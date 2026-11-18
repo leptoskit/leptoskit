@@ -922,3 +922,75 @@ fn a_focus_request_is_written_where_the_browser_can_carry_it_out() {
 	);
 	assert!(!page.contains("data-lk-focus=\"true\""), "{page}");
 }
+
+#[test]
+fn a_modal_is_a_dialog_and_a_popover_carries_the_popover_attribute() {
+	use leptoskit_native::Placement;
+	use leptoskit_native::components::Button;
+	use leptoskit_native::components::Modal;
+	use leptoskit_native::components::Popover;
+
+	let html = render(
+		View()
+			.child(Button("Account").id("me"))
+			.child(
+				Popover("me", false)
+					.placement(Placement::BelowEnd)
+					.child(Button("Sign out")),
+			)
+			.child(
+				Modal(true)
+					.aria_label("Delete the note?")
+					.initial_focus("keep")
+					.child(Button("Keep it").id("keep")),
+			),
+	)
+	.to_html();
+	let tag = |name: &str| {
+		let start = html
+			.find(&format!("<{name} "))
+			.unwrap_or_else(|| panic!("{html}"));
+		let end = start + html[start..].find('>').expect("the tag closes");
+
+		&html[start..end]
+	};
+
+	// A server writes a modal that starts open as an open dialog, so it is
+	// on screen before any script runs. The element implies its role.
+	let dialog = tag("dialog");
+	assert!(dialog.contains(r#"data-lk-modal="open""#), "{dialog}");
+	assert!(dialog.contains(" open"), "{dialog}");
+	assert!(
+		dialog.contains(r#"data-lk-initial-focus="keep""#),
+		"{dialog}"
+	);
+	assert!(
+		dialog.contains(r#"aria-label="Delete the note?""#),
+		"{dialog}"
+	);
+	assert!(!dialog.contains("role="), "{dialog}");
+
+	let popover = &html[html.find("popover=").expect("a popover")..];
+	let popover = &popover[..popover.find('>').expect("the tag closes")];
+	assert!(popover.contains(r#"popover="auto""#), "{popover}");
+	assert!(popover.contains(r#"data-lk-popover="closed""#), "{popover}");
+	assert!(popover.contains(r#"data-lk-anchor="me""#), "{popover}");
+	assert!(
+		popover.contains(r#"data-lk-placement="below_end""#),
+		"{popover}"
+	);
+
+	let closed = render(
+		Modal(false)
+			.aria_label("Delete the note?")
+			.child(Text("Sure?")),
+	)
+	.to_html();
+	assert!(closed.contains(r#"data-lk-modal="closed""#), "{closed}");
+	assert!(!closed.contains(" open"), "{closed}");
+	// A closed dialog shows nothing even though every element is a flex box.
+	assert!(
+		closed.contains(":not([open]){display:none!important;}"),
+		"{closed}"
+	);
+}

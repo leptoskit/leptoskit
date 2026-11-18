@@ -2,82 +2,82 @@
 source: examples/gallery/tests/trees.rs
 expression: "lines.join(\"\\n\")"
 ---
-View [flex-col h-full w-full] #78a8f3cb614f
-  View [flex-col gap-3 pb-2 pt-safe-offset-4 px-4] #55b5448ad638
-    View [flex-row items-end] #44b4f0e7f305
-      View [flex-1 flex-col gap-0.5] #22ecfa0e86cc
-        Text "Library" #f1543c57c647
-        Text "1,204 photos · 86 videos" #ca6d48dda3e9
-      Button "Select" [h-[30px] px-3.5 py-0 rounded-[15px]] #90e8817ea053
-    View [flex-row items-center p-0.5 rounded-[9px]] #5d2c9cc1f75b
-      Button "Years" [flex-1 h-7 rounded-[7px]] #bea16d84d74a
-      Button "Months" [flex-1 h-7 rounded-[7px]] #1b089e2ae0b9
-      Button "Days" [flex-1 h-7 rounded-[7px]] #cc659002118d
-      Button "All Photos" [flex-1 h-7 rounded-[7px]] #d504c9d5edfa
-  ScrollView [flex-1] #05c28b38a6e0
-    View [flex-col pb-6] #9a8c91043fee
-      View [flex-col] #6c930b8d7dcf
-        View [flex-row gap-2 items-center pb-3 pt-4 px-4] #2e3a04eec067
-          Text "October 2026" #9c67a12fdccf
-          Text "Lagos & Accra" #b130824dadc4
-        View [gap-0.5 grid grid-cols-3] #7b33e4c80916
-          View [col-span-2 row-span-2] #50cd62f36f46
-            Image [h-full w-full] #f94310b29dfc
-          View #6a314596b940
-            Image [h-full w-full] #ad12b5547b6c
-          View #6a314596b940
-            Image [h-full w-full] #78f77eb98144
-            View [absolute bottom-1.5 px-1.5 py-0.5 right-1.5 rounded-[6px]] #9ee707c63a0f
-              Text "0:42" [font-semibold text-[#ffffff] text-[11px]] #96c2183751d9
-          View #6a314596b940
-            Image [h-full w-full] #dbd4fc0dc3cf
-          View #6a314596b940
-            Image [h-full w-full] #990f6daddb4c
-            View [absolute bottom-1.5 px-1.5 py-0.5 right-1.5 rounded-[6px]] #9ee707c63a0f
-              Text "1:08" [font-semibold text-[#ffffff] text-[11px]] #edc92d3a0bf7
-          View #6a314596b940
-            Image [h-full w-full] #6cec79208264
-          View #6a314596b940
-            Image [h-full w-full] #af4936b06002
-          View #6a314596b940
-            Image [h-full w-full] #dd5bfe70e100
-            View [absolute bottom-1.5 px-1.5 py-0.5 right-1.5 rounded-[6px]] #9ee707c63a0f
-              Text "0:42" [font-semibold text-[#ffffff] text-[11px]] #96c2183751d9
-          View #6a314596b940
-            Image [h-full w-full] #a10ad3f987af
-      View [flex-col] #6c930b8d7dcf
-        View [flex-row gap-2 items-center pb-3 pt-4 px-4] #2e3a04eec067
-          Text "September 2026" #36744ab83723
-          Text "Cape Coast" #80da7f4ed24e
-        View [gap-0.5 grid grid-cols-3] #7b33e4c80916
-          View [col-span-2 row-span-2] #50cd62f36f46
-            Image [h-full w-full] #dbfae575d9e5
-          View #6a314596b940
-            Image [h-full w-full] #ee37a52d7501
-          View #6a314596b940
-            Image [h-full w-full] #074b798c6ab7
-          View #6a314596b940
-            Image [h-full w-full] #1a40423f4d7b
-            View [absolute bottom-1.5 px-1.5 py-0.5 right-1.5 rounded-[6px]] #9ee707c63a0f
-              Text "0:42" [font-semibold text-[#ffffff] text-[11px]] #96c2183751d9
-          View #6a314596b940
-            Image [h-full w-full] #34485faae35d
-          View #6a314596b940
-            Image [h-full w-full] #ef9c751e10af
-            View [absolute bottom-1.5 px-1.5 py-0.5 right-1.5 rounded-[6px]] #9ee707c63a0f
-              Text "1:08" [font-semibold text-[#ffffff] text-[11px]] #edc92d3a0bf7
-  View [flex-col] #61e05b18ffdf
-    View [h-[1px]] #27b706f7e38d
-    View [flex-row items-center pb-safe-offset-2 pt-2 px-2] #f619bbe450b9
-      View [flex-1 flex-col gap-1 items-center] #8ba2f2b1ea42
-        View [h-[22px] w-6] #0a07c3ea1247
-        Text "Library" [font-medium text-[10px] text-center] #32d802e73582
-      View [flex-1 flex-col gap-1 items-center] #8ba2f2b1ea42
-        View [h-[22px] w-6] #e75719cad70e
-        Text "For You" [font-medium text-[10px] text-center] #f651612af85b
-      View [flex-1 flex-col gap-1 items-center] #8ba2f2b1ea42
-        View [h-[22px] w-6] #ff220da04a29
-        Text "Albums" [font-medium text-[10px] text-center] #e51881c4ab22
-      View [flex-1 flex-col gap-1 items-center] #8ba2f2b1ea42
-        View [h-[22px] w-6] #e75719cad70e
-        Text "Search" [font-medium text-[10px] text-center] #90f13e9c01ce
+View [flex-col h-full w-full] #1dbe2d95d89e
+  View [flex-col gap-3 pb-2 pt-safe-offset-4 px-4] #21d623a7a4f7
+    View [flex-row items-end] #68fe082af5a7
+      View [flex-1 flex-col gap-0.5] #c33fd01a0f6c
+        Text "Library" #c5c8847c835d
+        Text "1,204 photos · 86 videos" #8ded5668ee81
+      Button "Select" [h-[30px] px-3.5 py-0 rounded-[15px]] #85f6b543aed5
+    View [flex-row items-center p-0.5 rounded-[9px]] #5fc0d5366420
+      Button "Years" [flex-1 h-7 rounded-[7px]] #55f8e699fd0f
+      Button "Months" [flex-1 h-7 rounded-[7px]] #85ab4eed125f
+      Button "Days" [flex-1 h-7 rounded-[7px]] #2c1510206359
+      Button "All Photos" [flex-1 h-7 rounded-[7px]] #2ab472ad5089
+  ScrollView [flex-1] #2d9c0cdd73e0
+    View [flex-col pb-6] #918ec3bd8060
+      View [flex-col] #fb38e323e356
+        View [flex-row gap-2 items-center pb-3 pt-4 px-4] #827e8bef4979
+          Text "October 2026" #43d73cb3a6ad
+          Text "Lagos & Accra" #a3268b2debd1
+        View [gap-0.5 grid grid-cols-3] #f457472388cf
+          View [col-span-2 row-span-2] #8a6fd15a98a3
+            Image [h-full w-full] #724fbb25e91f
+          View #2b395e0da08a
+            Image [h-full w-full] #03fc92c29b1f
+          View #2b395e0da08a
+            Image [h-full w-full] #ed77a9ccd48d
+            View [absolute bottom-1.5 px-1.5 py-0.5 right-1.5 rounded-[6px]] #918bd724c3f4
+              Text "0:42" [font-semibold text-[#ffffff] text-[11px]] #7b20b6b35108
+          View #2b395e0da08a
+            Image [h-full w-full] #d511aaa11bb9
+          View #2b395e0da08a
+            Image [h-full w-full] #179b5fa62d11
+            View [absolute bottom-1.5 px-1.5 py-0.5 right-1.5 rounded-[6px]] #918bd724c3f4
+              Text "1:08" [font-semibold text-[#ffffff] text-[11px]] #3e5216bee1f0
+          View #2b395e0da08a
+            Image [h-full w-full] #c824eeb491a3
+          View #2b395e0da08a
+            Image [h-full w-full] #9d49bd74fd5a
+          View #2b395e0da08a
+            Image [h-full w-full] #a8b70d91c1a2
+            View [absolute bottom-1.5 px-1.5 py-0.5 right-1.5 rounded-[6px]] #918bd724c3f4
+              Text "0:42" [font-semibold text-[#ffffff] text-[11px]] #7b20b6b35108
+          View #2b395e0da08a
+            Image [h-full w-full] #195c61ca0a4f
+      View [flex-col] #fb38e323e356
+        View [flex-row gap-2 items-center pb-3 pt-4 px-4] #827e8bef4979
+          Text "September 2026" #3348e0f6887a
+          Text "Cape Coast" #f3fb95878e23
+        View [gap-0.5 grid grid-cols-3] #f457472388cf
+          View [col-span-2 row-span-2] #8a6fd15a98a3
+            Image [h-full w-full] #2a5b015ed8e5
+          View #2b395e0da08a
+            Image [h-full w-full] #a9c8a243eb6e
+          View #2b395e0da08a
+            Image [h-full w-full] #3d23a205cdb6
+          View #2b395e0da08a
+            Image [h-full w-full] #a29c6fdbd174
+            View [absolute bottom-1.5 px-1.5 py-0.5 right-1.5 rounded-[6px]] #918bd724c3f4
+              Text "0:42" [font-semibold text-[#ffffff] text-[11px]] #7b20b6b35108
+          View #2b395e0da08a
+            Image [h-full w-full] #a8c3e2a813f1
+          View #2b395e0da08a
+            Image [h-full w-full] #09ac23bf5ea4
+            View [absolute bottom-1.5 px-1.5 py-0.5 right-1.5 rounded-[6px]] #918bd724c3f4
+              Text "1:08" [font-semibold text-[#ffffff] text-[11px]] #3e5216bee1f0
+  View [flex-col] #2d6a70948d26
+    View [h-[1px]] #23c635a84f27
+    View [flex-row items-center pb-safe-offset-2 pt-2 px-2] #a06659a05a2f
+      View [flex-1 flex-col gap-1 items-center] #1d364c35affd
+        View [h-[22px] w-6] #aa068bd00667
+        Text "Library" [font-medium text-[10px] text-center] #a6f1213e35b2
+      View [flex-1 flex-col gap-1 items-center] #1d364c35affd
+        View [h-[22px] w-6] #ce3a369c023c
+        Text "For You" [font-medium text-[10px] text-center] #a5ce9b7649a1
+      View [flex-1 flex-col gap-1 items-center] #1d364c35affd
+        View [h-[22px] w-6] #d19c4cff5ca5
+        Text "Albums" [font-medium text-[10px] text-center] #41c1548a95aa
+      View [flex-1 flex-col gap-1 items-center] #1d364c35affd
+        View [h-[22px] w-6] #ce3a369c023c
+        Text "Search" [font-medium text-[10px] text-center] #9e44b66e742c

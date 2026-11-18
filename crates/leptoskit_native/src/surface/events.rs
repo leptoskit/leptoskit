@@ -22,6 +22,12 @@ impl<B: NativeBackend> NativeSurface<B> {
 			return EventOutcome::Unhandled;
 		}
 
+		// A dismissal is for the overlay it names: a popover the app keeps
+		// open does not close the modal around it.
+		if matches!(*event, NativeEvent::Dismiss) {
+			return self.dispatch_handlers(target, &event);
+		}
+
 		let mut current = Some(target);
 
 		while let Some(id) = current {
@@ -96,9 +102,22 @@ impl<B: NativeBackend> NativeSurface<B> {
 	}
 
 	/// Finds the deepest node whose frame contains the viewport-space point.
+	///
+	/// Open overlays are above everything else, the last one on top. An open
+	/// modal covers the viewport, so nothing behind it is hit.
 	pub fn hit_test(&self, x: f32, y: f32) -> Option<NodeId> {
 		let root = self.root?;
 		let mut best = None;
+
+		for &overlay in self.overlays.iter().rev() {
+			if self.hit_areas[overlay.index()].subtree.contains(x, y) {
+				self.hit_test_walk(overlay, x, y, &mut best);
+			}
+
+			if best.is_some() {
+				return best;
+			}
+		}
 
 		if self.hit_areas[root.index()].subtree.contains(x, y) {
 			self.hit_test_walk(root, x, y, &mut best);

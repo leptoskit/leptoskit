@@ -375,10 +375,12 @@ fn event_payloads_decode_unicode_controls_and_reject_malformed_values() {
 		(1, b"{}".as_slice()),
 		(6, br#"{"checked":"false"}"#),
 		(7, br#"{"value":1e999}"#),
-		(9, b""),
+		(10, b""),
 	] {
 		assert!(decode_event(kind, payload).is_none());
 	}
+
+	assert_eq!(decode_event(9, b""), Some(NativeEvent::Dismiss));
 }
 
 #[test]

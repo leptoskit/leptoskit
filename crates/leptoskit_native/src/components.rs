@@ -358,3 +358,47 @@ tag!(ScrollView => ScrollView());
 tag!(Vector => Vector(ViewBox::UNIT));
 tag!(TextInput => TextInput());
 tag!(TextArea => TextArea());
+
+/// Content that sits above the screen and blocks it while `open`: a
+/// confirmation, a form that must be finished, an announcement.
+///
+/// While it is open, nothing behind it can be pressed or focused. Focus
+/// moves inside when it opens, to [`initial_focus`](Element::initial_focus)
+/// or the first focusable element, and returns to where it was when it
+/// closes. Escape, a press on the area around the content, Android's Back
+/// and a swipe down on an iOS sheet ask to close it through
+/// [`on_dismiss`](Element::on_dismiss); the app closes it by building it
+/// with `open` false.
+///
+/// The modal itself is the area around the content: it fills the screen and
+/// centres its children. Style the dimming with a background class on the
+/// modal, such as `bg-black/50`, and the panel with classes on the child.
+/// Name it for assistive technology with `aria_label` or `aria_labelled_by`;
+/// it is announced as a modal dialog.
+///
+/// Keep it in the tree while closed: it shows nothing and takes no space.
+#[track_caller]
+pub fn Modal(open: bool) -> Element {
+	Element::modal(open)
+}
+
+/// Content that sits above the screen while `open`, hanging from the
+/// element whose `id` is `anchor`: a menu under a button, a date picker
+/// under a field.
+///
+/// The rest of the screen stays usable. Escape and a press anywhere outside
+/// ask to close it through [`on_dismiss`](Element::on_dismiss); the app
+/// closes it by building it with `open` false. Focus returns to where it was
+/// when it closes. [`placement`](Element::placement) picks the side and the
+/// edge that lines up with the anchor, and a popover that would leave the
+/// screen flips or slides back inside it.
+///
+/// It is as large as its content. Keep it in the tree while closed: it
+/// shows nothing and takes no space.
+#[track_caller]
+pub fn Popover(anchor: impl Into<String>, open: bool) -> Element {
+	Element::popover(anchor, open)
+}
+
+tag!(Modal => Modal(false));
+tag!(Popover => Popover("", false));

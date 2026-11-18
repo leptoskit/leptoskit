@@ -532,6 +532,68 @@ Native platforms load images from local files only: a path or a `file://` URL, p
 
 For supported utility families and their limits, use the [CSS coverage reference](../reference/css-coverage.md). For a complete shared-screen example, see [code reuse across platforms](../platforms/code-reuse.md).
 
+## Show a dialog or a menu above the screen
+
+A confirmation, a "new item" form and an account menu all sit above the rest of the screen. They close on Escape or a press outside, focus goes into them when they open, and it goes back where it was when they close. A `View` styled with `absolute` gives you none of that, and whatever comes later in the tree is drawn over it.
+
+Use `Modal` for something the person must answer before going on, and `Popover` for something that hangs from a control and leaves the rest of the screen usable.
+
+```rust
+view! {
+	<View class="gap-3 p-4">
+		<Button id="delete" on:press=move || set_confirming(true)>"Delete note"</Button>
+		<Modal
+			open=confirming
+			aria_label="Delete the note?"
+			initial_focus="keep"
+			on:dismiss=move || set_confirming(false)
+		>
+			<View class="w-80 gap-3 rounded-xl bg-white p-4">
+				<Text>"Delete the note? This cannot be undone."</Text>
+				<Button on:press=delete>"Delete"</Button>
+				<Button id="keep" on:press=move || set_confirming(false)>"Keep it"</Button>
+			</View>
+		</Modal>
+	</View>
+}
+```
+
+Both stay in the tree while closed and show nothing. Your state says whether one is open. A dismissal is a request: `on:dismiss` runs when the person presses Escape or presses outside, and the overlay closes when you render it with `open` false. Leave the state alone to refuse, for example while a form inside is saving. Without an `on:dismiss` handler, only something inside the overlay can close it.
+
+A `Modal` covers the whole screen, and what it holds sits in the middle. The `Modal` itself is the backdrop: give it a class such as `bg-black/50` to dim the screen, and style the panel inside it. `initial_focus` names the element that takes focus when it opens, by `id`. Without one, the first control inside does, so in a confirmation name the safe choice. Give a `Modal` an accessible name with `aria_label` or `aria_labelledby`; it has the `dialog` role already.
+
+A `Popover` names the element it hangs from by `id`, and `placement` picks the side:
+
+```rust
+view! {
+	<View class="items-end p-4">
+		<Button id="me" on:press=move || set_menu_open(!menu_open)>"Account"</Button>
+		<Popover
+			anchor="me"
+			open=menu_open
+			placement=Placement::BelowEnd
+			on:dismiss=move || set_menu_open(false)
+		>
+			<View class="w-48 rounded-lg bg-white p-2">
+				<Button on:press=open_profile>"Profile"</Button>
+				<Button on:press=sign_out>"Sign out"</Button>
+			</View>
+		</Popover>
+	</View>
+}
+```
+
+The placements are `BelowStart` (the default), `Below`, `BelowEnd`, `AboveStart`, `Above` and `AboveEnd`. Start and end follow the reading direction. A popover with no room on its side opens on the other side, and one that would leave the screen is moved back inside it. A press on the anchor of an open popover is left to the anchor's own handler, so a button that toggles its menu closes it once. A popover is as large as what it holds, and it has no role of its own: give its content the role that fits, such as `menu`.
+
+In builder code these are `Modal(open)` and `Popover(anchor, open)`, with `.on_dismiss(...)`, `.initial_focus(...)` and `.placement(...)`.
+
+What each platform does:
+
+- **Web.** A `Modal` is a `<dialog>` opened with `showModal()`. The browser puts it above the page, makes the page behind it inert, keeps Tab inside it, and gives focus back when it closes. A server writes a modal that starts open as `<dialog open>`, so it is on screen before any script runs. A `Popover` is an element with `popover="auto"`, placed from its anchor's rectangle and kept beside it while the page scrolls. A popover that starts open appears once the page hydrates.
+- **Terminal.** Overlays are drawn last, over everything. Tab stays inside an open modal, Escape asks the overlay on top to close, a click on a modal's backdrop or outside a popover asks too, and closing gives focus back.
+- **macOS, iOS, Android, Linux and Windows.** For now an overlay is drawn as a layer in the right place, over what comes before it in the tree, and presses do not pass through an open modal. The rest is not there yet: nothing asks to dismiss it, so close it from a control inside; focus is not moved or kept inside; and a parent that clips or scrolls cuts it off. Put overlays at the top level of the screen until these platforms present them as sheets, popovers and windows of their own.
+- **Watch surfaces** refuse a tree that holds a `Modal` or a `Popover`.
+
 ## Persist shared application state
 
 Enable the `storage` feature to use `leptoskit::hooks::use_async_storage` with persistent preferences. The browser host opens a `LocalStorage<T>` namespace. A native host opens an application-private data directory. Both implement the same `AsyncStorage<T>` contract and return the same reactive handle for shared screen code.

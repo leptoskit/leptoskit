@@ -1328,6 +1328,7 @@ unsafe fn decode_event(
 		}
 		8 => NativeEvent::PressIn,
 		9 => NativeEvent::PressOut,
+		10 => NativeEvent::Dismiss,
 		_ => return Err("unknown event kind"),
 	})
 }

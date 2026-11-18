@@ -149,6 +149,20 @@ pub trait NativeBackend {
 	/// ordinary widget backends do not retain a mutation log.
 	fn limit_mutation_log(&mut self, _bytes: usize) {}
 
+	/// Whether this backend shows `Modal` and `Popover` as overlays of its
+	/// own: a sheet, a popup window, a layer drawn last.
+	///
+	/// Such a backend is told the real kind, and an open overlay's frame is
+	/// in viewport coordinates. Every other backend is given a plain `View`
+	/// whose frame, relative to its parent as usual, covers the viewport or
+	/// sits beside the anchor. That shows the overlay in the right place
+	/// over the siblings before it, without the rest of what an overlay
+	/// does: an ancestor that clips or scrolls still cuts it off, the screen
+	/// behind stays usable, and nothing asks to dismiss it.
+	fn presents_overlays(&self) -> bool {
+		false
+	}
+
 	/// A terminal recording error, checked by sandbox hosts after rendering
 	/// and before entering the guest again. Ordinary widget backends have none.
 	fn render_error(&self) -> Option<&'static str> {
@@ -237,6 +251,7 @@ pub trait NativeBackend {
 pub struct HeadlessBackend {
 	log: Vec<Mutation>,
 	measurer: Option<SharedTextMeasurer>,
+	overlays: bool,
 	#[cfg(feature = "serde")]
 	log_budget: Option<limits::LogBudget>,
 }
@@ -254,6 +269,14 @@ impl HeadlessBackend {
 	/// approximation.
 	pub fn new() -> Self {
 		Self::default()
+	}
+
+	/// Records `Modal` and `Popover` as a backend that presents overlays
+	/// itself is told of them; see [`NativeBackend::presents_overlays`].
+	#[must_use]
+	pub fn presenting_overlays(mut self) -> Self {
+		self.overlays = true;
+		self
 	}
 
 	/// Limits undrained mutation batches by their JSON byte size. Exceeding
@@ -307,6 +330,10 @@ impl HeadlessBackend {
 }
 
 impl NativeBackend for HeadlessBackend {
+	fn presents_overlays(&self) -> bool {
+		self.overlays
+	}
+
 	#[cfg(feature = "serde")]
 	fn limit_mutation_log(&mut self, bytes: usize) {
 		if let Some(budget) = &mut self.log_budget {

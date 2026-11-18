@@ -113,6 +113,8 @@ fn refused_widget_kinds() {
 		("Checkbox", Checkbox(false)),
 		("Radio", Element::new(NativeKind::Radio)),
 		("Slider", Slider(SliderState::default())),
+		("Modal", Element::modal(false)),
+		("Popover", Element::popover("anchor", false)),
 		("Rive", Element::new(NativeKind::Rive)),
 		("custom", Element::new(NativeKind::Custom("custom"))),
 	];

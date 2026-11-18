@@ -192,6 +192,8 @@ pub enum EventKind {
 	ValueChange,
 	/// A key was pressed while focus was inside the target.
 	Key,
+	/// The person asked a modal or popover to close.
+	Dismiss,
 }
 
 impl EventKind {
@@ -207,6 +209,7 @@ impl EventKind {
 			Self::Toggle => 6,
 			Self::ValueChange => 7,
 			Self::Key => 8,
+			Self::Dismiss => 9,
 		}
 	}
 }
@@ -1414,6 +1417,7 @@ impl<B: NativeBackend> WasmHost<B> {
 			NativeEvent::Press => (EventKind::Press, None),
 			NativeEvent::Focus => (EventKind::Focus, None),
 			NativeEvent::Blur => (EventKind::Blur, None),
+			NativeEvent::Dismiss => (EventKind::Dismiss, None),
 			NativeEvent::Scroll { offset_x, offset_y } => {
 				(
 					EventKind::Scroll,

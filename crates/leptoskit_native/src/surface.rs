@@ -143,6 +143,16 @@ impl ShadowNode {
 		self.props.hidden == Some(true)
 			|| (self.kind == NativeKind::ActivityIndicator && self.props.running == Some(false))
 	}
+
+	/// Whether this is a modal or popover that is showing.
+	fn is_open_overlay(&self) -> bool {
+		self.props.hidden != Some(true)
+			&& self
+				.props
+				.overlay
+				.as_ref()
+				.is_some_and(|overlay| overlay.open)
+	}
 }
 
 /// The height a text field's native chrome adds around its text.
@@ -317,6 +327,8 @@ pub struct NativeSurface<B: NativeBackend> {
 	/// Per-node hit areas, rebuilt by every layout commit. Kept apart from
 	/// the shadow nodes so pruning reads a dense array.
 	hit_areas: Vec<HitArea>,
+	/// The open overlays, in document order: the last one is on top.
+	overlays: Vec<NodeId>,
 	/// Scratch space for reconciliation: the children a commit walks, so the
 	/// steady state allocates nothing to snapshot them.
 	scratch_children: Vec<NodeId>,
@@ -359,6 +371,7 @@ impl<B: NativeBackend> NativeSurface<B> {
 			viewport: Size::new(0.0, 0.0),
 			frames: Vec::new(),
 			hit_areas: Vec::new(),
+			overlays: Vec::new(),
 			scratch_children: Vec::new(),
 			source: None,
 			relationships: false,
@@ -568,6 +581,13 @@ impl<B: NativeBackend> NativeSurface<B> {
 	/// The committed children of a node, in order.
 	pub fn children(&self, id: NodeId) -> &[NodeId] {
 		&self.shadows[id.index()].children
+	}
+
+	/// The open modals and popovers, in document order: the last one is on
+	/// top. Their frames are in viewport coordinates for a backend that
+	/// [presents overlays](NativeBackend::presents_overlays).
+	pub fn open_overlays(&self) -> &[NodeId] {
+		&self.overlays
 	}
 
 	/// The parent of a node, if it has one.

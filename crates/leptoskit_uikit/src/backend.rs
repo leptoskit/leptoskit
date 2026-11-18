@@ -420,6 +420,8 @@ impl UIKitBackend {
 			// A 3D scene draws in the generated hosts' Swift and Kotlin renderers;
 			// this backend holds its place as an empty view.
 			NativeKind::View
+			| NativeKind::Modal
+			| NativeKind::Popover
 			| NativeKind::Custom(_)
 			| NativeKind::Scene3d
 			| NativeKind::Video

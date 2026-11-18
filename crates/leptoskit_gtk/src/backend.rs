@@ -708,6 +708,8 @@ impl NativeBackend for GtkBackend {
 			// GTK yet);
 			// this backend holds its place as an empty view.
 			NativeKind::View
+			| NativeKind::Modal
+			| NativeKind::Popover
 			| NativeKind::Custom(_)
 			| NativeKind::Scene3d
 			| NativeKind::Video

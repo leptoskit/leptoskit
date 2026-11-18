@@ -383,7 +383,9 @@ impl Role {
 			| NativeKind::Text
 			| NativeKind::TextRun
 			| NativeKind::ScrollView
+			| NativeKind::Popover
 			| NativeKind::Custom(_) => None,
+			NativeKind::Modal => Some(Self::Dialog),
 			NativeKind::Image
 			| NativeKind::Vector
 			| NativeKind::Rive

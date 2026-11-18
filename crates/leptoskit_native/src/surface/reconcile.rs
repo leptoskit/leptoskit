@@ -147,11 +147,14 @@ impl<B: NativeBackend> NativeSurface<B> {
 		}
 
 		let props = self.props_to_send(&element.props);
-		out.push(Mutation::Create {
-			id,
-			kind: element.kind,
-			props,
-		});
+		// A backend with no overlays of its own shows one as a container.
+		let overlay = matches!(element.kind, NativeKind::Modal | NativeKind::Popover);
+		let kind = if overlay && !self.backend.presents_overlays() {
+			NativeKind::View
+		} else {
+			element.kind
+		};
+		out.push(Mutation::Create { id, kind, props });
 
 		if let Some((parent, index)) = slot {
 			self.attach_child(parent, id, index, out);

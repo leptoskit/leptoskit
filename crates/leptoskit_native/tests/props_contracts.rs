@@ -42,6 +42,8 @@ fn every_kind_retains_canonical_and_legacy_wire_names() {
 		(NativeKind::ActivityIndicator, "ActivityIndicator"),
 		(NativeKind::PasswordInput, "PasswordInput"),
 		(NativeKind::TextArea, "TextArea"),
+		(NativeKind::Modal, "Modal"),
+		(NativeKind::Popover, "Popover"),
 		(NativeKind::Pressable, "Pressable"),
 		(NativeKind::Scene3d, "Scene3d"),
 		(NativeKind::Video, "Video"),

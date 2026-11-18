@@ -1940,6 +1940,264 @@ async fn a_roving_group_moves_focus_with_the_arrow_keys() {
 	parent.remove();
 }
 
+/// Whether an element matches a selector the browser knows.
+fn matches(element: &web_sys::Element, selector: &str) -> bool {
+	element
+		.matches(selector)
+		.expect("a selector the browser knows")
+}
+
+#[wasm_bindgen_test]
+async fn a_modal_opens_in_the_top_layer_and_gives_focus_back() {
+	use leptoskit_native::components::Button;
+	use leptoskit_native::components::Modal;
+
+	let parent = container();
+	let open = ArcRwSignal::new(false);
+	let dismissals = Arc::new(AtomicUsize::new(0));
+	let mount = mount_to(parent.clone(), {
+		let (open, dismissals) = (open.clone(), Arc::clone(&dismissals));
+
+		move || {
+			let (open, dismissals) = (open.clone(), Arc::clone(&dismissals));
+
+			move || {
+				let (show, close, dismissals) =
+					(open.clone(), open.clone(), Arc::clone(&dismissals));
+
+				render(
+					View()
+						.child(
+							Button("Delete")
+								.id("opener")
+								.on_press(move || show.set(true)),
+						)
+						.child(
+							Modal(open.get())
+								.aria_label("Delete the note?")
+								.initial_focus("keep")
+								.on_dismiss(move || {
+									dismissals.fetch_add(1, Ordering::Relaxed);
+									close.set(false);
+								})
+								.child(
+									View()
+										.id("panel")
+										.class("w-40 h-20")
+										.child(Button("Delete it").id("confirm"))
+										.child(Button("Keep it").id("keep")),
+								),
+						),
+				)
+			}
+		}
+	});
+	tick().await;
+	next_frame().await;
+
+	let dialog: web_sys::HtmlElement = find(&parent, "dialog");
+	let by_id = |id: &str| -> web_sys::HtmlElement {
+		document()
+			.get_element_by_id(id)
+			.unwrap_or_else(|| panic!("an element with the id {id}"))
+			.unchecked_into()
+	};
+	let displayed = |element: &web_sys::Element| {
+		web_sys::window()
+			.unwrap()
+			.get_computed_style(element)
+			.unwrap()
+			.unwrap()
+			.get_property_value("display")
+			.unwrap()
+	};
+	assert!(!matches(&dialog, ":modal"));
+	assert_eq!(displayed(&dialog), "none");
+
+	by_id("opener").focus().unwrap();
+	by_id("opener").click();
+	tick().await;
+	next_frame().await;
+
+	assert!(matches(&dialog, ":modal"), "the dialog is shown as a modal");
+	assert_eq!(document().active_element(), Some(by_id("keep").into()));
+	// It covers the viewport, with what it holds in the middle.
+	let frame = dialog.get_bounding_client_rect();
+	let window = web_sys::window().unwrap();
+	let viewport = (
+		window.inner_width().unwrap().as_f64().unwrap(),
+		window.inner_height().unwrap().as_f64().unwrap(),
+	);
+	assert_eq!((frame.left(), frame.top()), (0.0, 0.0));
+	assert!(
+		(frame.width() - viewport.0).abs() <= 20.0,
+		"{} of {}",
+		frame.width(),
+		viewport.0
+	);
+	assert!(
+		(frame.height() - viewport.1).abs() <= 20.0,
+		"{} of {}",
+		frame.height(),
+		viewport.1
+	);
+	let panel = by_id("panel").get_bounding_client_rect();
+	close(
+		panel.left() + panel.width() / 2.0,
+		(frame.width() / 2.0) as f32,
+		0,
+		"the panel's centre",
+	);
+
+	// A press inside is not a dismissal.
+	by_id("panel").click();
+	tick().await;
+	assert_eq!(dismissals.load(Ordering::Relaxed), 0);
+
+	// Escape arrives as a `cancel` event, which the app answers.
+	let options = web_sys::EventInit::new();
+	options.set_cancelable(true);
+	let cancel = web_sys::Event::new_with_event_init_dict("cancel", &options).unwrap();
+	assert!(
+		!dialog.dispatch_event(&cancel).unwrap(),
+		"the dialog stays for the app to close"
+	);
+	tick().await;
+	next_frame().await;
+	assert_eq!(dismissals.load(Ordering::Relaxed), 1);
+	assert!(!matches(&dialog, ":modal"));
+	assert_eq!(displayed(&dialog), "none");
+	assert_eq!(document().active_element(), Some(by_id("opener").into()));
+
+	// A press on the dialog itself is a press on the backdrop.
+	by_id("opener").click();
+	tick().await;
+	next_frame().await;
+	assert!(matches(&dialog, ":modal"));
+	dialog.click();
+	tick().await;
+	next_frame().await;
+	assert_eq!(dismissals.load(Ordering::Relaxed), 2);
+	assert!(!matches(&dialog, ":modal"));
+
+	drop(mount);
+	parent.remove();
+}
+
+#[wasm_bindgen_test]
+async fn a_popover_opens_beside_its_anchor_and_asks_before_it_closes() {
+	use leptoskit_native::Placement;
+	use leptoskit_native::components::Button;
+	use leptoskit_native::components::Popover;
+
+	let parent = container();
+	let open = ArcRwSignal::new(false);
+	let dismissals = Arc::new(AtomicUsize::new(0));
+	let mount = mount_to(parent.clone(), {
+		let (open, dismissals) = (open.clone(), Arc::clone(&dismissals));
+
+		move || {
+			let (open, dismissals) = (open.clone(), Arc::clone(&dismissals));
+
+			move || {
+				let (toggle, close, dismissals) =
+					(open.clone(), open.clone(), Arc::clone(&dismissals));
+
+				render(
+					View()
+						.class("p-10 items-start")
+						.child(
+							Button("Account")
+								.id("me")
+								.class("w-40 h-8")
+								.on_press(move || toggle.update(|open| *open = !*open)),
+						)
+						.child(
+							Popover("me", open.get())
+								.placement(Placement::BelowEnd)
+								.on_dismiss(move || {
+									dismissals.fetch_add(1, Ordering::Relaxed);
+									close.set(false);
+								})
+								.child(
+									View()
+										.class("w-20 h-10")
+										.child(Button("Sign out").id("sign-out")),
+								),
+						),
+				)
+			}
+		}
+	});
+	tick().await;
+	next_frame().await;
+
+	let popover: web_sys::HtmlElement = find(&parent, "[popover]");
+	let anchor: web_sys::HtmlElement = find(&parent, "#me");
+	let sign_out = || -> web_sys::HtmlElement { find(&parent, "#sign-out") };
+	assert!(!matches(&popover, ":popover-open"));
+
+	anchor.focus().unwrap();
+	open.set(true);
+	tick().await;
+	next_frame().await;
+
+	assert!(matches(&popover, ":popover-open"));
+	// Below the anchor, end edges lined up.
+	let (below, hung) = (
+		anchor.get_bounding_client_rect(),
+		popover.get_bounding_client_rect(),
+	);
+	close(hung.top(), below.bottom() as f32, 0, "the popover's top");
+	close(
+		hung.right(),
+		below.right() as f32,
+		0,
+		"the popover's end edge",
+	);
+	assert_eq!(hung.width(), 80.0);
+	// Focus goes to the first control inside.
+	assert_eq!(document().active_element(), Some(sign_out().into()));
+
+	// The browser closes a popover on Escape or a press outside. The app
+	// hears that as a request, and closing gives focus back.
+	popover.hide_popover().unwrap();
+	next_frame().await;
+	tick().await;
+	next_frame().await;
+	assert_eq!(dismissals.load(Ordering::Relaxed), 1);
+	assert!(!open.get_untracked());
+	assert!(!matches(&popover, ":popover-open"));
+	assert_eq!(document().active_element(), Some(anchor.clone().into()));
+
+	// Closing it from the app is not a dismissal.
+	open.set(true);
+	tick().await;
+	next_frame().await;
+	assert!(matches(&popover, ":popover-open"));
+	open.set(false);
+	tick().await;
+	next_frame().await;
+	next_frame().await;
+	assert!(!matches(&popover, ":popover-open"));
+	assert_eq!(dismissals.load(Ordering::Relaxed), 1);
+
+	// A press on the anchor of an open popover closes it once: the browser
+	// does not count it as a press outside and then let the app reopen it.
+	open.set(true);
+	tick().await;
+	next_frame().await;
+	anchor.click();
+	tick().await;
+	next_frame().await;
+	next_frame().await;
+	assert!(!open.get_untracked());
+	assert!(!matches(&popover, ":popover-open"));
+
+	drop(mount);
+	parent.remove();
+}
+
 #[wasm_bindgen_test]
 fn vector_paths_map_their_view_box_onto_the_frame() {
 	use leptoskit_native::PathData;
