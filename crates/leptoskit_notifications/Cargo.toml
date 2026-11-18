@@ -54,6 +54,18 @@ required-features = ["service"]
 name = "boundary"
 required-features = ["service"]
 
+# The migrations' own round trip and the registry backfill, on SQLite and,
+# behind `postgres`, on a private Postgres.
+[[test]]
+name = "migrations"
+required-features = ["service"]
+
+# The fanout over audiences of thousands: many batches, batch boundaries,
+# duplicated steps, conditions, and a cancel part-way.
+[[test]]
+name = "large_audience"
+required-features = ["service"]
+
 # The Postgres races need the Postgres service; they start a private
 # Postgres from local binaries and skip without them.
 [[test]]
