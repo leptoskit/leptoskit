@@ -1,0 +1,47 @@
+[package]
+name = "leptoskit_cloud"
+version = "0.3.0"
+authors.workspace = true
+categories = ["development-tools", "web-programming"]
+edition.workspace = true
+homepage.workspace = true
+keywords = ["leptoskit", "cloud", "deploy", "hosting"]
+license.workspace = true
+readme = "readme.md"
+repository.workspace = true
+rust-version.workspace = true
+description = "LeptosKit Cloud's shared types: slugs, sizes, deployment states, the source archive, and the price estimate."
+
+[dependencies]
+# Without features: types the dashboard (wasm), the CLI, the control plane,
+# and the workers all share, with no server dependencies and nothing that
+# needs a filesystem; `tests/dependencies.rs` keeps it that way. The optional
+# crates pack a project (the CLI) and unpack it (the build worker); only the
+# `archive` feature compiles them.
+flate2 = { workspace = true, optional = true }
+ignore = { workspace = true, optional = true }
+leptoskit_config = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+sha2 = { workspace = true, optional = true }
+tar = { workspace = true, optional = true }
+thiserror = { workspace = true }
+url = { workspace = true }
+uuid = { workspace = true, features = ["serde"] }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+tempfile = { workspace = true }
+toml = { workspace = true }
+
+[features]
+default = []
+# `archive::pack` and `archive::unpack`, which read and write the filesystem
+# and, for the file list, run `git`.
+archive = ["dep:flate2", "dep:ignore", "dep:sha2", "dep:tar"]
+
+[[test]]
+name = "archive"
+required-features = ["archive"]
+
+[lints]
+workspace = true
