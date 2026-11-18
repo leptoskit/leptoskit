@@ -46,6 +46,7 @@
 | `Button`                                       | an `NSButton` whose clicks dispatch `NativeEvent::Press`           |
 | `TextInput`                                    | an editable `NSTextField` (change, submit, focus, and blur events) |
 | `PasswordInput`                                | an `NSSecureTextField` with the same editing events                |
+| `TextArea`                                     | an `NSTextView` in an `NSScrollView`, with a drawn placeholder     |
 | `Switch`                                       | an `NSSwitch` proposing typed boolean values                       |
 | `Checkbox`, `Radio`                            | native `NSButton` switch/radio controls                            |
 | `Slider`                                       | an `NSSlider` proposing values on the shared step grid             |

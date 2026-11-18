@@ -98,9 +98,24 @@ pub(super) fn enable_touch_active(element: &web_sys::Element) {
 /// Always write controlled properties, even if their committed value has not
 /// changed. Leptos's ordinary property diff cannot undo a rejected proposal.
 pub(super) fn restore_input(element: web_sys::Element) {
+	if let Some(area) = element.dyn_ref::<web_sys::HtmlTextAreaElement>() {
+		restore_area(area);
+
+		return;
+	}
+
 	let input: web_sys::HtmlInputElement = element.unchecked_into();
 
 	restore(&input);
+}
+
+/// Writes a `TextArea`'s committed value back over a rejected proposal.
+fn restore_area(area: &web_sys::HtmlTextAreaElement) {
+	if let Some(value) = area.get_attribute("data-lk-value")
+		&& area.value() != value
+	{
+		area.set_value(&value);
+	}
 }
 
 pub(super) fn restore(input: &web_sys::HtmlInputElement) {
@@ -246,14 +261,21 @@ pub(super) fn typed_target(event: &web_sys::Event) -> bool {
 }
 
 pub(super) fn text_event(event: &web_sys::Event, chain: &[Handlers]) {
-	let input = event
-		.target()
-		.and_then(|target| target.dyn_into::<web_sys::HtmlInputElement>().ok())
-		.expect("text input event targets an input");
+	let target = event.target().expect("text input event has a target");
+	let field = match target.dyn_into::<web_sys::HtmlTextAreaElement>() {
+		Ok(area) => TextField::Area(area),
+		Err(target) => {
+			TextField::Input(
+				target
+					.dyn_into::<web_sys::HtmlInputElement>()
+					.expect("text input event targets an input or a textarea"),
+			)
+		}
+	};
 
 	if interactive(event) {
 		let native = NativeEvent::Change {
-			value: input.value(),
+			value: field.value(),
 		};
 
 		for handlers in chain.iter().rev() {
@@ -263,8 +285,31 @@ pub(super) fn text_event(event: &web_sys::Event, chain: &[Handlers]) {
 		}
 	}
 
-	queue_microtask(move || restore(&input));
+	queue_microtask(move || field.restore());
 	event.stop_propagation();
+}
+
+/// The element behind a text field: `<input>` for one line, `<textarea>`
+/// for many.
+enum TextField {
+	Input(web_sys::HtmlInputElement),
+	Area(web_sys::HtmlTextAreaElement),
+}
+
+impl TextField {
+	fn value(&self) -> String {
+		match self {
+			Self::Input(input) => input.value(),
+			Self::Area(area) => area.value(),
+		}
+	}
+
+	fn restore(&self) {
+		match self {
+			Self::Input(input) => restore(input),
+			Self::Area(area) => restore_area(area),
+		}
+	}
 }
 
 pub(super) fn toggle(

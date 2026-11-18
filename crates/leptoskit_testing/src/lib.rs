@@ -482,7 +482,7 @@ impl<B: NativeBackend> WidgetTester<B> {
 		let id = self.action_target(finder)?;
 		if !matches!(
 			self.surface.kind(id),
-			NativeKind::TextInput | NativeKind::PasswordInput
+			NativeKind::TextInput | NativeKind::TextArea | NativeKind::PasswordInput
 		) {
 			return Err(self.error(format!("{finder:?} is not a text input")));
 		}
@@ -501,7 +501,7 @@ impl<B: NativeBackend> WidgetTester<B> {
 		let id = self.action_target(finder)?;
 		if !matches!(
 			self.surface.kind(id),
-			NativeKind::TextInput | NativeKind::PasswordInput
+			NativeKind::TextInput | NativeKind::TextArea | NativeKind::PasswordInput
 		) {
 			return Err(self.error(format!("{finder:?} is not a text input")));
 		}

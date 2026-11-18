@@ -39,6 +39,9 @@ pub enum ControlTreeError {
 	/// A text input requires an accessible name: a label, a labelling
 	/// reference, or at least a placeholder.
 	MissingInputLabel { kind: NativeKind },
+	/// A single-line field cannot announce itself as multi-line; use a
+	/// `TextArea` for multiple lines.
+	MultilineTextInput { kind: NativeKind },
 	/// Two elements share one id; relationships and the DOM need unique ids.
 	DuplicateId { id: String },
 	/// An ARIA relationship names an id no element in the tree has.
@@ -128,6 +131,13 @@ impl fmt::Display for ControlTreeError {
 					formatter,
 					"{kind} requires an accessible name: set aria_label, aria_labelled_by, or a \
 					 placeholder"
+				)
+			}
+			Self::MultilineTextInput { kind } => {
+				write!(
+					formatter,
+					"{kind} holds one line, so aria_multiline(true) misreports it: use TextArea \
+					 for multiple lines"
 				)
 			}
 			Self::DuplicateId { id } => {

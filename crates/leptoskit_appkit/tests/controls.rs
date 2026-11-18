@@ -40,6 +40,7 @@ mod macos {
 	use objc2_app_kit::NSEventType;
 	use objc2_app_kit::NSProgressIndicator;
 	use objc2_app_kit::NSProgressIndicatorStyle;
+	use objc2_app_kit::NSScrollView;
 	use objc2_app_kit::NSSecureTextField;
 	use objc2_app_kit::NSSlider;
 	use objc2_app_kit::NSSwitch;
@@ -48,7 +49,9 @@ mod macos {
 	use objc2_app_kit::NSTextContentTypeNewPassword;
 	use objc2_app_kit::NSTextContentTypePassword;
 	use objc2_app_kit::NSTextContentTypeUsername;
+	use objc2_app_kit::NSTextDelegate;
 	use objc2_app_kit::NSTextField;
+	use objc2_app_kit::NSTextView;
 	use objc2_foundation::NSNotification;
 	use objc2_foundation::NSPoint;
 	use objc2_foundation::NSString;
@@ -96,6 +99,10 @@ mod macos {
 				unstyled_fields_fit_their_rounded_bezel,
 			),
 			("typed_text_input_hints", typed_text_input_hints),
+			(
+				"text_area_edits_lines_and_shows_its_placeholder",
+				text_area_edits_lines_and_shows_its_placeholder,
+			),
 			(
 				"focused_field_removal_does_not_emit_inside_commit",
 				focused_field_removal_does_not_emit_inside_commit,
@@ -890,6 +897,83 @@ mod macos {
 				value: "hel".to_owned()
 			}]
 		);
+	}
+
+	fn text_area_edits_lines_and_shows_its_placeholder() {
+		let value = Rc::new(RefCell::new(String::new()));
+		let screen = {
+			let value = Rc::clone(&value);
+			move || {
+				TextArea()
+					.placeholder("Write a note")
+					.value(value.borrow().clone())
+					.max_length(6)
+					.class("w-64 h-24")
+			}
+		};
+		let surface = Rc::new(RefCell::new(mounted(&screen())));
+		let id = surface.borrow().root().unwrap();
+		let scroll = native::<NSScrollView>(&surface.borrow(), id);
+		let text = scroll
+			.documentView()
+			.and_then(|view| view.downcast::<NSTextView>().ok())
+			.expect("a text area holds a text view");
+		assert!(text.isEditable());
+		assert!(!text.isRichText());
+		let placeholder = text
+			.subviews()
+			.firstObject()
+			.and_then(|view| view.downcast::<NSTextField>().ok())
+			.expect("a placeholder label over the text view");
+		assert_eq!(placeholder.stringValue().to_string(), "Write a note");
+		assert!(!placeholder.isHidden());
+
+		// An edit with a new line proposes the whole text, cut to the cap,
+		// and never submits.
+		let events = Rc::new(RefCell::new(Vec::new()));
+		surface.borrow().backend().set_event_listener({
+			let events = Rc::clone(&events);
+			move |_, event| events.borrow_mut().push(event.clone())
+		});
+		text.setString(&NSString::from_str("one\ntwo!"));
+		// SAFETY: the notification retains this text view as its object; the
+		// installed delegate implements the native edit notification.
+		let notification = unsafe {
+			NSNotification::notificationWithName_object(
+				&NSString::from_str("NSTextDidChangeNotification"),
+				Some(&text),
+			)
+		};
+		text.delegate().unwrap().textDidChange(&notification);
+		assert_eq!(
+			*events.borrow(),
+			vec![NativeEvent::Change {
+				value: "one\ntw".to_owned()
+			}]
+		);
+		// The application has not committed the proposal, so the view shows
+		// the committed value again.
+		assert_eq!(text.string().to_string(), "");
+
+		// Once the application commits a value, the placeholder hides.
+		value.replace("one\ntw".to_owned());
+		surface.borrow_mut().set_root(&screen());
+		assert_eq!(text.string().to_string(), "one\ntw");
+		assert!(placeholder.isHidden());
+
+		// A read-only area refuses edits but stays selectable.
+		let frozen = mounted(
+			&TextArea()
+				.aria_label("Frozen")
+				.value("kept")
+				.read_only(true),
+		);
+		let frozen = native::<NSScrollView>(&frozen, frozen.root().unwrap())
+			.documentView()
+			.and_then(|view| view.downcast::<NSTextView>().ok())
+			.unwrap();
+		assert!(!frozen.isEditable());
+		assert!(frozen.isSelectable());
 	}
 
 	fn edit(field: &NSTextField, value: &str) {

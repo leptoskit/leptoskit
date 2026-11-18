@@ -116,7 +116,8 @@ final class MobileWidgetRenderer: NSObject, UIScrollViewDelegate, NativeRiveSink
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
         onRiveViewportChange?()
 
-        guard widgets[scrollView.tag] === scrollView else { return }
+        // A text area scrolls its own text and reports no offsets.
+        guard widgets[scrollView.tag] === scrollView, !(scrollView is UITextView) else { return }
 
         if applying { scrolls.movedWhileApplying(scrollView.tag) } else { reportScroll(scrollView.tag) }
     }
@@ -199,6 +200,7 @@ final class MobileWidgetRenderer: NSObject, UIScrollViewDelegate, NativeRiveSink
         case "pressable", "Pressable": widget = makePressable(item.id)
         case "text_input", "TextInput", "password_input", "PasswordInput":
             widget = makeTextField(item.id, secure: ["password_input", "PasswordInput"].contains(item.kind))
+        case "text_area", "TextArea": widget = makeTextArea()
         case "scroll_view", "ScrollView":
             let scroll = UIScrollView()
             scroll.delegate = self
@@ -384,7 +386,8 @@ extension MobileWidgetRenderer {
 /// Scroll content sizes and programmatic scrolling, once a transaction's frames are set.
 extension MobileWidgetRenderer {
     fileprivate func updateScrollSizes() {
-        for scroll in widgets.values.compactMap({ $0 as? UIScrollView }) {
+        // A text area is a scroll view too, and sizes its own text.
+        for scroll in widgets.values.compactMap({ $0 as? UIScrollView }) where !(scroll is UITextView) {
             let size = scroll.subviews.reduce(CGSize.zero) { size, child in
 
                 guard !exits.contains(child) else { return size }

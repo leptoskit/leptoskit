@@ -68,6 +68,7 @@ fn widget_kinds_imply_their_roles_and_explicit_roles_override_them() {
 	assert_eq!(Role::implicit(NativeKind::Radio), Some(Role::Radio));
 	assert_eq!(Role::implicit(NativeKind::Slider), Some(Role::Slider));
 	assert_eq!(Role::implicit(NativeKind::TextInput), Some(Role::TextBox));
+	assert_eq!(Role::implicit(NativeKind::TextArea), Some(Role::TextBox));
 	assert_eq!(
 		Role::implicit(NativeKind::PasswordInput),
 		Some(Role::TextBox)
@@ -241,7 +242,11 @@ fn the_legacy_label_is_an_alias_and_aria_values_convert_from_booleans() {
 
 #[test]
 fn text_inputs_require_an_accessible_name_but_accept_any_naming_channel() {
-	for kind in [NativeKind::TextInput, NativeKind::PasswordInput] {
+	for kind in [
+		NativeKind::TextInput,
+		NativeKind::TextArea,
+		NativeKind::PasswordInput,
+	] {
 		assert_eq!(
 			Element::new(kind).validate(),
 			Err(ControlTreeError::MissingInputLabel { kind })

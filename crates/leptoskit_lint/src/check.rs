@@ -61,6 +61,7 @@ pub const BUILT_IN_COMPONENTS: &[&str] = &[
 	"Status",
 	"Switch",
 	"Text",
+	"TextArea",
 	"TextInput",
 	"Vector",
 	"VerticalDivider",

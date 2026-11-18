@@ -1,5 +1,6 @@
 package dev.leptoskit.mobile
 
+import android.text.InputType
 import android.view.MotionEvent
 import android.view.View
 import android.view.inputmethod.EditorInfo
@@ -181,6 +182,37 @@ class NativeControlsTest {
             email.dispatchKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_UP, android.view.KeyEvent.KEYCODE_ENTER))
             assertTrue(password.hasFocus())
             assertFalse(events.contains(2))
+        }
+
+    @Test
+    fun aTextAreaKeepsEnterForANewLine() =
+        onMain {
+            val root = FrameLayout(InstrumentationRegistry.getInstrumentation().targetContext)
+            val events = mutableListOf<Pair<Int, String>>()
+            val renderer = NativeWidgetRenderer(root, { _, kind, text -> events.add(kind to text) })
+            renderer.render(
+                RenderBatch(
+                    1,
+                    listOf(
+                        RenderMutation.Create(1, "view", WidgetProps()),
+                        RenderMutation.Create(2, "text_input", WidgetProps()),
+                        RenderMutation.Create(3, "text_area", WidgetProps(value = "one\ntwo")),
+                        RenderMutation.InsertChild(1, 2, 0),
+                        RenderMutation.InsertChild(1, 3, 1),
+                    ),
+                ),
+            )
+            val content = root.getChildAt(0) as FrameLayout
+            val line = content.getChildAt(0) as EditText
+            val area = content.getChildAt(1) as EditText
+            assertEquals("one\ntwo", area.text.toString())
+            assertTrue(area.inputType and InputType.TYPE_TEXT_FLAG_MULTI_LINE != 0)
+            // The field before it still moves on to it; the area itself names no action.
+            assertEquals(EditorInfo.IME_ACTION_NEXT, line.imeOptions)
+            assertEquals(EditorInfo.IME_FLAG_NO_ENTER_ACTION, area.imeOptions)
+            events.clear()
+            area.setText("one\ntwo\nthree")
+            assertEquals(listOf(1 to "one\ntwo\nthree"), events)
         }
 
     @Test

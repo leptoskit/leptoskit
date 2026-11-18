@@ -154,6 +154,7 @@ fn refuse_kind(kind: NativeKind) -> Result<(), WatchError> {
 		| NativeKind::Vector => Ok(()),
 		NativeKind::ScrollView => Err(WatchError::UnsupportedKind("ScrollView")),
 		NativeKind::TextInput => Err(WatchError::UnsupportedKind("TextInput")),
+		NativeKind::TextArea => Err(WatchError::UnsupportedKind("TextArea")),
 		NativeKind::PasswordInput => Err(WatchError::UnsupportedKind("PasswordInput")),
 		NativeKind::Checkbox => Err(WatchError::UnsupportedKind("Checkbox")),
 		NativeKind::Radio => Err(WatchError::UnsupportedKind("Radio")),

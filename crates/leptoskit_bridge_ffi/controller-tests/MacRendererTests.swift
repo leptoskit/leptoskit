@@ -38,6 +38,40 @@ struct MacRendererTests {
         #expect(events.first?.text == "after")
     }
 
+    /// A text area is a text view inside a scroll view: it shows several lines, sends each edit, and
+    /// cuts a proposal at `max_length`.
+    @Test func textAreasHoldLinesAndSendEdits() throws {
+        let view = NSView()
+        let renderer = MacWidgetRenderer(view: view)
+        var events: [Event] = []
+        renderer.onEvent = { events.append(Event(node: $0, kind: $1, text: $2)) }
+        try renderer.render(decode("""
+        {"version":1,"root":1,"mutations":[
+          {"Create":{"id":1,"kind":"view","props":{}}},
+          {"Create":{"id":2,"kind":"text_area","props":{"value":"one\\ntwo","max_length":9}}},
+          {"InsertChild":{"parent":1,"child":2}}
+        ]}
+        """))
+        let root = try #require(view.subviews.first)
+        let area = try #require(root.subviews.first as? MacTextArea)
+
+        #expect(area.text.string == "one\ntwo")
+        area.text.string = "one\ntwo\nthree"
+        area.textDidChange(Notification(name: NSText.didChangeNotification, object: area.text))
+        #expect(events.map(\.node) == [2])
+        #expect(events.first?.kind == 1)
+        #expect(events.first?.text == "one\ntwo\nt")
+
+        try renderer.render(decode("""
+        {"version":1,"root":1,"mutations":[
+          {"UpdateProps":{"id":2,"props":{"value":"","placeholder":"Notes","read_only":true}}}
+        ]}
+        """))
+        #expect(area.text.string.isEmpty)
+        #expect(!area.text.isEditable)
+        #expect(area.text.isSelectable)
+    }
+
     /// A password field is a secure AppKit field whose `autocomplete` hint becomes its content type.
     @Test func passwordFieldsAreSecureAndNameTheirContent() throws {
         let view = NSView()

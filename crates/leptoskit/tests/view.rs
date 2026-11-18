@@ -98,6 +98,7 @@ fn controls_take_their_values_as_props() {
 			<LinearProgressIndicator progress=Progress::Indeterminate />
 			<ActivityIndicator running=false />
 			<PasswordInput placeholder="Password" />
+			<TextArea placeholder="Notes" max_length=200 />
 			<Pressable accessibility_label="Open">
 				<Text>"Open"</Text>
 			</Pressable>
@@ -112,6 +113,7 @@ fn controls_take_their_values_as_props() {
 		LinearProgressIndicator(Progress::Indeterminate),
 		ActivityIndicator(false),
 		PasswordInput().placeholder("Password"),
+		TextArea().placeholder("Notes").max_length(200),
 		Pressable("Open").child(Text("Open")),
 		ScrollView().class("flex-1"),
 	]);

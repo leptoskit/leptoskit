@@ -181,7 +181,8 @@ final class MacWidgetRenderer: NSObject, NSTextFieldDelegate, NativeRiveSink {
     }
 
     private func updateScrollSizes() {
-        for scroll in widgets.values.compactMap({ $0 as? NSScrollView }) {
+        // A text area is a scroll view too, and sizes its own text.
+        for scroll in widgets.values.compactMap({ $0 as? MacScrollView }) {
             guard let document = scroll.documentView else { continue }
 
             document.setFrameSize(document.subviews.reduce(scroll.contentSize) { size, child in
@@ -215,6 +216,11 @@ final class MacWidgetRenderer: NSObject, NSTextFieldDelegate, NativeRiveSink {
         case "text_input", "TextInput", "password_input", "PasswordInput":
             let secure = ["password_input", "PasswordInput"].contains(item.kind)
             widget = editable(secure ? NSSecureTextField() : NSTextField())
+        case "text_area", "TextArea":
+            let area = MacTextArea()
+            area.onChange = { [weak self] value in self?.event(item.id, 1, value) }
+            area.onFocus = { [weak self] focused in self?.event(item.id, focused ? 3 : 4) }
+            widget = area
         case "scroll_view", "ScrollView":
             let scroll = MacScrollView()
             scroll.onScroll = { [weak self] in self?.scrolled(item.id) }
@@ -507,6 +513,12 @@ enum MacWidgetStyle {
         if let button = widget as? NSButton { applyButton(props, to: button) }
 
         if let field = widget as? NSTextField { applyField(props, to: field) }
+
+        if let area = widget as? MacTextArea {
+            area.apply(
+                props, font: font(props), color: props.color.map(color) ?? .labelColor,
+                alignment: alignment(props.textAlign))
+        }
 
         if let label = widget as? TextLabel {
             let font = font(props)

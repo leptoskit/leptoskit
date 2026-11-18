@@ -298,6 +298,7 @@ impl Element {
 					| NativeKind::Pressable
 					| NativeKind::ScrollView
 					| NativeKind::TextInput
+					| NativeKind::TextArea
 					| NativeKind::PasswordInput
 					| NativeKind::Switch
 					| NativeKind::Checkbox
@@ -405,6 +406,7 @@ impl Element {
 				| NativeKind::Map
 				| NativeKind::LivePhoto
 				| NativeKind::TextInput
+				| NativeKind::TextArea
 				| NativeKind::PasswordInput
 				| NativeKind::Switch
 				| NativeKind::Checkbox
@@ -418,8 +420,10 @@ impl Element {
 			return Err(ControlTreeError::Children { kind: self.kind });
 		}
 
-		if matches!(self.kind, NativeKind::TextInput | NativeKind::PasswordInput)
-			&& !self.props.names_itself()
+		if matches!(
+			self.kind,
+			NativeKind::TextInput | NativeKind::TextArea | NativeKind::PasswordInput
+		) && !self.props.names_itself()
 			&& self
 				.props
 				.placeholder
@@ -427,6 +431,12 @@ impl Element {
 				.is_none_or(|placeholder| placeholder.trim().is_empty())
 		{
 			return Err(ControlTreeError::MissingInputLabel { kind: self.kind });
+		}
+
+		if matches!(self.kind, NativeKind::TextInput | NativeKind::PasswordInput)
+			&& self.props.aria().multiline == Some(true)
+		{
+			return Err(ControlTreeError::MultilineTextInput { kind: self.kind });
 		}
 
 		if self
@@ -749,6 +759,12 @@ impl Element {
 	#[track_caller]
 	pub fn text_input() -> Self {
 		Self::new(NativeKind::TextInput)
+	}
+
+	/// A `TextArea` element: a multi-line text field.
+	#[track_caller]
+	pub fn text_area() -> Self {
+		Self::new(NativeKind::TextArea)
 	}
 
 	/// A `Button` element with the given label.

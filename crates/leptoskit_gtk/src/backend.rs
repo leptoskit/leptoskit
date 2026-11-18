@@ -712,6 +712,18 @@ impl NativeBackend for GtkBackend {
 
 				entry.upcast()
 			}
+			NativeKind::TextArea => {
+				// A text view grows with its text; the scrolled window
+				// keeps it inside the frame Yoga gives the field.
+				let view = gtk::TextView::builder()
+					.wrap_mode(gtk::WrapMode::WordChar)
+					.accepts_tab(false)
+					.build();
+				let scroll = gtk::ScrolledWindow::new();
+				scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
+				scroll.set_child(Some(&view));
+				scroll.upcast()
+			}
 			NativeKind::Switch => gtk::Switch::new().upcast(),
 			NativeKind::Checkbox => gtk::CheckButton::new().upcast(),
 			NativeKind::Radio => crate::radio::Radio::new().upcast(),
@@ -752,6 +764,18 @@ impl NativeBackend for GtkBackend {
 		control
 			.style_context()
 			.add_provider(&css, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
+
+		// A provider styles only the widget it is added to, and a text
+		// area's text lives in the view inside its scrolled window.
+		if kind == NativeKind::TextArea
+			&& let Some(view) = control
+				.downcast_ref::<gtk::ScrolledWindow>()
+				.and_then(gtk::ScrolledWindow::child)
+		{
+			view.style_context()
+				.add_provider(&css, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
+		}
+
 		// GTK fixes the accessible role of native controls itself; an
 		// explicit role restyles plain containers at creation.
 		if let Some(role) = props.aria().role {
@@ -1024,6 +1048,10 @@ fn configure(widget: &Widget, _dark: Option<bool>) {
 		configure_entry(&entry, widget.kind, props, rtl);
 	}
 
+	if let Some(view) = text_view(widget) {
+		configure_text_view(&view, props);
+	}
+
 	if let Ok(toggle) = widget.control.clone().downcast::<gtk::Switch>() {
 		toggle.set_active(props.checked.unwrap_or(false));
 		toggle.set_state(props.checked.unwrap_or(false));
@@ -1116,6 +1144,13 @@ fn control_css(kind: NativeKind, props: &NativeProps) -> String {
 		);
 	}
 
+	if kind == NativeKind::TextArea && props.is_custom_drawn() {
+		css.push_str(
+			"scrolledwindow, textview, textview text { background: transparent; border: 0; \
+			 box-shadow: none; }",
+		);
+	}
+
 	if matches!(kind, NativeKind::TextInput | NativeKind::PasswordInput) {
 		// Yoga sizes an input from its text. The theme's minimum (34px in
 		// Adwaita) would make the entry taller than that frame and
@@ -1180,6 +1215,72 @@ fn configure_button(button: &gtk::Button, props: &NativeProps) {
 		});
 
 		label.layout().set_auto_dir(false);
+	}
+}
+
+/// The text view inside a `TextArea`'s scrolled window.
+fn text_view(widget: &Widget) -> Option<gtk::TextView> {
+	if widget.kind != NativeKind::TextArea {
+		return None;
+	}
+
+	widget
+		.control
+		.downcast_ref::<gtk::ScrolledWindow>()?
+		.child()?
+		.downcast::<gtk::TextView>()
+		.ok()
+}
+
+/// Applies a `TextArea`'s committed value and hints to its text view.
+///
+/// A text view has no placeholder of its own, so the placeholder only names
+/// the field for assistive technology here.
+fn configure_text_view(view: &gtk::TextView, props: &NativeProps) {
+	let value = props
+		.value
+		.as_deref()
+		.or(props.text.as_deref())
+		.unwrap_or("");
+	let buffer = view.buffer();
+	let current = buffer.text(&buffer.start_iter(), &buffer.end_iter(), false);
+
+	if current != value {
+		let position = buffer.cursor_position();
+		buffer.set_text(value);
+		let cursor = buffer.iter_at_offset(position.min(value.chars().count() as i32));
+		buffer.place_cursor(&cursor);
+	}
+
+	view.set_justification(match props.text_align.unwrap_or_default() {
+		TextAlign::Start => gtk::Justification::Left,
+		TextAlign::Center => gtk::Justification::Center,
+		TextAlign::End => gtk::Justification::Right,
+	});
+	// A read-only field refuses edits but stays selectable and copyable.
+	view.set_editable(props.read_only != Some(true));
+
+	let mut hints = gtk::InputHints::NONE;
+	match props.capitalize {
+		Some(Capitalize::Words) => hints |= gtk::InputHints::UPPERCASE_WORDS,
+		Some(Capitalize::Sentences) => hints |= gtk::InputHints::UPPERCASE_SENTENCES,
+		Some(Capitalize::Characters) => hints |= gtk::InputHints::UPPERCASE_CHARS,
+		Some(Capitalize::None) | None => {}
+	}
+
+	if props.autocorrect == Some(false) {
+		hints |= gtk::InputHints::NO_SPELLCHECK;
+	}
+
+	view.set_input_hints(hints);
+}
+
+/// A text view cannot refuse an insertion, so a `max_length` field reports
+/// its text cut to the limit; the commit that follows writes it back.
+fn limited(text: &str, max_length: Option<usize>) -> String {
+	match max_length {
+		Some(max_length) => text.chars().take(max_length).collect(),
+		None => text.to_owned(),
 	}
 }
 
@@ -1416,6 +1517,7 @@ fn connect(state: &Rc<RefCell<State>>, id: NodeId, widget: &Widget) {
 		NativeKind::Button
 			| NativeKind::Pressable
 			| NativeKind::TextInput
+			| NativeKind::TextArea
 			| NativeKind::PasswordInput
 			| NativeKind::Switch
 			| NativeKind::Checkbox
@@ -1513,6 +1615,36 @@ fn connect_proposals(
 		});
 	}
 
+	if let Some(view) = text_view(widget) {
+		let weak = weak.clone();
+		let flag = flag.clone();
+		let state = Rc::downgrade(state);
+		view.buffer().connect_changed(move |buffer| {
+			// A commit writing the value holds the state; it is not a
+			// proposal.
+			if flag.get() {
+				return;
+			}
+
+			let max_length = state.upgrade().and_then(|state| {
+				state
+					.borrow()
+					.widgets
+					.get(&id)
+					.and_then(|widget| widget.props.max_length)
+			});
+			let text = buffer.text(&buffer.start_iter(), &buffer.end_iter(), false);
+			emit(
+				&weak,
+				&flag,
+				id,
+				NativeEvent::Change {
+					value: limited(&text, max_length),
+				},
+			);
+		});
+	}
+
 	if let Ok(toggle) = widget.control.clone().downcast::<gtk::Switch>() {
 		let weak = weak.clone();
 		let flag = flag.clone();
@@ -1567,7 +1699,9 @@ fn connect_proposals(
 		});
 	}
 
-	if let Ok(scroll) = widget.control.clone().downcast::<gtk::ScrolledWindow>() {
+	if let Ok(scroll) = widget.control.clone().downcast::<gtk::ScrolledWindow>()
+		&& widget.kind == NativeKind::ScrollView
+	{
 		for adjustment in [scroll.hadjustment(), scroll.vadjustment()] {
 			let weak = weak.clone();
 			let flag = flag.clone();

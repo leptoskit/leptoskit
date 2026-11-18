@@ -17,6 +17,7 @@ use leptoskit_native::components::ScrollView;
 use leptoskit_native::components::Slider;
 use leptoskit_native::components::SliderState;
 use leptoskit_native::components::Text;
+use leptoskit_native::components::TextArea;
 use leptoskit_native::components::TextInput;
 use leptoskit_native::components::helpers::Column;
 use leptoskit_tui::Exit;
@@ -270,6 +271,161 @@ fn an_application_rewrite_replaces_the_draft() {
 	// The application keeps the raw draft but renders it uppercased.
 	assert_eq!(value.lock().unwrap().as_str(), "a");
 	assert!(sink.lines()[0].starts_with('A'));
+}
+
+fn area_screen(
+	value: &Arc<Mutex<String>>,
+	submitted: &Arc<Mutex<bool>>,
+	max_length: Option<usize>,
+) -> impl FnMut() -> Element + 'static {
+	let value = Arc::clone(value);
+	let submitted = Arc::clone(submitted);
+
+	move || {
+		let current = value.lock().unwrap().clone();
+		let mut area = TextArea()
+			.placeholder("Note")
+			.accessibility_label("Note")
+			.value(current)
+			.on_change({
+				let value = Arc::clone(&value);
+				move |next: &str| next.clone_into(&mut value.lock().unwrap())
+			})
+			.on(NativeEventSlot::Submit, {
+				let submitted = Arc::clone(&submitted);
+				move |_: &NativeEvent| {
+					*submitted.lock().unwrap() = true;
+
+					EventOutcome::Handled
+				}
+			})
+			.class("w-20 h-12");
+
+		if let Some(max_length) = max_length {
+			area = area.max_length(max_length);
+		}
+
+		area
+	}
+}
+
+#[test]
+fn enter_adds_a_line_to_a_text_area_and_never_submits() {
+	let value = shared(String::new());
+	let submitted = shared(false);
+	let sink = session(
+		area_screen(&value, &submitted, None),
+		vec![
+			plain(KeyCode::Tab),
+			char('a'),
+			char('b'),
+			plain(KeyCode::Enter),
+			char('c'),
+		],
+		16,
+		4,
+	);
+
+	assert_eq!(value.lock().unwrap().as_str(), "ab\nc");
+	assert!(!*submitted.lock().unwrap());
+	let lines = sink.lines();
+	assert!(lines[0].starts_with("ab"));
+	assert!(lines[1].starts_with('c'));
+	// The caret follows the text onto the second line.
+	assert_eq!(sink.frames.last().unwrap().cursor(), Some((1, 1)));
+}
+
+#[test]
+fn arrows_home_and_end_move_between_a_text_areas_lines() {
+	let value = shared("abc\nde".to_owned());
+	let submitted = shared(false);
+	// The caret starts at the end. Up keeps column 2 on the first line,
+	// Home goes to its start, Down returns to the second line's start, and
+	// End to its end.
+	let sink = session(
+		area_screen(&value, &submitted, None),
+		vec![
+			plain(KeyCode::Tab),
+			plain(KeyCode::Up),
+			char('1'),
+			plain(KeyCode::Home),
+			char('2'),
+			plain(KeyCode::Down),
+			char('3'),
+			plain(KeyCode::End),
+			char('4'),
+		],
+		16,
+		4,
+	);
+
+	assert_eq!(value.lock().unwrap().as_str(), "2ab1c\nd3e4");
+	assert_eq!(sink.frames.last().unwrap().cursor(), Some((4, 1)));
+}
+
+#[test]
+fn a_text_area_wraps_long_lines_and_scrolls_to_the_caret() {
+	let value = shared(String::new());
+	let submitted = shared(false);
+	let mut events = vec![plain(KeyCode::Tab)];
+
+	for line in ['a', 'b', 'c', 'd'] {
+		events.push(char(line));
+		events.push(plain(KeyCode::Enter));
+	}
+
+	events.extend("hello world".chars().map(char));
+
+	let sink = session(area_screen(&value, &submitted, None), events, 16, 4);
+
+	assert_eq!(value.lock().unwrap().as_str(), "a\nb\nc\nd\nhello world");
+	// Ten columns wrap "hello world" onto two lines; three rows show the
+	// last three wrapped lines, with the caret on the bottom one.
+	let lines = sink.lines();
+	assert!(lines[0].starts_with('d'));
+	assert!(lines[1].starts_with("hello"));
+	assert!(lines[2].starts_with("world"));
+	assert_eq!(sink.frames.last().unwrap().cursor(), Some((5, 2)));
+}
+
+#[test]
+fn a_text_area_refuses_typing_past_its_max_length() {
+	let value = shared(String::new());
+	let submitted = shared(false);
+	let sink = session(
+		area_screen(&value, &submitted, Some(3)),
+		vec![
+			plain(KeyCode::Tab),
+			char('a'),
+			plain(KeyCode::Enter),
+			char('b'),
+			char('c'),
+			plain(KeyCode::Enter),
+		],
+		16,
+		4,
+	);
+
+	assert_eq!(value.lock().unwrap().as_str(), "a\nb");
+	assert!(sink.lines()[1].starts_with('b'));
+}
+
+#[test]
+fn a_click_places_a_text_areas_caret_on_the_clicked_line() {
+	let value = shared("abc\ndef".to_owned());
+	let submitted = shared(false);
+	let sink = session(
+		area_screen(&value, &submitted, None),
+		vec![
+			SourceEvent::Mouse(Mouse::Click { col: 1, row: 0 }),
+			char('x'),
+		],
+		16,
+		4,
+	);
+
+	assert_eq!(value.lock().unwrap().as_str(), "axbc\ndef");
+	assert_eq!(sink.frames.last().unwrap().cursor(), Some((2, 0)));
 }
 
 fn slider_screen(value: &Arc<Mutex<f64>>) -> impl FnMut() -> Element + 'static {

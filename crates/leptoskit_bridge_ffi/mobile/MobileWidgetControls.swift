@@ -1,8 +1,37 @@
 import LeptosKitBridge
 import UIKit
 
+/// Several lines of editable text. Return adds a line, the text wraps, and the
+/// view scrolls its own content. `UITextView` has no placeholder, so a label
+/// over the empty text shows it.
+final class MobileTextArea: UITextView {
+    let hint = UILabel()
+
+    override init(frame: CGRect, textContainer: NSTextContainer?) {
+        super.init(frame: frame, textContainer: textContainer)
+        backgroundColor = .clear
+        hint.textColor = .placeholderText
+        hint.numberOfLines = 0
+        hint.isUserInteractionEnabled = false
+        addSubview(hint)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { nil }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        let inset = textContainerInset
+        let padding = textContainer.lineFragmentPadding
+        let width = max(0, bounds.width - inset.left - inset.right - 2 * padding)
+        hint.frame = CGRect(
+            x: inset.left + padding, y: inset.top, width: width,
+            height: hint.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude)).height)
+    }
+}
+
 /// Native controls and keyboard gestures for the generated iOS renderer.
-extension MobileWidgetRenderer: UITextFieldDelegate, UIGestureRecognizerDelegate {
+extension MobileWidgetRenderer: UITextFieldDelegate, UITextViewDelegate, UIGestureRecognizerDelegate {
     /// Press in and out follow the events on which UIKit sets and clears the
     /// button's highlight, so `active:` styles track it.
     func makeButton(_ id: Int) -> UIButton {
@@ -40,6 +69,31 @@ extension MobileWidgetRenderer: UITextFieldDelegate, UIGestureRecognizerDelegate
 
         return field
     }
+
+    func makeTextArea() -> MobileTextArea {
+        let area = MobileTextArea()
+        area.delegate = self
+
+        return area
+    }
+
+    func textViewDidChange(_ textView: UITextView) {
+        (textView as? MobileTextArea)?.hint.isHidden = !textView.text.isEmpty
+        event(textView.tag, 1, textView.text ?? "")
+    }
+
+    func textViewDidBeginEditing(_ textView: UITextView) { event(textView.tag, 3) }
+    func textViewDidEndEditing(_ textView: UITextView) { event(textView.tag, 4) }
+
+    func textView(
+        _ textView: UITextView, shouldChangeTextIn range: NSRange, replacementText text: String
+    ) -> Bool {
+        guard let max = properties[textView.tag]?.maxLength else { return true }
+
+        let current = (textView.text as NSString?)?.length ?? 0
+        return current - range.length + (text as NSString).length <= max
+    }
+
     func makeControl(_ item: Change.Widget) throws -> UIView {
         let widget: UIView
         switch item.kind {

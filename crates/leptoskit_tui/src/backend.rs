@@ -471,7 +471,10 @@ impl NativeBackend for TuiBackend {
 			frame: Frame::default(),
 		});
 
-		if matches!(kind, NativeKind::TextInput | NativeKind::PasswordInput) {
+		if matches!(
+			kind,
+			NativeKind::TextInput | NativeKind::TextArea | NativeKind::PasswordInput
+		) {
 			let value = props
 				.value
 				.as_deref()
@@ -499,7 +502,10 @@ impl NativeBackend for TuiBackend {
 
 		node.props = props.clone();
 
-		if matches!(node.kind, NativeKind::TextInput | NativeKind::PasswordInput) {
+		if matches!(
+			node.kind,
+			NativeKind::TextInput | NativeKind::TextArea | NativeKind::PasswordInput
+		) {
 			let value = props
 				.value
 				.as_deref()

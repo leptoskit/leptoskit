@@ -1237,8 +1237,8 @@ enum Start {
 fn builtin(name: &str) -> Option<Start> {
 	let attribute = |name, default| Start::Attribute { name, default };
 	Some(match name {
-		"View" | "ScrollView" | "TextInput" | "PasswordInput" | "Row" | "Column" | "Wrap"
-		| "Center" | "Spacer" | "ClipRect" | "Divider" | "VerticalDivider" | "Card"
+		"View" | "ScrollView" | "TextInput" | "TextArea" | "PasswordInput" | "Row" | "Column"
+		| "Wrap" | "Center" | "Spacer" | "ClipRect" | "Divider" | "VerticalDivider" | "Card"
 		| "ListView" => Start::Bare,
 		"Text" | "Button" => Start::Content,
 		"Heading" => Start::Heading,

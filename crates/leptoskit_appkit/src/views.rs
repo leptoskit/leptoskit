@@ -29,11 +29,15 @@ use objc2_app_kit::NSEvent;
 use objc2_app_kit::NSResponder;
 use objc2_app_kit::NSSlider;
 use objc2_app_kit::NSSwitch;
+use objc2_app_kit::NSText;
+use objc2_app_kit::NSTextDelegate;
 use objc2_app_kit::NSTextField;
 use objc2_app_kit::NSTextFieldDelegate;
 use objc2_app_kit::NSTextView;
+use objc2_app_kit::NSTextViewDelegate;
 use objc2_app_kit::NSView;
 use objc2_foundation::NSNotification;
+use objc2_foundation::NSPoint;
 use objc2_foundation::NSRect;
 use objc2_foundation::NSString;
 
@@ -65,6 +69,37 @@ impl FlippedView {
 		let view: Retained<Self> = unsafe { msg_send![super(this), initWithFrame: NSRect::ZERO] };
 		view.setWantsLayer(true);
 		view
+	}
+}
+
+define_class!(
+	// SAFETY: NSTextField is initialized through its designated initializer.
+	// The class does not implement `Drop`.
+	#[unsafe(super(NSTextField, NSControl, NSView, NSResponder, NSObject))]
+	#[thread_kind = MainThreadOnly]
+	/// The placeholder a `TextArea` draws over its empty text view, which has
+	/// none of its own. Clicks pass through it to the text view beneath.
+	pub(crate) struct PlaceholderLabel;
+
+	impl PlaceholderLabel {
+		#[unsafe(method(hitTest:))]
+		fn hit_test(&self, _point: NSPoint) -> *mut NSView {
+			std::ptr::null_mut()
+		}
+	}
+);
+
+impl PlaceholderLabel {
+	/// A borderless, uneditable label with no text yet.
+	pub(crate) fn new(mtm: MainThreadMarker) -> Retained<Self> {
+		let this = Self::alloc(mtm).set_ivars(());
+		// SAFETY: `initWithFrame:` is NSTextField's designated initializer.
+		let label: Retained<Self> = unsafe { msg_send![super(this), initWithFrame: NSRect::ZERO] };
+		label.setBezeled(false);
+		label.setDrawsBackground(false);
+		label.setEditable(false);
+		label.setSelectable(false);
+		label
 	}
 }
 
@@ -506,6 +541,53 @@ define_class!(
 	}
 
 	unsafe impl NSTextFieldDelegate for ActionTarget {}
+
+	// A `TextArea`'s text view reports its edits and focus here.
+	unsafe impl NSTextDelegate for ActionTarget {
+		#[unsafe(method(textDidChange:))]
+		fn text_did_change(&self, notification: &NSNotification) {
+			let _keep_alive = self.retain();
+			let Some(text) = notification
+				.object()
+				.and_then(|object| object.downcast::<NSText>().ok())
+			else {
+				return;
+			};
+			let mut value = text.string().to_string();
+
+			// The view accepts more characters than the app allows, so
+			// truncate to `max_length` before the proposal leaves.
+			if let Some(max_length) = self.ivars().max_length.get() {
+				let truncated: String = value.chars().take(max_length).collect();
+
+				if truncated != value {
+					value = truncated;
+					text.setString(&NSString::from_str(&value));
+				}
+			}
+
+			if text.isEditable() && !text.isHiddenOrHasHiddenAncestor() {
+				self.emit(&NativeEvent::Change { value });
+			}
+
+			if self.ivars().active.get() && text.string().to_string() != *self.ivars().value.borrow()
+			{
+				text.setString(&NSString::from_str(&self.ivars().value.borrow()));
+			}
+		}
+
+		#[unsafe(method(textDidBeginEditing:))]
+		fn text_did_begin_editing(&self, _notification: &NSNotification) {
+			self.emit(&NativeEvent::Focus);
+		}
+
+		#[unsafe(method(textDidEndEditing:))]
+		fn text_did_end_editing(&self, _notification: &NSNotification) {
+			self.emit(&NativeEvent::Blur);
+		}
+	}
+
+	unsafe impl NSTextViewDelegate for ActionTarget {}
 );
 
 impl ActionTarget {

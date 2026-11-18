@@ -19,6 +19,7 @@
 //! | `Button` | an `NSButton` whose action dispatches [`NativeEvent::Press`] |
 //! | `TextInput` | an editable `NSTextField` |
 //! | `PasswordInput` | an `NSSecureTextField` |
+//! | `TextArea` | an `NSTextView` in an `NSScrollView`, with a drawn placeholder |
 //! | `Switch` | an `NSSwitch` |
 //! | `Checkbox`, `Radio` | native `NSButton` switch/radio controls |
 //! | `Slider` | an `NSSlider` with shared step-grid keyboard increments |
