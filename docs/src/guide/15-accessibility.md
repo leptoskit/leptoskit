@@ -104,6 +104,40 @@ The [`Field`](16-accessible-components.md#field) helper and `leptoskit::form` al
 
 The text becomes a label only when the relationship is unambiguous: the field has an `id`, it is named by exactly one element, that element is a plain `Text` with no `role`, and no other field is named after the same text. A label and its field inside the same `For` or `Show` are matched; a label outside a `For` or `Show` whose field is inside it stays a plain text.
 
+### Move focus once
+
+Some actions should carry the person to the next thing to do. After "Send code", the caret belongs in the code field. After a menu closes, focus belongs back on the button that opened it. After a form fails, a screen reader should land on the error summary. Without that, a keyboard or screen-reader user has to hunt for where the screen changed.
+
+Create a `FocusRequest`, give it to the widget with `focus_on`, and call `request()` from any handler:
+
+```rust
+#[component]
+fn SignIn() -> impl IntoView {
+	let to_code = FocusRequest::new();
+
+	view! {
+		<View class="gap-2">
+			<Button on:press=move || { send_code(); to_code.request(); }>"Send code"</Button>
+			<TextInput aria_label="Code" focus_on=to_code />
+		</View>
+	}
+}
+```
+
+Each call to `request()` moves focus once, after the screen next updates. The person can then tab or click away, and later updates leave focus where they put it. That is the difference from `focused(true)`, which pulls focus back after every update and suits a widget that should always hold it, such as a chat prompt.
+
+The handle is `Copy`, so any number of handlers can capture it. Give one handle to one widget; when two requests arrive in the same update, the newest wins. A widget that leaves the screen and comes back does not take focus again until `request()` is called again.
+
+- **Web:** the element is focused with `focus()`. A `Text`, a heading or a container takes focus too: it gets `tabindex="-1"`, so it can be focused from code without joining the Tab order.
+- **Terminal:** focus moves to any widget in the focus ring, and the widget hears `Focus` as it would from Tab.
+- **Linux (GTK):** the widget grabs focus if GTK lets it take focus.
+- **macOS:** text fields and text areas become first responder. Buttons, switches, checkboxes and sliders take focus only while Keyboard Navigation is turned on in System Settings, which is how macOS treats them everywhere. Text and containers are left alone.
+- **Windows:** buttons, toggles, sliders and text fields take focus. Text and containers are left alone.
+- **iOS:** a text field or text area takes the keyboard. Any other widget takes the VoiceOver cursor instead, because iOS has no keyboard focus for it without a hardware keyboard.
+- **Android:** a text field takes input focus. Other widgets take focus when the device is driven by a keyboard or remote, and take the TalkBack cursor either way. The on-screen keyboard is not raised for you.
+
+On macOS, Windows, iOS and Android the widget does not hear a `Focus` event for a move the app asked for, because events are held back while an update is applied. The web, the terminal and GTK deliver it.
+
 A plain container with a `role` or an `aria_label` becomes one accessibility element, merging its content the way React Native's `accessible` does — VoiceOver and TalkBack read the card below as a single item:
 
 ```rust,ignore

@@ -519,6 +519,16 @@ pub struct NativeProps {
 	/// controlled value overrides what the user typed.
 	#[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
 	pub focused: Option<bool>,
+	/// The serial of the latest one-shot focus request this widget holds,
+	/// set by [`Element::focus_on`](crate::Element::focus_on) from a
+	/// [`FocusRequest`](crate::FocusRequest). Serials grow with every
+	/// request in the process. [`NativeSurface`](crate::NativeSurface) sends
+	/// a serial to its backend only with the commit that first carries it,
+	/// so a backend moves focus to
+	/// [`MutationList::focus_target`](crate::MutationList::focus_target)
+	/// after each batch and leaves focus alone otherwise.
+	#[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
+	pub focus_request: Option<u64>,
 	/// Where a scroll view's content is scrolled to, set by
 	/// [`Element::scroll_offset`](crate::Element::scroll_offset). A backend
 	/// scrolls there when the value changes, and leaves the person's own

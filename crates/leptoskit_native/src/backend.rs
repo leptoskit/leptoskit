@@ -112,6 +112,31 @@ impl MutationList {
 	pub fn into_mutations(self) -> Vec<Mutation> {
 		self.mutations
 	}
+
+	/// The widget this batch moves keyboard focus to: the last one created
+	/// or updated with a [`focus_request`](NativeProps::focus_request) that
+	/// the batch does not also delete.
+	///
+	/// The surface sends a request with the commit that makes it and leaves
+	/// it out of every later one, so a backend moves focus here once it has
+	/// applied the batch and needs no memory of earlier requests.
+	pub fn focus_target(&self) -> Option<NodeId> {
+		let mut asked = Vec::new();
+
+		for mutation in &self.mutations {
+			match mutation {
+				Mutation::Create { id, props, .. } | Mutation::UpdateProps { id, props }
+					if props.focus_request.is_some() =>
+				{
+					asked.push(*id);
+				}
+				Mutation::Delete { id } => asked.retain(|asked| asked != id),
+				_ => {}
+			}
+		}
+
+		asked.pop()
+	}
 }
 
 /// The platform contract: one method per mutation, applied in batch order.

@@ -648,3 +648,51 @@ fn screens_without_focusables_absorb_keys_quietly() {
 
 	assert!(sink.lines()[0].contains("still"));
 }
+
+/// A menu whose first button asks for focus on the third, as a handler does
+/// with `FocusRequest::request`.
+fn focus_request_session(events: Vec<SourceEvent>) -> Recorder {
+	let asked = shared(None::<u64>);
+
+	session(
+		move || {
+			let request = *asked.lock().unwrap();
+
+			Column()
+				.child(Button("One").on_press({
+					let asked = Arc::clone(&asked);
+					move || *asked.lock().unwrap() = Some(1)
+				}))
+				.child(Button("Two"))
+				.child(Button("Three").with_props(|props| props.focus_request = request))
+		},
+		events,
+		24,
+		4,
+	)
+}
+
+#[test]
+fn a_focus_request_moves_focus_to_its_widget() {
+	let sink = focus_request_session(vec![plain(KeyCode::Tab), plain(KeyCode::Enter)]);
+
+	let frame = sink.frames.last().unwrap();
+	assert!(label_is_focused(frame, 2));
+	assert!(!label_is_focused(frame, 0));
+}
+
+#[test]
+fn a_focus_request_lets_the_person_move_on() {
+	let sink = focus_request_session(vec![
+		plain(KeyCode::Tab),
+		plain(KeyCode::Enter),
+		plain(KeyCode::BackTab),
+		// Pressing the second button rebuilds the screen with the request
+		// still in place.
+		plain(KeyCode::Enter),
+	]);
+
+	let frame = sink.frames.last().unwrap();
+	assert!(label_is_focused(frame, 1));
+	assert!(!label_is_focused(frame, 2));
+}

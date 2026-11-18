@@ -339,6 +339,9 @@ pub struct NativeSurface<B: NativeBackend> {
 	/// Recognizers for pointers currently down. Interior mutability lets a
 	/// gesture callback rebuild the tree without borrowing the session.
 	gestures: RefCell<crate::gesture::Session>,
+	/// The newest focus request sent to the backend. Serials only grow, so
+	/// an older one is a request that was already carried out.
+	focus_answered: u64,
 	#[cfg(feature = "devtools")]
 	devtools: Devtools,
 }
@@ -365,6 +368,7 @@ impl<B: NativeBackend> NativeSurface<B> {
 			safe_area: Rect::default(),
 			pressed: None,
 			gestures: RefCell::default(),
+			focus_answered: 0,
 			#[cfg(feature = "devtools")]
 			devtools: Devtools::default(),
 		}

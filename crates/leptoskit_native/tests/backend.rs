@@ -7,6 +7,7 @@ use leptoskit_native::MutationList;
 use leptoskit_native::NativeBackend;
 use leptoskit_native::NativeSurface;
 use leptoskit_native::components::Text;
+use leptoskit_native::components::TextInput;
 use leptoskit_native::components::View;
 use leptoskit_yoga::NodeId;
 
@@ -127,4 +128,98 @@ fn the_trait_defaults_forward_each_mutation_and_report_no_error() {
 
 	surface.backend_mut().limit_mutation_log(64);
 	assert_eq!(surface.backend().render_error(), None);
+}
+
+/// The props mutations of a commit, as `(creates, request)` pairs: whether
+/// each one created its widget, and the focus request it carried.
+fn focus_requests(log: &[Mutation]) -> Vec<(bool, u64)> {
+	log.iter()
+		.filter_map(|mutation| {
+			match mutation {
+				Mutation::Create { props, .. } => Some((true, props.focus_request?)),
+				Mutation::UpdateProps { props, .. } => Some((false, props.focus_request?)),
+				_ => None,
+			}
+		})
+		.collect()
+}
+
+/// A screen with a field that holds the focus request `request`.
+fn code_screen(title: &str, request: Option<u64>) -> leptoskit_native::Element {
+	View().child(Text(title)).child(
+		TextInput()
+			.aria_label("Code")
+			.with_props(|props| props.focus_request = request),
+	)
+}
+
+#[test]
+fn a_focus_request_reaches_the_backend_once() {
+	let mut surface = NativeSurface::new(HeadlessBackend::new());
+	surface.set_root(&code_screen("Sign in", None));
+	assert_eq!(focus_requests(&surface.backend_mut().take_log()), []);
+
+	surface.set_root(&code_screen("Sign in", Some(4)));
+	assert_eq!(
+		focus_requests(&surface.backend_mut().take_log()),
+		[(false, 4)]
+	);
+
+	// Something else changes while the field still holds the request.
+	surface.set_root(&code_screen("Check your email", Some(4)));
+	let unrelated = surface.backend_mut().take_log();
+	assert_ne!(unrelated, [] as [Mutation; 0]);
+	assert_eq!(focus_requests(&unrelated), []);
+
+	surface.set_root(&code_screen("Check your email", Some(9)));
+	assert_eq!(
+		focus_requests(&surface.backend_mut().take_log()),
+		[(false, 9)]
+	);
+}
+
+#[test]
+fn a_widget_created_with_a_new_request_takes_focus_and_an_old_one_does_not() {
+	let mut surface = NativeSurface::new(HeadlessBackend::new());
+	surface.set_root(&code_screen("Sign in", Some(4)));
+	assert_eq!(
+		focus_requests(&surface.backend_mut().take_log()),
+		[(true, 4)]
+	);
+
+	// The field leaves and comes back still holding the request it had.
+	surface.set_root(&View().child(Text("Sign in")));
+	surface.set_root(&code_screen("Sign in", Some(4)));
+	assert_eq!(focus_requests(&surface.backend_mut().take_log()), []);
+}
+
+#[test]
+fn a_batch_names_the_last_widget_asked_to_take_focus() {
+	let mut surface = NativeSurface::new(HeadlessBackend::new());
+	surface.set_root(&View().children([
+		TextInput().aria_label("Email"),
+		TextInput().aria_label("Code"),
+	]));
+	let fields: Vec<NodeId> = surface.children(surface.root().unwrap()).to_vec();
+	let asks = |id, request| {
+		Mutation::UpdateProps {
+			id,
+			props: TextInput()
+				.with_props(|props| props.focus_request = request)
+				.props,
+		}
+	};
+
+	let mut batch = MutationList::new();
+	assert_eq!(batch.focus_target(), None);
+
+	batch.push(asks(fields[0], Some(1)));
+	batch.push(asks(fields[1], None));
+	assert_eq!(batch.focus_target(), Some(fields[0]));
+
+	batch.push(asks(fields[1], Some(2)));
+	assert_eq!(batch.focus_target(), Some(fields[1]));
+
+	batch.push(Mutation::Delete { id: fields[1] });
+	assert_eq!(batch.focus_target(), Some(fields[0]));
 }

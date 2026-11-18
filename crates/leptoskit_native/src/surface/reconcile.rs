@@ -146,10 +146,11 @@ impl<B: NativeBackend> NativeSurface<B> {
 			);
 		}
 
+		let props = self.props_to_send(&element.props);
 		out.push(Mutation::Create {
 			id,
 			kind: element.kind,
-			props: element.props.clone(),
+			props,
 		});
 
 		if let Some((parent, index)) = slot {
@@ -228,15 +229,28 @@ impl<B: NativeBackend> NativeSurface<B> {
 			&& self.shadows[id.index()].props.aria().role == element.props.aria().role
 	}
 
+	/// The props a backend receives. A focus request travels once, with the
+	/// commit that makes it: every later update leaves it out, and so does a
+	/// widget created while it still holds a request already carried out.
+	/// Backends then move focus once and the person can move on.
+	fn props_to_send(&mut self, props: &NativeProps) -> NativeProps {
+		let mut props = props.clone();
+
+		match props.focus_request {
+			Some(serial) if serial > self.focus_answered => self.focus_answered = serial,
+			_ => props.focus_request = None,
+		}
+
+		props
+	}
+
 	/// Updates a node that keeps its identity, leaving its children alone.
 	pub(super) fn update_own(&mut self, id: NodeId, element: &Element, out: &mut MutationList) {
 		if self.shadows[id.index()].props != element.props {
 			self.shadows[id.index()].props = element.props.clone();
 			self.update_text_measure(id, element);
-			out.push(Mutation::UpdateProps {
-				id,
-				props: element.props.clone(),
-			});
+			let props = self.props_to_send(&element.props);
+			out.push(Mutation::UpdateProps { id, props });
 		}
 
 		self.shadows[id.index()].handlers = element.handlers().to_vec();

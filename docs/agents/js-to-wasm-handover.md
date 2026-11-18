@@ -37,8 +37,8 @@ One pull request per item. Every backend is kept in step, with AppKit as the ref
 | -- | ----------------------------------------------------------- | -------- | ----------- |
 | 1  | Text input hints                                            | G9       | #852, open  |
 | 2  | `TextArea`                                                  | G12      | #877, open  |
-| 3  | Labels that focus their fields                              | G13      | PR open     |
-| 4  | One-shot focus requests                                     | G2       | not started |
+| 3  | Labels that focus their fields                              | G13      | #879, open  |
+| 4  | One-shot focus requests                                     | G2       | PR open     |
 | 5  | Arrow-key navigation for tabs, radio groups and menus       | G5       | not started |
 | 6  | `Modal` and `Popover`                                       | G1       | not started |
 | 7  | Scroll into view                                            | G4       | not started |
@@ -77,6 +77,15 @@ On the web, a plain `Text` that is the one `aria_labelled_by` target of a field 
 - **Run on Linux:** the `leptoskit_native` tests, including the new markup test and a wire test for the keys Android reads; host and Wasm clippy; ktlint.
 - **Not run:** the Android host change, and no browser test clicks a label yet. The demo's `visitor_pages.mjs` covers it once the demo is converted (DM-19).
 - **Found on the way, not fixed:** `WidgetHost.kt`'s `applyAccessibility` reads `aria_hidden`, `role`, `aria_live` and the rest from the top level of the props, but the wire nests them in an `aria` object, so the Rust Android backend appears to drop every ARIA property except the name. The Kotlin renderer for generated apps reads the nested object. Needs an Android device to confirm.
+
+### `feat/focus-requests`: stacked on `feat/label-focus`
+
+`FocusRequest::new()`, `Element::focus_on(request)` and `request()` (`crates/leptoskit_native/src/focus.rs`), as the audit's G2 proposes. The handle is a remembered signal holding a serial; `request()` takes the next serial from one process-wide counter. The widget carries the serial in `NativeProps::focus_request`.
+
+- **One place decides "once".** `NativeSurface` remembers the newest serial it has sent and strips `focus_request` from every `Create` and `UpdateProps` that does not carry a newer one (`props_to_send` in `surface/reconcile.rs`). Backends hold no state: after a batch they focus `MutationList::focus_target()`. The web keeps the newest serial it answered in a thread-local and reads `data-lk-focus-request`.
+- **Run on Linux:** native, web markup, terminal and GTK tests; a Chrome test for the web; host and Wasm clippy; AppKit, UIKit and Windows cross-linted (compiled, never run); ktlint.
+- **Not run:** AppKit, UIKit, Windows, `WidgetHost.kt`, and the Swift and Kotlin renderers. The Swift and Kotlin tests added here first run in CI.
+- **Left for later:** on AppKit, UIKit, Windows and Android the move happens while events are held back, so the widget hears no `Focus` event for it. `focused(true)` still does nothing on AppKit, Windows, GTK and Android; the audit hoped this change would fix that, and it does not.
 
 ### `feat/public-demo`: no pull request
 

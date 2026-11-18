@@ -108,6 +108,7 @@ pub fn is_layout_only(kind: NativeKind, props: &NativeProps) -> bool {
 		text_align: _,
 		direction: _,
 		focused,
+		focus_request,
 		scroll_offset,
 		// Motion is web-only: native hosts show the resting pose, so it
 		// never needs a native view, and adding motion leaves the native
@@ -156,6 +157,7 @@ pub fn is_layout_only(kind: NativeKind, props: &NativeProps) -> bool {
 		&& italic.is_none()
 		&& spans.is_none()
 		&& focused.is_none()
+		&& focus_request.is_none()
 		&& scroll_offset.is_none()
 		&& extra.is_empty()
 		&& aria_only_hides(aria.as_deref())

@@ -580,6 +580,33 @@ impl Drop for Suppression {
 	}
 }
 
+impl GtkBackend {
+	/// Moves keyboard focus to the widget a batch asked to focus.
+	///
+	/// The move waits for the main loop's next idle turn. By then the commit
+	/// that asked for it has finished, so the `Focus` and `Blur` events it
+	/// raises reach the application the way the person's own would.
+	fn focus_requested(&self, mutations: &MutationList) {
+		let Some(id) = mutations.focus_target() else {
+			return;
+		};
+		let state = Rc::downgrade(&self.state);
+		glib::idle_add_local_once(move || {
+			let control = state.upgrade().and_then(|state| {
+				state
+					.borrow()
+					.widgets
+					.get(&id)
+					.map(|widget| widget.control.clone())
+			});
+
+			if let Some(control) = control {
+				control.grab_focus();
+			}
+		});
+	}
+}
+
 impl NativeBackend for GtkBackend {
 	fn rive_visible(&self, id: NodeId) -> bool {
 		let state = self.state.borrow();
@@ -665,6 +692,7 @@ impl NativeBackend for GtkBackend {
 		sync_hosts(&mut self.state.borrow_mut());
 		self.refresh();
 		drop(guard);
+		self.focus_requested(mutations);
 	}
 
 	fn create(&mut self, id: NodeId, kind: NativeKind, props: &NativeProps) {

@@ -105,6 +105,8 @@ let screen = view! {
 - `on_key` hears every key pressed while focus is inside the element, before the focused field acts on it, so a screen can take `Ctrl+P` while a text field has focus. Return `EventOutcome::Handled` to keep the key from the field. Keys are named the way the web names them: `"p"`, `"Enter"`, `"Escape"`, `"Tab"`, `"ArrowUp"`.
 - `focused(true)` asks for keyboard focus: after each change, focus moves to that widget if it is somewhere else. Keep it on your prompt, and move it to a dialog's search field while the dialog is open; when the dialog closes, focus returns to the prompt.
 
+To move focus once and then leave it alone, such as back to the button that opened a dialog, use a [`FocusRequest`](../guide/15-accessibility.md#move-focus-once).
+
 Both work in the terminal and in the browser, where a handled key also skips the browser's own meaning, such as printing on `Ctrl+P`. The other platforms do not deliver key presses or move focus for you yet.
 
 A screen that needs the terminal's size, such as a list that shows half the rows, can read it with `leptoskit::guest::viewport()` once the runner has reported it; layout and responsive classes such as `min-[968px]:flex` already follow the size on their own.

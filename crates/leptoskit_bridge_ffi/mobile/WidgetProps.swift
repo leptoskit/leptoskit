@@ -13,6 +13,9 @@ struct WidgetProps: Decodable {
     let progress: WidgetProgress?
     let running: Bool?
     let focused: Bool?
+    /// The serial of a one-shot focus request, present only in the
+    /// transaction that makes the request: see `Element::focus_on`.
+    let focusRequest: UInt64?
     let accessibilityLabel: String?
     let color: UInt32?
     let background: UInt32?

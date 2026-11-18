@@ -16,6 +16,7 @@ use objc2::runtime::AnyObject;
 use objc2_foundation::NSString;
 use objc2_ui_kit::NSObjectUIAccessibility;
 use objc2_ui_kit::UIAccessibilityAnnouncementNotification;
+use objc2_ui_kit::UIAccessibilityLayoutChangedNotification;
 use objc2_ui_kit::UIAccessibilityPostNotification;
 use objc2_ui_kit::UIAccessibilityTraitAdjustable;
 use objc2_ui_kit::UIAccessibilityTraitButton;
@@ -125,6 +126,16 @@ pub(crate) fn is_element(props: &NativeProps) -> bool {
 		|| props.accessibility_label.is_some()
 		|| props.aria().description.is_some()
 		|| props.aria().live.is_some()
+}
+
+/// Moves the `VoiceOver` cursor to a view, as after a change of screen.
+pub(crate) fn move_cursor(view: &UIView) {
+	let argument: &AnyObject = view;
+	// SAFETY: the layout-changed notification takes the element to move to,
+	// and UIKit exports this immutable notification constant.
+	unsafe {
+		UIAccessibilityPostNotification(UIAccessibilityLayoutChangedNotification, Some(argument));
+	}
 }
 
 /// Announces live-region text to assistive technology.

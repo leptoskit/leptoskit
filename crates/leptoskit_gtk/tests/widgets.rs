@@ -141,6 +141,10 @@ mod linux {
 				text_area_edits_lines_and_honours_hints,
 			),
 			(
+				"a_focus_request_moves_focus_once",
+				a_focus_request_moves_focus_once,
+			),
+			(
 				"scroll_and_disabled_hidden_ancestors",
 				scroll_and_disabled_hidden_ancestors,
 			),
@@ -1121,6 +1125,47 @@ mod linux {
 			}
 		)));
 		assert_eq!(text(&view), "one");
+	}
+
+	fn a_focus_request_moves_focus_once() {
+		let form = |code: &str, request: Option<u64>| {
+			View().class("p-4 gap-2").children([
+				TextInput().aria_label("Email").class("h-10"),
+				TextInput()
+					.aria_label("Code")
+					.value(code)
+					.class("h-10")
+					.with_props(|props| props.focus_request = request),
+			])
+		};
+		let mounted = mounted(&form("", None));
+		let email = native::<gtk::Entry>(&mounted, child(&mounted, 0));
+		let code = native::<gtk::Entry>(&mounted, child(&mounted, 1));
+		// An entry's focus sits on the text widget inside it.
+		let holds = |entry: &gtk::Entry| {
+			GtkWindowExt::focus(&mounted.window)
+				.is_some_and(|focus| focus == *entry || focus.is_ancestor(entry))
+		};
+		email.grab_focus();
+		pump();
+		assert!(holds(&email));
+
+		// The request moves focus to the code field.
+		mounted.surface.borrow_mut().set_root(&form("", Some(1)));
+		pump();
+		assert!(holds(&code));
+
+		// The person moves back; an unrelated commit leaves focus alone.
+		email.grab_focus();
+		pump();
+		mounted.surface.borrow_mut().set_root(&form("12", Some(1)));
+		pump();
+		assert!(holds(&email));
+
+		// A second request moves it again.
+		mounted.surface.borrow_mut().set_root(&form("12", Some(2)));
+		pump();
+		assert!(holds(&code));
 	}
 
 	fn password_editing_focus_and_removal() {

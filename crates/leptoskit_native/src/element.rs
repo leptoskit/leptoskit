@@ -1557,6 +1557,33 @@ impl Element {
 		self
 	}
 
+	/// Moves keyboard focus here once each time `request` is
+	/// [requested](crate::FocusRequest::request), after the commit that
+	/// follows. Between requests focus is left alone, so the person can move
+	/// on; use [`focused`](Self::focused) for a widget that should hold focus
+	/// for as long as a condition is true.
+	///
+	/// ```
+	/// use leptoskit_native::FocusRequest;
+	/// use leptoskit_native::components::TextInput;
+	///
+	/// # reactive_graph::owner::Owner::new().with(|| {
+	/// let to_code = FocusRequest::new();
+	/// let field = TextInput().aria_label("Code").focus_on(&to_code);
+	/// assert_eq!(field.props.focus_request, None);
+	///
+	/// // Later, in a handler: the next build carries the request.
+	/// to_code.request();
+	/// let field = TextInput().aria_label("Code").focus_on(&to_code);
+	/// assert!(field.props.focus_request.is_some());
+	/// # });
+	/// ```
+	#[must_use]
+	pub fn focus_on(mut self, request: impl std::borrow::Borrow<crate::FocusRequest>) -> Self {
+		self.props.focus_request = request.borrow().serial();
+		self
+	}
+
 	/// Scrolls a scroll view's content to `offset` whenever the offset
 	/// changes, like a feed that follows a live position or a "back to top"
 	/// button. Between changes the person scrolls freely; the view's

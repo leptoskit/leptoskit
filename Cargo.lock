@@ -5509,6 +5509,7 @@ dependencies = [
  "leptoskit_windows",
  "leptoskit_yoga",
  "monosecret",
+ "reactive_graph",
  "reactive_stores",
 ]
 
