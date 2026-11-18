@@ -9,11 +9,16 @@
 )]
 
 pub mod config;
+pub mod domains;
 pub mod review;
 pub mod scenarios;
 pub mod shipping;
 
+use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 
@@ -22,6 +27,9 @@ use leptoskit_auth::Mailbox;
 use leptoskit_cloud::server::Control;
 use leptoskit_cloud::server::ControlConfig;
 use leptoskit_cloud::server::DEFAULT_REGION;
+use leptoskit_cloud::server::Lookup;
+use leptoskit_cloud::server::ResolveError;
+use leptoskit_cloud::server::Resolver;
 use leptoskit_cloud::server::SharedMailer;
 use leptoskit_cloud::server::ShippingSettings;
 use leptoskit_cloud::server::StorageConfig;
@@ -35,6 +43,62 @@ fn keys() -> Keys {
 	Keys::parse(&format!("test:{}", "A".repeat(43))).expect("test keys")
 }
 
+/// DNS as a test arranges it: the TXT records each name holds, whether the
+/// resolver answers at all, and every name it was asked for.
+#[derive(Clone, Debug, Default)]
+pub struct Dns {
+	records: Arc<Mutex<HashMap<String, Vec<String>>>>,
+	down: Arc<AtomicBool>,
+	asked: Arc<Mutex<Vec<String>>>,
+}
+
+impl Dns {
+	/// Adds a TXT record at `name`.
+	pub fn publish(&self, name: &str, value: &str) {
+		self.records
+			.lock()
+			.expect("dns")
+			.entry(name.to_owned())
+			.or_default()
+			.push(value.to_owned());
+	}
+
+	/// Removes every record at `name`.
+	pub fn clear(&self, name: &str) {
+		self.records.lock().expect("dns").remove(name);
+	}
+
+	/// Whether lookups fail from now on.
+	pub fn down(&self, down: bool) {
+		self.down.store(down, Ordering::SeqCst);
+	}
+
+	/// Every name asked for so far.
+	pub fn asked(&self) -> Vec<String> {
+		self.asked.lock().expect("dns").clone()
+	}
+}
+
+impl Resolver for Dns {
+	fn txt<'a>(&'a self, name: &'a str) -> Lookup<'a> {
+		Box::pin(async move {
+			self.asked.lock().expect("dns").push(name.to_owned());
+
+			if self.down.load(Ordering::SeqCst) {
+				return Err(ResolveError);
+			}
+
+			Ok(self
+				.records
+				.lock()
+				.expect("dns")
+				.get(name)
+				.cloned()
+				.unwrap_or_default())
+		})
+	}
+}
+
 /// A running control plane.
 pub struct App {
 	pub address: SocketAddr,
@@ -43,11 +107,13 @@ pub struct App {
 	/// arrange rows through [`App::system`].
 	pub db: Db,
 	pub mailbox: Mailbox,
+	/// What the control plane takes for DNS.
+	pub dns: Dns,
 	pub control: Control,
 	client: reqwest::Client,
 	/// How many tokens [`App::token`] has made, to name the next.
 	tokens: AtomicUsize,
-	/// The local object store'"'"'s directory, removed with the app.
+	/// The local object store's directory, removed with the app.
 	pub storage: tempfile::TempDir,
 }
 
@@ -211,12 +277,14 @@ pub async fn app_with(db: Db, configure: impl FnOnce(&mut ControlConfig)) -> App
 	let address = listener.local_addr().expect("an address");
 	let origin = format!("http://{address}");
 	let mailbox = Mailbox::new();
+	let dns = Dns::default();
 	let storage = tempfile::tempdir().expect("a storage directory");
 	let mut config = ControlConfig {
 		origin: origin.clone(),
 		keys: keys(),
 		vault: Keys::single("vault-test", [42; 32]),
 		mailer: SharedMailer::new(mailbox.clone()),
+		resolver: Arc::new(dns.clone()),
 		github: None,
 		google: None,
 		default_region: DEFAULT_REGION.to_owned(),
@@ -245,6 +313,7 @@ pub async fn app_with(db: Db, configure: impl FnOnce(&mut ControlConfig)) -> App
 		origin,
 		db,
 		mailbox,
+		dns,
 		control,
 		client: reqwest::Client::new(),
 		tokens: AtomicUsize::new(1),

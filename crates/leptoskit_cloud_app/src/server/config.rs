@@ -14,10 +14,12 @@ use leptoskit_cloud::pricing::Catalogue;
 use leptoskit_cloud::server::ControlConfig;
 use leptoskit_cloud::server::DEFAULT_REGION;
 use leptoskit_cloud::server::DevMode;
+use leptoskit_cloud::server::DnsOverHttps;
 use leptoskit_cloud::server::OAuthApp;
 use leptoskit_cloud::server::S3Config;
 use leptoskit_cloud::server::SecretValue;
 use leptoskit_cloud::server::SharedMailer;
+use leptoskit_cloud::server::SharedResolver;
 use leptoskit_cloud::server::ShippingSettings;
 use leptoskit_cloud::server::StorageConfig;
 use leptoskit_cloud::server::catalogue_from_json;
@@ -34,6 +36,11 @@ pub const AUTH_KEYS: &str = "LEPTOSKIT_CLOUD_AUTH_KEYS";
 /// pairs, newest first, in the form of [`AUTH_KEYS`] and never the same
 /// keys.
 pub const VAULT_KEYS: &str = "LEPTOSKIT_CLOUD_VAULT_KEYS";
+/// The DNS-over-HTTPS resolver custom domains are verified through, which
+/// answers `?name=…&type=TXT` in JSON. [`DEFAULT_DNS_RESOLVER`] without it.
+pub const DNS_RESOLVER: &str = "LEPTOSKIT_CLOUD_DNS_RESOLVER";
+/// Cloudflare's public resolver.
+pub const DEFAULT_DNS_RESOLVER: &str = "https://cloudflare-dns.com/dns-query";
 /// Where mail is sent through, such as `smtps://user:password@host`.
 pub const SMTP_URL: &str = "LEPTOSKIT_CLOUD_SMTP_URL";
 /// Who mail is from, such as `LeptosKit Cloud <cloud@leptoskit.com>`.
@@ -258,6 +265,7 @@ impl ServeConfig {
 			.or_else(|| dev.then(|| DEV_REGISTRY.to_owned()))
 			.ok_or(ConfigError::Missing(REGISTRY))?;
 		let catalogue = catalogue(vars)?;
+		let resolver = resolver(vars, dev)?;
 		let (mailer, mailbox) = if dev {
 			let mailbox = Mailbox::new();
 			(SharedMailer::new(mailbox.clone()), Some(mailbox))
@@ -279,6 +287,7 @@ impl ServeConfig {
 				keys,
 				vault,
 				mailer,
+				resolver,
 				github: oauth_app(vars, GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET)?,
 				google: oauth_app(vars, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET)?,
 				default_region,
@@ -293,6 +302,20 @@ impl ServeConfig {
 			origin_from_bind,
 		})
 	}
+}
+
+/// What reads a custom domain's challenge record: [`DNS_RESOLVER`], over
+/// `https` except in `--dev`.
+fn resolver(vars: Vars<'_>, dev: bool) -> Result<SharedResolver, ConfigError> {
+	let endpoint = read(vars, DNS_RESOLVER).unwrap_or_else(|| DEFAULT_DNS_RESOLVER.to_owned());
+
+	if !dev && !endpoint.starts_with("https://") {
+		return Err(invalid(DNS_RESOLVER, "must be https"));
+	}
+
+	let resolver = DnsOverHttps::new(&endpoint)
+		.map_err(|error| invalid(DNS_RESOLVER, format!("is unusable: {error}")))?;
+	Ok(std::sync::Arc::new(resolver))
 }
 
 /// The public origin: `https` with no path, or in `--dev`, this machine
@@ -612,6 +635,16 @@ mod tests {
 
 		for (name, value, expected) in [
 			(ORIGIN, "http://cloud.example.com", "must be https"),
+			(
+				DNS_RESOLVER,
+				"http://dns.example.com/dns-query",
+				"must be https",
+			),
+			(
+				DNS_RESOLVER,
+				"https://dns.example.com/q?name=x",
+				"is unusable",
+			),
 			(ORIGIN, "https://cloud.example.com/path", "no path"),
 			(DATABASE_URL, "mysql://x", "must start with"),
 			(BIND, "everywhere", "must be an address"),

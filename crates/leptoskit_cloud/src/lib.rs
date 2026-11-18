@@ -51,6 +51,7 @@ pub mod archive;
 pub mod config;
 pub mod deployment;
 pub mod deployments;
+pub mod domains;
 pub mod operator;
 pub mod pricing;
 pub mod projects;

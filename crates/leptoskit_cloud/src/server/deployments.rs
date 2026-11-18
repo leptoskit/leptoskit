@@ -1153,22 +1153,27 @@ pub(crate) async fn rollback(
 
 	if !missing.is_empty() {
 		return Err(rpc::Error::conflict(format!(
-				"secret_missing: #{to} starts with {} that `{environment_name}` no longer has: \
-				 {}. 			 Set {} again, or deploy instead",
-				if missing.len() == 1 {
-					"a secret"
-				} else {
-					"secrets"
-				},
-				missing.join(", "),
-				if missing.len() == 1 { "it" } else { "them" },
-			)));
+			"secret_missing: #{to} starts with {} that `{environment_name}` no longer has: {}. \
+			 Set {} again, or deploy instead",
+			if missing.len() == 1 {
+				"a secret"
+			} else {
+				"secrets"
+			},
+			missing.join(", "),
+			if missing.len() == 1 { "it" } else { "them" },
+		)));
 	}
 
 	let organization = access.organization.clone();
 	let number = next_number(cx.tx(), &environment).await?;
 	let mut spec = spec;
 	spec.deployment = self::number(number);
+	// The routes as recorded, less any custom domain the environment no
+	// longer holds: it may be someone else's by now.
+	let held = super::domains::for_release(cx.tx(), environment_id).await?;
+	spec.routes
+		.retain(|route| route.hostname == placement.hostname || held.contains(&route.hostname));
 	spec.validate()
 		.map_err(|error| rpc::Error::server(format!("a rollback's spec is invalid: {error}")))?;
 	let signer = signer(cx.tx(), &access.caller, None).await?;
@@ -1800,6 +1805,8 @@ async fn built(tx: &Tx, mut changing: Changing, output: &BuildServerOutput) -> r
 	// The environment's variables and secret names as they are now, when
 	// the build ends: what was set while it built is in.
 	let (variables, secrets) = super::config::for_release(tx, environment.id).await?;
+	// And its verified domains: the hostnames that are its to route.
+	let domains = super::domains::for_release(tx, environment.id).await?;
 	let target = SpecTarget {
 		environment: environment_ref(&organization, &project, &environment),
 		deployment: number(changing.row.number),
@@ -1807,6 +1814,7 @@ async fn built(tx: &Tx, mut changing: Changing, output: &BuildServerOutput) -> r
 		cluster: &cluster.facts.0,
 		variables: &variables,
 		secrets: &secrets,
+		domains: &domains,
 	};
 	let spec = match release::spec(&changing.row.plan.0, output, &target) {
 		Ok(spec) => spec,
@@ -2049,6 +2057,22 @@ pub(crate) async fn release_finished(
 			changing.stamp_all(Stamp::Built, Stamp::Live);
 			changing.stamp_all(Stamp::Unknown, Stamp::Live);
 			changing.advance(DeploymentState::Live)?;
+
+			// Domains detached while a deployment still served them go
+			// now, if this one doesn't.
+			let routed: std::collections::BTreeSet<&str> = changing
+				.row
+				.spec
+				.0
+				.as_ref()
+				.map(|spec| {
+					spec.routes
+						.iter()
+						.map(|route| route.hostname.as_str())
+						.collect()
+				})
+				.unwrap_or_default();
+			super::domains::released(tx, environment_id, &routed).await?;
 
 			if let Some(build) = changing.row.build.0.as_ref() {
 				placement.migrations = Json(build.migrations.clone());

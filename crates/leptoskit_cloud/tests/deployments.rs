@@ -18,6 +18,7 @@ use leptoskit_rpc::live::Update;
 use serde_json::Value;
 use serde_json::json;
 use support::config;
+use support::domains;
 use support::review;
 use support::shipping;
 use support::shipping::Shop;
@@ -459,4 +460,29 @@ async fn configuration_has_a_size() {
 #[tokio::test]
 async fn a_removed_secret_never_comes_back() {
 	config::a_removed_secret_never_comes_back(&support::app().await).await;
+}
+
+#[tokio::test]
+async fn a_verified_domain_reaches_the_release() {
+	domains::a_verified_domain_reaches_the_release(&support::app().await).await;
+}
+
+#[tokio::test]
+async fn domains_are_checked_and_the_tenants_alone() {
+	domains::domains_are_checked_and_the_tenants_alone(&support::app().await).await;
+}
+
+#[tokio::test]
+async fn a_hostname_is_one_environments() {
+	domains::a_hostname_is_one_environments(&support::app().await).await;
+}
+
+#[tokio::test]
+async fn verifying_races_to_one_holder() {
+	domains::verifying_races_to_one_holder(&support::app().await).await;
+}
+
+#[tokio::test]
+async fn a_detached_domain_is_held_until_it_stops_serving() {
+	domains::a_detached_domain_is_held_until_it_stops_serving(&support::app().await).await;
 }

@@ -614,6 +614,37 @@ pub struct Secret {
 	pub updated_at: Timestamp,
 }
 
+/// A custom domain of an environment. It routes nothing until it is
+/// verified, and a verified hostname is one environment's in the whole
+/// cloud: `claim` holds it, uniquely.
+#[table(name = "domains", unique(environment_id, hostname), index(hostname))]
+pub struct Domain {
+	pub id: Id<Self>,
+	#[db(on_delete = cascade)]
+	pub environment_id: Id<Environment>,
+	#[db(min_len = 3, max_len = 253)]
+	pub hostname: String,
+	/// What the challenge record must hold. It isn't a secret: it is
+	/// published in DNS.
+	#[db(min_len = 32, max_len = 64)]
+	pub token: String,
+	/// The hostname again, from when it is verified until the row goes:
+	/// unique, so two environments never hold one hostname, whoever races
+	/// to verify it.
+	#[db(unique, max_len = 253)]
+	pub claim: Option<String>,
+	pub verified_at: Option<Timestamp>,
+	/// Detached while a deployment still serves it. The row, and its
+	/// claim, go when a deployment without it is live.
+	pub removing: bool,
+	#[db(no_foreign_key)]
+	pub created_by: Id<Account>,
+	#[db(created_at)]
+	pub created_at: Timestamp,
+	#[db(updated_at)]
+	pub updated_at: Timestamp,
+}
+
 /// That a job was given a secret's value: which secret, and which version,
 /// written in the transaction that leases the job, before the value leaves.
 /// Kept after the secret and the job are gone, as the record of where a

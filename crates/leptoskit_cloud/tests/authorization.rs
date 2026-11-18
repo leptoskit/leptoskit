@@ -203,6 +203,9 @@ fn expected(caller: Caller, operation: &str, requirement: Requirement) -> Outcom
 		// The fixture's production has no earlier release to return to: a
 		// caller who may roll back gets as far as finding that out.
 		_ if operation == "rollback" => Outcome::Refused(409, "rollback_unavailable"),
+		// The fixture's DNS holds no challenge record: a caller who may
+		// verify gets as far as finding that out.
+		_ if operation == "verify_domain" => Outcome::Refused(409, "domain_not_verified"),
 		_ => Outcome::Answered(200),
 	}
 }
@@ -640,7 +643,7 @@ impl Fixture {
 					"number": 1,
 				})
 			}
-			"variables" | "secrets" => {
+			"variables" | "secrets" | "domains" => {
 				json!({ "organization": organization, "project": "web", "environment": "staging" })
 			}
 			// Whoever may unset may set, and set these just before.
@@ -659,6 +662,14 @@ impl Fixture {
 					"project": "web",
 					"environment": "staging",
 					"name": if operation == "unset_variable" { "MATRIX_VARIABLE" } else { "MATRIX_SECRET" },
+				})
+			}
+			"attach_domain" | "verify_domain" | "detach_domain" => {
+				json!({
+					"organization": organization,
+					"project": "web",
+					"environment": "staging",
+					"hostname": "matrix.example.org",
 				})
 			}
 			"pair" => json!({ "code": self.pairing_code, "name": "matrix-worker" }),

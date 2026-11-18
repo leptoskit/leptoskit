@@ -108,6 +108,11 @@ impl Console {
 				keys: keys(),
 				vault: Keys::single("vault", [9; 32]),
 				mailer: SharedMailer::new(mailbox.clone()),
+				// No test here verifies a domain: nothing asks it.
+				resolver: std::sync::Arc::new(
+					leptoskit_cloud::server::DnsOverHttps::new("https://dns.invalid/dns-query")
+						.expect("a resolver"),
+				),
 				github: github.then(|| {
 					OAuthApp {
 						client_id: "github-client".to_owned(),
