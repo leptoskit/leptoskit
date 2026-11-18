@@ -32,6 +32,14 @@ pub const MAX_VARIABLE_VALUE_LEN: usize = 32 * 1024;
 /// The longest secret value, in bytes.
 pub const MAX_SECRET_VALUE_LEN: usize = 64 * 1024;
 
+/// The most an environment's variables take together, names and values, in
+/// bytes. A release carries them all, to every process.
+pub const MAX_VARIABLES_TOTAL_LEN: usize = 256 * 1024;
+
+/// The most an environment's secrets take together, names and sealed
+/// values, in bytes. A cluster keeps them in one object of at most 1 MiB.
+pub const MAX_SECRETS_TOTAL_LEN: usize = 512 * 1024;
+
 /// The prefix of the names the cloud sets on every process.
 pub const RESERVED_PREFIX: &str = "LEPTOSKIT_";
 
@@ -69,6 +77,138 @@ pub fn check_name(name: &str) -> Result<(), String> {
 	}
 
 	Ok(())
+}
+
+/// A secret's value on its way in. It is a string on the wire.
+///
+/// Its `Debug` never shows it, and reading one that isn't a string says so
+/// without repeating what was sent: a secret sent as a number by mistake
+/// must not come back in the error.
+#[derive(Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(transparent)]
+pub struct SecretValue(String);
+
+impl SecretValue {
+	#[must_use]
+	pub fn new(value: impl Into<String>) -> Self {
+		Self(value.into())
+	}
+
+	/// The value itself.
+	#[must_use]
+	pub fn expose(&self) -> &str {
+		&self.0
+	}
+
+	#[must_use]
+	pub fn into_inner(self) -> String {
+		self.0
+	}
+}
+
+impl std::fmt::Debug for SecretValue {
+	fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		formatter.write_str("SecretValue([redacted])")
+	}
+}
+
+impl From<String> for SecretValue {
+	fn from(value: String) -> Self {
+		Self(value)
+	}
+}
+
+impl From<&str> for SecretValue {
+	fn from(value: &str) -> Self {
+		Self(value.to_owned())
+	}
+}
+
+impl<'de> Deserialize<'de> for SecretValue {
+	fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+		use serde::de::IgnoredAny;
+
+		/// What was sent, without keeping anything that isn't a string.
+		struct Sent;
+
+		impl<'de> serde::de::Visitor<'de> for Sent {
+			type Value = Option<String>;
+
+			fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+				formatter.write_str("a string")
+			}
+
+			fn visit_str<E: serde::de::Error>(self, value: &str) -> Result<Self::Value, E> {
+				Ok(Some(value.to_owned()))
+			}
+
+			fn visit_string<E: serde::de::Error>(self, value: String) -> Result<Self::Value, E> {
+				Ok(Some(value))
+			}
+
+			fn visit_bool<E: serde::de::Error>(self, _: bool) -> Result<Self::Value, E> {
+				Ok(None)
+			}
+
+			fn visit_i64<E: serde::de::Error>(self, _: i64) -> Result<Self::Value, E> {
+				Ok(None)
+			}
+
+			fn visit_u64<E: serde::de::Error>(self, _: u64) -> Result<Self::Value, E> {
+				Ok(None)
+			}
+
+			fn visit_f64<E: serde::de::Error>(self, _: f64) -> Result<Self::Value, E> {
+				Ok(None)
+			}
+
+			fn visit_bytes<E: serde::de::Error>(self, _: &[u8]) -> Result<Self::Value, E> {
+				Ok(None)
+			}
+
+			fn visit_unit<E: serde::de::Error>(self) -> Result<Self::Value, E> {
+				Ok(None)
+			}
+
+			fn visit_none<E: serde::de::Error>(self) -> Result<Self::Value, E> {
+				Ok(None)
+			}
+
+			fn visit_some<D: serde::Deserializer<'de>>(
+				self,
+				deserializer: D,
+			) -> Result<Self::Value, D::Error> {
+				IgnoredAny::deserialize(deserializer).map(|_| None)
+			}
+
+			fn visit_seq<A: serde::de::SeqAccess<'de>>(
+				self,
+				mut seq: A,
+			) -> Result<Self::Value, A::Error> {
+				while seq.next_element::<IgnoredAny>()?.is_some() {}
+
+				Ok(None)
+			}
+
+			fn visit_map<A: serde::de::MapAccess<'de>>(
+				self,
+				mut map: A,
+			) -> Result<Self::Value, A::Error> {
+				while map.next_entry::<IgnoredAny, IgnoredAny>()?.is_some() {}
+
+				Ok(None)
+			}
+		}
+
+		deserializer
+			.deserialize_any(Sent)?
+			.map(Self)
+			.ok_or_else(|| {
+				serde::de::Error::custom(
+					"a secret's value must be a string; it isn't repeated here",
+				)
+			})
+	}
 }
 
 /// A variable, with its value.
@@ -183,9 +323,17 @@ pub async fn set_secret(
 	project: String,
 	environment: String,
 	name: String,
-	value: String,
+	value: SecretValue,
 ) -> rpc::Result<SecretSummary> {
-	crate::server::config::set_secret(cx, organization, project, environment, name, value).await
+	crate::server::config::set_secret(
+		cx,
+		organization,
+		project,
+		environment,
+		name,
+		value.into_inner(),
+	)
+	.await
 }
 
 /// Removes a secret. What is running keeps it until the environment's next
@@ -232,6 +380,39 @@ mod tests {
 		] {
 			let error = check_name(reserved).expect_err(reserved);
 			assert!(error.contains("set by the cloud"), "{error}");
+		}
+	}
+
+	#[test]
+	fn a_secret_that_is_not_a_string_is_never_repeated() {
+		let value: SecretValue = serde_json::from_str("\"hunter2\"").expect("a string");
+		assert_eq!(value.expose(), "hunter2");
+		assert_eq!(format!("{value:?}"), "SecretValue([redacted])");
+		assert_eq!(serde_json::to_string(&value).expect("json"), "\"hunter2\"");
+
+		for sent in [
+			"4815162342",
+			"-4815162342",
+			"48151.62342",
+			"true",
+			"null",
+			"[\"hunter2\"]",
+			"{\"hunter2\": \"hunter2\"}",
+		] {
+			let error = serde_json::from_str::<SecretValue>(sent)
+				.expect_err(sent)
+				.to_string();
+			assert!(error.contains("must be a string"), "{error}");
+			assert!(!error.contains("4815"), "{error}");
+			assert!(!error.contains("hunter2"), "{error}");
+
+			// And through a value, as the server reads arguments.
+			let value: serde_json::Value = serde_json::from_str(sent).expect("json");
+			let error = serde_json::from_value::<SecretValue>(value)
+				.expect_err(sent)
+				.to_string();
+			assert!(!error.contains("4815"), "{error}");
+			assert!(!error.contains("hunter2"), "{error}");
 		}
 	}
 }

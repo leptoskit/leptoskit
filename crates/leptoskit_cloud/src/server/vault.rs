@@ -28,6 +28,7 @@ use crate::tables::Environment;
 use crate::tables::NewDataKey;
 use crate::tables::Organization;
 use crate::tables::Project;
+use crate::tables::Secret;
 
 /// What a wrapped data key is bound to, before its organisation.
 const DATA_KEY_PURPOSE: &[u8] = b"leptoskit-cloud vault data key v1";
@@ -60,6 +61,9 @@ pub(crate) struct Place<'a> {
 	pub(crate) organization: Id<Organization>,
 	pub(crate) project: Id<Project>,
 	pub(crate) environment: Id<Environment>,
+	/// The secret's own row: a name removed and set again is another row,
+	/// so what it held before doesn't open as its first version.
+	pub(crate) secret: Id<Secret>,
 	pub(crate) name: &'a str,
 	pub(crate) version: i64,
 }
@@ -183,12 +187,13 @@ impl Vault {
 impl Unwrapped {
 	/// What a value at `place` is bound to, each part length-prefixed by
 	/// [`Keys::seal`].
-	fn context(place: &Place<'_>) -> [Vec<u8>; 6] {
+	fn context(place: &Place<'_>) -> [Vec<u8>; 7] {
 		[
 			VALUE_PURPOSE.to_vec(),
 			uuid_bytes(place.organization.uuid()).to_vec(),
 			uuid_bytes(place.project.uuid()).to_vec(),
 			uuid_bytes(place.environment.uuid()).to_vec(),
+			uuid_bytes(place.secret.uuid()).to_vec(),
 			place.name.as_bytes().to_vec(),
 			place.version.to_be_bytes().to_vec(),
 		]
@@ -245,6 +250,7 @@ mod tests {
 			organization,
 			project: Id::from_uuid(Uuid::from_u128(2)),
 			environment: Id::from_uuid(Uuid::from_u128(3)),
+			secret: Id::from_uuid(Uuid::from_u128(4)),
 			name: "API_KEY",
 			version: 1,
 		}
@@ -267,6 +273,10 @@ mod tests {
 			},
 			Place {
 				environment: Id::from_uuid(Uuid::from_u128(9)),
+				..home
+			},
+			Place {
+				secret: Id::from_uuid(Uuid::from_u128(9)),
 				..home
 			},
 			Place {

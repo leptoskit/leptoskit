@@ -450,3 +450,13 @@ async fn a_copied_secret_opens_nowhere_else() {
 async fn first_secrets_race_to_one_key() {
 	config::first_secrets_race_to_one_key(&support::app().await).await;
 }
+
+#[tokio::test]
+async fn configuration_has_a_size() {
+	config::configuration_has_a_size(&support::app().await).await;
+}
+
+#[tokio::test]
+async fn a_removed_secret_never_comes_back() {
+	config::a_removed_secret_never_comes_back(&support::app().await).await;
+}

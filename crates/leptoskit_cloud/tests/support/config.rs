@@ -668,3 +668,125 @@ pub async fn first_secrets_race_to_one_key(app: &App) {
 
 	shop.cluster.finish(&release, applied()).await.expect(200);
 }
+
+/// An environment's variables and secrets have a size together, so a
+/// release is never asked to carry more than a cluster can hold, and a
+/// refused secret leaves nothing behind. A secret sent as something other
+/// than a string is refused without being repeated.
+pub async fn configuration_has_a_size(app: &App) {
+	let shop = Shop::open(app).await;
+
+	let mut args = valued(&shop, "production", "PIN", "");
+	args["value"] = json!(4_815_162_342_u64);
+	let answer = app.call("set_secret", args, shop.as_ana()).await;
+	assert_eq!(answer.status, 400, "{}", answer.text);
+	assert!(!answer.text.contains("4815162342"), "{}", answer.text);
+
+	let value = "v".repeat(leptoskit_cloud::config::MAX_VARIABLE_VALUE_LEN);
+	let fit = leptoskit_cloud::config::MAX_VARIABLES_TOTAL_LEN
+		/ leptoskit_cloud::config::MAX_VARIABLE_VALUE_LEN;
+
+	for index in 0..fit - 1 {
+		set(&shop, "set_variable", &format!("BIG_{index}"), &value)
+			.await
+			.expect(200);
+	}
+
+	// The last would fit by its value alone; the names take it over.
+	set(&shop, "set_variable", "BIG_LAST", &value)
+		.await
+		.refused(409, "variables_too_large");
+	// Replacing one with something smaller still works at the limit.
+	set(&shop, "set_variable", "BIG_0", "small")
+		.await
+		.expect(200);
+
+	let value = "s".repeat(leptoskit_cloud::config::MAX_SECRET_VALUE_LEN);
+	let fit = leptoskit_cloud::config::MAX_SECRETS_TOTAL_LEN
+		/ leptoskit_cloud::config::MAX_SECRET_VALUE_LEN;
+
+	for index in 0..fit - 1 {
+		set(&shop, "set_secret", &format!("KEY_{index}"), &value)
+			.await
+			.expect(200);
+	}
+
+	let answer = set(&shop, "set_secret", "KEY_LAST", &value).await;
+	answer.refused(409, "secrets_too_large");
+	assert!(!answer.text.contains("ssssssss"), "{}", answer.text);
+	let secrets = app
+		.call("secrets", place(&shop, "production"), shop.as_ana())
+		.await;
+	let secrets = secrets.expect(200).json();
+	let names: Vec<&str> = secrets
+		.as_array()
+		.expect("secrets")
+		.iter()
+		.filter_map(|secret| secret["name"].as_str())
+		.collect();
+	assert_eq!(names.len(), fit - 1, "{names:?}");
+	assert!(!names.contains(&"KEY_LAST"), "{names:?}");
+	let rows = Secret::query().all(&app.system()).await.expect("secrets");
+	assert_eq!(rows.len(), fit - 1);
+}
+
+/// A secret removed and set again starts at version 1 again, but what it
+/// held before doesn't open in its place: someone who puts the old row's
+/// sealed value back gets a failed release, not the old value.
+pub async fn a_removed_secret_never_comes_back(app: &App) {
+	let shop = Shop::open(app).await;
+	set(&shop, "set_secret", "API_KEY", SECRET)
+		.await
+		.expect(200);
+	let system = app.system();
+	let old = Secret::query()
+		.first(&system)
+		.await
+		.expect("the secrets")
+		.expect("the secret");
+	app.call(
+		"unset_secret",
+		named(&shop, "production", "API_KEY"),
+		shop.as_ana(),
+	)
+	.await
+	.expect(200);
+	let again = set(&shop, "set_secret", "API_KEY", ROTATED).await;
+	assert_eq!(again.expect(200).json()["version"], 1);
+	let new = Secret::query()
+		.first(&system)
+		.await
+		.expect("the secrets")
+		.expect("the secret");
+	assert_eq!(new.version, old.version);
+	assert_ne!(new.id, old.id);
+
+	// The new value reaches a release.
+	build(&shop, b"first").await;
+	let release = shop.cluster.take().await;
+	assert_eq!(release["secrets"], json!({ "API_KEY": ROTATED }));
+	shop.cluster.finish(&release, applied()).await.expect(200);
+
+	// The old sealed value, put back under the same name and version.
+	Secret::update()
+		.filter(|secret| secret.id.eq(new.id))
+		.set(|secret| secret.sealed, old.sealed.clone())
+		.run(&system)
+		.await
+		.expect("put the old value back");
+	let number = build(&shop, b"second").await;
+	assert_eq!(shop.cluster.claim().await, None);
+	let sheet = shop.on("deployment", "production", number).await;
+	let sheet = sheet.expect(200);
+	assert_eq!(
+		sheet.json()["deployment"]["state"],
+		json!({ "state": "failed", "stage": "rolling_out", "blocker": "secret_unavailable" }),
+		"{}",
+		sheet.text
+	);
+	assert!(!sheet.text.contains(SECRET), "{}", sheet.text);
+	// The first release's lease is the only one: nothing was recorded for
+	// the release that got nothing.
+	let leases = SecretLease::query().all(&system).await.expect("leases");
+	assert_eq!(leases.len(), 1, "{leases:?}");
+}

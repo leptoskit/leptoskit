@@ -244,7 +244,7 @@ impl ServeConfig {
 		let origin_from_bind = dev && read(vars, ORIGIN).is_none();
 		let origin = origin(vars, dev, bind)?;
 		let keys = keys(vars, dev)?;
-		let vault = vault_keys(vars, dev)?;
+		let vault = vault_keys(vars, Some(&keys), dev)?;
 		// Everything else is checked before the SMTP mailer starts its pool.
 		let default_region =
 			read(vars, DEFAULT_REGION_VAR).unwrap_or_else(|| DEFAULT_REGION.into());
@@ -372,21 +372,24 @@ fn keys(vars: Vars<'_>, dev: bool) -> Result<Keys, ConfigError> {
 /// The vault's master keys: [`VAULT_KEYS`], or in `--dev` without it, a
 /// random key for this run only, so a secret stored in one run can't be
 /// read in the next.
-fn vault_keys(vars: Vars<'_>, dev: bool) -> Result<Keys, ConfigError> {
+fn vault_keys(vars: Vars<'_>, auth: Option<&Keys>, dev: bool) -> Result<Keys, ConfigError> {
 	match read(vars, VAULT_KEYS) {
 		Some(text) => {
-			// One leaked variable must not open both sessions and secrets.
-			if read(vars, AUTH_KEYS).is_some_and(|auth| auth.trim() == text.trim()) {
+			let keys = Keys::parse(&text).map_err(|error| {
+				// The error names a key's ID, never the key.
+				invalid(VAULT_KEYS, format!("is invalid: {error}"))
+			})?;
+
+			// One leaked key must not open both sessions and secrets,
+			// whatever each variable calls it.
+			if auth.is_some_and(|auth| auth.shares_key_with(&keys)) {
 				return Err(invalid(
 					VAULT_KEYS,
-					format!("must not be the keys in {AUTH_KEYS}: make it its own"),
+					format!("must not hold a key that is in {AUTH_KEYS}: make it its own"),
 				));
 			}
 
-			Keys::parse(&text).map_err(|error| {
-				// The error names a key's ID, never the key.
-				invalid(VAULT_KEYS, format!("is invalid: {error}"))
-			})
+			Ok(keys)
 		}
 		None if dev => {
 			let mut secret = [0_u8; 32];
@@ -587,8 +590,25 @@ mod tests {
 		let mut pairs = without(VAULT_KEYS);
 		pairs.push((VAULT_KEYS, KEY));
 		let message = error(&pairs, false);
-		assert!(message.contains("must not be the keys in"), "{message}");
+		assert!(
+			message.contains("must not hold a key that is in"),
+			"{message}"
+		);
 		assert!(!message.contains("AAAA"), "{message}");
+
+		// The same key under another name, beside one of its own, is still
+		// the same key.
+		let renamed = format!(
+			"{VAULT_KEY},other-name:{}",
+			KEY.split_once(':').expect("id:key").1
+		);
+		let mut pairs = without(VAULT_KEYS);
+		pairs.push((VAULT_KEYS, &renamed));
+		let message = error(&pairs, false);
+		assert!(
+			message.contains("must not hold a key that is in"),
+			"{message}"
+		);
 
 		for (name, value, expected) in [
 			(ORIGIN, "http://cloud.example.com", "must be https"),

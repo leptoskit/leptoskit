@@ -18,8 +18,10 @@ use super::vault::Place;
 use crate::access::Permission;
 use crate::config::MAX_SECRET_VALUE_LEN;
 use crate::config::MAX_SECRETS;
+use crate::config::MAX_SECRETS_TOTAL_LEN;
 use crate::config::MAX_VARIABLE_VALUE_LEN;
 use crate::config::MAX_VARIABLES;
+use crate::config::MAX_VARIABLES_TOTAL_LEN;
 use crate::config::SecretSummary;
 use crate::config::Variable;
 use crate::config::check_name;
@@ -140,18 +142,35 @@ pub(crate) async fn set_variable(
 	}
 
 	let updated_by = access.caller.account();
-	let row = if let Some(mut row) = variable_named(cx.tx(), environment_id, &name).await? {
+	let mut rows = crate::tables::Variable::query()
+		.filter(|row| row.environment_id.eq(environment_id))
+		.all(cx.tx())
+		.await?;
+	let existing = rows
+		.iter()
+		.position(|row| row.name == name)
+		.map(|at| rows.swap_remove(at));
+	let total = rows
+		.iter()
+		.map(|row| row.name.len() + row.value.len())
+		.sum::<usize>()
+		+ name.len()
+		+ value.len();
+
+	if total > MAX_VARIABLES_TOTAL_LEN {
+		return Err(rpc::Error::conflict(format!(
+			"variables_too_large: the variables of `{environment_name}` would take more than \
+			 {MAX_VARIABLES_TOTAL_LEN} bytes together; remove or shorten some first"
+		)));
+	}
+
+	let row = if let Some(mut row) = existing {
 		row.value = value;
 		row.updated_by = updated_by;
 		row.save(cx.tx()).await?;
 		row
 	} else {
-		let count = crate::tables::Variable::query()
-			.filter(|row| row.environment_id.eq(environment_id))
-			.count(cx.tx())
-			.await?;
-
-		if count >= MAX_VARIABLES as u64 {
+		if rows.len() >= MAX_VARIABLES {
 			return Err(rpc::Error::conflict(format!(
 				"too_many_variables: `{environment_name}` has {MAX_VARIABLES} variables; remove \
 				 some first"
@@ -356,55 +375,62 @@ async fn store(cx: &rpc::MutationCx, args: StoreSecret) -> rpc::Result<SecretSum
 		.data_key_for_writing(cx.tx(), access.organization.id)
 		.await?;
 	let updated_by = access.caller.account();
-	let row = if let Some(mut row) = secret_named(cx.tx(), environment_id, &name).await? {
-		let version = row.version + 1;
-		row.sealed = key.seal(
-			&Place {
-				organization: access.organization.id,
-				project: project.id,
-				environment: environment_id,
-				name: &row.name,
-				version,
-			},
-			&value,
-		)?;
-		row.version = version;
-		row.updated_by = updated_by;
-		row.save(cx.tx()).await?;
-		row
+	let mut rows = Secret::query()
+		.filter(|row| row.environment_id.eq(environment_id))
+		.all(cx.tx())
+		.await?;
+	let mut row = if let Some(at) = rows.iter().position(|row| row.name == name) {
+		rows.swap_remove(at)
 	} else {
-		let count = Secret::query()
-			.filter(|row| row.environment_id.eq(environment_id))
-			.count(cx.tx())
-			.await?;
-
-		if count >= MAX_SECRETS as u64 {
+		if rows.len() >= MAX_SECRETS {
 			return Err(rpc::Error::conflict(format!(
 				"too_many_secrets: `{environment_name}` has {MAX_SECRETS} secrets; remove some \
 				 first"
 			)));
 		}
 
-		let sealed = key.seal(
-			&Place {
-				organization: access.organization.id,
-				project: project.id,
-				environment: environment_id,
-				name: &name,
-				version: 1,
-			},
-			&value,
-		)?;
+		// The row first, without a value: the value is sealed to the row's
+		// own ID, so a name set again after it was removed never shares a
+		// place with what it held before. A refusal below takes the row
+		// back with the transaction.
 		NewSecret {
 			environment_id,
 			name,
-			version: 1,
-			sealed,
+			version: 0,
+			sealed: Vec::new(),
 			updated_by,
 		}
 		.insert(cx.tx())
 		.await?
 	};
+	let version = row.version + 1;
+	row.sealed = key.seal(
+		&Place {
+			organization: access.organization.id,
+			project: project.id,
+			environment: environment_id,
+			secret: row.id,
+			name: &row.name,
+			version,
+		},
+		&value,
+	)?;
+	let total = rows
+		.iter()
+		.chain(std::iter::once(&row))
+		.map(|row| row.name.len() + row.sealed.len())
+		.sum::<usize>();
+
+	if total > MAX_SECRETS_TOTAL_LEN {
+		return Err(rpc::Error::conflict(format!(
+			"secrets_too_large: the secrets of `{environment_name}` would take more than \
+			 {MAX_SECRETS_TOTAL_LEN} bytes together; remove or shorten some first"
+		)));
+	}
+
+	row.version = version;
+	row.updated_by = updated_by;
+	row.save(cx.tx()).await?;
 	audit::record(
 		cx.tx(),
 		&Actor::from(&access.caller),
@@ -587,19 +613,30 @@ pub(crate) async fn lease(
 		// Secrets without the key they were sealed with.
 		return Err(LeaseError::Unreadable);
 	};
+	// Every value is opened before any row is written: a lease row says a
+	// value went to the worker, and none goes unless all of them open.
+	let wanted: Vec<&Secret> = rows
+		.iter()
+		.filter(|row| names.contains(&row.name))
+		.collect();
 	let mut values = BTreeMap::new();
 
-	for row in rows.iter().filter(|row| names.contains(&row.name)) {
+	for row in &wanted {
 		let value = key.open(
 			&Place {
 				organization: lessee.organization.id,
 				project: lessee.project.id,
 				environment: environment_id,
+				secret: row.id,
 				name: &row.name,
 				version: row.version,
 			},
 			&row.sealed,
 		)?;
+		values.insert(row.name.clone(), value);
+	}
+
+	for row in wanted {
 		NewSecretLease {
 			job_id: lessee.job.id,
 			attempt: lessee.job.attempt,
@@ -612,7 +649,6 @@ pub(crate) async fn lease(
 		}
 		.insert(tx)
 		.await?;
-		values.insert(row.name.clone(), value);
 	}
 
 	Ok(values)

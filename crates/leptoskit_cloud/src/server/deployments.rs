@@ -1152,8 +1152,7 @@ pub(crate) async fn rollback(
 	let missing = super::config::missing(cx.tx(), environment_id, secret_names(&spec)).await?;
 
 	if !missing.is_empty() {
-		return Err(rpc::Error::conflict(
-			format!(
+		return Err(rpc::Error::conflict(format!(
 				"secret_missing: #{to} starts with {} that `{environment_name}` no longer has: \
 				 {}. 			 Set {} again, or deploy instead",
 				if missing.len() == 1 {
@@ -1163,8 +1162,7 @@ pub(crate) async fn rollback(
 				},
 				missing.join(", "),
 				if missing.len() == 1 { "it" } else { "them" },
-			),
-		));
+			)));
 	}
 
 	let organization = access.organization.clone();

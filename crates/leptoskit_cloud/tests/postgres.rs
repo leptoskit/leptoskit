@@ -388,4 +388,18 @@ mod config {
 			config::first_secrets_race_to_one_key(&app).await;
 		}
 	}
+
+	#[tokio::test]
+	async fn configuration_has_a_size() {
+		if let Some((_postgres, app)) = app().await {
+			config::configuration_has_a_size(&app).await;
+		}
+	}
+
+	#[tokio::test]
+	async fn a_removed_secret_never_comes_back() {
+		if let Some((_postgres, app)) = app().await {
+			config::a_removed_secret_never_comes_back(&app).await;
+		}
+	}
 }
