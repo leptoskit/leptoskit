@@ -36,6 +36,7 @@ use crate::NativeEvent;
 use crate::NativeKind;
 use crate::NativeProps;
 use crate::Progress;
+use crate::SubmitLabel;
 use crate::element::HandlerEntry;
 
 mod controls;
@@ -327,6 +328,16 @@ impl Inherited {
 	};
 }
 
+/// A read-only text field announces itself, the way `aria_read_only` does.
+fn announce_read_only(kind: NativeKind, props: &mut NativeProps) {
+	if matches!(kind, NativeKind::TextInput | NativeKind::PasswordInput)
+		&& props.read_only == Some(true)
+	{
+		let aria = props.aria_mut();
+		aria.read_only = aria.read_only.or(Some(true));
+	}
+}
+
 /// Builds each typed DOM control before adding attributes common to all kinds.
 fn render_node(
 	mut element: Element,
@@ -403,13 +414,7 @@ fn render_node(
 	let kind = element.kind;
 	let mut props = element.props;
 	let id = props.id.take();
-	// A read-only text field announces itself, the way `aria_read_only` does.
-	if matches!(kind, NativeKind::TextInput | NativeKind::PasswordInput)
-		&& props.read_only == Some(true)
-	{
-		let aria = props.aria_mut();
-		aria.read_only = aria.read_only.or(Some(true));
-	}
+	announce_read_only(kind, &mut props);
 	let test_id = props.test_id().map(str::to_owned);
 	let enabled = parent_enabled && props.enabled.unwrap_or(true);
 	// A pressable with an href is a link: an `<a>` the browser can open in
@@ -1038,7 +1043,7 @@ fn text_input(
 			props
 				.submit_label
 				.filter(|_| kind == NativeKind::TextInput)
-				.map(|label| label.wire_name()),
+				.map(SubmitLabel::wire_name),
 		)
 		.value(value.clone())
 		.attr("data-lk-value", value)

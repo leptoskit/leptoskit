@@ -68,7 +68,7 @@ fn overflowing_decoration_never_extends_the_activation_bounds() {
 fn decoration_rejects_nested_controls_handlers_and_scrolling_in_all_variants() {
 	let group = RadioGroup::new("choices").unwrap();
 
-	for child in [
+	for child in vec![
 		Button("Nested"),
 		Pressable("Nested"),
 		TextInput(),
