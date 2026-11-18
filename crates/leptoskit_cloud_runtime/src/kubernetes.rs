@@ -98,7 +98,19 @@ pub struct ClusterProfile {
 	pub image_pull_secret: Option<String>,
 	/// Whether KEDA's HTTP add-on is installed, which is what lets a
 	/// process sleep at `min = 0` and wake on the first request.
-	pub keda_http: bool,
+	pub keda_http: Option<HttpAddon>,
+}
+
+/// Service endpoints installed by the pinned HTTP add-on chart.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HttpAddon {
+	pub namespace: String,
+	pub interceptor_service: String,
+	pub interceptor_port: u16,
+	pub scaler_service: String,
+	pub scaler_port: u16,
+	/// Labels selecting only the interceptor pods, within `namespace`.
+	pub interceptor_labels: BTreeMap<String, String>,
 }
 
 impl Default for ClusterProfile {
@@ -114,7 +126,7 @@ impl Default for ClusterProfile {
 			dns_namespace: "kube-system".to_owned(),
 			blocked_egress_cidrs: Vec::new(),
 			image_pull_secret: None,
-			keda_http: false,
+			keda_http: None,
 		}
 	}
 }
@@ -228,7 +240,8 @@ pub enum Object {
 	HorizontalPodAutoscaler(autoscaling::HorizontalPodAutoscaler),
 	PodDisruptionBudget(policy::PodDisruptionBudget),
 	Ingress(networking::Ingress),
-	HttpScaledObject(HttpScaledObject),
+	InterceptorRoute(InterceptorRoute),
+	ScaledObject(ScaledObject),
 }
 
 impl Object {
@@ -248,7 +261,8 @@ impl Object {
 			Self::HorizontalPodAutoscaler(_) => "HorizontalPodAutoscaler",
 			Self::PodDisruptionBudget(_) => "PodDisruptionBudget",
 			Self::Ingress(_) => "Ingress",
-			Self::HttpScaledObject(_) => "HTTPScaledObject",
+			Self::InterceptorRoute(_) => "InterceptorRoute",
+			Self::ScaledObject(_) => "ScaledObject",
 		}
 	}
 
@@ -288,7 +302,8 @@ impl Object {
 			Self::HorizontalPodAutoscaler(o) => &o.metadata,
 			Self::PodDisruptionBudget(o) => &o.metadata,
 			Self::Ingress(o) => &o.metadata,
-			Self::HttpScaledObject(o) => &o.metadata,
+			Self::InterceptorRoute(o) => &o.metadata,
+			Self::ScaledObject(o) => &o.metadata,
 		}
 	}
 }
@@ -298,21 +313,21 @@ impl Object {
 /// the CRD, so this is a plain serde struct, not a `k8s-openapi` type. The
 /// fields are the object's body exactly as it serializes.
 #[derive(Debug, Clone, Serialize)]
-pub struct HttpScaledObject {
+pub struct ScaledObject {
 	#[serde(rename = "apiVersion")]
 	pub api_version: &'static str,
 	pub kind: &'static str,
 	pub metadata: meta::ObjectMeta,
-	pub spec: HttpScaledObjectSpec,
+	pub spec: ScaledObjectSpec,
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct HttpScaledObjectSpec {
+pub struct ScaledObjectSpec {
 	#[serde(rename = "scaleTargetRef")]
 	pub scale_target_ref: HttpScaleTargetRef,
-	#[serde(rename = "replicasMin")]
+	#[serde(rename = "minReplicaCount")]
 	pub replicas_min: u32,
-	#[serde(rename = "replicasMax")]
+	#[serde(rename = "maxReplicaCount")]
 	pub replicas_max: u32,
 	pub triggers: Vec<HttpTrigger>,
 }
@@ -330,6 +345,53 @@ pub struct HttpTrigger {
 	#[serde(rename = "type")]
 	pub kind: &'static str,
 	pub metadata: BTreeMap<String, String>,
+}
+
+/// HTTP add-on 0.16 route schema:
+/// https://github.com/kedacore/http-add-on/blob/v0.16.0/config/crd/bases/http.keda.sh_interceptorroutes.yaml
+#[derive(Debug, Clone, Serialize)]
+pub struct InterceptorRoute {
+	#[serde(rename = "apiVersion")]
+	pub api_version: &'static str,
+	pub kind: &'static str,
+	pub metadata: meta::ObjectMeta,
+	pub spec: InterceptorRouteSpec,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InterceptorRouteSpec {
+	pub target: HttpTarget,
+	pub rules: Vec<HttpRule>,
+	pub scaling_metric: HttpMetric,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct HttpTarget {
+	pub service: String,
+	pub port: u16,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct HttpRule {
+	pub hosts: Vec<String>,
+	pub paths: Vec<HttpPath>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct HttpPath {
+	pub value: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct HttpMetric {
+	pub concurrency: Concurrency,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Concurrency {
+	#[serde(rename = "targetValue")]
+	pub target_value: u32,
 }
 
 /// The Kubernetes objects of one release, in one deterministic order: the
@@ -359,6 +421,28 @@ pub fn manifests(
 	objects.extend(claim_objects(spec, &namespace, &labels));
 	objects.extend(deployment_objects(spec, cluster, &namespace, &labels)?);
 	objects.extend(service_objects(spec, &namespace, &labels));
+	if spec.processes.iter().any(|process| process.scale.sleep) {
+		if let Some(addon) = &cluster.keda_http {
+			// The add-on documents an ExternalName bridge for namespace-local
+			// Ingress backends: https://github.com/kedacore/http-add-on/blob/v0.16.0/examples/xkcd/templates/externalservice.yaml
+			objects.push(Object::Service(core::Service {
+				metadata: object_meta(Some(&namespace), "http-interceptor", &labels),
+				spec: Some(core::ServiceSpec {
+					type_: Some("ExternalName".to_owned()),
+					external_name: Some(format!(
+						"{}.{}.svc.cluster.local",
+						addon.interceptor_service, addon.namespace
+					)),
+					ports: Some(vec![core::ServicePort {
+						port: i32::from(addon.interceptor_port),
+						..Default::default()
+					}]),
+					..Default::default()
+				}),
+				status: None,
+			}));
+		}
+	}
 	objects.extend(scaling_objects(spec, cluster, &namespace, &labels)?);
 	objects.extend(budget_objects(spec, &namespace, &labels));
 	objects.extend(ingress_objects(spec, cluster, &namespace, &labels)?);
@@ -637,7 +721,23 @@ fn ingress_policy_for(
 	policy_labels.insert(NAME_LABEL.to_owned(), process.name.clone());
 	let from = networking::NetworkPolicyIngressRule {
 		ports: Some(vec![tcp_door(process.port)]),
-		from: Some(vec![peer_from_namespace(&cluster.ingress_namespace)]),
+		from: Some(vec![if process.scale.sleep {
+			let mut peer = peer_from_namespace(
+				cluster
+					.keda_http
+					.as_ref()
+					.map_or("", |addon| addon.namespace.as_str()),
+			);
+			peer.pod_selector = cluster.keda_http.as_ref().map(|addon| {
+				meta::LabelSelector {
+					match_labels: Some(addon.interceptor_labels.clone()),
+					match_expressions: None,
+				}
+			});
+			peer
+		} else {
+			peer_from_namespace(&cluster.ingress_namespace)
+		}]),
 	};
 	Object::NetworkPolicy(networking::NetworkPolicy {
 		metadata: object_meta(
@@ -1109,7 +1209,11 @@ fn scaling_objects(
 	let mut objects = Vec::new();
 	for process in &spec.processes {
 		match scaling_for(process, cluster)? {
-			Scaling::Sleeping => objects.push(keda_object(spec, process, namespace, labels)),
+			Scaling::Sleeping => {
+				if let Some(addon) = &cluster.keda_http {
+					objects.extend(keda_objects(spec, process, addon, namespace, labels));
+				}
+			}
 			Scaling::Autoscaling => objects.push(hpa_object(process, namespace, labels)),
 			Scaling::Fixed => {}
 		}
@@ -1119,7 +1223,7 @@ fn scaling_objects(
 
 fn scaling_for(process: &Process, cluster: &ClusterProfile) -> Result<Scaling, ManifestError> {
 	if process.scale.sleep {
-		if cluster.keda_http {
+		if cluster.keda_http.is_some() {
 			Ok(Scaling::Sleeping)
 		} else {
 			Err(ManifestError::SleepWithoutScaler {
@@ -1166,43 +1270,78 @@ fn hpa_object(process: &Process, namespace: &str, labels: &BTreeMap<String, Stri
 /// The scaled object wakes the process when one of its routes is asked
 /// for: KEDA watches the edge, sees a request for the process's hosts and
 /// prefixes, and scales from zero up.
-fn keda_object(
+fn keda_objects(
 	spec: &ReleaseSpec,
 	process: &Process,
+	addon: &HttpAddon,
 	namespace: &str,
 	labels: &BTreeMap<String, String>,
-) -> Object {
+) -> Vec<Object> {
 	let routes: Vec<&Route> = spec
 		.routes
 		.iter()
 		.filter(|route| route.process == process.name)
 		.collect();
-	let hosts = unique_sorted(routes.iter().map(|route| route.hostname.as_str()));
-	let prefixes = unique_sorted(routes.iter().map(|route| route.path_prefix.as_str()));
+	// Separate rules preserve host/path pairs rather than their Cartesian
+	// product.
+	let rules = routes
+		.iter()
+		.map(|route| {
+			HttpRule {
+				hosts: vec![route.hostname.clone()],
+				paths: vec![HttpPath {
+					value: route.path_prefix.clone(),
+				}],
+			}
+		})
+		.collect();
+	// ScaledObject and external-push metadata, at this exact add-on version:
+	// https://github.com/kedacore/http-add-on/blob/v0.16.0/test/helpers/scaledobject.go
 	let trigger = HttpTrigger {
-		kind: "http",
+		kind: "external-push",
 		metadata: BTreeMap::from([
-			("hosts".to_owned(), hosts.join(",")),
-			("pathPrefixes".to_owned(), prefixes.join(",")),
-			("service".to_owned(), process.name.clone()),
-			("port".to_owned(), "80".to_owned()),
+			("interceptorRoute".to_owned(), process.name.clone()),
+			(
+				"scalerAddress".to_owned(),
+				format!(
+					"{}.{}.svc.cluster.local:{}",
+					addon.scaler_service, addon.namespace, addon.scaler_port
+				),
+			),
 		]),
 	};
-	Object::HttpScaledObject(HttpScaledObject {
-		api_version: "http.keda.sh/v1alpha1",
-		kind: "HTTPScaledObject",
-		metadata: object_meta(Some(namespace), &process.name, labels),
-		spec: HttpScaledObjectSpec {
-			scale_target_ref: HttpScaleTargetRef {
-				name: process.name.clone(),
-				api_version: "apps/v1",
-				kind: "Deployment",
+	vec![
+		Object::InterceptorRoute(InterceptorRoute {
+			api_version: "http.keda.sh/v1beta1",
+			kind: "InterceptorRoute",
+			metadata: object_meta(Some(namespace), &process.name, labels),
+			spec: InterceptorRouteSpec {
+				target: HttpTarget {
+					service: process.name.clone(),
+					port: 80,
+				},
+				rules,
+				scaling_metric: HttpMetric {
+					concurrency: Concurrency { target_value: 100 },
+				},
 			},
-			replicas_min: 0,
-			replicas_max: process.scale.max,
-			triggers: vec![trigger],
-		},
-	})
+		}),
+		Object::ScaledObject(ScaledObject {
+			api_version: "keda.sh/v1alpha1",
+			kind: "ScaledObject",
+			metadata: object_meta(Some(namespace), &process.name, labels),
+			spec: ScaledObjectSpec {
+				scale_target_ref: HttpScaleTargetRef {
+					name: process.name.clone(),
+					api_version: "apps/v1",
+					kind: "Deployment",
+				},
+				replicas_min: 0,
+				replicas_max: process.scale.max,
+				triggers: vec![trigger],
+			},
+		}),
+	]
 }
 
 /// A disruption budget for every process that always runs at least two:
@@ -1255,7 +1394,7 @@ fn ingress_objects(
 	by_host
 		.into_iter()
 		.map(|(hostname, routes)| {
-			ingress(hostname, routes, cluster, namespace, labels).map(Object::Ingress)
+			ingress(hostname, routes, spec, cluster, namespace, labels).map(Object::Ingress)
 		})
 		.collect()
 }
@@ -1263,6 +1402,7 @@ fn ingress_objects(
 fn ingress(
 	hostname: &str,
 	mut routes: Vec<&Route>,
+	spec: &ReleaseSpec,
 	cluster: &ClusterProfile,
 	namespace: &str,
 	labels: &BTreeMap<String, String>,
@@ -1286,9 +1426,30 @@ fn ingress(
 				path_type: "Prefix".to_owned(),
 				backend: networking::IngressBackend {
 					service: Some(networking::IngressServiceBackend {
-						name: route.process.clone(),
+						name: if spec
+							.processes
+							.iter()
+							.any(|process| process.name == route.process && process.scale.sleep)
+						{
+							"http-interceptor".to_owned()
+						} else {
+							route.process.clone()
+						},
 						port: Some(networking::ServiceBackendPort {
-							number: Some(80),
+							number: Some(
+								if spec.processes.iter().any(|process| {
+									process.name == route.process && process.scale.sleep
+								}) {
+									i32::from(
+										cluster
+											.keda_http
+											.as_ref()
+											.map_or(80, |addon| addon.interceptor_port),
+									)
+								} else {
+									80
+								},
+							),
 							name: None,
 						}),
 					}),
@@ -1372,13 +1533,6 @@ fn host_tls(
 			))
 		}
 	}
-}
-
-fn unique_sorted<'a>(values: impl Iterator<Item = &'a str>) -> Vec<String> {
-	let mut seen: Vec<&str> = values.collect();
-	seen.sort_unstable();
-	seen.dedup();
-	seen.into_iter().map(str::to_owned).collect()
 }
 
 fn secret_name(process: &Process) -> String {

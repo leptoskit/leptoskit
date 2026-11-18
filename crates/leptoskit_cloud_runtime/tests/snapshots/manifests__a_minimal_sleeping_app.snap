@@ -113,7 +113,11 @@ spec:
   - from:
     - namespaceSelector:
         matchLabels:
-          kubernetes.io/metadata.name: ingress-nginx
+          kubernetes.io/metadata.name: keda
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/component: interceptor
+          app.kubernetes.io/name: http-add-on
     ports:
     - port: 8080
       protocol: TCP
@@ -290,8 +294,49 @@ spec:
     app.kubernetes.io/name: app
   type: ClusterIP
 ---
-apiVersion: http.keda.sh/v1alpha1
-kind: HTTPScaledObject
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: leptoskit-cloud
+    leptoskit.cloud/deployment: '1'
+    leptoskit.cloud/environment: production
+    leptoskit.cloud/organization: acme
+    leptoskit.cloud/project: notes
+  name: http-interceptor
+  namespace: lk-0b64f478d99c825f63ac
+spec:
+  externalName: keda-add-ons-http-interceptor-proxy.keda.svc.cluster.local
+  ports:
+  - port: 8080
+  type: ExternalName
+---
+apiVersion: http.keda.sh/v1beta1
+kind: InterceptorRoute
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: leptoskit-cloud
+    leptoskit.cloud/deployment: '1'
+    leptoskit.cloud/environment: production
+    leptoskit.cloud/organization: acme
+    leptoskit.cloud/project: notes
+  name: app
+  namespace: lk-0b64f478d99c825f63ac
+spec:
+  target:
+    service: app
+    port: 80
+  rules:
+  - hosts:
+    - notes.leptoskit.app
+    paths:
+    - value: /
+  scalingMetric:
+    concurrency:
+      targetValue: 100
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
 metadata:
   labels:
     app.kubernetes.io/managed-by: leptoskit-cloud
@@ -306,15 +351,13 @@ spec:
     name: app
     apiVersion: apps/v1
     kind: Deployment
-  replicasMin: 0
-  replicasMax: 1
+  minReplicaCount: 0
+  maxReplicaCount: 1
   triggers:
-  - type: http
+  - type: external-push
     metadata:
-      hosts: notes.leptoskit.app
-      pathPrefixes: /
-      port: '80'
-      service: app
+      interceptorRoute: app
+      scalerAddress: keda-add-ons-http-external-scaler.keda.svc.cluster.local:9090
 ---
 apiVersion: networking.k8s.io/v1
 kind: Ingress
@@ -335,9 +378,9 @@ spec:
       paths:
       - backend:
           service:
-            name: app
+            name: http-interceptor
             port:
-              number: 80
+              number: 8080
         path: /
         pathType: Prefix
   tls:
