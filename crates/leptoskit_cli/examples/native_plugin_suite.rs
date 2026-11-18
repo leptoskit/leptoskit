@@ -64,6 +64,7 @@ const OPTIONAL_PLUGINS: &[(&str, &str)] = &[
 	("video-thumbnails", "leptoskit_plugin_video_thumbnails"),
 	("logging", "leptoskit_plugin_logging"),
 	("location", "leptoskit_plugin_location"),
+	("app-usage", "leptoskit_plugin_app_usage"),
 	(
 		"local-authentication",
 		"leptoskit_plugin_local_authentication",
@@ -132,6 +133,7 @@ const ANDROID_TESTS: &[&str] = &[
 	"leptoskit_plugin_video_thumbnails/tests/android/VideoThumbnailsWireTest.kt",
 	"leptoskit_plugin_background_task/tests/android/BackgroundTaskWireTest.kt",
 	"leptoskit_plugin_location/android-tests/LocationPluginTest.kt",
+	"leptoskit_plugin_app_usage/android-tests/AppUsagePluginTest.kt",
 	"leptoskit_plugin_local_authentication/tests/android/LocalAuthenticationPluginTest.kt",
 	"leptoskit_plugin_device_keys/tests/android/DeviceKeysPluginTest.kt",
 	"leptoskit_plugin_notifications/tests/android/NotificationsPluginTest.kt",

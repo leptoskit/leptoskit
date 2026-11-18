@@ -359,6 +359,20 @@ signing certificate's SHA-256 digest.
 
 <!-- {/p_applicationSummary} -->
 
+<!-- {@p_appUsageSummary} -->
+
+Add `{{ plugin_app_usage.package.name }}` as a direct dependency and select the `{{ plugin_app_usage.package.metadata.leptoskit.runtime.name }}`
+plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata.
+Generated Windows, Linux, and terminal hosts currently omit runtime plugins, so use
+explicit registration in a custom host there. Guests enable the `guest` feature and reuse
+`guest::AppUsage` rather than resolving the plugin on every call. Android reports typed
+usage events, foreground sessions and screen-time summaries from Usage Access, which the
+app's owner grants on the system's own screen; iOS and macOS give third-party apps no
+per-app usage, so sessions and summaries are unavailable and events are the lock and
+unlock transitions buffered while the app is alive.
+
+<!-- {/p_appUsageSummary} -->
+
 <!-- {@p_argumentsSummary} -->
 
 Add `leptoskit_plugin_arguments` as a direct dependency and expose the plugin explicitly
