@@ -1,7 +1,7 @@
 import CLeptosKitBridge
 import Foundation
-@testable import LeptosKitThermal
 import LeptosKitBridge
+@testable import LeptosKitThermal
 import Testing
 
 /// Allocate a payload through the real C ABI; its bytes outlive the bridge.
@@ -28,7 +28,7 @@ private func payload(_ data: Data = Data()) throws -> NativeBuffer {
     return NativeBuffer(taking: request.payload)
 }
 
-/// The first little-endian u32 of a snapshot.
+/// One little-endian u32 field of a snapshot.
 private func field(_ data: Data, _ index: Int) -> UInt32 {
     data.withUnsafeBytes { UInt32(littleEndian: $0.loadUnaligned(fromByteOffset: index * 4, as: UInt32.self)) }
 }
@@ -99,8 +99,9 @@ func thermalCancellationAndCloseReleaseWaiters() async throws {
         // Let the waiter install its observer before cancelling. The device
         // may heat or cool in this interval, so either completion is valid.
         try await Task.sleep(for: .milliseconds(10))
-        let busy = try await plugin.invoke(method: 0, payload: payload())
-        if busy == snapshot {
+        // While the first waiter is still pending, a second one is refused.
+        let now = try await plugin.invoke(method: 0, payload: payload())
+        if now == snapshot {
             await #expect(throws: PluginError.busy) {
                 try await plugin.invoke(method: 1, payload: payload(snapshot))
             }
