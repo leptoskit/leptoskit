@@ -91,9 +91,20 @@ struct Contract {
 	presses: Rc<Cell<usize>>,
 }
 
+/// A backend holding one `Modal` and one `Popover`, opened and closed one
+/// step at a time.
+struct Overlays {
+	backend: AndroidBackend,
+	root: NodeId,
+	modal: NodeId,
+	popover: NodeId,
+	dismissals: Rc<Cell<usize>>,
+}
+
 thread_local! {
 	static PROBE: RefCell<Option<Probe>> = const { RefCell::new(None) };
 	static CONTRACT: RefCell<Option<Contract>> = const { RefCell::new(None) };
+	static OVERLAYS: RefCell<Option<Overlays>> = const { RefCell::new(None) };
 }
 
 fn fixture(state: &State, live: &Arc<Mutex<State>>) -> Element {
@@ -760,6 +771,127 @@ pub extern "system" fn Java_dev_leptoskit_widgets_ProbeActivity_nativeContractSt
 		}
 
 		jint::try_from(presses.get()).expect("press count fits a jint")
+	})
+}
+
+fn overlay_props(open: bool, anchor: Option<&str>) -> NativeProps {
+	NativeProps {
+		overlay: Some(leptoskit_native::Overlay {
+			open,
+			anchor: anchor.map(str::to_owned),
+			..leptoskit_native::Overlay::default()
+		}),
+		..NativeProps::default()
+	}
+}
+
+/// Builds a page on `host` with a button, a closed modal holding a 256 by
+/// 128 panel, a closed popover of 160 by 96 and a line of text after both,
+/// in a 320 by 480 viewport. Returns the node ids.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_leptoskit_widgets_ProbeActivity_nativeOverlayMount(
+	mut env: JNIEnv<'_>,
+	_class: JClass<'_>,
+	host: JObject<'_>,
+) -> jstring {
+	let mut backend = AndroidBackend::new(&mut env, &host).expect("overlay Android host");
+	assert!(backend.presents_overlays());
+	let mut arena = Yoga::new();
+	let [root, button, modal, panel, popover, list, after] =
+		std::array::from_fn(|_| arena.create_node());
+	let plain = NativeProps::default();
+	let menu = NativeProps {
+		id: Some("menu".into()),
+		text: Some("Menu".into()),
+		..NativeProps::default()
+	};
+	backend.create(root, NativeKind::View, &plain);
+	backend.create(button, NativeKind::Button, &menu);
+	backend.create(modal, NativeKind::Modal, &overlay_props(false, None));
+	backend.create(panel, NativeKind::View, &plain);
+	backend.create(
+		popover,
+		NativeKind::Popover,
+		&overlay_props(false, Some("menu")),
+	);
+	backend.create(list, NativeKind::View, &plain);
+	backend.create(after, NativeKind::View, &plain);
+	backend.insert_child(root, button, 0);
+	backend.insert_child(root, modal, 1);
+	backend.insert_child(root, popover, 2);
+	backend.insert_child(root, after, 3);
+	backend.insert_child(modal, panel, 0);
+	backend.insert_child(popover, list, 0);
+	backend.update_layout(root, 0.0, 0.0, 320.0, 480.0);
+	backend.update_layout(button, 10.0, 10.0, 120.0, 40.0);
+	backend.update_layout(modal, 0.0, 0.0, 320.0, 480.0);
+	backend.update_layout(panel, 32.0, 176.0, 256.0, 128.0);
+	backend.update_layout(popover, 10.0, 54.0, 160.0, 96.0);
+	backend.update_layout(list, 0.0, 0.0, 160.0, 96.0);
+	backend.update_layout(after, 10.0, 60.0, 120.0, 20.0);
+	let dismissals = Rc::new(Cell::new(0));
+	let counter = Rc::clone(&dismissals);
+	backend.set_event_listener(move |_, event| {
+		if matches!(event, NativeEvent::Dismiss) {
+			counter.set(counter.get() + 1);
+		}
+	});
+	let status = serde_json::json!({
+		"root": root.index(),
+		"modal": modal.index(),
+		"popover": popover.index(),
+		"after": after.index(),
+	})
+	.to_string();
+	OVERLAYS.with(|overlays| {
+		*overlays.borrow_mut() = Some(Overlays {
+			backend,
+			root,
+			modal,
+			popover,
+			dismissals,
+		});
+	});
+	env.new_string(status).expect("overlay status").into_raw()
+}
+
+/// Applies one overlay step and returns the requests to close the listener
+/// has seen. Step 0 only reports; dropping the backend (step 6) closes its
+/// host.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_leptoskit_widgets_ProbeActivity_nativeOverlayStep(
+	_env: JNIEnv<'_>,
+	_class: JClass<'_>,
+	step: jint,
+) -> jint {
+	OVERLAYS.with(|overlays| {
+		let mut overlays = overlays.borrow_mut();
+		if step == 6 {
+			overlays.take().expect("mounted overlays");
+			return 0;
+		}
+
+		let Overlays {
+			backend,
+			root,
+			modal,
+			popover,
+			dismissals,
+		} = overlays.as_mut().expect("mounted overlays");
+		match step {
+			0 => {}
+			1 => backend.update_props(*modal, &overlay_props(true, None)),
+			2 => backend.update_props(*modal, &overlay_props(false, None)),
+			3 => backend.update_props(*popover, &overlay_props(true, Some("menu"))),
+			4 => backend.update_props(*popover, &overlay_props(false, Some("menu"))),
+			5 => {
+				backend.remove_child(*root, *popover);
+				backend.delete(*popover);
+			}
+			_ => panic!("unknown overlay step"),
+		}
+
+		jint::try_from(dismissals.get()).expect("dismissal count fits a jint")
 	})
 }
 

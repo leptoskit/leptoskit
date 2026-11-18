@@ -25,6 +25,7 @@ let controllerTargets: [Target] = [
             "mobile/NativeApplicationTeardown.kt", "mobile/NativePluginJobs.kt",
             "mobile/NativeServiceOwner.kt", "mobile/NativeTextMeasurer.kt",
             "mobile/NativeWidgetProps.kt", "mobile/NativeWidgetRenderer.kt", "mobile/RenderBatch.kt",
+            "mobile/NativeOverlayView.kt",
             "mobile/LeptosKitApplicationController.swift", "mobile/app.cpp",
             "mobile/MobileApplicationTeardown.swift", "mobile/NativeDevelopmentGuests.swift",
             "mobile/NativeDevelopmentGuests.kt", "mobile/NativeHeadlessGuest.kt",

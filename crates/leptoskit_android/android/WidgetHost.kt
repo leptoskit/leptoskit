@@ -1,6 +1,9 @@
 package dev.leptoskit.widgets
 
+import android.app.Activity
+import android.app.Dialog
 import android.content.Context
+import android.content.ContextWrapper
 import android.content.res.ColorStateList
 import android.graphics.Bitmap
 import android.graphics.Canvas
@@ -11,6 +14,7 @@ import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.Typeface
 import android.graphics.drawable.Animatable
+import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.Drawable
 import android.net.Uri
 import android.os.Build
@@ -30,8 +34,10 @@ import android.util.TypedValue
 import android.view.ContextThemeWrapper
 import android.view.Gravity
 import android.view.KeyEvent
+import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
+import android.view.Window
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.inputmethod.EditorInfo
 import android.widget.Button
@@ -41,6 +47,7 @@ import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.HorizontalScrollView
 import android.widget.ImageView
+import android.widget.PopupWindow
 import android.widget.ProgressBar
 import android.widget.RadioButton
 import android.widget.ScrollView
@@ -93,6 +100,44 @@ class WidgetHost(
         var parent: Long? = null
         var keyListener: android.text.method.KeyListener? = null
         val children = mutableListOf<Long>()
+
+        /** Set for a `Modal` or `Popover`: Android shows its view in a window of its own. */
+        var presented: Presented? = null
+    }
+
+    /**
+     * The window of a `Modal` (a dialog) or a `Popover` (a popup window), and
+     * the view inside it that holds the node's own. The node's view is never
+     * a child of its parent's.
+     */
+    private class Presented(
+        val frame: FrameLayout,
+    ) {
+        var dialog: Dialog? = null
+        var popup: PopupWindow? = null
+
+        /** Set while the host takes the window down, so that is not reported as a request to close. */
+        var closing = false
+        val showing: Boolean get() = dialog?.isShowing == true || popup?.isShowing == true
+    }
+
+    /**
+     * Back, Escape and a touch outside all end in `cancel`, which a dialog
+     * answers by closing. A modal only asks: the app closes it with the next
+     * tree.
+     */
+    private class ModalDialog(
+        context: Context,
+        private val onCancel: () -> Unit,
+    ) : Dialog(context) {
+        init {
+            requestWindowFeature(Window.FEATURE_NO_TITLE)
+            setCanceledOnTouchOutside(true)
+            // The app draws the dialog's own panel, corners and all.
+            window?.setBackgroundDrawable(ColorDrawable(android.graphics.Color.TRANSPARENT))
+        }
+
+        override fun cancel() = onCancel()
     }
 
     private class ScrollParts(
@@ -116,6 +161,15 @@ class WidgetHost(
 
     /** The actual Android widget, available to native hosts and verification. */
     fun control(id: Long): View? = nodes[id]?.control
+
+    /** Whether a `Modal`'s dialog or a `Popover`'s popup is on screen. Null for any other node. */
+    fun overlayShown(id: Long): Boolean? = nodes[id]?.presented?.showing
+
+    /** A `Modal`'s dialog, once it has been shown. */
+    fun overlayDialog(id: Long): Dialog? = nodes[id]?.presented?.dialog
+
+    /** A `Popover`'s popup window, once it has been shown. */
+    fun overlayPopup(id: Long): PopupWindow? = nodes[id]?.presented?.popup
 
     /** Effective native visibility includes ancestor clipping and scrolling. */
     fun riveVisible(id: Long): Boolean {
@@ -182,6 +236,8 @@ class WidgetHost(
             }
 
             refreshMountedRoot()
+            // An overlay that was already open had no window to show over.
+            refreshOverlays()
         }
     }
 
@@ -377,10 +433,17 @@ class WidgetHost(
                         val position = fields.getInt("index")
                         parent.children.add(position, child.id)
                         child.parent = parent.id
-                        parent.content.addView(
-                            child.outer,
-                            position + if (parent.content === parent.outer && parent.control != null) 1 else 0,
-                        )
+
+                        // An overlay's view is in its own window, so the
+                        // overlays before this child do not count towards
+                        // where its view goes.
+                        if (child.presented == null) {
+                            val before = parent.children.take(position).count { nodes[it]?.presented == null }
+                            parent.content.addView(
+                                child.outer,
+                                before + if (parent.content === parent.outer && parent.control != null) 1 else 0,
+                            )
+                        }
 
                         if (parent.kind == "pressable") decorative(child.outer)
                         resizeScroll(parent)
@@ -389,7 +452,8 @@ class WidgetHost(
                     "RemoveChild" -> {
                         val parent = checkNotNull(nodes[fields.getLong("parent")])
                         val child = checkNotNull(nodes[fields.getLong("child")])
-                        parent.content.removeView(child.outer)
+                        // An overlay comes down now that it has no parent to show over.
+                        child.presented?.let(::hide) ?: parent.content.removeView(child.outer)
                         parent.children.remove(child.id)
                         child.parent = null
                         resizeScroll(parent)
@@ -398,6 +462,7 @@ class WidgetHost(
                     "Delete" -> {
                         if (focus == id) focus = null
                         nodes.remove(id)?.let { node ->
+                            node.presented?.let(::hide)
                             node.outer.clearFocus()
                             (node.outer.parent as? ViewGroup)?.removeView(node.outer)
                             stopAnimation(node)
@@ -419,8 +484,169 @@ class WidgetHost(
             if (relabel) linkLabels()
             refresh()
             refreshMountedRoot()
+            refreshOverlays()
             focus?.let { nodes[it] }?.let(::moveFocus)
         }
+    }
+
+    /**
+     * Shows each open `Modal` and `Popover` and takes down each closed one,
+     * once the views they hold are in place. An overlay needs a window: until
+     * the tree it belongs to is attached to one, it stays down.
+     */
+    private fun refreshOverlays() {
+        for (node in nodes.values.toList()) {
+            val presented = node.presented ?: continue
+            val overlay = node.props.optJSONObject("overlay")
+            val open = overlay?.optBoolean("open") == true && node.parent != null && nodes.containsKey(node.id)
+            val shown = if (node.kind == "modal") refreshDialog(node, presented, open) else refreshPopup(node, presented, open)
+
+            if (shown) {
+                val name = overlay?.string("initial_focus")
+                nodes.values.firstOrNull { name != null && it.props.string("id") == name }?.let(::moveFocus)
+            }
+        }
+    }
+
+    /** Takes an overlay's window down without asking anyone. */
+    private fun hide(presented: Presented) {
+        presented.closing = true
+        presented.dialog?.takeIf { it.isShowing }?.dismiss()
+        presented.popup?.takeIf { it.isShowing }?.dismiss()
+        presented.closing = false
+    }
+
+    /**
+     * The view an overlay is placed against, and that view's node: the nearest
+     * ancestor shown in a window of its own, or else the root of the tree.
+     */
+    private fun windowOf(node: Node): Node {
+        var current = node
+
+        while (true) {
+            val parent = current.parent?.let(nodes::get) ?: return current
+
+            if (parent.presented?.showing == true) return parent
+            current = parent
+        }
+    }
+
+    /** The Activity this host draws in, which a dialog needs. */
+    private fun activity(): Activity? =
+        generateSequence(context) { (it as? ContextWrapper)?.baseContext }.filterIsInstance<Activity>().firstOrNull()
+
+    /**
+     * Shows or takes down a modal's dialog. Returns whether this call showed
+     * it. The modal itself covers the viewport; the dialog is as large as what
+     * the modal holds, and Android centres it and dims the screen behind it.
+     */
+    private fun refreshDialog(
+        node: Node,
+        presented: Presented,
+        open: Boolean,
+    ): Boolean {
+        val held =
+            node.children
+                .mapNotNull(nodes::get)
+                .filter { it.presented == null && !it.props.optBoolean("hidden") }
+                .map { it.outer.frame }
+        val bounds = RectF()
+        held.forEach(bounds::union)
+        val width = bounds.width().roundToInt()
+        val height = bounds.height().roundToInt()
+        val activity = activity()
+
+        if (!open || activity == null || width <= 0 || height <= 0 || !windowOf(node).outer.isAttachedToWindow) {
+            hide(presented)
+
+            return false
+        }
+        val modal = node.outer.frame
+        node.outer.layoutParams =
+            FrameLayout.LayoutParams(modal.width().roundToInt(), modal.height().roundToInt(), Gravity.TOP or Gravity.LEFT).apply {
+                leftMargin = -bounds.left.roundToInt()
+                topMargin = -bounds.top.roundToInt()
+            }
+        val dialog =
+            presented.dialog ?: ModalDialog(activity) { emit(node.id, DISMISS) }.also {
+                it.setContentView(presented.frame, ViewGroup.LayoutParams(width, height))
+                presented.dialog = it
+            }
+        presented.frame.layoutParams =
+            presented.frame.layoutParams.apply {
+                this.width = width
+                this.height = height
+            }
+        dialog.window?.setLayout(width, height)
+
+        if (dialog.isShowing) return false
+        dialog.show()
+
+        return true
+    }
+
+    /**
+     * Shows or takes down a popover's popup window. Returns whether this call
+     * showed it. Layout has already placed the popover beside its anchor, in
+     * viewport coordinates, so the window goes exactly there.
+     */
+    private fun refreshPopup(
+        node: Node,
+        presented: Presented,
+        open: Boolean,
+    ): Boolean {
+        val frame = node.outer.frame
+        val width = frame.width().roundToInt()
+        val height = frame.height().roundToInt()
+        val below = windowOf(node)
+
+        if (!open || width <= 0 || height <= 0 || !below.outer.isAttachedToWindow) {
+            hide(presented)
+
+            return false
+        }
+        node.outer.layoutParams = FrameLayout.LayoutParams(width, height)
+        val popup =
+            presented.popup ?: PopupWindow(presented.frame, width, height, true).also { popup ->
+                popup.setBackgroundDrawable(null)
+                popup.isOutsideTouchable = true
+                // A touch outside asks the app, and the popup stays until the app closes it.
+                popup.setTouchInterceptor { view, event ->
+                    val outside =
+                        event.actionMasked == MotionEvent.ACTION_OUTSIDE ||
+                            (
+                                event.actionMasked == MotionEvent.ACTION_DOWN &&
+                                    (event.x < 0 || event.y < 0 || event.x >= view.width || event.y >= view.height)
+                            )
+
+                    if (outside) emit(node.id, DISMISS)
+                    outside
+                }
+                // Back closes a popup window itself. That is reported as a
+                // request, and the popup shows again if the app keeps it open.
+                popup.setOnDismissListener {
+                    if (!presented.closing && !closed) {
+                        emit(node.id, DISMISS)
+                        suppress { refreshOverlays() }
+                    }
+                }
+                presented.popup = popup
+            }
+        // The viewport's origin in the window the popup is placed against.
+        val origin = IntArray(2)
+        below.outer.getLocationInWindow(origin)
+        val viewport = below.outer.frame
+        val left = origin[0] - viewport.left.roundToInt() + frame.left.roundToInt()
+        val top = origin[1] - viewport.top.roundToInt() + frame.top.roundToInt()
+
+        if (popup.isShowing) {
+            popup.update(left, top, width, height)
+
+            return false
+        }
+        popup.showAtLocation(below.outer, Gravity.NO_GRAVITY, left, top)
+
+        return true
     }
 
     /**
@@ -494,6 +720,7 @@ class WidgetHost(
         checkUiThread()
         suppress {
             nodes.values.forEach { node ->
+                node.presented?.let(::hide)
                 stopAnimation(node)
                 node.outer.clearFocus()
                 (node.outer.parent as? ViewGroup)?.removeView(node.outer)
@@ -721,6 +948,10 @@ class WidgetHost(
             }
         val node = Node(id, kind, outer, control, content, props, scroll)
         nodes[id] = node
+
+        if (kind == "modal" || kind == "popover") {
+            node.presented = Presented(FrameLayout(context).apply { addView(outer) })
+        }
 
         if (control is EditText) node.keyListener = control.keyListener
 
@@ -977,9 +1208,12 @@ class WidgetHost(
         outer.clipping = props.optBoolean("clip") || outer.radius > 0f
 
         val borderEdges = borderEdges(props)
+        // A dialog dims the screen behind it, so the backdrop a modal draws on
+        // the web has nothing to cover here.
+        val background = if (node.kind == "modal") null else "background"
         outer.background =
             SurfaceDrawable(
-                props.color("background", android.graphics.Color.TRANSPARENT),
+                background?.let { props.color(it, android.graphics.Color.TRANSPARENT) } ?: android.graphics.Color.TRANSPARENT,
                 props.color("border_color", android.graphics.Color.TRANSPARENT),
                 borderEdges,
                 outer.radius,
@@ -1921,6 +2155,10 @@ class WidgetHost(
     companion object {
         const val SLIDER_STEPS = 1_000_000
         private const val ASSET_SCHEME = "asset://"
+
+        /** A `Modal` or `Popover` asks to be closed. */
+        private const val DISMISS = 12
+
         private val RADIO_KEYS =
             setOf(KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN)
 

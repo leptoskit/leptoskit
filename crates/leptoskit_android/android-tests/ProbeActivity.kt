@@ -216,6 +216,63 @@ class ProbeActivity : Activity() {
         nativeContractStep(5)
     }
 
+    // A modal is a dialog and a popover is a popup window, each over the
+    // Activity's own window. Runs last: a dialog takes window focus.
+    private fun verifyOverlays() {
+        val overlayHost = WidgetHost(this)
+        val ids = JSONObject(nativeOverlayMount(overlayHost))
+        val rootId = ids.getLong("root")
+        val modalId = ids.getLong("modal")
+        val popoverId = ids.getLong("popover")
+        val overlayRoot = checkNotNull(overlayHost.view(rootId)) as ViewGroup
+        assertion(
+            overlayRoot.childCount == 2 && overlayRoot.getChildAt(1) === overlayHost.view(ids.getLong("after")),
+            "Overlay views stay out of their parent, and later siblings keep their order",
+        )
+        assertion(
+            overlayHost.overlayShown(rootId) == null &&
+                overlayHost.overlayShown(modalId) == false &&
+                overlayHost.overlayShown(popoverId) == false,
+            "Closed overlays show nothing",
+        )
+        nativeOverlayStep(1)
+        assertion(overlayHost.overlayShown(modalId) == false, "An open modal waits for a window")
+        overlayHost.mount(rootId, container)
+        val dialog = checkNotNull(overlayHost.overlayDialog(modalId))
+        val panel = checkNotNull(dialog.window).attributes
+        assertion(dialog.isShowing, "An open modal shows as a dialog once its tree is in a window")
+        assertion(
+            panel.width == (256 * overlayHost.density).roundToInt() && panel.height == (128 * overlayHost.density).roundToInt(),
+            "A dialog is as large as what the modal holds",
+        )
+        // Back, Escape and a touch outside all call cancel.
+        dialog.cancel()
+        assertion(nativeOverlayStep(0) == 1 && dialog.isShowing, "Cancelling a dialog asks the app and leaves it up")
+        nativeOverlayStep(2)
+        assertion(!dialog.isShowing && nativeOverlayStep(0) == 1, "Closing the modal dismisses its dialog without asking")
+
+        nativeOverlayStep(3)
+        val popup = checkNotNull(overlayHost.overlayPopup(popoverId))
+        assertion(
+            popup.isShowing &&
+                popup.width == (160 * overlayHost.density).roundToInt() &&
+                popup.height == (96 * overlayHost.density).roundToInt(),
+            "An open popover shows as a popup window the size of its layout",
+        )
+        // Back dismisses a popup window itself.
+        popup.dismiss()
+        assertion(nativeOverlayStep(0) == 2, "A popup the system dismisses asks the app")
+        assertion(popup.isShowing, "A popup the app keeps open shows again")
+        nativeOverlayStep(4)
+        assertion(!popup.isShowing && nativeOverlayStep(0) == 2, "Closing the popover dismisses its popup without asking")
+        nativeOverlayStep(3)
+        assertion(popup.isShowing, "A popover opens a second time")
+        nativeOverlayStep(5)
+        assertion(!popup.isShowing && overlayHost.view(popoverId) == null, "Deleting an open popover takes its popup down")
+        overlayHost.mount(null, container)
+        nativeOverlayStep(6)
+    }
+
     private fun assertion(
         value: Boolean,
         detail: String,
@@ -745,6 +802,7 @@ class ProbeActivity : Activity() {
                         "Backend teardown detaches all native children and stops animation",
                     )
                     verifyBackendContract()
+                    verifyOverlays()
                     // The verifier stops the app after the verdict, so coverage builds
                     // write their profile first; other builds ignore this.
                     nativeFlushCoverage(File(filesDir, "coverage.profraw").path)
@@ -816,6 +874,10 @@ class ProbeActivity : Activity() {
         @JvmStatic private external fun nativeContractMount(host: WidgetHost): String
 
         @JvmStatic private external fun nativeContractStep(step: Int): Int
+
+        @JvmStatic private external fun nativeOverlayMount(host: WidgetHost): String
+
+        @JvmStatic private external fun nativeOverlayStep(step: Int): Int
 
         @JvmStatic private external fun nativeFlushCoverage(path: String)
     }
