@@ -1,10 +1,16 @@
 //! Each person's personal organisation, made the first time they call.
 //!
 //! Its slug comes from the local part of their primary verified address
-//! (`ana@example.com` makes `ana`), or `personal` without one; a taken or
-//! reserved slug gets `-2`, `-3`, and so on. The organisation's unique
-//! `personal_owner` column makes it once per person, however many first
-//! requests race: the losers find the winner's.
+//! (`ana@example.com` makes `ana`), or `personal` without one, because the
+//! console shows it and a recognisable one is friendlier. When that is taken
+//! or reserved, `ana-2` and `ana-3`, and after those `ana-` and ten random
+//! hex characters (40 bits). Anyone who knows an address can take its
+//! friendly slugs first, and anyone can take `personal`'s; that only moves
+//! the person to a random suffix, which nobody can take in advance, so no
+//! one can stop another person's first sign-in.
+//!
+//! The organisation's unique `personal_owner` column makes it once per
+//! person, however many first requests race: the losers find the winner's.
 
 use leptoskit_auth::Account;
 use leptoskit_db::Id;
@@ -21,14 +27,22 @@ use crate::tables::Organization;
 /// The plan a new organisation starts on.
 pub(crate) const STARTING_PLAN: &str = "hobby";
 
-/// How many slugs to try before giving up: `ana`, `ana-2`, … `ana-50`.
-const SLUG_ATTEMPTS: u32 = 50;
+/// How many friendly slugs to try: `ana`, `ana-2`, and `ana-3`.
+const FRIENDLY_SLUGS: u32 = 3;
+
+/// How many random slugs to try after those. The first is free unless 40
+/// random bits match a slug someone holds, so running out of these means
+/// the randomness is broken, not that the namespace is.
+const RANDOM_SLUGS: u32 = 8;
+
+/// How many random bytes a random slug's suffix has: ten hex characters.
+const RANDOM_SUFFIX_BYTES: usize = 5;
 
 /// Makes `account`'s personal organisation unless it exists.
 ///
 /// # Errors
 ///
-/// When the database fails, or every candidate slug is taken.
+/// When the database fails, or the operating system has no randomness.
 pub(crate) async fn ensure(
 	services: &Services,
 	account: Id<Account>,
@@ -49,11 +63,15 @@ pub(crate) async fn ensure(
 		.unwrap_or("Personal")
 		.to_owned();
 
-	for attempt in 1..=SLUG_ATTEMPTS {
+	for attempt in 1..=FRIENDLY_SLUGS + RANDOM_SLUGS {
 		let slug = if attempt == 1 {
 			base.clone()
+		} else if attempt <= FRIENDLY_SLUGS {
+			suffixed(&base, &attempt.to_string())
 		} else {
-			suffixed(&base, attempt)
+			let random = super::secret::random_hex(RANDOM_SUFFIX_BYTES)
+				.map_err(|_| rpc::Error::server("the server has no randomness to name with"))?;
+			suffixed(&base, &random)
 		};
 
 		if super::account::check_organization_slug(&slug).is_err() {
@@ -73,9 +91,10 @@ pub(crate) async fn ensure(
 		}
 	}
 
-	Err(rpc::Error::server(
-		"couldn't find a free slug for your personal organisation",
-	))
+	Err(rpc::Error::server(format!(
+		"{RANDOM_SLUGS} random slugs for a personal organisation were all taken, so the server's \
+		 randomness is broken"
+	)))
 }
 
 async fn exists(db: &impl leptoskit_db::Read, account: Id<Account>) -> rpc::Result<bool> {
@@ -146,9 +165,9 @@ fn base_slug(email: Option<&str>) -> String {
 		.unwrap_or_else(|| "personal".to_owned())
 }
 
-/// `base` with `-n`, cut so the whole stays a slug's length.
-fn suffixed(base: &str, attempt: u32) -> String {
-	let suffix = format!("-{attempt}");
+/// `base` with `-<suffix>`, cut so the whole stays a slug's length.
+fn suffixed(base: &str, suffix: &str) -> String {
+	let suffix = format!("-{suffix}");
 	let keep = crate::slug::SLUG_MAX_LEN.saturating_sub(suffix.len());
 	let mut stem: String = base.chars().take(keep).collect();
 	while stem.ends_with('-') {
@@ -171,7 +190,13 @@ mod tests {
 		assert_eq!(base_slug(Some("42@example.com")), "personal");
 		assert_eq!(base_slug(Some("jo@example.com")), "personal");
 		assert_eq!(base_slug(None), "personal");
-		assert_eq!(suffixed("ana", 2), "ana-2");
-		assert_eq!(suffixed(&"a".repeat(40), 12).len(), 40);
+		assert_eq!(suffixed("ana", "2"), "ana-2");
+		assert_eq!(suffixed(&"a".repeat(40), "12").len(), 40);
+
+		// A long stem is cut, and never left ending in a hyphen.
+		let random = suffixed(&"ab-".repeat(20), "0123456789");
+		assert_eq!(random, format!("{}-0123456789", "ab-".repeat(9) + "ab"));
+		assert!(crate::slug::Slug::parse(&random).is_ok(), "{random}");
+		assert!(random.len() <= crate::slug::SLUG_MAX_LEN);
 	}
 }

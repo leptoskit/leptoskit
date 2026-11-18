@@ -5,23 +5,30 @@
 //! Every operation names the permission it needs, and the server decides it
 //! here and nowhere else:
 //!
-//! | Permission            | Level        | owner | admin | developer | billing | viewer | Token scope |
-//! | --------------------- | ------------ | :---: | :---: | :-------: | :-----: | :----: | ----------- |
-//! | `view_organization`   | organisation |   ✓   |   ✓   |     ✓     |    ✓    |   ✓    | any         |
-//! | `view_projects`       | project      |   ✓   |   ✓   |     ✓     |    ✓    |   ✓    | any         |
-//! | `manage_members`      | organisation |   ✓   |   ✓   |           |         |        | `admin`     |
-//! | `manage_owners`       | organisation |   ✓   |       |           |         |        | `admin`     |
-//! | `manage_tokens`       | organisation |   ✓   |   ✓   |           |         |        | `admin`     |
-//! | `create_project`      | organisation |   ✓   |   ✓   |     ✓     |         |        | `manage`    |
-//! | `manage_environments` | project      |   ✓   |   ✓   |     ✓     |         |        | `manage`    |
-//! | `delete_project`      | project      |   ✓   |   ✓   |           |         |        | `admin`     |
-//! | `delete_environment`  | project      |   ✓   |   ✓   |           |         |        | `admin`     |
+//! | Permission            | Level        | owner | admin | developer | billing | viewer | API token        |
+//! | --------------------- | ------------ | :---: | :---: | :-------: | :-----: | :----: | ---------------- |
+//! | `view_organization`   | organisation |   ✓   |   ✓   |     ✓     |    ✓    |   ✓    | any scope        |
+//! | `view_projects`       | project      |   ✓   |   ✓   |     ✓     |    ✓    |   ✓    | any scope        |
+//! | `manage_members`      | organisation |   ✓   |   ✓   |           |         |        | never: a person  |
+//! | `manage_owners`       | organisation |   ✓   |       |           |         |        | never: a person  |
+//! | `manage_tokens`       | organisation |   ✓   |   ✓   |           |         |        | never: a person  |
+//! | `create_project`      | organisation |   ✓   |   ✓   |     ✓     |         |        | `manage`         |
+//! | `manage_environments` | project      |   ✓   |   ✓   |     ✓     |         |        | `manage`         |
+//! | `delete_project`      | project      |   ✓   |   ✓   |           |         |        | `admin`          |
+//! | `delete_environment`  | project      |   ✓   |   ✓   |           |         |        | `admin`          |
 //!
-//! A person has their role's permissions. A token has a permission when one
-//! of its scopes grants it *and* its creator's current role does, so a
-//! token never outlives a demotion. A token bound to one project has no
-//! organisation-level permission except `view_organization`, and sees no
-//! other project.
+//! A person, signed in themselves or through the CLI, has their role's
+//! permissions. A token has a permission when one of its scopes grants it
+//! *and* its creator's current role does, so a token never outlives a
+//! demotion. A token bound to one project has no organisation-level
+//! permission except `view_organization`, and sees no other project.
+//!
+//! Some permissions only a person has, whatever a token's scopes
+//! ([`Permission::requires_person`]): who is in an organisation, with what
+//! role, and which tokens act in it. Those are the authority to act there,
+//! and a token that could hand them out could turn itself into a
+//! membership or a token that outlives its own scopes, expiry, and
+//! revocation.
 //!
 //! The deletions need the `admin` scope by name: no narrower scope grants
 //! them, which is how "a scope that names them" reads for the six scopes
@@ -78,6 +85,16 @@ impl Role {
 		}
 	}
 
+	/// Whether someone with this role may give someone else `role`, by
+	/// inviting them or by changing their role, or take it away: managing
+	/// members, and for the owner role, being an owner. An invitation is
+	/// only as good as this is for its inviter when it is accepted.
+	#[must_use]
+	pub const fn may_give(self, role: Self) -> bool {
+		self.allows(Permission::ManageMembers)
+			&& (!matches!(role, Self::Owner) || self.allows(Permission::ManageOwners))
+	}
+
 	/// Whether someone with this role may give a token `scope`: owners any,
 	/// admins all but `billing`, developers what they do day to day, and
 	/// billing and viewers what they can already see or pay for.
@@ -117,7 +134,8 @@ pub enum TokenScope {
 	Publish,
 	/// The plan and invoices, when billing arrives. Reads, today.
 	Billing,
-	/// Members, tokens, and deleting projects and environments.
+	/// Deleting projects and environments. Members and tokens are a
+	/// person's to manage, whatever a token's scopes.
 	Admin,
 }
 
@@ -146,8 +164,9 @@ impl TokenScope {
 	}
 
 	/// Whether this scope grants `permission`: every scope reads, `manage`
-	/// creates and changes projects and environments, and `admin` manages
-	/// people and tokens and deletes.
+	/// creates and changes projects and environments, `admin` deletes them,
+	/// and none grants what only a person may do
+	/// ([`Permission::requires_person`]).
 	#[must_use]
 	pub const fn allows(self, permission: Permission) -> bool {
 		match permission {
@@ -155,11 +174,12 @@ impl TokenScope {
 			Permission::CreateProject | Permission::ManageEnvironments => {
 				matches!(self, Self::Manage)
 			}
-			Permission::ManageMembers
-			| Permission::ManageOwners
-			| Permission::ManageTokens
-			| Permission::DeleteProject
-			| Permission::DeleteEnvironment => matches!(self, Self::Admin),
+			Permission::DeleteProject | Permission::DeleteEnvironment => {
+				matches!(self, Self::Admin)
+			}
+			Permission::ManageMembers | Permission::ManageOwners | Permission::ManageTokens => {
+				false
+			}
 		}
 	}
 }
@@ -224,6 +244,21 @@ impl Permission {
 		}
 	}
 
+	/// Whether only a person may have this permission, signed in themselves
+	/// or through the CLI: never an API token, whatever its scopes. Who is
+	/// in an organisation, with what role, and which tokens act in it are
+	/// the authority to act there. A token that could invite someone,
+	/// change a role, or make a token could turn itself into a membership
+	/// or a credential that outlives its own scopes, expiry, and
+	/// revocation, so only people hand those out.
+	#[must_use]
+	pub const fn requires_person(self) -> bool {
+		matches!(
+			self,
+			Self::ManageMembers | Self::ManageOwners | Self::ManageTokens
+		)
+	}
+
 	/// Whether the permission is about one project, which a project-bound
 	/// token may have for its own project, rather than the organisation as
 	/// a whole.
@@ -258,12 +293,25 @@ pub enum Requirement {
 	Organization(Permission),
 	/// `permission` in the project the arguments name.
 	Project(Permission),
+	/// One of `leptoskit_rpc`'s own `rpc.*` operations, which every
+	/// leptoskit server serves. They reach no organisation: the inbox and
+	/// job operations read and change only the caller's own notices and
+	/// jobs, of which the cloud has none, and `rpc.service_token` answers
+	/// `null` because the cloud forwards nobody's identity to a service.
+	Builtin,
 }
 
 /// Every operation the control plane serves, with what it asks of its
 /// caller. The authorisation tests run each one as every kind of caller
-/// from this table, and fail when an operation is served without a row.
+/// from this table, and fail when the server serves an operation without a
+/// row.
 pub const OPERATIONS: &[(&str, Requirement)] = &[
+	("rpc.inbox", Requirement::Builtin),
+	("rpc.mark_read", Requirement::Builtin),
+	("rpc.mark_all_read", Requirement::Builtin),
+	("rpc.job_status", Requirement::Builtin),
+	("rpc.cancel_job", Requirement::Builtin),
+	("rpc.service_token", Requirement::Builtin),
 	("whoami", Requirement::SignedIn),
 	("organizations", Requirement::SignedIn),
 	("create_organization", Requirement::Person),
@@ -422,13 +470,47 @@ mod tests {
 				.filter(|scope| role.grants(*scope))
 			{
 				for permission in Permission::ALL {
-					if scope.allows(permission) && !role.allows(permission) {
-						// `admin` names member management; an admin's
-						// `admin` token still can't touch owners, because
-						// the role check runs on every call.
-						assert_eq!(scope, TokenScope::Admin, "{role} {scope} {permission:?}");
-					}
+					assert!(
+						!scope.allows(permission) || role.allows(permission),
+						"{role} {scope} {permission:?}"
+					);
 				}
+			}
+		}
+	}
+
+	#[test]
+	fn only_people_manage_members_and_tokens() {
+		let person_only: Vec<Permission> = Permission::ALL
+			.into_iter()
+			.filter(|permission| permission.requires_person())
+			.collect();
+		assert_eq!(
+			person_only,
+			[
+				Permission::ManageMembers,
+				Permission::ManageOwners,
+				Permission::ManageTokens
+			]
+		);
+
+		for scope in TokenScope::ALL {
+			for permission in person_only.iter().copied() {
+				assert!(!scope.allows(permission), "{scope} {permission:?}");
+			}
+		}
+	}
+
+	#[test]
+	fn giving_a_role_is_managing_members_and_owning_for_owner() {
+		for giver in Role::ALL {
+			for role in Role::ALL {
+				let expected = match giver {
+					Role::Owner => true,
+					Role::Admin => role != Role::Owner,
+					Role::Developer | Role::Billing | Role::Viewer => false,
+				};
+				assert_eq!(giver.may_give(role), expected, "{giver} {role}");
 			}
 		}
 	}
@@ -444,6 +526,11 @@ mod tests {
 			requirement("delete_project"),
 			Some(Requirement::Project(Permission::DeleteProject))
 		);
+		assert_eq!(
+			requirement("invite_member"),
+			Some(Requirement::Organization(Permission::ManageMembers))
+		);
+		assert_eq!(requirement("rpc.inbox"), Some(Requirement::Builtin));
 		assert_eq!(requirement("deploy"), None);
 	}
 

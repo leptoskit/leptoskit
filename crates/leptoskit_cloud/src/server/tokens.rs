@@ -1,11 +1,15 @@
 //! The bodies of [`crate::tokens`]'s operations.
 //!
-//! A token is never stronger than whoever makes it: a person gives only the
-//! scopes their role grants, and a token making another gives only its own
-//! scopes, its own project binding, and no longer a life than it has left.
+//! A token is never stronger than whoever makes it, who is always a
+//! person: they give only the scopes their role grants. A token makes no
+//! tokens, so none outlives the revocation of another.
+
+use std::future::Future;
 
 use leptoskit_db::Id;
 use leptoskit_rpc as rpc;
+use serde::Deserialize;
+use serde::Serialize;
 use uuid::Uuid;
 
 use super::audit;
@@ -94,18 +98,69 @@ fn too_strong(why: &str) -> rpc::Error {
 	rpc::Error::forbidden(format!("token_too_strong: {why}"))
 }
 
+/// `create_token`'s body. It is an action so that nothing keeps its answer:
+/// a mutation's answer is stored as its receipt when it comes with an
+/// idempotency key, and this one holds the token's value. The writes still
+/// happen in one serializable transaction, with the mutation runner's
+/// retries, through [`MintToken`], which is never registered and so never
+/// runs with a request ID.
 pub(crate) async fn create_token(
-	cx: &rpc::MutationCx,
-	organization: &str,
+	cx: &rpc::ActionCx,
+	organization: String,
 	name: String,
 	scopes: Vec<TokenScope>,
 	project: Option<String>,
 	expires_in_days: Option<u32>,
 ) -> rpc::Result<CreatedToken> {
+	cx.mutate(MintToken {
+		organization,
+		name,
+		scopes,
+		project,
+		expires_in_days,
+	})
+	.await
+}
+
+/// The authorisation, the token's row, and its audit entry, in one
+/// transaction. Only [`create_token`] runs it: it isn't served, so no
+/// client calls it, and it never has a receipt.
+#[derive(Clone, Serialize, Deserialize)]
+pub(crate) struct MintToken {
+	organization: String,
+	name: String,
+	scopes: Vec<TokenScope>,
+	project: Option<String>,
+	expires_in_days: Option<u32>,
+}
+
+impl rpc::Operation for MintToken {
+	type Context = rpc::MutationCx;
+	type Output = CreatedToken;
+
+	const KIND: rpc::Kind = rpc::Kind::Mutation;
+	/// What the change log records the commit as.
+	const NAME: &'static str = "create_token";
+
+	fn run(self, cx: &rpc::MutationCx) -> impl Future<Output = rpc::Result<CreatedToken>> + Send {
+		mint(cx, self)
+	}
+}
+
+async fn mint(cx: &rpc::MutationCx, args: MintToken) -> rpc::Result<CreatedToken> {
+	let MintToken {
+		organization,
+		name,
+		scopes,
+		project,
+		expires_in_days,
+	} = args;
+	// Managing tokens takes a person, so no token gets past this to make
+	// another: a token it made would outlive its own revocation.
 	let access = authorize::organization(
 		cx.tx(),
 		cx.context(),
-		organization,
+		&organization,
 		Permission::ManageTokens,
 	)
 	.await?;
@@ -164,34 +219,29 @@ pub(crate) async fn create_token(
 		None => None,
 	};
 	let now = leptoskit_db::now();
-	let mut expires_at = now + chrono::TimeDelta::days(i64::from(days));
+	let expires_at = now + chrono::TimeDelta::days(i64::from(days));
 
-	// What a token may give: no more than it has.
-	if let Some(parent) = access.caller.token() {
-		if let Some(scope) = scopes.iter().find(|scope| !parent.scopes.contains(scope)) {
-			return Err(too_strong(&format!(
-				"this token doesn't have the `{scope}` scope, so it can't give it"
-			)));
-		}
-
-		if let Some(bound) = parent.project
-			&& project.as_ref().is_none_or(|project| project.id != bound)
-		{
-			// Another project is one this token can't see.
-			if project.is_some() {
-				return Err(rpc::Error::not_found(
-					"project_not_found: there is no such project that you can see",
-				));
-			}
-
-			return Err(too_strong(
-				"this token is bound to one project, so a token it makes must be too",
-			));
-		}
-
-		if expires_at > parent.expires_at {
-			expires_at = parent.expires_at;
-		}
+	// A live token's name is unique in its organisation, so a request sent
+	// again after its answer was lost can't quietly make a second token the
+	// caller can't tell from the first: it is refused, naming the first.
+	if let Some(existing) = ApiToken::query()
+		.filter(|token| {
+			token.organization_id.eq(organization_id)
+				& token.name.eq(name.clone())
+				& token.revoked_at.is_null()
+				& token.expires_at.gt(now)
+		})
+		.first(cx.tx())
+		.await?
+	{
+		return Err(rpc::Error::conflict(format!(
+			"token_name_taken: `{organization}` already has a live token `{name}`, \
+			 {TOKEN_PREFIX}{}_…, made at {}. If it is from a request whose answer you didn't get, \
+			 nobody has its value: revoke it ({}) and ask again. Otherwise choose another name",
+			existing.prefix,
+			existing.created_at.format("%Y-%m-%d %H:%M:%S UTC"),
+			existing.id,
+		)));
 	}
 
 	let live = ApiToken::query()

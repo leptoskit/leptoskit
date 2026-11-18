@@ -81,3 +81,43 @@ async fn the_cli_client_is_registered_once() {
 	assert_eq!(clients[0].name, leptoskit_cloud::server::CLI_CLIENT_NAME);
 	assert!(clients[0].first_party);
 }
+
+#[tokio::test]
+async fn tokens_never_grant_membership() {
+	scenarios::tokens_never_grant_membership(&support::app().await).await;
+}
+
+#[tokio::test]
+async fn an_invitation_needs_its_inviters_authority() {
+	scenarios::an_invitation_needs_its_inviters_authority(&support::app().await).await;
+}
+
+#[tokio::test]
+async fn replacing_an_invitation_needs_authority_over_it() {
+	scenarios::replacing_an_invitation_needs_authority_over_it(&support::app().await).await;
+}
+
+#[tokio::test]
+async fn personal_organizations_cannot_be_squatted() {
+	scenarios::personal_organizations_cannot_be_squatted(&support::app().await).await;
+}
+
+#[tokio::test]
+async fn token_secrets_are_never_stored() {
+	scenarios::token_secrets_are_never_stored(&support::app().await).await;
+}
+
+#[tokio::test]
+async fn the_last_owner_stays_under_concurrent_changes() {
+	scenarios::the_last_owner_stays_under_concurrent_changes(&support::app().await).await;
+}
+
+#[tokio::test]
+async fn caps_hold_under_concurrent_creates() {
+	scenarios::caps_hold_under_concurrent_creates(&support::app().await).await;
+}
+
+#[tokio::test]
+async fn a_members_tokens_follow_their_role() {
+	scenarios::a_members_tokens_follow_their_role(&support::app().await).await;
+}

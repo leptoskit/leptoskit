@@ -30,9 +30,14 @@ pub(crate) struct Access {
 }
 
 impl Access {
-	/// `Forbidden` unless the caller has `permission`, by role and, for a
-	/// token, by scope and project binding; saying why.
+	/// `Forbidden` unless the caller has `permission`: a person for what
+	/// only a person may do, then by role and, for a token, by scope and
+	/// project binding; saying why.
 	pub(crate) fn require(&self, permission: Permission) -> rpc::Result<()> {
+		if self.caller.token().is_some() && permission.requires_person() {
+			return Err(person_required(describe(permission)));
+		}
+
 		if !self.role.allows(permission) {
 			return Err(rpc::Error::forbidden(format!(
 				"insufficient_role: a {} of `{}` can't {}",
@@ -60,6 +65,27 @@ impl Access {
 
 		Ok(())
 	}
+
+	/// `Forbidden` unless the caller may give `role` to someone, or take it
+	/// away: [`Role::may_give`], checked as [`require`](Self::require)
+	/// checks a permission, so a token is refused for being one.
+	pub(crate) fn require_to_give(&self, role: Role) -> rpc::Result<()> {
+		self.require(Permission::ManageMembers)?;
+
+		if role == Role::Owner {
+			self.require(Permission::ManageOwners)?;
+		}
+
+		Ok(())
+	}
+}
+
+/// The `Forbidden` an API token gets for what only a person may do.
+pub(crate) fn person_required(what: &str) -> rpc::Error {
+	rpc::Error::forbidden(format!(
+		"person_required: only a person, signed in or through the CLI, can {what}; an API token \
+		 can't"
+	))
 }
 
 /// The organisation `slug` names, if the caller can see it, with `permission`

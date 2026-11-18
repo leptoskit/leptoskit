@@ -180,13 +180,6 @@ pub(crate) fn check_name(name: &str) -> rpc::Result<String> {
 	Ok(name.to_owned())
 }
 
-/// The `Forbidden` a token gets for what only a person may do.
-fn people_only(what: &str) -> rpc::Error {
-	rpc::Error::forbidden(format!(
-		"person_required: only a person signed in can {what}, not an API token"
-	))
-}
-
 pub(crate) async fn create_organization(
 	cx: &rpc::MutationCx,
 	slug: String,
@@ -195,7 +188,7 @@ pub(crate) async fn create_organization(
 	let caller = caller(cx.context())?;
 
 	let Caller::Person { account, .. } = caller else {
-		return Err(people_only("create an organisation"));
+		return Err(authorize::person_required("create an organisation"));
 	};
 
 	check_organization_slug(&slug)?;
@@ -271,18 +264,6 @@ pub(crate) async fn members(cx: &rpc::QueryCx, organization: &str) -> rpc::Resul
 	Ok(out)
 }
 
-/// `Forbidden` unless the caller may give or take `role`: only an owner
-/// touches the owner role.
-fn require_for_role(access: &authorize::Access, role: Role) -> rpc::Result<()> {
-	access.require(Permission::ManageMembers)?;
-
-	if role == Role::Owner {
-		access.require(Permission::ManageOwners)?;
-	}
-
-	Ok(())
-}
-
 /// An address as invitations keep it: trimmed, lowercased, and checked.
 fn normalize_email(email: &str) -> rpc::Result<String> {
 	let normalized = email.trim().to_ascii_lowercase();
@@ -304,22 +285,37 @@ pub(crate) async fn invite_member(
 		Permission::ManageMembers,
 	)
 	.await?;
-	require_for_role(&access, role)?;
+	access.require_to_give(role)?;
 	let services = services(cx.context())?;
 	let email = normalize_email(&email)?;
 	let organization_id = access.organization.id;
 	let now = leptoskit_db::now();
-	// Inviting an address again replaces its pending link.
-	Invitation::update()
+	// Inviting an address again replaces its pending invitations, which is
+	// revoking each: the caller needs the authority to revoke every one,
+	// so an admin can't cancel an owner's invitation this way.
+	let replaced = Invitation::query()
 		.filter(|row| {
 			row.organization_id.eq(organization_id)
 				& row.email.eq(email.clone())
 				& row.accepted_at.is_null()
 				& row.revoked_at.is_null()
+				& row.expires_at.gt(now)
 		})
-		.set(|row| row.revoked_at, Some(now))
-		.run(cx.tx())
+		.all(cx.tx())
 		.await?;
+
+	for row in &replaced {
+		access.require_to_give(row.role)?;
+	}
+
+	for row in &replaced {
+		let id = row.id;
+		Invitation::update()
+			.filter(|row| row.id.eq(id))
+			.set(|row| row.revoked_at, Some(now))
+			.run(cx.tx())
+			.await?;
+	}
 
 	let pending = Invitation::query()
 		.filter(|row| {
@@ -364,14 +360,25 @@ pub(crate) async fn invite_member(
 	)
 	.await?;
 
-	// The mail names a person who invites by their own address, which the
-	// transaction may read; a token's invitation names nobody. Nobody else's
-	// address is read here: that would take a second connection while this
-	// transaction holds one.
-	let inviter = match &access.caller {
-		Caller::Person { account, .. } => super::primary_email(cx.tx(), *account).await?,
-		Caller::Token(_) => None,
-	};
+	// The address is in the entry above; an address can be long enough that
+	// repeating it here wouldn't fit.
+	for row in &replaced {
+		audit::record(
+			cx.tx(),
+			&Actor::from(&access.caller),
+			"invitation.revoke",
+			Some(organization_id),
+			None,
+			Some(format!("{} (replaced by {})", row.id, invitation.id)),
+			&client(cx.context()),
+		)
+		.await?;
+	}
+
+	// The mail names the inviter by their own address, which the transaction
+	// may read (only a person invites). Nobody else's address is read here:
+	// that would take a second connection while this transaction holds one.
+	let inviter = super::primary_email(cx.tx(), access.caller.account()).await?;
 	let mail = Mail {
 		to: email,
 		subject: format!("Join {} on LeptosKit Cloud", access.organization.name),
@@ -434,7 +441,7 @@ pub(crate) async fn accept_invitation(
 	let caller = caller(cx.context())?;
 
 	let Caller::Person { account, .. } = caller else {
-		return Err(people_only("accept an invitation"));
+		return Err(authorize::person_required("accept an invitation"));
 	};
 
 	let account = *account;
@@ -469,6 +476,16 @@ pub(crate) async fn accept_invitation(
 	}
 
 	if invitation.revoked_at.is_some() || invitation.expires_at <= now {
+		return Err(invalid());
+	}
+
+	// An invitation is only as good as its inviter's authority now: one
+	// whose inviter has left, or holds a role that can no longer give the
+	// role it offers, is no invitation. Demoting or removing someone
+	// revokes these too; this holds however their role changed.
+	let inviter = membership_of(cx.tx(), organization.id, invitation.invited_by).await?;
+
+	if !inviter.is_some_and(|inviter| inviter.role.may_give(invitation.role)) {
 		return Err(invalid());
 	}
 
@@ -589,7 +606,7 @@ pub(crate) async fn revoke_invitation(
 				"invitation_not_found: `{organization}` has no pending invitation {invitation}"
 			))
 		})?;
-	require_for_role(&access, row.role)?;
+	access.require_to_give(row.role)?;
 	Invitation::update()
 		.filter(|row| row.id.eq(id))
 		.set(|row| row.revoked_at, Some(leptoskit_db::now()))
@@ -664,8 +681,8 @@ pub(crate) async fn set_member_role(
 	)
 	.await?;
 	let target = member(cx.tx(), &access, account).await?;
-	require_for_role(&access, target.role)?;
-	require_for_role(&access, role)?;
+	access.require_to_give(target.role)?;
+	access.require_to_give(role)?;
 
 	if target.role != role {
 		if role != Role::Owner {
@@ -687,6 +704,54 @@ pub(crate) async fn set_member_role(
 			&client(cx.context()),
 		)
 		.await?;
+		revoke_invitations_beyond(cx, &access, target.account_id, Some(role)).await?;
+	}
+
+	Ok(())
+}
+
+/// Revokes the pending invitations `inviter` sent that `role`, their role
+/// now (`None` once they have gone), can't give, each with its own audit
+/// entry: an invitation is only as good as its inviter's authority.
+async fn revoke_invitations_beyond(
+	cx: &rpc::MutationCx,
+	access: &authorize::Access,
+	inviter: Id<Account>,
+	role: Option<Role>,
+) -> rpc::Result<()> {
+	let organization_id = access.organization.id;
+	let now = leptoskit_db::now();
+	let pending = Invitation::query()
+		.filter(|row| {
+			row.organization_id.eq(organization_id)
+				& row.invited_by.eq(inviter)
+				& row.accepted_at.is_null()
+				& row.revoked_at.is_null()
+				& row.expires_at.gt(now)
+		})
+		.all(cx.tx())
+		.await?;
+
+	for row in pending
+		.iter()
+		.filter(|row| !role.is_some_and(|role| role.may_give(row.role)))
+	{
+		let id = row.id;
+		Invitation::update()
+			.filter(|row| row.id.eq(id))
+			.set(|row| row.revoked_at, Some(now))
+			.run(cx.tx())
+			.await?;
+		audit::record(
+			cx.tx(),
+			&Actor::from(&access.caller),
+			"invitation.revoke",
+			Some(organization_id),
+			None,
+			Some(format!("{id} {}", row.email)),
+			&client(cx.context()),
+		)
+		.await?;
 	}
 
 	Ok(())
@@ -704,7 +769,7 @@ pub(crate) async fn remove_member(
 		matches!(access.caller, Caller::Person { account: me, .. } if me == target.account_id);
 
 	if !leaving {
-		require_for_role(&access, target.role)?;
+		access.require_to_give(target.role)?;
 	}
 
 	keep_an_owner(cx.tx(), &access, &target).await?;
@@ -736,5 +801,7 @@ pub(crate) async fn remove_member(
 		&client(cx.context()),
 	)
 	.await?;
+	// Their invitations go with them.
+	revoke_invitations_beyond(cx, &access, removed_account, None).await?;
 	Ok(())
 }

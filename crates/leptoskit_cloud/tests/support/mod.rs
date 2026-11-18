@@ -11,6 +11,8 @@
 pub mod scenarios;
 
 use std::net::SocketAddr;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 
 use leptoskit_auth::Keys;
 use leptoskit_auth::Mailbox;
@@ -38,6 +40,8 @@ pub struct App {
 	pub mailbox: Mailbox,
 	pub control: Control,
 	client: reqwest::Client,
+	/// How many tokens [`App::token`] has made, to name the next.
+	tokens: AtomicUsize,
 }
 
 /// Who a call is from.
@@ -91,6 +95,80 @@ impl Answer {
 	}
 }
 
+/// Text to look for in a database: as text, as bytes, and as the hex
+/// Postgres prints `bytea` in.
+struct Needle<'a> {
+	text: &'a str,
+	hex: String,
+}
+
+impl<'a> Needle<'a> {
+	fn new(text: &'a str) -> Self {
+		Self {
+			text,
+			hex: hex::encode(text),
+		}
+	}
+
+	fn is_in(&self, value: &leptoskit_db::Value) -> bool {
+		match value {
+			leptoskit_db::Value::Text(text) => text.contains(self.text) || text.contains(&self.hex),
+			leptoskit_db::Value::Bytes(bytes) => {
+				bytes
+					.windows(self.text.len())
+					.any(|window| window == self.text.as_bytes())
+			}
+			leptoskit_db::Value::Json(json) => json.to_string().contains(self.text),
+			_ => false,
+		}
+	}
+}
+
+/// Runs `sql` as written, returning its rows' raw values.
+async fn raw_rows(db: &Db, sql: String) -> Vec<Vec<leptoskit_db::Value>> {
+	leptoskit_db::Statement::new(sql, Vec::new())
+		.reads::<leptoskit_cloud::tables::AuditEvent>()
+		.fetch(db)
+		.await
+		.expect("a raw read")
+}
+
+/// The one text column of a raw row.
+fn only_text(row: &[leptoskit_db::Value]) -> String {
+	match row {
+		[leptoskit_db::Value::Text(text)] => text.clone(),
+		other => panic!("expected one text column, got {other:?}"),
+	}
+}
+
+/// Every table in the database, quoted for a `FROM`: the app's, and the
+/// toolkit's, which Postgres keeps in their own schemas (`"rpc"."receipts"`).
+async fn every_table(db: &Db) -> Vec<String> {
+	let sql = match leptoskit_db::Read::dialect(db) {
+		leptoskit_db::Dialect::Sqlite => "SELECT name FROM sqlite_master WHERE type = 'table'",
+		leptoskit_db::Dialect::Postgres => {
+			"SELECT table_schema || '\".\"' || table_name FROM information_schema.tables WHERE \
+			 table_type = 'BASE TABLE' AND table_schema NOT IN ('pg_catalog', 'information_schema')"
+		}
+	};
+
+	raw_rows(db, sql.to_owned())
+		.await
+		.iter()
+		.map(|row| format!("\"{}\"", only_text(row)))
+		.collect()
+}
+
+/// Every row of `table`, a name from [`every_table`]. On Postgres each row
+/// is one JSON text, so a `bytea` shows as hex.
+async fn every_row(db: &Db, table: &str) -> Vec<Vec<leptoskit_db::Value>> {
+	let sql = match leptoskit_db::Read::dialect(db) {
+		leptoskit_db::Dialect::Sqlite => format!("SELECT * FROM {table}"),
+		leptoskit_db::Dialect::Postgres => format!("SELECT row_to_json(t)::text FROM {table} AS t"),
+	};
+	raw_rows(db, sql).await
+}
+
 /// A control plane over a migrated in-memory SQLite database.
 pub async fn app() -> App {
 	app_on(leptoskit_db::testing::sqlite_migrated(leptoskit_cloud::MIGRATIONS).await).await
@@ -132,6 +210,7 @@ pub async fn app_on(db: Db) -> App {
 		mailbox,
 		control,
 		client: reqwest::Client::new(),
+		tokens: AtomicUsize::new(1),
 	}
 }
 
@@ -147,6 +226,45 @@ impl App {
 			.client
 			.post(format!("{}/rpc/{operation}", self.origin))
 			.header("origin", &self.origin)
+			.json(&args);
+		self.send(request, caller).await
+	}
+
+	/// Where `needle` appears in the database: every row of every table,
+	/// the RPC's receipts, sign-in's and the OAuth provider's tables
+	/// included, as a backup or anyone reading the database would see them.
+	/// It looks for the text, its bytes, and their hex, as Postgres prints
+	/// `bytea`. Returns `table: row` for each hit.
+	pub async fn find_in_every_table(&self, needle: &str) -> Vec<String> {
+		let db = self.system();
+		let needle = Needle::new(needle);
+		let mut found = Vec::new();
+
+		for table in every_table(&db).await {
+			for row in every_row(&db, &table).await {
+				if row.iter().any(|value| needle.is_in(value)) {
+					found.push(format!("{table}: {row:?}"));
+				}
+			}
+		}
+
+		found
+	}
+
+	/// `POST /rpc/<operation>` with `args` and an `Idempotency-Key`, as a
+	/// client retrying a call sends it.
+	pub async fn call_with_key(
+		&self,
+		operation: &str,
+		args: Value,
+		caller: As<'_>,
+		key: &str,
+	) -> Answer {
+		let request = self
+			.client
+			.post(format!("{}/rpc/{operation}", self.origin))
+			.header("origin", &self.origin)
+			.header("idempotency-key", key)
 			.json(&args);
 		self.send(request, caller).await
 	}
@@ -307,7 +425,8 @@ impl App {
 			.to_owned()
 	}
 
-	/// Makes a token in `organization` and returns its value and ID.
+	/// Makes a token in `organization`, named `test-<n>` so no two share a
+	/// name, and returns its value and ID.
 	pub async fn token(
 		&self,
 		caller: As<'_>,
@@ -315,12 +434,13 @@ impl App {
 		scopes: &[&str],
 		project: Option<&str>,
 	) -> (String, String) {
+		let number = self.tokens.fetch_add(1, Ordering::Relaxed);
 		let created = self
 			.call(
 				"create_token",
 				json!({
 					"organization": organization,
-					"name": "test",
+					"name": format!("test-{number}"),
 					"scopes": scopes,
 					"project": project,
 				}),
@@ -346,5 +466,54 @@ impl App {
 			.await;
 		created.expect(200);
 		created.json()
+	}
+
+	/// Runs the device flow for `client_id`, approved by the session
+	/// `cookie`, and returns the token response.
+	pub async fn device_flow(&self, client_id: &str, scope: &str, cookie: &str) -> Value {
+		let started = self
+			.post_form(
+				"/oauth/device_authorization",
+				&[("client_id", client_id), ("scope", scope)],
+			)
+			.await;
+		let started = started.expect(200).json();
+		let device_code = started["device_code"].as_str().expect("a device code");
+		let user_code = started["user_code"].as_str().expect("a user code");
+		self.post_json(
+			"/oauth/device",
+			json!({ "user_code": user_code, "approve": true }),
+			As::Session(cookie),
+		)
+		.await
+		.expect(204);
+		let tokens = self
+			.post_form(
+				"/oauth/token",
+				&[
+					("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
+					("device_code", device_code),
+					("client_id", client_id),
+				],
+			)
+			.await;
+		tokens.expect(200).json()
+	}
+
+	/// An access token for the first-party CLI, approved by the session
+	/// `cookie`: that person, calling through the CLI.
+	pub async fn cli_access(&self, cookie: &str) -> String {
+		let discovery = self
+			.get(leptoskit_cloud::server::DISCOVERY_PATH, As::Nobody)
+			.await;
+		let discovery = discovery.expect(200).json();
+		let scope = discovery["scope"].as_str().expect("scopes");
+		let tokens = self
+			.device_flow(self.control.cli_client_id(), scope, cookie)
+			.await;
+		tokens["access_token"]
+			.as_str()
+			.expect("an access token")
+			.to_owned()
 	}
 }

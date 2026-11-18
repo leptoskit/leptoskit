@@ -86,3 +86,59 @@ async fn the_cli_signs_in_with_the_device_flow() {
 		scenarios::the_cli_signs_in_with_the_device_flow(&app).await;
 	}
 }
+
+#[tokio::test]
+async fn tokens_never_grant_membership() {
+	if let Some((_postgres, app)) = app().await {
+		scenarios::tokens_never_grant_membership(&app).await;
+	}
+}
+
+#[tokio::test]
+async fn an_invitation_needs_its_inviters_authority() {
+	if let Some((_postgres, app)) = app().await {
+		scenarios::an_invitation_needs_its_inviters_authority(&app).await;
+	}
+}
+
+#[tokio::test]
+async fn replacing_an_invitation_needs_authority_over_it() {
+	if let Some((_postgres, app)) = app().await {
+		scenarios::replacing_an_invitation_needs_authority_over_it(&app).await;
+	}
+}
+
+#[tokio::test]
+async fn personal_organizations_cannot_be_squatted() {
+	if let Some((_postgres, app)) = app().await {
+		scenarios::personal_organizations_cannot_be_squatted(&app).await;
+	}
+}
+
+#[tokio::test]
+async fn token_secrets_are_never_stored() {
+	if let Some((_postgres, app)) = app().await {
+		scenarios::token_secrets_are_never_stored(&app).await;
+	}
+}
+
+#[tokio::test]
+async fn the_last_owner_stays_under_concurrent_changes() {
+	if let Some((_postgres, app)) = app().await {
+		scenarios::the_last_owner_stays_under_concurrent_changes(&app).await;
+	}
+}
+
+#[tokio::test]
+async fn caps_hold_under_concurrent_creates() {
+	if let Some((_postgres, app)) = app().await {
+		scenarios::caps_hold_under_concurrent_creates(&app).await;
+	}
+}
+
+#[tokio::test]
+async fn a_members_tokens_follow_their_role() {
+	if let Some((_postgres, app)) = app().await {
+		scenarios::a_members_tokens_follow_their_role(&app).await;
+	}
+}

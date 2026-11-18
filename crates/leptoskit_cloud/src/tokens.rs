@@ -9,7 +9,9 @@
 //! once.
 //!
 //! A token can do what its scopes allow *and* the person who made it can
-//! still do: a token never outlives a demotion or its maker leaving.
+//! still do: a token never outlives a demotion or its maker leaving. Only a
+//! person lists, makes, or revokes tokens; a token can't, whatever its
+//! scopes, so no token outlives the revocation of the one that made it.
 
 use leptoskit_db::Timestamp;
 use leptoskit_rpc as rpc;
@@ -122,33 +124,41 @@ pub async fn tokens(cx: &rpc::QueryCx, organization: String) -> rpc::Result<Vec<
 	crate::server::tokens::tokens(cx, &organization).await
 }
 
-/// Makes a token, and returns its value this once.
+/// Makes a token, and returns its value this once. Only a person may.
+///
+/// It is an action, not a mutation, so the value is never kept anywhere,
+/// not even as the answer to a repeated request: an `Idempotency-Key` is
+/// ignored. A live token's name is unique in its organisation instead, so
+/// a request sent again after its answer was lost is refused with
+/// `token_name_taken` naming the token it made, whose value nobody saw:
+/// revoke that one and ask again.
 ///
 /// # Arguments
 ///
-/// - `name`: what to call it, such as `ci`.
+/// - `name`: what to call it, such as `ci`; no other live token in the
+///   organisation may have it.
 /// - `scopes`: what it may do; at least one, and only scopes the caller's role
-///   may give. A token making another may only give its own.
+///   may give.
 /// - `project`: the one project it may touch, when it should be bound to one.
-/// - `expires_in_days`: 30, 90, or 365; 90 when left out. A token making
-///   another can't outlast itself.
+/// - `expires_in_days`: 30, 90, or 365; 90 when left out.
 ///
 /// # Errors
 ///
-/// `Forbidden` (`token_too_strong`) for scopes, a project, or a lifetime the
-/// caller can't give; `NotFound` for a project the organisation doesn't
-/// have.
+/// `Forbidden` (`person_required`) for a token, and (`token_too_strong`) for
+/// scopes the caller's role can't give; `NotFound` for a project the
+/// organisation doesn't have; `Conflict` (`token_name_taken`) for a name a
+/// live token has.
 #[rpc::api(scope = crate::OAuthScope::Cloud, tag = "tokens")]
-#[rpc::mutation]
+#[rpc::action]
 pub async fn create_token(
-	cx: &rpc::MutationCx,
+	cx: &rpc::ActionCx,
 	organization: String,
 	name: String,
 	scopes: Vec<TokenScope>,
 	#[serde(default)] project: Option<String>,
 	#[serde(default)] expires_in_days: Option<u32>,
 ) -> rpc::Result<CreatedToken> {
-	crate::server::tokens::create_token(cx, &organization, name, scopes, project, expires_in_days)
+	crate::server::tokens::create_token(cx, organization, name, scopes, project, expires_in_days)
 		.await
 }
 
