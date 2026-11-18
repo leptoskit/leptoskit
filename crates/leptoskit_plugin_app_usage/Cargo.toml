@@ -1,0 +1,32 @@
+[package]
+name = "leptoskit_plugin_app_usage"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+homepage.workspace = true
+license.workspace = true
+readme = "readme.md"
+repository.workspace = true
+rust-version.workspace = true
+description = "App usage access, lock and unlock events, foreground sessions and screen-time summaries for LeptosKit apps."
+
+[package.metadata.leptoskit.runtime]
+name = "app-usage"
+apple-module = "LeptosKitAppUsage"
+apple-type = "AppUsagePlugin"
+android-type = "dev.leptoskit.plugins.appusage.AppUsagePlugin"
+android-context = true
+# Usage Access is granted on its own system screen, never at install time;
+# the protected declaration keeps Android Studio lint quiet while the
+# runtime checks the AppOps mode.
+android-permissions = ["android.permission.PACKAGE_USAGE_STATS"]
+android-protected-permissions = ["android.permission.PACKAGE_USAGE_STATS"]
+
+[features]
+guest = ["leptoskit_bridge/guest"]
+
+[dependencies]
+leptoskit_bridge = { workspace = true }
+
+[lints]
+workspace = true

@@ -6269,6 +6269,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "leptoskit_plugin_app_usage"
+version = "0.3.0"
+dependencies = [
+ "leptoskit_bridge",
+]
+
+[[package]]
 name = "leptoskit_plugin_application"
 version = "0.3.0"
 dependencies = [
