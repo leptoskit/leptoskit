@@ -68,7 +68,6 @@ cat > /etc/rancher/k3s/config.yaml <<'LEPTOSKIT_DOCUMENT'
 }
 LEPTOSKIT_DOCUMENT
 cat > /var/lib/rancher/k3s/agent/etc/containerd/config-v3.toml.tmpl <<'LEPTOSKIT_DOCUMENT'
-version = 3
 {{ template "base" . }}
 [plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.runsc]
   runtime_type = "io.containerd.runsc.v1"

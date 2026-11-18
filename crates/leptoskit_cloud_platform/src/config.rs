@@ -13,6 +13,33 @@ use crate::PlatformError;
 /// Tested k3s release: <https://github.com/k3s-io/k3s/releases/tag/v1.35.10%2Bk3s1>
 pub const K3S_VERSION: &str = "v1.35.10+k3s1";
 
+/// Official origin ranges, verified 2026-11-18 at
+/// <https://www.cloudflare.com/ips-v4> and <https://www.cloudflare.com/ips-v6>.
+pub const CLOUDFLARE_CIDRS: &[&str] = &[
+	"173.245.48.0/20",
+	"103.21.244.0/22",
+	"103.22.200.0/22",
+	"103.31.4.0/22",
+	"141.101.64.0/18",
+	"108.162.192.0/18",
+	"190.93.240.0/20",
+	"188.114.96.0/20",
+	"197.234.240.0/22",
+	"198.41.128.0/17",
+	"162.158.0.0/15",
+	"104.16.0.0/13",
+	"104.24.0.0/14",
+	"172.64.0.0/13",
+	"131.0.72.0/22",
+	"2400:cb00::/32",
+	"2606:4700::/32",
+	"2803:f800::/32",
+	"2405:b500::/32",
+	"2405:8100::/32",
+	"2a06:98c0::/29",
+	"2c0f:f248::/32",
+];
+
 /// Complete offline platform declaration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -399,6 +426,53 @@ impl PlatformConfig {
 	/// Enforce supported topology, safe rendering and explicit operational
 	/// inputs.
 	pub fn validate(&self) -> Result<(), PlatformError> {
+		require(
+			self.admin_cidrs.iter().any(|cidr| !cidr.contains(':')),
+			"IPv4-only node addressing requires at least one IPv4 admin CIDR",
+		)?;
+		validate_strings(&serde_json::to_value(self)?)?;
+		require(
+			[&self.edge.account_id, &self.edge.zone_id]
+				.iter()
+				.all(|id| id.len() == 32 && id.bytes().all(|b| b.is_ascii_hexdigit())),
+			"Cloudflare account and zone IDs must be 32 hex digits",
+		)?;
+		for pin in [
+			&self.addons.cloudnative_pg,
+			&self.addons.keda,
+			&self.addons.keda_http,
+			&self.addons.cert_manager,
+			&self.addons.traefik,
+			&self.addons.zot,
+		] {
+			let parts: Vec<_> = pin.trim_start_matches('v').split('.').collect();
+			require(
+				parts.len() == 3
+					&& parts
+						.iter()
+						.all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit())),
+				"add-on charts require exact release versions",
+			)?;
+		}
+		require(
+			self.postgres
+				.storage_size
+				.strip_suffix("Gi")
+				.is_some_and(|s| s.parse::<u32>().is_ok_and(|n| n > 0))
+				&& slug(&self.postgres.storage_class),
+			"postgres requires a positive Gi storage size and StorageClass slug",
+		)?;
+		for bucket in [
+			&self.object_storage.sources,
+			&self.object_storage.build_logs,
+			&self.object_storage.web_assets,
+			&self.object_storage.bundles,
+			&self.object_storage.backups,
+			&self.object_storage.registry,
+		] {
+			require(slug(bucket), "object storage bucket names must be slugs")?;
+		}
+		validate_credentials(&self.object_storage.credentials)?;
 		require(slug(&self.name), "name must be a lowercase slug")?;
 		require(
 			https(&self.control_origin),
@@ -459,6 +533,16 @@ impl PlatformConfig {
 			"edge cluster must exist in default_region",
 		)?;
 		if self.edge.mode == EdgeMode::Https {
+			let provided: BTreeSet<_> = self
+				.edge
+				.cloudflare_cidrs
+				.iter()
+				.map(String::as_str)
+				.collect();
+			require(
+				provided == CLOUDFLARE_CIDRS.iter().copied().collect(),
+				"HTTPS Cloudflare ranges must match the pinned official snapshot",
+			)?;
 			require(
 				self.edge.cloudflare_cidrs.iter().any(|s| s.contains(':'))
 					&& self.edge.cloudflare_cidrs.iter().any(|s| !s.contains(':')),
@@ -471,6 +555,11 @@ impl PlatformConfig {
 				"regions require slug names and clusters",
 			)?;
 			for (name, cluster) in &config.clusters {
+				require(
+					self.name.len() + region.len() + name.len() + 2 <= 53,
+					"combined platform, region and cluster names must fit provider resource \
+					 labels (53 characters)",
+				)?;
 				require(slug(name), "cluster name must be a slug")?;
 				cluster.validate(self.isolation.platform)?;
 			}
@@ -481,6 +570,11 @@ impl PlatformConfig {
 
 impl Cluster {
 	fn validate(&self, platform: GvisorPlatform) -> Result<(), PlatformError> {
+		let total: u32 = self.nodes.values().map(|n| u32::from(n.count())).sum();
+		require(
+			total <= 240,
+			"clusters support at most 240 nodes to fit deterministic private addresses",
+		)?;
 		require(
 			self.distribution == "k3s" && self.version == K3S_VERSION,
 			"distribution/version must match the pinned k3s release",
@@ -526,6 +620,10 @@ impl Cluster {
 			let private = cidr(self.private_cidr.as_deref().ok_or_else(|| {
 				PlatformError::Invalid("cloud servers require private_cidr".into())
 			})?)?;
+			require(
+				matches!(private.0,IpAddr::V4(ip) if ip.is_private()),
+				"private_cidr must be an RFC1918 network",
+			)?;
 			require(
 				private.0.is_ipv4()
 					&& private.1 <= 24
@@ -601,5 +699,66 @@ fn overlaps(a: (IpAddr, u8), b: (IpAddr, u8)) -> bool {
 			u32::from(a_ip) >> (32 - a.1.min(b.1)) == u32::from(b_ip) >> (32 - a.1.min(b.1))
 		}
 		_ => true,
+	}
+}
+
+fn validate_strings(value: &serde_json::Value) -> Result<(), PlatformError> {
+	match value {
+		serde_json::Value::String(s) => {
+			require(
+				!s.is_empty()
+					&& s.len() <= 256
+					&& !s.chars().any(char::is_control)
+					&& !s.contains("${")
+					&& !s.contains("%{"),
+				"configuration strings must be nonempty, bounded literals without control \
+				 characters or template expressions",
+			)
+		}
+		serde_json::Value::Object(map) => {
+			for value in map.values() {
+				validate_strings(value)?;
+			}
+			Ok(())
+		}
+		serde_json::Value::Array(values) => {
+			for value in values {
+				validate_strings(value)?;
+			}
+			Ok(())
+		}
+		_ => Ok(()),
+	}
+}
+
+fn validate_credentials(reference: &CredentialRef) -> Result<(), PlatformError> {
+	match reference {
+		CredentialRef::Environment {
+			access_key,
+			secret_key,
+		} => {
+			require(
+				[access_key, secret_key].iter().all(|s| {
+					s.bytes()
+						.all(|b| b.is_ascii_uppercase() || b == b'_' || b.is_ascii_digit())
+						&& !s.starts_with(|c: char| c.is_ascii_digit())
+				}),
+				"credentials must name environment variables, never values",
+			)
+		}
+		CredentialRef::KubernetesSecret {
+			name,
+			access_key,
+			secret_key,
+		} => {
+			require(
+				slug(name)
+					&& [access_key, secret_key].iter().all(|s| {
+						s.bytes()
+							.all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.'))
+					}),
+				"credentials must reference a Kubernetes secret and data keys",
+			)
+		}
 	}
 }

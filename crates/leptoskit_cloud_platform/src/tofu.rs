@@ -33,14 +33,24 @@ pub fn generate(config: &PlatformConfig) -> Result<Generated, PlatformError> {
 					json!({"source":"hetznercloud/hcloud","version":HCLOUD_VERSION});
 				doc["provider"]["hcloud"] = json!({});
 			}
-			if let Some(cidr) = &cluster.private_cidr {
+			if machines
+				.iter()
+				.any(|m| m.node.cloud() && m.node.role() == Role::Server)
+				&& let Some(cidr) = &cluster.private_cidr
+			{
 				doc["resource"]["hcloud_network"]["cluster"] = json!({"name":format!("{}-{region}-{name}",config.name),"ip_range":cidr,"lifecycle":{"prevent_destroy":true}});
 				doc["resource"]["hcloud_network_subnet"]["cluster"] = json!({"network_id":"${hcloud_network.cluster.id}","type":"cloud","network_zone":cluster.network_zone,"ip_range":cidr});
 			}
 			let mut addresses = serde_json::Map::new();
 			for machine in &machines {
 				addresses.insert(machine.id.clone(), json!(machine.public));
-				cloud_node(&mut doc, config, machine, &machines);
+				cloud_node(
+					&mut doc,
+					config,
+					&format!("{}-{region}-{name}", config.name),
+					machine,
+					&machines,
+				);
 			}
 			doc["output"]["node_addresses"] = json!({"value":addresses});
 			if region == &config.default_region && name == &config.edge.cluster {
@@ -58,6 +68,7 @@ pub fn generate(config: &PlatformConfig) -> Result<Generated, PlatformError> {
 fn cloud_node(
 	doc: &mut Value,
 	config: &PlatformConfig,
+	scope: &str,
 	machine: &Machine<'_>,
 	peers: &[Machine<'_>],
 ) {
@@ -71,15 +82,23 @@ fn cloud_node(
 		return;
 	};
 	let id = machine.id.replace('-', "_");
+	// The baseline exists before VM creation, closing the initial cloud-init
+	// window without depending on addresses that OpenTofu has not allocated
+	// yet.
+	doc["resource"]["hcloud_firewall"]["baseline"] = json!({"name":format!("{scope}-bootstrap"),"rule":[rule("tcp","22",&config.admin_cidrs)],"apply_to":[{"label_selector":format!("leptoskit-cloud={scope}")}]});
 	// Attach the peer-dependent firewall separately, avoiding a server/firewall
 	// dependency cycle. Initial cloud-init installs an admin-only host
 	// firewall.
 	doc["resource"]["hcloud_server"][&id] = json!({"name":machine.id,"server_type":server_type,"location":location,"image":"ubuntu-24.04","ssh_keys":ssh_key_ids.iter().map(ToString::to_string).collect::<Vec<_>>(),"public_net":[{"ipv4_enabled":true,"ipv6_enabled":false}],"lifecycle":{"prevent_destroy":true},"user_data":initial_cloud_init(config)});
+	// Label attachment protects new VMs without making hcloud_server own the
+	// manual firewall list managed by hcloud_firewall_attachment in phase one.
+	doc["resource"]["hcloud_server"][&id]["labels"] = json!({"leptoskit-cloud":scope});
+	doc["resource"]["hcloud_server"][&id]["depends_on"] = json!(["hcloud_firewall.baseline"]);
 	if let Some(private) = &machine.private {
 		doc["resource"]["hcloud_server"][&id]["network"] =
 			json!([{"network_id":"${hcloud_network.cluster.id}","ip":private}]);
 		doc["resource"]["hcloud_server"][&id]["depends_on"] =
-			json!(["hcloud_network_subnet.cluster"]);
+			json!(["hcloud_network_subnet.cluster", "hcloud_firewall.baseline"]);
 	}
 	doc["resource"]["hcloud_firewall"][&id] =
 		json!({"name":format!("{}-peers",machine.id),"rule":rules(config,machine,peers)});
@@ -123,10 +142,12 @@ pub(crate) fn rules(
 				&peer.public
 			};
 			rules.push(rule("tcp", "6443", &[host_cidr(address)]));
-			if peer.node.role() == Role::Agent && peer.node.cloud() && machine.node.cloud() {
-				if let Some(private) = &peer.private {
-					rules.push(rule("tcp", "6443", &[host_cidr(private)]));
-				}
+			if peer.node.role() == Role::Agent
+				&& peer.node.cloud()
+				&& machine.node.cloud()
+				&& let Some(private) = &peer.private
+			{
+				rules.push(rule("tcp", "6443", &[host_cidr(private)]));
 			}
 			if peer.node.role() == Role::Server {
 				for port in ["2379-2380", "10250"] {

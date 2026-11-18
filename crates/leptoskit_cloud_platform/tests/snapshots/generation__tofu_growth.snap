@@ -80,6 +80,24 @@ expression: content
       }
     },
     "hcloud_firewall": {
+      "baseline": {
+        "apply_to": [
+          {
+            "label_selector": "leptoskit-cloud=cloud-example-eu-growth"
+          }
+        ],
+        "name": "cloud-example-eu-growth-bootstrap",
+        "rule": [
+          {
+            "direction": "in",
+            "port": "22",
+            "protocol": "tcp",
+            "source_ips": [
+              "192.0.2.0/24"
+            ]
+          }
+        ]
+      },
       "control_0": {
         "name": "control-0-peers",
         "rule": [
@@ -568,9 +586,13 @@ expression: content
     "hcloud_server": {
       "control_0": {
         "depends_on": [
-          "hcloud_network_subnet.cluster"
+          "hcloud_network_subnet.cluster",
+          "hcloud_firewall.baseline"
         ],
         "image": "ubuntu-24.04",
+        "labels": {
+          "leptoskit-cloud": "cloud-example-eu-growth"
+        },
         "lifecycle": {
           "prevent_destroy": true
         },
@@ -596,9 +618,13 @@ expression: content
       },
       "control_1": {
         "depends_on": [
-          "hcloud_network_subnet.cluster"
+          "hcloud_network_subnet.cluster",
+          "hcloud_firewall.baseline"
         ],
         "image": "ubuntu-24.04",
+        "labels": {
+          "leptoskit-cloud": "cloud-example-eu-growth"
+        },
         "lifecycle": {
           "prevent_destroy": true
         },
@@ -624,9 +650,13 @@ expression: content
       },
       "control_2": {
         "depends_on": [
-          "hcloud_network_subnet.cluster"
+          "hcloud_network_subnet.cluster",
+          "hcloud_firewall.baseline"
         ],
         "image": "ubuntu-24.04",
+        "labels": {
+          "leptoskit-cloud": "cloud-example-eu-growth"
+        },
         "lifecycle": {
           "prevent_destroy": true
         },

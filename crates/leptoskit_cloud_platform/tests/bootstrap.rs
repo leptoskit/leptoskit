@@ -63,6 +63,20 @@ fn cloud_outputs_are_required_and_checked() {
 }
 
 #[test]
+fn sensitive_outputs_are_never_rendered() {
+	let config = PlatformConfig::parse(include_str!("../examples/growth.toml")).unwrap();
+	let mut outputs: serde_json::Value =
+		serde_json::from_str(include_str!("growth-outputs.json")).unwrap();
+	outputs["tunnel_token"] = serde_json::json!({"sensitive":true,"value":"secret-sentinel"});
+	let files = bootstrap::generate(&config, Some(&outputs.to_string())).unwrap();
+	assert!(
+		files
+			.values()
+			.all(|content| !content.contains("secret-sentinel"))
+	);
+}
+
+#[test]
 fn firewall_has_exact_public_wireguard_peers() {
 	let config = PlatformConfig::parse(include_str!("../examples/growth.toml")).unwrap();
 	let files = bootstrap::generate(&config, Some(include_str!("growth-outputs.json"))).unwrap();
