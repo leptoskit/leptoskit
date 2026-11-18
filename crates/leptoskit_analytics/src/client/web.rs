@@ -126,7 +126,7 @@ pub fn init(options: Options) {
 			options,
 			page: None,
 			pageview_session: None,
-		})
+		});
 	});
 	save_identity();
 
