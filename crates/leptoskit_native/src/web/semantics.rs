@@ -51,33 +51,6 @@ pub(super) enum Tag {
 }
 
 impl Tag {
-	/// The element name.
-	pub(super) const fn name(self) -> &'static str {
-		match self {
-			Self::Div => "div",
-			Self::Span => "span",
-			Self::Heading(1) => "h1",
-			Self::Heading(2) => "h2",
-			Self::Heading(3) => "h3",
-			Self::Heading(4) => "h4",
-			Self::Heading(5) => "h5",
-			Self::Heading(_) => "h6",
-			Self::List => "ul",
-			Self::ListItem => "li",
-			Self::Nav => "nav",
-			Self::Main => "main",
-			Self::Header => "header",
-			Self::Footer => "footer",
-			Self::Aside => "aside",
-			Self::Article => "article",
-			Self::Section => "section",
-			Self::Search => "search",
-			Self::Paragraph => "p",
-			Self::Rule => "hr",
-			Self::Label => "label",
-		}
-	}
-
 	/// The role the element implies without a `role` attribute.
 	const fn implied_role(self) -> Option<Role> {
 		match self {

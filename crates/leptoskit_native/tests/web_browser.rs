@@ -524,6 +524,101 @@ async fn reactive_controls_preserve_focus_and_deliver_native_events() {
 	parent.remove();
 }
 
+/// A text field inside landmarks, a list, and beside a heading keeps its
+/// DOM node and its focus when typing re-renders the tree. The semantic
+/// elements were once built by tag name, which replaced each of them, and
+/// so the field, on every render.
+#[wasm_bindgen_test]
+async fn semantic_containers_keep_their_nodes_and_focus_across_a_rerender() {
+	const SEMANTIC: [&str; 11] = [
+		"main", "nav", "ul", "li", "h2", "header", "footer", "aside", "article", "section",
+		"search",
+	];
+
+	let parent = container();
+	let value = ArcRwSignal::new("a".to_owned());
+	let app_value = value.clone();
+	let mount = mount_to(parent.clone(), move || {
+		move || {
+			let change = app_value.clone();
+			let input = Element::text_input()
+				.with_props(|props| {
+					props.value = Some(app_value.get());
+					props.accessibility_label = Some("Name".to_owned());
+				})
+				.on(NativeEventSlot::Change, move |event| {
+					if let NativeEvent::Change { value } = event {
+						change.set(value.clone());
+					}
+
+					EventOutcome::Handled
+				});
+			let landmark = |role| View().role(role).aria_label("landmark");
+
+			render(
+				View()
+					.role(Role::Main)
+					.child(landmark(Role::Banner))
+					.child(
+						Text(format!("Typed: {}", app_value.get()))
+							.role(Role::Heading)
+							.aria_level(2),
+					)
+					.child(
+						View().role(Role::Navigation).child(
+							View()
+								.role(Role::List)
+								.child(View().role(Role::ListItem).child(input)),
+						),
+					)
+					.child(landmark(Role::Complementary))
+					.child(landmark(Role::Article))
+					.child(landmark(Role::Region))
+					.child(landmark(Role::Search))
+					.child(landmark(Role::ContentInfo)),
+			)
+		}
+	});
+	tick().await;
+	let before: Vec<web_sys::HtmlElement> = SEMANTIC
+		.iter()
+		.map(|selector| find(&parent, selector))
+		.collect();
+	let input: web_sys::HtmlInputElement = find(&parent, "input");
+	input.focus().expect("focus input");
+
+	for typed in ["ab", "abc"] {
+		input.set_value(typed);
+		let options = web_sys::EventInit::new();
+		options.set_bubbles(true);
+		input
+			.dispatch_event(
+				&web_sys::Event::new_with_event_init_dict("input", &options).expect("input event"),
+			)
+			.expect("dispatch input");
+		tick().await;
+		assert_eq!(value.get_untracked(), typed);
+
+		for (selector, before) in SEMANTIC.iter().zip(&before) {
+			let after: web_sys::HtmlElement = find(&parent, selector);
+			assert_eq!(*before, after, "`<{selector}>` must keep its DOM node");
+		}
+
+		let current: web_sys::HtmlInputElement = find(&parent, "input");
+		assert_eq!(input, current, "the field must keep its DOM node");
+		assert_eq!(
+			document().active_element(),
+			Some(input.clone().into()),
+			"the field must keep its focus"
+		);
+	}
+
+	let heading: web_sys::HtmlElement = find(&parent, "h2");
+	assert_eq!(heading.text_content().as_deref(), Some("Typed: abc"));
+	drop(mount);
+	parent.remove();
+}
+
 #[wasm_bindgen_test]
 async fn handled_events_stop_bubbling_and_disabled_buttons_do_not_press() {
 	let parent = container();

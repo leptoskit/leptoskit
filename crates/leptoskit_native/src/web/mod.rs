@@ -22,7 +22,6 @@ use leptos::html;
 use leptos::prelude::*;
 use leptos::tachys::html::attribute::Attribute;
 use leptos::tachys::html::attribute::custom::custom_attribute;
-use leptos::tachys::html::element::custom;
 use leptos::tachys::html::event::on;
 use sha2::Digest;
 use sha2::Sha256;
@@ -923,6 +922,52 @@ fn rive_canvas(props: NativeProps, attrs: impl Attribute + 'static) -> AnyView {
 	panic!("enable leptoskit_native's rive feature before rendering a Rive element")
 }
 
+/// A container or heading as the typed element for `tag`.
+///
+/// Typed, never tachys' custom-element constructor: that one keeps an
+/// element across a render only when its lower-case tag equals the DOM's
+/// upper-case `tagName`, which no HTML element's does, so it replaced
+/// `<main>`, `<nav>`, `<ul>`, `<li>`, and every heading on each render, and
+/// whatever was focused inside lost its focus.
+fn semantic_element(
+	tag: Tag,
+	children: impl IntoView + 'static,
+	attrs: impl Attribute + 'static,
+) -> AnyView {
+	macro_rules! element {
+		($constructor:ident) => {
+			html::$constructor()
+				.child(children)
+				.add_any_attr(attrs)
+				.into_any()
+		};
+	}
+
+	match tag {
+		Tag::Div => element!(div),
+		Tag::Rule => html::hr().add_any_attr(attrs).into_any(),
+		Tag::Span => element!(span),
+		Tag::Heading(1) => element!(h1),
+		Tag::Heading(2) => element!(h2),
+		Tag::Heading(3) => element!(h3),
+		Tag::Heading(4) => element!(h4),
+		Tag::Heading(5) => element!(h5),
+		Tag::Heading(_) => element!(h6),
+		Tag::List => element!(ul),
+		Tag::ListItem => element!(li),
+		Tag::Nav => element!(nav),
+		Tag::Main => element!(main),
+		Tag::Header => element!(header),
+		Tag::Footer => element!(footer),
+		Tag::Aside => element!(aside),
+		Tag::Article => element!(article),
+		Tag::Section => element!(section),
+		Tag::Search => element!(search),
+		Tag::Paragraph => element!(p),
+		Tag::Label => element!(label),
+	}
+}
+
 fn typed_element(parts: NodeParts, attrs: impl Attribute + 'static) -> AnyView {
 	let NodeParts {
 		kind,
@@ -947,22 +992,12 @@ fn typed_element(parts: NodeParts, attrs: impl Attribute + 'static) -> AnyView {
 						.into_any()
 				}
 				Tag::Rule => html::hr().add_any_attr(attrs).into_any(),
-				semantic => {
-					custom(semantic.name())
-						.child((content, children))
-						.add_any_attr(attrs)
-						.into_any()
-				}
+				semantic => semantic_element(semantic, (content, children), attrs),
 			}
 		}
 		NativeKind::Text | NativeKind::TextRun => {
 			match tag {
-				Tag::Heading(_) | Tag::Label => {
-					custom(tag.name())
-						.child((content, children))
-						.add_any_attr(attrs)
-						.into_any()
-				}
+				Tag::Heading(_) | Tag::Label => semantic_element(tag, (content, children), attrs),
 				_ => {
 					html::span()
 						.child((content, children))
