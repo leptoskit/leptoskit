@@ -5823,18 +5823,50 @@ dependencies = [
 name = "leptoskit_cloud"
 version = "0.3.0"
 dependencies = [
+ "chrono",
  "flate2",
+ "futures",
+ "getrandom 0.4.3",
+ "hex",
+ "http",
  "ignore",
+ "leptoskit_auth",
+ "leptoskit_axum",
  "leptoskit_config",
+ "leptoskit_db",
+ "leptoskit_idp",
+ "leptoskit_rpc",
+ "reqwest 0.12.28",
+ "schemars",
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "subtle",
  "tar",
  "tempfile",
  "thiserror 2.0.21",
+ "tokio",
  "toml 0.9.12+spec-1.1.0",
  "url",
  "uuid",
+]
+
+[[package]]
+name = "leptoskit_cloud_app"
+version = "0.0.0"
+dependencies = [
+ "clap",
+ "getrandom 0.4.3",
+ "leptoskit_auth",
+ "leptoskit_axum",
+ "leptoskit_cloud",
+ "leptoskit_db",
+ "reqwest 0.12.28",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "url",
 ]
 
 [[package]]
