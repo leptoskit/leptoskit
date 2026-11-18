@@ -533,6 +533,41 @@ fn as_without_devtools(html: String) -> String {
 	html
 }
 
+/// A page whose server made editor 57. The browser test hydrates it with the
+/// page's own editor, which has another id.
+#[test]
+fn canvist_editor_hydration_fixture_matches_server_rendering() {
+	let html = as_without_devtools(
+		render(
+			Element::view().child(
+				Element::canvist_editor(57)
+					.accessibility_label("Note")
+					.placeholder("Write a note…")
+					.class("w-full"),
+			),
+		)
+		.to_html(),
+	);
+
+	if std::env::var_os("UPDATE_LEPTOSKIT_WEB_FIXTURE").is_some() {
+		std::fs::write(
+			concat!(
+				env!("CARGO_MANIFEST_DIR"),
+				"/tests/fixtures/web_canvist_editor_hydration.html"
+			),
+			&html,
+		)
+		.expect("write explicit fixture update");
+
+		return;
+	}
+
+	assert_eq!(
+		html,
+		include_str!("fixtures/web_canvist_editor_hydration.html")
+	);
+}
+
 #[test]
 fn hydration_fixture_matches_server_rendering() {
 	let html = as_without_devtools(render(hydration_fixture()).to_html());

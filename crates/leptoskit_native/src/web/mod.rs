@@ -1103,8 +1103,28 @@ fn canvist_editor_element(props: NativeProps, attrs: impl Attribute + 'static) -
 		)
 		.attr("data-lk-placeholder", props.placeholder)
 		.attr("data-lk-read-only", props.read_only == Some(true))
+		.directive(
+			|element: web_sys::Element, editor| name_canvist_editor(&element, editor),
+			props.canvist_editor,
+		)
 		.add_any_attr(attrs)
 		.into_any()
+}
+
+/// Writes the page's own editor onto a `CanvistEditor`'s container.
+///
+/// An editor's id is handed out when the editor is created, so the server's
+/// editor and the page's seldom share one, and hydration leaves attributes as
+/// the server wrote them. Without this a server-rendered container would go
+/// on naming an editor the page does not have.
+fn name_canvist_editor(element: &web_sys::Element, editor: Option<u32>) {
+	let Some(editor) = editor.map(|editor| editor.to_string()) else {
+		return;
+	};
+
+	if element.get_attribute("data-lk-canvist-editor").as_deref() != Some(editor.as_str()) {
+		let _ = element.set_attribute("data-lk-canvist-editor", &editor);
+	}
 }
 
 fn typed_element(parts: NodeParts, attrs: impl Attribute + 'static) -> AnyView {
