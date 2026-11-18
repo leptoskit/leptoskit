@@ -374,8 +374,8 @@ final class MacWidgetRenderer: NSObject, NSTextFieldDelegate, NativeRiveSink {
             // The field editor exists from here through end editing; this is
             // where its correction and continuous spell checking follow
             // `autocorrect`.
-            if properties[id]?.autocorrect == false, let editor = field.currentEditor() {
-                editor.isAutomaticCorrectionEnabled = false
+            if properties[id]?.autocorrect == false, let editor = field.currentEditor() as? NSTextView {
+                editor.isAutomaticSpellingCorrectionEnabled = false
                 editor.isContinuousSpellCheckingEnabled = false
             }
 

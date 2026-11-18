@@ -7,20 +7,6 @@ struct WidgetProps: Decodable {
     let placeholder: String?
     /// What the field holds, as HTML's `autocomplete`; read it through `textContent`.
     let autocomplete: String?
-    /// Which keyboard a text field asks for; macOS has none, so this is
-    /// ignored here, but it travels with the props.
-    let keyboard: String?
-    /// Whether the field refuses edits but stays selectable and copyable.
-    let readOnly: Bool?
-    /// The longest value the field accepts, in characters.
-    let maxLength: Int?
-    /// How typing is capitalized; macOS has no touch keyboard to shape, so
-    /// this is ignored here but travels with the props.
-    let capitalize: String?
-    /// Whether the field corrects spelling while typing.
-    let autocorrect: Bool?
-    /// What the return key is named; macOS has no return key to name.
-    let submitLabel: String?
     let value: String?
     let checked: Bool?
     let slider: WidgetSlider?
@@ -56,6 +42,19 @@ struct WidgetProps: Decodable {
     let map: UInt32?
     /// The session a `LivePhoto` shows; the `live-photo` plugin owns it.
     let livePhoto: UInt32?
+    /// Which keyboard a text field asks for. iOS shapes its keyboard from it;
+    /// macOS has no touch keyboard and ignores it.
+    let keyboard: String?
+    /// Whether the field refuses edits but stays selectable and copyable.
+    let readOnly: Bool?
+    /// The longest value the field accepts, in characters.
+    let maxLength: Int?
+    /// How typing is capitalized. iOS applies it; macOS ignores it.
+    let capitalize: String?
+    /// Whether the field corrects spelling while typing.
+    let autocorrect: Bool?
+    /// What the return key is named. iOS applies it; macOS ignores it.
+    let submitLabel: String?
 }
 
 extension WidgetProps {
