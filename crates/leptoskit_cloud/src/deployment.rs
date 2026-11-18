@@ -3,9 +3,15 @@
 //!
 //! ```text
 //! queued → building → migrating → rolling_out → live → superseded
-//!                  ↘        ↘            ↘
-//!                   failed { stage, blocker }      cancelled (from queued or building)
+//!    ↘          ↘        ↘            ↘
+//!     failed { stage, blocker }              cancelled (from queued or building)
 //! ```
+//!
+//! A queued deployment fails only for a reason that stops it before any
+//! work starts: no build worker can take it ([`Blocker::BuilderUnavailable`]),
+//! or the organisation's quota, spend cap, or payment refuses it
+//! ([`Blocker::QuotaExceeded`], [`Blocker::SpendCapReached`],
+//! [`Blocker::PaymentRequired`]). [`Blocker::fails_queued`] names them.
 //!
 //! A rollback is a new deployment whose [`Source`] names an earlier one; it
 //! goes from `queued` straight to `migrating`, because there is nothing to
@@ -65,6 +71,8 @@ pub enum DeploymentState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Stage {
+	/// Waiting to start: refused before any work began.
+	Queued,
 	/// Building the server image.
 	Building,
 	/// Checking the schema and applying migrations.
@@ -75,12 +83,18 @@ pub enum Stage {
 
 impl Stage {
 	/// Every stage, in the order a deployment passes through them.
-	pub const ALL: [Self; 3] = [Self::Building, Self::Migrating, Self::RollingOut];
+	pub const ALL: [Self; 4] = [
+		Self::Queued,
+		Self::Building,
+		Self::Migrating,
+		Self::RollingOut,
+	];
 
 	/// The stage's name, as the wire and the CLI spell it.
 	#[must_use]
 	pub const fn name(self) -> &'static str {
 		match self {
+			Self::Queued => "queued",
 			Self::Building => "building",
 			Self::Migrating => "migrating",
 			Self::RollingOut => "rolling_out",
@@ -125,14 +139,11 @@ impl DeploymentState {
 	#[must_use]
 	pub const fn stage(&self) -> Option<Stage> {
 		match self {
+			Self::Queued => Some(Stage::Queued),
 			Self::Building => Some(Stage::Building),
 			Self::Migrating => Some(Stage::Migrating),
 			Self::RollingOut => Some(Stage::RollingOut),
-			Self::Queued
-			| Self::Live
-			| Self::Superseded
-			| Self::Failed { .. }
-			| Self::Cancelled => None,
+			Self::Live | Self::Superseded | Self::Failed { .. } | Self::Cancelled => None,
 		}
 	}
 
@@ -153,7 +164,9 @@ impl DeploymentState {
 	/// - `migrating` to `rolling_out`, `rolling_out` to `live`, and `live` to
 	///   `superseded`;
 	/// - `building`, `migrating`, and `rolling_out` to `failed`, with the stage
-	///   they are.
+	///   they are;
+	/// - `queued` to `failed` in the `queued` stage, only for a blocker that
+	///   stops a deployment before any work starts ([`Blocker::fails_queued`]).
 	///
 	/// Nothing else, and no state to itself.
 	#[must_use]
@@ -164,7 +177,10 @@ impl DeploymentState {
 			| (Self::Migrating, Self::RollingOut)
 			| (Self::RollingOut, Self::Live)
 			| (Self::Live, Self::Superseded) => true,
-			(current, Self::Failed { stage, .. }) => current.stage() == Some(*stage),
+			(current, Self::Failed { stage, blocker }) => {
+				current.stage() == Some(*stage)
+					&& (*stage != Stage::Queued || blocker.fails_queued())
+			}
 			_ => false,
 		}
 	}
@@ -249,6 +265,20 @@ impl Blocker {
 		Self::ClusterUnavailable,
 		Self::Interrupted,
 	];
+
+	/// Whether this stops a deployment before any work starts, so a queued
+	/// deployment may fail with it: no build worker, a quota, the spend cap,
+	/// or a payment.
+	#[must_use]
+	pub const fn fails_queued(self) -> bool {
+		matches!(
+			self,
+			Self::BuilderUnavailable
+				| Self::QuotaExceeded
+				| Self::SpendCapReached
+				| Self::PaymentRequired
+		)
+	}
 
 	/// The stable code: `snake_case`, never renamed once released.
 	#[must_use]
@@ -499,9 +529,15 @@ mod tests {
 		states
 	}
 
-	/// A short label for a state: its name, and a failure's stage.
+	/// A short label for a state: its name, and a failure's stage. A queued
+	/// failure names its blocker too, because only some may end a queued
+	/// deployment.
 	fn label(state: DeploymentState) -> String {
 		match state {
+			DeploymentState::Failed {
+				stage: Stage::Queued,
+				blocker,
+			} => format!("failed@queued:{blocker}"),
 			DeploymentState::Failed { stage, .. } => format!("failed@{stage}"),
 			other => other.name().to_owned(),
 		}
@@ -513,6 +549,10 @@ mod tests {
 			("queued", "building"),
 			("queued", "migrating"),
 			("queued", "cancelled"),
+			("queued", "failed@queued:builder_unavailable"),
+			("queued", "failed@queued:quota_exceeded"),
+			("queued", "failed@queued:spend_cap_reached"),
+			("queued", "failed@queued:payment_required"),
 			("building", "migrating"),
 			("building", "cancelled"),
 			("building", "failed@building"),
@@ -525,7 +565,7 @@ mod tests {
 		.into_iter()
 		.collect();
 		let states = every_state();
-		assert_eq!(states.len(), 7 + 3 * 10);
+		assert_eq!(states.len(), 7 + 4 * 10);
 		let mut seen = BTreeSet::new();
 
 		for from in &states {
@@ -557,6 +597,46 @@ mod tests {
 		}
 
 		assert!(!DeploymentState::Live.is_final());
+	}
+
+	#[test]
+	fn a_queued_deployment_fails_only_before_work_starts() {
+		let queued = DeploymentState::Queued;
+		let upload = Source::Upload {
+			archive: Digest::parse(&format!("sha256:{}", "a".repeat(64))).unwrap(),
+		};
+
+		for blocker in Blocker::ALL {
+			let failed = DeploymentState::Failed {
+				stage: Stage::Queued,
+				blocker,
+			};
+			let expected = matches!(
+				blocker,
+				Blocker::BuilderUnavailable
+					| Blocker::QuotaExceeded
+					| Blocker::SpendCapReached
+					| Blocker::PaymentRequired
+			);
+			assert_eq!(queued.can_become(&failed), expected, "{blocker}");
+			assert_eq!(
+				queued.advance(failed, &upload).is_ok(),
+				expected,
+				"{blocker}"
+			);
+			// Only a queued deployment fails in the queued stage.
+			assert!(!DeploymentState::Building.can_become(&failed), "{blocker}");
+		}
+
+		let refused = DeploymentState::Failed {
+			stage: Stage::Queued,
+			blocker: Blocker::SpendCapReached,
+		};
+		assert_eq!(
+			serde_json::to_string(&refused).unwrap(),
+			r#"{"state":"failed","stage":"queued","blocker":"spend_cap_reached"}"#
+		);
+		assert_eq!(refused.to_string(), "failed (queued: spend_cap_reached)");
 	}
 
 	#[test]

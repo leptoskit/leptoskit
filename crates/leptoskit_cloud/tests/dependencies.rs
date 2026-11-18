@@ -1,7 +1,10 @@
-//! The library without features compiles no server dependencies and nothing
-//! that needs a filesystem: the dashboard compiles it to wasm. `cargo deny`
-//! can't check this, because other crates use these legitimately. The tree
-//! is read for `wasm32-unknown-unknown`, which is what the dashboard builds.
+//! The library without features compiles no server dependencies and none of
+//! the archive's filesystem crates: the dashboard compiles it to wasm. `cargo
+//! deny` can't check this, because other crates use these legitimately. The
+//! tree is read for `wasm32-unknown-unknown`, which is what the dashboard
+//! builds, without proc macros: they run in the compiler and never reach a
+//! bundle (`leptoskit_db_macros` and leptos's code-splitting macros build
+//! with `sha2`).
 
 #![cfg(not(target_arch = "wasm32"))]
 
@@ -21,8 +24,10 @@ const SERVER: &[&str] = &[
 ];
 
 /// Crates only the `archive` feature may pull in: they read and write the
-/// filesystem.
-const ARCHIVE: &[&str] = &["flate2", "ignore", "sha2", "tar", "walkdir"];
+/// filesystem. `walkdir` isn't here: leptos brings it (through
+/// `leptos_hot_reload`) into every leptoskit wasm build, and the tables and
+/// operations this library declares need leptos's query client.
+const ARCHIVE: &[&str] = &["flate2", "ignore", "sha2", "tar"];
 
 #[test]
 fn the_shared_types_compile_neither_server_nor_filesystem_crates() {
@@ -44,8 +49,8 @@ fn the_archive_feature_adds_the_archive_crates_and_no_server() {
 	}
 }
 
-/// `cargo tree` for this package on the wasm target, normal edges only, one
-/// package per line.
+/// `cargo tree` for this package on the wasm target, normal edges only and
+/// no proc macros, one package per line.
 fn tree(features: &[&str]) -> String {
 	let output = Command::new(env!("CARGO"))
 		.arg("tree")
@@ -57,7 +62,7 @@ fn tree(features: &[&str]) -> String {
 			"--target",
 			"wasm32-unknown-unknown",
 			"--edges",
-			"normal",
+			"normal,no-proc-macro",
 			"--prefix",
 			"none",
 			"--format",

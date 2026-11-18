@@ -15,14 +15,25 @@
 //!   `archive` feature, packing a project and unpacking it safely.
 //! - [`pricing`]: a price catalogue and the monthly estimate for a `[cloud]`
 //!   table, in integer minor units.
+//! - [`access`]: roles, token scopes, and the one table that turns them into
+//!   permissions.
+//! - [`tables`]: the control plane's tables.
+//! - [`account`], [`tokens`], [`projects`]: the control plane's operations, as
+//!   every client calls them.
 //!
 //! Without features it has no server dependencies and compiles for
 //! `wasm32-unknown-unknown`. The `[cloud]` table itself lives in
 //! [`leptoskit_config::cloud`], which defines the size enums and slugs once;
 //! this crate re-exports them.
 //!
-//! The cloud's tables, operations, server, and workers arrive in later
-//! slices; nothing here talks to a network.
+//! With the `server` feature, it is also the control plane itself
+//! ([`server`]): the operations' bodies, identity, sign-in, the CLI's device
+//! flow, and the routes, which `leptoskit_cloud_app` serves. The
+//! operations' bodies exist only in that build: a crate that links this one
+//! for its client, such as the CLI, compiles none of them.
+//!
+//! Deployments, workers, billing, secrets, and domains arrive in later
+//! slices.
 #![doc(
 	html_logo_url = "https://raw.githubusercontent.com/leptoskit/leptoskit/main/docs/src/assets/icon.svg"
 )]
@@ -30,8 +41,44 @@
 	html_favicon_url = "https://raw.githubusercontent.com/leptoskit/leptoskit/main/docs/src/assets/mark.svg"
 )]
 
+pub mod access;
+pub mod account;
 pub mod archive;
 pub mod deployment;
 pub mod pricing;
+pub mod projects;
+#[cfg(feature = "server")]
+pub mod server;
 pub mod size;
 pub mod slug;
+pub mod tables;
+pub mod tokens;
+
+leptoskit_rpc::scopes! {
+	/// What the CLI may ask for when someone signs it in with the device
+	/// flow. Every control-plane operation requires it of a third-party
+	/// access token.
+	pub enum OAuthScope {
+		/// Act as you in the cloud: see and change your organisations,
+		/// projects, environments, and tokens.
+		Cloud = "cloud",
+	}
+}
+
+// Sign-in, the device flow, and the RPC's own bookkeeping keep their
+// tables in the control plane's database, beside its own.
+#[cfg(feature = "server")]
+leptoskit_db::packs!(leptoskit_auth, leptoskit_idp, leptoskit_rpc);
+
+leptoskit_db::export_schema!();
+
+/// Every migration of the control plane's database on SQLite, generated with
+/// `leptoskit db migration create` and embedded for `leptoskit-cloud-control
+/// migrate` to apply.
+#[cfg(feature = "server")]
+pub static MIGRATIONS: &[leptoskit_db::Migration] = leptoskit_db::migrations!("migrations");
+
+/// The same migrations written for Postgres.
+#[cfg(feature = "postgres")]
+pub static POSTGRES_MIGRATIONS: &[leptoskit_db::Migration] =
+	leptoskit_db::migrations!("migrations-postgres");

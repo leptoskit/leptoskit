@@ -1,0 +1,59 @@
+[package]
+name = "leptoskit_cloud_app"
+version = "0.0.0"
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+readme = "readme.md"
+repository.workspace = true
+rust-version.workspace = true
+description = "LeptosKit Cloud's control plane: the `leptoskit-cloud-control` server."
+
+[[bin]]
+name = "leptoskit-cloud-control"
+path = "src/main.rs"
+required-features = ["server"]
+
+[dependencies]
+clap = { workspace = true, optional = true, features = ["derive", "env"] }
+getrandom = { workspace = true, optional = true }
+leptoskit_auth = { workspace = true, optional = true }
+leptoskit_axum = { workspace = true, optional = true }
+leptoskit_cloud = { workspace = true, optional = true }
+leptoskit_db = { workspace = true, optional = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, optional = true, features = ["macros", "net", "rt-multi-thread", "signal"] }
+url = { workspace = true, optional = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+reqwest = { workspace = true, features = ["json", "rustls-tls"] }
+serde_json = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["macros", "net", "process", "rt-multi-thread", "time"] }
+
+[features]
+default = []
+# The control plane's server: the `leptoskit-cloud-control` binary, its
+# configuration, and its commands. The console's `ssr` and `hydrate`
+# features join it here when the console arrives.
+server = [
+	"dep:clap",
+	"dep:getrandom",
+	"dep:leptoskit_auth",
+	"dep:leptoskit_axum",
+	"dep:leptoskit_cloud",
+	"dep:leptoskit_db",
+	"dep:tokio",
+	"dep:url",
+	"leptoskit_cloud/server",
+]
+# Postgres databases, beside SQLite.
+postgres = ["server", "leptoskit_cloud/postgres"]
+
+[[test]]
+name = "binary"
+required-features = ["server"]
+
+[lints]
+workspace = true
