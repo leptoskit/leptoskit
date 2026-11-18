@@ -71,6 +71,12 @@ pub fn is_layout_only(kind: NativeKind, props: &NativeProps) -> bool {
 		source,
 		placeholder,
 		autocomplete,
+		keyboard,
+		read_only,
+		max_length,
+		capitalize,
+		autocorrect,
+		submit_label,
 		value,
 		checked,
 		radio_group,
@@ -122,6 +128,12 @@ pub fn is_layout_only(kind: NativeKind, props: &NativeProps) -> bool {
 		&& source.is_none()
 		&& placeholder.is_none()
 		&& autocomplete.is_none()
+		&& keyboard.is_none()
+		&& read_only.is_none()
+		&& max_length.is_none()
+		&& capitalize.is_none()
+		&& autocorrect.is_none()
+		&& submit_label.is_none()
 		&& value.is_none()
 		&& checked.is_none()
 		&& radio_group.is_none()

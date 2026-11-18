@@ -4,7 +4,9 @@ use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::Arc;
 
+use leptoskit_native::Capitalize;
 use leptoskit_native::Color;
+use leptoskit_native::Keyboard;
 use leptoskit_native::Mutation;
 use leptoskit_native::MutationList;
 use leptoskit_native::NativeBackend;
@@ -13,6 +15,7 @@ use leptoskit_native::NativeProps;
 use leptoskit_native::Progress;
 use leptoskit_native::Role;
 use leptoskit_native::SharedTextMeasurer;
+use leptoskit_native::SubmitLabel;
 use leptoskit_native::TextContent;
 use leptoskit_yoga::NodeId;
 use objc2::MainThreadMarker;
@@ -46,9 +49,11 @@ use objc2_ui_kit::UIControlState;
 use objc2_ui_kit::UIFont;
 use objc2_ui_kit::UIImage;
 use objc2_ui_kit::UIImageView;
+use objc2_ui_kit::UIKeyboardType;
 use objc2_ui_kit::UILabel;
 use objc2_ui_kit::UIProgressView;
 use objc2_ui_kit::UIProgressViewStyle;
+use objc2_ui_kit::UIReturnKeyType;
 use objc2_ui_kit::UIScrollView;
 use objc2_ui_kit::UIScrollViewContentInsetAdjustmentBehavior;
 use objc2_ui_kit::UISlider;
@@ -816,7 +821,9 @@ fn apply_props(widget: &mut Widget, props: &NativeProps, mtm: MainThreadMarker) 
 				.map_or_else(|| state.value().to_string(), str::to_owned);
 			slider.setAccessibilityValue(Some(&NSString::from_str(&announced)), mtm);
 		}
-		Control::Input { field, .. } => apply_input_props(field, props, &foreground, &font),
+		Control::Input { field, .. } => {
+			apply_input_props(field, props, widget.kind, &foreground, &font)
+		}
 		Control::Image { image, source } => {
 			if source != &props.source {
 				let loaded = props.source.as_deref().and_then(load_image);
@@ -947,33 +954,88 @@ fn apply_button_props(
 /// Masks passwords and prevents keyboard correction or capitalization.
 fn apply_password_traits(field: &UITextField) {
 	field.setSecureTextEntry(true);
-	// These forwarded setters have no directly discoverable Method. Send
-	// their documented NSInteger ABI through the public Objective-C runtime.
-	// SAFETY: each selector below takes one NSInteger and returns void. The
-	// field remains alive on the main thread throughout each synchronous send.
+	// SAFETY: each selector is a forwarded setter taking one NSInteger.
+	unsafe {
+		send_integer_traits(
+			field,
+			&[
+				(sel!(setAutocorrectionType:), UITextAutocorrectionType::No.0),
+				(sel!(setSpellCheckingType:), UITextSpellCheckingType::No.0),
+				(
+					sel!(setAutocapitalizationType:),
+					UITextAutocapitalizationType::None.0,
+				),
+			],
+		);
+	}
+}
+
+/// Sends the `UITextInputTraits` setters objc2's direct Method lookup cannot
+/// validate, one NSInteger each.
+///
+/// # Safety
+///
+/// Every selector must be a forwarded setter that takes one NSInteger and
+/// returns void, and the field must remain alive on the main thread through
+/// each synchronous send.
+unsafe fn send_integer_traits(field: &UITextField, traits: &[(Sel, isize)]) {
+	// SAFETY: each selector is checked before the send, which takes one
+	// NSInteger and returns void. The field remains alive on the main thread
+	// throughout each synchronous send.
 	unsafe {
 		let send: unsafe extern "C-unwind" fn(&UITextField, Sel, isize) =
 			std::mem::transmute(objc2::ffi::objc_msgSend as unsafe extern "C-unwind" fn());
-		for (selector, value) in [
-			(sel!(setAutocorrectionType:), UITextAutocorrectionType::No.0),
-			(sel!(setSpellCheckingType:), UITextSpellCheckingType::No.0),
-			(
-				sel!(setAutocapitalizationType:),
-				UITextAutocapitalizationType::None.0,
-			),
-		] {
+
+		for (selector, value) in traits {
 			assert!(
-				field.respondsToSelector(selector),
+				field.respondsToSelector(*selector),
 				"UITextField must support {selector}"
 			);
-			send(field, selector, value);
+			send(field, *selector, *value);
 		}
+	}
+}
+
+/// The keyboard layout a field asks for, from its `keyboard` prop.
+fn keyboard_type(keyboard: Option<Keyboard>) -> UIKeyboardType {
+	match keyboard {
+		Some(Keyboard::Email) => UIKeyboardType::EmailAddress,
+		Some(Keyboard::Number) => UIKeyboardType::NumberPad,
+		Some(Keyboard::Decimal) => UIKeyboardType::DecimalPad,
+		Some(Keyboard::Phone) => UIKeyboardType::PhonePad,
+		Some(Keyboard::Url) => UIKeyboardType::URL,
+		Some(Keyboard::Search) => UIKeyboardType::WebSearch,
+		Some(Keyboard::Text) | None => UIKeyboardType::Default,
+	}
+}
+
+/// How the keyboard capitalizes typing, from the `capitalize` prop.
+fn autocapitalization(capitalize: Option<Capitalize>) -> UITextAutocapitalizationType {
+	match capitalize {
+		Some(Capitalize::None) => UITextAutocapitalizationType::None,
+		Some(Capitalize::Words) => UITextAutocapitalizationType::Words,
+		Some(Capitalize::Sentences) => UITextAutocapitalizationType::Sentences,
+		Some(Capitalize::Characters) => UITextAutocapitalizationType::AllCharacters,
+		None => UITextAutocapitalizationType::Sentences,
+	}
+}
+
+/// What the return key is named, from the `submit_label` prop.
+fn return_key(submit_label: Option<SubmitLabel>) -> UIReturnKeyType {
+	match submit_label {
+		Some(SubmitLabel::Done) => UIReturnKeyType::Done,
+		Some(SubmitLabel::Go) => UIReturnKeyType::Go,
+		Some(SubmitLabel::Next) => UIReturnKeyType::Next,
+		Some(SubmitLabel::Search) => UIReturnKeyType::Search,
+		Some(SubmitLabel::Send) => UIReturnKeyType::Send,
+		None => UIReturnKeyType::Default,
 	}
 }
 
 fn apply_input_props(
 	field: &UITextField,
 	props: &NativeProps,
+	kind: NativeKind,
 	foreground: &UIColor,
 	font: &UIFont,
 ) {
@@ -1006,6 +1068,33 @@ fn apply_input_props(
 		let send: unsafe extern "C-unwind" fn(&UITextField, Sel, Option<&NSString>) =
 			std::mem::transmute(objc2::ffi::objc_msgSend as unsafe extern "C-unwind" fn());
 		send(field, selector, content_type(props.text_content()));
+	}
+
+	// Keyboard shape, capitalization, correction, and the return key's name
+	// are forwarded `UITextInputTraits`, which objc2's direct Method lookup
+	// cannot find: send their documented NSInteger ABI. A password field
+	// already pins its own correction and capitalization when it is built,
+	// and masking is the one keyboard shape that matters there.
+	if kind != NativeKind::PasswordInput {
+		let mut traits = vec![
+			(sel!(setKeyboardType:), keyboard_type(props.keyboard).0),
+			(
+				sel!(setAutocapitalizationType:),
+				autocapitalization(props.capitalize).0,
+			),
+		];
+
+		if props.autocorrect == Some(false) {
+			traits.push((sel!(setAutocorrectionType:), UITextAutocorrectionType::No.0));
+			traits.push((sel!(setSpellCheckingType:), UITextSpellCheckingType::No.0));
+		}
+
+		if let Some(label) = props.submit_label {
+			traits.push((sel!(setReturnKeyType:), return_key(Some(label)).0));
+		}
+
+		// SAFETY: every selector is a forwarded setter taking one NSInteger.
+		unsafe { send_integer_traits(field, &traits) };
 	}
 
 	field.setFont(Some(font));

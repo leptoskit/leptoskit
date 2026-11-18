@@ -84,6 +84,20 @@ enum WidgetTextStyle {
         field.textColor = textColor(props)
         field.textAlignment = alignment
         field.isEnabled = props.enabled ?? true
+        // iOS shaping: keyboard, capitalization, correction, and the return key.
+        if let keyboard = props.keyboard {
+            field.keyboardType = keyboardType(keyboard)
+        }
+        if let capitalize = props.capitalize {
+            field.autocapitalizationType = capitalization(capitalize)
+        }
+        if props.autocorrect == false {
+            field.autocorrectionType = .no
+            field.spellCheckingType = .no
+        }
+        if let label = props.submitLabel {
+            field.returnKeyType = returnKey(label)
+        }
     }
 
     private static func contentType(_ content: TextContent?) -> UITextContentType? {
@@ -135,6 +149,39 @@ enum WidgetTextStyle {
         fonts[key] = font
 
         return font
+    }
+
+    private static func keyboardType(_ keyboard: String) -> UIKeyboardType {
+        switch keyboard {
+        case "email": .emailAddress
+        case "number": .numberPad
+        case "decimal": .decimalPad
+        case "phone": .phonePad
+        case "url": .URL
+        case "search": .webSearch
+        default: .default
+        }
+    }
+
+    private static func capitalization(_ capitalize: String) -> UITextAutocapitalizationType {
+        switch capitalize {
+        case "none": .none
+        case "words": .words
+        case "sentences": .sentences
+        case "characters": .allCharacters
+        default: .sentences
+        }
+    }
+
+    private static func returnKey(_ label: String) -> UIReturnKeyType {
+        switch label {
+        case "go": .go
+        case "next": .next
+        case "search": .search
+        case "send": .send
+        case "done": .done
+        default: .default
+        }
     }
 }
 

@@ -1,10 +1,13 @@
 #![cfg(all(feature = "web", not(target_arch = "wasm32")))]
 
 use leptos::prelude::RenderHtml;
+use leptoskit_native::Capitalize;
 use leptoskit_native::Color;
 use leptoskit_native::Element;
 use leptoskit_native::FontWeight;
+use leptoskit_native::Keyboard;
 use leptoskit_native::NativeKind;
+use leptoskit_native::SubmitLabel;
 use leptoskit_native::components::Pressable;
 use leptoskit_native::components::Text;
 use leptoskit_native::components::View;
@@ -164,6 +167,68 @@ fn renders_semantic_controls_and_escapes_user_content() {
 	assert!(html.contains("&lt;script&gt;"));
 	assert!(!html.contains("<script>"));
 	assert!(html.contains("value=\"&lt;hello&gt; &amp; &quot;world&quot;\""));
+}
+
+#[test]
+fn typed_text_input_hints_render_exact_attributes() {
+	let element = Element::view().children([
+		Element::text_input().with_props(|props| {
+			props.keyboard = Some(Keyboard::Email);
+			props.read_only = Some(true);
+			props.max_length = Some(9);
+			props.capitalize = Some(Capitalize::Characters);
+			props.autocorrect = Some(false);
+			props.submit_label = Some(SubmitLabel::Go);
+			props.accessibility_label = Some("Email".into());
+		}),
+		Element::text_input().with_props(|props| {
+			props.keyboard = Some(Keyboard::Number);
+			props.accessibility_label = Some("field".into());
+		}),
+		Element::text_input().with_props(|props| {
+			props.keyboard = Some(Keyboard::Decimal);
+			props.accessibility_label = Some("field".into());
+		}),
+		Element::text_input().with_props(|props| {
+			props.keyboard = Some(Keyboard::Phone);
+			props.accessibility_label = Some("field".into());
+		}),
+		Element::text_input().with_props(|props| {
+			props.keyboard = Some(Keyboard::Url);
+			props.accessibility_label = Some("field".into());
+		}),
+		Element::text_input().with_props(|props| {
+			props.keyboard = Some(Keyboard::Search);
+			props.accessibility_label = Some("field".into());
+		}),
+		Element::text_input().with_props(|props| {
+			props.submit_label = Some(SubmitLabel::Send);
+			props.accessibility_label = Some("field".into());
+		}),
+	]);
+	let html = render(element).to_html();
+
+	let input = html.split("<input").nth(1).expect("first input");
+	assert!(input.contains("type=\"email\""), "{input}");
+	assert!(input.contains(" readonly"), "{input}");
+	assert!(input.contains("maxlength=\"9\""), "{input}");
+	assert!(input.contains("autocapitalize=\"characters\""), "{input}");
+	assert!(input.contains("autocorrect=\"off\""), "{input}");
+	assert!(input.contains("spellcheck=\"false\""), "{input}");
+	assert!(input.contains("enterkeyhint=\"go\""), "{input}");
+
+	// Number and decimal shape the keyboard through inputmode, not type.
+	let rest = html
+		.split("<input")
+		.skip(2)
+		.collect::<Vec<_>>()
+		.join("<input");
+	assert!(rest.contains("inputmode=\"numeric\""), "{rest}");
+	assert!(rest.contains("inputmode=\"decimal\""), "{rest}");
+	assert!(rest.contains("type=\"tel\""), "{rest}");
+	assert!(rest.contains("type=\"url\""), "{rest}");
+	assert!(rest.contains("type=\"search\""), "{rest}");
+	assert!(rest.contains("enterkeyhint=\"send\""), "{rest}");
 }
 
 #[test]

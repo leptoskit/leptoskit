@@ -28,8 +28,10 @@ use sha2::Digest;
 use sha2::Sha256;
 use wasm_bindgen::JsCast;
 
+use crate::Capitalize;
 use crate::Element;
 use crate::EventOutcome;
+use crate::Keyboard;
 use crate::NativeEvent;
 use crate::NativeKind;
 use crate::NativeProps;
@@ -401,6 +403,13 @@ fn render_node(
 	let kind = element.kind;
 	let mut props = element.props;
 	let id = props.id.take();
+	// A read-only text field announces itself, the way `aria_read_only` does.
+	if matches!(kind, NativeKind::TextInput | NativeKind::PasswordInput)
+		&& props.read_only == Some(true)
+	{
+		let aria = props.aria_mut();
+		aria.read_only = aria.read_only.or(Some(true));
+	}
 	let test_id = props.test_id().map(str::to_owned);
 	let enabled = parent_enabled && props.enabled.unwrap_or(true);
 	// A pressable with an href is a link: an `<a>` the browser can open in
@@ -981,15 +990,56 @@ fn text_input(
 	attrs: impl Attribute + 'static,
 ) -> AnyView {
 	let value = props.value.unwrap_or(text);
+	// A shaped keyboard is a `type` where HTML has one, and an `inputmode`
+	// where it has none. A password field keeps its type whatever it asks
+	// for: masking is the one keyboard shape that matters there.
+	let keyboard = (kind == NativeKind::TextInput).then_some(props.keyboard.unwrap_or_default());
+	let (typed, input_mode) = match keyboard {
+		Some(Keyboard::Email) => (Some("email"), None),
+		Some(Keyboard::Phone) => (Some("tel"), None),
+		Some(Keyboard::Url) => (Some("url"), None),
+		Some(Keyboard::Search) => (Some("search"), None),
+		Some(Keyboard::Number) => (None, Some("numeric")),
+		Some(Keyboard::Decimal) => (None, Some("decimal")),
+		_ => (None, None),
+	};
+	let input_type = typed.unwrap_or(if kind == NativeKind::PasswordInput {
+		"password"
+	} else {
+		"text"
+	});
+	// Spelling suggestions and marks follow `autocorrect`, the way HTML's
+	// `autocorrect` and `spellcheck` do.
+	let autocorrect = kind != NativeKind::PasswordInput
+		&& props.autocorrect.is_some_and(|autocorrect| !autocorrect);
+
 	html::input()
-		.r#type(if kind == NativeKind::PasswordInput {
-			"password"
-		} else {
-			"text"
-		})
+		.r#type(input_type)
 		.disabled(!enabled)
 		.placeholder(props.placeholder.unwrap_or_default())
 		.attr("autocomplete", props.autocomplete)
+		.attr("inputmode", input_mode)
+		.attr("readonly", props.read_only == Some(true))
+		.attr(
+			"maxlength",
+			props.max_length.map(|length| length.to_string()),
+		)
+		.attr(
+			"autocapitalize",
+			props
+				.capitalize
+				.filter(|_| kind == NativeKind::TextInput)
+				.map(capitalize_value),
+		)
+		.attr("autocorrect", autocorrect.then_some("off"))
+		.attr("spellcheck", autocorrect.then_some("false"))
+		.attr(
+			"enterkeyhint",
+			props
+				.submit_label
+				.filter(|_| kind == NativeKind::TextInput)
+				.map(|label| label.wire_name()),
+		)
 		.value(value.clone())
 		.attr("data-lk-value", value)
 		.directive(controls::restore_input, ())
@@ -998,6 +1048,16 @@ fn text_input(
 		})
 		.add_any_attr(attrs)
 		.into_any()
+}
+
+/// The `autocapitalize` value HTML reads for each capitalization rule.
+fn capitalize_value(capitalize: Capitalize) -> &'static str {
+	match capitalize {
+		Capitalize::None => "none",
+		Capitalize::Words => "words",
+		Capitalize::Sentences => "sentences",
+		Capitalize::Characters => "characters",
+	}
 }
 
 /// A spinner whose animation and accessibility follow whether it is running.

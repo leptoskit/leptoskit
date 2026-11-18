@@ -1906,6 +1906,17 @@ fn update_input(control: HWND, props: &NativeProps, rtl: bool) {
 				wide(props.placeholder.as_deref().unwrap_or("")).as_ptr() as isize,
 			)),
 		);
+		// A read-only field refuses edits but stays selectable and copyable.
+		SendMessageW(
+			control,
+			EM_SETREADONLY,
+			Some(WPARAM(if props.read_only == Some(true) { 1 } else { 0 })),
+			None,
+		);
+		// The longest value the field accepts, the way HTML's `maxlength`
+		// behaves.
+		let limit = props.max_length.map_or(0, |length| length);
+		SendMessageW(control, EM_LIMITTEXT, Some(WPARAM(limit)), None);
 	}
 }
 

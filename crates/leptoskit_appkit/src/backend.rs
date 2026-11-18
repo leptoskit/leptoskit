@@ -909,6 +909,10 @@ fn apply_control(control: &mut Control, props: &NativeProps) {
 			});
 			field.setPlaceholderAttributedString(placeholder.as_deref());
 			field.setContentType(content_type(props.text_content()));
+			// A read-only field refuses edits but stays selectable, so its
+			// value can still be selected and copied.
+			field.setEditable(props.read_only != Some(true));
+			field.setSelectable(true);
 			let value = props
 				.value
 				.as_deref()

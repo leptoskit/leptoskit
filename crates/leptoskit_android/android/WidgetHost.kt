@@ -90,6 +90,7 @@ class WidgetHost(
         var imageSource: String? = null
         var riveBitmap: Bitmap? = null
         var parent: Long? = null
+        var keyListener: android.text.method.KeyListener? = null
         val children = mutableListOf<Long>()
     }
 
@@ -656,6 +657,8 @@ class WidgetHost(
         val node = Node(id, kind, outer, control, content, props, scroll)
         nodes[id] = node
 
+        if (control is EditText) node.keyListener = control.keyListener
+
         if (control != null) {
             outer.fill = control
             outer.addView(control)
@@ -687,8 +690,13 @@ class WidgetHost(
                     },
                 )
                 control.setOnEditorActionListener { _, action, event ->
-                    if (action == EditorInfo.IME_ACTION_DONE ||
-                        (event?.keyCode == KeyEvent.KEYCODE_ENTER && event.action == KeyEvent.ACTION_UP)
+                    if (action in listOf(
+                            EditorInfo.IME_ACTION_DONE,
+                            EditorInfo.IME_ACTION_GO,
+                            EditorInfo.IME_ACTION_NEXT,
+                            EditorInfo.IME_ACTION_SEARCH,
+                            EditorInfo.IME_ACTION_SEND,
+                        ) || (event?.keyCode == KeyEvent.KEYCODE_ENTER && event.action == KeyEvent.ACTION_UP)
                     ) {
                         emit(id, 2, text = control.text.toString())
                         true
@@ -988,6 +996,60 @@ class WidgetHost(
                 control.hint = props.string("placeholder")
 
                 autofill(control, node.kind, props.string("autocomplete"))
+
+                // Keyboard shape, capitalization, correction and the return-key
+                // name follow the typed props. A password field keeps its own
+                // masking and correction behavior.
+                val secure = node.kind == "password_input"
+                if (!secure) {
+                    val keyboard = props.string("keyboard") ?: "text"
+                    val capitalize = props.string("capitalize") ?: "none"
+                    val autocorrect = props.isNull("autocorrect") || props.optBoolean("autocorrect", true)
+                    var inputType = when (keyboard) {
+                        "email" -> InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS
+                        "phone" -> InputType.TYPE_CLASS_PHONE
+                        "url" -> InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
+                        "number" -> InputType.TYPE_CLASS_NUMBER
+                        "decimal" -> InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
+                        else -> InputType.TYPE_CLASS_TEXT
+                    }
+                    if (inputType and InputType.TYPE_MASK_CLASS == InputType.TYPE_CLASS_TEXT) {
+                        inputType = inputType or when (capitalize) {
+                            "words" -> InputType.TYPE_TEXT_FLAG_CAP_WORDS
+                            "sentences" -> InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+                            "characters" -> InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS
+                            else -> 0
+                        }
+                    }
+                    if (!autocorrect) inputType = inputType or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+                    if (control.inputType != inputType) control.inputType = inputType
+                }
+
+                // A read-only field refuses edits but stays selectable.
+                if (props.optBoolean("read_only")) {
+                    control.keyListener = null
+                } else if (control.keyListener == null) {
+                    control.keyListener = node.keyListener
+                }
+
+                // The longest value the field accepts, the way HTML's
+                // `maxlength` behaves.
+                val max_length = if (props.isNull("max_length")) null else props.number("max_length", 0.0).toInt()
+                if (max_length == null) {
+                    control.filters = emptyArray()
+                } else if (control.filters?.filterIsInstance<InputFilter.LengthFilter>()?.firstOrNull()?.max != max_length) {
+                    control.filters = arrayOf(InputFilter.LengthFilter(max_length))
+                }
+
+                // What the return key is named.
+                val ime = when (props.string("submit_label") ?: "done") {
+                    "go" -> EditorInfo.IME_ACTION_GO
+                    "next" -> EditorInfo.IME_ACTION_NEXT
+                    "search" -> EditorInfo.IME_ACTION_SEARCH
+                    "send" -> EditorInfo.IME_ACTION_SEND
+                    else -> EditorInfo.IME_ACTION_DONE
+                }
+                if (control.imeOptions != ime) control.imeOptions = ime
 
                 control.setHintTextColor(if (dark) 0xffa0a0a0.toInt() else 0xff707070.toInt())
             } else if (control !is CompoundButton) {

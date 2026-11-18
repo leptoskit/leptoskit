@@ -13,6 +13,8 @@ use gtk::gdk;
 use gtk::glib;
 use gtk::graphene;
 use gtk::prelude::*;
+use leptoskit_native::Capitalize;
+use leptoskit_native::Keyboard;
 use leptoskit_native::MutationList;
 use leptoskit_native::NativeBackend;
 use leptoskit_native::NativeEvent;
@@ -1249,6 +1251,46 @@ fn configure_entry(entry: &gtk::Entry, kind: NativeKind, props: &NativeProps, rt
 	}
 
 	entry.set_placeholder_text(props.placeholder.as_deref());
+
+	// Keyboard shape becomes the field's input purpose, where GTK has one:
+	// email, phone, URL, and the numeric family. Search has no distinct
+	// purpose and keeps the default.
+	if kind != NativeKind::PasswordInput {
+		let purpose = match props.keyboard {
+			Some(Keyboard::Email) => gtk::InputPurpose::Email,
+			Some(Keyboard::Phone) => gtk::InputPurpose::Phone,
+			Some(Keyboard::Url) => gtk::InputPurpose::Url,
+			Some(Keyboard::Number) => gtk::InputPurpose::Digits,
+			Some(Keyboard::Decimal) => gtk::InputPurpose::Number,
+			Some(Keyboard::Text) | Some(Keyboard::Search) | None => gtk::InputPurpose::FreeForm,
+		};
+		entry.set_input_purpose(purpose);
+	}
+
+	// A read-only field refuses edits but stays selectable and copyable.
+	entry.set_editable(props.read_only != Some(true));
+
+	// The longest value the field accepts, the way HTML's `maxlength` behaves.
+	if let Some(max_length) = props.max_length {
+		entry.set_max_length(max_length as i32);
+	} else {
+		entry.set_max_length(0);
+	}
+
+	// Capitalization and spelling hints, combined into the input hints.
+	let mut hints = gtk::InputHints::NONE;
+	match props.capitalize {
+		Some(Capitalize::Words) => hints |= gtk::InputHints::UPPERCASE_WORDS,
+		Some(Capitalize::Sentences) => hints |= gtk::InputHints::UPPERCASE_SENTENCES,
+		Some(Capitalize::Characters) => hints |= gtk::InputHints::UPPERCASE_CHARS,
+		Some(Capitalize::None) | None => {}
+	}
+
+	if props.autocorrect == Some(false) {
+		hints |= gtk::InputHints::NO_SPELLCHECK;
+	}
+
+	entry.set_input_hints(hints);
 }
 
 fn configure_scale(scale: &gtk::Scale, props: &NativeProps) {
