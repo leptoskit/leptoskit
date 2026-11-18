@@ -178,7 +178,13 @@ async fn serve(config: ServeConfig) -> Result<(), Error> {
 	let dev = config.control.dev.is_some();
 	let control = Control::start(&db, config.control_for(address)).await?;
 	let readiness = Readiness::new();
-	let router = control.router().merge(readiness.routes());
+	// Merging replaces the default fallback that serves the provider's
+	// protocol endpoints. Install the identity layers after every route.
+	let router = control
+		.router()
+		.merge(readiness.routes())
+		.layer(control.auth().layer())
+		.layer(control.idp().layer());
 	let live = control.live().clone();
 	let shutdown = GracefulShutdown::new()
 		.readiness(&readiness)
