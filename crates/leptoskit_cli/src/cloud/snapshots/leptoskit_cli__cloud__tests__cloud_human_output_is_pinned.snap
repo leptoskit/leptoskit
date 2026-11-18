@@ -1,0 +1,10 @@
+---
+source: crates/leptoskit_cli/src/cloud/tests.rs
+expression: "human(&json!({\n    \"account\": \"account-id\", \"email\": \"person@example.com\", \"via\": \"cli\",\n    \"organizations\": [{ \"name\": \"Notes\", \"slug\": \"notes\", \"role\": \"owner\" }]\n}))"
+---
+account: account-id
+email: person@example.com
+organizations: name: Notes
+role: owner
+slug: notes
+via: cli

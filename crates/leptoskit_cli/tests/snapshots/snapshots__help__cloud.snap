@@ -1,0 +1,27 @@
+---
+source: crates/leptoskit_cli/tests/snapshots.rs
+expression: "normalize(&stdout(&output), &scratch.path)"
+---
+Signs in and manages cloud accounts, projects, environments and tokens
+
+Usage: leptoskit cloud [OPTIONS] <COMMAND>
+
+Commands:
+  login    Signs in through your browser with a short code
+  logout   Revokes your login and removes the local credentials
+  whoami   Shows who is signed in and which organizations they can see
+  org      Manages organizations and membership
+  project  Manages projects and their production environment
+  env      Manages a project's environments
+  token    Manages scoped API tokens for CI
+  link     Links leptoskit.toml to an existing cloud project
+  help     Print this message or the help of the given subcommand(s)
+
+Options:
+      --app-target <NAME>  Select a named target from the root leptoskit.toml
+      --url <URL>          Cloud origin; overrides `LEPTOSKIT_CLOUD_URL` and [cloud].url
+      --json               Prints the documented JSON result
+      --org <ORG>          Organization slug; defaults to [cloud].organization or your personal one
+      --project <PROJECT>  Project slug; defaults to [cloud].project
+  -h, --help               Print help
+  -V, --version            Print version

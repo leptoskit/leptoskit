@@ -1,0 +1,5 @@
+---
+source: crates/leptoskit_cli/src/cloud/tests.rs
+expression: human(&output)
+---
+Done.

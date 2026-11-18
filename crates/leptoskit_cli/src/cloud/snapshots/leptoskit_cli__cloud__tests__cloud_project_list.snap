@@ -1,0 +1,23 @@
+---
+source: crates/leptoskit_cli/src/cloud/tests.rs
+expression: help
+---
+Lists the selected organization's projects
+
+Usage: list [OPTIONS]
+
+Options:
+      --url <URL>
+          Cloud origin; overrides `LEPTOSKIT_CLOUD_URL` and [cloud].url
+
+      --json
+          Prints the documented JSON result
+
+      --org <ORG>
+          Organization slug; defaults to [cloud].organization or your personal one
+
+      --project <PROJECT>
+          Project slug; defaults to [cloud].project
+
+  -h, --help
+          Print help

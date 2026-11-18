@@ -41,6 +41,34 @@ async fn cloud_cli_login_project_and_api_token() {
 	let origin = format!("http://{address}");
 	tokio::spawn(async move { while let Ok(Some(_)) = lines.next_line().await {} });
 	let http = reqwest::Client::builder().no_proxy().build().unwrap();
+	let discovery = http
+		.get(format!("{origin}/.well-known/leptoskit-cloud"))
+		.send()
+		.await
+		.unwrap()
+		.json::<serde_json::Value>()
+		.await
+		.unwrap();
+	let oidc = http
+		.get(format!("{origin}/.well-known/openid-configuration"))
+		.send()
+		.await
+		.unwrap();
+	let device = http
+		.post(format!("{origin}/oauth/device_authorization"))
+		.form(&[
+			("client_id", discovery["cli_client_id"].as_str().unwrap()),
+			("scope", discovery["scope"].as_str().unwrap()),
+		])
+		.send()
+		.await
+		.unwrap();
+	assert_eq!(
+		(oidc.status().as_u16(), device.status().as_u16()),
+		(200, 200),
+		"The real control plane must serve OIDC discovery and device authorization before CLI \
+		 login can run"
+	);
 	let signed_in = http
 		.post(format!("{origin}/auth/dev/sign-in"))
 		.header("origin", &origin)

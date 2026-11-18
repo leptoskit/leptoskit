@@ -1,0 +1,30 @@
+---
+source: crates/leptoskit_cli/src/cloud/tests.rs
+expression: help
+---
+Revokes a token; requires its ID again as confirmation
+
+Usage: revoke [OPTIONS] --confirm <CONFIRM> <TOKEN>
+
+Arguments:
+  <TOKEN>
+          
+
+Options:
+      --confirm <CONFIRM>
+          
+
+      --url <URL>
+          Cloud origin; overrides `LEPTOSKIT_CLOUD_URL` and [cloud].url
+
+      --json
+          Prints the documented JSON result
+
+      --org <ORG>
+          Organization slug; defaults to [cloud].organization or your personal one
+
+      --project <PROJECT>
+          Project slug; defaults to [cloud].project
+
+  -h, --help
+          Print help

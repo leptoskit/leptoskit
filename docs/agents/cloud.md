@@ -6,7 +6,11 @@ This note is the contract every cloud pull request builds against. When a slice 
 
 ## CLI accounts and projects
 
-Implementation checkpoint, not built. The CLI now passes `cargo check -p leptoskit_cli --all-targets`, but the new isolated backend-unification regression fails in the featureless `leptoskit_auth` dependency: seven policies require `SignedIn: Setting`, whose implementation is gated on auth’s server feature. Fixing that crate needs a separate authorized task. Cloud tests report 96 passed and one failed (this regression). The recorded CLI test run reports 11 passed and two failed; its fixture corrections and subsequent lint fixes remain unverified. The real-control-plane login test receives HTTP 404 during device authorization, and existing CLI help snapshots still need updating. Generated snapshots remain review artifacts, not accepted baselines.
+Tables are server-only; every client-visible type is a plain serde type, and an operation never returns a table row.
+
+CLI 1's account slice is built and verified: Cloud all-feature tests passed 97/97 with Postgres required, including the isolated featureless-client check with no backend, SQLite, Postgres, both backends, and wasm. CLI cloud tests passed 13/13, help snapshots passed 14/14, and the control-plane app suite passed 11/11, including real-binary device login, whoami, project creation, token creation and API-token use. Cloud native and featureless wasm clippy, CLI all-target checking, and CLI and control-plane app native clippy passed with warnings denied.
+
+The CLI reads cloud discovery for the client, scopes and RPC path, then OpenID Connect discovery for device authorization, token and revocation endpoints. The fake provider advertises different paths to verify that the CLI follows discovery. The binary installs the auth and identity-provider layers after merging readiness routes: Axum's merge replaces the default fallback that carries protocol middleware, so nothing may be merged after those final layers. `leptoskit_cloud_app/tests/binary.rs` starts the real binary and checks OIDC discovery, device authorization, Cloud discovery, readiness and health. `leptoskit_cloud_app/tests/cloud_cli.rs` verifies the end-to-end CLI journey.
 
 The account part of CLI 1 lives in `crates/leptoskit_cli/src/cloud/`. It adds this command tree; deployment commands belong to a later slice, and `lk deploy` keeps its existing behavior:
 
@@ -36,7 +40,7 @@ lk cloud token revoke <token-id> --confirm <token-id>
 lk cloud link [--force]
 ```
 
-Every command accepts `--json`, `--url`, `--org` and `--project`, before or after its subcommand. Organization and project default from `[cloud]`; without an organization link, the caller's personal organization is used. Organization operations name their organization positionally. Token creation's optional `--project` binds the token to that project; omit it to create an organization token. Destructive operations always require `--confirm`, including in a terminal. There are no interactive confirmation prompts.
+Every command accepts `--json`, `--url`, `--org` and `--project`, before or after its subcommand. Organization and project default from `[cloud]`; without an organization link, the caller's personal organization is used. Organization operations name their organization positionally. Token creation's optional `--project` binds the token to that project; without an explicit or linked project it creates an organization token. Destructive operations always require `--confirm`, including in a terminal. There are no interactive confirmation prompts.
 
 The cloud origin is chosen from `--url`, `LEPTOSKIT_CLOUD_URL`, `[cloud].url`, then `https://cloud.leptoskit.dev`. It must be HTTPS, or HTTP on loopback, without credentials, path, query or fragment. Requests have a 30-second timeout, follow no redirects and bypass proxies for loopback.
 

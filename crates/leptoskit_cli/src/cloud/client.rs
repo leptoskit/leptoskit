@@ -39,6 +39,16 @@ struct Discovery {
 	rpc: String,
 }
 
+#[derive(Deserialize)]
+struct OAuthDiscovery {
+	#[serde(rename = "device_authorization_endpoint")]
+	device_authorization: String,
+	#[serde(rename = "token_endpoint")]
+	token: String,
+	#[serde(rename = "revocation_endpoint")]
+	revocation: String,
+}
+
 /// What login shows while waiting for approval. Never contains the device code.
 #[derive(Debug)]
 pub struct Verification {
@@ -123,6 +133,32 @@ impl Client {
 		)
 	}
 
+	fn oauth(&self) -> Result<OAuthDiscovery> {
+		let mut discovery: OAuthDiscovery = transport::read(
+			self.agent
+				.get(format!("{}/.well-known/openid-configuration", self.origin))
+				.call(),
+		)?
+		.result(&[])?;
+		for endpoint in [
+			&mut discovery.device_authorization,
+			&mut discovery.token,
+			&mut discovery.revocation,
+		] {
+			let url = url::Url::parse(endpoint).context("Invalid OAuth endpoint.")?;
+			ensure!(
+				url.origin().ascii_serialization() == self.origin
+					&& url.username().is_empty()
+					&& url.password().is_none()
+					&& url.query().is_none()
+					&& url.fragment().is_none(),
+				"OAuth endpoint must belong to this cloud."
+			);
+			url.path().clone_into(endpoint);
+		}
+		Ok(discovery)
+	}
+
 	/// Runs device login, calling `show` before polling and replacing the
 	/// stored session.
 	///
@@ -130,9 +166,10 @@ impl Client {
 	/// When discovery, approval, or private credential storage fails.
 	pub fn login(&self, show: impl FnOnce(&Verification) -> Result<()>) -> Result<()> {
 		let discovery = self.discovery()?;
+		let oauth = self.oauth()?;
 		let device: DeviceAuthorization = self
 			.form(
-				"/oauth/device_authorization",
+				&oauth.device_authorization,
 				&[
 					("client_id", &discovery.cli_client_id),
 					("scope", &discovery.scope),
@@ -163,7 +200,7 @@ impl Client {
 			}
 			std::thread::sleep(Duration::from_secs(interval));
 			let reply = self.form(
-				"/oauth/token",
+				&oauth.token,
 				&[
 					("client_id", &discovery.cli_client_id),
 					("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
@@ -205,15 +242,18 @@ impl Client {
 		let _lock = self.store.lock()?;
 		let session = self.store.load()?;
 		let revoked = session.as_ref().is_none_or(|session| {
-			self.form(
-				"/oauth/revoke",
-				&[
-					("client_id", &session.client_id),
-					("token", session.refresh.expose()),
-					("token_type_hint", "refresh_token"),
-				],
-			)
-			.is_ok_and(|reply| (200..300).contains(&reply.status))
+			self.oauth()
+				.and_then(|oauth| {
+					self.form(
+						&oauth.revocation,
+						&[
+							("client_id", &session.client_id),
+							("token", session.refresh.expose()),
+							("token_type_hint", "refresh_token"),
+						],
+					)
+				})
+				.is_ok_and(|reply| (200..300).contains(&reply.status))
 		});
 		self.store.delete()?;
 		Ok(revoked)
@@ -242,8 +282,9 @@ impl Client {
 		{
 			return Ok(session.access);
 		}
+		let oauth = self.oauth()?;
 		let reply = self.form(
-			"/oauth/token",
+			&oauth.token,
 			&[
 				("client_id", &session.client_id),
 				("grant_type", "refresh_token"),

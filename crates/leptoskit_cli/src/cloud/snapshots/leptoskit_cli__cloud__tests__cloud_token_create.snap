@@ -1,0 +1,33 @@
+---
+source: crates/leptoskit_cli/src/cloud/tests.rs
+expression: help
+---
+Creates a scoped token and shows its value once
+
+Usage: create [OPTIONS] --scope <SCOPES> <NAME>
+
+Arguments:
+  <NAME>
+          
+
+Options:
+      --scope <SCOPES>
+          
+
+      --url <URL>
+          Cloud origin; overrides `LEPTOSKIT_CLOUD_URL` and [cloud].url
+
+      --expires <EXPIRES>
+          [default: 90]
+
+      --json
+          Prints the documented JSON result
+
+      --org <ORG>
+          Organization slug; defaults to [cloud].organization or your personal one
+
+      --project <PROJECT>
+          Project slug; defaults to [cloud].project
+
+  -h, --help
+          Print help

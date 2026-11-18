@@ -1,0 +1,34 @@
+---
+source: crates/leptoskit_cli/src/cloud/tests.rs
+expression: help
+---
+Manages organizations and membership
+
+Usage: org [OPTIONS] <COMMAND>
+
+Commands:
+  list               Lists organizations you can see
+  create             Creates an organization with you as owner
+  members            Lists the members of an organization
+  invite             Emails an invitation to join
+  invitations        Lists pending invitations
+  revoke-invitation  Revokes an invitation; requires its ID again as confirmation
+  set-role           Changes a member's role
+  remove-member      Removes a member; requires their ID again as confirmation
+  help               Print this message or the help of the given subcommand(s)
+
+Options:
+      --url <URL>
+          Cloud origin; overrides `LEPTOSKIT_CLOUD_URL` and [cloud].url
+
+      --json
+          Prints the documented JSON result
+
+      --org <ORG>
+          Organization slug; defaults to [cloud].organization or your personal one
+
+      --project <PROJECT>
+          Project slug; defaults to [cloud].project
+
+  -h, --help
+          Print help

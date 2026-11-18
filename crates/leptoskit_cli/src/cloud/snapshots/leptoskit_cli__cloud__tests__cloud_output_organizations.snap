@@ -1,0 +1,10 @@
+---
+source: crates/leptoskit_cli/src/cloud/tests.rs
+expression: human(&output)
+---
+id: 00000000-0000-0000-0000-000000000001
+name: Team
+personal: false
+plan: hobby
+role: owner
+slug: team

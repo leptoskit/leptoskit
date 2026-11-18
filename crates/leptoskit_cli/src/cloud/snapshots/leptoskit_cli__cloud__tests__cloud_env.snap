@@ -1,0 +1,30 @@
+---
+source: crates/leptoskit_cli/src/cloud/tests.rs
+expression: help
+---
+Manages a project's environments
+
+Usage: env [OPTIONS] <COMMAND>
+
+Commands:
+  list    Lists the selected project's environments
+  create  Creates a staging or preview environment
+  update  Reads the current revision and changes the app's scale
+  delete  Deletes an environment other than production
+  help    Print this message or the help of the given subcommand(s)
+
+Options:
+      --url <URL>
+          Cloud origin; overrides `LEPTOSKIT_CLOUD_URL` and [cloud].url
+
+      --json
+          Prints the documented JSON result
+
+      --org <ORG>
+          Organization slug; defaults to [cloud].organization or your personal one
+
+      --project <PROJECT>
+          Project slug; defaults to [cloud].project
+
+  -h, --help
+          Print help

@@ -47,14 +47,17 @@ fn server(answer: impl Fn(&str, &str, &str) -> Response + Send + Sync + 'static)
 	let discovery =
 		json!({ "cli_client_id": "cli", "scope": "openid cloud offline_access", "rpc": "/rpc" });
 	let (stop, stopped) = tokio::sync::oneshot::channel();
+	let oauth = json!({"device_authorization_endpoint": format!("{url}/identity/device"), "token_endpoint": format!("{url}/identity/token"), "revocation_endpoint": format!("{url}/identity/revoke")});
 	let answer: Arc<Answer> = Arc::new(answer);
 	let thread = std::thread::spawn(move || {
 		tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(async {
 			let router = axum::Router::new().fallback(move |uri: axum::http::Uri, headers: axum::http::HeaderMap, body: axum::body::Bytes| {
 				let answer = Arc::clone(&answer);
 				let discovery = discovery.clone();
+				let oauth = oauth.clone();
 				async move {
 					if uri.path() == "/.well-known/leptoskit-cloud" { return axum::Json(discovery).into_response(); }
+					if uri.path() == "/.well-known/openid-configuration" { return axum::Json(oauth).into_response(); }
 					answer(uri.path(), headers.get("authorization").and_then(|value| value.to_str().ok()).unwrap_or_default(), std::str::from_utf8(&body).unwrap())
 				}
 			});
@@ -111,7 +114,7 @@ fn cloud_refresh_is_serialized_and_rotation_is_stored() {
 	let recorded = Arc::clone(&refreshes);
 	let server = server(move |path, authorization, body| {
 		match path {
-			"/oauth/token" => {
+			"/identity/token" => {
 				assert!(body.contains("refresh_token=known-refresh"));
 				*recorded.lock().unwrap() += 1;
 				json_response(
@@ -158,7 +161,7 @@ fn cloud_refreshes_once_after_unauthorized_and_ci_token_never_touches_storage() 
 			.unwrap()
 			.push((path.to_owned(), authorization.to_owned()));
 		match path {
-			"/oauth/token" => {
+			"/identity/token" => {
 				json_response(
 					json!({"access_token": "new-access", "refresh_token": "rotated-refresh", "expires_in": 3600}),
 				)
@@ -186,7 +189,7 @@ fn cloud_refreshes_once_after_unauthorized_and_ci_token_never_touches_storage() 
 			.lock()
 			.unwrap()
 			.iter()
-			.filter(|(path, _)| path == "/oauth/token")
+			.filter(|(path, _)| path == "/identity/token")
 			.count(),
 		1
 	);
@@ -212,7 +215,7 @@ fn cloud_refreshes_once_after_unauthorized_and_ci_token_never_touches_storage() 
 #[test]
 fn cloud_logout_removes_credentials_online_and_offline() {
 	let server = server(|path, _, body| {
-		assert_eq!(path, "/oauth/revoke");
+		assert_eq!(path, "/identity/revoke");
 		assert!(body.contains("token=known-refresh"));
 		axum::http::StatusCode::OK.into_response()
 	});
@@ -308,13 +311,13 @@ fn cloud_device_login_pending_slow_down_approved_denied_and_expired() {
 		let origin = Arc::new(Mutex::new(String::new()));
 		let host = Arc::clone(&origin);
 		let server = server(move |path, _, body| {
-			if path == "/oauth/device_authorization" {
+			if path == "/identity/device" {
 				assert!(body.contains("client_id=cli"));
 				return json_response(
 					json!({ "device_code": "known-device", "user_code": "ABCD-EFGH", "verification_uri": format!("{}/device", host.lock().unwrap()), "interval": 1, "expires_in": 60 }),
 				);
 			}
-			assert_eq!(path, "/oauth/token");
+			assert_eq!(path, "/identity/token");
 			assert!(body.contains("device_code=known-device"));
 			let mut count = seen.lock().unwrap();
 			*count += 1;
@@ -366,9 +369,7 @@ fn cloud_device_login_pending_slow_down_approved_denied_and_expired() {
 	}
 }
 
-#[test]
-fn cloud_commands_send_named_arguments_and_render_results() {
-	use clap::Parser as _;
+fn command_cases() -> Vec<(Vec<&'static str>, &'static str, Value, Value)> {
 	let id = "00000000-0000-0000-0000-000000000001";
 	let time = "2026-11-18T00:00:00Z";
 	let organization = json!({"id": id, "slug": "team", "name": "Team", "plan": "hobby", "personal": false, "role": "owner"});
@@ -378,7 +379,7 @@ fn cloud_commands_send_named_arguments_and_render_results() {
 	let environment = json!({"id": id, "name": "staging", "kind": "staging", "scale": scale, "revision": 7, "scale_differs": false, "created_at": time, "updated_at": time});
 	let token = json!({"id": id, "name": "ci", "prefix": "lkc_0123456789ab", "scopes": ["read"], "project": null, "expires_at": time, "last_used_at": null, "created_by": id, "created_at": time});
 	let invitation = json!({"id": id, "email": "invite@example.com", "role": "viewer", "invited_by": id, "expires_at": time, "created_at": time});
-	let cases: Vec<(Vec<&str>, &str, Value, Value)> = vec![
+	vec![
 		(
 			vec!["whoami"],
 			"whoami",
@@ -514,14 +515,30 @@ fn cloud_commands_send_named_arguments_and_render_results() {
 			json!({"organization": "team", "token": id}),
 			Value::Null,
 		),
-	];
-	for (args, operation, expected, response) in cases {
-		let environment = environment.clone();
+	]
+}
+
+#[test]
+fn cloud_commands_send_named_arguments_and_render_results() {
+	use clap::Parser as _;
+	for (args, operation, expected, response) in command_cases() {
+		let environment = command_cases()
+			.into_iter()
+			.find(|(_, name, ..)| *name == "create_environment")
+			.unwrap()
+			.3;
 		let returned = response.clone();
 		let seen = Arc::new(Mutex::new(0));
 		let count = Arc::clone(&seen);
 		let server = server(move |path, authorization, body| {
-			assert_eq!(authorization, "Bearer known-access");
+			assert_eq!(
+				authorization,
+				if operation == "members" {
+					"Bearer known-api"
+				} else {
+					"Bearer known-access"
+				}
+			);
 			if operation == "update_environment" && path == "/rpc/environments" {
 				return json_response(json!([environment]));
 			}
