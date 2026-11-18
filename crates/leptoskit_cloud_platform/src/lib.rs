@@ -1,6 +1,12 @@
 //! Offline, two-phase platform infrastructure generation.
 
 pub mod config;
+pub mod tofu;
+mod topology;
+
+/// Deterministic relative paths and UTF-8 file contents; the library performs
+/// no I/O.
+pub type Generated = std::collections::BTreeMap<String, String>;
 
 /// Invalid input or an unsuccessful generation operation.
 #[derive(Debug, thiserror::Error)]
