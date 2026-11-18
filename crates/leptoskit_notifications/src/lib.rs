@@ -152,6 +152,17 @@ pub const FANOUT_BATCH: usize = 500;
 /// seconds: about a year.
 pub const MAX_SCHEDULE_SECS: i64 = 366 * 24 * 60 * 60;
 
+/// The longest spec, as the JSON the service stores it as, in bytes: a
+/// topic, condition, or everyone send keeps its spec for the fanout job.
+/// Every send is held to it, whatever its target, so a spec that passes
+/// [`check_spec`] always stores: `data` that is valid at
+/// [`MAX_DATA_LEN`] can still grow past this once escaped inside the spec.
+pub const MAX_SPEC_LEN: usize = 8_192;
+
+/// The longest topic, condition, or everyone target, as the JSON the
+/// service stores it as for the fanout job, in bytes.
+pub const MAX_TARGET_LEN: usize = 1_200;
+
 /// One durable inbox row: the recipient's copy of a notification a send
 /// delivered to them. The read, dismissed, and cancelled state lives here,
 /// shared by every device signed in as [`Notification::person`], never
@@ -693,6 +704,14 @@ pub fn check_send_shape(
 		SendTarget::Everyone => {}
 	}
 
+	// A fanout send stores its target as JSON, where a condition's quoted
+	// values can grow by escaping.
+	if !matches!(target, SendTarget::Recipients(_)) && stored_len(target) > MAX_TARGET_LEN {
+		return Err(format!(
+			"a target is at most {MAX_TARGET_LEN} bytes once stored as JSON: shorten the condition"
+		));
+	}
+
 	if let (Some(visible_at), Some(expires_at)) = (spec.visible_at, spec.expires_at)
 		&& expires_at <= visible_at
 	{
@@ -728,7 +747,19 @@ pub fn check_spec(spec: &SendSpec) -> Result<(), String> {
 	check_data(spec.data.as_deref())?;
 	options::check_options(&spec.options)?;
 
+	if stored_len(spec) > MAX_SPEC_LEN {
+		return Err(format!(
+			"a send is at most {MAX_SPEC_LEN} bytes once stored as JSON: shorten its data, body, \
+			 or options"
+		));
+	}
+
 	Ok(())
+}
+
+/// How many bytes `value` takes as the JSON the service stores.
+pub(crate) fn stored_len(value: &impl Serialize) -> usize {
+	serde_json::to_string(value).map_or(usize::MAX, |stored| stored.len())
 }
 
 /// Checks a topic name wherever one is named — a send's target, a
@@ -954,7 +985,15 @@ fn valid_text(value: &str) -> bool {
 ///
 /// `validate_only` checks everything and answers the audience the send
 /// would reach right now — matched by the target, minus the people opted
-/// out of the category — and writes nothing.
+/// out of the category — and writes nothing. It reads the audience page by
+/// page with no transaction open, so a dry run over everyone the service
+/// knows never holds up the service's writes.
+///
+/// It is an [action](rpc::ActionCx) for that reason: the dry run reads
+/// outside any transaction, and the send itself is written in one
+/// transaction of its own, retried when another gets in its way. A
+/// request's idempotency header isn't kept for an action, and doesn't need
+/// to be: the idempotency key is what makes a send safe to retry.
 ///
 /// The send is idempotent by idempotency key: the same key with the same
 /// intent answers the first run's result and writes nothing, across
@@ -979,9 +1018,9 @@ fn valid_text(value: &str) -> bool {
 /// shape always, the schedule of a send the service doesn't already hold
 /// — and [`rpc::Error::Conflict`] when the key was used for a different
 /// send.
-#[rpc::mutation(service = "notifications")]
+#[rpc::action(service = "notifications")]
 pub async fn send(
-	cx: &rpc::MutationCx,
+	cx: &rpc::ActionCx,
 	idempotency_key: String,
 	spec: SendSpec,
 	target: SendTarget,
@@ -1001,7 +1040,12 @@ pub async fn send(
 		// A dry run follows the new-send rules — the clock applies — but
 		// no key is read and nothing is written.
 		check_send_timing(spec.visible_at, spec.expires_at).map_err(rpc::Error::invalid)?;
-		let audience = service::audience_now(cx.tx(), &spec, &target).await?;
+		let audience = cx
+			.query(service::DryRun {
+				spec,
+				target: target.clone(),
+			})
+			.await?;
 
 		return Ok(SendResult {
 			delivered: audience.delivered,
@@ -1016,6 +1060,34 @@ pub async fn send(
 			},
 			targeted: audience.targeted,
 		});
+	}
+
+	cx.mutate(service::SendWrite {
+		idempotency_key,
+		spec,
+		target,
+	})
+	.await
+}
+
+/// The body of [`send`](fn@send)'s write, in its own transaction: the
+/// stored-send lookup, then the whole recipients fanout or the fanout
+/// send's record and its first job.
+///
+/// # Errors
+///
+/// As [`send`](fn@send).
+#[cfg(feature = "service")]
+pub(crate) async fn send_write(
+	cx: &rpc::MutationCx,
+	idempotency_key: String,
+	spec: SendSpec,
+	target: SendTarget,
+) -> rpc::Result<SendResult> {
+	if cx.identity().caller.as_deref() != Some(rpc::server::APP_CALLER) {
+		return Err(rpc::Error::forbidden(
+			"only the app sends notifications: call this from its server, with the service's token",
+		));
 	}
 
 	let intent = service::intent_hash(&spec, &target);
@@ -1079,7 +1151,7 @@ pub async fn send(
 		step: 0,
 	})
 	.at(leptoskit_db::now())
-	.key(format!("fanout:{idempotency_key}:0"))
+	.key(service::job_key("fanout", &idempotency_key, 0))
 	.await?;
 
 	service::schedule_wakes(cx, &idempotency_key, &spec).await?;
@@ -1100,10 +1172,18 @@ pub async fn send(
 /// enqueued when more audience remains. The stored cursor is where a
 /// replayed step picks up after, and the send's row is what a step checks
 /// before it writes, so a [`cancel`] that lands between steps ends the
-/// fanout with nothing more written.
+/// fanout with nothing more written. One send's steps run one at a time,
+/// and a step that finds its batch taken by another run leaves the next
+/// step in place before it ends, so the fanout always reaches its end.
 ///
 /// Only the service's own workers run it; the app never enqueues it.
-#[rpc::job(service = "notifications", queue = "fanout", retries = 8, timeout = 5m)]
+#[rpc::job(
+	service = "notifications",
+	queue = "fanout",
+	retries = 8,
+	timeout = 5m,
+	serialize_by = send_key
+)]
 pub async fn fanout_send(cx: &rpc::JobCx, send_key: String, step: u32) -> rpc::Result<()> {
 	service::fanout_step(cx, &send_key, step).await
 }
@@ -1155,6 +1235,34 @@ pub async fn wake_send(cx: &rpc::JobCx, send_key: String) -> rpc::Result<()> {
 	service::wake(cx.db(), &send_key).await
 }
 
+/// Wakes one fanout batch's people when the send becomes visible: the
+/// people with rows of the send in `(after, through]`, at most
+/// [`FANOUT_BATCH`] of them. A batch that is visible when it commits wakes
+/// its people in its own transaction; this job is for a batch that commits
+/// while its send is still scheduled, so its people hear about it however
+/// the send's own wake at `visible_at` raced its commit.
+///
+/// Only the service's own workers run it; the app never enqueues it.
+#[rpc::job(service = "notifications")]
+pub async fn wake_batch(
+	cx: &rpc::JobCx,
+	send_key: String,
+	after: Option<uuid::Uuid>,
+	through: uuid::Uuid,
+) -> rpc::Result<()> {
+	service::wake_range(cx.db(), &send_key, after, through).await
+}
+
+/// Cancels the rows of a large fanout send that [`cancel`] left, in
+/// batches of [`FANOUT_BATCH`], each in a transaction of its own, so a
+/// cancel never writes a whole audience in one transaction.
+///
+/// Only the service's own workers run it; the app never enqueues it.
+#[rpc::job(service = "notifications", serialize_by = send_key)]
+pub async fn cancel_rows(cx: &rpc::JobCx, send_key: String) -> rpc::Result<()> {
+	service::cancel_rows(cx.db(), &send_key).await
+}
+
 /// Cancels a scheduled send before it's due: every row it created stops
 /// being visible, forever. Once a row of the send is visible the send can
 /// no longer be cancelled, and a key the service doesn't know is not found.
@@ -1166,7 +1274,13 @@ pub async fn wake_send(cx: &rpc::JobCx, send_key: String) -> rpc::Result<()> {
 /// fanout stops before its next batch, the rows written so far are
 /// cancelled — visible or not, because an audience this large can't wait
 /// for the schedule to turn — and the send answers
-/// [`SendState::Cancelled`] from then on.
+/// [`SendState::Cancelled`] from then on, and pushes nothing more.
+///
+/// The answer is how many rows the cancel stops. A topic, condition, or
+/// everyone send with more than [`FANOUT_BATCH`] of them has them
+/// cancelled in batches by a background job, so one cancel never writes a
+/// whole audience in one transaction: until the job is through, asking
+/// again answers how many are left.
 ///
 /// Only the app may call it.
 ///
@@ -1185,65 +1299,7 @@ pub async fn cancel(cx: &rpc::MutationCx, idempotency_key: String) -> rpc::Resul
 
 	check_key(&idempotency_key).map_err(rpc::Error::invalid)?;
 
-	let now = leptoskit_db::now();
-	let send = service::find_send(cx.tx(), &idempotency_key).await?;
-	let rows = Notification::query()
-		.filter(|notification| notification.send_key.eq(idempotency_key.clone()))
-		.all(cx.tx())
-		.await?;
-
-	// Existence is the send's own row, not its fanout: a send every
-	// recipient opted out of delivered nothing, and cancelling it is still
-	// cancelling it.
-	if send.is_none() && rows.is_empty() {
-		return Err(rpc::Error::not_found(
-			"no send with this idempotency key exists",
-		));
-	}
-
-	// A fanout still walking its audience is stoppable whatever its rows
-	// say; a complete one keeps today's rule: what someone has already
-	// seen can't be unsent.
-	let fanning = send
-		.as_ref()
-		.is_some_and(|send| SendState::from_str_value(&send.state) == Some(SendState::FanningOut));
-
-	if !fanning
-		&& rows.iter().any(|notification| {
-			// A data row is never seen by anyone — it is the silent
-			// half of a send, not a visible one — so only a visible
-			// notification row can make the send uncancellable.
-			notification.kind != MessageKind::Data.as_str()
-				&& notification.visible_at <= now
-				&& notification.cancelled_at.is_none()
-		}) {
-		return Err(rpc::Error::conflict(
-			"this send is already visible, so it can no longer be cancelled",
-		));
-	}
-
-	if fanning {
-		// The state the fanout's next step checks: once this commits, no
-		// later batch of this send writes anything.
-		service::cancel_fanout(cx.tx(), &idempotency_key).await?;
-	}
-
-	let mut cancelled = 0u32;
-
-	for notification in rows {
-		if notification.cancelled_at.is_some() {
-			continue;
-		}
-
-		Notification::update()
-			.filter(|row| row.id.eq(notification.id))
-			.set(|row| row.cancelled_at, Some(now))
-			.run(cx.tx())
-			.await?;
-		cancelled += 1;
-	}
-
-	Ok(cancelled)
+	service::cancel(cx, &idempotency_key).await
 }
 
 /// The signed-in person's durable inbox, newest first, one page at a time.
@@ -1731,8 +1787,11 @@ pub async fn forget_person(cx: &rpc::MutationCx, person: uuid::Uuid) -> rpc::Res
 /// each attempted exactly once. Name an endpoint id to probe one device;
 /// an id that isn't the person's own live endpoint is not found. There
 /// is no idempotency key to reuse — a test answers, it does not record —
-/// so a retried call pushes again; a client that wants replay safety
-/// sends the RPC layer's own idempotency header.
+/// so a retried call pushes again.
+///
+/// It is an [action](rpc::ActionCx): the endpoints are read first, and the
+/// provider requests go out with no transaction open, so however slow a
+/// provider is, it holds up nothing else the service writes.
 ///
 /// Only the app may call it: [`rpc::client::call_as_app`] from server code.
 ///
@@ -1742,9 +1801,9 @@ pub async fn forget_person(cx: &rpc::MutationCx, person: uuid::Uuid) -> rpc::Res
 /// [`rpc::Error::Invalid`] for input the checks refuse or a server with
 /// no push transport configured, and [`rpc::Error::NotFound`] for an
 /// endpoint id the person doesn't hold live.
-#[rpc::mutation(service = "notifications")]
+#[rpc::action(service = "notifications")]
 pub async fn send_test(
-	cx: &rpc::MutationCx,
+	cx: &rpc::ActionCx,
 	spec: SendSpec,
 	person: uuid::Uuid,
 	#[serde(default)] endpoint: Option<uuid::Uuid>,

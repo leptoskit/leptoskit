@@ -63,7 +63,7 @@ Every named recipient gets one durable row of their own, visible immediately —
 
 The `idempotency_key` is how retries stay safe: derive one stable key per logical send (like the invoice id above) and reuse it on retry. The same key with the same intent answers the first run's result and writes nothing — across restarts, and past the send's expiry, because the send's bookkeeping lives in the service's database — and the same key with a different intent is refused with a conflict, so a reused key can't quietly send something else.
 
-`SendSpec::visible_at` and `expires_at` take RFC 3339 instants, at most a year ahead. `data` is a JSON object of at most 4 KiB your screens read to route a tap; everything is length-checked on both sides, so a screen can reject bad input without a round trip.
+`SendSpec::visible_at` and `expires_at` take RFC 3339 instants, at most a year ahead; a `visible_at` in the past means now, so the notification shows from the moment it is sent and its push has its full delivery window from then. `data` is a JSON object of at most 4 KiB your screens read to route a tap; everything is length-checked on both sides, so a screen can reject bad input without a round trip. The whole spec is bounded as the service stores it, too: at most 8 KiB as JSON, with its options at most 4 KiB of that, so a spec that passes the checks is always one the service can keep, whatever its target.
 
 ### Cancel a scheduled send
 
@@ -77,6 +77,8 @@ let cancelled: u32 = call_as_app(leptoskit_notifications::Cancel {
 ```
 
 After it's due the service refuses with a conflict — what someone has already seen can't be unsent. Cancelling again answers `0`, and so does cancelling a send every recipient opted out of: it delivered nothing, but the service knows the key, and cancelling it is still cancelling it.
+
+A send to a topic, a condition, or everyone can have far more rows than one write should touch. Cancelling one with more than 500 answers how many it stops, stops the send's pushes at once, and cancels the rows themselves in the background, a batch at a time; asked again before they are all done, it answers how many are left.
 
 ## Send to a topic
 
@@ -346,7 +348,7 @@ let dry = call_as_app(leptoskit_notifications::Send {
 .await?;
 ```
 
-`send_status` answers the state — `fanning_out`, `complete`, or `cancelled` — and the counts so far: `targeted` (everyone the target matched), `delivered`, and `skipped_opted_out`. Once the state is `complete` the counts are final; `validate_only` answers the same shape for the audience as it stands now, without writing a row, the way FCM's `validate_only` does, for every target — recipients, topic, condition, and everyone. Cancelling works mid-fanout too: the fanout stops before its next batch, the rows written so far are cancelled, and the send answers `cancelled` from then on.
+`send_status` answers the state — `fanning_out`, `complete`, or `cancelled` — and the counts so far: `targeted` (everyone the target matched), `delivered`, and `skipped_opted_out`. Once the state is `complete` the counts are final; `validate_only` answers the same shape for the audience as it stands now, without writing a row, the way FCM's `validate_only` does, for every target — recipients, topic, condition, and everyone. A dry run reads the audience a page at a time and holds nothing open while it does, so counting everyone the service knows doesn't hold up its other work. Cancelling works mid-fanout too: the fanout stops before its next batch, the rows written so far are cancelled, and the send answers `cancelled` from then on.
 
 ## Shape a message
 
@@ -758,11 +760,13 @@ The receiver itself shows what the service pushed: the envelope's title and body
 
 When a recipient of a send has enrolled endpoints and your server has configured that platform's transport, the send enqueues one durable delivery per notification and endpoint in the send's own transaction. The push job attempts each one when the notification becomes visible — a scheduled send pushes at its `visible_at`, not before — and re-checks, at the moment of the attempt, everything that could have changed since the send: cancellation, expiry, the category opt-out the person may have flipped meanwhile, and the endpoint's liveness. A cancelled send never pushes; an expired one is skipped; an opt-out made after the send reaches the queue still stops the push.
 
-Transient failures — a 429, a 5xx, a network error — retry with the provider's `Retry-After` honored when given, up to eight attempts (eight is eight: the ninth never goes out), and then end as rejected with `attempts_exhausted`. Permanent failures end at once with a reason code, and only the provider's own "unregistered" answer invalidates an endpoint — a plain 404 from FCM is a project-naming problem on your side, not a dead device — so nothing further is pushed to a dead credential and its other queued deliveries are skipped. Failure of one endpoint never rolls back the inbox row or the other endpoints' deliveries: the inbox row committed with the send, and push is best-effort on top of it.
+Transient failures — a 429, a 5xx, a network error — retry with backoff, and with the provider's `Retry-After` honored when it asks for longer, up to eight attempts (eight is eight: the ninth never goes out), and then end as rejected with `attempts_exhausted`. The waits start at one minute and double, so the eighth attempt comes about two hours after the first: a provider outage of an hour loses no delivery. Permanent failures end at once with a reason code, and only the provider's own "unregistered" answer invalidates an endpoint — a plain 404 from FCM is a project-naming problem on your side, not a dead device — so nothing further is pushed to a dead credential and its other queued deliveries are skipped. Failure of one endpoint never rolls back the inbox row or the other endpoints' deliveries: the inbox row committed with the send, and push is best-effort on top of it.
 
 Delivery retries stop at eight actual push requests, including requests refused for authentication. OAuth token exchanges are separate and do not spend push attempts. FCM refreshes once after a 401; the next push goes through the durable queue and its attempt budget. An exchange failure retries every minute with sanitized `operator_configuration` status. Neither provider diagnostics nor credentials appear in that status.
 
-Every delivery has a deadline: the earlier of notification expiry and 24 hours after `visible_at`, including notifications with no expiry. Provider `Retry-After` accepts delta seconds and HTTP dates; invalid values use backoff. A provider delay is never shortened into an earlier push. If it exceeds the deadline, the queue wakes at the deadline and ends delivery (`expired` or `horizon_exceeded`) without another request. Unrepresentable arithmetic ends with `retry_overflow`. Local schedule, cancellation, expiry, and horizon decisions do not spend attempts. FCM transient retries use exponential backoff starting at one minute, plus stable per-delivery jitter, and respect longer provider delays. See [FCM error codes](https://firebase.google.com/docs/cloud-messaging/error-codes).
+Every delivery has a deadline: the earlier of notification expiry and 24 hours after `visible_at`, including notifications with no expiry. Provider `Retry-After` accepts delta seconds and HTTP dates; invalid values use backoff. A provider delay is never shortened into an earlier push. If it exceeds the deadline, the queue wakes at the deadline and ends delivery (`expired` or `horizon_exceeded`) without another request. Unrepresentable arithmetic ends with `retry_overflow`. Local schedule, cancellation, expiry, and horizon decisions do not spend attempts. Transient and refused retries on every platform use exponential backoff starting at one minute — 1, 2, 4, and so on to 64 minutes — plus up to a quarter more of jitter that differs from delivery to delivery, and respect longer provider delays. See [FCM error codes](https://firebase.google.com/docs/cloud-messaging/error-codes).
+
+The push job works through a send in rounds of at most a thousand attempts, each started within a minute, and a round hands whatever is left to the next at once, so a send to a million devices is never one long job. A delivery whose stored options this server can't read — written by a newer version, before a rollback — waits with `operator_configuration` status rather than pushing something else, and goes out once a server that reads them is back, within its delivery window.
 
 A send's [options](#shape-a-message) ride the same deliveries, and when a payload is over its provider's limit the extras go in a fixed order — per-platform blocks, image, sound, badge, and link, then the send's `data` — before the id-only envelope, and only then a clear `oversized` end without a request.
 
@@ -779,7 +783,7 @@ let outcomes = call_as_app(leptoskit_notifications::SendTest {
 .await?;
 ```
 
-The spec is a full `SendSpec` — options included, silent data messages included — so the device receives exactly what a real send to it would carry. The blast radius is the person's own enrollment: at most their ten live endpoints, each attempted exactly once, one provider request each. A transient failure answers `rejected` with no reason and the retry is calling again; an endpoint id that isn't the person's own live one is `404`. There is no idempotency key to reuse — a test answers, it doesn't record — so a repeated call pushes again; send the RPC layer's own idempotency header if your tooling retries.
+The spec is a full `SendSpec` — options included, silent data messages included — so the device receives exactly what a real send to it would carry. The blast radius is the person's own enrollment: at most their ten live endpoints, each attempted exactly once, one provider request each. A transient failure answers `rejected` with no reason and the retry is calling again; an endpoint id that isn't the person's own live one is `404`. There is no idempotency key to reuse — a test answers, it doesn't record — so a repeated call, a retried request included, pushes again. While the providers answer, the service holds nothing open, so a slow provider doesn't hold up its other work.
 
 Read what happened from your server, per endpoint, with `call_as_app`:
 

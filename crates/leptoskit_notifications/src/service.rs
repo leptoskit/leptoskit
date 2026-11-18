@@ -41,6 +41,130 @@ use crate::Wake;
 use crate::condition::Condition;
 use crate::push::PushEndpoint;
 
+/// The longest job key the job table holds, in bytes.
+const MAX_JOB_KEY_LEN: usize = 255;
+
+/// The key of one of a send's jobs: `{kind}:{send_key}:{what}`, the shape
+/// these keys have always had, while it fits the job table's key column.
+/// An idempotency key may use all of its 255 bytes, so a key that doesn't
+/// fit names the send by the SHA-256 of its key instead:
+/// `{kind}#{hash}:{what}`. The `#` keeps the two shapes apart, so no
+/// hashed key is ever some other send's verbatim one.
+pub(crate) fn job_key(kind: &str, send_key: &str, what: impl std::fmt::Display) -> String {
+	let verbatim = format!("{kind}:{send_key}:{what}");
+
+	if verbatim.len() <= MAX_JOB_KEY_LEN {
+		return verbatim;
+	}
+
+	format!(
+		"{kind}#{}:{what}",
+		hex::encode(Sha256::digest(send_key.as_bytes()))
+	)
+}
+
+/// The write half of [`send`](crate::send), as the mutation the action
+/// runs: its own transaction, retried when another gets in its way. It is
+/// called in process only, never routed, so the action's checks always
+/// come first.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub(crate) struct SendWrite {
+	pub(crate) idempotency_key: String,
+	pub(crate) spec: crate::SendSpec,
+	pub(crate) target: crate::SendTarget,
+}
+
+impl rpc::Operation for SendWrite {
+	type Context = rpc::MutationCx;
+	type Output = crate::SendResult;
+
+	const KIND: rpc::Kind = rpc::Kind::Mutation;
+	const NAME: &'static str = "send";
+	const SERVICE: Option<&'static str> = Some(SERVICE);
+
+	fn run(self, cx: &rpc::MutationCx) -> impl Future<Output = rpc::Result<Self::Output>> + Send {
+		crate::send_write(cx, self.idempotency_key, self.spec, self.target)
+	}
+}
+
+/// The dry run of [`send`](crate::send), as the query the action runs:
+/// the audience walk reads page by page, with no transaction open.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub(crate) struct DryRun {
+	pub(crate) spec: crate::SendSpec,
+	pub(crate) target: crate::SendTarget,
+}
+
+impl rpc::Operation for DryRun {
+	type Context = rpc::QueryCx;
+	type Output = Audience;
+
+	const KIND: rpc::Kind = rpc::Kind::Query;
+	const NAME: &'static str = "send";
+	const SERVICE: Option<&'static str> = Some(SERVICE);
+
+	async fn run(self, cx: &rpc::QueryCx) -> rpc::Result<Self::Output> {
+		audience_now(cx.db(), &self.spec, &self.target).await
+	}
+}
+
+/// The person's live endpoints a [`send_test`](crate::send_test) pushes
+/// to, credentials included — read in process only, never routed, so
+/// they never leave the service — and their unread count when the spec's
+/// badge asks for it.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub(crate) struct TestTargets {
+	person: Uuid,
+	endpoint: Option<Uuid>,
+	unread: bool,
+}
+
+/// What [`TestTargets`] reads.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub(crate) struct Targets {
+	endpoints: Vec<(Uuid, String, String)>,
+	unread: Option<u64>,
+}
+
+impl rpc::Operation for TestTargets {
+	type Context = rpc::QueryCx;
+	type Output = Targets;
+
+	const KIND: rpc::Kind = rpc::Kind::Query;
+	const NAME: &'static str = "send_test";
+	const SERVICE: Option<&'static str> = Some(SERVICE);
+
+	async fn run(self, cx: &rpc::QueryCx) -> rpc::Result<Self::Output> {
+		let mut query = PushEndpoint::query()
+			.filter(|row| row.person.eq(self.person) & row.invalidated_at.is_null());
+
+		if let Some(endpoint) = self.endpoint {
+			query = query.filter(|row| row.id.eq(endpoint));
+		}
+
+		// The blast radius is the person's own enrollment, bounded again
+		// here so nothing about a future bound change widens a test.
+		let endpoints = query
+			.order_by(|row| row.id.asc())
+			.limit(u64::try_from(crate::push::MAX_ENDPOINTS).unwrap_or(u64::MAX))
+			.all(cx.db())
+			.await?;
+		let unread = if self.unread {
+			Some(unread_for(cx.db(), self.person).await?)
+		} else {
+			None
+		};
+
+		Ok(Targets {
+			endpoints: endpoints
+				.into_iter()
+				.map(|endpoint| (endpoint.id, endpoint.platform, endpoint.credential))
+				.collect(),
+			unread,
+		})
+	}
+}
+
 /// The person the app forwarded, or the error a stranger gets: nobody's
 /// inbox answers without one, and no argument can name one.
 ///
@@ -351,7 +475,11 @@ pub(crate) async fn fanout(
 	recipients: &std::collections::BTreeSet<Uuid>,
 ) -> rpc::Result<Fanout> {
 	let now = leptoskit_db::now();
-	let visible_at = spec.visible_at.unwrap_or(now);
+	// An earlier time is now: the row says when it really became visible,
+	// so the inbox and the push's delivery window agree on it.
+	let visible_at = spec
+		.visible_at
+		.map_or(now, |visible_at| visible_at.max(now));
 	let data = spec.data.as_deref().unwrap_or("{}");
 	let opted_out: std::collections::BTreeSet<Uuid> = Preference::query()
 		.filter(|preference| {
@@ -500,7 +628,7 @@ pub(crate) async fn schedule_wakes(
 			send_key: send_key.to_owned(),
 		})
 		.at(at)
-		.key(format!("wake:{send_key}:{turning}"))
+		.key(job_key("wake", send_key, turning))
 		.await?;
 	}
 
@@ -541,19 +669,68 @@ pub(crate) async fn wake(db: &Db, send_key: &str) -> rpc::Result<()> {
 
 		cursor = page.last().map(|notification| notification.person);
 		let tx = db.begin().await?;
-		let now = leptoskit_db::now();
-
-		for notification in &page {
-			NewWake {
-				person: notification.person,
-				woken_at: now,
-			}
-			.upsert(&tx, |wake| wake.person)
-			.await?;
-		}
-
+		wake_people(&tx, page.iter().map(|notification| notification.person)).await?;
 		tx.commit().await?;
 	}
+}
+
+/// Wakes the people of one fanout batch, the body of
+/// [`wake_batch`](crate::wake_batch): those with a row of the send whose
+/// person is in `(after, through]` — at most one batch of them.
+///
+/// # Errors
+///
+/// Whatever the read or the writes fail with.
+pub(crate) async fn wake_range(
+	db: &Db,
+	send_key: &str,
+	after: Option<Uuid>,
+	through: Uuid,
+) -> rpc::Result<()> {
+	let page = Notification::query()
+		.filter(|notification| {
+			let mut condition =
+				notification.send_key.eq(send_key.to_owned()) & notification.person.lte(through);
+			if let Some(after) = after {
+				condition = condition & notification.person.gt(after);
+			}
+			condition
+		})
+		.order_by(|notification| notification.person.asc())
+		.limit(u64::try_from(crate::FANOUT_BATCH).unwrap_or(u64::MAX))
+		.all(db)
+		.await?;
+
+	if page.is_empty() {
+		return Ok(());
+	}
+
+	let tx = db.begin().await?;
+	wake_people(&tx, page.iter().map(|notification| notification.person)).await?;
+	tx.commit().await?;
+
+	Ok(())
+}
+
+/// Writes `people`'s wake rows in `tx`: the clock event that re-runs their
+/// open inbox and badge subscriptions once `tx` commits.
+///
+/// # Errors
+///
+/// Whatever a write fails with.
+async fn wake_people(tx: &leptoskit_db::Tx, people: impl Iterator<Item = Uuid>) -> rpc::Result<()> {
+	let now = leptoskit_db::now();
+
+	for person in people {
+		NewWake {
+			person,
+			woken_at: now,
+		}
+		.upsert(tx, |wake| wake.person)
+		.await?;
+	}
+
+	Ok(())
 }
 
 /// The audience a target names, and how many of it a send to `spec`'s
@@ -625,7 +802,7 @@ pub(crate) async fn audience_now(
 }
 
 /// What an audience walk came to.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub(crate) struct Audience {
 	pub(crate) targeted: u32,
 	pub(crate) delivered: u32,
@@ -908,12 +1085,17 @@ async fn evaluate(
 /// transaction, the send's cursor and counts advanced in the same commit,
 /// and the successor enqueued when more audience remains.
 ///
-/// Every write in the step is fenced on the send still fanning out: a
-/// [`cancel`](crate::cancel) that commits between steps makes the next
-/// step's update match nothing, and the step ends without writing. A
-/// step that replays — a crash after commit, before the job recorded its
-/// success — finds the people it already delivered by the send's unique
-/// row per person, skips them, and changes no count.
+/// The transaction first claims the batch: it moves the cursor from where
+/// this step read it, fenced on the send still fanning out, and writes
+/// nothing at all when that matches no row. A [`cancel`](crate::cancel)
+/// that commits between steps, a replayed step whose batch already
+/// committed, and two runs of one step at once all end up there, and a
+/// step that loses its batch that way makes sure the step after the
+/// winner's exists before it ends: the winner enqueues it itself, but a
+/// winner that crashed before it did would otherwise leave the send
+/// fanning out forever. Successors are keyed by the cursor they start
+/// from, never by a step number, so no step's key can be one a finished
+/// job already holds.
 ///
 /// # Errors
 ///
@@ -945,29 +1127,128 @@ pub(crate) async fn fanout_step(cx: &rpc::JobCx, send_key: &str, step: u32) -> r
 	let walk = walk_of(&target)?;
 
 	let page = candidates(db, &walk, send.cursor, FANOUT_PAGE + 1).await?;
+	let more = page.len() > FANOUT_PAGE;
+	let page = &page[..page.len().min(FANOUT_PAGE)];
 
-	if page.is_empty() {
-		finish_fanout(db, send_key).await?;
+	let Some(&last) = page.last() else {
+		// The walk has passed the last person in its audience.
+		finish_fanout(db, send_key, &spec).await?;
+
+		return Ok(());
+	};
+
+	let matching = evaluate(db, &walk, page).await?;
+	let scheduled = spec
+		.visible_at
+		.is_some_and(|visible_at| visible_at > leptoskit_db::now());
+
+	// One transaction: the claim, the batch's rows, their push deliveries,
+	// the counts, and — when the rows are visible as they commit — their
+	// people's wakes.
+	let tx = db.begin().await?;
+
+	if !claim_batch(&tx, send_key, send.cursor, last).await? {
+		tx.rollback().await?;
+
+		return continue_fanout(db, send_key, step).await;
+	}
+
+	let batch = deliver_batch(&tx, send_key, &spec, &send, &matching).await?;
+
+	if !scheduled {
+		wake_people(
+			&tx,
+			batch.fanout.delivered_to.iter().map(|(person, _)| *person),
+		)
+		.await?;
+	}
+
+	tx.commit().await?;
+
+	if batch.deliveries > 0 {
+		push::kick(db, send_key, &spec, "fanout").await?;
+	}
+
+	// A batch that commits before its send is visible wakes its own people
+	// when the send becomes visible, however the send's own wake at that
+	// moment raced this commit.
+	if scheduled && batch.fanout.delivered > 0 {
+		rpc::enqueue(
+			db,
+			crate::WakeBatch {
+				send_key: send_key.to_owned(),
+				after: send.cursor,
+				through: last,
+			},
+		)
+		.at(push::becomes_visible(&spec))
+		.key(job_key("wake", send_key, format!("batch:{last}")))
+		.await?;
+	}
+
+	if !more {
+		finish_fanout(db, send_key, &spec).await?;
 
 		return Ok(());
 	}
 
-	let more = page.len() > FANOUT_PAGE;
-	let page = &page[..page.len().saturating_sub(usize::from(more))];
-	let last = page.last().copied();
-	let matching = evaluate(db, &walk, page).await?;
+	enqueue_step(db, send_key, step.saturating_add(1), Some(last)).await
+}
 
-	// One transaction: the batch's rows, its push deliveries, and the
-	// cursor that says the batch ran. Everything inside is fenced on the
-	// send still fanning out, so a cancel that lands first empties the
-	// whole step.
-	let tx = db.begin().await?;
+/// Moves a fanning send's cursor from `from`, where the step read it, to
+/// `last`, in `tx`: whether this step owns the batch. Anything else — a
+/// cancel, another run that took the batch — leaves it unclaimed.
+///
+/// # Errors
+///
+/// Whatever the write fails with.
+async fn claim_batch(
+	tx: &leptoskit_db::Tx,
+	send_key: &str,
+	from: Option<Uuid>,
+	last: Uuid,
+) -> rpc::Result<bool> {
+	let claim = AppSend::update().filter(|send| {
+		send.idempotency_key.eq(send_key.to_owned())
+			& send.state.eq(crate::SendState::FanningOut.as_str())
+	});
+	let claim = match from {
+		Some(from) => claim.filter(|send| send.cursor.eq(from)),
+		None => claim.filter(|send| send.cursor.is_null()),
+	};
+	let claimed = claim.set(|send| send.cursor, Some(last)).run(tx).await?;
+
+	Ok(claimed == 1)
+}
+
+/// What one claimed batch wrote.
+struct Batch {
+	fanout: Fanout,
+	/// How many push deliveries the batch enqueued.
+	deliveries: usize,
+}
+
+/// Writes a claimed batch in `tx`: the rows of the people in `matching`
+/// who hold none of the send's yet, their push deliveries, and the send's
+/// counts. A person who already holds a row — written by a run whose
+/// claim this one replays — is skipped and counted nowhere.
+///
+/// # Errors
+///
+/// Whatever a read or a write fails with.
+async fn deliver_batch(
+	tx: &leptoskit_db::Tx,
+	send_key: &str,
+	spec: &crate::SendSpec,
+	send: &AppSend,
+	matching: &[Uuid],
+) -> rpc::Result<Batch> {
 	let already: std::collections::BTreeSet<Uuid> = Notification::query()
 		.filter(|notification| {
 			notification.send_key.eq(send_key.to_owned())
 				& notification.person.in_list(matching.iter().copied())
 		})
-		.all(&tx)
+		.all(tx)
 		.await?
 		.into_iter()
 		.map(|notification| notification.person)
@@ -985,102 +1266,92 @@ pub(crate) async fn fanout_step(cx: &rpc::JobCx, send_key: &str, step: u32) -> r
 			delivered_to: Vec::new(),
 		}
 	} else {
-		fanout(&tx, send_key, &spec, &fresh).await?
+		fanout(tx, send_key, spec, &fresh).await?
 	};
 
-	let delivered_rows = push::deliveries_in_tx(&tx, send_key, &fanout).await?;
+	let deliveries = push::deliveries_in_tx(tx, send_key, &fanout).await?;
 
-	// The advance is fenced on the send still fanning out and on this
-	// batch still being the furthest one — a lease that expired and
-	// replays a step while its successor committed can only move the
-	// cursor forward, never back.
-	let mut advance = AppSend::update()
-		.filter(|send| {
-			send.idempotency_key.eq(send_key.to_owned())
-				& send.state.eq(crate::SendState::FanningOut.as_str())
-		})
-		.set(|send| send.cursor, last);
-
-	if let Some(last) = last {
-		advance = advance.filter(|send| send.cursor.is_null() | send.cursor.lt(last));
-	}
-
-	let advanced = advance
+	// The claim held the cursor where this step read it, so the counts it
+	// read are the counts to add to.
+	AppSend::update()
+		.filter(|row| row.idempotency_key.eq(send_key.to_owned()))
 		.set(
-			|send| send.targeted,
+			|row| row.targeted,
 			send.targeted + i64::try_from(fresh.len()).unwrap_or(i64::MAX),
 		)
 		.set(
-			|send| send.delivered,
+			|row| row.delivered,
 			send.delivered + i64::from(fanout.delivered),
 		)
 		.set(
-			|send| send.skipped_opted_out,
+			|row| row.skipped_opted_out,
 			send.skipped_opted_out + i64::from(fanout.skipped_opted_out),
 		)
-		.run(&tx)
+		.run(tx)
 		.await?;
 
-	// A cancel or a completed fanout claimed the send between the read and
-	// this commit: this step writes nothing, and the cancel's own rows
-	// stand as the truth.
-	if advanced == 0 {
-		tx.rollback().await?;
+	Ok(Batch { fanout, deliveries })
+}
 
+/// What a step that lost its batch still owes the fanout: the step for
+/// the cursor as it stands now, under the key that cursor's own step is
+/// enqueued with, so it exists exactly once whoever enqueues it first.
+/// A send that is no longer fanning out owes nothing.
+///
+/// # Errors
+///
+/// Whatever the read or the enqueue fails with.
+async fn continue_fanout(db: &Db, send_key: &str, step: u32) -> rpc::Result<()> {
+	let Some(send) = find_send(db, send_key).await? else {
+		return Ok(());
+	};
+
+	if crate::SendState::from_str_value(&send.state) != Some(crate::SendState::FanningOut) {
 		return Ok(());
 	}
 
-	tx.commit().await?;
+	enqueue_step(db, send_key, step.saturating_add(1), send.cursor).await
+}
 
-	if delivered_rows > 0 {
-		push::enqueue_round(db, send_key, &spec).await?;
-	}
+/// Enqueues the fanout step that walks on from `after`, keyed by it: the
+/// first step's key for the start of the audience, and the batch's last
+/// person after that.
+///
+/// # Errors
+///
+/// Whatever the enqueue fails with.
+async fn enqueue_step(db: &Db, send_key: &str, step: u32, after: Option<Uuid>) -> rpc::Result<()> {
+	let key = match after {
+		Some(after) => job_key("fanout", send_key, format!("after:{after}")),
+		None => job_key("fanout", send_key, 0),
+	};
 
-	// The batch's insert alone can't reach an open inbox: a live read's
-	// `visible_at <= now` was taken with an earlier `now`, which a row
-	// that didn't exist can't match — the wake is the clock event, the
-	// same way a recipients send's is. One wake per step, so a batch's
-	// people hear about their rows without waiting for the whole
-	// audience.
-	rpc::enqueue(
-		db,
-		crate::WakeSend {
-			send_key: send_key.to_owned(),
-		},
-	)
-	.at(leptoskit_db::now())
-	.key(format!("wake:{send_key}:fanout:{step}"))
-	.await?;
-
-	if !more {
-		finish_fanout(db, send_key).await?;
-
-		return Ok(());
-	}
-
-	// The successor exists only once this step's batch committed, and its
-	// key keeps a replayed step from doubling it.
 	rpc::enqueue(
 		db,
 		crate::FanoutSend {
 			send_key: send_key.to_owned(),
-			step: step.saturating_add(1),
+			step,
 		},
 	)
 	.at(leptoskit_db::now())
-	.key(format!("fanout:{send_key}:{}", step.saturating_add(1)))
+	.key(key)
 	.await?;
 
 	Ok(())
 }
 
 /// Marks a fanning send complete — only while it still is, so a cancel
-/// that lands first stays a cancel.
+/// that lands first stays a cancel. One more push round goes first: a
+/// round that finds the send still fanning out keeps looking, and this one
+/// covers any batch whose own kick a crash lost between its commit and its
+/// enqueue.
 ///
 /// # Errors
 ///
-/// Whatever the write fails with.
-async fn finish_fanout(db: &Db, send_key: &str) -> rpc::Result<()> {
+/// Whatever the write or the enqueue fails with.
+async fn finish_fanout(db: &Db, send_key: &str, spec: &crate::SendSpec) -> rpc::Result<()> {
+	push::kick_final(db, send_key, spec).await?;
+
 	AppSend::update()
 		.filter(|send| {
 			send.idempotency_key.eq(send_key.to_owned())
@@ -1111,6 +1382,139 @@ pub(crate) async fn cancel_fanout(tx: &leptoskit_db::Tx, send_key: &str) -> rpc:
 		.await?;
 
 	Ok(())
+}
+
+/// The body of [`cancel`](crate::cancel), set-based: existence, the
+/// visible-row rule, and the rows themselves are each one statement, and
+/// no row is read into memory. A fanout send with more than one batch of
+/// rows to cancel hands them to [`cancel_rows`](crate::cancel_rows), so
+/// this transaction never writes a whole audience.
+///
+/// # Errors
+///
+/// [`rpc::Error::NotFound`] for an unknown key, [`rpc::Error::Conflict`]
+/// once a complete send is visible, and whatever a read or write fails
+/// with.
+pub(crate) async fn cancel(cx: &rpc::MutationCx, send_key: &str) -> rpc::Result<u32> {
+	let tx = cx.tx();
+	let now = leptoskit_db::now();
+	let send = find_send(tx, send_key).await?;
+	let of_send = |notification: &<Notification as leptoskit_db::Table>::Columns| {
+		notification.send_key.eq(send_key.to_owned())
+	};
+
+	// Existence is the send's own row, not its fanout: a send every
+	// recipient opted out of delivered nothing, and cancelling it is still
+	// cancelling it.
+	if send.is_none() && !Notification::query().filter(of_send).exists(tx).await? {
+		return Err(rpc::Error::not_found(
+			"no send with this idempotency key exists",
+		));
+	}
+
+	// A fanout still walking its audience is stoppable whatever its rows
+	// say, and one already stopped stays stoppable while its rows are
+	// cancelled; a complete one keeps today's rule: what someone has
+	// already seen can't be unsent.
+	let state = send
+		.as_ref()
+		.and_then(|send| crate::SendState::from_str_value(&send.state));
+	let fanning = state == Some(crate::SendState::FanningOut);
+
+	// A data row is never seen by anyone — it is the silent half of a send,
+	// not a visible one — so only a visible notification row can make the
+	// send uncancellable.
+	if !fanning
+		&& state != Some(crate::SendState::Cancelled)
+		&& Notification::query()
+			.filter(|notification| {
+				of_send(notification)
+					& notification
+						.kind
+						.eq(crate::options::MessageKind::Notification.as_str())
+					& notification.visible_at.lte(now)
+					& notification.cancelled_at.is_null()
+			})
+			.exists(tx)
+			.await?
+	{
+		return Err(rpc::Error::conflict(
+			"this send is already visible, so it can no longer be cancelled",
+		));
+	}
+
+	if fanning {
+		// The state the fanout's next step checks, and the push rounds
+		// too: once this commits, no later batch of this send writes
+		// anything, and nothing more of it is pushed.
+		cancel_fanout(tx, send_key).await?;
+	}
+
+	let pending = Notification::query()
+		.filter(|notification| of_send(notification) & notification.cancelled_at.is_null())
+		.count(tx)
+		.await?;
+
+	if send.as_ref().is_some_and(|send| send.target.is_some())
+		&& pending > u64::try_from(crate::FANOUT_BATCH).unwrap_or(u64::MAX)
+	{
+		// Unkeyed: a cancel asked again while the job works enqueues a
+		// second, which finds whatever the first left, one at a time.
+		cx.enqueue(crate::CancelRows {
+			send_key: send_key.to_owned(),
+		})
+		.at(now)
+		.await?;
+
+		return Ok(u32::try_from(pending).unwrap_or(u32::MAX));
+	}
+
+	let cancelled = Notification::update()
+		.filter(|notification| of_send(notification) & notification.cancelled_at.is_null())
+		.set(|notification| notification.cancelled_at, Some(now))
+		.run(tx)
+		.await?;
+
+	Ok(u32::try_from(cancelled).unwrap_or(u32::MAX))
+}
+
+/// The body of [`cancel_rows`](crate::cancel_rows): the send's uncancelled
+/// rows, one batch at a time, each batch its own short write, until none
+/// is left.
+///
+/// # Errors
+///
+/// Whatever a read or a write fails with; the job runs again and picks up
+/// what is left.
+pub(crate) async fn cancel_rows(db: &Db, send_key: &str) -> rpc::Result<()> {
+	loop {
+		let batch: Vec<Uuid> = Notification::query()
+			.filter(|notification| {
+				notification.send_key.eq(send_key.to_owned()) & notification.cancelled_at.is_null()
+			})
+			.order_by(|notification| notification.id.asc())
+			.limit(u64::try_from(crate::FANOUT_BATCH).unwrap_or(u64::MAX))
+			.all(db)
+			.await?
+			.into_iter()
+			.map(|notification| notification.id)
+			.collect();
+
+		if batch.is_empty() {
+			return Ok(());
+		}
+
+		Notification::update()
+			.filter(|notification| {
+				notification.id.in_list(batch.iter().copied()) & notification.cancelled_at.is_null()
+			})
+			.set(
+				|notification| notification.cancelled_at,
+				Some(leptoskit_db::now()),
+			)
+			.run(db)
+			.await?;
+	}
 }
 
 /// Subscribes a batch of people to `topic`, the body of
@@ -1686,6 +2090,8 @@ fn uuid_of(value: &leptoskit_db::Value) -> Option<Uuid> {
 /// The body of [`send_test`](crate::send_test): the person's live
 /// endpoints — the one named, when an id came — each attempted exactly
 /// once through its platform's transport, with nothing written anywhere.
+/// The endpoints are read first, in a query of their own; the provider
+/// requests go out after it, with no transaction open.
 ///
 /// # Errors
 ///
@@ -1693,35 +2099,29 @@ fn uuid_of(value: &leptoskit_db::Value) -> Option<Uuid> {
 /// [`rpc::Error::NotFound`] for an endpoint id the person doesn't hold
 /// live, and whatever a read fails with.
 pub(crate) async fn send_test(
-	cx: &rpc::MutationCx,
+	cx: &rpc::ActionCx,
 	spec: &crate::SendSpec,
 	person: Uuid,
 	endpoint: Option<Uuid>,
 ) -> rpc::Result<Vec<crate::TestSendOutcome>> {
-	let push = push::Push::of(cx)?;
-
-	let Some(runtime) = push.runtime.as_ref() else {
+	let Some(runtime) = cx
+		.get::<push::Push>()
+		.and_then(|push| push.runtime.as_ref())
+	else {
 		return Err(rpc::Error::invalid(
 			"push is not configured on this server: set a transport's configuration to test a send",
 		));
 	};
 
-	let mut query =
-		PushEndpoint::query().filter(|row| row.person.eq(person) & row.invalidated_at.is_null());
-
-	if let Some(endpoint) = endpoint {
-		query = query.filter(|row| row.id.eq(endpoint));
-	}
-
-	// The blast radius is the person's own enrollment, bounded again
-	// here so nothing about a future bound change widens a test.
-	let endpoints = query
-		.order_by(|row| row.id.asc())
-		.limit(u64::try_from(crate::push::MAX_ENDPOINTS).unwrap_or(u64::MAX))
-		.all(cx.tx())
+	let targets = cx
+		.query(TestTargets {
+			person,
+			endpoint,
+			unread: spec.options.badge == Some(crate::options::BadgeSetting::Unread),
+		})
 		.await?;
 
-	if endpoint.is_some() && endpoints.is_empty() {
+	if endpoint.is_some() && targets.endpoints.is_empty() {
 		return Err(rpc::Error::not_found(
 			"no live endpoint with this id is this person's",
 		));
@@ -1731,7 +2131,7 @@ pub(crate) async fn send_test(
 	// attempt collapses to the same logical message.
 	let badge = match spec.options.badge {
 		Some(crate::options::BadgeSetting::Unread) => {
-			u32::try_from(unread_for(cx.tx(), person).await?).ok()
+			targets.unread.and_then(|unread| u32::try_from(unread).ok())
 		}
 		Some(crate::options::BadgeSetting::Set(set)) => Some(set),
 		None => None,
@@ -1746,13 +2146,13 @@ pub(crate) async fn send_test(
 		badge,
 	};
 
-	let mut outcomes = Vec::with_capacity(endpoints.len());
+	let mut outcomes = Vec::with_capacity(targets.endpoints.len());
 
-	for endpoint in endpoints {
-		let platform = crate::push::PushPlatform::from_str_value(&endpoint.platform)
+	for (id, platform, credential) in targets.endpoints {
+		let platform = crate::push::PushPlatform::from_str_value(&platform)
 			.unwrap_or(crate::push::PushPlatform::Apns);
 		let attempt = match runtime.transport(platform) {
-			Some(transport) => transport.attempt(&endpoint.credential, &message).await,
+			Some(transport) => transport.attempt(&credential, &message).await,
 			None => {
 				transport::Outcome::Ended {
 					reason: crate::push::DeliveryReason::TransportUnavailable,
@@ -1777,7 +2177,7 @@ pub(crate) async fn send_test(
 		};
 
 		outcomes.push(crate::TestSendOutcome {
-			endpoint: endpoint.id,
+			endpoint: id,
 			platform,
 			state,
 			reason,

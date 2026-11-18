@@ -747,12 +747,18 @@ async fn wake_jobs_survive_a_restart_and_drain_once_without_spinning() {
 	let second = start(Db::connect(&url).await.expect("the database opens again")).await;
 
 	// The restarted workers claim the overdue wake, run it once, and leave
-	// it done: one wake row, no pending or spinning job.
+	// it done: one wake row, no pending or spinning job. The worker records
+	// the job done in a write of its own after the wake row commits, so
+	// wait for that record, not for the row.
 	let drained = async {
 		loop {
-			let wakes = rows(&second, "SELECT count(*) FROM wakes").await;
+			let jobs = rows(
+				&second,
+				"SELECT count(*) FROM rpc_jobs WHERE state = 'done'",
+			)
+			.await;
 
-			if text(&wakes[0][0]) != "0" {
+			if text(&jobs[0][0]) != "0" {
 				break;
 			}
 

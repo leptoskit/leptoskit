@@ -623,7 +623,26 @@ async fn wait_not_enqueued(service: &Service, send_key: &str) -> Vec<Value> {
 /// Waits until every delivery of `send_key` has left the queue, and
 /// answers their states and reasons.
 async fn settled(service: &Service, send_key: &str) -> Vec<(String, Option<String>)> {
+	settle(service, send_key, false).await
+}
+
+/// [`settled`], moving the queue's clock past every retry's wait as it
+/// waits: retries wait minutes to hours, which a test that follows a
+/// delivery through them takes as read.
+async fn settled_rewinding(service: &Service, send_key: &str) -> Vec<(String, Option<String>)> {
+	settle(service, send_key, true).await
+}
+
+async fn settle(
+	service: &Service,
+	send_key: &str,
+	rewinding: bool,
+) -> Vec<(String, Option<String>)> {
 	for _ in 0..300 {
+		if rewinding {
+			rewind(service, send_key).await;
+		}
+
 		let states = delivery_status(service, send_key)
 			.await
 			.into_iter()
@@ -649,6 +668,84 @@ async fn settled(service: &Service, send_key: &str) -> Vec<(String, Option<Strin
 
 	let last = delivery_status(service, send_key).await;
 	panic!("the deliveries of {send_key} never settled: {last:?}");
+}
+
+/// Makes every retrying delivery of `send_key` due now, and every push
+/// round waiting to run them.
+async fn rewind(service: &Service, send_key: &str) {
+	use leptoskit_notifications::push::PushDelivery;
+
+	let now = leptoskit_db::now();
+	PushDelivery::update()
+		.filter(|row| row.send_key.eq(send_key.to_owned()) & row.state.eq("retrying"))
+		.set(|row| row.next_attempt_at, Some(now))
+		.run(&service.db)
+		.await
+		.expect("the deliveries rewind");
+	service
+		.db
+		.fetch(Statement {
+			sql: "UPDATE \"rpc_jobs\" SET \"run_at\" = ?1 WHERE \"name\" = 'push_send' AND \
+			      \"state\" = 'pending'"
+				.into(),
+			args: vec![leptoskit_db::Value::Timestamp(now)],
+		})
+		.await
+		.expect("the rounds rewind");
+}
+
+/// How many of `send_key`'s deliveries are in `state`.
+async fn in_state(service: &Service, send_key: &str, state: &str) -> usize {
+	let stored = rows(
+		service,
+		&format!(
+			"SELECT count(*) FROM push_deliveries WHERE send_key = '{send_key}' AND state = \
+			 '{state}'"
+		),
+	)
+	.await;
+	text(&stored[0][0]).parse().expect("a count")
+}
+
+/// Waits until `count` of `send_key`'s deliveries are accepted.
+async fn all_accepted(service: &Service, send_key: &str, count: usize) {
+	for _ in 0..600 {
+		if in_state(service, send_key, "accepted").await >= count {
+			return;
+		}
+
+		tokio::time::sleep(Duration::from_millis(50)).await;
+	}
+
+	panic!(
+		"{} of {count} deliveries of {send_key} were accepted; {} still enqueued",
+		in_state(service, send_key, "accepted").await,
+		in_state(service, send_key, "enqueued").await,
+	);
+}
+
+/// Enrolls one APNs endpoint per entry of `people`, by writing the rows a
+/// registration writes: thousands of HTTP registrations would only slow
+/// these tests down.
+async fn enroll_directly(service: &Service, people: &[Uuid]) {
+	let tx = service.db.begin().await.expect("a transaction");
+
+	for (n, person) in people.iter().enumerate() {
+		leptoskit_notifications::push::NewPushEndpoint {
+			id: Uuid::now_v7(),
+			person: *person,
+			platform: "apns".to_owned(),
+			credential: format!("{n:064x}"),
+			generation: 1,
+			fingerprint: format!("{n:064x}"),
+			invalidated_at: None,
+		}
+		.insert(&tx)
+		.await
+		.expect("an endpoint");
+	}
+
+	tx.commit().await.expect("the endpoints commit");
 }
 
 async fn rows(service: &Service, sql: &str) -> Vec<Vec<leptoskit_db::Value>> {
@@ -1990,7 +2087,7 @@ async fn a_refused_authorization_refreshes_once_and_then_stalls() {
 
 	let (status, _) = send(&service, "stale", spec(), &[ALICE]).await;
 	assert_eq!(status, 200);
-	let outcomes = settled(&service, "stale").await;
+	let outcomes = settled_rewinding(&service, "stale").await;
 	assert_eq!(
 		outcomes,
 		vec![("accepted".to_owned(), None)],
@@ -2434,7 +2531,7 @@ async fn transient_failures_retry_and_recover() {
 	let (status, _) = send(&service, "flaky", spec(), &[ALICE]).await;
 	assert_eq!(status, 200);
 
-	let outcomes = settled(&service, "flaky").await;
+	let outcomes = settled_rewinding(&service, "flaky").await;
 	assert_eq!(
 		outcomes,
 		vec![("accepted".to_owned(), None)],
@@ -2470,7 +2567,7 @@ async fn a_network_failure_retries_like_any_transient() {
 	let (status, _) = send(&service, "unplugged", spec(), &[ALICE]).await;
 	assert_eq!(status, 200);
 
-	let outcomes = settled(&service, "unplugged").await;
+	let outcomes = settled_rewinding(&service, "unplugged").await;
 	assert_eq!(
 		outcomes,
 		vec![("accepted".to_owned(), None)],
@@ -2504,7 +2601,7 @@ async fn eight_attempts_are_eight_not_nine() {
 	let (status, _) = send(&service, "doomed", spec(), &[ALICE]).await;
 	assert_eq!(status, 200);
 
-	let outcomes = settled(&service, "doomed").await;
+	let outcomes = settled_rewinding(&service, "doomed").await;
 	assert_eq!(
 		outcomes,
 		vec![("rejected".to_owned(), Some("attempts_exhausted".to_owned()))],
@@ -3107,7 +3204,7 @@ async fn one_failing_endpoint_never_holds_its_peers() {
 	let (status, _) = send(&service, "mixed", spec(), &[ALICE, BOB]).await;
 	assert_eq!(status, 200);
 
-	let outcomes = settled(&service, "mixed").await;
+	let outcomes = settled_rewinding(&service, "mixed").await;
 	assert!(
 		outcomes.contains(&("accepted".to_owned(), None)),
 		"bob's delivery completed: {outcomes:?}"
@@ -4380,9 +4477,11 @@ async fn generation_case(
 	mock.release();
 	held.await.unwrap();
 	if !reactivate {
-		let job = rpc::server::jobs::JobRow::query()
-			.filter(|row| row.key.eq(format!("push:{old}:1")))
-			.first(
+		let jobs = rpc::server::jobs::JobRow::query()
+			.filter(|row| {
+				row.name.eq("push_send") & row.state.eq(rpc::server::jobs::JobState::Pending)
+			})
+			.all(
 				&service
 					.db
 					.system("inspect retry job in credential fencing test"),
@@ -4390,7 +4489,9 @@ async fn generation_case(
 			.await
 			.unwrap();
 		assert!(
-			job.is_some(),
+			jobs.iter().any(|job| {
+				job.arguments.0["send_key"] == old.as_str() && job.arguments.0["round"] == 1
+			}),
 			"a fenced response must schedule pending work"
 		);
 	}
@@ -4732,4 +4833,347 @@ async fn revoke_receipts_replay_without_crossing_accounts_or_new_enrollments() {
 	let bob = endpoints_of(&service, BOB).await;
 	assert_eq!(bob.len(), 1);
 	assert_eq!(bob[0]["id"], new["id"]);
+}
+
+// The round engine: every fanout batch pushed, rounds bounded, and one
+// delivery's failure kept to itself.
+
+/// A topic send larger than two batches pushes every batch, however its
+/// jobs interleave. With one worker running them one at a time, the first
+/// batch's round runs — and finds nothing left waiting — before the second
+/// batch is even written; the later batches' deliveries are still all
+/// attempted.
+#[tokio::test(flavor = "multi_thread")]
+async fn every_fanout_batch_is_pushed() {
+	let mock = Mock::new();
+	let mut service = service(&mock, &all_transports()).await;
+	let audience: Vec<Uuid> = (0..1_201_u128)
+		.map(|n| Uuid::from_u128(0x0F1A_0000_0000_0000_0000_0000_0000_0000 | n))
+		.collect();
+
+	for chunk in audience.chunks(1_000) {
+		let (status, body) = post(
+			&service,
+			"subscribe_to_topic",
+			json!({ "topic": "news.batches", "persons": chunk }),
+			Some(TOKEN),
+		)
+		.await;
+		assert_eq!(status, 200, "{body}");
+	}
+
+	enroll_directly(&service, &audience).await;
+
+	let (status, body) = post(
+		&service,
+		"send",
+		json!({
+			"idempotency_key": "every-batch",
+			"spec": spec(),
+			"target": { "topic": "news.batches" },
+		}),
+		Some(TOKEN),
+	)
+	.await;
+	assert_eq!(status, 200, "{body}");
+
+	service.jobs = Some(
+		leptoskit_notifications::service::workers_with_push(
+			service.db.clone(),
+			service.push.clone(),
+		)
+		.workers(1)
+		.poll(Duration::from_millis(50))
+		.start(),
+	);
+
+	all_accepted(&service, "every-batch", 1_201).await;
+	assert_eq!(in_state(&service, "every-batch", "enqueued").await, 0);
+	assert_eq!(
+		mock.requests_to(APNS_HOST).len(),
+		1_201,
+		"each delivery went out once"
+	);
+}
+
+/// One round attempts a bounded share and hands the rest on at once: two
+/// thousand due deliveries take more than one round, and every one of them
+/// is accepted.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_round_attempts_a_bounded_share_and_hands_on_the_rest() {
+	let mock = Mock::new();
+	let mut service = service(&mock, &all_transports()).await;
+	let people: Vec<Uuid> = (0..1_000_u128)
+		.map(|n| Uuid::from_u128(0x0B0D_0000_0000_0000_0000_0000_0000_0000 | n))
+		.collect();
+	let twice: Vec<Uuid> = people.iter().chain(&people).copied().collect();
+	enroll_directly(&service, &twice).await;
+
+	let (status, body) = send(&service, "bounded", spec(), &people).await;
+	assert_eq!(status, 200, "{body}");
+	assert_eq!(in_state(&service, "bounded", "enqueued").await, 2_000);
+
+	spawn_round(&service, "bounded", 0)
+		.await
+		.expect("the round runs");
+	assert_eq!(
+		mock.requests_to(APNS_HOST).len(),
+		1_000,
+		"one round attempts its share, not the whole send"
+	);
+
+	let next = rpc::server::jobs::JobRow::query()
+		.filter(|job| job.name.eq("push_send") & job.state.eq(rpc::server::jobs::JobState::Pending))
+		.all(&service.db.system("read the next round in a test"))
+		.await
+		.unwrap()
+		.into_iter()
+		.find(|job| job.arguments.0["round"] == 1)
+		.expect("the next round is queued");
+	assert!(
+		next.run_at <= leptoskit_db::now(),
+		"and due at once: {:?}",
+		next.run_at
+	);
+	assert!(
+		next.serial_key.is_some(),
+		"one send's rounds run one at a time"
+	);
+
+	service.resume();
+	all_accepted(&service, "bounded", 2_000).await;
+	assert_eq!(
+		mock.requests_to(APNS_HOST).len(),
+		2_000,
+		"each delivery went out once"
+	);
+}
+
+/// A stored options value this build can't read stalls its own delivery —
+/// the way an operator-side failure does — and nothing else: its peer in
+/// the same round goes out, and the round ends cleanly.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_unreadable_delivery_never_fails_its_round() {
+	let mock = Mock::new();
+	let service = service(&mock, &all_transports()).await;
+	assert_eq!(
+		enroll(&service, ALICE, apns_credential(&device_token(1)))
+			.await
+			.0,
+		200
+	);
+	assert_eq!(
+		enroll(&service, BOB, apns_credential(&device_token(3)))
+			.await
+			.0,
+		200
+	);
+	let (status, body) = send(&service, "unreadable", spec(), &[ALICE, BOB]).await;
+	assert_eq!(status, 200, "{body}");
+
+	// Alice's row carries options written by a build that knows a kind
+	// this one doesn't.
+	leptoskit_notifications::Notification::update()
+		.filter(|row| row.send_key.eq("unreadable") & row.person.eq(ALICE))
+		.set(|row| row.options, Some(r#"{"kind":"hologram"}"#.to_owned()))
+		.run(&service.db)
+		.await
+		.unwrap();
+
+	spawn_round(&service, "unreadable", 0)
+		.await
+		.expect("the round ends cleanly");
+
+	let items = delivery_status(&service, "unreadable").await;
+	let of = |person: Uuid| {
+		items
+			.iter()
+			.find(|item| item["person"] == json!(person))
+			.cloned()
+			.expect("a delivery")
+	};
+	assert_eq!(of(BOB)["state"], "accepted", "{items:?}");
+	assert_eq!(of(ALICE)["state"], "retrying", "{items:?}");
+	assert_eq!(of(ALICE)["reason"], "operator_configuration", "{items:?}");
+	assert_eq!(of(ALICE)["attempts"], 0, "nothing was pushed for it");
+	assert_eq!(mock.requests_to(APNS_HOST).len(), 1, "only bob's went out");
+}
+
+/// A notification row gone between an attempt and its outcome's write
+/// ends that delivery as cancelled, the way an attempt that finds it gone
+/// does, and the round ends cleanly.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_row_gone_mid_attempt_ends_its_delivery_not_the_round() {
+	let mock = Mock::new();
+	let service = service(&mock, &all_transports()).await;
+	assert_eq!(
+		enroll(&service, ALICE, apns_credential(&device_token(1)))
+			.await
+			.0,
+		200
+	);
+	let (status, body) = send(&service, "vanishing", spec(), &[ALICE]).await;
+	assert_eq!(status, 200, "{body}");
+
+	mock.scripted(|request, _| {
+		if request.url.contains(APNS_HOST) {
+			return Scripted::Hold(503, Vec::new(), String::new());
+		}
+
+		Scripted::Default
+	});
+
+	let racing = spawn_round(&service, "vanishing", 0);
+	mock.wait_held(1).await;
+	leptoskit_notifications::Notification::query()
+		.filter(|row| row.send_key.eq("vanishing"))
+		.delete(&service.db)
+		.await
+		.unwrap();
+	mock.release();
+	racing.await.expect("the round ends cleanly");
+
+	let items = delivery_status(&service, "vanishing").await;
+	assert_eq!(items[0]["state"], "skipped", "{items:?}");
+	assert_eq!(items[0]["reason"], "cancelled", "{items:?}");
+	assert_eq!(items[0]["attempts"], 1, "the request it made is counted");
+}
+
+/// A test send holds no transaction while a provider answers: a write made
+/// while its request is in flight finishes before the provider answers it.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_test_send_holds_up_no_write_while_a_provider_answers() {
+	let mock = Mock::new();
+	let service = service(&mock, &all_transports()).await;
+	assert_eq!(
+		enroll(&service, ALICE, apns_credential(&device_token(1)))
+			.await
+			.0,
+		200
+	);
+	mock.scripted(|request, _| {
+		if request.url.contains(APNS_HOST) {
+			return Scripted::Hold(200, Vec::new(), String::new());
+		}
+
+		Scripted::Default
+	});
+
+	let address = service.address;
+	let probe = tokio::spawn(async move {
+		let response = reqwest::Client::new()
+			.post(format!("http://{address}{PREFIX}/rpc/send_test"))
+			.bearer_auth(TOKEN)
+			.json(&json!({ "spec": spec(), "person": ALICE }))
+			.send()
+			.await
+			.unwrap();
+		(response.status().as_u16(), response.text().await.unwrap())
+	});
+	mock.wait_held(1).await;
+
+	let (status, body) = tokio::time::timeout(
+		Duration::from_secs(10),
+		post(
+			&service,
+			"subscribe_to_topic",
+			json!({ "topic": "news.meanwhile", "persons": [BOB] }),
+			Some(TOKEN),
+		),
+	)
+	.await
+	.expect("the write finishes while the provider still holds the test send");
+	assert_eq!(status, 200, "{body}");
+
+	mock.release();
+	let (status, body) = probe.await.expect("the test send answers");
+	assert_eq!(status, 200, "{body}");
+	let outcomes: Value = serde_json::from_str(&body).unwrap();
+	assert_eq!(outcomes[0]["state"], "accepted", "{outcomes}");
+}
+
+/// The longest idempotency key pushes too, from a recipients send and a
+/// topic send: the push rounds name the send by its hash when their own
+/// keys would be too long.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_longest_key_pushes() {
+	let mock = Mock::new();
+	let mut service = service(&mock, &all_transports()).await;
+	assert_eq!(
+		enroll(&service, ALICE, apns_credential(&device_token(1)))
+			.await
+			.0,
+		200
+	);
+	let (status, body) = post(
+		&service,
+		"subscribe_to_topic",
+		json!({ "topic": "news.long", "persons": [ALICE] }),
+		Some(TOKEN),
+	)
+	.await;
+	assert_eq!(status, 200, "{body}");
+	service.resume();
+
+	for (name, target) in [
+		("r", json!({ "recipients": [ALICE] })),
+		("t", json!({ "topic": "news.long" })),
+	] {
+		let key = format!("{name}{}", "k".repeat(254));
+		let (status, body) = post(
+			&service,
+			"send",
+			json!({ "idempotency_key": key, "spec": spec(), "target": target }),
+			Some(TOKEN),
+		)
+		.await;
+		assert_eq!(status, 200, "{name}: {body}");
+		assert_eq!(
+			settled(&service, &key).await,
+			vec![("accepted".to_owned(), None)],
+			"{name}"
+		);
+	}
+}
+
+/// A send dated more than a day back is a send from now: its push goes out
+/// rather than ending past its delivery window, and the inbox shows it.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_earlier_visible_at_is_now() {
+	let mock = Mock::new();
+	let mut service = service(&mock, &all_transports()).await;
+	assert_eq!(
+		enroll(&service, ALICE, apns_credential(&device_token(1)))
+			.await
+			.0,
+		200
+	);
+	service.resume();
+
+	let earlier = (chrono::Utc::now() - chrono::Duration::hours(48)).to_rfc3339();
+	let (status, body) = send(
+		&service,
+		"backdated",
+		json!({ "category": "news", "title": "Backdated", "visible_at": earlier }),
+		&[ALICE],
+	)
+	.await;
+	assert_eq!(status, 200, "{body}");
+
+	assert_eq!(
+		settled(&service, "backdated").await,
+		vec![("accepted".to_owned(), None)],
+		"inside its window, which starts now"
+	);
+
+	let (status, body) = post(
+		&service,
+		"inbox",
+		json!({ "page": { "limit": 10 } }),
+		Some(&signed_in(ALICE)),
+	)
+	.await;
+	assert_eq!(status, 200, "{body}");
+	let page: Value = serde_json::from_str(&body).unwrap();
+	assert_eq!(page["items"][0]["title"], "Backdated", "{page}");
 }
