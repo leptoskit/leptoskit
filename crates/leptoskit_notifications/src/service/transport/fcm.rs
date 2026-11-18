@@ -325,95 +325,272 @@ impl Transport for Fcm {
 	) -> Pin<Box<dyn Future<Output = Outcome> + Send + 'a>> {
 		let send = async move {
 			// Size is checked on the encoded message before any network
-			// work: the full one first, then the minimal id-only envelope,
-			// and past both a terminal clear result with nothing sent.
-			let full =
-				serde_json::to_vec(&fcm_message(credential, message, true)).unwrap_or_default();
-			let body = if full.len() > PAYLOAD_LIMIT {
-				let minimal = serde_json::to_vec(&fcm_message(credential, message, false))
-					.unwrap_or_default();
+			// work, trimming the optional extras in the shared order —
+			// platform overrides, then image, then sound, badge, and
+			// link — before falling back to the id-only envelope, and
+			// past it a terminal clear result with nothing sent.
+			let mut body_message = fcm_message(credential, message, Include::All);
 
-				if minimal.len() > PAYLOAD_LIMIT {
-					return Outcome::Ended {
-						reason: DeliveryReason::Oversized,
-						invalidate: false,
-					};
+			for trim in [
+				trim_platform_and_image as Trim,
+				trim_sound_badge_link,
+				trim_minimal,
+			] {
+				let encoded = serde_json::to_vec(&body_message).unwrap_or_default();
+
+				if encoded.len() <= PAYLOAD_LIMIT {
+					return self.send_encoded(encoded).await;
 				}
 
-				minimal
-			} else {
-				full
-			};
+				trim(&mut body_message, credential, message);
+			}
 
-			// The operator's account configuration is not the endpoint's:
-			// an unusable account stalls the delivery — visible, retrying
-			// — rather than failing it.
-			let access_token = match self.access_token().await {
-				Ok(token) => token,
-				Err(AccessFailure::Network) => return Outcome::Stalled { after: None },
-				Err(AccessFailure::Unusable) => {
-					return Outcome::Stalled { after: None };
-				}
-			};
+			let minimal = serde_json::to_vec(&body_message).unwrap_or_default();
 
-			let (status, outcome) = self.post(&access_token, &body).await;
-
-			if status == 401 {
-				// The provider refused this authorization: the cached
-				// token is stale or wrong, so drop it, exchange once more
-				// — bounded, once per request. A
-				// token that was refused when fresh is the operator's
-				// setup, and the delivery waits rather than ends.
-				self.drop_token().await;
-
-				// Refresh once, but send again only through the durable queue:
-				// every push request must consume the eight-request budget.
-				let _refresh = self.access_token().await;
-				return Outcome::AuthRejected {
-					after: Some(Duration::from_secs(1)),
+			if minimal.len() > PAYLOAD_LIMIT {
+				return Outcome::Ended {
+					reason: DeliveryReason::Oversized,
+					invalidate: false,
 				};
 			}
 
-			outcome
+			self.send_encoded(minimal).await
 		};
 
 		Box::pin(send)
 	}
 }
 
-/// The HTTP v1 message: the standard visible notification, the send's
-/// `data` as the string-valued map the API asks for, the notification's
-/// id as the collapse key and in `data`, the same collapse id for an iOS
-/// app the project also talks to, and the notification's remaining life
-/// as the TTL both platforms hold it for, so a provider can't deliver
-/// past the send's expiry.
+impl Fcm {
+	/// Exchanges an access token and posts one encoded message, answering
+	/// the attempt's outcome.
+	async fn send_encoded(&self, body: Vec<u8>) -> Outcome {
+		// The operator's account configuration is not the endpoint's:
+		// an unusable account stalls the delivery — visible, retrying
+		// — rather than failing it.
+		let access_token = match self.access_token().await {
+			Ok(token) => token,
+			Err(AccessFailure::Network) => return Outcome::Stalled { after: None },
+			Err(AccessFailure::Unusable) => {
+				return Outcome::Stalled { after: None };
+			}
+		};
+
+		let (status, outcome) = self.post(&access_token, &body).await;
+
+		if status == 401 {
+			// The provider refused this authorization: the cached
+			// token is stale or wrong, so drop it, exchange once more
+			// — bounded, once per request. A
+			// token that was refused when fresh is the operator's
+			// setup, and the delivery waits rather than ends.
+			self.drop_token().await;
+
+			// Refresh once, but send again only through the durable queue:
+			// every push request must consume the eight-request budget.
+			let _refresh = self.access_token().await;
+			return Outcome::AuthRejected {
+				after: Some(Duration::from_secs(1)),
+			};
+		}
+
+		outcome
+	}
+}
+
+/// One step of the documented degradation order, applied to the encoded
+/// message in place: first the platform overrides and the image, then
+/// the sound, the badge, and the link, then — the id-only envelope — the
+/// send's `data` and everything else optional.
+type Trim = fn(&mut serde_json::Value, &str, &Message);
+
+/// The platform overrides and the image go first. The Android
+/// notification block stays — the sound and the badge it also carries
+/// go in the next step, each in its own turn.
+fn trim_platform_and_image(
+	message: &mut serde_json::Value,
+	_credential: &str,
+	_original: &Message,
+) {
+	if let Some(root) = message
+		.get_mut("message")
+		.and_then(|message| message.as_object_mut())
+	{
+		if let Some(notification) = root.get_mut("notification").and_then(|n| n.as_object_mut()) {
+			notification.remove("image");
+		}
+
+		if let Some(android) = root.get_mut("android").and_then(|a| a.as_object_mut())
+			&& let Some(notification) = android
+				.get_mut("notification")
+				.and_then(|n| n.as_object_mut())
+		{
+			for key in ["channel_id", "color", "icon", "tag", "sticky"] {
+				notification.remove(key);
+			}
+		}
+
+		if let Some(apns) = root.get_mut("apns")
+			&& let Some(payload) = apns.get_mut("payload").and_then(|p| p.as_object_mut())
+		{
+			payload.remove("fcm_options");
+
+			if let Some(aps) = payload.get_mut("aps").and_then(|aps| aps.as_object_mut()) {
+				for key in [
+					"thread-id",
+					"category",
+					"interruption-level",
+					"relevance-score",
+					"mutable-content",
+				] {
+					aps.remove(key);
+				}
+
+				if let Some(alert) = aps.get_mut("alert").and_then(|a| a.as_object_mut()) {
+					alert.remove("subtitle");
+				}
+			}
+		}
+	}
+}
+
+/// The sound, the badge, and the link go next.
+fn trim_sound_badge_link(message: &mut serde_json::Value, _credential: &str, _original: &Message) {
+	if let Some(root) = message
+		.get_mut("message")
+		.and_then(|message| message.as_object_mut())
+	{
+		if let Some(data) = root.get_mut("data").and_then(|d| d.as_object_mut()) {
+			data.remove("lklink");
+		}
+
+		if let Some(notification) = root
+			.get_mut("android")
+			.and_then(|android| android.get_mut("notification"))
+			.and_then(|n| n.as_object_mut())
+		{
+			notification.remove("sound");
+			notification.remove("notification_count");
+		}
+
+		// The Android notification block may have emptied; an empty one
+		// carries nothing and goes.
+		if let Some(android) = root.get_mut("android").and_then(|a| a.as_object_mut())
+			&& android
+				.get("notification")
+				.and_then(|n| n.as_object())
+				.is_some_and(serde_json::Map::is_empty)
+		{
+			android.remove("notification");
+		}
+
+		if let Some(aps) = root
+			.get_mut("apns")
+			.and_then(|apns| apns.get_mut("payload"))
+			.and_then(|payload| payload.get_mut("aps"))
+			.and_then(|aps| aps.as_object_mut())
+		{
+			aps.remove("badge");
+		}
+	}
+}
+
+/// The id-only envelope: today's minimal message, which for a data
+/// message keeps the background shape and its id, because a silent push
+/// must stay silent.
+fn trim_minimal(message: &mut serde_json::Value, credential: &str, original: &Message) {
+	*message = fcm_message(credential, original, Include::Minimal);
+}
+
+/// What a message carries beside its ids: everything, or the id-only
+/// envelope the provider's payload limit can force.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Include {
+	All,
+	Minimal,
+}
+
+/// The HTTP v1 message: the standard visible notification — or, for a
+/// data send, no notification block at all — the send's `data` as the
+/// string-valued map the API asks for, the notification's id as the
+/// collapse key and in `data`, the same collapse id for an iOS app the
+/// project also talks to, and the notification's remaining life as the
+/// TTL both platforms hold it for, so a provider can't deliver past the
+/// send's expiry. The send's [options](crate::MessageOptions) shape the
+/// Android notification, the iOS payload, and the priority, each where
+/// its platform reads it.
 ///
-/// `with_data` is false for the minimal id-only envelope, when the full
-/// one doesn't fit the provider's limit. The collapse key and headers
-/// stay either way: a fallback that dropped them would let a repeat of
-/// the same notification stack banners the full payload would have
-/// replaced. Collapse is best-effort deduplication, though — a provider
-/// that never coalesces, or a device that was offline, can still show
-/// two.
-fn fcm_message(credential: &str, message: &Message, with_data: bool) -> serde_json::Value {
+/// [`Include::Minimal`] is the id-only envelope, when the full one
+/// doesn't fit the provider's limit. The collapse key and headers stay
+/// either way: a fallback that dropped them would let a repeat of the
+/// same notification stack banners the full payload would have replaced.
+/// Collapse is best-effort deduplication, though — a provider that never
+/// coalesces, or a device that was offline, can still show two.
+fn fcm_message(credential: &str, message: &Message, include: Include) -> serde_json::Value {
 	let ttl = message.expires_at.map(|expires_at| {
 		(expires_at - leptoskit_db::now())
 			.num_seconds()
 			.clamp(0, MAX_TTL_SECS)
 	});
 
+	let mut root = serde_json::Map::new();
+	root.insert("token".to_owned(), serde_json::json!(credential));
+
+	if !message.options.is_data() {
+		root.insert(
+			"notification".to_owned(),
+			fcm_notification(message, include),
+		);
+	}
+
+	root.insert(
+		"data".to_owned(),
+		serde_json::Value::Object(fcm_data_map(message, include)),
+	);
+	root.insert("android".to_owned(), fcm_android(message, include, ttl));
+	// An iOS app served through the same project sees the same alert,
+	// collapse id, and expiry as a direct APNs send would give it.
+	root.insert("apns".to_owned(), fcm_apns(message, include, ttl));
+
+	serde_json::json!({
+		"message": serde_json::Value::Object(root),
+	})
+}
+
+/// The visible notification block — which a data message carries none
+/// of — with the image when there is one and room for it.
+fn fcm_notification(message: &Message, include: Include) -> serde_json::Value {
+	let mut notification = serde_json::json!({
+		"title": message.title,
+		"body": message.body,
+	});
+
+	if include == Include::All && message.options.image.is_some() {
+		notification["image"] = serde_json::json!(message.options.image);
+	}
+
+	notification
+}
+
+/// The string-valued `data` map: the caller's own object, the link the
+/// send names, and the notification's id — with the envelope's own keys
+/// and the platform's reserved words never let through.
+fn fcm_data_map(message: &Message, include: Include) -> serde_json::Map<String, serde_json::Value> {
 	let mut map = serde_json::Map::new();
 
-	if with_data {
-		let data: serde_json::Value = serde_json::from_str(&message.data).unwrap_or_default();
+	if include == Include::All {
+		let parsed: serde_json::Value = serde_json::from_str(&message.data).unwrap_or_default();
 
-		if let Some(object) = data.as_object() {
+		if let Some(object) = parsed.as_object() {
 			for (name, value) in object {
-				// The envelope's own id key and FCM's reserved words are
+				// The envelope's own keys and FCM's reserved words are
 				// dropped from the caller's data rather than overwritten
-				// or sent: `lkn` is ours, and `from`, `google.*`, and
-				// `gcm.*` are words the platform reserves.
+				// or sent: `lkn`, `lklink`, and `lkimg` are ours, and
+				// `from`, `google.*`, and `gcm.*` are words the platform
+				// reserves.
 				if name == "lkn"
+					|| name == "lklink"
+					|| name == "lkimg"
 					|| name == "from"
 					|| name.starts_with("google.")
 					|| name.starts_with("gcm.")
@@ -432,6 +609,13 @@ fn fcm_message(credential: &str, message: &Message, with_data: bool) -> serde_js
 				);
 			}
 		}
+
+		if let Some(link) = message.options.link.as_deref() {
+			map.insert(
+				"lklink".to_owned(),
+				serde_json::Value::String(link.to_owned()),
+			);
+		}
 	}
 
 	map.insert(
@@ -439,63 +623,204 @@ fn fcm_message(credential: &str, message: &Message, with_data: bool) -> serde_js
 		serde_json::Value::String(message.id.to_string()),
 	);
 
+	map
+}
+
+/// The `android` config: the collapse key and TTL every message carries,
+/// the priority the send named, and — when there is room — the
+/// notification block the Android options shape.
+fn fcm_android(message: &Message, include: Include, ttl: Option<i64>) -> serde_json::Value {
 	let mut android = serde_json::json!({
 		"collapse_key": message.id.to_string(),
 	});
-	let mut apns = serde_json::json!({
-		"headers": {
-			"apns-collapse-id": message.id.to_string(),
-		},
-		"payload": {
-			"aps": {
-				"alert": {
-					"title": message.title,
-					"body": message.body,
-				},
-			},
-			"lkn": message.id.to_string(),
-		},
-	});
 
-	if let Some(ttl) = ttl {
-		if let Some(object) = android.as_object_mut() {
-			object.insert(
-				"ttl".to_owned(),
-				serde_json::Value::String(format!("{ttl}s")),
-			);
+	if let Some(ttl) = ttl
+		&& let Some(object) = android.as_object_mut()
+	{
+		object.insert(
+			"ttl".to_owned(),
+			serde_json::Value::String(format!("{ttl}s")),
+		);
+	}
+
+	// Priority rides in the Android config, and — like the collapse key
+	// and the TTL — survives the id-only envelope: it is two bytes of
+	// intent, not decoration.
+	match message.options.priority {
+		Some(crate::options::SendPriority::High) => {
+			android["priority"] = serde_json::json!("HIGH");
+		}
+		Some(crate::options::SendPriority::Normal) => {
+			android["priority"] = serde_json::json!("NORMAL");
+		}
+		None => {}
+	}
+
+	if include != Include::All {
+		return android;
+	}
+
+	let mut notification = serde_json::Map::new();
+
+	if let Some(android_options) = message.options.android.as_ref() {
+		let fields = [
+			("channel_id", android_options.channel_id.as_deref()),
+			("color", android_options.color.as_deref()),
+			("icon", android_options.icon.as_deref()),
+			("tag", android_options.tag.as_deref()),
+		];
+
+		for (name, value) in fields {
+			if let Some(value) = value {
+				notification.insert(name.to_owned(), serde_json::json!(value));
+			}
 		}
 
-		if let Some(headers) = apns
-			.get_mut("headers")
-			.and_then(|headers| headers.as_object_mut())
-		{
-			headers.insert(
-				"apns-expiration".to_owned(),
-				serde_json::Value::String(
-					message
-						.expires_at
-						.map_or(0, |expires_at| expires_at.timestamp().max(0))
-						.to_string(),
-				),
-			);
+		if let Some(sticky) = android_options.sticky {
+			notification.insert("sticky".to_owned(), serde_json::json!(sticky));
 		}
 	}
 
-	serde_json::json!({
-		"message": {
-			"token": credential,
-			"notification": {
+	match message.options.sound.as_ref() {
+		Some(crate::options::NotificationSound::Default) => {
+			notification.insert("sound".to_owned(), serde_json::json!("default"));
+		}
+		Some(crate::options::NotificationSound::Named(name)) => {
+			notification.insert("sound".to_owned(), serde_json::json!(name));
+		}
+		// Unset and Silent both leave the sound to the channel: a
+		// channel is the only silence Android honors per notification.
+		None | Some(crate::options::NotificationSound::Silent) => {}
+	}
+
+	if let Some(badge) = message.badge {
+		notification.insert("notification_count".to_owned(), serde_json::json!(badge));
+	}
+
+	if !notification.is_empty() {
+		android["notification"] = serde_json::Value::Object(notification);
+	}
+
+	android
+}
+
+/// The `apns` block FCM serves an iOS app through the same project: the
+/// collapse header every message carries, the expiry and the
+/// background-or-priority headers the send implies, and the payload a
+/// direct APNs send would carry — alert or `content-available`, the
+/// Apple options, the badge, and the image under the mutable-content
+/// flag.
+fn fcm_apns(message: &Message, include: Include, ttl: Option<i64>) -> serde_json::Value {
+	let data = message.options.is_data();
+	let mut headers = serde_json::Map::new();
+
+	headers.insert(
+		"apns-collapse-id".to_owned(),
+		serde_json::Value::String(message.id.to_string()),
+	);
+
+	// A data send's iOS half is a background push, as a direct APNs send
+	// would be; an explicit priority rides the header too. A plain
+	// notification adds neither, exactly as before options existed.
+	if data {
+		headers.insert("apns-push-type".to_owned(), serde_json::json!("background"));
+		headers.insert("apns-priority".to_owned(), serde_json::json!("5"));
+	} else if let Some(priority) = message.options.priority {
+		headers.insert(
+			"apns-priority".to_owned(),
+			serde_json::json!(match priority {
+				crate::options::SendPriority::High => "10",
+				crate::options::SendPriority::Normal => "5",
+			}),
+		);
+	}
+
+	if ttl.is_some() {
+		headers.insert(
+			"apns-expiration".to_owned(),
+			serde_json::Value::String(
+				message
+					.expires_at
+					.map_or(0, |expires_at| expires_at.timestamp().max(0))
+					.to_string(),
+			),
+		);
+	}
+
+	let mut aps = if data {
+		serde_json::json!({
+			"content-available": 1,
+		})
+	} else {
+		serde_json::json!({
+			"alert": {
 				"title": message.title,
 				"body": message.body,
 			},
-			"data": map,
-			"android": android,
-			// An iOS app served through the same project sees the same
-			// alert, collapse id, and expiry as a direct APNs send would
-			// give it.
-			"apns": apns,
-		},
+		})
+	};
+
+	if include == Include::All {
+		apply_apple_options(&mut aps, message, data);
+		apply_badge_and_image(&mut aps, message, data);
+	}
+
+	let mut payload = serde_json::json!({
+		"aps": aps,
+		"lkn": message.id.to_string(),
+	});
+
+	if include == Include::All && message.options.image.is_some() && !data {
+		payload["fcm_options"] = serde_json::json!({
+			"image": message.options.image,
+		});
+	}
+
+	serde_json::json!({
+		"headers": serde_json::Value::Object(headers),
+		"payload": payload,
 	})
+}
+
+/// The Apple options into `aps`: subtitle on the alert, and the
+/// grouping and interruption keys beside it.
+fn apply_apple_options(aps: &mut serde_json::Value, message: &Message, data: bool) {
+	let Some(apple) = message.options.apple.as_ref() else {
+		return;
+	};
+
+	if !data && let Some(subtitle) = apple.subtitle.as_deref() {
+		aps["alert"]["subtitle"] = serde_json::json!(subtitle);
+	}
+
+	if let Some(thread_id) = apple.thread_id.as_deref() {
+		aps["thread-id"] = serde_json::json!(thread_id);
+	}
+
+	if let Some(category) = apple.category.as_deref() {
+		aps["category"] = serde_json::json!(category);
+	}
+
+	if let Some(level) = apple.interruption_level {
+		aps["interruption-level"] = serde_json::json!(level.as_str());
+	}
+
+	if let Some(score) = apple.relevance_score {
+		aps["relevance-score"] = serde_json::json!(score);
+	}
+}
+
+/// The badge and the image flag into `aps`. An image needs a
+/// Notification Service Extension in the iOS app to display: the
+/// mutable-content flag hands the payload to it.
+fn apply_badge_and_image(aps: &mut serde_json::Value, message: &Message, data: bool) {
+	if let Some(badge) = message.badge {
+		aps["badge"] = serde_json::json!(badge);
+	}
+
+	if message.options.image.is_some() && !data {
+		aps["mutable-content"] = serde_json::json!(1);
+	}
 }
 
 /// Classifies one FCM answer. The provider's status strings are read here

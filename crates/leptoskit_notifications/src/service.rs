@@ -39,6 +39,7 @@ use crate::SERVICE;
 use crate::TopicSubscription;
 use crate::Wake;
 use crate::condition::Condition;
+use crate::push::PushEndpoint;
 
 /// The person the app forwarded, or the error a stranger gets: nobody's
 /// inbox answers without one, and no argument can name one.
@@ -55,7 +56,8 @@ pub(crate) fn me(identity: &rpc::server::Identity) -> rpc::Result<Uuid> {
 }
 
 /// Which notification rows `person` may see at `now`: visible, not
-/// cancelled, not expired, and not in a category they opted out of.
+/// cancelled, not expired, not in a category they opted out of, and not
+/// a data row — a silent message's durable half never surfaces.
 pub(crate) fn visible(
 	notification: &<Notification as leptoskit_db::Table>::Columns,
 	person: Uuid,
@@ -63,6 +65,9 @@ pub(crate) fn visible(
 	opted_out: &[String],
 ) -> leptoskit_db::Expr {
 	let mut expr = notification.person.eq(person)
+		& notification
+			.kind
+			.eq(crate::options::MessageKind::Notification.as_str())
 		& notification.visible_at.lte(now)
 		& notification.cancelled_at.is_null()
 		& (notification.expires_at.is_null() | notification.expires_at.gt(now));
@@ -94,6 +99,25 @@ pub(crate) async fn opted_out_categories(
 		.into_iter()
 		.map(|preference| preference.category)
 		.collect())
+}
+
+/// How many visible, unread, undismissed notification rows `person`
+/// holds right now: what a badge shows, and what a send's `unread` badge
+/// option resolves to at push time. Data rows never count.
+///
+/// # Errors
+///
+/// Whatever the read fails with.
+pub(crate) async fn unread_for(db: &impl leptoskit_db::Read, person: Uuid) -> rpc::Result<u64> {
+	let now = leptoskit_db::now();
+	let opted_out = opted_out_categories(db, person).await?;
+
+	Notification::query()
+		.filter(|notification| visible(notification, person, now, &opted_out))
+		.filter(|notification| notification.read_at.is_null() & notification.dismissed_at.is_null())
+		.count(db)
+		.await
+		.map_err(rpc::Error::from)
 }
 
 /// The canonical form of what a send intends, hashed: the same send twice
@@ -367,6 +391,8 @@ pub(crate) async fn fanout(
 			cancelled_at: None,
 			read_at: None,
 			dismissed_at: None,
+			kind: kind_of(spec),
+			options: options_of(spec),
 		}
 		.insert(tx)
 		.await?;
@@ -375,6 +401,26 @@ pub(crate) async fn fanout(
 	}
 
 	Ok(fanout)
+}
+
+/// The row kind a spec writes: `data` for a silent send, `notification`
+/// otherwise.
+fn kind_of(spec: &crate::SendSpec) -> String {
+	(if spec.is_data() {
+		crate::options::MessageKind::Data
+	} else {
+		crate::options::MessageKind::Notification
+	})
+	.as_str()
+	.to_owned()
+}
+
+/// The options a spec stores on each row — its kind, its presentation,
+/// everything the push engine reads per delivery — or `None` when the
+/// send carried none.
+fn options_of(spec: &crate::SendSpec) -> Option<String> {
+	(!spec.options.is_empty())
+		.then(|| serde_json::to_string(&spec.options).expect("the options are plain JSON"))
 }
 
 /// The notification `id`, when it belongs to `person`, and not found
@@ -1635,6 +1681,110 @@ fn uuid_of(value: &leptoskit_db::Value) -> Option<Uuid> {
 		leptoskit_db::Value::Bytes(bytes) => Uuid::from_slice(bytes).ok(),
 		_ => None,
 	}
+}
+
+/// The body of [`send_test`](crate::send_test): the person's live
+/// endpoints — the one named, when an id came — each attempted exactly
+/// once through its platform's transport, with nothing written anywhere.
+///
+/// # Errors
+///
+/// [`rpc::Error::Invalid`] when no transport is configured at all,
+/// [`rpc::Error::NotFound`] for an endpoint id the person doesn't hold
+/// live, and whatever a read fails with.
+pub(crate) async fn send_test(
+	cx: &rpc::MutationCx,
+	spec: &crate::SendSpec,
+	person: Uuid,
+	endpoint: Option<Uuid>,
+) -> rpc::Result<Vec<crate::TestSendOutcome>> {
+	let push = push::Push::of(cx)?;
+
+	let Some(runtime) = push.runtime.as_ref() else {
+		return Err(rpc::Error::invalid(
+			"push is not configured on this server: set a transport's configuration to test a send",
+		));
+	};
+
+	let mut query =
+		PushEndpoint::query().filter(|row| row.person.eq(person) & row.invalidated_at.is_null());
+
+	if let Some(endpoint) = endpoint {
+		query = query.filter(|row| row.id.eq(endpoint));
+	}
+
+	// The blast radius is the person's own enrollment, bounded again
+	// here so nothing about a future bound change widens a test.
+	let endpoints = query
+		.order_by(|row| row.id.asc())
+		.limit(u64::try_from(crate::push::MAX_ENDPOINTS).unwrap_or(u64::MAX))
+		.all(cx.tx())
+		.await?;
+
+	if endpoint.is_some() && endpoints.is_empty() {
+		return Err(rpc::Error::not_found(
+			"no live endpoint with this id is this person's",
+		));
+	}
+
+	// One test message id for the whole call, so every endpoint's
+	// attempt collapses to the same logical message.
+	let badge = match spec.options.badge {
+		Some(crate::options::BadgeSetting::Unread) => {
+			u32::try_from(unread_for(cx.tx(), person).await?).ok()
+		}
+		Some(crate::options::BadgeSetting::Set(set)) => Some(set),
+		None => None,
+	};
+	let message = transport::Message {
+		id: Uuid::now_v7(),
+		title: spec.title.clone(),
+		body: spec.body.clone(),
+		data: spec.data.clone().unwrap_or_else(|| "{}".to_owned()),
+		expires_at: spec.expires_at,
+		options: spec.options.clone(),
+		badge,
+	};
+
+	let mut outcomes = Vec::with_capacity(endpoints.len());
+
+	for endpoint in endpoints {
+		let platform = crate::push::PushPlatform::from_str_value(&endpoint.platform)
+			.unwrap_or(crate::push::PushPlatform::Apns);
+		let attempt = match runtime.transport(platform) {
+			Some(transport) => transport.attempt(&endpoint.credential, &message).await,
+			None => {
+				transport::Outcome::Ended {
+					reason: crate::push::DeliveryReason::TransportUnavailable,
+					invalidate: false,
+				}
+			}
+		};
+
+		let (state, reason) = match attempt {
+			transport::Outcome::Accepted => (crate::push::DeliveryState::Accepted, None),
+			// There is no queue behind a test: a transient answer is a
+			// rejected one whose retry is calling again.
+			transport::Outcome::Transient { .. } => (crate::push::DeliveryState::Rejected, None),
+			transport::Outcome::Stalled { .. } | transport::Outcome::AuthRejected { .. } => {
+				(
+					crate::push::DeliveryState::Rejected,
+					Some(crate::push::DeliveryReason::OperatorConfiguration),
+				)
+			}
+			transport::Outcome::WaitUntil(_) => (crate::push::DeliveryState::Skipped, None),
+			transport::Outcome::Ended { reason, .. } => (push::state_of(reason), Some(reason)),
+		};
+
+		outcomes.push(crate::TestSendOutcome {
+			endpoint: endpoint.id,
+			platform,
+			state,
+			reason,
+		});
+	}
+
+	Ok(outcomes)
 }
 
 /// The `number`th placeholder for the dialect.

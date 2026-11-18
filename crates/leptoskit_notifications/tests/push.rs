@@ -3607,6 +3607,685 @@ fn a_malformed_extra_host_is_refused_by_name_at_the_build() {
 	);
 }
 
+// Message options on the wire.
+
+/// The APNs wire carries every option where Apple reads it: priority in
+/// the header, sound, badge, and link in the payload, the Apple
+/// overrides in `aps`, and an image under the mutable-content flag.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_apns_wire_carries_the_send_options() {
+	let mock = Mock::new();
+	let mut service = service(&mock, &all_transports()).await;
+
+	assert_eq!(
+		enroll(&service, ALICE, apns_credential(&device_token(1)))
+			.await
+			.0,
+		200
+	);
+	service.resume();
+
+	let (status, body) = send(
+		&service,
+		"apns-options",
+		json!({
+			"category": "billing",
+			"title": "Invoice paid",
+			"body": "See the attachment.",
+			"options": {
+				"priority": "normal",
+				"image": "https://cdn.example.test/paid.png",
+				"sound": { "named": "chime.aiff" },
+				"badge": { "set": 7 },
+				"link": "/invoice/42",
+				"apple": {
+					"subtitle": "Invoice #42",
+					"thread_id": "billing",
+					"category": "BILLING",
+					"interruption_level": "time_sensitive",
+					"relevance_score": 0.9,
+				},
+			},
+		}),
+		&[ALICE],
+	)
+	.await;
+	assert_eq!(status, 200, "{body}");
+	settled(&service, "apns-options").await;
+
+	let sent = mock.requests_to(APNS_HOST);
+	assert_eq!(sent.len(), 1);
+	assert_eq!(sent[0].header("apns-priority"), Some("5"), "normal is 5");
+	assert_eq!(sent[0].header("apns-push-type"), Some("alert"));
+
+	let payload = sent[0].json();
+	assert_eq!(payload["aps"]["alert"]["title"], "Invoice paid");
+	assert_eq!(payload["aps"]["alert"]["subtitle"], "Invoice #42");
+	assert_eq!(payload["aps"]["sound"], "chime.aiff");
+	assert_eq!(payload["aps"]["badge"], 7);
+	assert_eq!(payload["aps"]["thread-id"], "billing");
+	assert_eq!(payload["aps"]["category"], "BILLING");
+	assert_eq!(payload["aps"]["interruption-level"], "time-sensitive");
+	assert_eq!(payload["aps"]["relevance-score"], 0.9);
+	assert_eq!(payload["aps"]["mutable-content"], 1);
+	assert_eq!(payload["lkimg"], "https://cdn.example.test/paid.png");
+	assert_eq!(payload["lklink"], "/invoice/42");
+	assert!(payload["lkn"].as_str().is_some());
+
+	// A silent sound leaves the key out — Apple platforms are silent
+	// without one — and the default sound names it.
+	for (sound, _key) in [("silent", false), ("default", true)] {
+		let (status, body) = send(
+			&service,
+			&format!("apns-sound-{sound}"),
+			json!({
+				"category": "billing",
+				"title": "T",
+				"options": { "sound": sound },
+			}),
+			&[ALICE],
+		)
+		.await;
+		assert_eq!(status, 200, "{body}");
+		settled(&service, &format!("apns-sound-{sound}")).await;
+	}
+
+	let sounds = mock.requests_to(APNS_HOST);
+	assert!(
+		sounds[1].json()["aps"].get("sound").is_none(),
+		"silent sends no sound key"
+	);
+	assert_eq!(sounds[2].json()["aps"]["sound"], "default");
+}
+
+/// A data send's APNs wire is a background push: the background type,
+/// priority 5 as Apple requires with it, `content-available`, and no
+/// alert — with the data and the id still riding.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_apns_data_wire_is_a_background_push() {
+	let mock = Mock::new();
+	let mut service = service(&mock, &all_transports()).await;
+
+	assert_eq!(
+		enroll(&service, ALICE, apns_credential(&device_token(1)))
+			.await
+			.0,
+		200
+	);
+	service.resume();
+
+	let (status, body) = send(
+		&service,
+		"apns-data",
+		json!({
+			"category": "sync",
+			"title": "Sync",
+			"body": "A silent nudge.",
+			"data": json!({ "since": "42" }).to_string(),
+			"options": {
+				"kind": "data",
+				"priority": "high",
+				"badge": { "set": 3 },
+				"link": "/sync",
+			},
+		}),
+		&[ALICE],
+	)
+	.await;
+	assert_eq!(status, 200, "{body}");
+	settled(&service, "apns-data").await;
+
+	let sent = mock.requests_to(APNS_HOST);
+	assert_eq!(sent.len(), 1);
+	assert_eq!(sent[0].header("apns-push-type"), Some("background"));
+	assert_eq!(
+		sent[0].header("apns-priority"),
+		Some("5"),
+		"a background push is priority 5, whatever the send asked"
+	);
+
+	let payload = sent[0].json();
+	assert_eq!(payload["aps"]["content-available"], 1);
+	assert!(
+		payload["aps"].get("alert").is_none(),
+		"no banner: {payload}"
+	);
+	assert_eq!(payload["aps"]["badge"], 3);
+	assert_eq!(payload["lk"]["since"], "42");
+	assert_eq!(payload["lklink"], "/sync");
+	assert!(payload["lkn"].as_str().is_some());
+}
+
+/// The FCM wire carries the options where the HTTP v1 API reads them:
+/// the Android notification and priority, the image in both the
+/// notification and the iOS payload, the link in the data, and the
+/// Apple overrides in the APNs block the project also serves.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_fcm_wire_carries_the_send_options() {
+	let mock = Mock::new();
+	let (rsa_pem, _) = test_rsa();
+	let config = config::PushConfig {
+		apns: None,
+		fcm: Some(fcm_config_for(&rsa_pem)),
+		web: None,
+	};
+	let mut service = service(&mock, &config).await;
+
+	assert_eq!(
+		enroll(&service, ALICE, fcm_credential("fcm-token-1"))
+			.await
+			.0,
+		200
+	);
+	mock.scripted(passing_exchange());
+	service.resume();
+
+	let (status, body) = send(
+		&service,
+		"fcm-options",
+		json!({
+			"category": "billing",
+			"title": "Invoice paid",
+			"body": "See the attachment.",
+			"options": {
+				"priority": "high",
+				"image": "https://cdn.example.test/paid.png",
+				"sound": { "named": "chime" },
+				"badge": { "set": 7 },
+				"link": "/invoice/42",
+				"android": {
+					"channel_id": "inbox",
+					"color": "#10b981",
+					"icon": "ic_income",
+					"tag": "billing",
+					"sticky": true,
+				},
+				"apple": {
+					"subtitle": "Invoice #42",
+					"thread_id": "billing",
+					"interruption_level": "passive",
+					"relevance_score": 0.5,
+				},
+			},
+		}),
+		&[ALICE],
+	)
+	.await;
+	assert_eq!(status, 200, "{body}");
+	settled(&service, "fcm-options").await;
+
+	let sent = mock.requests_to(FCM_HOST);
+	assert_eq!(sent.len(), 1);
+	let message = sent[0].json()["message"].clone();
+
+	let android = &message["android"];
+	assert_eq!(android["priority"], "HIGH");
+	assert_eq!(android["notification"]["channel_id"], "inbox");
+	assert_eq!(android["notification"]["color"], "#10b981");
+	assert_eq!(android["notification"]["icon"], "ic_income");
+	assert_eq!(android["notification"]["tag"], "billing");
+	assert_eq!(android["notification"]["sticky"], true);
+	assert_eq!(android["notification"]["sound"], "chime");
+	assert_eq!(android["notification"]["notification_count"], 7);
+
+	assert_eq!(
+		message["notification"]["image"],
+		"https://cdn.example.test/paid.png"
+	);
+	assert_eq!(message["data"]["lklink"], "/invoice/42");
+
+	let aps = &message["apns"]["payload"]["aps"];
+	assert_eq!(aps["alert"]["subtitle"], "Invoice #42");
+	assert_eq!(aps["thread-id"], "billing");
+	assert_eq!(aps["interruption-level"], "passive");
+	assert_eq!(aps["relevance-score"], 0.5);
+	assert_eq!(aps["mutable-content"], 1);
+	assert_eq!(
+		message["apns"]["payload"]["fcm_options"]["image"],
+		"https://cdn.example.test/paid.png"
+	);
+	assert_eq!(message["apns"]["headers"]["apns-priority"], "10");
+
+	// A default send adds none of the option headers it never had: the
+	// bytes an option-less send produces are the bytes it always did.
+	let (status, body) = send(&service, "fcm-plain-after-options", spec(), &[ALICE]).await;
+	assert_eq!(status, 200, "{body}");
+	settled(&service, "fcm-plain-after-options").await;
+	let plain = mock.requests_to(FCM_HOST)[1].json()["message"].clone();
+	assert!(plain["android"].get("priority").is_none(), "{plain}");
+	assert!(plain["android"].get("notification").is_none(), "{plain}");
+	assert!(
+		plain["apns"]["headers"].get("apns-priority").is_none(),
+		"{plain}"
+	);
+	assert!(
+		plain["notification"].get("image").is_none() && plain["data"].get("lklink").is_none(),
+		"{plain}"
+	);
+}
+
+/// A data send's FCM wire has no notification block at all — Android
+/// hands the data to the app — and its iOS half is the same background
+/// push a direct APNs send would be.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_fcm_data_wire_has_no_notification_block() {
+	let mock = Mock::new();
+	let (rsa_pem, _) = test_rsa();
+	let config = config::PushConfig {
+		apns: None,
+		fcm: Some(fcm_config_for(&rsa_pem)),
+		web: None,
+	};
+	let mut service = service(&mock, &config).await;
+
+	assert_eq!(
+		enroll(&service, ALICE, fcm_credential("fcm-token-1"))
+			.await
+			.0,
+		200
+	);
+	mock.scripted(passing_exchange());
+	service.resume();
+
+	let (status, body) = send(
+		&service,
+		"fcm-data",
+		json!({
+			"category": "sync",
+			"title": "Sync",
+			"body": "A silent nudge.",
+			"data": json!({ "since": "42" }).to_string(),
+			"options": { "kind": "data", "priority": "normal" },
+		}),
+		&[ALICE],
+	)
+	.await;
+	assert_eq!(status, 200, "{body}");
+	settled(&service, "fcm-data").await;
+
+	let message = mock.requests_to(FCM_HOST)[0].json()["message"].clone();
+	assert!(
+		message.get("notification").is_none(),
+		"a data message shows nothing: {message}"
+	);
+	assert_eq!(message["data"]["since"], "42");
+	assert_eq!(message["data"]["lkn"], message["android"]["collapse_key"]);
+	assert_eq!(message["android"]["priority"], "NORMAL");
+	assert_eq!(message["apns"]["headers"]["apns-push-type"], "background");
+	assert_eq!(message["apns"]["headers"]["apns-priority"], "5");
+	assert_eq!(message["apns"]["payload"]["aps"]["content-available"], 1);
+	assert!(
+		message["apns"]["payload"]["aps"].get("alert").is_none(),
+		"{message}"
+	);
+}
+
+/// The Web Push wire carries the options the receiver reads: urgency in
+/// the header, and the image, badge, link, silent flag, and web
+/// presentation inside the independently opened envelope.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_web_push_wire_carries_the_send_options() {
+	let mock = Mock::new();
+	let (key_pem, _) = generated_pem();
+	let (_, web) = web_config_for(&key_pem);
+	let config = config::PushConfig {
+		apns: None,
+		fcm: None,
+		web: Some(web),
+	};
+	let mut service = service(&mock, &config).await;
+
+	let endpoint = format!("https://{WEB_HOST}/push/abcdef123456");
+	let (receiver, credential, auth_secret, _) = web_subscription(&endpoint);
+	let (status, body) = enroll(&service, ALICE, credential).await;
+	assert_eq!(status, 200, "{body}");
+	service.resume();
+
+	let (status, body) = send(
+		&service,
+		"web-options",
+		json!({
+			"category": "billing",
+			"title": "Invoice paid",
+			"body": "See the attachment.",
+			"options": {
+				"priority": "high",
+				"image": "https://cdn.example.test/paid.png",
+				"sound": "silent",
+				"badge": { "set": 7 },
+				"link": "/invoice/42",
+				"web": {
+					"icon": "https://cdn.example.test/icon.png",
+					"badge_icon": "/badge.png",
+					"actions": [{ "action": "open", "title": "Open" }],
+					"require_interaction": true,
+					"dir": "rtl",
+					"lang": "de",
+				},
+			},
+		}),
+		&[ALICE],
+	)
+	.await;
+	assert_eq!(status, 200, "{body}");
+	settled(&service, "web-options").await;
+
+	let sent = mock.requests_to(WEB_HOST);
+	assert_eq!(sent.len(), 1);
+	assert_eq!(sent[0].header("urgency"), Some("high"));
+
+	let receiver_point = {
+		let stored = rows(&service, "SELECT credential FROM push_endpoints").await;
+		let subscription: Value = serde_json::from_str(&text(&stored[0][0])).unwrap();
+		URL_SAFE_NO_PAD
+			.decode(subscription["keys"]["p256dh"].as_str().unwrap())
+			.unwrap()
+	};
+	let opened = open_aes128gcm(&sent[0].body, receiver, &receiver_point, &auth_secret);
+	let payload: Value = serde_json::from_slice(&opened).unwrap();
+	assert_eq!(payload["image"], "https://cdn.example.test/paid.png");
+	assert_eq!(payload["lkbadge"], 7);
+	assert_eq!(payload["lklink"], "/invoice/42");
+	assert_eq!(payload["silent"], true);
+	assert_eq!(payload["lkw"]["icon"], "https://cdn.example.test/icon.png");
+	assert_eq!(payload["lkw"]["badge"], "/badge.png");
+	assert_eq!(payload["lkw"]["actions"][0]["action"], "open");
+	assert_eq!(payload["lkw"]["actions"][0]["title"], "Open");
+	assert_eq!(payload["lkw"]["require_interaction"], true);
+	assert_eq!(payload["lkw"]["dir"], "rtl");
+	assert_eq!(payload["lkw"]["lang"], "de");
+	assert!(payload["lkdata"].is_null(), "a visible send is not flagged");
+
+	// A default send keeps today's urgency and today's envelope keys.
+	let (status, body) = send(&service, "web-plain", spec(), &[ALICE]).await;
+	assert_eq!(status, 200, "{body}");
+	settled(&service, "web-plain").await;
+	let plain = mock.requests_to(WEB_HOST)[1].clone();
+	assert_eq!(plain.header("urgency"), Some("normal"));
+}
+
+/// A data send's web envelope is flagged so the receiver shows nothing.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_web_push_data_envelope_is_flagged_silent() {
+	let mock = Mock::new();
+	let (key_pem, _) = generated_pem();
+	let (_, web) = web_config_for(&key_pem);
+	let config = config::PushConfig {
+		apns: None,
+		fcm: None,
+		web: Some(web),
+	};
+	let mut service = service(&mock, &config).await;
+
+	let endpoint = format!("https://{WEB_HOST}/push/abcdef123456");
+	let (receiver, credential, auth_secret, _) = web_subscription(&endpoint);
+	let (status, body) = enroll(&service, ALICE, credential).await;
+	assert_eq!(status, 200, "{body}");
+	service.resume();
+
+	let (status, body) = send(
+		&service,
+		"web-data",
+		json!({
+			"category": "sync",
+			"title": "Sync",
+			"body": "A silent nudge.",
+			"data": json!({ "since": "42" }).to_string(),
+			"options": { "kind": "data", "badge": { "set": 2 } },
+		}),
+		&[ALICE],
+	)
+	.await;
+	assert_eq!(status, 200, "{body}");
+	settled(&service, "web-data").await;
+
+	let sent = mock.requests_to(WEB_HOST);
+	assert_eq!(sent.len(), 1);
+	let receiver_point = {
+		let stored = rows(&service, "SELECT credential FROM push_endpoints").await;
+		let subscription: Value = serde_json::from_str(&text(&stored[0][0])).unwrap();
+		URL_SAFE_NO_PAD
+			.decode(subscription["keys"]["p256dh"].as_str().unwrap())
+			.unwrap()
+	};
+	let opened = open_aes128gcm(&sent[0].body, receiver, &receiver_point, &auth_secret);
+	let payload: Value = serde_json::from_slice(&opened).unwrap();
+	assert_eq!(
+		payload["lkdata"], true,
+		"the receiver's cue to show nothing"
+	);
+	assert_eq!(payload["lk"]["since"], "42");
+	assert_eq!(payload["lkbadge"], 2, "a badge still sets, silently");
+}
+
+/// An unread badge resolves per recipient at push time: two people, two
+/// different unread counts, one send — each payload badges its own.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_unread_badge_resolves_per_recipient_at_push_time() {
+	let mock = Mock::new();
+	let mut service = service(&mock, &all_transports()).await;
+
+	assert_eq!(
+		enroll(&service, ALICE, apns_credential(&device_token(1)))
+			.await
+			.0,
+		200
+	);
+	assert_eq!(
+		enroll(&service, BOB, apns_credential(&device_token(2)))
+			.await
+			.0,
+		200
+	);
+	service.resume();
+
+	// Alice holds one unread, bob three.
+	for key in ["alice-prior"] {
+		let (status, body) = send(&service, key, spec(), &[ALICE]).await;
+		assert_eq!(status, 200, "{body}");
+	}
+
+	for key in ["bob-prior-1", "bob-prior-2", "bob-prior-3"] {
+		let (status, body) = send(&service, key, spec(), &[BOB]).await;
+		assert_eq!(status, 200, "{body}");
+	}
+
+	settled(&service, "bob-prior-3").await;
+
+	let (status, body) = send(
+		&service,
+		"badge-unread",
+		json!({
+			"category": "news",
+			"title": "Two badges",
+			"body": "One each.",
+			"options": { "badge": "unread" },
+		}),
+		&[ALICE, BOB],
+	)
+	.await;
+	assert_eq!(status, 200, "{body}");
+	settled(&service, "badge-unread").await;
+
+	// The badge-unread send is itself unread, so each count includes it:
+	// alice's 1 prior plus this one, bob's 3 plus this one.
+	let mut badges = mock
+		.requests_to(APNS_HOST)
+		.iter()
+		.filter(|seen| seen.header("apns-collapse-id").is_some())
+		.map(|seen| seen.json()["aps"]["badge"].as_i64())
+		.collect::<Vec<_>>();
+	badges.sort_unstable();
+
+	assert_eq!(
+		badges,
+		vec![None, None, None, None, Some(2), Some(4)],
+		"only the badge-unread send carries badges, one per recipient: {badges:?}"
+	);
+}
+
+/// The payload limits degrade the optional extras in the documented
+/// order — platform overrides and image first, then sound, badge, and
+/// link, then the send's `data` — before the id-only envelope.
+#[tokio::test(flavor = "multi_thread")]
+async fn payload_limits_degrade_options_in_the_documented_order() {
+	let mock = Mock::new();
+	let mut service = service(&mock, &all_transports()).await;
+
+	assert_eq!(
+		enroll(&service, ALICE, apns_credential(&device_token(1)))
+			.await
+			.0,
+		200
+	);
+	assert_eq!(
+		enroll(&service, ALICE, fcm_credential("fcm-degrade"))
+			.await
+			.0,
+		200
+	);
+	mock.scripted(passing_exchange());
+	service.resume();
+
+	// Sized so the full payload is past Apple's 4 KiB, the
+	// platform-and-image trim is past it too, and the sound-badge-link
+	// trim fits: the wire carries the data without any of the extras.
+	let link = format!("/l/{}", "x".repeat(900));
+	let (status, body) = send(
+		&service,
+		"apns-degrade",
+		json!({
+			"category": "billing",
+			"title": "T",
+			"body": "x".repeat(600),
+			"data": json!({ "k": "d".repeat(3_300) }).to_string(),
+			"options": {
+				"image": "https://cdn.example.test/i.png",
+				"sound": "default",
+				"badge": { "set": 7 },
+				"link": link,
+				"apple": { "subtitle": "s".repeat(100) },
+			},
+		}),
+		&[ALICE],
+	)
+	.await;
+	assert_eq!(status, 200, "{body}");
+
+	let outcomes = settled(&service, "apns-degrade").await;
+	assert!(
+		outcomes.iter().all(|(state, _)| state == "accepted"),
+		"{outcomes:?}"
+	);
+
+	let apns = mock
+		.requests_to(APNS_HOST)
+		.iter()
+		.map(Seen::json)
+		.max_by_key(|payload| payload["lkn"].as_str().map_or(0, str::len))
+		.expect("the degraded push went out");
+	assert!(apns["lk"].is_object(), "the data survived: {apns}");
+	assert!(apns["aps"].get("sound").is_none(), "sound went: {apns}");
+	assert!(apns["aps"].get("badge").is_none(), "badge went: {apns}");
+	assert!(apns.get("lklink").is_none(), "link went: {apns}");
+	assert!(apns.get("lkimg").is_none(), "image went: {apns}");
+	assert!(
+		apns["aps"]["alert"].get("subtitle").is_none(),
+		"platform overrides went: {apns}"
+	);
+
+	// Past every trim, the id-only envelope: no data, no options, the
+	// alert and the id alone — with the collapse id still its own.
+	let (status, body) = send(
+		&service,
+		"apns-minimal",
+		json!({
+			"category": "billing",
+			"title": "T",
+			"body": "b".repeat(1_900),
+			"data": json!({ "k": "d".repeat(3_300) }).to_string(),
+			"options": { "sound": "default", "badge": { "set": 7 } },
+		}),
+		&[ALICE],
+	)
+	.await;
+	assert_eq!(status, 200, "{body}");
+	settled(&service, "apns-minimal").await;
+
+	let minimal = mock
+		.requests_to(APNS_HOST)
+		.iter()
+		.map(Seen::json)
+		.find(|payload| payload["aps"]["alert"]["title"] == "T" && payload.get("lk").is_none())
+		.expect("the id-only envelope went out");
+	assert!(minimal["aps"].get("sound").is_none(), "{minimal}");
+	assert!(minimal["aps"].get("badge").is_none(), "{minimal}");
+
+	// The same order on FCM: the Android notification, the image, and
+	// the Apple extras go before the link, and the data outlasts them
+	// all short of the id-only envelope. The body rides twice — the
+	// notification block and the APNs payload — so this send is past
+	// the whole message's 4 KiB until the platform extras leave.
+	let (status, body) = send(
+		&service,
+		"fcm-degrade",
+		json!({
+			"category": "billing",
+			"title": "T",
+			"body": "y".repeat(1_050),
+			"data": json!({ "k": "d".repeat(1_500) }).to_string(),
+			"options": {
+				"image": "https://cdn.example.test/i.png",
+				"badge": { "set": 7 },
+				"link": "/l",
+				"android": { "channel_id": "inbox", "tag": "billing" },
+			},
+		}),
+		&[ALICE],
+	)
+	.await;
+	assert_eq!(status, 200, "{body}");
+	settled(&service, "fcm-degrade").await;
+
+	let degraded = mock
+		.requests_to(FCM_HOST)
+		.iter()
+		.map(|seen| seen.json()["message"].clone())
+		.find(|message| message["data"].get("k").is_some())
+		.expect("the degraded FCM message went out");
+
+	// Stage one dropped the platform overrides and the image, and kept
+	// everything the later stages own: the badge and the link, and the
+	// data and the collapse key, which never go short of the id-only
+	// envelope.
+	let android_notification = &degraded["android"]["notification"];
+	assert!(
+		android_notification.get("channel_id").is_none()
+			&& android_notification.get("tag").is_none(),
+		"the platform block went: {degraded}"
+	);
+	assert_eq!(
+		android_notification["notification_count"], 7,
+		"the badge outlasts the platform block: {degraded}"
+	);
+	assert!(
+		degraded["notification"].get("image").is_none(),
+		"the image went: {degraded}"
+	);
+	assert!(
+		degraded["apns"]["payload"].get("fcm_options").is_none(),
+		"the iOS image went with it: {degraded}"
+	);
+	assert!(
+		degraded["data"].get("lklink").is_some(),
+		"the link stayed: {degraded}"
+	);
+	assert!(
+		degraded["android"].get("collapse_key").is_some(),
+		"the collapse key never goes: {degraded}"
+	);
+}
+
 #[cfg(feature = "postgres")]
 #[path = "support/postgres.rs"]
 mod postgres;

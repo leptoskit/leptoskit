@@ -44,6 +44,12 @@ required-features = ["service"]
 name = "push"
 required-features = ["service"]
 
+# The options tests exercise message options end to end: silent data
+# sends, idempotent intent, and the app-only test send.
+[[test]]
+name = "options"
+required-features = ["service"]
+
 [[test]]
 name = "boundary"
 required-features = ["service"]

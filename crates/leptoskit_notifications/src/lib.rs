@@ -59,6 +59,7 @@ use serde::Deserialize;
 use serde::Serialize;
 
 pub mod condition;
+pub mod options;
 
 #[cfg(feature = "browser")]
 pub mod browser;
@@ -70,6 +71,18 @@ pub mod native;
 pub mod service;
 
 pub mod push;
+
+pub use options::AndroidOptions;
+pub use options::AppleOptions;
+pub use options::BadgeSetting;
+pub use options::InterruptionLevel;
+pub use options::MessageKind;
+pub use options::MessageOptions;
+pub use options::NotificationSound;
+pub use options::SendPriority;
+pub use options::TextDirection;
+pub use options::WebOptions;
+pub use options::WebPushAction;
 
 /// The service's name: the `[services.notifications]` table in the app's
 /// `leptoskit.toml` must use it, because every operation is addressed to it.
@@ -188,6 +201,18 @@ pub struct Notification {
 	pub dismissed_at: Option<leptoskit_db::Timestamp>,
 	#[db(created_at)]
 	pub created_at: leptoskit_db::Timestamp,
+	/// The row's kind: `notification`, the inbox row this has always
+	/// been, or `data` — a silent background message's durable half. A
+	/// data row never surfaces in an inbox or a badge count; it exists so
+	/// the send's deliveries, status, cancellation, and idempotency work
+	/// exactly as they do for a visible one.
+	#[db(one_of("notification", "data"), default = "notification")]
+	pub kind: String,
+	/// The send's options, as the JSON it was sent as; `None` when the
+	/// send carried none. The push engine reads it per delivery, so a
+	/// badge set to the recipient's unread count resolves at push time.
+	#[db(max_len = 4096)]
+	pub options: Option<String>,
 }
 
 /// One send the app's server made. Keyed by its idempotency key, so a
@@ -362,9 +387,10 @@ pub static POSTGRES_MIGRATIONS: &[leptoskit_db::Migration] =
 	leptoskit_db::migrations!("migrations-postgres");
 
 /// What a send carries, apart from its key and its recipients: the content,
-/// and when it shows and stops showing. The app's server builds one per
-/// send, and the service stores it verbatim on every row. The lengths here
-/// are what [`check_send`] and the `notifications` table enforce.
+/// when it shows and stops showing, and the [options](MessageOptions) that
+/// shape the notification each platform shows. The app's server builds one
+/// per send, and the service stores it verbatim on every row. The lengths
+/// here are what [`check_send`] and the `notifications` table enforce.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct SendSpec {
 	pub category: String,
@@ -380,6 +406,22 @@ pub struct SendSpec {
 	/// When it stops being visible. Must be after visibility begins.
 	#[serde(default)]
 	pub expires_at: Option<leptoskit_db::Timestamp>,
+	/// How the notification is shaped on each platform: a silent data
+	/// message, priority, an image, a sound, a badge, a click link, and
+	/// the per-platform overrides. `None` — and an all-default options
+	/// value, which serializes to nothing — is the send exactly as it
+	/// was before options existed.
+	#[serde(default, skip_serializing_if = "MessageOptions::is_empty")]
+	pub options: MessageOptions,
+}
+
+impl SendSpec {
+	/// Whether this is a silent data message: no inbox row, no badge
+	/// count, delivery durable all the same.
+	#[must_use]
+	pub fn is_data(&self) -> bool {
+		self.options.is_data()
+	}
 }
 
 /// Who a send goes to. Explicit recipients are today's send, unchanged;
@@ -514,6 +556,24 @@ pub struct SendProgress {
 	pub skipped_opted_out: u32,
 }
 
+/// What one [`send_test`] attempt came to, for one endpoint. Sanitized
+/// exactly like a durable delivery's status: no provider text, no
+/// credential.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct TestSendOutcome {
+	/// The endpoint's opaque id, as the person's own list answers it.
+	pub endpoint: uuid::Uuid,
+	/// Which platform's service it went through.
+	pub platform: push::PushPlatform,
+	/// Where the one attempt stands: `accepted`, `rejected`, or
+	/// `skipped`. There is no queue behind a test send, so nothing is
+	/// ever `enqueued` or `retrying` — a transient failure answers
+	/// `rejected` with no reason, and calling again is the retry.
+	pub state: push::DeliveryState,
+	/// Why it ended, when it did and the code knows one.
+	pub reason: Option<push::DeliveryReason>,
+}
+
 /// What one app-side topic subscription call changed.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct TopicChanges {
@@ -618,22 +678,7 @@ pub fn check_send_shape(
 	target: &SendTarget,
 ) -> Result<(), String> {
 	check_key(idempotency_key)?;
-	check_category(&spec.category)?;
-
-	if spec.title.trim().is_empty() || spec.title.len() > MAX_TITLE_LEN || !valid_text(&spec.title)
-	{
-		return Err(format!(
-			"a title is 1 to {MAX_TITLE_LEN} bytes, with no control characters"
-		));
-	}
-
-	if spec.body.len() > MAX_BODY_LEN || !valid_text(&spec.body) {
-		return Err(format!(
-			"a body is at most {MAX_BODY_LEN} bytes, with no control characters"
-		));
-	}
-
-	check_data(spec.data.as_deref())?;
+	check_spec(spec)?;
 
 	match target {
 		SendTarget::Recipients(recipients) => {
@@ -653,6 +698,35 @@ pub fn check_send_shape(
 	{
 		return Err("an expiry must be after the notification becomes visible".into());
 	}
+
+	Ok(())
+}
+
+/// Checks a spec's own shape — category, content, `data`, and options —
+/// wherever a spec is named: a send, or a [`send_test`](fn@send_test)
+/// probe.
+///
+/// # Errors
+///
+/// A message naming what's wrong.
+pub fn check_spec(spec: &SendSpec) -> Result<(), String> {
+	check_category(&spec.category)?;
+
+	if spec.title.trim().is_empty() || spec.title.len() > MAX_TITLE_LEN || !valid_text(&spec.title)
+	{
+		return Err(format!(
+			"a title is 1 to {MAX_TITLE_LEN} bytes, with no control characters"
+		));
+	}
+
+	if spec.body.len() > MAX_BODY_LEN || !valid_text(&spec.body) {
+		return Err(format!(
+			"a body is at most {MAX_BODY_LEN} bytes, with no control characters"
+		));
+	}
+
+	check_data(spec.data.as_deref())?;
+	options::check_options(&spec.options)?;
 
 	Ok(())
 }
@@ -1136,7 +1210,12 @@ pub async fn cancel(cx: &rpc::MutationCx, idempotency_key: String) -> rpc::Resul
 
 	if !fanning
 		&& rows.iter().any(|notification| {
-			notification.visible_at <= now && notification.cancelled_at.is_none()
+			// A data row is never seen by anyone — it is the silent
+			// half of a send, not a visible one — so only a visible
+			// notification row can make the send uncancellable.
+			notification.kind != MessageKind::Data.as_str()
+				&& notification.visible_at <= now
+				&& notification.cancelled_at.is_none()
 		}) {
 		return Err(rpc::Error::conflict(
 			"this send is already visible, so it can no longer be cancelled",
@@ -1633,4 +1712,51 @@ pub async fn forget_person(cx: &rpc::MutationCx, person: uuid::Uuid) -> rpc::Res
 	}
 
 	service::forget_person(cx.tx(), person).await
+}
+
+/// Pushes a spec to one person's live endpoints, right now, as a test:
+/// the app's server only, the way FCM's "test on device" is. Nothing is
+/// written — no inbox row, no delivery row, no send bookkeeping, no
+/// count anywhere — and each endpoint answers its own outcome, because
+/// a test is a question about a device, not a send.
+///
+/// The spec takes the same [options](MessageOptions) a send does —
+/// priority, image, sound, a badge, a link, and the per-platform blocks,
+/// silent data messages included — so what a device receives is what a
+/// real send to it would carry. A badge set to `unread` resolves against
+/// the person's live count at the moment of the test.
+///
+/// The blast radius is bounded by the person's own enrollment: at most
+/// their [`MAX_ENDPOINTS`](crate::push::MAX_ENDPOINTS) live endpoints,
+/// each attempted exactly once. Name an endpoint id to probe one device;
+/// an id that isn't the person's own live endpoint is not found. There
+/// is no idempotency key to reuse — a test answers, it does not record —
+/// so a retried call pushes again; a client that wants replay safety
+/// sends the RPC layer's own idempotency header.
+///
+/// Only the app may call it: [`rpc::client::call_as_app`] from server code.
+///
+/// # Errors
+///
+/// [`rpc::Error::Forbidden`] from anywhere but the app's server,
+/// [`rpc::Error::Invalid`] for input the checks refuse or a server with
+/// no push transport configured, and [`rpc::Error::NotFound`] for an
+/// endpoint id the person doesn't hold live.
+#[rpc::mutation(service = "notifications")]
+pub async fn send_test(
+	cx: &rpc::MutationCx,
+	spec: SendSpec,
+	person: uuid::Uuid,
+	#[serde(default)] endpoint: Option<uuid::Uuid>,
+) -> rpc::Result<Vec<TestSendOutcome>> {
+	if cx.identity().caller.as_deref() != Some(rpc::server::APP_CALLER) {
+		return Err(rpc::Error::forbidden(
+			"only the app tests sends: call this from its server, with the service's token",
+		));
+	}
+
+	check_spec(&spec).map_err(rpc::Error::invalid)?;
+	check_send_timing(spec.visible_at, spec.expires_at).map_err(rpc::Error::invalid)?;
+
+	service::send_test(cx, &spec, person, endpoint).await
 }

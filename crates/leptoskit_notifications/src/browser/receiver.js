@@ -5,11 +5,16 @@
 // builds it with your inbox route baked in — same-origin from its root (for
 // example `/sw.js`) with a JavaScript content type, and registers it. On a
 // `push` event it reads the notifications service's envelope — the title,
-// the body, the notification's id, and the send's `data` — and shows what
-// arrived with the platform's own presentation, tagged with the
-// notification's id so a repeat replaces rather than stacks. On a click it
-// closes the banner, focuses a window of this origin the person already
-// has, and otherwise opens your inbox route with the notification's id.
+// the body, the notification's id, the send's `data`, and the options that
+// shape the banner: an image, a badge count, a click link, and the web
+// presentation set — and shows what arrived with the platform's own
+// presentation, tagged with the notification's id so a repeat replaces
+// rather than stacks. A data message — `lkdata` — shows nothing at all:
+// the app's own code decides what its `data` means, and the worker's whole
+// job for it is the badge it asked to set. On a click it closes the
+// banner, focuses a window of this origin the person already has, and
+// otherwise opens your inbox route — or the send's own link, when it
+// carries one that resolves to this origin — with the notification's id.
 //
 // This worker holds no credentials and calls no server: nothing fetches,
 // nothing evaluates, and no read state changes here — the authenticated app
@@ -17,13 +22,15 @@
 // oversized, malformed, or typed wrong still shows one truthful banner
 // ("New notification") under a stable tag, so a broken sender cannot
 // silently swallow a delivery, and untrusted payload content can never
-// choose where a click navigates.
+// choose where a click navigates: the link is honored only when it
+// resolves to this script's own origin, and everything else stays in the
+// notification's data.
 
 (() => {
 	"use strict";
 
-	// The inbox route your build substituted in: the only URL a click may
-	// open, on this origin, plus the notification's id as a query
+	// The inbox route your build substituted in: the default URL a click
+	// opens, on this origin, plus the notification's id as a query
 	// parameter.
 	const ROUTE = "__LKN_INBOX_ROUTE__";
 
@@ -36,6 +43,14 @@
 	// send. Longer content is clipped, not dropped.
 	const MAX_TITLE_CHARS = 200;
 	const MAX_BODY_CHARS = 2000;
+
+	// The bounds of the options the service puts in the envelope,
+	// mirrored from its own checks: an option longer than its bound is
+	// not honored, the same way a mistyped one is not.
+	const MAX_URL_CHARS = 1024;
+	const MAX_ACTIONS = 2;
+	const MAX_ACTION_CHARS = 100;
+	const MAX_LANG_CHARS = 35;
 
 	// The tag an id-less or broken envelope falls back to, so even those
 	// collapse instead of stacking.
@@ -53,9 +68,15 @@
 	// A tag is plain printable ASCII, without control characters.
 	const PLAIN_TEXT = /^[\x20-\x7e]{1,64}$/;
 
+	// A BCP 47 language tag, as loose as the service's own check.
+	const LANGUAGE_TAG = /^[a-zA-Z0-9-]{1,35}$/;
+
 	// Reads what arrived into what to show: a title, a body, a stable
-	// tag, and the notification's id for the click. Never throws:
-	// whatever a push carried, the answer is a banner.
+	// tag, the notification's id for the click, and the options that
+	// shape the banner — a silent data flag, an image, a badge count, a
+	// click link, and the web presentation set. Never throws: whatever a
+	// push carried, the answer is either a banner or a deliberate
+	// silence, never a broken one.
 	function envelopeOf(data) {
 		let payload = null;
 
@@ -80,6 +101,12 @@
 				tag: FALLBACK_TAG,
 				id: null,
 				lk: undefined,
+				data: false,
+				silent: false,
+				image: null,
+				badge: null,
+				link: null,
+				web: null,
 			};
 		}
 
@@ -97,6 +124,12 @@
 			tag: tag(payload.lkn),
 			id,
 			lk: plainObject(payload.lk),
+			data: payload.lkdata === true,
+			silent: payload.silent === true,
+			image: urlString(payload.image),
+			badge: badgeCount(payload.lkbadge),
+			link: urlString(payload.lklink),
+			web: presentation(payload.lkw),
 		};
 	}
 
@@ -114,6 +147,68 @@
 		return typeof lkn === "string" && NOTIFICATION_ID.test(lkn) ? lkn : null;
 	}
 
+	// An option that names a URL: a bounded string, or nothing. The
+	// click's own rules decide where a URL may actually go.
+	function urlString(value) {
+		return typeof value === "string" &&
+				value.length > 0 &&
+				value.length <= MAX_URL_CHARS
+			? value
+			: null;
+	}
+
+	// A badge count: a whole number the platform could set, or nothing.
+	function badgeCount(value) {
+		return typeof value === "number" && Number.isSafeInteger(value) &&
+				value >= 0
+			? value
+			: null;
+	}
+
+	// The web presentation set, as the service sends it: every field
+	// validated on its own, because the notification options are
+	// untrusted payload content like everything else.
+	function presentation(value) {
+		const set = plainObject(value);
+		if (!set) {
+			return null;
+		}
+
+		const read = {
+			icon: urlString(set.icon),
+			badge: urlString(set.badge),
+			requireInteraction: set.require_interaction === true,
+			dir: set.dir === "auto" || set.dir === "ltr" || set.dir === "rtl"
+				? set.dir
+				: null,
+			lang: typeof set.lang === "string" && LANGUAGE_TAG.test(set.lang)
+				? set.lang
+				: null,
+			actions: [],
+		};
+
+		if (Array.isArray(set.actions)) {
+			for (const action of set.actions.slice(0, MAX_ACTIONS)) {
+				const actionId = typeof action?.action === "string" &&
+						action.action.length > 0 &&
+						action.action.length <= MAX_ACTION_CHARS
+					? action.action
+					: null;
+				const title = typeof action?.title === "string" &&
+						action.title.length > 0 &&
+						action.title.length <= MAX_ACTION_CHARS
+					? action.title
+					: null;
+
+				if (actionId !== null && title !== null) {
+					read.actions.push({ action: actionId, title });
+				}
+			}
+		}
+
+		return read;
+	}
+
 	function clipped(text, maxChars) {
 		return text.length > maxChars ? text.slice(0, maxChars - 1) + "…" : text;
 	}
@@ -124,12 +219,49 @@
 			: undefined;
 	}
 
-	// The URL a click opens: the built-in route on this origin, with the
-	// notification's id when the envelope carried one. Payload content
-	// cannot add a path, a host, a scheme, or anything else — a
-	// hand-edited or mis-built route that left this origin is refused here
+	// Sets the app badge the platform shows, where the platform can: a
+	// count the send named, resolved by the service to the person's live
+	// unread number at push time. A zero clears it. Failures — an
+	// unsupported platform, a refused badge — are the platform's own
+	// answer, swallowed on purpose: a badge is a courtesy, never the
+	// delivery.
+	function setBadge(count) {
+		if (count === null || typeof navigator === "undefined") {
+			return;
+		}
+
+		try {
+			if (count === 0 && typeof navigator.clearAppBadge === "function") {
+				navigator.clearAppBadge().catch(() => {});
+			} else if (typeof navigator.setAppBadge === "function") {
+				navigator.setAppBadge(count).catch(() => {});
+			}
+		} catch (_error) {
+			// The badge API threw synchronously; the banner is unaffected.
+		}
+	}
+
+	// The URL a click opens: the send's own link when it resolves to this
+	// origin, and otherwise the built-in route — checked against this
+	// origin again at click time — with the notification's id when the
+	// envelope carried one. Payload content cannot add a path, a host, a
+	// scheme, or anything else — a link off this origin is refused here
 	// rather than navigated.
 	function targetUrl(data) {
+		const link = data && typeof data.lklink === "string" ? data.lklink : null;
+
+		if (link) {
+			try {
+				const linked = new URL(link, self.location.origin);
+
+				if (linked.origin === self.location.origin) {
+					return linked.href;
+				}
+			} catch (_error) {
+				// A malformed link falls through to the route.
+			}
+		}
+
 		let url;
 
 		try {
@@ -161,15 +293,66 @@
 		}
 	}
 
-	// One push: show what arrived. The registration's own presentation is
-	// used, so what a banner looks like is the OS's business, not this
-	// script's.
+	// One push: show what arrived, or — for a data message — show
+	// nothing but the badge it asked for. The registration's own
+	// presentation is used, so what a banner looks like is the OS's
+	// business, not this script's.
 	async function deliver(event) {
 		const envelope = envelopeOf(event.data);
+		setBadge(envelope.badge);
+
+		if (envelope.data) {
+			// A silent data message: the browser may penalize pushes
+			// that show nothing, and the service documents that, but
+			// the sender's instruction is the sender's.
+			return;
+		}
+
 		const options = { body: envelope.body, tag: envelope.tag };
 
-		if (envelope.id !== null || envelope.lk !== undefined) {
-			options.data = { lkn: envelope.id, lk: envelope.lk };
+		if (envelope.silent) {
+			options.silent = true;
+		}
+
+		if (envelope.image) {
+			options.image = envelope.image;
+		}
+
+		if (envelope.web) {
+			if (envelope.web.icon) {
+				options.icon = envelope.web.icon;
+			}
+
+			if (envelope.web.badge) {
+				options.badge = envelope.web.badge;
+			}
+
+			if (envelope.web.actions.length > 0) {
+				options.actions = envelope.web.actions;
+			}
+
+			if (envelope.web.requireInteraction) {
+				options.requireInteraction = true;
+			}
+
+			if (envelope.web.dir) {
+				options.dir = envelope.web.dir;
+			}
+
+			if (envelope.web.lang) {
+				options.lang = envelope.web.lang;
+			}
+		}
+
+		if (
+			envelope.id !== null || envelope.lk !== undefined ||
+			envelope.link !== null
+		) {
+			options.data = {
+				lkn: envelope.id,
+				lk: envelope.lk,
+				lklink: envelope.link,
+			};
 		}
 
 		await self.registration.showNotification(envelope.title, options);

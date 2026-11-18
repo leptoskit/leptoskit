@@ -466,7 +466,11 @@ pub(crate) trait Transport: Send + Sync {
 
 /// What a transport pushes: the notification's stable id — the collapse
 /// and topic key on every provider — its visible text, its `data` object,
-/// and when it stops being worth delivering.
+/// when it stops being worth delivering, and the [options] that shape
+/// the notification on each platform, with the badge already resolved to
+/// the number this recipient's push carries.
+///
+/// [options]: crate::MessageOptions
 #[derive(Clone, Debug)]
 pub struct Message {
 	/// The notification's id: the collapse id at APNs, the collapse key
@@ -481,6 +485,14 @@ pub struct Message {
 	/// When the notification stops being visible: the providers' expiry,
 	/// so a late push doesn't wake someone for something already gone.
 	pub expires_at: Option<Timestamp>,
+	/// How this send shapes the push: a silent data message, priority,
+	/// an image, a sound, a link, and the per-platform blocks. Empty is
+	/// the send exactly as it was before options existed.
+	pub options: crate::MessageOptions,
+	/// The badge this push sets, already resolved per recipient — a
+	/// number the transports put in the payload. `None` touches no
+	/// badge.
+	pub badge: Option<u32>,
 }
 
 /// The process's push transports, as the operator configured them. A
