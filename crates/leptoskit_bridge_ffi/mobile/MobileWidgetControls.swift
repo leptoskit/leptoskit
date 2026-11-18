@@ -137,7 +137,9 @@ extension MobileWidgetRenderer: UITextFieldDelegate, UIGestureRecognizerDelegate
     func textFieldDidBeginEditing(_ textField: UITextField) { event(textField.tag, 3) }
     func textFieldDidEndEditing(_ textField: UITextField) { event(textField.tag, 4) }
 
-    func textField(_ textField: UITextField, shouldChangeCharactersIn range: NSRange, replacement string: String) -> Bool {
+    func textField(
+        _ textField: UITextField, shouldChangeCharactersIn range: NSRange, replacement string: String
+    ) -> Bool {
         guard let props = properties[textField.tag] else { return true }
 
         // A read-only field refuses every edit and stays selectable.

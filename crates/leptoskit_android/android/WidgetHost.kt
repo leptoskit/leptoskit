@@ -690,7 +690,8 @@ class WidgetHost(
                     },
                 )
                 control.setOnEditorActionListener { _, action, event ->
-                    if (action in listOf(
+                    if (action in
+                        listOf(
                             EditorInfo.IME_ACTION_DONE,
                             EditorInfo.IME_ACTION_GO,
                             EditorInfo.IME_ACTION_NEXT,
@@ -1005,21 +1006,23 @@ class WidgetHost(
                     val keyboard = props.string("keyboard") ?: "text"
                     val capitalize = props.string("capitalize") ?: "none"
                     val autocorrect = props.isNull("autocorrect") || props.optBoolean("autocorrect", true)
-                    var inputType = when (keyboard) {
-                        "email" -> InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS
-                        "phone" -> InputType.TYPE_CLASS_PHONE
-                        "url" -> InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
-                        "number" -> InputType.TYPE_CLASS_NUMBER
-                        "decimal" -> InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
-                        else -> InputType.TYPE_CLASS_TEXT
-                    }
-                    if (inputType and InputType.TYPE_MASK_CLASS == InputType.TYPE_CLASS_TEXT) {
-                        inputType = inputType or when (capitalize) {
-                            "words" -> InputType.TYPE_TEXT_FLAG_CAP_WORDS
-                            "sentences" -> InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
-                            "characters" -> InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS
-                            else -> 0
+                    var inputType =
+                        when (keyboard) {
+                            "email" -> InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS
+                            "phone" -> InputType.TYPE_CLASS_PHONE
+                            "url" -> InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
+                            "number" -> InputType.TYPE_CLASS_NUMBER
+                            "decimal" -> InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
+                            else -> InputType.TYPE_CLASS_TEXT
                         }
+                    if (inputType and InputType.TYPE_MASK_CLASS == InputType.TYPE_CLASS_TEXT) {
+                        inputType = inputType or
+                            when (capitalize) {
+                                "words" -> InputType.TYPE_TEXT_FLAG_CAP_WORDS
+                                "sentences" -> InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+                                "characters" -> InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS
+                                else -> 0
+                            }
                     }
                     if (!autocorrect) inputType = inputType or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
                     if (control.inputType != inputType) control.inputType = inputType
@@ -1034,21 +1037,26 @@ class WidgetHost(
 
                 // The longest value the field accepts, the way HTML's
                 // `maxlength` behaves.
-                val max_length = if (props.isNull("max_length")) null else props.number("max_length", 0.0).toInt()
-                if (max_length == null) {
+                val maxLength = if (props.isNull("max_length")) null else props.number("max_length", 0.0).toInt()
+                if (maxLength == null) {
                     control.filters = emptyArray()
-                } else if (control.filters?.filterIsInstance<InputFilter.LengthFilter>()?.firstOrNull()?.max != max_length) {
-                    control.filters = arrayOf(InputFilter.LengthFilter(max_length))
+                } else if (control.filters
+                        ?.filterIsInstance<InputFilter.LengthFilter>()
+                        ?.firstOrNull()
+                        ?.max != maxLength
+                ) {
+                    control.filters = arrayOf(InputFilter.LengthFilter(maxLength))
                 }
 
                 // What the return key is named.
-                val ime = when (props.string("submit_label") ?: "done") {
-                    "go" -> EditorInfo.IME_ACTION_GO
-                    "next" -> EditorInfo.IME_ACTION_NEXT
-                    "search" -> EditorInfo.IME_ACTION_SEARCH
-                    "send" -> EditorInfo.IME_ACTION_SEND
-                    else -> EditorInfo.IME_ACTION_DONE
-                }
+                val ime =
+                    when (props.string("submit_label") ?: "done") {
+                        "go" -> EditorInfo.IME_ACTION_GO
+                        "next" -> EditorInfo.IME_ACTION_NEXT
+                        "search" -> EditorInfo.IME_ACTION_SEARCH
+                        "send" -> EditorInfo.IME_ACTION_SEND
+                        else -> EditorInfo.IME_ACTION_DONE
+                    }
                 if (control.imeOptions != ime) control.imeOptions = ime
 
                 control.setHintTextColor(if (dark) 0xffa0a0a0.toInt() else 0xff707070.toInt())

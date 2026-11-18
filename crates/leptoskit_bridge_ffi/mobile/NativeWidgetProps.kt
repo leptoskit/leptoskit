@@ -8,9 +8,9 @@ import android.graphics.RectF
 import android.graphics.drawable.GradientDrawable
 import android.text.InputFilter
 import android.text.InputType
-import android.view.inputmethod.EditorInfo
 import android.view.Gravity
 import android.view.View
+import android.view.inputmethod.EditorInfo
 import android.widget.Button
 import android.widget.CompoundButton
 import android.widget.EditText
@@ -252,29 +252,31 @@ internal class NativeWidgetProps(
                 val keyboard = props.rest?.optString("keyboard") ?: "text"
                 val capitalize = props.rest?.optString("capitalize") ?: "none"
                 val autocorrect = props.rest?.isNull("autocorrect") == true || props.rest?.optBoolean("autocorrect", true) == true
-                var inputType = when (keyboard) {
-                    "email" -> InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS
-                    "phone" -> InputType.TYPE_CLASS_PHONE
-                    "url" -> InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
-                    "number" -> InputType.TYPE_CLASS_NUMBER
-                    "decimal" -> InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
-                    else -> InputType.TYPE_CLASS_TEXT
-                }
-                if (inputType and InputType.TYPE_MASK_CLASS == InputType.TYPE_CLASS_TEXT) {
-                    inputType = inputType or when (capitalize) {
-                        "words" -> InputType.TYPE_TEXT_FLAG_CAP_WORDS
-                        "sentences" -> InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
-                        "characters" -> InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS
-                        else -> 0
+                var inputType =
+                    when (keyboard) {
+                        "email" -> InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS
+                        "phone" -> InputType.TYPE_CLASS_PHONE
+                        "url" -> InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
+                        "number" -> InputType.TYPE_CLASS_NUMBER
+                        "decimal" -> InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
+                        else -> InputType.TYPE_CLASS_TEXT
                     }
+                if (inputType and InputType.TYPE_MASK_CLASS == InputType.TYPE_CLASS_TEXT) {
+                    inputType = inputType or
+                        when (capitalize) {
+                            "words" -> InputType.TYPE_TEXT_FLAG_CAP_WORDS
+                            "sentences" -> InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+                            "characters" -> InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS
+                            else -> 0
+                        }
                 }
                 if (!autocorrect) inputType = inputType or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
                 if (widget.inputType != inputType) widget.inputType = inputType
             }
 
             // A read-only field refuses edits but stays selectable.
-            val read_only = props.rest?.optBoolean("read_only") == true
-            if (read_only) {
+            val readOnly = props.rest?.optBoolean("read_only") == true
+            if (readOnly) {
                 if (keyListeners[widget] == null) keyListeners[widget] = widget.keyListener
                 widget.keyListener = null
             } else if (widget.keyListener == null) {
@@ -282,21 +284,26 @@ internal class NativeWidgetProps(
             }
 
             // The longest value the field accepts.
-            val max_length = if (props.rest?.has("max_length") == true) props.rest?.getInt("max_length") else null
-            if (max_length == null) {
+            val maxLength = if (props.rest?.has("max_length") == true) props.rest?.getInt("max_length") else null
+            if (maxLength == null) {
                 widget.filters = emptyArray()
-            } else if (widget.filters?.filterIsInstance<InputFilter.LengthFilter>()?.firstOrNull()?.max != max_length) {
-                widget.filters = arrayOf(InputFilter.LengthFilter(max_length))
+            } else if (widget.filters
+                    ?.filterIsInstance<InputFilter.LengthFilter>()
+                    ?.firstOrNull()
+                    ?.max != maxLength
+            ) {
+                widget.filters = arrayOf(InputFilter.LengthFilter(maxLength))
             }
 
             // What the return key is named.
-            val ime = when (props.rest?.optString("submit_label") ?: "done") {
-                "go" -> EditorInfo.IME_ACTION_GO
-                "next" -> EditorInfo.IME_ACTION_NEXT
-                "search" -> EditorInfo.IME_ACTION_SEARCH
-                "send" -> EditorInfo.IME_ACTION_SEND
-                else -> EditorInfo.IME_ACTION_DONE
-            }
+            val ime =
+                when (props.rest?.optString("submit_label") ?: "done") {
+                    "go" -> EditorInfo.IME_ACTION_GO
+                    "next" -> EditorInfo.IME_ACTION_NEXT
+                    "search" -> EditorInfo.IME_ACTION_SEARCH
+                    "send" -> EditorInfo.IME_ACTION_SEND
+                    else -> EditorInfo.IME_ACTION_DONE
+                }
             if (widget.imeOptions != ime) widget.imeOptions = ime
         }
 
