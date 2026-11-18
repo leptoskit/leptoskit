@@ -2,7 +2,7 @@
 "leptoskit_notifications": minor
 ---
 
-# A device goes to its next person, a forgotten person is erased, and callers are bounded
+# Devices change hands and forgotten people are erased
 
 Three things the notifications service got wrong on a shared device and for a deleted account, and four limits it did not have.
 
