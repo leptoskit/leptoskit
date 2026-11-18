@@ -1,5 +1,5 @@
-//! Pure OpenTofu JSON generation. Provider credentials use provider environment
-//! variables.
+//! Pure `OpenTofu` JSON generation. Provider credentials use provider
+//! environment variables.
 use serde_json::Value;
 use serde_json::json;
 
@@ -19,7 +19,8 @@ use crate::topology::Machine;
 const HCLOUD_VERSION: &str = "1.70.2";
 const CLOUDFLARE_VERSION: &str = "5.28.1";
 
-/// Generate an independent OpenTofu root per cluster; no provider is contacted.
+/// Generate an independent `OpenTofu` root per cluster; no provider is
+/// contacted.
 pub fn generate(config: &PlatformConfig) -> Result<Generated, PlatformError> {
 	config.validate()?;
 	let mut files = Generated::new();
@@ -109,33 +110,38 @@ pub(crate) fn rules(
 	machine: &Machine<'_>,
 	peers: &[Machine<'_>],
 ) -> Vec<Value> {
-	let mut rules = vec![rule("tcp", "22", config.admin_cidrs.clone())];
+	let mut rules = vec![rule("tcp", "22", &config.admin_cidrs)];
 	if machine.node.role() == Role::Server {
-		rules.push(rule("tcp", "6443", config.admin_cidrs.clone()));
+		rules.push(rule("tcp", "6443", &config.admin_cidrs));
 	}
 	for peer in peers.iter().filter(|p| p.id != machine.id) {
-		rules.push(rule("udp", "51820", vec![host_cidr(&peer.public)]));
+		rules.push(rule("udp", "51820", &[host_cidr(&peer.public)]));
 		if machine.node.role() == Role::Server {
 			let address = if peer.node.role() == Role::Server {
 				peer.private.as_ref().unwrap_or(&peer.public)
 			} else {
 				&peer.public
 			};
-			rules.push(rule("tcp", "6443", vec![host_cidr(address)]));
+			rules.push(rule("tcp", "6443", &[host_cidr(address)]));
+			if peer.node.role() == Role::Agent && peer.node.cloud() && machine.node.cloud() {
+				if let Some(private) = &peer.private {
+					rules.push(rule("tcp", "6443", &[host_cidr(private)]));
+				}
+			}
 			if peer.node.role() == Role::Server {
 				for port in ["2379-2380", "10250"] {
-					rules.push(rule("tcp", port, vec![host_cidr(address)]));
+					rules.push(rule("tcp", port, &[host_cidr(address)]));
 				}
 			}
 		}
 	}
 	if config.edge.mode == EdgeMode::Https && machine.node.pool() == Pool::Ingress {
-		rules.push(rule("tcp", "443", config.edge.cloudflare_cidrs.clone()));
+		rules.push(rule("tcp", "443", &config.edge.cloudflare_cidrs));
 	}
 	rules
 }
 
-fn rule(protocol: &str, port: &str, sources: Vec<String>) -> Value {
+fn rule(protocol: &str, port: &str, sources: &[String]) -> Value {
 	json!({"direction":"in","protocol":protocol,"port":port,"source_ips":sources})
 }
 fn host_cidr(address: &str) -> String {

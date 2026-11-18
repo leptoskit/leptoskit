@@ -45,8 +45,7 @@ pub(crate) fn machines<'a>(
 							))
 						})?
 					} else {
-						format!("${{hcloud_server.{} .ipv4_address}}", id.replace('-', "_"))
-							.replace(" .", ".")
+						format!("${{hcloud_server.{}.ipv4_address}}", id.replace('-', "_"))
 					};
 					let private = if cloud_servers {
 						let cidr = cluster.private_cidr.as_deref().ok_or_else(|| {

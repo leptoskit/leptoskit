@@ -1,5 +1,6 @@
 //! Offline, two-phase platform infrastructure generation.
 
+pub mod bootstrap;
 pub mod config;
 pub mod tofu;
 mod topology;
@@ -11,6 +12,9 @@ pub type Generated = std::collections::BTreeMap<String, String>;
 /// Invalid input or an unsuccessful generation operation.
 #[derive(Debug, thiserror::Error)]
 pub enum PlatformError {
+	/// Formatting into an output document failed.
+	#[error("formatting failed")]
+	Format(#[from] std::fmt::Error),
 	/// Invalid operator configuration.
 	#[error("{0}")]
 	Invalid(String),

@@ -10,7 +10,7 @@ use serde::Serialize;
 
 use crate::PlatformError;
 
-/// Tested k3s release: https://github.com/k3s-io/k3s/releases/tag/v1.35.10%2Bk3s1
+/// Tested k3s release: <https://github.com/k3s-io/k3s/releases/tag/v1.35.10%2Bk3s1>
 pub const K3S_VERSION: &str = "v1.35.10+k3s1";
 
 /// Complete offline platform declaration.
@@ -62,7 +62,7 @@ pub struct Cluster {
 	pub version: String,
 	/// Pod network, disjoint from services and node networks.
 	pub pod_cidr: String,
-	/// ClusterIP network.
+	/// `ClusterIP` network.
 	pub service_cidr: String,
 	/// Optional operator-managed DNS name resolving to reachable servers.
 	pub registration_address: Option<String>,
@@ -106,7 +106,7 @@ pub enum Pool {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "provider", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum Node {
-	/// Ubuntu 24.04 x86-64 VMs created by OpenTofu.
+	/// Ubuntu 24.04 x86-64 VMs created by `OpenTofu`.
 	HetznerCloud {
 		/// Kubernetes role.
 		role: Role,
@@ -157,7 +157,7 @@ impl Node {
 		}
 	}
 
-	/// Whether OpenTofu owns this node.
+	/// Whether `OpenTofu` owns this node.
 	pub fn cloud(&self) -> bool {
 		matches!(self, Self::HetznerCloud { .. })
 	}
@@ -177,7 +177,7 @@ pub enum GvisorPlatform {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Isolation {
-	/// RuntimeClass name; currently gvisor only.
+	/// `RuntimeClass` name; currently gvisor only.
 	#[serde(default = "runtime_class")]
 	pub runtime_class: String,
 	/// Kernel isolation backend.
@@ -194,7 +194,7 @@ fn runtime_class() -> String {
 	"gvisor".into()
 }
 
-/// CloudNativePG shared database inputs.
+/// `CloudNativePG` shared database inputs.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Postgres {
@@ -202,7 +202,7 @@ pub struct Postgres {
 	pub instances: u16,
 	/// Per-instance PVC size, e.g. 100Gi.
 	pub storage_size: String,
-	/// Existing StorageClass.
+	/// Existing `StorageClass`.
 	pub storage_class: String,
 	/// Existing WAL archive bucket.
 	pub wal_bucket: String,
@@ -270,7 +270,7 @@ pub enum EdgeMode {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum CustomDomains {
-	/// Cloudflare for SaaS.
+	/// Cloudflare for `SaaS`.
 	CloudflareSaas,
 	/// cert-manager certificates.
 	CertManager,
@@ -286,7 +286,7 @@ pub struct Edge {
 	pub zone_id: String,
 	/// Edge transport.
 	pub mode: EdgeMode,
-	/// Cluster in default_region owning public ingress.
+	/// Cluster in `default_region` owning public ingress.
 	pub cluster: String,
 	/// Customer certificate strategy.
 	pub custom_domains: CustomDomains,
@@ -299,7 +299,7 @@ pub struct Edge {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum Registry {
-	/// Zot backed by object_storage.registry.
+	/// Zot backed by `object_storage.registry`.
 	Zot {
 		/// Existing authentication secret.
 		auth_secret: String,
@@ -318,7 +318,7 @@ pub enum Registry {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Addons {
-	/// CloudNativePG operator chart.
+	/// `CloudNativePG` operator chart.
 	pub cloudnative_pg: String,
 	/// KEDA chart.
 	pub keda: String,
