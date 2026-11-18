@@ -8,7 +8,13 @@ publish = false
 readme = "readme.md"
 repository.workspace = true
 rust-version.workspace = true
-description = "LeptosKit Cloud's control plane: the `leptoskit-cloud-control` server."
+description = "LeptosKit Cloud: the `leptoskit-cloud-control` server and the console it serves."
+
+# One crate is both sides of the console: the library is the browser's wasm
+# client (`hydrate`), and the binary is the control plane, which renders the
+# console's pages too when it is built with `ssr`.
+[lib]
+crate-type = ["cdylib", "rlib"]
 
 [[bin]]
 name = "leptoskit-cloud-control"
@@ -18,32 +24,56 @@ required-features = ["server"]
 [dependencies]
 clap = { workspace = true, optional = true, features = ["derive", "env"] }
 getrandom = { workspace = true, optional = true }
+# The console's renderer and leptos adapter. Pages are server-rendered only
+# with `ssr`, and hydrated in the browser with `hydrate`.
+leptos = { workspace = true, optional = true }
+# The console: components, sign-in, the device flow, queries, and operations.
+leptoskit = { workspace = true, features = ["auth", "idp", "leptos", "query", "rpc"] }
 leptoskit_auth = { workspace = true, optional = true }
 leptoskit_axum = { workspace = true, optional = true }
-leptoskit_cloud = { workspace = true, optional = true }
+# The control plane's operations, as types the console calls. `server` adds
+# their bodies.
+leptoskit_cloud = { workspace = true }
 leptoskit_db = { workspace = true, optional = true }
+leptoskit_router = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, optional = true, features = ["macros", "net", "rt-multi-thread", "signal"] }
 url = { workspace = true, optional = true }
 
+# The browser's side of `hydrate`: the wasm entry point, the task executor,
+# panics in the console, and the clipboard.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+any_spawner = { workspace = true, optional = true, features = ["wasm-bindgen"] }
+console_error_panic_hook = { workspace = true, optional = true }
+leptoskit_plugin_clipboard = { workspace = true, optional = true }
+wasm-bindgen = { workspace = true, optional = true }
+# The address bar's host, and a full reload after signing out.
+web-sys = { workspace = true, optional = true, features = ["Location", "Window"] }
+
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+# The screen tests' executor, which drops the tasks a render spawns.
+any_spawner = { workspace = true }
+http-body-util = { workspace = true }
+insta = { workspace = true }
 leptoskit_cli = { workspace = true }
+leptoskit_router_codegen = { workspace = true }
+leptoskit_testing = { workspace = true }
 reqwest = { workspace = true, features = ["json", "rustls-tls"] }
 serde_json = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["macros", "net", "process", "rt-multi-thread", "time"] }
+tower = { workspace = true, features = ["util"] }
 
 [features]
 default = []
 # The control plane's server: the `leptoskit-cloud-control` binary, its
-# configuration, and its commands. The console's `ssr` and `hydrate`
-# features join it here when the console arrives.
+# configuration, and its commands. On its own it serves the API, sign-in and
+# the device flow, without the console's pages.
 server = [
 	"dep:clap",
 	"dep:getrandom",
 	"dep:leptoskit_auth",
 	"dep:leptoskit_axum",
-	"dep:leptoskit_cloud",
 	"dep:leptoskit_db",
 	"dep:tokio",
 	"dep:url",
@@ -51,10 +81,31 @@ server = [
 ]
 # Postgres databases, beside SQLite.
 postgres = ["server", "leptoskit_cloud/postgres"]
+# The console in a browser or on the server: the leptos adapter and the
+# router following the address bar.
+web = ["dep:leptos", "leptoskit/web", "leptoskit_router/web"]
+# The server renders the console's pages beside the API, and serves the
+# client the browser hydrates them with.
+ssr = ["server", "web", "leptos/ssr", "leptoskit/server", "leptoskit_router/ssr"]
+# The browser: hydrates the server's pages.
+hydrate = [
+	"web",
+	"dep:any_spawner",
+	"dep:console_error_panic_hook",
+	"dep:leptoskit_plugin_clipboard",
+	"dep:wasm-bindgen",
+	"dep:web-sys",
+	"leptos/hydrate",
+	"leptoskit/hydrate",
+]
 
 [[test]]
 name = "binary"
 required-features = ["server"]
+
+[[test]]
+name = "console"
+required-features = ["ssr"]
 
 [lints]
 workspace = true

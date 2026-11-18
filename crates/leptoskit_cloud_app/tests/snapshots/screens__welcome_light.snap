@@ -1,0 +1,12 @@
+---
+source: crates/leptoskit_cloud_app/tests/screens.rs
+expression: "readable(desktop.palette(Appearance::Light))"
+---
+"LeptosKit Cloud"                            #16111f on #fffaf0 17.80
+"Hello, ana."                                #16111f on #fffaf0 17.80
+"Your projects live at cloud.example.test"   #4d4558 on #fffaf0  8.75
+"You're on Hobby, and nothing here can ch"   #4d4558 on #fffaf0  8.75
+"Do you have a leptoskit app already?"       #16111f on #fffaf0 17.80
+"Yes, ship it from my terminal"              #faf6f0 on #16111f 17.20
+"Not yet, ship a starter"                    #16111f on #fffdf8 18.22
+"Look around first"                          #4d4558 on #fffaf0  8.75

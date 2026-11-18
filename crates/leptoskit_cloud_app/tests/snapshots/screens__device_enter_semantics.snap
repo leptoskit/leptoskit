@@ -1,0 +1,10 @@
+---
+source: crates/leptoskit_cloud_app/tests/screens.rs
+expression: screen.semantics()
+---
+main
+  text "LeptosKit Cloud"
+  text "CONNECT A TERMINAL"
+  heading(1) "Enter the code your terminal shows."
+  textbox "Code from your terminal"
+  button "Continue"

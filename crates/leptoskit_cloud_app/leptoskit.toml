@@ -1,0 +1,26 @@
+#:schema https://leptoskit.dev/schemas/leptoskit.v0.schema.json
+
+schema_version = 0
+
+# The console renders on the control plane's server and hydrates in the
+# browser: `leptoskit build` builds the library with `hydrate` for the
+# browser, and the binary with `ssr`.
+[app]
+name = "leptoskit_cloud_app"
+render = "ssr"
+
+[build]
+client_package = "leptoskit_cloud_app"
+
+# The file router as a plugin: `leptoskit plugin:router routes` (or `lk
+# routes`) regenerates `src/routes.rs` from `src/routes/`.
+[[plugins]]
+name = "router"
+
+# Builder calls everywhere, as in every crate in this repository.
+[lint]
+markup = "builder"
+
+[lint.rules]
+markup_style = "deny"
+component_attribute = "deny"

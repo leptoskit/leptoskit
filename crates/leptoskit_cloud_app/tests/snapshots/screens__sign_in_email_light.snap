@@ -1,0 +1,11 @@
+---
+source: crates/leptoskit_cloud_app/tests/screens.rs
+expression: "readable(desktop.palette(Appearance::Light))"
+---
+"LeptosKit Cloud"                            #16111f on #fffaf0 17.80
+"Check your email."                          #16111f on #fffaf0 17.80
+"We sent a code to ana@example.com."         #4d4558 on #fffaf0  8.75
+"Code from the email"                        #6e6578 on #fffaf0  5.32
+"Continue"                                   #faf6f0 on #16111f 17.20
+"Use a different email"                      #4d4558 on #fffaf0  8.75
+"Send another code"                          #4d4558 on #fffaf0  8.75

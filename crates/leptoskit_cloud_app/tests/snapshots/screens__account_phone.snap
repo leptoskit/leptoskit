@@ -1,0 +1,106 @@
+---
+source: crates/leptoskit_cloud_app/tests/screens.rs
+expression: phone.tree()
+---
+view text=None label=None value=None frame=(0.0,0.0,400.0,1600.0) visible=true enabled=true
+  view text=None label=None value=None frame=(0.0,0.0,400.0,48.0) visible=true enabled=true
+    pressable text=None label=Some("LeptosKit Cloud: your projects") value=None frame=(16.0,2.0,44.0,44.0) visible=true enabled=true
+      view text=None label=None value=None frame=(26.0,12.0,24.0,24.0) visible=true enabled=true
+        view text=None label=None value=None frame=(26.0,15.4,9.4,20.6) visible=true enabled=true
+        view text=None label=None value=None frame=(38.0,26.6,9.4,9.4) visible=true enabled=true
+        view text=None label=None value=None frame=(38.9,12.0,9.4,9.4) visible=true enabled=true
+    pressable text=None label=Some("ana: projects") value=None frame=(72.0,2.0,24.0,44.0) visible=true enabled=true
+      text text=Some("ana") label=None value=None frame=(72.0,16.0,24.0,16.0) visible=true enabled=true
+    view text=None label=None value=None frame=(108.0,24.0,220.0,0.0) visible=false enabled=true
+    view text=None label=None value=None frame=(0.0,0.0,0.0,0.0) visible=false enabled=true
+      view text=None label=Some("Plan: Hobby. Spend isn't available yet.") value=None frame=(0.0,0.0,0.0,0.0) visible=false enabled=true
+        view text=None label=None value=None frame=(0.0,0.0,0.0,0.0) visible=false enabled=true
+          text text=Some("Hobby") label=None value=None frame=(0.0,0.0,0.0,0.0) visible=false enabled=true
+    pressable text=None label=Some("Your account") value=None frame=(340.0,2.0,44.0,44.0) visible=true enabled=true
+      view text=None label=None value=None frame=(346.0,8.0,32.0,32.0) visible=true enabled=true
+        text text=Some("A") label=None value=None frame=(358.0,16.0,8.0,16.0) visible=true enabled=true
+  view text=None label=None value=None frame=(0.0,48.0,400.0,1.0) visible=true enabled=true
+  view text=None label=None value=None frame=(0.0,49.0,400.0,1486.0) visible=true enabled=true
+    view text=None label=Some("Console") value=None frame=(0.0,49.0,0.0,0.0) visible=false enabled=true
+      view text=None label=None value=None frame=(0.0,49.0,0.0,0.0) visible=false enabled=true
+        text text=Some("ana") label=None value=None frame=(0.0,49.0,0.0,0.0) visible=false enabled=true
+      view text=None label=None value=None frame=(0.0,49.0,0.0,0.0) visible=false enabled=true
+        vector text=None label=None value=None frame=(0.0,49.0,0.0,0.0) visible=false enabled=true
+        view text=None label=None value=None frame=(0.0,49.0,0.0,0.0) visible=false enabled=true
+          text text=Some("Filter projects") label=None value=None frame=(0.0,49.0,0.0,0.0) visible=false enabled=true
+          text_input text=None label=Some("Filter projects") value=Some("") frame=(0.0,49.0,0.0,0.0) visible=false enabled=true
+        text text=Some("/") label=None value=None frame=(0.0,49.0,0.0,0.0) visible=false enabled=true
+      view text=None label=None value=None frame=(0.0,49.0,0.0,0.0) visible=false enabled=true
+        pressable text=None label=Some("Projects") value=None frame=(0.0,49.0,0.0,0.0) visible=false enabled=true
+          vector text=None label=None value=None frame=(0.0,49.0,0.0,0.0) visible=false enabled=true
+          text text=Some("Projects") label=None value=None frame=(0.0,49.0,0.0,0.0) visible=false enabled=true
+      view text=None label=None value=None frame=(0.0,49.0,0.0,0.0) visible=false enabled=true
+      view text=None label=None value=None frame=(0.0,49.0,0.0,0.0) visible=false enabled=true
+        pressable text=None label=Some("New project") value=None frame=(0.0,49.0,0.0,0.0) visible=false enabled=true
+          vector text=None label=None value=None frame=(0.0,49.0,0.0,0.0) visible=false enabled=true
+          text text=Some("New project") label=None value=None frame=(0.0,49.0,0.0,0.0) visible=false enabled=true
+    view text=None label=None value=None frame=(0.0,49.0,0.0,0.0) visible=false enabled=true
+    scroll_view text=None label=None value=None frame=(0.0,49.0,400.0,1486.0) visible=true enabled=true
+      view text=None label=None value=None frame=(0.0,49.0,400.0,1486.0) visible=true enabled=true
+        view text=None label=None value=None frame=(16.0,73.0,368.0,881.1) visible=true enabled=true
+          text text=Some("Account") label=None value=None frame=(16.0,73.0,368.0,30.0) visible=true enabled=true
+          view text=None label=Some("You") value=None frame=(16.0,127.0,368.0,85.3) visible=true enabled=true
+            text text=Some("You") label=None value=None frame=(33.0,144.0,334.0,18.3) visible=true enabled=true
+            text text=Some("ana@example.com") label=None value=None frame=(33.0,174.3,334.0,21.0) visible=true enabled=true
+          view text=None label=Some("Sign-in methods") value=None frame=(16.0,236.3,368.0,344.3) visible=true enabled=true
+            text text=Some("Sign-in methods") label=None value=None frame=(33.0,253.3,334.0,18.3) visible=true enabled=true
+            view text=None label=None value=None frame=(33.0,283.6,334.0,44.0) visible=true enabled=true
+              view text=None label=None value=None frame=(33.0,284.6,290.0,42.0) visible=true enabled=true
+                text text=Some("Email codes") label=None value=None frame=(33.0,284.6,290.0,21.0) visible=true enabled=true
+                text text=Some("ana@example.com") label=None value=None frame=(33.0,305.6,290.0,21.0) visible=true enabled=true
+              text text=Some("✓ On") label=None value=None frame=(335.0,297.6,32.0,16.0) visible=true enabled=true
+            view text=None label=None value=None frame=(33.0,339.6,334.0,48.0) visible=true enabled=true
+              view text=None label=None value=None frame=(33.0,353.1,196.0,21.0) visible=true enabled=true
+                text text=Some("GitHub") label=None value=None frame=(33.0,353.1,196.0,21.0) visible=true enabled=true
+              view text=None label=None value=None frame=(241.0,339.6,126.0,48.0) visible=true enabled=true
+                pressable text=None label=Some("Link GitHub") value=None frame=(243.0,341.6,122.0,44.0) visible=true enabled=true
+                  text text=Some("Link GitHub") label=None value=None frame=(260.0,355.6,88.0,16.0) visible=true enabled=true
+            view text=None label=None value=None frame=(33.0,399.6,334.0,48.0) visible=true enabled=true
+              view text=None label=None value=None frame=(33.0,413.1,196.0,21.0) visible=true enabled=true
+                text text=Some("Google") label=None value=None frame=(33.0,413.1,196.0,21.0) visible=true enabled=true
+              view text=None label=None value=None frame=(241.0,399.6,126.0,48.0) visible=true enabled=true
+                pressable text=None label=Some("Link Google") value=None frame=(243.0,401.6,122.0,44.0) visible=true enabled=true
+                  text text=Some("Link Google") label=None value=None frame=(260.0,415.6,88.0,16.0) visible=true enabled=true
+            view text=None label=None value=None frame=(33.0,459.6,334.0,1.0) visible=true enabled=true
+            text text=Some("Passkeys") label=None value=None frame=(33.0,472.6,334.0,16.0) visible=true enabled=true
+            text text=Some("No passkeys yet. A passkey signs you in with your fingerprint, face or screen lock.") label=None value=None frame=(33.0,500.6,334.0,63.0) visible=true enabled=true
+          view text=None label=Some("Signed in on") value=None frame=(16.0,604.6,368.0,108.3) visible=true enabled=true
+            text text=Some("Signed in on") label=None value=None frame=(33.0,621.6,334.0,18.3) visible=true enabled=true
+            view text=None label=Some("Where you're signed in") value=None frame=(33.0,651.9,334.0,44.0) visible=true enabled=true
+              view text=None label=None value=None frame=(33.0,651.9,334.0,44.0) visible=true enabled=true
+                view text=None label=None value=None frame=(33.0,652.9,218.0,42.0) visible=true enabled=true
+                  text text=Some("Firefox on macOS") label=None value=None frame=(33.0,652.9,218.0,21.0) visible=true enabled=true
+                  text text=Some("Used 18 Nov 2026") label=None value=None frame=(33.0,673.9,218.0,21.0) visible=true enabled=true
+                text text=Some("• This device") label=None value=None frame=(263.0,665.9,104.0,16.0) visible=true enabled=true
+          view text=None label=Some("Appearance") value=None frame=(16.0,736.9,368.0,145.3) visible=true enabled=true
+            text text=Some("Appearance") label=None value=None frame=(33.0,753.9,334.0,18.3) visible=true enabled=true
+            view text=None label=Some("Appearance") value=None frame=(33.0,784.1,334.0,48.0) visible=true enabled=true
+              view text=None label=None value=None frame=(33.0,784.1,104.0,48.0) visible=true enabled=true
+                pressable text=None label=Some("System") value=None frame=(35.0,786.1,100.0,44.0) visible=true enabled=true
+                  text text=Some("✓") label=None value=None frame=(53.0,800.1,8.0,16.0) visible=true enabled=true
+                  text text=Some("System") label=None value=None frame=(69.0,800.1,48.0,16.0) visible=true enabled=true
+              view text=None label=None value=None frame=(145.0,784.1,78.0,48.0) visible=true enabled=true
+                pressable text=None label=Some("Light") value=None frame=(147.0,786.1,74.0,44.0) visible=true enabled=true
+                  text text=Some("Light") label=None value=None frame=(164.0,800.1,40.0,16.0) visible=true enabled=true
+              view text=None label=None value=None frame=(231.0,784.1,70.0,48.0) visible=true enabled=true
+                pressable text=None label=Some("Dark") value=None frame=(233.0,786.1,66.0,44.0) visible=true enabled=true
+                  text text=Some("Dark") label=None value=None frame=(250.0,800.1,32.0,16.0) visible=true enabled=true
+            text text=Some("Lasts until the page reloads.") label=None value=None frame=(33.0,844.1,334.0,21.0) visible=true enabled=true
+          view text=None label=None value=None frame=(16.0,906.1,102.0,48.0) visible=true enabled=true
+            pressable text=None label=Some("Sign out") value=None frame=(18.0,908.1,98.0,44.0) visible=true enabled=true
+              text text=Some("Sign out") label=None value=None frame=(35.0,922.1,64.0,16.0) visible=true enabled=true
+  view text=None label=None value=None frame=(0.0,1535.0,400.0,1.0) visible=true enabled=true
+  view text=None label=Some("Sections") value=None frame=(0.0,1536.0,400.0,64.0) visible=true enabled=true
+    pressable text=None label=Some("Apps") value=None frame=(0.0,1536.0,200.0,64.0) visible=true enabled=true
+      view text=None label=None value=None frame=(88.0,1549.7,24.0,2.0) visible=true enabled=true
+      vector text=None label=None value=None frame=(91.0,1553.7,18.0,18.0) visible=true enabled=true
+      text text=Some("Apps") label=None value=None frame=(87.4,1573.7,25.1,12.6) visible=true enabled=true
+    pressable text=None label=Some("You") value=None frame=(200.0,1536.0,200.0,64.0) visible=true enabled=true
+      view text=None label=None value=None frame=(288.0,1549.7,24.0,2.0) visible=true enabled=true
+      vector text=None label=None value=None frame=(291.0,1553.7,18.0,18.0) visible=true enabled=true
+      text text=Some("You") label=None value=None frame=(290.6,1573.7,18.9,12.6) visible=true enabled=true

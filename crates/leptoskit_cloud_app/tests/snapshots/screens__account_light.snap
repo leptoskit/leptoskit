@@ -1,0 +1,36 @@
+---
+source: crates/leptoskit_cloud_app/tests/screens.rs
+expression: "readable(desktop.palette(Appearance::Light))"
+---
+"ana"                                        #16111f on #fffdf8 18.22
+"Hobby"                                      #4d4558 on #fffdf8  8.95
+"A"                                          #16111f on #f3ede4 15.91
+"ana"                                        #16111f on #fffdf8 18.22
+"Filter projects"                            #6e6578 on #fffdf8  5.44
+"/"                                          #6e6578 on #fffdf8  5.44
+"Projects"                                   #4d4558 on #fffdf8  8.95
+"New project"                                #4d4558 on #fffdf8  8.95
+"Account"                                    #16111f on #faf6f0 17.20
+"You"                                        #16111f on #fffdf8 18.22
+"ana@example.com"                            #16111f on #fffdf8 18.22
+"Sign-in methods"                            #16111f on #fffdf8 18.22
+"Email codes"                                #16111f on #fffdf8 18.22
+"ana@example.com"                            #6e6578 on #fffdf8  5.44
+"✓ On"                                       #1f7a45 on #fffdf8  5.26
+"GitHub"                                     #16111f on #fffdf8 18.22
+"Link GitHub"                                #16111f on #fffdf8 18.22
+"Google"                                     #16111f on #fffdf8 18.22
+"Link Google"                                #16111f on #fffdf8 18.22
+"Passkeys"                                   #16111f on #fffdf8 18.22
+"No passkeys yet. A passkey signs you in "   #4d4558 on #fffdf8  8.95
+"Signed in on"                               #16111f on #fffdf8 18.22
+"Firefox on macOS"                           #16111f on #fffdf8 18.22
+"Used 18 Nov 2026"                           #6e6578 on #fffdf8  5.44
+"• This device"                              #4d4558 on #fffdf8  8.95
+"Appearance"                                 #16111f on #fffdf8 18.22
+"✓"                                          #16111f on #fffdf8 18.22
+"System"                                     #16111f on #fffdf8 18.22
+"Light"                                      #4d4558 on #fffdf8  8.95
+"Dark"                                       #4d4558 on #fffdf8  8.95
+"Lasts until the page reloads."              #6e6578 on #fffdf8  5.44
+"Sign out"                                   #b8233f on #fffdf8  6.17

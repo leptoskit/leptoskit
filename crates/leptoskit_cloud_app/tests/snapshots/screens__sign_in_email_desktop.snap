@@ -1,0 +1,33 @@
+---
+source: crates/leptoskit_cloud_app/tests/screens.rs
+expression: desktop.tree()
+---
+scroll_view text=None label=None value=None frame=(0.0,0.0,1280.0,1600.0) visible=true enabled=true
+  view text=None label=None value=None frame=(0.0,0.0,1280.0,1600.0) visible=true enabled=true
+    view text=None label=None value=None frame=(416.0,64.0,448.0,396.1) visible=true enabled=true
+      view text=None label=None value=None frame=(416.0,64.0,448.0,396.1) visible=true enabled=true
+      view text=None label=None value=None frame=(416.0,64.0,448.0,396.1) visible=true enabled=true
+        view text=None label=None value=None frame=(449.0,97.0,382.0,20.0) visible=true enabled=true
+          view text=None label=None value=None frame=(449.0,97.0,20.0,20.0) visible=true enabled=true
+            view text=None label=None value=None frame=(449.0,99.9,7.9,17.1) visible=true enabled=true
+            view text=None label=None value=None frame=(459.0,109.1,7.9,7.9) visible=true enabled=true
+            view text=None label=None value=None frame=(459.7,97.0,7.9,7.9) visible=true enabled=true
+          text text=Some("LeptosKit Cloud") label=None value=None frame=(477.0,99.0,120.0,16.0) visible=true enabled=true
+        view text=None label=None value=None frame=(449.0,137.0,382.0,70.4) visible=true enabled=true
+          text text=Some("Check your email.") label=None value=None frame=(449.0,137.0,382.0,41.4) visible=true enabled=true
+          text text=Some("We sent a code to ana@example.com.") label=None value=None frame=(449.0,186.4,382.0,21.0) visible=true enabled=true
+        view text=None label=None value=None frame=(449.0,227.4,382.0,63.7) visible=true enabled=true
+          text text=Some("Code from the email") label=None value=None frame=(449.0,227.4,382.0,13.7) visible=true enabled=true
+          text_input text=None label=Some("Code from the email") value=Some("") frame=(449.0,247.1,382.0,44.0) visible=true enabled=true
+        view text=None label=None value=None frame=(449.0,311.1,382.0,48.0) visible=true enabled=true
+          view text=None label=None value=None frame=(451.0,313.1,378.0,44.0) visible=true enabled=true
+            view text=None label=None value=None frame=(451.0,313.1,378.0,44.0) visible=true enabled=true
+            pressable text=None label=Some("Continue") value=None frame=(451.0,313.1,378.0,44.0) visible=true enabled=true
+              text text=Some("Continue") label=None value=None frame=(608.0,327.1,64.0,16.0) visible=true enabled=true
+        view text=None label=None value=None frame=(449.0,379.1,382.0,48.0) visible=true enabled=true
+          view text=None label=None value=None frame=(449.0,379.1,196.0,48.0) visible=true enabled=true
+            pressable text=None label=Some("Use a different email") value=None frame=(451.0,381.1,192.0,44.0) visible=true enabled=true
+              text text=Some("Use a different email") label=None value=None frame=(463.0,395.1,168.0,16.0) visible=true enabled=true
+          view text=None label=None value=None frame=(653.0,379.1,164.0,48.0) visible=true enabled=true
+            pressable text=None label=Some("Send another code") value=None frame=(655.0,381.1,160.0,44.0) visible=true enabled=true
+              text text=Some("Send another code") label=None value=None frame=(667.0,395.1,136.0,16.0) visible=true enabled=true
