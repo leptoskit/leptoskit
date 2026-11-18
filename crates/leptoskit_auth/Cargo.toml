@@ -33,7 +33,7 @@ leptoskit_config = { workspace = true, optional = true }
 leptoskit_db = { workspace = true, features = ["solana"] }
 leptoskit_query = { workspace = true, optional = true }
 leptoskit_rpc = { workspace = true, optional = true }
-lettre = { version = "0.11", optional = true, default-features = false, features = ["builder", "hostname", "pool", "smtp-transport", "tokio1-rustls-tls"] }
+lettre = { version = "0.11.24", optional = true, default-features = false, features = ["builder", "hostname", "pool", "smtp-transport", "tokio1-rustls-tls"] }
 # webauthn-rs verifies signatures with OpenSSL. Building it from source keeps
 # servers buildable where no OpenSSL headers are installed (macOS, Windows,
 # containers), at the cost of a longer first build.
