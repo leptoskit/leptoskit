@@ -28,7 +28,7 @@ pub struct Cli {
 /// Supported offline commands.
 #[derive(Debug, Subcommand)]
 pub enum Operation {
-	/// Generate phase-one `OpenTofu` files.
+	/// Generate phase-one `OpenTofu` files and Kubernetes add-ons.
 	Generate {
 		/// Operator TOML file.
 		#[arg(long)]
@@ -75,7 +75,9 @@ impl Cli {
 			Operation::Check { .. } => Ok("configuration valid\n".into()),
 			Operation::PlanSummary { .. } => summary(&config),
 			Operation::Generate { out, .. } => {
-				write_files(out, "generate", &crate::tofu::generate(&config)?)
+				let mut files = crate::tofu::generate(&config)?;
+				files.extend(crate::addons::generate(&config)?);
+				write_files(out, "generate", &files)
 			}
 			Operation::Bootstrap { outputs, out, .. } => {
 				let outputs = outputs.as_ref().map(std::fs::read_to_string).transpose()?;
@@ -91,6 +93,22 @@ impl Cli {
 
 fn summary(config: &PlatformConfig) -> Result<String, PlatformError> {
 	let mut output = String::from("REGION/CLUSTER  NODE  ROLE  POOL  OWNERSHIP\n");
+	for (name, version) in [
+		("cloudnative-pg", &config.addons.cloudnative_pg),
+		("keda", &config.addons.keda),
+		("keda-add-ons-http", &config.addons.keda_http),
+		("cert-manager", &config.addons.cert_manager),
+		("traefik (edge cluster)", &config.addons.traefik),
+	] {
+		writeln!(output, "Add-on {name}: {version}")?;
+	}
+	if matches!(config.registry, crate::config::Registry::Zot { .. }) {
+		writeln!(output, "Add-on zot (edge cluster): {}", config.addons.zot)?;
+	}
+	writeln!(
+		output,
+		"Connector cloudflared: 2026.11.0 (tunnel mode only)"
+	)?;
 	for (region, entry) in &config.regions {
 		for (name, cluster) in &entry.clusters {
 			let machines = crate::topology::machines(cluster, None)?;

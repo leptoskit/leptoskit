@@ -166,6 +166,38 @@ fn common_charts(config: &PlatformConfig, platform: &Value) -> Result<Documents,
 	])
 }
 
+fn namespaces_and_runtime() -> Documents {
+	let mut documents = Vec::new();
+	for ns in [
+		"kube-system",
+		"cnpg-system",
+		"database",
+		"keda",
+		"cert-manager",
+		"registry",
+	] {
+		let level = if ns == "kube-system" {
+			"privileged"
+		} else {
+			"baseline"
+		};
+		let mut doc = object("v1", "Namespace", ns, None, json!({}));
+		doc["metadata"]["labels"] = json!({"pod-security.kubernetes.io/enforce":level,"pod-security.kubernetes.io/enforce-version":"v1.35"});
+		documents.push(("00-namespaces", doc));
+	}
+	documents.push((
+		"10-runtime",
+		object(
+			"node.k8s.io/v1",
+			"RuntimeClass",
+			"gvisor",
+			None,
+			json!({"handler":"runsc"}),
+		),
+	));
+	documents
+}
+
 /// Generate independent, ordered YAML documents per cluster without resolving
 /// secrets or contacting chart repositories.
 pub fn generate(config: &PlatformConfig) -> Result<Generated, PlatformError> {
@@ -180,34 +212,7 @@ pub fn generate(config: &PlatformConfig) -> Result<Generated, PlatformError> {
 					.any(|node| node.pool() != Pool::Build),
 				"add-ons require a non-build node",
 			)?;
-			let mut documents = Vec::new();
-			for ns in [
-				"kube-system",
-				"cnpg-system",
-				"database",
-				"keda",
-				"cert-manager",
-				"registry",
-			] {
-				let level = if ns == "kube-system" {
-					"privileged"
-				} else {
-					"baseline"
-				};
-				let mut doc = object("v1", "Namespace", ns, None, json!({}));
-				doc["metadata"]["labels"] = json!({"pod-security.kubernetes.io/enforce":level,"pod-security.kubernetes.io/enforce-version":"v1.35"});
-				documents.push(("00-namespaces", doc));
-			}
-			documents.push((
-				"10-runtime",
-				object(
-					"node.k8s.io/v1",
-					"RuntimeClass",
-					"gvisor",
-					None,
-					json!({"handler":"runsc"}),
-				),
-			));
+			let mut documents = namespaces_and_runtime();
 			let platform = placement(cluster, Pool::Platform);
 			documents.extend(common_charts(config, &platform)?);
 			documents.extend(registry::documents(
