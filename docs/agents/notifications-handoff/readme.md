@@ -12,17 +12,17 @@ This file is the working memory for that effort. It was written on 18 November 2
 
 ## Status
 
-| Work                                              | Where                                                   | State                                      |
-| ------------------------------------------------- | ------------------------------------------------------- | ------------------------------------------ |
-| Service, inbox, push on every platform            | [#846](https://github.com/leptoskit/leptoskit/pull/846) | Merged                                     |
-| Topics, conditions, durable fanout                | [#847](https://github.com/leptoskit/leptoskit/pull/847) | Merged                                     |
-| Person attributes, segments, send to everyone     | [#848](https://github.com/leptoskit/leptoskit/pull/848) | Merged                                     |
-| Message options, silent data messages, test sends | [#849](https://github.com/leptoskit/leptoskit/pull/849) | Merged                                     |
-| Migration, backfill and large-audience tests      | [#850](https://github.com/leptoskit/leptoskit/pull/850) | Merged                                     |
-| A. Fanout and push engine fixes                   | [#871](https://github.com/leptoskit/leptoskit/pull/871) | Ready: crate gates pass, base of the stack |
-| B. Provider transport fixes                       | [#872](https://github.com/leptoskit/leptoskit/pull/872) | Ready: crate gates pass, stacked on A      |
-| C. Device details and device targeting            | [#873](https://github.com/leptoskit/leptoskit/pull/873) | Draft: code written, gates unfinished      |
-| D to L                                            | Not started                                             | See below                                  |
+| Work                                              | Where                                                   | State                                                    |
+| ------------------------------------------------- | ------------------------------------------------------- | -------------------------------------------------------- |
+| Service, inbox, push on every platform            | [#846](https://github.com/leptoskit/leptoskit/pull/846) | Merged                                                   |
+| Topics, conditions, durable fanout                | [#847](https://github.com/leptoskit/leptoskit/pull/847) | Merged                                                   |
+| Person attributes, segments, send to everyone     | [#848](https://github.com/leptoskit/leptoskit/pull/848) | Merged                                                   |
+| Message options, silent data messages, test sends | [#849](https://github.com/leptoskit/leptoskit/pull/849) | Merged                                                   |
+| Migration, backfill and large-audience tests      | [#850](https://github.com/leptoskit/leptoskit/pull/850) | Merged                                                   |
+| A. Fanout and push engine fixes                   | [#871](https://github.com/leptoskit/leptoskit/pull/871) | Ready: crate gates pass, base of the stack               |
+| B. Provider transport fixes                       | [#872](https://github.com/leptoskit/leptoskit/pull/872) | Ready: crate gates pass, stacked on A                    |
+| C. Device details and device targeting            | [#873](https://github.com/leptoskit/leptoskit/pull/873) | Ready: crate, guest and browser gates pass, stacked on B |
+| D to L                                            | Not started                                             | See below                                                |
 
 Each pull request's description says what was checked, where, and what is left. A sits on `main`; the others are stacked on it in order.
 
@@ -43,7 +43,13 @@ Tried on 18 November 2026 by the session that finished task A. This is what work
   ```
 
   The build still runs as root; only the test binaries change user. Once `devenv shell` has run, `target/` is a link into `/root/.cache/mbx`, which `postgres` cannot reach: `chmod o+x /root /root/.cache && chmod -R o+rX /root/.cache/mbx/targets` lets it run the binaries (repeat the second command after a build adds new ones). `tests/dependencies.rs` runs `cargo` itself and fails with `Permission denied` while `postgres` cannot reach root's toolchain: if it does, run that file again without the runner (`env -u CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER cargo test … --test dependencies`).
-- **Browser tests.** `tests/browser.rs` is compiled only for `wasm32-unknown-unknown` and runs under `wasm-bindgen-test-runner` with a webdriver, as `test:browser` does; a native `cargo test` reports it as zero tests. Chromium is installed at `/opt/pw-browsers/chromium`.
+- **Browser tests.** `tests/browser.rs` is compiled only for `wasm32-unknown-unknown`; a native `cargo test` reports it as zero tests, and no CI job runs it. It runs here in real Chrome. `cargo bin` cannot download `wasm-bindgen-test-runner` (its GitHub lookup is refused), so install it once where `cargo bin` looks: `cargo install wasm-bindgen-cli --version =<the version in Cargo.toml's bin metadata> --locked --root .bin/rust-nightly/wasm-bindgen-cli/<version>`. Then:
+
+  ```sh
+  devenv shell -- bash -c 'export WASM_BINDGEN_TEST_WEBDRIVER_JSON="$(bash setup/scripts/chrome_for_tests.sh)"; CHROMEDRIVER="$DEVENV_PROFILE/bin/chromedriver" cargo test --locked --target wasm32-unknown-unknown --package leptoskit_notifications --features browser --test browser'
+  ```
+- **The compiled-guest test.** `cargo test -p leptoskit_wasm --test notifications_guest` ignores all 13 tests without a built guest. Build it and run them as `test:plugins:guest` does: `cargo build --locked --release --target wasm32-unknown-unknown --package notifications_guest_probe`, then `LEPTOSKIT_NOTIFICATIONS_GUEST="$PWD/target/wasm32-unknown-unknown/release/notifications_guest_probe.wasm" cargo test --locked --package leptoskit_wasm --test notifications_guest -- --ignored`.
+- **Disk.** After the notifications, admin, CLI, plugin and guest builds, `target/` is about 15 GB and about 2.5 GB is free. Check `df -h /` before building another crate; reclaim with `mbx gc` (`--dry-run` first), never by deleting `target/`.
 - **Long commands.** A foreground command is cut off after ten minutes. Run builds and test runs in the background and read their log.
 - **GitHub.** `gh api` works against the REST endpoints (`repos/leptoskit/leptoskit/pulls`, `…/commits/<sha>/check-runs`). The cloud GitHub app cannot merge (403).
 - **Stacked pull requests.** The owner asked on 18 November 2026 that every task's pull request be based on the previous task's branch (A on `main`, B on A, C on B, and on), so work goes on without waiting for merges. The owner merges the stack at the end. When a lower branch changes, rebase the ones above it.
