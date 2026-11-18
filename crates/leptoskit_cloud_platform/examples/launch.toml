@@ -1,0 +1,68 @@
+# Documentation addresses and identifiers; no infrastructure has been provisioned.
+name = "cloud-example"
+control_origin = "https://console.example.com"
+apps_domain = "apps.example.com"
+default_region = "eu"
+admin_cidrs = ["192.0.2.0/24"]
+
+[regions.eu.clusters.launch]
+distribution = "k3s"
+pod_cidr = "10.42.0.0/16"
+service_cidr = "10.43.0.0/16"
+
+[regions.eu.clusters.launch.nodes.box]
+provider = "existing"
+role = "server"
+pool = "tenant"
+public_address = "203.0.113.10"
+
+[isolation]
+platform = "systrap"
+# https://storage.googleapis.com/gvisor/releases/release/20261116.0/x86_64/gvisor.tar.zstd.sha512
+release = "20261116.0"
+sha512 = "a34261504066142b6c1cc4d1813bb2d092761675416e350edc98c4cc66469b63b6f41acdeed09681b6c717c00e80e437f5f2f9c8d37705b8a9260632867c2b7d"
+denied_egress_cidrs = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16"]
+
+[postgres]
+instances = 1
+storage_size = "100Gi"
+storage_class = "local-path"
+wal_bucket = "example-backups"
+retention_days = 30
+
+[object_storage]
+endpoint = "https://s3.example.com"
+region = "example-region"
+sources = "example-sources"
+build_logs = "example-logs"
+web_assets = "example-assets"
+bundles = "example-bundles"
+backups = "example-backups"
+registry = "example-registry"
+
+[object_storage.credentials]
+kind = "kubernetes-secret"
+name = "object-storage"
+access_key = "ACCESS_KEY_ID"
+secret_key = "SECRET_ACCESS_KEY"
+
+[edge]
+account_id = "00000000000000000000000000000000"
+zone_id = "00000000000000000000000000000000"
+mode = "tunnel"
+cluster = "launch"
+custom_domains = "cloudflare-saas"
+
+[registry]
+kind = "zot"
+auth_secret = "registry-auth"
+
+[addons]
+cloudnative_pg = "0.29.2"
+keda = "2.21.1"
+keda_http = "0.16.0"
+cert_manager = "v1.21.3"
+traefik = "42.4.1"
+zot = "0.1.134"
+acme_email = "operator@example.com"
+cloudflare_api_secret = "cloudflare-dns"
