@@ -60,18 +60,18 @@ Ding-inspired status pills live under `leptoskit::components::toast` (also re-ex
 
 ## Controls
 
-| Builder                             | Shared value and events                                      | AppKit widget                             | Web element                       |
-| ----------------------------------- | ------------------------------------------------------------ | ----------------------------------------- | --------------------------------- |
-| `Button(label)`                     | `.on_press(Fn())`                                            | `NSButton`                                | `button`                          |
-| `Pressable(label)`                  | Accessible label and decorative children. `.on_press(Fn())`. | Flipped `NSButton` with child hit routing | `button`                          |
+| Builder                             | Shared value and events                                                                                                                                       | AppKit widget                             | Web element                       |
+| ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------- | --------------------------------- |
+| `Button(label)`                     | `.on_press(Fn())`                                                                                                                                             | `NSButton`                                | `button`                          |
+| `Pressable(label)`                  | Accessible label and decorative children. `.on_press(Fn())`.                                                                                                  | Flipped `NSButton` with child hit routing | `button`                          |
 | `TextInput()`                       | `.value(...)`, `.on_change(Fn(&str))`, `.keyboard(...)`, `.read_only(...)`, `.max_length(...)`, `.capitalize(...)`, `.autocorrect(...)`, `.submit_label(...)` | `NSTextField`                             | Text `input`                      |
-| `PasswordInput()`                   | The same single-line text contract, with masked display      | `NSSecureTextField`                       | Password `input`                  |
-| `Switch(checked)`                   | `.on_toggle(Fn(bool))`                                       | `NSSwitch`                                | Checkbox `input` with switch role |
-| `Checkbox(checked)`                 | `.on_toggle(Fn(bool))`                                       | Switch-type `NSButton`                    | Checkbox `input`                  |
-| `Radio(group, checked)`             | `.on_toggle(Fn(bool))` proposes selection                    | Radio-type `NSButton`                     | Radio `input`                     |
-| `Slider(state)`                     | `.on_value_change(Fn(f64))`                                  | `NSSlider`                                | Range `input`                     |
-| `LinearProgressIndicator(progress)` | Determinate fraction or indeterminate animation              | Bar `NSProgressIndicator`                 | `progress`                        |
-| `ActivityIndicator(running)`        | Running or stopped animation                                 | Spinning `NSProgressIndicator`            | Styled `span` with progress role  |
+| `PasswordInput()`                   | The same single-line text contract, with masked display                                                                                                       | `NSSecureTextField`                       | Password `input`                  |
+| `Switch(checked)`                   | `.on_toggle(Fn(bool))`                                                                                                                                        | `NSSwitch`                                | Checkbox `input` with switch role |
+| `Checkbox(checked)`                 | `.on_toggle(Fn(bool))`                                                                                                                                        | Switch-type `NSButton`                    | Checkbox `input`                  |
+| `Radio(group, checked)`             | `.on_toggle(Fn(bool))` proposes selection                                                                                                                     | Radio-type `NSButton`                     | Radio `input`                     |
+| `Slider(state)`                     | `.on_value_change(Fn(f64))`                                                                                                                                   | `NSSlider`                                | Range `input`                     |
+| `LinearProgressIndicator(progress)` | Determinate fraction or indeterminate animation                                                                                                               | Bar `NSProgressIndicator`                 | `progress`                        |
+| `ActivityIndicator(running)`        | Running or stopped animation                                                                                                                                  | Spinning `NSProgressIndicator`            | Styled `span` with progress role  |
 
 Applications own control values. Handlers receive proposed values. Rebuilding the tree commits an accepted value. Both adapters restore the last committed value when the application rejects a proposal, including a proposal that triggers no rebuild.
 
