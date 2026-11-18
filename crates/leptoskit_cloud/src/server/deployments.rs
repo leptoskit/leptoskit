@@ -566,6 +566,119 @@ fn environment_ref(
 	}
 }
 
+/// The secrets a spec's processes start with, by the names they are kept
+/// under.
+fn secret_names(spec: &leptoskit_cloud_runtime::ReleaseSpec) -> Vec<&String> {
+	let mut names: Vec<&String> = spec
+		.processes
+		.iter()
+		.flat_map(|process| process.secret_env.values())
+		.collect();
+	names.sort_unstable();
+	names.dedup();
+	names
+}
+
+/// Refuses while a deployment of `environment` is in flight, for a change
+/// that deployment's release depends on.
+///
+/// # Errors
+///
+/// `Conflict` (`deployment_in_flight`).
+pub(crate) async fn settled(
+	db: &impl leptoskit_db::Read,
+	environment: &Environment,
+) -> rpc::Result<()> {
+	refuse_in_flight(db, environment).await
+}
+
+/// The secrets the release `job` carries names, leased to `worker` for this
+/// attempt.
+///
+/// The inner error is why the release can't start, in words for its sheet:
+/// the environment no longer has one of them (which `unset_secret` and
+/// `rollback` each refuse to let happen), or the vault can't open one. It
+/// never holds a value, and nothing was leased.
+///
+/// # Errors
+///
+/// When the database fails.
+pub(crate) async fn release_secrets(
+	tx: &Tx,
+	services: &super::Services,
+	job: &Job,
+	worker: Id<crate::tables::Worker>,
+) -> rpc::Result<Result<crate::workers::LeasedSecrets, String>> {
+	let StoredInput::Release(input) = &job.input.0 else {
+		return Ok(Ok(crate::workers::LeasedSecrets::default()));
+	};
+	let names: Vec<String> = secret_names(&input.spec.0).into_iter().cloned().collect();
+
+	if names.is_empty() {
+		return Ok(Ok(crate::workers::LeasedSecrets::default()));
+	}
+
+	let Some(deployment_id) = job.deployment_id else {
+		return Err(rpc::Error::server("a release job has no deployment"));
+	};
+	let deployment = Deployment::query()
+		.filter(|row| row.id.eq(deployment_id))
+		.one(tx)
+		.await?;
+	let (organization, project, environment) = owners(tx, &deployment).await?;
+	let lessee = super::config::Lessee {
+		job,
+		worker,
+		organization: &organization,
+		project: &project,
+		environment: &environment,
+	};
+
+	match super::config::lease(tx, &services.shipping().vault, &lessee, &names).await {
+		Ok(values) => Ok(Ok(crate::workers::LeasedSecrets::new(values))),
+		Err(super::config::LeaseError::Missing(missing)) => {
+			Ok(Err(format!(
+				"`{}` no longer has {}",
+				environment.name,
+				missing.join(", ")
+			)))
+		}
+		Err(super::config::LeaseError::Unreadable) => {
+			Ok(Err("the vault couldn't open a secret this release starts \
+			        with; set it again, or ask the operator about the \
+			        vault's keys"
+				.to_owned()))
+		}
+		Err(super::config::LeaseError::Failed(error)) => Err(error),
+	}
+}
+
+/// A release that can't start, because a secret it starts with can't be
+/// read: it fails before any worker is given it, and the previous release
+/// keeps serving. Nothing reached the cluster.
+///
+/// # Errors
+///
+/// When the database fails.
+pub(crate) async fn release_unstartable(tx: &Tx, job: &Job, why: &str) -> rpc::Result<()> {
+	let Some(mut changing) = changing_for(tx, job).await? else {
+		return Ok(());
+	};
+
+	if changing.state() != DeploymentState::RollingOut {
+		return Ok(());
+	}
+
+	changing.stamp(
+		&LineKind::Server,
+		Stamp::Failed,
+		Some(detail(&format!("not started: {why}. Nothing was changed"))),
+	);
+	fail(&mut changing, Stage::RollingOut, Blocker::SecretUnavailable)?;
+	changing.save(tx).await?;
+	Ok(())
+}
+
 /// The rows a deployment belongs to.
 async fn owners(
 	db: &impl leptoskit_db::Read,
@@ -1033,6 +1146,27 @@ pub(crate) async fn rollback(
 			"rollback_unavailable: #{to} has no build to return to"
 		)));
 	};
+	// A rollback applies the spec as it was recorded, variables included.
+	// Its secrets are named there and read when the release is claimed, so
+	// each must still exist: with their values as they are now.
+	let missing = super::config::missing(cx.tx(), environment_id, secret_names(&spec)).await?;
+
+	if !missing.is_empty() {
+		return Err(rpc::Error::conflict(
+			format!(
+				"secret_missing: #{to} starts with {} that `{environment_name}` no longer has: \
+				 {}. 			 Set {} again, or deploy instead",
+				if missing.len() == 1 {
+					"a secret"
+				} else {
+					"secrets"
+				},
+				missing.join(", "),
+				if missing.len() == 1 { "it" } else { "them" },
+			),
+		));
+	}
+
 	let organization = access.organization.clone();
 	let number = next_number(cx.tx(), &environment).await?;
 	let mut spec = spec;
@@ -1665,11 +1799,16 @@ async fn built(tx: &Tx, mut changing: Changing, output: &BuildServerOutput) -> r
 		.one(tx)
 		.await?;
 	let hostname = changing.row.hostname.clone();
+	// The environment's variables and secret names as they are now, when
+	// the build ends: what was set while it built is in.
+	let (variables, secrets) = super::config::for_release(tx, environment.id).await?;
 	let target = SpecTarget {
 		environment: environment_ref(&organization, &project, &environment),
 		deployment: number(changing.row.number),
 		hostname: &hostname,
 		cluster: &cluster.facts.0,
+		variables: &variables,
+		secrets: &secrets,
 	};
 	let spec = match release::spec(&changing.row.plan.0, output, &target) {
 		Ok(spec) => spec,

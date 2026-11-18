@@ -20,6 +20,7 @@
 pub mod account;
 mod audit;
 mod authorize;
+pub(crate) mod config;
 mod control;
 pub(crate) mod deployments;
 mod identity;
@@ -34,6 +35,7 @@ pub(crate) mod status;
 mod storage;
 pub mod tokens;
 pub(crate) mod uploads;
+mod vault;
 pub(crate) mod workers;
 
 use std::sync::Arc;
@@ -103,6 +105,8 @@ pub(crate) struct Shipping {
 	pub(crate) jobs: Arc<tokio::sync::Notify>,
 	/// Values no log may show: the store's secret key.
 	pub(crate) redactions: Arc<[String]>,
+	/// Where secrets are kept.
+	pub(crate) vault: vault::Vault,
 }
 
 /// How long leases and addresses last, how long things are kept, and how

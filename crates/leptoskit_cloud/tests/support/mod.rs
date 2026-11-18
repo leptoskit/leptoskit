@@ -8,6 +8,7 @@
 	reason = "each test binary uses the helpers it needs from this shared module"
 )]
 
+pub mod config;
 pub mod review;
 pub mod scenarios;
 pub mod shipping;
@@ -214,6 +215,7 @@ pub async fn app_with(db: Db, configure: impl FnOnce(&mut ControlConfig)) -> App
 	let mut config = ControlConfig {
 		origin: origin.clone(),
 		keys: keys(),
+		vault: Keys::single("vault-test", [42; 32]),
 		mailer: SharedMailer::new(mailbox.clone()),
 		github: None,
 		google: None,

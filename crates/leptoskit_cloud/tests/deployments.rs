@@ -17,6 +17,7 @@ use leptoskit_rpc::live::ServerFrame;
 use leptoskit_rpc::live::Update;
 use serde_json::Value;
 use serde_json::json;
+use support::config;
 use support::review;
 use support::shipping;
 use support::shipping::Shop;
@@ -418,4 +419,34 @@ async fn deployments_are_live() {
 		.await
 		.expect(200);
 	changes_to_mention(&mut screen, 1, "live").await;
+}
+
+#[tokio::test]
+async fn variables_and_secrets_reach_the_release() {
+	config::variables_and_secrets_reach_the_release(&support::app().await).await;
+}
+
+#[tokio::test]
+async fn names_and_values_are_checked() {
+	config::names_and_values_are_checked(&support::app().await).await;
+}
+
+#[tokio::test]
+async fn configuration_is_the_tenants_alone() {
+	config::configuration_is_the_tenants_alone(&support::app().await).await;
+}
+
+#[tokio::test]
+async fn a_release_always_finds_its_secrets() {
+	config::a_release_always_finds_its_secrets(&support::app().await).await;
+}
+
+#[tokio::test]
+async fn a_copied_secret_opens_nowhere_else() {
+	config::a_copied_secret_opens_nowhere_else(&support::app().await).await;
+}
+
+#[tokio::test]
+async fn first_secrets_race_to_one_key() {
+	config::first_secrets_race_to_one_key(&support::app().await).await;
 }

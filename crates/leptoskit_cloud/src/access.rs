@@ -17,6 +17,7 @@
 //! | `delete_project`      | project      |   ✓   |   ✓   |           |         |        | `admin`          |
 //! | `delete_environment`  | project      |   ✓   |   ✓   |           |         |        | `admin`          |
 //! | `deploy`              | project      |   ✓   |   ✓   |     ✓     |         |        | `deploy`         |
+//! | `manage_config`       | project      |   ✓   |   ✓   |     ✓     |         |        | `manage`         |
 //!
 //! A person, signed in themselves or through the CLI, has their role's
 //! permissions. A token has a permission when one of its scopes grants it
@@ -36,6 +37,10 @@
 //! the contract has. Shipping (`deploy`) needs the `deploy` scope by name in
 //! the same way: uploading an archive, deploying, cancelling, and rolling
 //! back. Reading deployments, their events, and logs is `view_projects`.
+//!
+//! Configuration (`manage_config`) is setting and removing an environment's
+//! variables and secrets. Reading variables, and the names of secrets, is
+//! `view_projects`; nobody reads a secret's value, whatever their role.
 //!
 //! Two kinds of caller are outside the table. Operators run the cloud
 //! itself: a person in the `operators` table, never a token
@@ -89,7 +94,10 @@ impl Role {
 			| Permission::ManageTokens
 			| Permission::DeleteProject
 			| Permission::DeleteEnvironment => matches!(self, Self::Owner | Self::Admin),
-			Permission::CreateProject | Permission::ManageEnvironments | Permission::Deploy => {
+			Permission::CreateProject
+			| Permission::ManageEnvironments
+			| Permission::Deploy
+			| Permission::ManageConfig => {
 				matches!(self, Self::Owner | Self::Admin | Self::Developer)
 			}
 		}
@@ -138,7 +146,7 @@ pub enum TokenScope {
 	Read,
 	/// Shipping: uploading archives, deploying, cancelling, and rolling back.
 	Deploy,
-	/// Projects, environments, and later configuration and domains.
+	/// Projects, environments, variables and secrets, and later domains.
 	Manage,
 	/// Store publishing, when it arrives. Reads, today.
 	Publish,
@@ -181,7 +189,9 @@ impl TokenScope {
 	pub const fn allows(self, permission: Permission) -> bool {
 		match permission {
 			Permission::ViewOrganization | Permission::ViewProjects => true,
-			Permission::CreateProject | Permission::ManageEnvironments => {
+			Permission::CreateProject
+			| Permission::ManageEnvironments
+			| Permission::ManageConfig => {
 				matches!(self, Self::Manage)
 			}
 			Permission::DeleteProject | Permission::DeleteEnvironment => {
@@ -225,11 +235,13 @@ pub enum Permission {
 	DeleteEnvironment,
 	/// Ship an environment: upload archives, deploy, cancel, and roll back.
 	Deploy,
+	/// Set and remove an environment's variables and secrets.
+	ManageConfig,
 }
 
 impl Permission {
 	/// Every permission.
-	pub const ALL: [Self; 10] = [
+	pub const ALL: [Self; 11] = [
 		Self::ViewOrganization,
 		Self::ViewProjects,
 		Self::ManageMembers,
@@ -240,6 +252,7 @@ impl Permission {
 		Self::DeleteProject,
 		Self::DeleteEnvironment,
 		Self::Deploy,
+		Self::ManageConfig,
 	];
 
 	/// The permission's name, as errors and the docs spell it.
@@ -256,6 +269,7 @@ impl Permission {
 			Self::DeleteProject => "delete_project",
 			Self::DeleteEnvironment => "delete_environment",
 			Self::Deploy => "deploy",
+			Self::ManageConfig => "manage_config",
 		}
 	}
 
@@ -286,6 +300,7 @@ impl Permission {
 				| Self::DeleteProject
 				| Self::DeleteEnvironment
 				| Self::Deploy
+				| Self::ManageConfig
 		)
 	}
 
@@ -438,6 +453,21 @@ pub const OPERATIONS: &[(&str, Requirement)] = &[
 		"runtime_logs",
 		Requirement::Project(Permission::ViewProjects),
 	),
+	("variables", Requirement::Project(Permission::ViewProjects)),
+	(
+		"set_variable",
+		Requirement::Project(Permission::ManageConfig),
+	),
+	(
+		"unset_variable",
+		Requirement::Project(Permission::ManageConfig),
+	),
+	("secrets", Requirement::Project(Permission::ViewProjects)),
+	("set_secret", Requirement::Project(Permission::ManageConfig)),
+	(
+		"unset_secret",
+		Requirement::Project(Permission::ManageConfig),
+	),
 	("pair", Requirement::Pairing),
 	("claim", Requirement::Worker),
 	("renew", Requirement::Worker),
@@ -489,7 +519,7 @@ mod tests {
 
 	#[test]
 	fn the_table_is_the_module_docs() {
-		let expected: [(Permission, [bool; 5]); 10] = [
+		let expected: [(Permission, [bool; 5]); 11] = [
 			(Permission::ViewOrganization, [true, true, true, true, true]),
 			(Permission::ViewProjects, [true, true, true, true, true]),
 			(Permission::ManageMembers, [true, true, false, false, false]),
@@ -506,6 +536,7 @@ mod tests {
 				[true, true, false, false, false],
 			),
 			(Permission::Deploy, [true, true, true, false, false]),
+			(Permission::ManageConfig, [true, true, true, false, false]),
 		];
 
 		for (permission, roles) in expected {
@@ -533,6 +564,15 @@ mod tests {
 			.filter(|scope| scope.allows(Permission::Deploy))
 			.collect();
 		assert_eq!(granting, [TokenScope::Deploy]);
+	}
+
+	#[test]
+	fn configuration_needs_the_manage_scope_by_name() {
+		let granting: Vec<TokenScope> = TokenScope::ALL
+			.into_iter()
+			.filter(|scope| scope.allows(Permission::ManageConfig))
+			.collect();
+		assert_eq!(granting, [TokenScope::Manage]);
 	}
 
 	#[test]

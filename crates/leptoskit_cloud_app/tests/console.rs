@@ -106,6 +106,7 @@ impl Console {
 			ControlConfig {
 				origin: origin.clone(),
 				keys: keys(),
+				vault: Keys::single("vault", [9; 32]),
 				mailer: SharedMailer::new(mailbox.clone()),
 				github: github.then(|| {
 					OAuthApp {

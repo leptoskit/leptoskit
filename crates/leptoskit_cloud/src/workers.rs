@@ -41,6 +41,7 @@
 //! worker holds one organisation's job at a time.
 
 use std::borrow::Cow;
+use std::collections::BTreeMap;
 
 use leptoskit_cloud_runtime::EnvironmentRef;
 use leptoskit_cloud_runtime::LogLine;
@@ -520,8 +521,54 @@ impl JobOutcome {
 	}
 }
 
+/// The values of the secrets a release's spec names in `secret_env`, by
+/// those names: handed to the one cluster worker that claims the release,
+/// in the claim's answer, and nowhere else. `Debug` prints names only.
+///
+/// A worker puts them in the environment's Kubernetes Secret
+/// (`leptoskit_cloud_runtime::SecretValues`) and keeps them nowhere: not in
+/// its pending marker, its saved outcome, or a log line.
+#[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(transparent)]
+pub struct LeasedSecrets(BTreeMap<String, String>);
+
+impl LeasedSecrets {
+	/// Values by the names a spec's `secret_env` uses.
+	#[must_use]
+	pub const fn new(values: BTreeMap<String, String>) -> Self {
+		Self(values)
+	}
+
+	/// Whether there are none.
+	#[must_use]
+	pub fn is_empty(&self) -> bool {
+		self.0.is_empty()
+	}
+
+	/// The names, in order.
+	pub fn names(&self) -> impl Iterator<Item = &str> {
+		self.0.keys().map(String::as_str)
+	}
+
+	/// The values by name, for the one place a Secret is written.
+	#[must_use]
+	pub fn into_values(self) -> BTreeMap<String, String> {
+		self.0
+	}
+}
+
+impl std::fmt::Debug for LeasedSecrets {
+	fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		formatter
+			.debug_map()
+			.entries(self.0.keys().map(|name| (name, "[redacted]")))
+			.finish()
+	}
+}
+
 /// A job a worker holds, and its lease. The input may carry presigned
-/// addresses, so `claim` is an action: no receipt keeps it.
+/// addresses, and `secrets` a release's secret values, so `claim` is an
+/// action: no receipt keeps it.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Assignment {
 	pub job: Uuid,
@@ -530,6 +577,10 @@ pub struct Assignment {
 	pub lease_expires_at: Timestamp,
 	pub lease_seconds: u32,
 	pub input: JobInput,
+	/// For a release whose spec names secrets: their values. Each is
+	/// recorded as leased to this job before it is sent.
+	#[serde(default, skip_serializing_if = "LeasedSecrets::is_empty")]
+	pub secrets: LeasedSecrets,
 }
 
 /// What `renew` says.

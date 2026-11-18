@@ -30,6 +30,10 @@ pub const DATABASE_URL: &str = "LEPTOSKIT_CLOUD_DATABASE_URL";
 /// The keys sessions and codes are signed with: `id:key` pairs, newest
 /// first, each key 32 random bytes in unpadded base64url.
 pub const AUTH_KEYS: &str = "LEPTOSKIT_CLOUD_AUTH_KEYS";
+/// The vault's master keys, which wrap each organisation's data key: `id:key`
+/// pairs, newest first, in the form of [`AUTH_KEYS`] and never the same
+/// keys.
+pub const VAULT_KEYS: &str = "LEPTOSKIT_CLOUD_VAULT_KEYS";
 /// Where mail is sent through, such as `smtps://user:password@host`.
 pub const SMTP_URL: &str = "LEPTOSKIT_CLOUD_SMTP_URL";
 /// Who mail is from, such as `LeptosKit Cloud <cloud@leptoskit.com>`.
@@ -240,6 +244,7 @@ impl ServeConfig {
 		let origin_from_bind = dev && read(vars, ORIGIN).is_none();
 		let origin = origin(vars, dev, bind)?;
 		let keys = keys(vars, dev)?;
+		let vault = vault_keys(vars, dev)?;
 		// Everything else is checked before the SMTP mailer starts its pool.
 		let default_region =
 			read(vars, DEFAULT_REGION_VAR).unwrap_or_else(|| DEFAULT_REGION.into());
@@ -272,6 +277,7 @@ impl ServeConfig {
 			control: ControlConfig {
 				origin,
 				keys,
+				vault,
 				mailer,
 				github: oauth_app(vars, GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET)?,
 				google: oauth_app(vars, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET)?,
@@ -363,6 +369,36 @@ fn keys(vars: Vars<'_>, dev: bool) -> Result<Keys, ConfigError> {
 	}
 }
 
+/// The vault's master keys: [`VAULT_KEYS`], or in `--dev` without it, a
+/// random key for this run only, so a secret stored in one run can't be
+/// read in the next.
+fn vault_keys(vars: Vars<'_>, dev: bool) -> Result<Keys, ConfigError> {
+	match read(vars, VAULT_KEYS) {
+		Some(text) => {
+			// One leaked variable must not open both sessions and secrets.
+			if read(vars, AUTH_KEYS).is_some_and(|auth| auth.trim() == text.trim()) {
+				return Err(invalid(
+					VAULT_KEYS,
+					format!("must not be the keys in {AUTH_KEYS}: make it its own"),
+				));
+			}
+
+			Keys::parse(&text).map_err(|error| {
+				// The error names a key's ID, never the key.
+				invalid(VAULT_KEYS, format!("is invalid: {error}"))
+			})
+		}
+		None if dev => {
+			let mut secret = [0_u8; 32];
+			getrandom::fill(&mut secret).map_err(|_| {
+				ConfigError::Dev("couldn't make a key: the system has no randomness".to_owned())
+			})?;
+			Ok(Keys::single("dev", secret))
+		}
+		None => Err(ConfigError::Missing(VAULT_KEYS)),
+	}
+}
+
 /// The object store: S3 when [`S3_ENDPOINT`] is set, and in `--dev` without
 /// it, a directory: [`STORAGE_DIR`], or one under the system's temporary
 /// directory.
@@ -450,6 +486,7 @@ mod tests {
 	use super::*;
 
 	const KEY: &str = "k1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+	const VAULT_KEY: &str = "v1:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBA";
 	const SMTP: &str = "smtp://user:hunter2@127.0.0.1:2525";
 
 	fn vars(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> {
@@ -465,6 +502,7 @@ mod tests {
 			(DATABASE_URL, "sqlite://cloud.db"),
 			(ORIGIN, "https://cloud.example.com"),
 			(AUTH_KEYS, KEY),
+			(VAULT_KEYS, VAULT_KEY),
 			(SMTP_URL, SMTP),
 			(MAIL_FROM, "Cloud <cloud@example.com>"),
 			(APPS_DOMAIN, "apps.example.com"),
@@ -513,6 +551,7 @@ mod tests {
 	fn nothing_secret_is_defaulted() {
 		for name in [
 			AUTH_KEYS,
+			VAULT_KEYS,
 			SMTP_URL,
 			MAIL_FROM,
 			ORIGIN,
@@ -536,6 +575,20 @@ mod tests {
 		let message = error(&pairs, false);
 		assert!(message.starts_with(AUTH_KEYS), "{message}");
 		assert!(!message.contains("secretish"), "{message}");
+
+		let mut pairs = without(VAULT_KEYS);
+		pairs.push((VAULT_KEYS, "v1:not-a-key-at-all-secretish"));
+		let message = error(&pairs, false);
+		assert!(message.starts_with(VAULT_KEYS), "{message}");
+		assert!(!message.contains("secretish"), "{message}");
+
+		// The vault's keys are its own: one leaked variable mustn't open
+		// both sessions and secrets.
+		let mut pairs = without(VAULT_KEYS);
+		pairs.push((VAULT_KEYS, KEY));
+		let message = error(&pairs, false);
+		assert!(message.contains("must not be the keys in"), "{message}");
+		assert!(!message.contains("AAAA"), "{message}");
 
 		for (name, value, expected) in [
 			(ORIGIN, "http://cloud.example.com", "must be https"),
