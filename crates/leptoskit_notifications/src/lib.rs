@@ -27,15 +27,15 @@
 //!
 //! Who may call what:
 //!
-//! - [`send`], [`cancel`], [`send_status`], [`subscribe_to_topic`],
-//!   [`unsubscribe_from_topic`], [`set_person_attributes`],
-//!   [`person_attributes`], [`forget_person`], and [`push_deliveries`] answer
-//!   only the app's server, signed with the service's token
-//!   ([`rpc::client::call_as_app`]). A recipient has no operation that sends,
-//!   steers a push, or describes anyone with attributes — segments must not be
-//!   forgeable from the client side.
+//! - [`send`], [`cancel`], [`send_status`], [`send_report`],
+//!   [`subscribe_to_topic`], [`unsubscribe_from_topic`],
+//!   [`set_person_attributes`], [`person_attributes`], [`forget_person`], and
+//!   [`push_deliveries`] answer only the app's server, signed with the
+//!   service's token ([`rpc::client::call_as_app`]). A recipient has no
+//!   operation that sends, steers a push, or describes anyone with attributes —
+//!   segments must not be forgeable from the client side.
 //! - [`inbox`], [`unread_count`], [`category_preferences`], [`mark_read`],
-//!   [`mark_dismissed`], [`set_category_preference`],
+//!   [`mark_opened`], [`mark_dismissed`], [`set_category_preference`],
 //!   [`register_push_endpoint`], [`push_endpoints`], [`revoke_push_endpoint`],
 //!   [`subscribe`], [`unsubscribe`], and [`my_topics`] answer the signed-in
 //!   person the app forwarded ([`rpc::server::ForwardedIdentity`]), and only
@@ -182,6 +182,9 @@ pub const MAX_SPEC_LEN: usize = 8_192;
 /// service stores it as for the fanout job, in bytes.
 pub const MAX_TARGET_LEN: usize = 1_200;
 
+/// The longest [label](SendSpec::label) a send may carry, in bytes.
+pub const MAX_LABEL_LEN: usize = 64;
+
 /// One durable inbox row: the recipient's copy of a notification a send
 /// delivered to them. The read, dismissed, and cancelled state lives here,
 /// shared by every device signed in as [`Notification::person`], never
@@ -232,6 +235,11 @@ pub struct Notification {
 	pub dismissed_at: Option<leptoskit_db::Timestamp>,
 	#[db(created_at)]
 	pub created_at: leptoskit_db::Timestamp,
+	/// When the recipient first opened it — tapped its push, or one of
+	/// the push's action buttons — on any device ([`mark_opened`]). The
+	/// first open stands; a row nobody opened, and every row written
+	/// before opens were recorded, holds `None`.
+	pub opened_at: Option<leptoskit_db::Timestamp>,
 	/// The row's kind: `notification`, the inbox row this has always
 	/// been, or `data` — a silent background message's durable half. A
 	/// data row never surfaces in an inbox or a badge count; it exists so
@@ -288,6 +296,11 @@ pub struct AppSend {
 	pub cursor: Option<uuid::Uuid>,
 	#[db(created_at)]
 	pub created_at: leptoskit_db::Timestamp,
+	/// The send's [label](SendSpec::label), when it carried one: kept
+	/// here for every kind of send, so [`send_report`] can answer it for
+	/// a recipients send too, which stores no spec.
+	#[db(max_len = 64)]
+	pub label: Option<String>,
 }
 
 /// One person's subscription to one topic. Topics are per person, not per
@@ -463,6 +476,14 @@ pub struct SendSpec {
 	/// is found. A send without one serializes without the field.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub local_time: Option<LocalTime>,
+	/// A short name of your own for the send, such as `spring-sale`, to
+	/// tell it apart in reports: 1 to [`MAX_LABEL_LEN`] ASCII letters,
+	/// digits, `-`, `_`, and `.`. The service stores it with the send and
+	/// answers it in [`send_report`]; no device ever receives it. Several
+	/// sends may share one label. It is part of what the idempotency key
+	/// stands for, and a send without one serializes without the field.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub label: Option<String>,
 }
 
 impl SendSpec {
@@ -608,6 +629,55 @@ pub struct SendProgress {
 	pub delivered: u32,
 	/// How many matched people it skipped for opting out of the category.
 	pub skipped_opted_out: u32,
+}
+
+/// What [`send_report`] answers: where a send stands, and what became of
+/// the inbox rows it wrote.
+///
+/// More will be reported here over time, so the type cannot be built or
+/// matched exhaustively outside this crate: read the fields you need.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[non_exhaustive]
+pub struct SendSummary {
+	/// What [`send_status`] answers for the same send: its state and what
+	/// it delivered and skipped. Kept on the send's own record, so it
+	/// stays the same however many of the send's rows are pruned later.
+	pub progress: SendProgress,
+	/// The send's [label](SendSpec::label), when it carried one.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub label: Option<String>,
+	/// When the send was made.
+	pub created_at: leptoskit_db::Timestamp,
+	/// What became of the send's rows, counted as the service stores
+	/// them now.
+	#[serde(default)]
+	pub inbox: InboxCounts,
+}
+
+/// What became of one send's inbox rows, counted over the rows the service
+/// still stores. Retention deletes old rows ([`prune`]), and a pruned row
+/// is counted nowhere here: for a send older than the operator's
+/// retention, these are the counts of what is left, down to all zeroes,
+/// while [`SendSummary::progress`] still says what the send delivered.
+///
+/// A silent data message is never in an inbox and has no open, so a data
+/// send's rows never count as [`opened`](Self::opened).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[non_exhaustive]
+pub struct InboxCounts {
+	/// How many of the send's rows are stored.
+	pub rows: u32,
+	/// How many of them their recipient has read — in the inbox, by
+	/// opening the push, or by dismissing.
+	pub read: u32,
+	/// How many of them their recipient opened: tapped the push, or one
+	/// of its action buttons ([`mark_opened`]).
+	#[serde(default)]
+	pub opened: u32,
+	/// How many of them their recipient dismissed.
+	pub dismissed: u32,
+	/// How many of them the app cancelled before they were due.
+	pub cancelled: u32,
 }
 
 /// What one [`send_test`] attempt came to, for one endpoint. Sanitized
@@ -804,6 +874,11 @@ pub fn check_spec(spec: &SendSpec) -> Result<(), String> {
 	}
 
 	check_data(spec.data.as_deref())?;
+
+	if let Some(label) = spec.label.as_deref() {
+		check_label(label)?;
+	}
+
 	options::check_options(&spec.options)?;
 	local::check_variants(spec)?;
 	local::check_local_time(spec)?;
@@ -821,6 +896,25 @@ pub fn check_spec(spec: &SendSpec) -> Result<(), String> {
 /// How many bytes `value` takes as the JSON the service stores.
 pub(crate) fn stored_len(value: &impl Serialize) -> usize {
 	serde_json::to_string(value).map_or(usize::MAX, |stored| stored.len())
+}
+
+/// Checks a send's [label](SendSpec::label): 1 to [`MAX_LABEL_LEN`] ASCII
+/// letters, digits, `-`, `_`, and `.` — a name that is safe in a URL, a
+/// file name, and a report's column, with nothing to escape.
+///
+/// # Errors
+///
+/// A message naming what's wrong.
+pub fn check_label(label: &str) -> Result<(), String> {
+	let allowed = |byte: u8| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.');
+
+	if label.is_empty() || label.len() > MAX_LABEL_LEN || !label.bytes().all(allowed) {
+		return Err(format!(
+			"a label is 1 to {MAX_LABEL_LEN} ASCII letters, digits, `-`, `_`, or `.`"
+		));
+	}
+
+	Ok(())
 }
 
 /// Checks a topic name wherever one is named — a send's target, a
@@ -1144,11 +1238,13 @@ pub async fn send(
 		});
 	}
 
-	cx.mutate(service::SendWrite {
+	// Boxed: the write's future holds the whole spec and target, which is
+	// more than a caller's stack frame should carry.
+	Box::pin(cx.mutate(service::SendWrite {
 		idempotency_key,
 		spec,
 		target,
-	})
+	}))
 	.await
 }
 
@@ -1188,7 +1284,15 @@ pub(crate) async fn send_write(
 		let recipients: std::collections::BTreeSet<uuid::Uuid> = named.iter().copied().collect();
 		let targeted = recipients.len().try_into().unwrap_or(u32::MAX);
 
-		match service::write_send(cx.tx(), &idempotency_key, &intent, targeted).await {
+		match service::write_send(
+			cx.tx(),
+			&idempotency_key,
+			&intent,
+			targeted,
+			spec.label.as_deref(),
+		)
+		.await
+		{
 			Ok(()) => {}
 			// Another send with this key committed between the read and
 			// the write. On Postgres the unique violation ends this
@@ -1307,6 +1411,51 @@ pub async fn send_status(cx: &rpc::QueryCx, idempotency_key: String) -> rpc::Res
 	};
 
 	Ok(service::progress_of(&send))
+}
+
+/// What became of a send: its [progress](SendProgress), as
+/// [`send_status`] answers it, its label, when it was made, and how many
+/// of the rows it wrote were read, opened, dismissed, and cancelled
+/// ([`InboxCounts`]).
+///
+/// The counts are one read over the send's own rows, found through the
+/// `(send_key, person)` index — work in step with the size of the send,
+/// never with the size of the table — so ask for a report when someone
+/// looks at it, not on a timer for every send. They count the rows the
+/// service still stores: after retention has pruned a send's rows they
+/// shrink, down to zero, while the progress stays as it was; and once the
+/// send's own record is pruned the send is not found.
+///
+/// Only the app may call it: [`rpc::client::call_as_app`] from server code.
+///
+/// # Errors
+///
+/// [`rpc::Error::Forbidden`] from anywhere but the app's server,
+/// [`rpc::Error::NotFound`] for a key no send holds, and
+/// [`rpc::Error::Invalid`] for a malformed key.
+#[rpc::query(service = "notifications")]
+pub async fn send_report(cx: &rpc::QueryCx, idempotency_key: String) -> rpc::Result<SendSummary> {
+	if cx.identity().caller.as_deref() != Some(rpc::server::APP_CALLER) {
+		return Err(rpc::Error::forbidden(
+			"only the app reads a send's report: call this from its server, with the service's \
+			 token",
+		));
+	}
+
+	check_key(&idempotency_key).map_err(rpc::Error::invalid)?;
+
+	let Some(send) = service::find_send(cx.db(), &idempotency_key).await? else {
+		return Err(rpc::Error::not_found(
+			"no send with this idempotency key exists",
+		));
+	};
+
+	Ok(SendSummary {
+		progress: service::progress_of(&send),
+		inbox: service::inbox_counts(cx.db(), &idempotency_key).await?,
+		created_at: send.created_at,
+		label: send.label,
+	})
 }
 
 /// Wakes the people a send reached, when its schedule turns: the job
@@ -1601,6 +1750,48 @@ pub async fn mark_read(cx: &rpc::MutationCx, notification: uuid::Uuid) -> rpc::R
 		Notification::update()
 			.filter(|row| row.id.eq(notification) & row.read_at.is_null())
 			.set(|row| row.read_at, Some(now))
+			.run(cx.tx())
+			.await?;
+	}
+
+	Ok(())
+}
+
+/// Records that the signed-in person opened one of their notifications:
+/// they tapped its push, or one of the push's action buttons. Call it from
+/// the place your app handles the tap — [`receive::Opened::mark_opened`]
+/// does, in one line, on every platform.
+///
+/// The first open is the one recorded. Opening the same notification
+/// again, from this device or another, changes nothing and succeeds, so a
+/// retried call is safe. Opening also marks the notification read, in the
+/// same write, when it wasn't already: someone who tapped it has seen it,
+/// and their badge on every device says so.
+///
+/// A silent data message is never shown, so it has no open: its id is
+/// answered like one that isn't there.
+///
+/// # Errors
+///
+/// [`rpc::Error::Forbidden`] unless the app forwarded a signed-in person,
+/// and [`rpc::Error::NotFound`] unless the notification is theirs.
+#[rpc::mutation(service = "notifications")]
+pub async fn mark_opened(cx: &rpc::MutationCx, notification: uuid::Uuid) -> rpc::Result<()> {
+	let me = service::me(cx.identity())?;
+	let row = service::own_row(cx.tx(), me, notification).await?;
+
+	if row.kind != MessageKind::Notification.as_str() {
+		return Err(service::not_in_inbox());
+	}
+
+	if row.opened_at.is_none() {
+		let now = leptoskit_db::now();
+		let read_at = row.read_at.or(Some(now));
+
+		Notification::update()
+			.filter(|row| row.id.eq(notification) & row.opened_at.is_null())
+			.set(|row| row.opened_at, Some(now))
+			.set(|row| row.read_at, read_at)
 			.run(cx.tx())
 			.await?;
 	}

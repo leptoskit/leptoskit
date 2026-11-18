@@ -2324,3 +2324,55 @@ async fn confirmed_revoke_reuses_subscription_and_stale_handle_never_unsubscribe
 	);
 	remove_boundaries().await;
 }
+
+/// A tap the page received is recorded as an open with one call: the
+/// page's own, same-origin, signed with the person's forwarded identity
+/// — the worker has no such identity and calls nothing. A tap with no
+/// notification to name calls nothing either, and a refusal comes back
+/// as the error it is.
+#[wasm_bindgen_test]
+async fn an_opened_tap_is_recorded_with_one_call_as_the_person() {
+	install_boundaries().await;
+	eval(&format!(
+		r#"window.__lknRouteAnswers["{SERVICE_PREFIX}/mark_opened"] = async () =>
+		new Response("null", {{ status: 200 }});"#,
+	));
+
+	let id = notification_id();
+	let opened = lkn::Opened {
+		notification: Some(id.parse().expect("a uuid")),
+		link: Some("/invoice/42".into()),
+		action: Some("approve".into()),
+		..lkn::Opened::default()
+	};
+	assert!(matches!(opened.mark_opened().await, Ok(true)));
+
+	let calls = requests_to("mark_opened");
+	assert_eq!(calls.len(), 1, "one call for one tap: {calls:?}");
+	assert_eq!(calls[0]["method"], "POST");
+	assert_eq!(calls[0]["authorization"], "Bearer lkn-test-token");
+	let body: serde_json::Value =
+		serde_json::from_str(calls[0]["body"].as_str().expect("a body")).expect("JSON");
+	assert_eq!(
+		body,
+		serde_json::json!({ "notification": id }),
+		"the open names the notification and nothing else"
+	);
+
+	// Nothing to name: a tap whose payload carried no readable id.
+	assert!(matches!(
+		lkn::Opened::default().mark_opened().await,
+		Ok(false)
+	));
+	assert_eq!(requests_to("mark_opened").len(), 1, "no call was made");
+
+	// The service no longer holds it for this person.
+	eval(&format!(
+		r#"window.__lknRouteAnswers["{SERVICE_PREFIX}/mark_opened"] = async () =>
+		new Response("ServerError|no notification with this id is in your inbox", {{ status: 404 }});"#,
+	));
+	assert!(opened.mark_opened().await.is_err());
+	assert_eq!(requests_to("mark_opened").len(), 2);
+
+	remove_boundaries().await;
+}

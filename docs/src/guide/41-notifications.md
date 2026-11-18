@@ -379,6 +379,55 @@ let dry = call_as_app(leptoskit_notifications::Send {
 
 `send_status` answers the state — `fanning_out`, `complete`, or `cancelled` — and the counts so far: `targeted` (everyone the target matched), `delivered`, and `skipped_opted_out`. Once the state is `complete` the counts are final; `validate_only` answers the same shape for the audience as it stands now, without writing a row, the way FCM's `validate_only` does, for every target — recipients, topic, condition, and everyone. A dry run reads the audience a page at a time and holds nothing open while it does, so counting everyone the service knows doesn't hold up its other work. Cancelling works mid-fanout too: the fanout stops before its next batch, the rows written so far are cancelled, and the send answers `cancelled` from then on.
 
+### See what a send came to
+
+After a send has gone out, the question changes from "is it done?" to "did it work?": how many people got it, how many read it, and how many tapped the push. `send_report` answers that for one send, from your server:
+
+```rust
+use leptoskit_rpc::client::call_as_app;
+
+let report = call_as_app(leptoskit_notifications::SendReport {
+    idempotency_key: "spring-sale-2026".into(),
+})
+.await?;
+
+println!(
+    "{} delivered, {} read, {} opened",
+    report.progress.delivered, report.inbox.read, report.inbox.opened,
+);
+```
+
+The answer has four parts:
+
+- `progress`: exactly what `send_status` answers, so one call is enough for a page that shows both.
+- `inbox`: what became of the rows the send wrote. `rows` is how many are stored, `read` how many their recipient has read, `opened` how many tapped the push (see [recording an open](#record-the-open)), `dismissed` how many were dismissed, and `cancelled` how many you cancelled before they were due.
+- `created_at`: when the send was made.
+- `label`: the send's label, when it has one (below).
+
+A few things to know when you read the numbers:
+
+- **`opened` only counts what your app reports.** The service cannot see a tap. It counts an open when your app calls `mark_opened` for it, which is one line in the place you handle taps. An app that doesn't call it has `opened: 0` on every send.
+- **Opening counts as reading.** A person who tapped the push has seen the notification, so an open also marks it read. `read` is therefore never smaller than `opened`. Dismissing marks a row read too.
+- **Each person counts once.** The counts are of inbox rows, one per person, not of devices or taps. Someone who taps the same notification on their phone and their laptop is one open.
+- **The counts are of what is still stored.** The service [deletes old rows](#how-long-things-are-kept). Once a send's rows have been deleted, `inbox` counts what is left, down to all zeroes, while `progress` still says what the send delivered. Read a send's report while its rows are kept (a year by default) and store the numbers yourself if you need them for longer.
+- **A silent data message has no open.** Nobody sees it, so its rows never count as `opened`.
+- **Ask when someone looks.** A report reads the send's own rows, so its cost grows with the size of the send and not with the size of your database. That is fine for a page a person opens. Don't poll it every few seconds for every send.
+
+Only your app's server can read a report. Conversions and funnels — what people did after they opened — are not part of this service.
+
+**Name a send with a label.** An idempotency key has to be unique per send, so it makes a poor name for a campaign that goes out in several sends. Give those sends the same `label` instead:
+
+```rust
+let spec = SendSpec {
+    category: "marketing".into(),
+    title: "Spring sale".into(),
+    label: Some("spring-sale".into()),
+    ..SendSpec::default()
+};
+```
+
+A label is 1 to 64 ASCII letters, digits, `-`, `_`, or `.`. The service stores it with the send and answers it in the send's report. It is never sent to a device. It is part of what the idempotency key stands for, so repeating a key with a different label is refused like any other changed send.
+
 ## Shape a message
 
 A plain send shows a banner with its title and body everywhere. Most of the time that's right, and then there are the others: the message that shouldn't wake anyone, the one that should carry a picture, the one whose whole job is to correct the badge count. `SendSpec` takes an `options` object for those, and every field is optional — a send without options behaves exactly as sends always did, byte for byte on the wire.
@@ -1064,6 +1113,9 @@ pub fn App() -> impl IntoView {
 					if let Ok(route) = Route::parse(&opened.route("/inbox")) {
 						taps.navigate(route);
 					}
+
+					// Count the open, and mark it read everywhere.
+					let _ = opened.mark_opened().await;
 				}
 				Received::Shown(_shown) => {
 					// A banner just appeared over your app.
@@ -1091,6 +1143,30 @@ In a browser the loop is the same with `browser::Receiver`, which re-exports the
 - `launched`: `true` for the tap that started the app.
 
 `opened.route("/inbox")` answers where to go: the send's link when it is a path on your app, such as `/invoice/42`, and otherwise the route you name with the notification's id added as `lkn` — the same address the web receiver opens. A link that is a full `https` URL is left for you to read from `link`, because only your app knows whether that URL is its own.
+
+#### Record the open
+
+A tap tells your app where to go, but it tells the service nothing: the person's other devices still show the notification as unread, and your [send's report](#see-what-a-send-came-to) has no idea anyone opened it. One call fixes both:
+
+```rust
+if let Received::Opened(opened) = received {
+	let _ = opened.mark_opened().await;
+}
+```
+
+`mark_opened` tells the service, as the signed-in person, that they opened this notification. It works the same on iOS, macOS, Android, and the web. The service then:
+
+- records the open on the person's inbox row, once. The first open is the one kept; tapping again, on this device or another, changes nothing and is not an error.
+- marks the notification read, if it wasn't already, so the unread badge drops on every device.
+- counts it in the send's report as `opened`.
+
+It answers `Ok(true)` when the service recorded the open and `Ok(false)` when there was nothing to record, which is the case for a local notification your app posted itself and for a push whose payload carried no id. A tap on an action button counts as an open too.
+
+It can fail: nobody is signed in, the notification was deleted or belongs to someone else, or the network is down. Nothing retries it for you. An open that was not recorded is safe to ignore, as the example does, and safe to send again.
+
+On the web, the page makes this call after the receiver hands it the tap. The service worker that shows the push never calls the service, because it holds no sign-in. So a click that opens your site is counted once your page has loaded and created its `Receiver`.
+
+If you call the service yourself, the operation is `leptoskit_notifications::MarkOpened { notification }`, called like [`MarkRead`](#read-the-inbox-on-any-platform).
 
 **The tap that started the app** is not lost. The host keeps what arrived before your code ran, and the receiver's first answer holds it, marked `launched`. If you want it before the first screen is drawn, ask without waiting:
 
@@ -1323,6 +1399,7 @@ A few rules hold whatever you set:
 - **Nothing in use is deleted.** A notification with a push still waiting to go out stays, and so does that push. A send that is still working through its audience keeps every row it has written. A scheduled notification is never too old before its time has come, and one you cancelled ahead of its time is kept until that time is `ENDED_DAYS` in the past.
 - **A push record never outlives its notification.** When a notification goes, its push records go with it, whatever their age.
 - **A person's inbox simply gets shorter.** Deleted rows leave the inbox and the unread count the same way a dismissed one does. Nothing on an open screen breaks.
+- **A send's report counts what is left.** The read, opened, and dismissed counts in a [send's report](#see-what-a-send-came-to) are counted over the rows still stored, so they shrink as rows are deleted. What the send delivered is kept on the send's own record and does not change.
 
 **How long a retry is safe.** The idempotency key is remembered for as long as the send's record is kept: at least `SENDS_DAYS` after the send, and for as long as any notification or push record from that send is still stored. With the defaults that is a year for a send that reached an inbox. During that time a repeat of the same call answers the first result and sends nothing. After the record is deleted, the service has forgotten the key, and the same call is a new send. So keep `SENDS_DAYS` longer than the longest time any of your systems might retry a send. It cannot be set below 2 days.
 
@@ -1331,7 +1408,7 @@ Retention is also the answer for personal data that isn't tied to one person's d
 ## What it doesn't do yet
 
 - **Native client enrollment is iOS, Android, and macOS.** The service side of enrollment is done, the web client is this crate's `browser` module, and the native client — iOS's and macOS's APNs token and Android's FCM token alike — is the `native` module (all above). Windows and Linux apps receive no push, so they have nothing to tap.
-- **No record of who opened what.** A tap reaches your app's code, and nothing reports it to the service: there is no opened count per send. Mark the item read from your own screen when the tap lands, as below.
+- **Opens are counted only when your app reports them, and nothing after the open is tracked.** A tap reaches your app's code; [`mark_opened`](#record-the-open) reports it, and the [send's report](#see-what-a-send-came-to) counts it. There are no conversions or funnels, no per-device or per-platform breakdown of opens, and no list of sends to browse yet.
 - **Action buttons are web and Apple only, and Apple's aren't registered yet.** `web.actions` buttons work today. An Apple notification shows buttons only for a category the app registered with the system, which leptoskit doesn't do yet; the receiver already reports a pressed button's id when an app registers its own. Android sends carry no buttons.
 - **No delivery receipts.** The service knows what it stored and what the provider accepted; it doesn't track who saw a banner. `accepted` is as far as status goes.
 - **No per-device state.** Read, dismissed, and cancelled state is per person, shared across their devices by design.

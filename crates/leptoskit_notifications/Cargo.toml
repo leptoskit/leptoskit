@@ -79,6 +79,12 @@ required-features = ["service"]
 name = "scale"
 required-features = ["service"]
 
+# The opens tests exercise open tracking, a send's report, and a send's
+# label, over rows the checks read back with plain SQL.
+[[test]]
+name = "opens"
+required-features = ["service"]
+
 # The Postgres races need the Postgres service; they start a private
 # Postgres from local binaries and skip without them.
 [[test]]

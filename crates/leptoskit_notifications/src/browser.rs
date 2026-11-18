@@ -854,6 +854,8 @@ pub use crate::receive::Shown;
 /// while let Ok(received) = receiver.next().await {
 ///     if let Received::Opened(opened) = received {
 ///         navigate(&opened.route("/inbox"));
+///         // Count the open, and mark it read on every device.
+///         let _ = opened.mark_opened().await;
 ///     }
 /// }
 /// ```

@@ -46,6 +46,9 @@ mod engine;
 #[path = "support/local.rs"]
 mod local;
 #[cfg(feature = "service")]
+#[path = "support/opens.rs"]
+mod opens;
+#[cfg(feature = "service")]
 #[path = "support/ownership.rs"]
 mod ownership;
 #[cfg(feature = "service")]
@@ -1406,4 +1409,111 @@ async fn a_large_local_cancel_stops_only_what_is_ahead_on_postgres() {
 	};
 	local::a_large_local_cancel_stops_only_what_is_ahead(&local_service(&postgres, false).await)
 		.await;
+}
+
+/// A migrated database on `postgres`, and the open-tracking checks'
+/// service over it.
+#[cfg(feature = "service")]
+async fn opens_service(postgres: &Postgres) -> (std::net::SocketAddr, Db) {
+	let db = Db::connect(&postgres.database())
+		.await
+		.expect("the database opens");
+	db.migrate(POSTGRES_MIGRATIONS)
+		.await
+		.expect("migrations apply");
+	let address = opens::serve(&db).await;
+
+	(address, db)
+}
+
+/// The first open is recorded once and marks the row read on Postgres too.
+#[tokio::test(flavor = "multi_thread")]
+#[cfg(feature = "service")]
+async fn the_first_open_is_recorded_and_marks_the_row_read_on_postgres() {
+	let Some(postgres) = Postgres::start() else {
+		return;
+	};
+	let (address, db) = opens_service(&postgres).await;
+	opens::the_first_open_is_recorded_and_marks_the_row_read(address, &db).await;
+}
+
+/// Only its owner opens a row on Postgres too.
+#[tokio::test(flavor = "multi_thread")]
+#[cfg(feature = "service")]
+async fn only_the_owner_opens_a_row_on_postgres() {
+	let Some(postgres) = Postgres::start() else {
+		return;
+	};
+	let (address, db) = opens_service(&postgres).await;
+	opens::only_the_owner_opens_a_row(address, &db).await;
+}
+
+/// A data message has no open on Postgres either.
+#[tokio::test(flavor = "multi_thread")]
+#[cfg(feature = "service")]
+async fn a_data_message_has_no_open_on_postgres() {
+	let Some(postgres) = Postgres::start() else {
+		return;
+	};
+	let (address, db) = opens_service(&postgres).await;
+	opens::a_data_message_has_no_open(address, &db).await;
+}
+
+/// A send's report counts its rows on Postgres, where the five counts come
+/// back as `bigint`.
+#[tokio::test(flavor = "multi_thread")]
+#[cfg(feature = "service")]
+async fn a_report_counts_what_became_of_a_sends_rows_on_postgres() {
+	let Some(postgres) = Postgres::start() else {
+		return;
+	};
+	let (address, db) = opens_service(&postgres).await;
+	opens::a_report_counts_what_became_of_a_sends_rows(address, &db).await;
+}
+
+/// A report's counts shrink with pruning on Postgres too.
+#[tokio::test(flavor = "multi_thread")]
+#[cfg(feature = "service")]
+async fn a_reports_counts_shrink_when_rows_are_pruned_on_postgres() {
+	let Some(postgres) = Postgres::start() else {
+		return;
+	};
+	let (address, db) = opens_service(&postgres).await;
+	opens::a_reports_counts_shrink_when_rows_are_pruned(address, &db).await;
+}
+
+/// A label is checked, stored in its `varchar(64)`, and part of the intent
+/// on Postgres too.
+#[tokio::test(flavor = "multi_thread")]
+#[cfg(feature = "service")]
+async fn a_label_is_checked_stored_and_part_of_the_intent_on_postgres() {
+	let Some(postgres) = Postgres::start() else {
+		return;
+	};
+	let (address, db) = opens_service(&postgres).await;
+	opens::a_label_is_checked_stored_and_part_of_the_intent(address, &db).await;
+}
+
+/// The open-tracking migration applies over existing rows on Postgres.
+#[tokio::test(flavor = "multi_thread")]
+#[cfg(feature = "service")]
+async fn rows_from_before_the_migration_are_unopened_on_postgres() {
+	let Some(postgres) = Postgres::start() else {
+		return;
+	};
+	let before = POSTGRES_MIGRATIONS
+		.iter()
+		.position(|migration| migration.name.ends_with("_endpoint_seen"))
+		.expect("the registry lists endpoint_seen")
+		+ 1;
+	let db = Db::connect(&postgres.database())
+		.await
+		.expect("the database opens");
+
+	opens::rows_from_before_the_migration_are_unopened(
+		&db,
+		&POSTGRES_MIGRATIONS[..before],
+		POSTGRES_MIGRATIONS,
+	)
+	.await;
 }

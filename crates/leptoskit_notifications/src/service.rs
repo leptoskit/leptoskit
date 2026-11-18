@@ -351,6 +351,7 @@ pub(crate) async fn write_send(
 	key: &str,
 	intent: &str,
 	targeted: u32,
+	label: Option<&str>,
 ) -> leptoskit_db::Result<()> {
 	NewAppSend {
 		idempotency_key: key.to_owned(),
@@ -362,6 +363,7 @@ pub(crate) async fn write_send(
 		target: None,
 		spec: None,
 		cursor: None,
+		label: label.map(str::to_owned),
 	}
 	.insert(tx)
 	.await
@@ -392,6 +394,7 @@ pub(crate) async fn write_fanout_send(
 		target: Some(target.stored()),
 		spec: Some(serde_json::to_string(spec).expect("the spec is plain JSON")),
 		cursor: None,
+		label: spec.label.clone(),
 	}
 	.insert(tx)
 	.await
@@ -553,6 +556,7 @@ pub(crate) async fn fanout(
 			cancelled_at: None,
 			read_at: None,
 			dismissed_at: None,
+			opened_at: None,
 			kind: kind_of(spec),
 			options: text.options.clone(),
 		}
@@ -698,13 +702,60 @@ pub(crate) async fn own_row(
 		.await
 	{
 		Ok(row) => Ok(row),
-		Err(leptoskit_db::DbError::NotFound { .. }) => {
-			Err(rpc::Error::not_found(
-				"no notification with this id is in your inbox",
-			))
-		}
+		Err(leptoskit_db::DbError::NotFound { .. }) => Err(not_in_inbox()),
 		Err(error) => Err(error.into()),
 	}
+}
+
+/// What every person-side call answers for an id that is not one of the
+/// caller's inbox rows, whatever the reason.
+pub(crate) fn not_in_inbox() -> rpc::Error {
+	rpc::Error::not_found("no notification with this id is in your inbox")
+}
+
+/// The read behind a send's [`InboxCounts`](crate::InboxCounts): one pass
+/// over the send's rows, found through the `(send_key, person)` unique
+/// index, counting each state's timestamp where it is set. One statement,
+/// so the five counts describe the same moment.
+fn send_counts_read(dialect: leptoskit_db::Dialect, send_key: &str) -> Statement {
+	Statement::new(
+		format!(
+			"SELECT count(*), count(\"read_at\"), count(\"opened_at\"), count(\"dismissed_at\"), \
+			 count(\"cancelled_at\") FROM \"notifications\" WHERE \"send_key\" = {}",
+			placeholder(dialect, 1)
+		),
+		vec![leptoskit_db::Value::Text(send_key.to_owned())],
+	)
+}
+
+/// What became of `send_key`'s rows, as the service stores them now.
+///
+/// # Errors
+///
+/// Whatever the read fails with.
+pub(crate) async fn inbox_counts(
+	db: &impl leptoskit_db::Read,
+	send_key: &str,
+) -> rpc::Result<crate::InboxCounts> {
+	let rows = send_counts_read(db.dialect(), send_key)
+		.reads::<Notification>()
+		.fetch(db)
+		.await?;
+	let row = rows.first().map(Vec::as_slice).unwrap_or_default();
+	let count = |index: usize| {
+		match row.get(index) {
+			Some(leptoskit_db::Value::Int(count)) => u32::try_from(*count).unwrap_or(u32::MAX),
+			_ => 0,
+		}
+	};
+
+	Ok(crate::InboxCounts {
+		rows: count(0),
+		read: count(1),
+		opened: count(2),
+		dismissed: count(3),
+		cancelled: count(4),
+	})
 }
 
 /// Reads the person's wake row, so the queries that follow it carry
@@ -2730,6 +2781,13 @@ pub mod plans {
 			}
 			super::Walk::Registry(_) => vec![super::registry_read(dialect, cursor, limit)],
 		})
+	}
+
+	/// The read behind a send's report counts, exactly as
+	/// [`send_report`](crate::send_report) issues it.
+	#[must_use]
+	pub fn send_counts(dialect: leptoskit_db::Dialect, send_key: &str) -> leptoskit_db::Statement {
+		super::send_counts_read(dialect, send_key)
 	}
 }
 
