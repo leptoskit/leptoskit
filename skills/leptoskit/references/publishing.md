@@ -32,7 +32,7 @@ Publishing has two halves on every store:
 ## Listings and screenshots
 
 - Listing text lives in `store/`: `listing.toml` (name, keywords, addresses, category), `en-US/summary.md`, `en-US/description.md`, and `en-US/release_notes.md`. Each upload sends what the store's API takes; a step asks for the rest. When a step's value says `(write it in …)`, ask the person for the text and add it to that file rather than typing it into the dashboard, so the next upload carries it.
-- `leptoskit publish screenshots` captures every store's screenshots into `store/screenshots/<size>/`, from `store/screenshots/screenshots.toml`. Browser sizes need `leptoskit dev` running; simulator and Android sizes need the app installed and Appium. Run `--dry-run` first to see the files. Name each size after the store size it is (`iphone-6.3`, `ipad-13`, `android-phone`, `android-tablet-7`, `android-tablet-10`, `play-feature-graphic`, `chrome-1280x800`, and the others in the publishing guide); `leptoskit publish` refuses a folder it doesn't know. Each upload to the App Store, Google Play, and addons.mozilla.org replaces that store's screenshots with the folders' files, after checking their sizes and counts (also under `--dry-run`); fix a refused image and run it again rather than uploading by hand. The Chrome Web Store and Edge have no image API: when their step asks for screenshots, upload the files from the folder it names.
+- `leptoskit publish screenshots` captures every store's screenshots into `store/screenshots/<size>/`, from `store/screenshots/screenshots.toml`. Browser sizes need `leptoskit dev` running; simulator and Android sizes need the app installed and Appium. Run `--dry-run` first to see the files. Name each size after the store size it is (`iphone-6.3`, `ipad-13`, `android-phone`, `android-tablet-7`, `android-tablet-10`, `play-feature-graphic`, `solana-icon`, `solana-banner`, `solana-previews`, `chrome-1280x800`, and the others in the publishing guide); `leptoskit publish` refuses a folder it doesn't know. Each upload to the App Store, Google Play, and addons.mozilla.org replaces that store's screenshots with the folders' files, after checking their sizes and counts (also under `--dry-run`); fix a refused image and run it again rather than uploading by hand. The Chrome Web Store, Edge, and the Solana dApp Store have no image API: when their step asks for screenshots or listing images, upload the files from the folder it names.
 
 ## Computer use in a store's dashboard
 
@@ -110,6 +110,20 @@ When you have computer use (screenshots, clicks, and typing) or a browser automa
   - a target SDK below Google Play's minimum (the command checks it);
   - a privacy policy URL that doesn't load;
   - permissions the app doesn't explain in its listing.
+
+**Solana dApp Store (Seeker and Saga)**
+
+- Publisher Portal: <https://publish.solanamobile.com>. The app is created there once, which needs the account holder: the account, the publisher profile, KYC (individual) or KYB (company), connecting the publisher wallet, the app details form, and approving the App NFT mint in the wallet. `leptoskit publish solana` says so, and the tool only updates an app that already exists, matched by the APK's package name.
+- The portal API key is created under **Settings**, **API keys**; the wallet (`solana-keygen new`, dedicated to publishing) is funded with about 0.02 SOL. Both are person steps.
+- Without `--submit`, nothing is sent: the signed APK is built into `.leptoskit/publish/solana/`. `--submit` runs Solana Mobile's official `dapp-store` tool, which mints the release NFT and submits for review; updates are reviewed in 1 to 2 business days, a new app in 3 to 4, and the result arrives by email.
+- Pages:
+  - **App details:** package name, name (25 characters), short description (50), website, support email, Terms of Use and privacy policy addresses, the icon (512×512, no transparency), the banner (1200×600), and 4 to 8 previews of one size.
+  - **Releases:** what "What's New" shows users, and the release's review state.
+- Common rejections:
+  - a publisher site that doesn't load, or is off-topic;
+  - Terms of Use or privacy policy addresses that are broken or not public;
+  - a debug or unsigned APK, or one signed with the Google Play key (the command checks this);
+  - a `versionCode` that isn't exactly one above the store's (pass `--build-number <n>`).
 
 **macOS downloads (Developer ID)**
 

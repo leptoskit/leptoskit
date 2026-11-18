@@ -1,0 +1,60 @@
+---
+source: crates/leptoskit_cli/src/publish/tests.rs
+expression: report.text()
+---
+What to do next
+
+solana: Clipper 1.4.0 is checked; an upload builds the release APK signed with your dApp Store key (versionCode 42) and submits it for review with the dapp-store tool. Its screenshots are checked: 4 images for solana-previews. Nothing was built or sent.
+
+  1. Create the Publisher Portal account and the publisher profile, and pass KYC (individual) or KYB (company). (you, the account holder)
+     Open   https://publish.solanamobile.com
+     Why by hand: identity verification has no API, and needs the account holder
+     Done when: the portal lets you add a dApp
+
+  2. Connect the publisher wallet in the portal: a new Solana wallet dedicated to publishing, which every future submission of this app must sign with. (you, the account holder)
+     Open   https://publish.solanamobile.com
+     Wallet address: (set LEPTOSKIT_PUBLISH_SOLANA_KEYPAIR to a funded Solana keypair)
+     Why by hand: wallet custody is the account holder's, and losing the wallet blocks every future submission
+     Done when: the portal shows the wallet connected
+
+  3. Create the app in the portal: the app details form and its listing images.
+     Open   https://publish.solanamobile.com
+     Package name: com.example.clipper
+     Name: Clipper
+     Short description: Clip quotes from anything you read.
+     Website: https://clipper.example
+     Support email: help@clipper.example
+     Terms of Use: (a public HTTPS page the portal checks)
+     Privacy policy: https://clipper.example/privacy
+     Icon: store/screenshots/solana-icon/*.png (512×512, no transparency)
+     Banner: store/screenshots/solana-banner/*.png (1200×600)
+     Previews: store/screenshots/solana-previews/*.png (4 to 8, all one size)
+     Why by hand: the first app and its listing are created in the portal; the official tool only updates an app that already exists there, matched by the package name
+     Done when: the app exists with its App NFT minted
+
+  4. Approve the App NFT mint transaction in the connected wallet, and every signing request the portal raises after it. (you, the account holder)
+     Open   https://publish.solanamobile.com
+     Why by hand: the mint is a Solana transaction only the wallet's holder can sign
+     Done when: the portal shows the app's App NFT minted
+
+  5. Create the portal API key, and set it as LEPTOSKIT_PUBLISH_SOLANA_API_KEY. (you, the account holder)
+     Open   https://publish.solanamobile.com/dashboard/settings/api-keys
+     Why by hand: an API key is created by the signed-in account holder
+     Done when: `leptoskit publish credentials` lists it as set
+
+  6. Fund the publishing wallet with about 0.02 SOL; the dapp-store tool refuses to start below 0.016 SOL, which minting the release NFT costs. (you, the account holder)
+     Wallet address: (set LEPTOSKIT_PUBLISH_SOLANA_KEYPAIR to a funded Solana keypair)
+     Why by hand: only the wallet's holder can move its SOL
+     Done when: `leptoskit publish solana` gets past the balance check
+
+  7. Add what the app's listing is missing to the project, and upload again.
+     Open   https://publish.solanamobile.com
+     Icon: (put one 512×512 image in store/screenshots/solana-icon/)
+     Banner: (put one 1200×600 image in store/screenshots/solana-banner/)
+     Why by hand: the portal's listing form and its images have no API, and the official tool takes none of them
+     Done when: the portal's listing shows them
+
+  8. Decide to release it, then run `leptoskit publish solana --submit`, which submits the release for review. (you, the account holder)
+     Release: .leptoskit/publish/solana/app-release.apk
+     Why by hand: submitting mints the release NFT and sends the app to review, which is the account holder's decision
+     Done when: the portal shows the release in review

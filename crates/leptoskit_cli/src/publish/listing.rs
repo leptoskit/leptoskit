@@ -114,6 +114,8 @@ pub mod limits {
 	pub const PLAY_SHORT: usize = 80;
 	pub const PLAY_FULL: usize = 4000;
 	pub const AMO_SUMMARY: usize = 250;
+	pub const SOLANA_NAME: usize = 25;
+	pub const SOLANA_SUMMARY: usize = 50;
 }
 
 impl Store {
@@ -182,6 +184,20 @@ impl Store {
 				check("store/en-US/summary.md", summary, PLAY_SHORT, false);
 				check("store/en-US/description.md", description, PLAY_FULL, false);
 			}
+			"solana" => {
+				check(
+					"the store name",
+					Some(self.listing.name.as_deref().unwrap_or(name)),
+					SOLANA_NAME,
+					false,
+				);
+				check(
+					"store/en-US/summary.md, the short description",
+					summary,
+					SOLANA_SUMMARY,
+					false,
+				);
+			}
 			"firefox" => check("store/en-US/summary.md", summary, AMO_SUMMARY, false),
 			_ => {}
 		}
@@ -195,6 +211,7 @@ fn store_name(store: &str) -> &'static str {
 		"app_store" => "the App Store",
 		"play" => "Google Play",
 		"firefox" => "addons.mozilla.org",
+		"solana" => "the Solana dApp Store",
 		_ => "the store",
 	}
 }
@@ -224,6 +241,23 @@ mod tests {
 			[
 				"the store name has 35 characters; Google Play takes at most 30",
 				"store/en-US/summary.md has 81 characters; Google Play takes at most 80",
+			]
+		);
+		// The dApp Store takes a 25-character name and a 50-character short
+		// description.
+		assert_eq!(
+			store.too_long("solana", "Notes"),
+			[
+				"store/en-US/summary.md, the short description has 81 characters; the Solana dApp \
+				 Store takes at most 50"
+			]
+		);
+		assert_eq!(
+			store.too_long("solana", "A name too long for the dApp Store's listing!"),
+			[
+				"the store name has 45 characters; the Solana dApp Store takes at most 25",
+				"store/en-US/summary.md, the short description has 81 characters; the Solana dApp \
+				 Store takes at most 50",
 			]
 		);
 	}

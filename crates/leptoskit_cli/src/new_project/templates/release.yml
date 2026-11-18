@@ -8,9 +8,10 @@
 # (Actions, release, Run workflow) with "submit" checked.
 #
 # Credentials are repository secrets (Settings, Secrets and variables,
-# Actions), under the names `leptoskit publish credentials` lists. Three are
+# Actions), under the names `leptoskit publish credentials` lists. Four are
 # files, stored base64-encoded instead:
 #   LEPTOSKIT_ANDROID_KEYSTORE_BASE64     the upload keystore: base64 -i upload.jks
+#   LEPTOSKIT_SOLANA_KEYSTORE_BASE64      the dApp Store signing keystore: base64 -i dappstore.jks
 #   LEPTOSKIT_MACOS_CERTIFICATE_BASE64    the Developer ID certificate, exported as a .p12
 #   LEPTOSKIT_MACOS_CERTIFICATE_PASSWORD  the .p12's password
 name: release
@@ -53,7 +54,7 @@ jobs:
         shell: bash
         run: |
           any=false
-          for store in chrome edge firefox app_store macos play; do
+          for store in chrome edge firefox app_store macos play solana; do
             if grep -q "^\[publish\.$store\]" leptoskit.toml; then
               echo "$store=true" >> "$GITHUB_OUTPUT"
 
@@ -113,8 +114,17 @@ jobs:
           distribution: temurin
           java-version: "17"
 
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        # The Solana dApp Store publishes through Solana Mobile's official
+        # npm tool, which this step makes runnable.
+        if: steps.stores.outputs.solana == 'true'
+        with:
+          node-version: "22"
+
       - name: install the Android SDK platform and NDK
-        if: steps.stores.outputs.play == 'true'
+        # The Solana dApp Store uploads the same Android release build as
+        # Google Play, so its build needs the SDK too.
+        if: steps.stores.outputs.play == 'true' || steps.stores.outputs.solana == 'true'
         run: |
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-36" "ndk;27.1.12297006"
           echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.1.12297006" >> "$GITHUB_ENV"
@@ -126,6 +136,14 @@ jobs:
         run: |
           echo "$KEYSTORE" | base64 --decode > "$RUNNER_TEMP/upload.jks"
           echo "LEPTOSKIT_ANDROID_KEYSTORE=$RUNNER_TEMP/upload.jks" >> "$GITHUB_ENV"
+
+      - name: decode the dApp Store signing key
+        if: steps.stores.outputs.solana == 'true'
+        env:
+          KEYSTORE: ${{ secrets.LEPTOSKIT_SOLANA_KEYSTORE_BASE64 }}
+        run: |
+          echo "$KEYSTORE" | base64 --decode > "$RUNNER_TEMP/dappstore.jks"
+          echo "LEPTOSKIT_SOLANA_KEYSTORE=$RUNNER_TEMP/dappstore.jks" >> "$GITHUB_ENV"
 
       - name: import the Developer ID certificate
         if: steps.stores.outputs.macos == 'true'
@@ -163,6 +181,13 @@ jobs:
           LEPTOSKIT_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.LEPTOSKIT_ANDROID_KEYSTORE_PASSWORD }}
           LEPTOSKIT_ANDROID_KEY_ALIAS: ${{ secrets.LEPTOSKIT_ANDROID_KEY_ALIAS }}
           LEPTOSKIT_ANDROID_KEY_PASSWORD: ${{ secrets.LEPTOSKIT_ANDROID_KEY_PASSWORD }}
+          # The Solana dApp Store's keypair is a JSON file, passed as its
+          # contents; its keystore's path comes from the decode step above.
+          LEPTOSKIT_PUBLISH_SOLANA_API_KEY: ${{ secrets.LEPTOSKIT_PUBLISH_SOLANA_API_KEY }}
+          LEPTOSKIT_PUBLISH_SOLANA_KEYPAIR: ${{ secrets.LEPTOSKIT_PUBLISH_SOLANA_KEYPAIR }}
+          LEPTOSKIT_SOLANA_KEYSTORE_PASSWORD: ${{ secrets.LEPTOSKIT_SOLANA_KEYSTORE_PASSWORD }}
+          LEPTOSKIT_SOLANA_KEY_ALIAS: ${{ secrets.LEPTOSKIT_SOLANA_KEY_ALIAS }}
+          LEPTOSKIT_SOLANA_KEY_PASSWORD: ${{ secrets.LEPTOSKIT_SOLANA_KEY_PASSWORD }}
           # gh attaches the macOS download to a GitHub release.
           GH_TOKEN: ${{ github.token }}
           SUBMIT: ${{ inputs.submit }}
@@ -180,7 +205,7 @@ jobs:
         if: always() && steps.stores.outputs.any == 'true'
         shell: bash
         run: |
-          rm -f "$RUNNER_TEMP/upload.jks" "$RUNNER_TEMP/certificate.p12"
+          rm -f "$RUNNER_TEMP/upload.jks" "$RUNNER_TEMP/dappstore.jks" "$RUNNER_TEMP/certificate.p12"
           security delete-keychain "$RUNNER_TEMP/signing.keychain-db" 2>/dev/null || true
 
       - name: what to do next
@@ -198,4 +223,5 @@ jobs:
             .leptoskit/publish/next-steps.*
             .leptoskit/publish/macos/*.dmg
             .leptoskit/publish/macos/*.zip
+            .leptoskit/publish/solana/*.apk
           if-no-files-found: ignore

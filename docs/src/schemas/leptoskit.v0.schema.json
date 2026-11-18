@@ -3830,6 +3830,17 @@
 							"type": "null"
 						}
 					]
+				},
+				"solana": {
+					"description": "The Solana dApp Store, for the release-signed Android APK.",
+					"anyOf": [
+						{
+							"$ref": "#/$defs/SolanaStore"
+						},
+						{
+							"type": "null"
+						}
+					]
 				}
 			},
 			"additionalProperties": false
@@ -4628,6 +4639,25 @@
 				]
 			},
 			"pattern": "^[a-z][a-z0-9-]{1,38}[a-z0-9]$"
+		},
+		"SolanaStore": {
+			"description": "An app in the Solana dApp Store's Publisher Portal, created once there.\nUpdates are matched by `native.package_id`, the Android package name\ninside the APK.",
+			"type": "object",
+			"properties": {
+				"cli_version": {
+					"description": "The version of `@solana-mobile/dapp-store-cli` an upload runs, such\nas `1.0.1`. A plain semantic version: the tool is pinned, so never a\nrange or a tag.",
+					"type": "string",
+					"default": "1.0.1"
+				},
+				"rpc_url": {
+					"description": "The Solana RPC address the wallet's balance is checked against,\n`https://…`. Defaults to Solana Labs' public mainnet RPC.",
+					"type": [
+						"string",
+						"null"
+					]
+				}
+			},
+			"additionalProperties": false
 		},
 		"SplashUntil": {
 			"description": "When the animated splash overlay is removed.",
