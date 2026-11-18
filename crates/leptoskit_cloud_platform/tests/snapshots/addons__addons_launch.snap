@@ -67,7 +67,33 @@ expression: "files.iter().map(|(path, content)|\nformat!(\"# {path}\\n{content}\
   }
 }
 ---
-# eu/launch/addons/10-policies-17.yaml
+# eu/launch/addons/00-namespaces-05.yaml
+{
+  "apiVersion": "v1",
+  "kind": "Namespace",
+  "metadata": {
+    "labels": {
+      "pod-security.kubernetes.io/enforce": "baseline",
+      "pod-security.kubernetes.io/enforce-version": "v1.35"
+    },
+    "name": "registry"
+  }
+}
+---
+# eu/launch/addons/01-secrets-19.yaml
+{
+  "apiVersion": "v1",
+  "data": {
+    "requirements.json": "[\n  {\n    \"createdBy\": \"operator\",\n    \"keys\": [\n      \"ACCESS_KEY_ID\",\n      \"SECRET_ACCESS_KEY\"\n    ],\n    \"name\": \"object-storage\",\n    \"namespace\": \"database\",\n    \"purpose\": \"WAL archives and base backups\",\n    \"source\": {\n      \"access_key\": \"ACCESS_KEY_ID\",\n      \"kind\": \"kubernetes-secret\",\n      \"name\": \"object-storage\",\n      \"secret_key\": \"SECRET_ACCESS_KEY\"\n    }\n  },\n  {\n    \"createdBy\": \"operator\",\n    \"keys\": [\n      \"htpasswd\"\n    ],\n    \"name\": \"registry-auth\",\n    \"namespace\": \"registry\",\n    \"purpose\": \"Authenticated registry push and pull\",\n    \"source\": \"operator bcrypt htpasswd file\"\n  },\n  {\n    \"createdBy\": \"operator\",\n    \"keys\": [\n      \"ACCESS_KEY_ID\",\n      \"SECRET_ACCESS_KEY\"\n    ],\n    \"name\": \"object-storage\",\n    \"namespace\": \"registry\",\n    \"purpose\": \"Registry S3 storage\",\n    \"source\": {\n      \"access_key\": \"ACCESS_KEY_ID\",\n      \"kind\": \"kubernetes-secret\",\n      \"name\": \"object-storage\",\n      \"secret_key\": \"SECRET_ACCESS_KEY\"\n    }\n  },\n  {\n    \"createdBy\": \"cert-manager\",\n    \"keys\": [\n      \"tls.crt\",\n      \"tls.key\"\n    ],\n    \"name\": \"registry-tls\",\n    \"namespace\": \"registry\",\n    \"purpose\": \"Registry TLS\",\n    \"source\": \"Certificate registry\"\n  },\n  {\n    \"createdBy\": \"operator\",\n    \"keys\": [\n      \"api-token\"\n    ],\n    \"name\": \"cloudflare-dns\",\n    \"namespace\": \"cert-manager\",\n    \"purpose\": \"DNS-01 challenge\",\n    \"source\": \"Cloudflare token with zone DNS edit and zone read\"\n  },\n  {\n    \"createdBy\": \"cert-manager\",\n    \"keys\": [\n      \"tls.key\"\n    ],\n    \"name\": \"apps-acme-account\",\n    \"namespace\": \"cert-manager\",\n    \"purpose\": \"ACME account key\",\n    \"source\": \"cert-manager generates this; do not precreate\"\n  },\n  {\n    \"createdBy\": \"cert-manager\",\n    \"keys\": [\n      \"tls.crt\",\n      \"tls.key\"\n    ],\n    \"name\": \"apps-wildcard-tls\",\n    \"namespace\": \"kube-system\",\n    \"purpose\": \"Ingress default wildcard certificate\",\n    \"source\": \"Certificate apps-wildcard generates this; do not precreate\"\n  },\n  {\n    \"createdBy\": \"operator\",\n    \"keys\": [\n      \"token\"\n    ],\n    \"name\": \"cloudflare-tunnel\",\n    \"namespace\": \"kube-system\",\n    \"purpose\": \"Tunnel connector\",\n    \"source\": \"sensitive OpenTofu tunnel_token output\"\n  }\n]"
+  },
+  "kind": "ConfigMap",
+  "metadata": {
+    "name": "required-secrets",
+    "namespace": "kube-system"
+  }
+}
+---
+# eu/launch/addons/10-policies-22.yaml
 {
   "apiVersion": "networking.k8s.io/v1",
   "kind": "NetworkPolicy",
@@ -102,7 +128,7 @@ expression: "files.iter().map(|(path, content)|\nformat!(\"# {path}\\n{content}\
   }
 }
 ---
-# eu/launch/addons/10-policies-18.yaml
+# eu/launch/addons/10-policies-23.yaml
 {
   "apiVersion": "networking.k8s.io/v1",
   "kind": "NetworkPolicy",
@@ -137,7 +163,7 @@ expression: "files.iter().map(|(path, content)|\nformat!(\"# {path}\\n{content}\
   }
 }
 ---
-# eu/launch/addons/10-policies-19.yaml
+# eu/launch/addons/10-policies-24.yaml
 {
   "apiVersion": "networking.k8s.io/v1",
   "kind": "NetworkPolicy",
@@ -189,7 +215,7 @@ expression: "files.iter().map(|(path, content)|\nformat!(\"# {path}\\n{content}\
   }
 }
 ---
-# eu/launch/addons/10-policies-20.yaml
+# eu/launch/addons/10-policies-25.yaml
 {
   "apiVersion": "networking.k8s.io/v1",
   "kind": "NetworkPolicy",
@@ -224,7 +250,7 @@ expression: "files.iter().map(|(path, content)|\nformat!(\"# {path}\\n{content}\
   }
 }
 ---
-# eu/launch/addons/10-policies-21.yaml
+# eu/launch/addons/10-policies-26.yaml
 {
   "apiVersion": "networking.k8s.io/v1",
   "kind": "NetworkPolicy",
@@ -259,7 +285,42 @@ expression: "files.iter().map(|(path, content)|\nformat!(\"# {path}\\n{content}\
   }
 }
 ---
-# eu/launch/addons/10-policies-22.yaml
+# eu/launch/addons/10-policies-27.yaml
+{
+  "apiVersion": "networking.k8s.io/v1",
+  "kind": "NetworkPolicy",
+  "metadata": {
+    "name": "platform-ingress",
+    "namespace": "registry"
+  },
+  "spec": {
+    "ingress": [
+      {
+        "from": [
+          {
+            "namespaceSelector": {
+              "matchExpressions": [
+                {
+                  "key": "app.kubernetes.io/managed-by",
+                  "operator": "NotIn",
+                  "values": [
+                    "leptoskit-cloud"
+                  ]
+                }
+              ]
+            }
+          }
+        ]
+      }
+    ],
+    "podSelector": {},
+    "policyTypes": [
+      "Ingress"
+    ]
+  }
+}
+---
+# eu/launch/addons/10-policies-28.yaml
 {
   "apiVersion": "networking.k8s.io/v1",
   "kind": "NetworkPolicy",
@@ -302,7 +363,7 @@ expression: "files.iter().map(|(path, content)|\nformat!(\"# {path}\\n{content}\
   }
 }
 ---
-# eu/launch/addons/10-runtime-05.yaml
+# eu/launch/addons/10-runtime-06.yaml
 {
   "apiVersion": "node.k8s.io/v1",
   "handler": "runsc",
@@ -312,7 +373,7 @@ expression: "files.iter().map(|(path, content)|\nformat!(\"# {path}\\n{content}\
   }
 }
 ---
-# eu/launch/addons/20-charts-06.yaml
+# eu/launch/addons/20-charts-07.yaml
 {
   "apiVersion": "helm.cattle.io/v1",
   "kind": "HelmChart",
@@ -329,7 +390,7 @@ expression: "files.iter().map(|(path, content)|\nformat!(\"# {path}\\n{content}\
   }
 }
 ---
-# eu/launch/addons/20-charts-07.yaml
+# eu/launch/addons/20-charts-08.yaml
 {
   "apiVersion": "helm.cattle.io/v1",
   "kind": "HelmChart",
@@ -346,7 +407,7 @@ expression: "files.iter().map(|(path, content)|\nformat!(\"# {path}\\n{content}\
   }
 }
 ---
-# eu/launch/addons/20-charts-09.yaml
+# eu/launch/addons/20-charts-10.yaml
 {
   "apiVersion": "helm.cattle.io/v1",
   "kind": "HelmChart",
@@ -363,7 +424,24 @@ expression: "files.iter().map(|(path, content)|\nformat!(\"# {path}\\n{content}\
   }
 }
 ---
-# eu/launch/addons/20-charts-10.yaml
+# eu/launch/addons/20-charts-11.yaml
+{
+  "apiVersion": "helm.cattle.io/v1",
+  "kind": "HelmChart",
+  "metadata": {
+    "name": "zot",
+    "namespace": "kube-system"
+  },
+  "spec": {
+    "chart": "zot",
+    "repo": "https://zotregistry.dev/helm-charts",
+    "targetNamespace": "registry",
+    "valuesContent": "{\n  \"configFiles\": {\n    \"config.json\": \"{\\n  \\\"distSpecVersion\\\": \\\"1.1.1\\\",\\n  \\\"http\\\": {\\n    \\\"address\\\": \\\"0.0.0.0\\\",\\n    \\\"auth\\\": {\\n      \\\"htpasswd\\\": {\\n        \\\"path\\\": \\\"/auth/htpasswd\\\"\\n      }\\n    },\\n    \\\"port\\\": \\\"5000\\\"\\n  },\\n  \\\"log\\\": {\\n    \\\"level\\\": \\\"info\\\"\\n  },\\n  \\\"storage\\\": {\\n    \\\"dedupe\\\": false,\\n    \\\"rootDirectory\\\": \\\"/var/lib/registry\\\",\\n    \\\"storageDriver\\\": {\\n      \\\"bucket\\\": \\\"example-registry\\\",\\n      \\\"forcepathstyle\\\": true,\\n      \\\"name\\\": \\\"s3\\\",\\n      \\\"region\\\": \\\"example-region\\\",\\n      \\\"regionendpoint\\\": \\\"https://s3.example.com\\\",\\n      \\\"secure\\\": true,\\n      \\\"skipverify\\\": false\\n    }\\n  }\\n}\"\n  },\n  \"env\": [\n    {\n      \"name\": \"AWS_ACCESS_KEY_ID\",\n      \"valueFrom\": {\n        \"secretKeyRef\": {\n          \"key\": \"ACCESS_KEY_ID\",\n          \"name\": \"object-storage\"\n        }\n      }\n    },\n    {\n      \"name\": \"AWS_SECRET_ACCESS_KEY\",\n      \"valueFrom\": {\n        \"secretKeyRef\": {\n          \"key\": \"SECRET_ACCESS_KEY\",\n          \"name\": \"object-storage\"\n        }\n      }\n    }\n  ],\n  \"externalSecrets\": [\n    {\n      \"mountPath\": \"/auth\",\n      \"secretName\": \"registry-auth\"\n    }\n  ],\n  \"fullnameOverride\": \"zot\",\n  \"mountConfig\": true,\n  \"nodeSelector\": {\n    \"leptoskit.dev/pool\": \"tenant\"\n  },\n  \"persistence\": true,\n  \"pvc\": {\n    \"storageClassName\": \"local-path\"\n  },\n  \"service\": {\n    \"port\": 5000,\n    \"type\": \"ClusterIP\"\n  },\n  \"tolerations\": [\n    {\n      \"effect\": \"PreferNoSchedule\",\n      \"key\": \"leptoskit.dev/pool\",\n      \"operator\": \"Equal\",\n      \"value\": \"tenant\"\n    }\n  ]\n}",
+    "version": "0.1.134"
+  }
+}
+---
+# eu/launch/addons/20-charts-14.yaml
 {
   "apiVersion": "helm.cattle.io/v1",
   "kind": "HelmChart",
@@ -380,7 +458,7 @@ expression: "files.iter().map(|(path, content)|\nformat!(\"# {path}\\n{content}\
   }
 }
 ---
-# eu/launch/addons/21-http-08.yaml
+# eu/launch/addons/21-http-09.yaml
 {
   "apiVersion": "helm.cattle.io/v1",
   "kind": "HelmChart",
@@ -397,7 +475,7 @@ expression: "files.iter().map(|(path, content)|\nformat!(\"# {path}\\n{content}\
   }
 }
 ---
-# eu/launch/addons/30-certificates-11.yaml
+# eu/launch/addons/30-certificates-15.yaml
 {
   "apiVersion": "cert-manager.io/v1",
   "kind": "ClusterIssuer",
@@ -427,7 +505,7 @@ expression: "files.iter().map(|(path, content)|\nformat!(\"# {path}\\n{content}\
   }
 }
 ---
-# eu/launch/addons/30-certificates-12.yaml
+# eu/launch/addons/30-certificates-16.yaml
 {
   "apiVersion": "cert-manager.io/v1",
   "kind": "Certificate",
@@ -447,7 +525,7 @@ expression: "files.iter().map(|(path, content)|\nformat!(\"# {path}\\n{content}\
   }
 }
 ---
-# eu/launch/addons/30-certificates-13.yaml
+# eu/launch/addons/30-certificates-17.yaml
 {
   "apiVersion": "traefik.io/v1alpha1",
   "kind": "TLSStore",
@@ -462,7 +540,7 @@ expression: "files.iter().map(|(path, content)|\nformat!(\"# {path}\\n{content}\
   }
 }
 ---
-# eu/launch/addons/30-database-15.yaml
+# eu/launch/addons/30-database-20.yaml
 {
   "apiVersion": "postgresql.cnpg.io/v1",
   "kind": "Cluster",
@@ -505,6 +583,12 @@ expression: "files.iter().map(|(path, content)|\nformat!(\"# {path}\\n{content}\
       },
       "retentionPolicy": "30d"
     },
+    "env": [
+      {
+        "name": "AWS_DEFAULT_REGION",
+        "value": "example-region"
+      }
+    ],
     "instances": 1,
     "storage": {
       "size": "100Gi",
@@ -513,7 +597,7 @@ expression: "files.iter().map(|(path, content)|\nformat!(\"# {path}\\n{content}\
   }
 }
 ---
-# eu/launch/addons/30-database-16.yaml
+# eu/launch/addons/30-database-21.yaml
 {
   "apiVersion": "postgresql.cnpg.io/v1",
   "kind": "ScheduledBackup",
@@ -531,7 +615,69 @@ expression: "files.iter().map(|(path, content)|\nformat!(\"# {path}\\n{content}\
   }
 }
 ---
-# eu/launch/addons/40-tunnel-14.yaml
+# eu/launch/addons/30-registry-12.yaml
+{
+  "apiVersion": "cert-manager.io/v1",
+  "kind": "Certificate",
+  "metadata": {
+    "name": "registry",
+    "namespace": "registry"
+  },
+  "spec": {
+    "dnsNames": [
+      "registry.apps.example.com"
+    ],
+    "issuerRef": {
+      "kind": "ClusterIssuer",
+      "name": "apps"
+    },
+    "secretName": "registry-tls"
+  }
+}
+---
+# eu/launch/addons/30-registry-13.yaml
+{
+  "apiVersion": "networking.k8s.io/v1",
+  "kind": "Ingress",
+  "metadata": {
+    "name": "registry",
+    "namespace": "registry"
+  },
+  "spec": {
+    "ingressClassName": "traefik",
+    "rules": [
+      {
+        "host": "registry.apps.example.com",
+        "http": {
+          "paths": [
+            {
+              "backend": {
+                "service": {
+                  "name": "zot",
+                  "port": {
+                    "number": 5000
+                  }
+                }
+              },
+              "path": "/",
+              "pathType": "Prefix"
+            }
+          ]
+        }
+      }
+    ],
+    "tls": [
+      {
+        "hosts": [
+          "registry.apps.example.com"
+        ],
+        "secretName": "registry-tls"
+      }
+    ]
+  }
+}
+---
+# eu/launch/addons/40-tunnel-18.yaml
 {
   "apiVersion": "apps/v1",
   "kind": "Deployment",

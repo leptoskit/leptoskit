@@ -1,5 +1,6 @@
 //! Offline Kubernetes add-ons. JSON is a YAML 1.2 subset, so the existing
 //! serializer provides escaping and stable ordering without another parser.
+use serde::Serialize;
 use serde_json::Value;
 use serde_json::json;
 
@@ -11,18 +12,47 @@ use crate::config::EdgeMode;
 use crate::config::PlatformConfig;
 use crate::config::Pool;
 
-/// Origin shared with the OpenTofu tunnel configuration.
+mod registry;
+
+/// Origin shared with the `OpenTofu` tunnel configuration.
 pub const TUNNEL_ORIGIN: &str = "http://traefik.kube-system.svc.cluster.local:80";
 
+#[derive(Serialize)]
+struct Metadata<'a> {
+	name: &'a str,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	namespace: Option<&'a str>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Manifest<'a> {
+	api_version: &'a str,
+	kind: &'a str,
+	metadata: Metadata<'a>,
+	#[serde(flatten)]
+	body: Value,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HelmChartSpec<'a> {
+	repo: &'a str,
+	chart: &'a str,
+	version: &'a str,
+	target_namespace: &'a str,
+	values_content: String,
+}
+
 fn object(api: &str, kind: &str, name: &str, namespace: Option<&str>, body: Value) -> Value {
-	let mut doc = body;
-	doc["apiVersion"] = json!(api);
-	doc["kind"] = json!(kind);
-	doc["metadata"] = json!({"name":name});
-	if let Some(ns) = namespace {
-		doc["metadata"]["namespace"] = json!(ns);
-	}
-	doc
+	// This concrete envelope contains only strings and JSON values: its
+	// serialization has no custom fallible serializer.
+	json!(Manifest {
+		api_version: api,
+		kind,
+		metadata: Metadata { name, namespace },
+		body
+	})
 }
 
 fn placement(cluster: &Cluster, desired: Pool) -> Value {
@@ -32,8 +62,10 @@ fn placement(cluster: &Cluster, desired: Pool) -> Value {
 		desired
 	} else if cluster.nodes.values().any(|n| n.pool() == Pool::Platform) {
 		Pool::Platform
-	} else {
+	} else if cluster.nodes.values().any(|n| n.pool() == Pool::Tenant) {
 		Pool::Tenant
+	} else {
+		Pool::Ingress
 	};
 	let name = match pool {
 		Pool::Platform => "platform",
@@ -52,13 +84,86 @@ fn chart(
 	version: &str,
 	values: &Value,
 ) -> Result<Value, PlatformError> {
+	let spec = HelmChartSpec {
+		repo,
+		chart: package,
+		version,
+		target_namespace: ns,
+		values_content: serde_json::to_string_pretty(values)?,
+	};
 	Ok(object(
 		"helm.cattle.io/v1",
 		"HelmChart",
 		name,
 		Some("kube-system"),
-		json!({"spec":{"repo":repo,"chart":package,"version":version,"targetNamespace":ns,"valuesContent":serde_json::to_string_pretty(values)?}}),
+		json!({"spec":spec}),
 	))
+}
+
+type Documents = Vec<(&'static str, Value)>;
+
+fn common_charts(config: &PlatformConfig, platform: &Value) -> Result<Documents, PlatformError> {
+	// Verified values: see the versioned upstream sources in the runbook.
+	let mut keda = platform.clone();
+	for component in ["operator", "metricsServer", "webhooks"] {
+		keda[component] = platform.clone();
+	}
+	let mut http = json!({});
+	for component in ["operator", "scaler", "interceptor"] {
+		http[component] = platform.clone();
+	}
+	http["interceptor"]["directPodRouting"] = json!(false);
+	let mut cert = platform.clone();
+	cert["crds"] = json!({"enabled":true});
+	for component in ["webhook", "cainjector", "startupapicheck"] {
+		cert[component] = platform.clone();
+	}
+	Ok(vec![
+		(
+			"20-charts",
+			chart(
+				"cloudnative-pg",
+				"cnpg-system",
+				"https://cloudnative-pg.github.io/charts",
+				"cloudnative-pg",
+				&config.addons.cloudnative_pg,
+				platform,
+			)?,
+		),
+		(
+			"20-charts",
+			chart(
+				"keda",
+				"keda",
+				"https://kedacore.github.io/charts",
+				"keda",
+				&config.addons.keda,
+				&keda,
+			)?,
+		),
+		(
+			"21-http",
+			chart(
+				"http",
+				"keda",
+				"https://kedacore.github.io/charts",
+				"keda-add-ons-http",
+				&config.addons.keda_http,
+				&http,
+			)?,
+		),
+		(
+			"20-charts",
+			chart(
+				"cert-manager",
+				"cert-manager",
+				"https://charts.jetstack.io",
+				"cert-manager",
+				&config.addons.cert_manager,
+				&cert,
+			)?,
+		),
+	])
 }
 
 /// Generate independent, ordered YAML documents per cluster without resolving
@@ -68,6 +173,13 @@ pub fn generate(config: &PlatformConfig) -> Result<Generated, PlatformError> {
 	let mut files = Generated::new();
 	for (region, entry) in &config.regions {
 		for (name, cluster) in &entry.clusters {
+			crate::config::require(
+				cluster
+					.nodes
+					.values()
+					.any(|node| node.pool() != Pool::Build),
+				"add-ons require a non-build node",
+			)?;
 			let mut documents = Vec::new();
 			for ns in [
 				"kube-system",
@@ -75,6 +187,7 @@ pub fn generate(config: &PlatformConfig) -> Result<Generated, PlatformError> {
 				"database",
 				"keda",
 				"cert-manager",
+				"registry",
 			] {
 				let level = if ns == "kube-system" {
 					"privileged"
@@ -96,66 +209,12 @@ pub fn generate(config: &PlatformConfig) -> Result<Generated, PlatformError> {
 				),
 			));
 			let platform = placement(cluster, Pool::Platform);
-			// Values verified in the official versioned chart sources listed in
-			// the runbook. Recheck these sources whenever a pin changes.
-			documents.push((
-				"20-charts",
-				chart(
-					"cloudnative-pg",
-					"cnpg-system",
-					"https://cloudnative-pg.github.io/charts",
-					"cloudnative-pg",
-					&config.addons.cloudnative_pg,
-					&platform,
-				)?,
-			));
-			let mut keda = platform.clone();
-			for component in ["operator", "metricsServer", "webhooks"] {
-				keda[component] = platform.clone();
-			}
-			documents.push((
-				"20-charts",
-				chart(
-					"keda",
-					"keda",
-					"https://kedacore.github.io/charts",
-					"keda",
-					&config.addons.keda,
-					&keda,
-				)?,
-			));
-			let mut http = json!({});
-			for component in ["operator", "scaler", "interceptor"] {
-				http[component] = platform.clone();
-			}
-			http["interceptor"]["directPodRouting"] = json!(false);
-			documents.push((
-				"21-http",
-				chart(
-					"http",
-					"keda",
-					"https://kedacore.github.io/charts",
-					"keda-add-ons-http",
-					&config.addons.keda_http,
-					&http,
-				)?,
-			));
-			let mut cert = platform.clone();
-			cert["crds"] = json!({"enabled":true});
-			for component in ["webhook", "cainjector", "startupapicheck"] {
-				cert[component] = platform.clone();
-			}
-			documents.push((
-				"20-charts",
-				chart(
-					"cert-manager",
-					"cert-manager",
-					"https://charts.jetstack.io",
-					"cert-manager",
-					&config.addons.cert_manager,
-					&cert,
-				)?,
-			));
+			documents.extend(common_charts(config, &platform)?);
+			documents.extend(registry::documents(
+				config,
+				&platform,
+				region == &config.default_region && name == &config.edge.cluster,
+			)?);
 			if region == &config.default_region && name == &config.edge.cluster {
 				let mut traefik = placement(cluster, Pool::Ingress);
 				traefik["fullnameOverride"] = json!("traefik");
@@ -171,6 +230,16 @@ pub fn generate(config: &PlatformConfig) -> Result<Generated, PlatformError> {
 				if config.edge.mode == EdgeMode::Https {
 					traefik["deployment"] = json!({"kind":"DaemonSet"});
 					traefik["ports"]["websecure"]["hostPort"] = json!(443);
+					let sources: Vec<_> = config
+						.edge
+						.cloudflare_cidrs
+						.iter()
+						.map(|cidr| json!({"ipBlock":{"cidr":cidr}}))
+						.collect();
+					// HostPort DNAT can bypass host INPUT rules. Enforce the
+					// same source boundary at the
+					// destination pod, on its target port.
+					documents.push(("10-policies",object("networking.k8s.io/v1","NetworkPolicy","cloudflare-https",Some("kube-system"),json!({"spec":{"podSelector":{"matchLabels":{"app.kubernetes.io/name":"traefik"}},"policyTypes":["Ingress"],"ingress":[{"from":sources,"ports":[{"protocol":"TCP","port":8443}]}]}}))));
 				}
 				documents.push((
 					"20-charts",
@@ -211,6 +280,32 @@ pub fn generate(config: &PlatformConfig) -> Result<Generated, PlatformError> {
 					("object-storage", "ACCESS_KEY_ID", "SECRET_ACCESS_KEY")
 				}
 			};
+			let mut required = vec![
+				json!({"namespace":"database","name":secret,"keys":[access,key],"purpose":"WAL archives and base backups","source":config.object_storage.credentials,"createdBy":"operator"}),
+			];
+			if region == &config.default_region && name == &config.edge.cluster {
+				if let crate::config::Registry::Zot { auth_secret } = &config.registry {
+					required.push(json!({"namespace":"registry","name":auth_secret,"keys":["htpasswd"],"purpose":"Authenticated registry push and pull","source":"operator bcrypt htpasswd file","createdBy":"operator"}));
+					required.push(json!({"namespace":"registry","name":secret,"keys":[access,key],"purpose":"Registry S3 storage","source":config.object_storage.credentials,"createdBy":"operator"}));
+					required.push(json!({"namespace":"registry","name":"registry-tls","keys":["tls.crt","tls.key"],"purpose":"Registry TLS","source":"Certificate registry","createdBy":"cert-manager"}));
+				}
+				required.push(json!({"namespace":"cert-manager","name":config.addons.cloudflare_api_secret,"keys":["api-token"],"purpose":"DNS-01 challenge","source":"Cloudflare token with zone DNS edit and zone read","createdBy":"operator"}));
+				required.push(json!({"namespace":"cert-manager","name":"apps-acme-account","keys":["tls.key"],"purpose":"ACME account key","source":"cert-manager generates this; do not precreate","createdBy":"cert-manager"}));
+				required.push(json!({"namespace":"kube-system","name":"apps-wildcard-tls","keys":["tls.crt","tls.key"],"purpose":"Ingress default wildcard certificate","source":"Certificate apps-wildcard generates this; do not precreate","createdBy":"cert-manager"}));
+				if config.edge.mode == EdgeMode::Tunnel {
+					required.push(json!({"namespace":"kube-system","name":"cloudflare-tunnel","keys":["token"],"purpose":"Tunnel connector","source":"sensitive OpenTofu tunnel_token output","createdBy":"operator"}));
+				}
+			}
+			documents.push((
+				"01-secrets",
+				object(
+					"v1",
+					"ConfigMap",
+					"required-secrets",
+					Some("kube-system"),
+					json!({"data":{"requirements.json":serde_json::to_string_pretty(&required)?}}),
+				),
+			));
 			// Native Barman and affinity fields verified against the v1.30.2
 			// API.
 			let mut affinity = platform.clone();
@@ -223,6 +318,7 @@ pub fn generate(config: &PlatformConfig) -> Result<Generated, PlatformError> {
 				"database",
 				"keda",
 				"cert-manager",
+				"registry",
 			] {
 				// The runtime owns tenant default-deny and egress policies.
 				// Here protect the destination namespaces;
@@ -245,7 +341,11 @@ pub fn generate(config: &PlatformConfig) -> Result<Generated, PlatformError> {
 				));
 			}
 			documents.push(("10-policies",object("networking.k8s.io/v1","NetworkPolicy","tenant-dns",Some("kube-system"),json!({"spec":{"podSelector":{"matchLabels":{"k8s-app":"kube-dns"}},"policyTypes":["Ingress"],"ingress":[{"from":[{"namespaceSelector":{"matchLabels":{"app.kubernetes.io/managed-by":"leptoskit-cloud"}}}],"ports":[{"protocol":"UDP","port":53},{"protocol":"TCP","port":53}]}]}}))));
-			for (index, (phase, document)) in documents.into_iter().enumerate() {
+			for (index, (phase, mut document)) in documents.into_iter().enumerate() {
+				if document["kind"] == "Cluster" {
+					document["spec"]["env"] =
+						json!([{"name":"AWS_DEFAULT_REGION","value":config.object_storage.region}]);
+				}
 				files.insert(
 					format!("{region}/{name}/addons/{phase}-{index:02}.yaml"),
 					format!("{}\n", serde_json::to_string_pretty(&document)?),

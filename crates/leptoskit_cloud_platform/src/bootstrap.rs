@@ -168,6 +168,11 @@ WantedBy=multi-user.target
 		 /etc/rancher/k3s /var/lib/rancher/k3s/agent/etc/containerd /etc/containerd \
 		 /etc/ssh/sshd_config.d\n",
 	);
+	// k3s loads this operator-owned file into containerd on startup:
+	// https://docs.k3s.io/installation/private-registry. Never render auth.
+	script.push_str(
+		"test -s /etc/rancher/k3s/registries.yaml\nchmod 600 /etc/rancher/k3s/registries.yaml\n",
+	);
 	if config.isolation.platform == GvisorPlatform::Kvm {
 		script.push_str("test -c /dev/kvm\n");
 	}
