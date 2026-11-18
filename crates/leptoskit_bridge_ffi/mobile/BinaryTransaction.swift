@@ -39,6 +39,7 @@ private extension Change {
 
 /// The properties sent in the JSON form, decoded as the JSON transaction decodes them.
 private struct WidgetExtras: Decodable {
+    let id: String?
     let autocomplete: String?
     let checked: Bool?
     let slider: WidgetSlider?
@@ -61,6 +62,7 @@ private struct WidgetExtras: Decodable {
     let capitalize: String?
     let autocorrect: Bool?
     let submitLabel: String?
+    let overlay: WidgetOverlay?
 }
 
 /// A cursor over one binary transaction; every read checks it stays in bounds.
@@ -168,7 +170,8 @@ private struct BinaryReader {
         let extras = has(31) ? try extras() : nil
 
         return WidgetProps(
-            text: text, source: source, placeholder: placeholder, autocomplete: extras?.autocomplete, value: value,
+            id: extras?.id, text: text, source: source, placeholder: placeholder,
+            autocomplete: extras?.autocomplete, value: value,
             checked: extras?.checked, slider: extras?.slider, progress: extras?.progress,
             running: extras?.running, focused: extras?.focused, focusRequest: extras?.focusRequest,
             accessibilityLabel: accessibilityLabel, color: color, background: background,
@@ -179,7 +182,8 @@ private struct BinaryReader {
             transform: transform, animation: animation, scene3d: extras?.scene3d, video: extras?.video,
             camera: extras?.camera, map: extras?.map, livePhoto: extras?.livePhoto,
             keyboard: extras?.keyboard, readOnly: extras?.readOnly, maxLength: extras?.maxLength,
-            capitalize: extras?.capitalize, autocorrect: extras?.autocorrect, submitLabel: extras?.submitLabel)
+            capitalize: extras?.capitalize, autocorrect: extras?.autocorrect, submitLabel: extras?.submitLabel,
+            overlay: extras?.overlay)
     }
 
     private mutating func transform() throws -> WidgetTransform {

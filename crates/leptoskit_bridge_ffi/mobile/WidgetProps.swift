@@ -2,6 +2,9 @@ import CoreGraphics
 
 /// Shared widget properties decoded from native render transactions.
 struct WidgetProps: Decodable {
+    /// The `id` the app gave the element, which a popover names as its anchor and an overlay as what
+    /// takes focus when it opens.
+    let id: String?
     let text: String?
     let source: String?
     let placeholder: String?
@@ -58,6 +61,19 @@ struct WidgetProps: Decodable {
     let autocorrect: Bool?
     /// What the return key is named. iOS applies it; macOS ignores it.
     let submitLabel: String?
+    /// Whether a `Modal` or `Popover` is showing, and where.
+    let overlay: WidgetOverlay?
+}
+
+/// What a `Modal` or `Popover` shows, as `Element::modal` and `Element::popover` set it.
+struct WidgetOverlay: Decodable, Equatable {
+    let open: Bool
+    /// The `id` of the element a popover hangs from. A modal has none.
+    let anchor: String?
+    /// The side of the anchor a popover opens on, such as `above_end`. Unset means `below_start`.
+    let placement: String?
+    /// The `id` of the element inside that takes focus when the overlay opens.
+    let initialFocus: String?
 }
 
 extension WidgetProps {

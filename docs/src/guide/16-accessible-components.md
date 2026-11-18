@@ -164,7 +164,8 @@ One `Dialog` carries the id, the title, and an optional description. `dialog.tit
 
 - **Web:** a `<dialog>` opened with `showModal()`. The browser makes the page behind it inert, keeps Tab inside, gives focus back, and tells assistive technology that the dialog is modal.
 - **Terminal:** drawn over the screen, with Tab kept inside and focus given back.
-- **macOS, iOS, Android, Windows and Linux (GTK):** drawn over the screen, but the screen behind still takes presses and Tab still leaves the dialog. Close it from its own buttons.
+- **macOS:** a sheet on the window, which keeps clicks and the keyboard to itself and gives focus back. Escape asks to close.
+- **iOS, Android, Windows and Linux (GTK):** drawn over the screen, but Tab still leaves the dialog and nothing asks to close it. Close it from its own buttons.
 
 `dialog.container(open)` is the older form: a dialog laid out in the page where you put it, shown or collapsed, with no top layer and no focus handling. Use it for a panel that is a dialog in name only, such as an inline confirmation inside a card. It is not marked `aria-modal`, because nothing keeps focus inside it.
 
@@ -198,7 +199,8 @@ Opening moves focus to the first action. Up and Down move between actions and wr
 The list is a [`Popover`](07-shared-components.md#show-a-dialog-or-a-menu-above-the-screen) with the `menu` role, and each action is a pressable with the `menuitem` role.
 
 - **Web and terminal:** as described.
-- **macOS, iOS, Android, Windows and Linux (GTK):** the list shows beside the button and a press on an action runs it and closes the list. The arrow keys, Escape and a press outside do nothing yet, so the button and the actions are how it closes.
+- **macOS:** the list opens in an `NSPopover` at the button. A press on an action runs it, and Escape or a press outside closes the menu. The arrow keys do nothing yet, because macOS does not deliver key presses to the app.
+- **iOS, Android, Windows and Linux (GTK):** the list shows beside the button and a press on an action runs it and closes the list. The arrow keys, Escape and a press outside do nothing yet, so the button and the actions are how it closes.
 
 A menu is for actions. For a choice that stays chosen, such as a theme or a sort order, use a `RadioGroup`.
 

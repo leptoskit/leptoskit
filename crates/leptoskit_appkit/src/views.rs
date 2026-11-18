@@ -360,7 +360,7 @@ impl EventSink {
 	/// The listener is cloned out before it runs, so it may replace itself or
 	/// rebuild the whole interface — deleting the very widget that fired —
 	/// without a `RefCell` conflict.
-	fn emit(&self, node: NodeId, event: &NativeEvent) {
+	pub(crate) fn emit(&self, node: NodeId, event: &NativeEvent) {
 		if self.suppressed.get() {
 			return;
 		}

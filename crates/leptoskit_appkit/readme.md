@@ -52,6 +52,8 @@
 | `Slider`                                       | an `NSSlider` proposing values on the shared step grid             |
 | `LinearProgressIndicator`, `ActivityIndicator` | native `NSProgressIndicator` bars and spinners                     |
 | `Vector`                                       | a flipped view with one `CAShapeLayer` per path                    |
+| `Modal`                                        | a sheet on the window that holds its parent                        |
+| `Popover`                                      | an `NSPopover` hanging from its anchor's view                      |
 | `Image`                                        | an `NSImageView` loading `source` as a file path or `file://` URL  |
 | `ScrollView`                                   | an `NSScrollView` over a flipped document view                     |
 

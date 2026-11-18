@@ -81,6 +81,7 @@ final class PressView: NSView {
 final class MacWidgetRenderer: NSObject, NSTextFieldDelegate, NativeRiveSink {
     private static let pressIn: UInt32 = 8
     private static let pressOut: UInt32 = 9
+    private static let dismiss: UInt32 = 10
     private let view: NSView
     var widgets: [Int: NSView] = [:]
     var properties: [Int: WidgetProps] = [:]
@@ -110,6 +111,7 @@ final class MacWidgetRenderer: NSObject, NSTextFieldDelegate, NativeRiveSink {
         devtools = nil
 
 		for widget in widgets.values {
+            (widget as? MacOverlayView)?.hide()
             (widget as? NSImageView)?.image = nil
             (widget as? NativeScene3dView)?.close()
             (widget as? NativeVideoView)?.close()
@@ -166,7 +168,62 @@ final class MacWidgetRenderer: NSObject, NSTextFieldDelegate, NativeRiveSink {
         exits.start(motion)
         updateScrollSizes()
         scrollToTargets()
+        presentOverlays()
         moveFocus()
+    }
+
+    /// Shows each open `Modal` and `Popover` and takes down each closed one, once the views they hold
+    /// and hang from are in place. An overlay needs a window: until the modal's place in the tree, or
+    /// the popover's anchor, is in one, it stays down.
+    private func presentOverlays() {
+        // Lowest id first, so an overlay inside another finds the outer one already on screen.
+        for id in widgets.keys.sorted() {
+            guard let overlay = widgets[id] as? MacOverlayView, let state = properties[id]?.overlay else { continue }
+            let anchor = state.open ? state.anchor.flatMap(named) : nil
+
+            if overlay.present(open: state.open, anchor: anchor, placement: state.placement) {
+                focusInside(overlay, state.initialFocus)
+            }
+        }
+    }
+
+    /// The widget the app gave this `id`.
+    private func named(_ name: String) -> NSView? {
+        properties.first { $0.value.id == name }.flatMap { widgets[$0.key] }
+    }
+
+    /// Moves keyboard focus to the widget named by `initial_focus` inside an overlay that has just been
+    /// shown. Without a name, AppKit picks what its window focuses first.
+    private func focusInside(_ overlay: MacOverlayView, _ name: String?) {
+        guard let widget = name.flatMap(named) else { return }
+        let target: NSView = (widget as? MacTextArea)?.text ?? widget
+
+        if target.acceptsFirstResponder { overlay.presentedWindow?.makeFirstResponder(target) }
+    }
+
+    /// A hidden place holder in the tree whose content AppKit shows as a sheet or a popover.
+    private func overlay(_ presentation: MacOverlayView.Presentation, _ id: Int) -> MacOverlayView {
+        let overlay = MacOverlayView(presentation)
+        overlay.onDismiss = { [weak self] in self?.event(id, Self.dismiss) }
+        overlay.onWindowChange = { [weak self] in
+            guard let self, !self.applying else { return }
+            self.applying = true
+            defer { self.applying = false }
+            self.presentOverlays()
+        }
+
+        return overlay
+    }
+
+    /// The view a widget's style goes on: an overlay's is what it shows, not its place in the tree.
+    private func style(_ props: WidgetProps, on widget: NSView) throws {
+        guard let overlay = widget as? MacOverlayView else {
+            try MacWidgetStyle.apply(props, to: widget)
+
+            return
+        }
+        try MacWidgetStyle.apply(props, to: overlay.content)
+        overlay.styled()
     }
 
     /// Carries out a one-shot focus request by making the widget the window's
@@ -215,6 +272,8 @@ final class MacWidgetRenderer: NSObject, NSTextFieldDelegate, NativeRiveSink {
         let widget: NSView
         switch item.kind {
         case "view", "View": widget = FlippedView()
+        case "modal", "Modal": widget = overlay(.sheet, item.id)
+        case "popover", "Popover": widget = overlay(.popover, item.id)
         case "text", "text_run", "Text", "TextRun": widget = TextLabel()
         case "button", "Button":
             let button = PressButton(title: "", target: self, action: #selector(pressed(_:)))
@@ -264,7 +323,7 @@ final class MacWidgetRenderer: NSObject, NSTextFieldDelegate, NativeRiveSink {
         widgets[item.id] = widget
         if item.props.focusRequest != nil { focusTarget = item.id }
         properties[item.id] = item.props
-        try MacWidgetStyle.apply(item.props, to: widget)
+        try style(item.props, on: widget)
         scrolls.receive(item.props.scrollOffset, for: item.id)
 
         motion.created(item.id, item.props)
@@ -286,7 +345,7 @@ final class MacWidgetRenderer: NSObject, NSTextFieldDelegate, NativeRiveSink {
             if let layer = widget.layer { motion.willChange(item.id, layer, from: properties[item.id], to: item.props) }
             if item.props.focusRequest != nil { focusTarget = item.id }
             properties[item.id] = item.props
-            try MacWidgetStyle.apply(item.props, to: widget)
+            try style(item.props, on: widget)
             scrolls.receive(item.props.scrollOffset, for: item.id)
             (widget as? NativeScene3dView)?.show(scene: item.props.scene3d)
             (widget as? NativeVideoView)?.show(player: item.props.video)
@@ -300,9 +359,14 @@ final class MacWidgetRenderer: NSObject, NSTextFieldDelegate, NativeRiveSink {
                 motion.willChange(item.id, layer, from: properties[item.id], to: properties[item.id])
             }
 
-            widget.frame = CGRect(
-                x: item.offsetX, y: item.offsetY, width: item.width, height: item.height
-            )
+            // AppKit places an overlay, so its frame says only how large it is.
+            if let overlay = widget as? MacOverlayView {
+                overlay.resize(CGSize(width: item.width, height: item.height))
+            } else {
+                widget.frame = CGRect(
+                    x: item.offsetX, y: item.offsetY, width: item.width, height: item.height
+                )
+            }
         }
 
         applyTree(change)
@@ -333,7 +397,7 @@ final class MacWidgetRenderer: NSObject, NSTextFieldDelegate, NativeRiveSink {
         let props = properties[id]
 
         guard props?.animation?.exiting != nil, child.window != nil, let parent = child.superview,
-              !exits.contains(child)
+              !exits.contains(child), !(child is MacOverlayView)
         else {
             detach(child)
 
@@ -347,12 +411,15 @@ final class MacWidgetRenderer: NSObject, NSTextFieldDelegate, NativeRiveSink {
     /// Takes a widget off screen, cancelling its exit if it was animating out.
     private func detach(_ child: NSView) {
         _ = exits.release(child)
+        // An overlay off the tree has no window to show on. One that is only moving shows again when
+        // the transaction ends.
+        (child as? MacOverlayView)?.hide()
         child.removeFromSuperview()
     }
 
     private func insertChild(_ edge: Change.Edge) {
         if let parent = widgets[edge.parent], let child = widgets[edge.child] {
-            let container = (parent as? NSScrollView)?.documentView ?? parent
+            let container = (parent as? NSScrollView)?.documentView ?? (parent as? MacOverlayView)?.content ?? parent
             detach(child)
             let index = min(edge.index ?? container.subviews.count, container.subviews.count)
 
