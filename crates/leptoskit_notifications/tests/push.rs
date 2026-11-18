@@ -1099,8 +1099,11 @@ async fn a_platform_without_a_transport_is_refused_loudly() {
 	);
 }
 
+/// A destination changes hands only to someone who presents the
+/// byte-identical credential — the device itself. The same Web Push URL
+/// under keys of the caller's own proves nothing and is refused.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_destination_of_another_live_account_is_refused_not_reassigned() {
+async fn a_destination_changes_hands_only_for_the_identical_credential() {
 	let mock = Mock::new();
 	let service = service(&mock, &all_transports()).await;
 
@@ -1108,53 +1111,67 @@ async fn a_destination_of_another_live_account_is_refused_not_reassigned() {
 	assert_eq!(status, 200, "{body}");
 	let alice_endpoint: Value = serde_json::from_str(&body).unwrap();
 
-	// Bob presents the same credential: refused, with no reassignment.
+	// Bob presents the same token: he holds the device now, so it is his,
+	// under a fresh endpoint, and alice's is revoked.
 	let (status, body) = enroll(&service, BOB, apns_credential(&device_token(1))).await;
-	assert_eq!(status, 409, "{body}");
-	assert!(
-		!body.contains(&device_token(1)),
-		"the refusal carries no credential: {body}"
+	assert_eq!(status, 200, "{body}");
+	let bob_endpoint: Value = serde_json::from_str(&body).unwrap();
+	assert_ne!(
+		bob_endpoint["id"], alice_endpoint["id"],
+		"a new endpoint, not the old one"
 	);
+	assert!(
+		endpoints_of(&service, ALICE).await.is_empty(),
+		"alice no longer holds the device"
+	);
+	assert_eq!(endpoints_of(&service, BOB).await.len(), 1);
 
-	let alice_now = endpoints_of(&service, ALICE).await;
-	assert_eq!(alice_now.len(), 1, "nothing moved");
-	assert_eq!(alice_now[0]["id"], alice_endpoint["id"]);
-
-	// The same holds where only the keys differ: bob can't take alice's
-	// Web Push URL by presenting his own keys for it.
+	// A Web Push subscription changes hands the same way: the same URL
+	// and the same keys.
 	let endpoint = format!("https://{WEB_HOST}/push/abcdef123456");
-	let (status, _) = enroll(&service, ALICE, web_credential(&endpoint)).await;
+	let subscription = web_credential(&endpoint);
+	let (status, _) = enroll(&service, ALICE, subscription.clone()).await;
 	assert_eq!(status, 200);
+	let alice_now = endpoints_of(&service, ALICE).await;
+	assert_eq!(alice_now.len(), 1);
 
+	// But where only the keys differ, nothing moves: bob can't take
+	// alice's Web Push URL by presenting his own keys for it.
 	let (status, body) = enroll(&service, BOB, web_credential(&endpoint)).await;
-	assert_eq!(status, 409, "a live URL is its owner's, keys or no: {body}");
+	assert_eq!(status, 409, "a URL without its keys proves nothing: {body}");
 	assert!(
 		!body.contains(WEB_HOST) && !body.contains("abcdef"),
 		"the refusal carries no endpoint: {body}"
 	);
-
-	// Alice revokes — what signing out of the app does — and then the
-	// credential is free for bob's device.
-	let (status, _) = post(
-		&service,
-		"revoke_push_endpoint",
-		json!({ "endpoint": alice_endpoint["id"] }),
-		Some(&signed_in(ALICE)),
-	)
-	.await;
-	assert_eq!(status, 200);
-
-	let (status, body) = enroll(&service, BOB, apns_credential(&device_token(1))).await;
 	assert_eq!(
-		status, 200,
-		"after revocation the credential enrolls: {body}"
+		endpoints_of(&service, ALICE).await,
+		alice_now,
+		"nothing moved"
 	);
 
-	let bob_now = endpoints_of(&service, BOB).await;
-	assert_eq!(bob_now.len(), 1);
-	assert_ne!(
-		bob_now[0]["id"], alice_endpoint["id"],
-		"a new endpoint, not the old one"
+	let (status, body) = enroll(&service, BOB, subscription).await;
+	assert_eq!(status, 200, "the identical subscription does: {body}");
+	assert!(
+		endpoints_of(&service, ALICE).await.is_empty(),
+		"alice's endpoint was revoked with the handover"
+	);
+	assert_eq!(endpoints_of(&service, BOB).await.len(), 2);
+
+	// A takeover is an enrollment like any other: it counts against the
+	// new owner's bound, and at the bound nothing moves.
+	for n in 2..=9_u8 {
+		let (status, body) = enroll(&service, BOB, apns_credential(&device_token(n))).await;
+		assert_eq!(status, 200, "{body}");
+	}
+
+	let (status, _) = enroll(&service, ALICE, apns_credential(&device_token(0xA1))).await;
+	assert_eq!(status, 200);
+	let (status, body) = enroll(&service, BOB, apns_credential(&device_token(0xA1))).await;
+	assert_eq!(status, 400, "bob is at the bound: {body}");
+	assert_eq!(
+		endpoints_of(&service, ALICE).await.len(),
+		1,
+		"a refused takeover leaves the device with its owner"
 	);
 }
 
@@ -1481,8 +1498,8 @@ async fn the_endpoint_list_is_bounded_and_paginated() {
 	let rest: Value = serde_json::from_str(&body).unwrap();
 	assert_eq!(rest["items"].as_array().map(Vec::len), Some(5));
 
-	// Ownership survives invalidation history; only explicit revocation frees a
-	// destination.
+	// Twelve more endpoints churn: each wave invalidates one live endpoint
+	// and enrolls a new one.
 	for wave in 0..12_u8 {
 		let listed = endpoints_of(&service, ALICE).await;
 		let victim_now = listed
@@ -1506,16 +1523,22 @@ async fn the_endpoint_list_is_bounded_and_paginated() {
 		assert_eq!(status, 200, "{body}");
 	}
 
+	// Twenty-five endpoints were enrolled and fifteen invalidated, and the
+	// table holds twenty: the ten live ones, and the ten most recently
+	// enrolled of the invalidated. Enrolling past the history bound drops
+	// the oldest invalidated endpoints, so churn can't grow a person's
+	// rows without limit.
 	let count = rows(&service, "SELECT count(*) FROM push_endpoints").await;
 	let total: usize = text(&count[0][0]).parse().unwrap();
+	assert_eq!(total, 20, "ten live, and ten of history");
+	let listed = endpoints_of(&service, ALICE).await;
+	assert_eq!(listed.len(), 20, "and the whole list is one page");
 	assert_eq!(
-		total, 25,
-		"invalidation must never silently release ownership"
-	);
-	let (status, body) = enroll(&service, BOB, apns_credential(&device_token(1))).await;
-	assert_eq!(
-		status, 409,
-		"even the oldest invalidated destination stays owned: {body}"
+		listed
+			.iter()
+			.filter(|endpoint| endpoint["invalidated_at"].is_null())
+			.count(),
+		10
 	);
 }
 
@@ -5043,8 +5066,6 @@ async fn reactivation_capacity(db: Db) {
 			.0,
 		200
 	);
-	let bob = enroll(&service, BOB, apns_credential(&device_token(1))).await;
-	assert_eq!(bob.0, 409, "{}", bob.1);
 	// Revoking one live endpoint frees exactly one slot for two concurrent
 	// reactivations.
 	let live = endpoints_of(&service, ALICE)

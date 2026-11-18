@@ -25,12 +25,18 @@
 //!    (`"/sw.js"`) and [`RegisterOptions::default()`], then [`ready`] to wait
 //!    for an active worker. Nothing in this module registers for you: offline
 //!    caching rules and scopes stay yours.
-//! 3. On **launch**, once the person is signed in, call [`reconcile`]: it
-//!    registers the subscription the browser already holds, if it holds one,
-//!    and answers `None` when it doesn't. It never prompts — reading a
-//!    subscription needs no permission — so it belongs on startup paths where a
-//!    prompt is not allowed. `None` is the app's cue to offer the switch
-//!    itself.
+//! 3. On **launch**, once the person is signed in, call [`reconcile`] with the
+//!    [`Enrollment`] the app saved beside their session when they turned
+//!    notifications on — and only with one. Without it nothing registers and
+//!    the answer is `None`, so a browser someone else left a subscription in is
+//!    never enrolled for the next person by startup code. With it, the
+//!    subscription the browser holds is renewed under that enrollment: the
+//!    service registers it only while the enrollment still stands, and answers
+//!    `None` once it doesn't — revoked from another device, taken over by the
+//!    browser's next person, or erased with the person. It never prompts —
+//!    reading a subscription needs no permission — so it belongs on startup
+//!    paths where a prompt is not allowed. `None` is the app's cue to clear
+//!    what it saved and offer the switch.
 //! 4. On an **explicit user gesture** — a "turn on notifications" button, never
 //!    a mount or a render — call [`enroll`]. It checks [`availability`], waits
 //!    for the **active** worker instead of racing its install, and subscribes
@@ -41,10 +47,13 @@
 //!    with [`crate::push::register_push_endpoint`] over the app's own RPC
 //!    client: the enrollment is the forwarded signed-in person's, and no
 //!    service token or copy of their session is stored anywhere in this module
-//!    or in the worker. Call [`reconcile`] at startup so the worker is settled
-//!    long before the gesture: `subscribe` is the one call whose permission the
+//!    or in the worker. Call [`ready`] at startup so the worker is settled long
+//!    before the gesture: `subscribe` is the one call whose permission the
 //!    browser ties to the gesture, and a worker still installing when the
-//!    gesture arrives can eat the gesture's window.
+//!    gesture arrives can eat the gesture's window. A browser whose previous
+//!    person never signed out passes to this one here: presenting the same
+//!    subscription takes the endpoint over, and the previous person's is
+//!    revoked.
 //!
 //!    Every enrollment carries the browser's details — `navigator.language` and
 //!    the `Intl` time zone — so a send can target devices with `device.`
@@ -64,8 +73,8 @@
 //! from the worker: the worker deliberately holds no credentials, so it
 //! has no identity to enroll with. The supported reconciliation is the
 //! next authenticated app launch calling [`reconcile`] again: the
-//! browser's current subscription is registered under the person who is
-//! signed in, and a stale handle's [`disable`] leaves a replaced
+//! browser's current subscription is registered under the person whose
+//! enrollment it renews, and a stale handle's [`disable`] leaves a replaced
 //! subscription alone — its endpoint dies at its push service, whose
 //! "unregistered" answer invalidates the stale record on its next
 //! delivery. Nothing here reads or mutates read state: the worker shows
@@ -74,15 +83,21 @@
 //! ```rust,ignore
 //! use leptoskit_notifications::browser;
 //!
-//! // At launch, after register and ready, without prompting:
+//! // At launch, after register and ready, without prompting. `saved` is
+//! // the enrollment kept beside this person's session, if they opted in:
 //! let options = browser::EnrollOptions::new(vapid_public_key);
-//! if browser::reconcile(&options).await?.is_none() {
-//!     // Offer the switch; from its click handler — with the operator's
-//!     // VAPID public key, whose private half never leaves the service —
-//!     // enroll:
-//!     let enrollment = browser::enroll(&options).await?;
-//!     // `enrollment.endpoint` is the opaque handle: keep it beside the
-//!     // person's session.
+//! match browser::reconcile(&options, saved.as_ref()).await? {
+//!     // Still enrolled: keep the handle.
+//!     Some(enrollment) => save(enrollment),
+//!     None => {
+//!         // Not enrolled, or no longer: clear what was saved and offer
+//!         // the switch. From its click handler — with the operator's
+//!         // VAPID public key, whose private half never leaves the
+//!         // service — enroll, and keep the handle beside the session:
+//!         forget_saved();
+//!         let enrollment = browser::enroll(&options).await?;
+//!         save(enrollment);
+//!     }
 //! }
 //! ```
 //!
@@ -369,11 +384,9 @@ pub enum EnrollError {
 	#[error("the browser holds a subscription for a different application server key")]
 	KeyMismatch,
 	/// The enrollment call failed: the network, or the service's own
-	/// answer — including the refusal that says another live account
-	/// holds this browser's subscription, which that account's
-	/// [`disable`] releases. The failure is surfaced, never swallowed:
-	/// nothing was unsubscribed, and the previous account's endpoint
-	/// stays the previous account's.
+	/// answer — the endpoint quota, or the refusal that says another
+	/// account holds this subscription's URL under different keys. The
+	/// failure is surfaced, never swallowed: nothing was unsubscribed.
 	#[error("enrolling failed: {0}")]
 	Enroll(leptoskit_rpc::FnError),
 }
@@ -393,8 +406,9 @@ pub enum EnrollError {
 /// [`crate::push::PushCredential`], over the app's RPC client as the
 /// forwarded signed-in person. Re-enrolling the same browser under the
 /// same account answers the same endpoint id, idempotently; under a
-/// different account it is refused until the previous account's
-/// [`disable`] has revoked the endpoint.
+/// different account the subscription changes hands — this person holds
+/// the browser now — and the previous account's endpoint is revoked, so
+/// its notifications stop arriving here.
 ///
 /// # Errors
 ///
@@ -429,34 +443,51 @@ pub async fn enroll(options: &EnrollOptions) -> Result<Enrollment, EnrollError> 
 			}
 		};
 
-		register_subscription(&subscription, options).await
+		register_subscription(&subscription, options, None).await
 	}
 }
 
-/// The nonprompting half of enrollment, for app startup: registers the
-/// subscription the browser already holds — if it holds one for this
-/// app's key — under the signed-in person, and answers `None` when the
-/// browser holds none.
+/// The nonprompting half of enrollment, for app startup — but only for a
+/// browser this person previously opted in on: `previous` is the
+/// [`Enrollment`] the app saved beside their session when [`enroll`]
+/// succeeded. Without it the answer is `None` and nothing is read or
+/// registered, so a subscription another account left in this browser is
+/// never enrolled for the next person, and a person who turned
+/// notifications off is never silently turned back on.
+///
+/// With it, the subscription the browser holds — if it holds one for this
+/// app's key — is renewed under that enrollment, with the browser's
+/// current details. The service registers it only while the enrollment
+/// still stands. When it doesn't — it was revoked from another device or
+/// by the app's server, taken over by the browser's next person, or erased
+/// with the person — the answer is `None` and nothing is registered: a
+/// launch never re-creates what the server revoked. `None` is also the
+/// answer when the browser holds no subscription anymore. Either way it is
+/// the app's cue to clear the saved enrollment and offer the switch, whose
+/// gesture-gated [`enroll`] can make a new one.
 ///
 /// Reading a subscription needs no permission and prompts nothing, so
-/// this belongs on launch paths where a prompt is forbidden; `None` is
-/// the app's cue to offer the switch whose gesture-gated [`enroll`] can
-/// then make one. The worker's activation is still waited for, the key
-/// still matched ([`EnrollError::KeyMismatch`]), and the registration
-/// still the person's own typed credential.
+/// this belongs on launch paths where a prompt is forbidden. The worker's
+/// activation is still waited for, the key still matched
+/// ([`EnrollError::KeyMismatch`]), and the registration still the person's
+/// own typed credential.
 ///
 /// # Errors
 ///
 /// As [`enroll`], minus the prompts: there is no `Subscribe` failure,
-/// because nothing subscribes.
+/// because nothing subscribes. A failed call leaves the saved enrollment
+/// as it was; the next launch tries again.
 #[cfg_attr(
 	not(target_arch = "wasm32"),
 	allow(clippy::unused_async, reason = "matches the browser signature")
 )]
-pub async fn reconcile(options: &EnrollOptions) -> Result<Option<Enrollment>, EnrollError> {
+pub async fn reconcile(
+	options: &EnrollOptions,
+	previous: Option<&Enrollment>,
+) -> Result<Option<Enrollment>, EnrollError> {
 	#[cfg(not(target_arch = "wasm32"))]
 	{
-		let _ = options;
+		let _ = (options, previous);
 		Err(EnrollError::Unavailable(
 			Availability::Unsupported.reason().to_owned(),
 		))
@@ -464,10 +495,22 @@ pub async fn reconcile(options: &EnrollOptions) -> Result<Option<Enrollment>, En
 
 	#[cfg(target_arch = "wasm32")]
 	{
+		let Some(previous) = previous else {
+			return Ok(None);
+		};
+
 		match held_subscription(options).await? {
 			(_, Held::Absent) => Ok(None),
 			(_, Held::Subscription(subscription)) => {
-				Ok(Some(register_subscription(&subscription, options).await?))
+				match register_subscription(&subscription, options, Some(previous.endpoint)).await {
+					Ok(enrollment) => Ok(Some(enrollment)),
+					// The service no longer has the enrollment this launch
+					// renews, and registered nothing in its place.
+					Err(EnrollError::Enroll(cause)) if crate::push::enrollment_gone(&cause) => {
+						Ok(None)
+					}
+					Err(error) => Err(error),
+				}
 			}
 		}
 	}
@@ -564,11 +607,14 @@ async fn held_subscription(options: &EnrollOptions) -> Result<(Registration, Hel
 /// browser's details, and answers the handle its disable needs.
 ///
 /// The person is read from the app's forwarded identity by the service,
-/// never from anything this module holds.
+/// never from anything this module holds. `renews` names the enrollment a
+/// launch renews, so the service registers nothing once that is gone; a
+/// gesture's enrollment passes none.
 #[cfg(target_arch = "wasm32")]
 async fn register_subscription(
 	subscription: &leptoskit_service_worker::PushSubscription,
 	options: &EnrollOptions,
+	renews: Option<uuid::Uuid>,
 ) -> Result<Enrollment, EnrollError> {
 	let summary = leptoskit_rpc::client::call(crate::push::RegisterPushEndpoint {
 		credential: crate::push::PushCredential::WebPush {
@@ -583,6 +629,7 @@ async fn register_subscription(
 			intl_time_zone(),
 			options.app_version.clone(),
 		),
+		renews,
 	})
 	.await
 	.map_err(EnrollError::Enroll)?;
@@ -872,7 +919,7 @@ mod tests {
 			))
 		);
 
-		let error = futures::executor::block_on(super::reconcile(&options));
+		let error = futures::executor::block_on(super::reconcile(&options, Some(&an_enrollment())));
 		assert_eq!(
 			error,
 			Err(super::EnrollError::Unavailable(

@@ -216,7 +216,28 @@ The grammar is `&&`, `||`, `!`, and parentheses over the predicates below — an
 | `has(user.<key>)`                    | the app set the attribute, whatever its value               |
 | `user.<key> < '10'` (also `<= > >=`) | both sides parse as finite numbers and the comparison holds |
 
-An attribute the person doesn't have answers false to every predicate, `!=` and `in` included: nobody matches a segment merely for lacking the attribute. Numeric comparisons are numbers, not text — `user.version > '9'` is true for `10` — and a value that doesn't parse as a finite number answers false; `NaN` and `inf` are refused as literals at parse time. Values in quotes are at most 256 bytes with no whitespace inside, and keys are `a-z`, `0-9`, and `_`, up to 64 bytes — the same rules `set_person_attributes` enforces, so what you can send is what you can ask about.
+An attribute the person doesn't have answers false to every predicate, `!=` and `in` included: nobody matches a segment merely for lacking the attribute. Numeric comparisons are numbers, not text — `user.version > '9'` is true for `10` — and a value that doesn't parse as a finite number answers false; `NaN` and `inf` are refused as literals at parse time. Keys are `a-z`, `0-9`, and `_`, up to 64 bytes, and values are at most 256 bytes with no control characters — the same rules `set_person_attributes` enforces, so what you can send is what you can ask about.
+
+**Values with spaces and quotes.** Real attribute values aren't always one word: a city is `New York`, a name is `O'Brien`. Everything between a value's quotes is the value, spaces included, and a quote inside a value is written twice:
+
+```text
+user.city == 'New York'
+user.surname == 'O''Brien'
+user.city in ['New York', 'Coeur d''Alene']
+```
+
+That doubled quote is the only escape there is; a backslash is just a backslash. When a value comes from somewhere you don't control, don't paste it between quotes yourself — `condition::quoted` writes it correctly, so a stray quote in someone's name can't end the value early and change who the send reaches:
+
+```rust
+use leptoskit_notifications::condition::quoted;
+
+let target = SendTarget::Condition(format!(
+    "user.city == {} && 'news.local' in topics",
+    quoted(&city), // 'Coeur d''Alene'
+));
+```
+
+Topic names need none of this — they can hold neither a space nor a quote — so a condition pasted from Firebase means exactly what it meant there. Parentheses and `!` can be opened at most 32 deep in the text, however little they group.
 
 One shape is refused outright: a condition that already holds for a person with no topics, no attributes, and no device, like `!('a' in topics)`, is an "everyone" audience in disguise — the plain target below says that with a name, so the condition grammar makes you use it. Everything else anchors on something: a topic, or an attribute predicate such as `user.plan == 'pro'`. Condition sends fan out like topic sends: same batches, same snapshot-as-reached, same idempotency. Which index a condition's fanout walks follows from its anchor — a condition that cannot match without one of its topics walks the topic's subscribers, and one anchored only on attributes walks the person registry below.
 
@@ -246,17 +267,23 @@ let attributes = call_as_app(leptoskit_notifications::PersonAttributes {
 .await?;
 ```
 
-Keys are 1 to 64 bytes of `a-z`, `0-9`, and `_`; values are strings of at most 256 bytes; a person holds at most 50 attributes, and a key past that bound is skipped and counted in `skipped_full` rather than refusing the batch. The call is idempotent — sending the same value again changes nothing and counts nothing — and `remove` is the last word: a key in both `set` and `remove` is removed, never set.
+Keys are 1 to 64 bytes of `a-z`, `0-9`, and `_`; values are strings of at most 256 bytes; a person holds at most 50 attributes, and a key past that bound is skipped and counted in `skipped_full` rather than refusing the batch. The call is idempotent — sending the same value again changes nothing and counts nothing — and `remove` is the last word: a key in both `set` and `remove` is removed, never set. One call names at most 100 keys across `set` and `remove`; a larger change is refused as a bad request, so split it into several calls.
 
 Setting an attribute also registers the person with the service, because an attribute is one of the things that makes someone an audience: the registry the service keeps is who "everyone" means. Someone who subscribes to a topic, sets a category preference, or enrolls a push endpoint is registered too — including by the migration that adds the registry, which backfills it from those tables. Someone who only ever received a recipients send is not registered: naming people in a send never puts them in an audience.
 
-When a person should belong to no audience anymore — a deleted account, a withdrawn consent — `ForgetPerson` removes them from the registry, with their attributes and their topic subscriptions:
+### Erase a person
+
+When someone deletes their account or withdraws consent, you need the service to hold nothing more about them — not only to stop sending. `ForgetPerson` erases everything it has for one person:
 
 ```rust
 call_as_app(leptoskit_notifications::ForgetPerson { person: alice_id }).await?;
 ```
 
-Their inbox rows stay as they are, and so do their push endpoints and category preferences: forgetting ends their audiences, not their history. A later attribute, subscription, preference, or enrollment registers them again.
+That removes their inbox, their enrolled devices and the push credentials stored for them, the record of what was pushed to those devices, their category preferences, their topic subscriptions, their attributes, and their place in the registry. Nothing more is pushed to their devices, no audience reaches them, and their inbox is empty. It is safe to call twice, and for someone the service never knew.
+
+A long inbox is erased in the background, a batch at a time, so the call returns quickly whatever the person's history; the rest follows within moments. A send's own totals are not rewritten — "delivered to 1,204 people" stays 1,204.
+
+It stays in effect. Their phone or browser learns at its next launch that its enrollment is gone and turns notifications off there, instead of enrolling again ([what happens at launch](#when-the-server-revokes-a-device)). The service hears of the person again only if something new happens: they turn notifications on, set a preference, or subscribe to a topic themselves, or your server names them in a send, a subscription, or an attribute call. If someone must stay out — a withdrawn consent, rather than a deleted account nobody can sign in to — stop offering them those switches and stop naming them; the service keeps no list of people it was told to forget, because that list would be data about them too.
 
 ## Target a segment
 
@@ -621,7 +648,32 @@ leptoskit_rpc::call(leptoskit_notifications::push::RegisterPushEndpoint {
 .await?;
 ```
 
-The service answers an opaque endpoint id — the credential itself never comes back, and never appears in a list, a status row, or an error. Registering a destination that account already holds answers the same endpoint again, so a retried enrollment makes no duplicate; a Web Push subscription whose browser rotated its keys updates the stored credential in place, keeping the endpoint and its queued deliveries. A person holds at most ten live endpoints. A destination another account holds, including an invalidated destination, is refused: signing out of the app on a device revokes that device's endpoints, and then the next account on it enrolls cleanly. Only the same owner can reactivate an invalidated destination, within the live endpoint limit. Revoking it releases the destination; its next registration gets a fresh id. Credential rotation and reactivation advance a version: queued deliveries follow the new credentials, and late responses to older credentials cannot invalidate the endpoint or change the new queue. Invalidated ownership records stay until explicitly revoked; lists remain paginated.
+The service answers an opaque endpoint id — the credential itself never comes back, and never appears in a list, a status row, or an error. Registering a destination that account already holds answers the same endpoint again, so a retried enrollment makes no duplicate; a Web Push subscription whose browser rotated its keys updates the stored credential in place, keeping the endpoint and its queued deliveries. Credential rotation and reactivation advance a version: queued deliveries follow the new credentials, and late responses to older credentials cannot invalidate the endpoint or change the new queue.
+
+A person holds at most ten live endpoints, and the service keeps at most ten more that a provider has invalidated — an uninstalled app, an expired subscription — so their device list can explain them. Past that, enrolling drops the oldest invalidated ones. Only the owner can bring an invalidated endpoint back, by enrolling it again within the live limit.
+
+### A shared device
+
+Two people use the same phone or the same browser. The first never signed out properly — their session expired, or they signed out with no connection — so the service still thinks the device is theirs. Without a rule for this, the second person couldn't turn notifications on, and the first person's notifications would keep appearing on a device they no longer hold.
+
+The rule: **whoever presents the device's own credential holds the device.** When the second person turns notifications on, their app hands over the same token (or the same browser subscription, keys included) the first person enrolled. The service gives the device to them under a new endpoint id and revokes the first person's: it leaves their device list, and anything still queued for it is skipped as `endpoint_revoked`. Nothing for you to write — `native::enroll` and `browser::enroll` already do this.
+
+It only happens when a person turns notifications on. A launch never takes a device over (see below), and a Web Push address presented with different keys is refused with a conflict: knowing the address isn't holding the browser.
+
+### When the server revokes a device
+
+An enrollment can end without the device's help: the person removes the device from a list on another device, the next person takes it over, your server revokes it, or `ForgetPerson` erases the person. The device finds out at its next launch — `reconcile` asks the service about the enrollment the app saved — and answers that it is gone (`native::Outcome::Gone`, or `None` in a browser). Clear what you saved and show the switch as off. **A launch never enrolls again in its place**: a revoke made on the server stays made until the person turns notifications back on themselves.
+
+When your server ends someone's session without the device — "sign out everywhere", a suspended account, an expired session it cleans up — it can release their devices too, so their notifications stop arriving on devices they're signed out of:
+
+```rust
+let revoked = call_as_app(leptoskit_notifications::push::RevokePersonEndpoints {
+    person: alice_id,
+})
+.await?;
+```
+
+That removes every endpoint the person holds and answers how many. Their inbox, preferences, topics, and attributes stay; [`ForgetPerson`](#erase-a-person) is the call that erases those.
 
 List and revoke are the person's own. The list is one bounded page at a time, oldest first, and it includes invalidated endpoints with their state — a device list that hides them can't explain them:
 
@@ -679,8 +731,9 @@ let enrollment = native::enroll().await?;
 
 At **launch**, once the person is signed in, call `native::reconcile(Some(&enrollment))` — with the enrollment you saved, and only with one: it is the record that this person opted in on this device. Reconciliation registers with APNs again — registration prompts nothing, Apple expects it every launch, and a device that never opted in is never registered, so a person who turned notifications off is not silently re-enabled. It also reads the [device's details](#what-a-device-says-about-itself) again. The answer is an explicit transition you persist:
 
-- `Outcome::Kept` — the OS still issues the same token. When the device's details are unchanged too, nothing is sent to the service at all; when they changed — an app update, a new language — the new details go in one idempotent call under the same endpoint id. Persist the enrollment it carries: it remembers what was sent, which is how the next launch knows whether anything changed. An enrollment saved by an older version of this module sends once, then settles.
-- `Outcome::Rotated { current, retired }` — the OS now issues a different token. The module verifies the previous handle against this person's endpoint list and retires it under its owner — a rotated token never leaks an orphan endpoint — so you persist `current` and drop `retired`. When the person is at the ten-endpoint bound, the quota refusal is answered by retiring the known-stale handle and re-registering once, so rotation at the quota still completes. A `retired` handle that turns out to be a **previous account's leftover** — the session switched without the old account signing out — is reported as `Retirement::Stale`: it is dropped, never operated under the new identity, and no credential moves.
+- `Outcome::Kept` — the OS still issues the same token. When the device's details are unchanged too, nothing is registered: the module only asks the service, in one small read, whether the enrollment still stands (and if the service can't be reached, keeps the enrollment and asks again next launch). When they changed — an app update, a new language — the new details go in one idempotent call under the same endpoint id. Persist the enrollment it carries: it remembers what was sent, which is how the next launch knows whether anything changed. An enrollment saved by an older version of this module sends once, then settles.
+- `Outcome::Rotated { current, retired }` — the OS now issues a different token. The module checks that the previous handle is still this person's and retires it — a rotated token never leaks an orphan endpoint — so you persist `current` and drop `retired`. When the person is at the ten-endpoint bound, the quota refusal is answered by retiring the known-stale handle and re-registering once, so rotation at the quota still completes.
+- `Outcome::Gone` — the service no longer has this enrollment for the signed-in person: it was [revoked on the server](#when-the-server-revokes-a-device), taken over by the device's next person, or was never theirs — a previous account's leftover handle. Nothing was registered. Clear the saved enrollment and the opt-in and show the switch as off; only the person's own tap enrolls again.
 - `Outcome::Off` — you passed no previous enrollment, so nothing was registered and nothing asked; the cue to show the opt-in switch.
 
 ```rust,ignore
@@ -688,13 +741,14 @@ At **launch**, once the person is signed in, call `native::reconcile(Some(&enrol
 match native::reconcile(Some(&enrollment)).await? {
 	native::Outcome::Kept(kept) => enrollment = kept,
 	native::Outcome::Rotated { current, .. } => enrollment = current,
+	native::Outcome::Gone(_) => {/* clear what you saved; show the switch as off */}
 	native::Outcome::Off => {/* show the switch; from its handler, enroll */}
 }
 ```
 
 Failures name their retry state rather than swallowing it: `EnrollError::Unconfirmed` means the OS did not answer within the host's bound — the previous enrollment stands untouched, and a stale token is never dressed up as success; `EnrollError::Enroll` carries the handle to keep retrying with (`None` when the attempt already retired it); `RetireFailed` and `OwnershipUnknown` leave the new enrollment live and name the old handle whose revoke to retry. A later `reconcile` retries an unfinished retirement by itself.
 
-**Sign out by disabling.** While the person is still authenticated, `native::disable(&enrollment).await?` revokes this person's service enrollment with a stable idempotency key derived from the endpoint id — the same contract as the web's `browser::disable` — so a retried sign-out is safe. It never changes OS registration or permission; the token stays the device's, and the next account enrolls from clean. Clear the saved enrollment and opt-in once the revoke is acknowledged: reconciliation runs only on what you pass it.
+**Sign out by disabling.** While the person is still authenticated, `native::disable(&enrollment).await?` revokes this person's service enrollment with a stable idempotency key derived from the endpoint id — the same contract as the web's `browser::disable` — so a retried sign-out is safe. It never changes OS registration or permission; the token stays the device's, and the next account enrolls from clean. Clear the saved enrollment and opt-in once the revoke is acknowledged: reconciliation runs only on what you pass it. If the sign-out never reaches the service — no connection, or the session had already expired — the device passes to [its next person](#a-shared-device) when they enroll, and your server can [release it](#when-the-server-revokes-a-device) in the meantime.
 
 Registration failures are surfaced, not guessed around: the OS's provisioning refusal comes back as an error carrying a stable code — `aps-environment` names the missing or mismatched entitlement — never the OS's own error text, a silent OS answers an explicit "unconfirmed" instead of hanging or replaying a prior token, and a cancelled wait gives up without losing the callback — the broker keeps it for the next read. There is no swizzling, no background daemon, and no token cached to storage.
 
@@ -827,16 +881,21 @@ let _ = browser::ready().await?;
 
 **Ask before you offer.** `browser::availability()` reads where push stands — `ready`, `insecure_context` (serve `https`; nothing in code works around it), `unsupported`, or `denied` (the person refused; link to the browser's site settings rather than prompting again). It never prompts, so a settings screen may call it on every render. **Prompting is the browser's answer to subscribing, and it happens only inside `enroll`** — the two calls are split by when they may run:
 
-- **`browser::reconcile`**, on launch, once the person is signed in. It registers the subscription the browser already holds, if it holds one for your key, and answers `None` when it holds none — the app's cue to show the switch. Reading a subscription needs no permission, so this may run from any startup path.
-- **`browser::enroll`**, from an explicit gesture — a button, never a mount or a render. It subscribes only when the browser holds no subscription, and that subscribe is the one call the browser gates on the gesture; reconciling at launch keeps the worker settled long before, so nothing asynchronous eats the gesture's activation window.
+- **`browser::reconcile`**, on launch, once the person is signed in, with the `Enrollment` you saved beside their session when they turned notifications on. It renews the subscription the browser holds under that enrollment and answers it back. It answers `None` — the cue to clear what you saved and show the switch — when you pass no saved enrollment, when the browser no longer holds a subscription, or when the service [no longer has the enrollment](#when-the-server-revokes-a-device). A browser can hold a subscription the previous person left behind, which is why a held subscription alone never enrolls anyone. Reading a subscription needs no permission, so this may run from any startup path.
+- **`browser::enroll`**, from an explicit gesture — a button, never a mount or a render. It subscribes only when the browser holds no subscription, and that subscribe is the one call the browser gates on the gesture; waiting for the worker at launch (`browser::ready`) keeps it settled long before, so nothing asynchronous eats the gesture's activation window.
 
 ```rust,ignore
-// At launch, after register and ready, without prompting:
+// At launch, after register and ready, without prompting. `saved` is the
+// enrollment you kept beside this person's session, if they opted in:
 let options = browser::EnrollOptions::new(vapid_public_key);
-if browser::reconcile(&options).await?.is_none() {
-    // Show the switch; from its click handler, with the operator's
-    // VAPID public key — the private half never leaves the service:
-    let enrollment = browser::enroll(&options).await?;
+match browser::reconcile(&options, saved.as_ref()).await? {
+    // Still enrolled: keep the handle it answers.
+    Some(enrollment) => saved = Some(enrollment),
+    // Not enrolled, or not anymore: clear what you saved and show the
+    // switch. From its click handler, with the operator's VAPID public
+    // key — the private half never leaves the service:
+    //     saved = Some(browser::enroll(&options).await?);
+    None => saved = None,
 }
 ```
 
@@ -844,11 +903,11 @@ Every enrollment also carries the browser's [details](#what-a-device-says-about-
 
 `enroll` checks availability first, waits for the **active** worker instead of racing its install, reuses the subscription the browser already holds (a second tap re-enrolls the same endpoint instead of prompting twice, and two racing calls converge on one subscription), and registers it under the person who is signed in — but only when that subscription was created for **your own VAPID key**: a subscription made for another sender's key can't receive your pushes, so claiming it would end in silent delivery failure, and it is refused (`KeyMismatch`) rather than replaced. When the receiver is registered under an explicit scope, name it in `EnrollOptions::worker_scope`: the match is exact — a worker registered for a broader scope never stands in for the one you asked for. It answers an opaque `Enrollment` — the endpoint's id — which you keep beside the person's session on the device.
 
-**Sign out by disabling.** While the person is still authenticated, `browser::disable(&enrollment).await?` revokes this person's service enrollment. It never unsubscribes the browser or changes OS permission. The subscription remains reusable: re-enabling can reuse it, but this service requires enrollment before sending. Until the previous account revokes, another account cannot enroll that destination.
+**Sign out by disabling.** While the person is still authenticated, `browser::disable(&enrollment).await?` revokes this person's service enrollment. It never unsubscribes the browser or changes OS permission. The subscription remains reusable: re-enabling can reuse it, but this service requires enrollment before sending. If the previous account never got to revoke, the browser passes to [the next person who enrolls in it](#a-shared-device).
 
 Disable requires a successful authenticated revoke acknowledgement. Failures, including not-found, stay explicit; no endpoint list can establish success. Retries use a stable key derived from the endpoint id, including after reload. Receipts are scoped to the authenticated caller and replay only while retained by the service; pruning an old receipt can leave a retry unconfirmed. Revocation stops future attempts at the service's documented revocation boundary; provider delivery already in flight and visible banners are not recalled. Origin-wide unsubscribe and permission revocation are separate actions in browser settings or the lower-level worker API.
 
-**When the browser changes the subscription on its own** — a rotated or replaced subscription, the `pushsubscriptionchange` event — the worker cannot reconcile anything: it deliberately holds no credentials, so it has no identity to enroll with. The supported reconciliation is the next authenticated app launch calling `reconcile` again; a stale handle's `disable` leaves the replaced subscription alone, and the replaced subscription's endpoint dies at its push service, whose answer invalidates the stale record on its next delivery. Churn is bounded by the ten-endpoint limit, and the person can revoke the dead ones from their own list.
+**When the browser changes the subscription on its own** — a rotated or replaced subscription, the `pushsubscriptionchange` event — the worker cannot reconcile anything: it deliberately holds no credentials, so it has no identity to enroll with. The supported reconciliation is the next authenticated app launch calling `reconcile` again with the saved enrollment; a stale handle's `disable` leaves the replaced subscription alone, and the replaced subscription's endpoint dies at its push service, whose answer invalidates the stale record on its next delivery. Churn is bounded by the ten-endpoint limit, and the person can revoke the dead ones from their own list.
 
 The receiver itself shows what the service pushed: the envelope's title and body under a tag built from the notification's id, so a repeat replaces rather than stacks; the send's `data` rides on the banner's own data, inert. A send's options reach it too — an image, a badge count (`navigator.setAppBadge` where the browser has it), a silent flag, and the web presentation set. The service never pushes a [data message](#silent-data-messages) to a browser; one flagged `lkdata` that arrived anyway would show nothing, leaving only the badge it asked to set. A push that is missing, oversized (past the service's 4 KiB record), malformed, or typed wrong still shows one truthful banner — "New notification", no invented text — under a stable tag, so a broken sender can never silently swallow a delivery. A click closes the banner, focuses an app window of this origin and opens the send's own link when it resolves to this origin — a path like `/invoice/42`, or an absolute URL of this origin — and otherwise brings it to your inbox route with the notification's id, or opens that route in a new window. A click on one of the `web.actions` buttons does the same and adds the button's id to the address as `lka`, so the page can tell "Approve" from a click on the banner. Bringing an open window to the address is a navigation — the page loads again there — not an in-app route change. A link anywhere else is refused at click time: payload content can never steer a click off the app's own origin. The worker holds no credentials and calls no server: nothing fetches, and **no read state changes until the authenticated app itself opens** and marks what it read.
 
@@ -862,7 +921,7 @@ You want to reach "iPhones still on version 2.0" or "devices set to French", so 
 | `time_zone`   | the current time zone's identifier            | the default time zone's id        | `Intl.DateTimeFormat().resolvedOptions().timeZone`         |
 | `app_version` | the app's `CFBundleShortVersionString`        | the package's version name        | only what you pass to `EnrollOptions::app_version`, if any |
 
-They are sent when the device enrolls and again whenever they change: on iOS, Android, and macOS the `native` module's launch `reconcile` reads them every launch and sends them only when they differ from what it last sent, so an app update or a language change reaches the service at the next launch and an unchanged launch costs nothing; on the web, `reconcile` and `enroll` send them each time. Windows and Linux have no enrollment yet, so they have no devices to describe.
+They are sent when the device enrolls and again whenever they change: on iOS, Android, and macOS the `native` module's launch `reconcile` reads them every launch and sends them only when they differ from what it last sent, so an app update or a language change reaches the service at the next launch and an unchanged launch costs one small read; on the web, `reconcile` and `enroll` send them each time. Windows and Linux have no enrollment yet, so they have no devices to describe.
 
 The service checks each detail's shape: the locale is a BCP 47 tag of at most 35 bytes, stored in canonical case (`en_gb` becomes `en-GB`); the time zone is an IANA-style name of at most 64 bytes — checked for shape only, not against a time zone database, because a device's database can be newer than the server's; the app version is free text of at most 64 bytes. A client drops a detail that fails its check rather than lose its enrollment over it, and a request that sends a bad one directly is refused with the detail named. Each re-enrollment replaces what the endpoint said before; a change to the details alone never rotates the endpoint's credential, so pushes already queued for it carry on untouched.
 

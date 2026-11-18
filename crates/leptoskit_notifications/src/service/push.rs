@@ -100,6 +100,17 @@ fn fingerprint(platform: PushPlatform, destination: &str) -> String {
 	))
 }
 
+/// The answer to a renewal of an enrollment the caller no longer holds:
+/// not found, in the words the enrollment clients read
+/// ([`ENROLLMENT_GONE`](crate::push::ENROLLMENT_GONE)).
+fn enrollment_gone() -> rpc::Error {
+	rpc::Error::not_found(format!(
+		"{}: it was revoked or erased on the server, so nothing was registered; enrolling again \
+		 takes the person's own gesture",
+		crate::push::ENROLLMENT_GONE
+	))
+}
+
 /// Registers one endpoint for `me`, over the credential their app
 /// presented and the details its device reported. Idempotent for the same
 /// person and destination: a Web Push subscription whose browser rotated
@@ -107,9 +118,21 @@ fn fingerprint(platform: PushPlatform, destination: &str) -> String {
 /// its owner, and its queued deliveries. The details are replaced on every
 /// registration; a change to them alone is a plain update that leaves the
 /// credential's generation, and so every queued delivery, as it was.
-/// Refused for a destination another account holds, even when
-/// invalidated, until its owner explicitly revokes it. Refused for a
-/// platform with no transport.
+///
+/// A destination another account holds changes hands when — and only when
+/// — the caller presents the byte-identical credential, keys included for
+/// a Web Push subscription: holding the credential is holding the device.
+/// The previous owner's endpoint is revoked — deleted, its queued
+/// deliveries skipped as revoked, live or invalidated alike — and the
+/// caller gets a fresh endpoint with a fresh id. The same destination with
+/// different keys proves nothing and is refused. Refused for a platform
+/// with no transport.
+///
+/// `renews` makes the call a renewal rather than an enrollment: it names
+/// the endpoint the caller's device believes it holds, and the call writes
+/// nothing unless that endpoint is still the caller's. A launch-time
+/// reconciliation sends it, so an enrollment the server revoked or erased
+/// stays gone — and a renewal never takes a destination over from anyone.
 ///
 /// # Errors
 ///
@@ -117,15 +140,17 @@ fn fingerprint(platform: PushPlatform, destination: &str) -> String {
 /// shared checks, a host the push-host policy won't push to, a platform
 /// this server has no transport for, or enrollment past
 /// [`MAX_ENDPOINTS`](crate::push::MAX_ENDPOINTS); [`rpc::Error::Conflict`]
-/// when another account holds the destination;
-/// [`rpc::Error::Contended`] when the same destination enrolls twice at
-/// once.
+/// when another account holds the destination under a different
+/// credential; [`rpc::Error::NotFound`] for a renewal of an enrollment the
+/// caller no longer holds; [`rpc::Error::Contended`] when the same
+/// destination enrolls twice at once.
 pub(crate) async fn register(
 	cx: &rpc::MutationCx,
 	push: &Push,
 	me: Uuid,
 	credential: &PushCredential,
 	device: &DeviceDetails,
+	renews: Option<Uuid>,
 ) -> rpc::Result<EndpointSummary> {
 	crate::push::check_credential(credential).map_err(rpc::Error::invalid)?;
 	let device = device.normalized().map_err(rpc::Error::invalid)?;
@@ -148,6 +173,16 @@ pub(crate) async fn register(
 	let destination = credential.destination().map_err(rpc::Error::invalid)?;
 	let canonical = credential.canonical().map_err(rpc::Error::invalid)?;
 	let fingerprint = fingerprint(platform, &destination);
+
+	// A renewal stands on the enrollment it names. Once that is gone —
+	// revoked from another device's list, taken over by the device's next
+	// person, erased with its owner — the device hears so, and nothing is
+	// written: only a gesture enrolls.
+	if let Some(renews) = renews
+		&& !standing(cx.tx(), me, renews).await?
+	{
+		return Err(enrollment_gone());
+	}
 
 	let existing = match PushEndpoint::query()
 		.filter(|endpoint| endpoint.fingerprint.eq(fingerprint.clone()))
@@ -213,10 +248,11 @@ pub(crate) async fn register(
 					.await?;
 			}
 
-			// Enrolling a device is one of the acts that makes a person
-			// known: someone push can reach belongs in the registry.
-			super::register_persons(cx.tx(), &std::collections::BTreeSet::from([me])).await?;
-
+			// The registry is left alone: holding an endpoint means its
+			// first enrollment registered them, and only an erasure
+			// unregisters a person — taking the endpoint with it. A
+			// re-enrollment that brought them back would undo a
+			// `forget_person` at the next launch.
 			return Ok(EndpointSummary {
 				id: existing.id,
 				platform,
@@ -226,10 +262,28 @@ pub(crate) async fn register(
 			});
 		}
 
-		return Err(rpc::Error::conflict(
-			"this device belongs to another account; its owner must revoke it first",
-		));
+		// A renewal never moves a destination between accounts: the
+		// device's enrollment under this person no longer describes it.
+		if renews.is_some() {
+			return Err(enrollment_gone());
+		}
+
+		// Another account's, and the caller holds something else for the
+		// same destination — a Web Push URL under different keys. That
+		// proves no possession, so nothing moves.
+		if existing.credential != canonical {
+			return Err(rpc::Error::conflict(
+				"this device belongs to another account; its owner must revoke it first",
+			));
+		}
+
+		// The byte-identical credential: the device is in the caller's
+		// hands now. Its previous person's endpoint is revoked — their
+		// notifications stop reaching a device they no longer hold — and
+		// the caller enrolls from clean below.
+		revoke(cx.tx(), existing.person, existing.id).await?;
 	}
+
 	check_capacity(cx.tx(), me).await?;
 
 	let id = Uuid::now_v7();
@@ -259,9 +313,10 @@ pub(crate) async fn register(
 		Err(error) => return Err(error.into()),
 	}
 
-	// A fresh enrollment registers the person, exactly as a re-enrollment
-	// does above.
+	// Enrolling a device is one of the acts that makes a person known:
+	// someone push can reach belongs in the registry.
 	super::register_persons(cx.tx(), &std::collections::BTreeSet::from([me])).await?;
+	trim_history(cx.tx(), me).await?;
 
 	Ok(EndpointSummary {
 		id,
@@ -290,6 +345,73 @@ async fn check_capacity(tx: &leptoskit_db::Tx, me: Uuid) -> rpc::Result<()> {
 	Ok(())
 }
 
+/// Keeps a person's endpoint rows bounded: at most
+/// [`MAX_ENDPOINTS`](crate::push::MAX_ENDPOINTS) live ones, which
+/// [`check_capacity`] enforces, plus
+/// [`MAX_ENDPOINT_HISTORY`](crate::push::MAX_ENDPOINT_HISTORY) invalidated
+/// ones. Past that the oldest invalidated rows are revoked, so enrolling
+/// credentials a provider keeps invalidating can't grow the table: the
+/// list stays one page, and a destination nobody could use frees itself.
+async fn trim_history(tx: &leptoskit_db::Tx, me: Uuid) -> rpc::Result<()> {
+	let invalidated = PushEndpoint::query()
+		.filter(|endpoint| endpoint.person.eq(me) & endpoint.invalidated_at.is_not_null())
+		.order_by(|endpoint| endpoint.id.asc())
+		.all(tx)
+		.await?;
+	let excess = invalidated
+		.len()
+		.saturating_sub(crate::push::MAX_ENDPOINT_HISTORY);
+
+	for endpoint in invalidated.into_iter().take(excess) {
+		revoke(tx, me, endpoint.id).await?;
+	}
+
+	Ok(())
+}
+
+/// Whether `endpoint` is one of `me`'s, live or invalidated: the one
+/// primary-key read behind
+/// [`push_endpoint_standing`](crate::push::push_endpoint_standing) and
+/// every renewal.
+///
+/// # Errors
+///
+/// Whatever the read fails with.
+pub(crate) async fn standing(
+	db: &impl leptoskit_db::Read,
+	me: Uuid,
+	endpoint: Uuid,
+) -> rpc::Result<bool> {
+	Ok(PushEndpoint::query()
+		.filter(|row| row.id.eq(endpoint) & row.person.eq(me))
+		.exists(db)
+		.await?)
+}
+
+/// Revokes every endpoint `person` holds, live or invalidated, and skips
+/// their queued deliveries as revoked: what
+/// [`revoke_person_endpoints`](crate::push::revoke_person_endpoints) and
+/// an erasure do. Bounded by the enrollment caps, so it is one short
+/// write. Answers how many endpoints it removed.
+///
+/// # Errors
+///
+/// Whatever a read or a write fails with.
+pub(crate) async fn revoke_all(tx: &leptoskit_db::Tx, person: Uuid) -> rpc::Result<u32> {
+	let held = PushEndpoint::query()
+		.filter(|endpoint| endpoint.person.eq(person))
+		.all(tx)
+		.await?;
+	let mut revoked = 0;
+
+	for endpoint in held {
+		revoke(tx, person, endpoint.id).await?;
+		revoked += 1;
+	}
+
+	Ok(revoked)
+}
+
 /// The push-service host check at enrollment: the endpoint URL's host
 /// must be one the installed Web Push transport's policy allows.
 fn check_web_host(runtime: &PushRuntime, endpoint: &str) -> Result<(), String> {
@@ -314,17 +436,16 @@ pub(crate) async fn list(
 	me: Uuid,
 	page: &rpc::PageArgs,
 ) -> rpc::Result<rpc::Page<EndpointSummary>> {
+	let most = u32::try_from(crate::push::MAX_ENDPOINTS + crate::push::MAX_ENDPOINT_HISTORY)
+		.unwrap_or(u32::MAX);
 	let mut page = page.clone();
-	page.limit = page.limit.clamp(
-		1,
-		u32::try_from(crate::push::MAX_ENDPOINTS + crate::push::MAX_ENDPOINT_HISTORY)
-			.unwrap_or(u32::MAX),
-	);
+	page.limit = page.limit.clamp(1, most);
 
-	let page_of_rows = rpc::paginate(
+	let page_of_rows = super::paginate_bounded(
 		db,
 		PushEndpoint::query().filter(|endpoint| endpoint.person.eq(me)),
 		&page,
+		most,
 		|endpoint| endpoint.id.asc(),
 		|endpoint| endpoint.id,
 	)
