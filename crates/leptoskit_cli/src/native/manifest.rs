@@ -116,6 +116,78 @@ pub fn with_file_providers(source: &str, providers: &[FileProvider<'_>]) -> Resu
 	Ok(output)
 }
 
+/// One `<meta-data>` entry of the application: a name, and its value as
+/// either `android:value` (text) or `android:resource` (a resource
+/// reference).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MetaData<'a> {
+	pub name: &'a str,
+	/// `value` or `resource`.
+	pub attribute: &'a str,
+	pub value: String,
+}
+
+/// Declares each `<meta-data>` entry inside `<application>`. An entry the
+/// app-owned manifest already declares under the same name is left as the
+/// app wrote it.
+///
+/// # Errors
+///
+/// When the manifest isn't valid XML or has no application element.
+pub fn with_meta_data(source: &str, entries: &[MetaData<'_>]) -> Result<String> {
+	if entries.is_empty() {
+		return Ok(source.to_owned());
+	}
+
+	let document = roxmltree::Document::parse(source).context("invalid AndroidManifest.xml")?;
+	let root = document.root_element();
+	let prefix = root
+		.lookup_prefix(ANDROID)
+		.context("Android manifest must declare the Android attribute namespace")?;
+	let application = root
+		.children()
+		.find(|node| node.has_tag_name("application"))
+		.context("Android manifest has no application element")?;
+	let mut declared: BTreeSet<_> = application
+		.children()
+		.filter(|node| node.has_tag_name("meta-data"))
+		.filter_map(|node| node.attribute((ANDROID, "name")))
+		.collect();
+	let mut additions = String::new();
+
+	for entry in entries {
+		if !declared.insert(entry.name) {
+			continue;
+		}
+
+		writeln!(
+			additions,
+			"<meta-data {prefix}:name=\"{}\" {prefix}:{}=\"{}\"/>",
+			entry.name, entry.attribute, entry.value
+		)?;
+	}
+
+	if additions.is_empty() {
+		return Ok(source.to_owned());
+	}
+
+	let range = application.range();
+	let element = &source[range.clone()];
+	let mut output = source.to_owned();
+
+	if let Some(open) = element.strip_suffix("/>") {
+		output.replace_range(range, &format!("{open}>\n{additions}</application>"));
+	} else {
+		let close = element
+			.rfind("</")
+			.context("Android application element has no closing tag")?;
+		output.insert_str(range.start + close, &additions);
+	}
+
+	roxmltree::Document::parse(&output).context("generated Android manifest is invalid")?;
+	Ok(output)
+}
+
 /// The application's theme, as the manifest names it (`@style/…`), when it
 /// names one.
 ///
@@ -389,6 +461,56 @@ mod tests {
 		let source = r#"<manifest xmlns:android="http://schemas.android.com/apk/res/android"><application/></manifest>"#;
 		assert_eq!(with_file_providers(source, &[]).unwrap(), source);
 		assert!(with_file_providers("<manifest/>", &[provider]).is_err());
+	}
+
+	#[test]
+	fn declares_application_meta_data_once_and_keeps_the_apps_own() {
+		let entries = [
+			MetaData {
+				name: "com.example.channel",
+				attribute: "value",
+				value: "leptoskit.notifications.default".into(),
+			},
+			MetaData {
+				name: "com.example.icon",
+				attribute: "resource",
+				value: "@drawable/ic_notification".into(),
+			},
+		];
+		let source = r#"<manifest xmlns:android="http://schemas.android.com/apk/res/android"><application android:label="Demo"><activity android:name=".Main"/></application></manifest>"#;
+		let output = with_meta_data(source, &entries).unwrap();
+		assert_eq!(
+			output,
+			"<manifest xmlns:android=\"http://schemas.android.com/apk/res/android\"><application \
+			 android:label=\"Demo\"><activity android:name=\".Main\"/><meta-data \
+			 android:name=\"com.example.channel\" \
+			 android:value=\"leptoskit.notifications.default\"/>\n<meta-data \
+			 android:name=\"com.example.icon\" \
+			 android:resource=\"@drawable/ic_notification\"/>\n</application></manifest>"
+		);
+		// Idempotent, and nothing to add leaves the source untouched.
+		assert_eq!(with_meta_data(&output, &entries).unwrap(), output);
+		assert_eq!(with_meta_data(source, &[]).unwrap(), source);
+
+		// The app's own entry wins; only the missing one is added, and a
+		// self-closing application under another prefix opens to take it.
+		let owned = r#"<manifest xmlns:a="http://schemas.android.com/apk/res/android"><application><meta-data a:name="com.example.channel" a:value="orders"/></application></manifest>"#;
+		let output = with_meta_data(owned, &entries).unwrap();
+		assert!(output.contains(r#"a:name="com.example.channel" a:value="orders""#));
+		assert_eq!(output.matches("com.example.channel").count(), 1);
+		assert!(output.contains(
+			r#"<meta-data a:name="com.example.icon" a:resource="@drawable/ic_notification"/>"#
+		));
+
+		let empty = r#"<manifest xmlns:a="http://schemas.android.com/apk/res/android"><application/></manifest>"#;
+		let output = with_meta_data(empty, &entries[..1]).unwrap();
+		assert_eq!(
+			output,
+			"<manifest xmlns:a=\"http://schemas.android.com/apk/res/android\"><application>\n<meta-data \
+			 a:name=\"com.example.channel\" \
+			 a:value=\"leptoskit.notifications.default\"/>\n</application></manifest>"
+		);
+		assert!(with_meta_data("<manifest><application/></manifest>", &entries).is_err());
 	}
 
 	#[test]

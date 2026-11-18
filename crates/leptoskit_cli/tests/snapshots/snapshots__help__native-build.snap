@@ -33,7 +33,7 @@ Options:
           
 
       --unsigned
-          Build the release without signing it: an APK or app no store takes, for measuring or testing. Without it, an Android, Quest, or iOS release is signed, or not built
+          Build the release without signing it: an APK or app no store takes, for measuring or testing. Without it, an Android, Quest, or iOS release is signed, or not built. A push-enabled macOS app is built ad-hoc signed and without its push entitlement
 
       --export-method <EXPORT_METHOD>
           Who an iOS release's `.ipa` is for: app-store-connect, ad-hoc, or development. Defaults to `native.ios.export-method`

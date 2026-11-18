@@ -282,6 +282,9 @@ fn the_push_entitlement_comes_and_goes_with_the_setting() {
 	write(&root.join(".leptoskit/macos/App.entitlements"), "<stale/>").unwrap();
 	let mut config = LeptoskitConfig::default();
 	config.native.macos.aps_environment = Some(leptoskit_config::ApsEnvironment::Development);
+	// A push-enabled Mac app generates only with its provisioning profile.
+	config.native.macos.provisioning_profile = Some("push.provisionprofile".into());
+	write(&root.join("push.provisionprofile"), "profile").unwrap();
 	generate(&root, &config, &registry).unwrap();
 	let with = generated(&root);
 	assert_eq!(with, without, "the opt-in changes nothing else");
@@ -316,6 +319,138 @@ fn the_push_entitlement_comes_and_goes_with_the_setting() {
 		entitlements_path(&root).is_none(),
 		"build signs nothing extra"
 	);
+}
+
+/// Apple's push entitlement is a restricted one: macOS kills an app that
+/// claims it at launch unless a matching provisioning profile is embedded in
+/// the bundle. So `aps-environment` without a configured profile stops
+/// before anything is generated, naming the setting, instead of building an
+/// app that cannot start.
+#[test]
+fn a_push_enabled_mac_app_generates_only_with_its_provisioning_profile() {
+	let temporary = tempfile::tempdir().unwrap();
+	let root = std::fs::canonicalize(temporary.path()).unwrap();
+	let registry = clipboard_registry(&root);
+	let mut config = LeptoskitConfig::default();
+	config.native.macos.aps_environment = Some(leptoskit_config::ApsEnvironment::Development);
+
+	let error = generate(&root, &config, &registry)
+		.expect_err("push without a provisioning profile must not generate")
+		.to_string();
+	assert!(error.contains("provisioning-profile"), "{error}");
+	assert!(error.contains("embedded.provisionprofile"), "{error}");
+	assert!(
+		!root.join(".leptoskit").exists(),
+		"the refusal precedes every generated write"
+	);
+
+	// A configured profile that isn't there is named by its path.
+	config.native.macos.provisioning_profile = Some("signing/push.provisionprofile".into());
+	let error = generate(&root, &config, &registry).unwrap_err().to_string();
+	assert!(error.contains("signing/push.provisionprofile"), "{error}");
+	assert!(!root.join(".leptoskit").exists());
+
+	write(&root.join("signing/push.provisionprofile"), "profile").unwrap();
+	generate(&root, &config, &registry).unwrap();
+	assert!(entitlements_path(&root).is_some());
+
+	// The profile is a push setting: without `aps-environment` it is
+	// neither required nor read.
+	config.native.macos.aps_environment = None;
+	config.native.macos.provisioning_profile = Some("missing.provisionprofile".into());
+	generate(&root, &config, &registry).unwrap();
+}
+
+/// A push-enabled Mac app is never ad-hoc signed with its entitlement: the
+/// local build asks for a real identity and embeds the profile, an app
+/// without push signs exactly as before, and `--unsigned` builds the push
+/// app ad-hoc without the entitlement.
+#[test]
+fn a_push_enabled_mac_app_is_never_ad_hoc_signed_with_its_entitlement() {
+	let temporary = tempfile::tempdir().unwrap();
+	let root = std::fs::canonicalize(temporary.path()).unwrap();
+	let nothing = |_: &str| None;
+	let identity = |name: &str| {
+		(name == IDENTITY).then(|| "Apple Development: Example (ABCDE12345)".to_owned())
+	};
+	let arguments = |signing: &LocalSigning| {
+		signing
+			.codesign_arguments()
+			.iter()
+			.map(|argument| argument.to_string_lossy().into_owned())
+			.collect::<Vec<_>>()
+			.join(" ")
+	};
+
+	// No push: ad-hoc, no entitlements, whatever the environment holds.
+	let plain = LeptoskitConfig::default();
+	for env in [&nothing as crate::native::signing::Env<'_>, &identity] {
+		let signing = local_signing(&root, &plain, env, false).unwrap();
+		assert_eq!(signing, LocalSigning::AdHoc);
+		assert_eq!(arguments(&signing), "--force --sign - --timestamp=none");
+		assert_eq!(signing.profile(), None);
+	}
+
+	let mut config = LeptoskitConfig::default();
+	config.native.macos.aps_environment = Some(leptoskit_config::ApsEnvironment::Development);
+	config.native.macos.provisioning_profile = Some("push.provisionprofile".into());
+	write(&root.join("push.provisionprofile"), "profile").unwrap();
+	write(&root.join(".leptoskit/macos/App.entitlements"), "<plist/>").unwrap();
+
+	// Push without an identity: refused, with the variable and the reason.
+	let error = local_signing(&root, &config, &nothing, false)
+		.unwrap_err()
+		.to_string();
+	assert!(error.contains(IDENTITY), "{error}");
+	assert!(error.contains("ad-hoc"), "{error}");
+	assert!(error.contains("--unsigned"), "{error}");
+
+	// Push with an identity: that identity, the entitlements, the profile.
+	let signing = local_signing(&root, &config, &identity, false).unwrap();
+	assert_eq!(
+		arguments(&signing).replace(&root.display().to_string(), "<root>"),
+		"--force --sign Apple Development: Example (ABCDE12345) --timestamp=none --entitlements \
+		 <root>/.leptoskit/macos/App.entitlements"
+	);
+	assert_eq!(
+		signing.profile(),
+		Some(root.join("push.provisionprofile").as_path())
+	);
+
+	// `--unsigned`: ad-hoc and without the entitlement, identity or not.
+	for env in [&nothing as crate::native::signing::Env<'_>, &identity] {
+		assert_eq!(
+			local_signing(&root, &config, env, true).unwrap(),
+			LocalSigning::AdHoc
+		);
+	}
+
+	// A missing profile is refused before the identity is even read.
+	std::fs::remove_file(root.join("push.provisionprofile")).unwrap();
+	let error = local_signing(&root, &config, &identity, true)
+		.unwrap_err()
+		.to_string();
+	assert!(error.contains("push.provisionprofile"), "{error}");
+}
+
+/// The profile is copied into the bundle where macOS looks for it, and a
+/// bundle that no longer needs one loses the copy an earlier build left.
+#[test]
+fn the_provisioning_profile_is_embedded_and_a_stale_one_removed() {
+	let temporary = tempfile::tempdir().unwrap();
+	let root = std::fs::canonicalize(temporary.path()).unwrap();
+	let bundle = root.join("App.app");
+	let embedded = bundle.join("Contents/embedded.provisionprofile");
+	write(&root.join("push.provisionprofile"), "profile").unwrap();
+
+	embed_profile(&bundle, None).unwrap();
+	assert!(!embedded.exists());
+
+	embed_profile(&bundle, Some(&root.join("push.provisionprofile"))).unwrap();
+	assert_eq!(std::fs::read_to_string(&embedded).unwrap(), "profile");
+
+	embed_profile(&bundle, None).unwrap();
+	assert!(!embedded.exists(), "a stale profile is removed");
 }
 
 // The generated macOS app's Swift compiles against the real modules: with

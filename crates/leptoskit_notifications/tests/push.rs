@@ -3897,7 +3897,14 @@ async fn the_fcm_wire_carries_the_send_options() {
 
 	let android = &message["android"];
 	assert_eq!(android["priority"], "HIGH");
-	assert_eq!(android["notification"]["channel_id"], "inbox");
+	// The channel a send names is the one the local-notifications plugin
+	// made under that id, and the plugin namespaces every channel it
+	// creates: the id Android knows is the prefixed one. The raw id names
+	// no channel, and Firebase would post through its fallback instead.
+	assert_eq!(
+		android["notification"]["channel_id"],
+		"leptoskit.notifications.inbox"
+	);
 	assert_eq!(android["notification"]["color"], "#10b981");
 	assert_eq!(android["notification"]["icon"], "ic_income");
 	assert_eq!(android["notification"]["tag"], "billing");

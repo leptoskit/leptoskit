@@ -13,7 +13,7 @@ Options:
       --optimize <OPTIMIZE>            How hard to optimize a release client for size, `fast` or `smallest`; defaults to `bundle.optimize`. Needs `--release`
       --out <OUT>                      Output directory: dist for applications, .leptoskit/graph/builds for captured graph artifacts. Recipe output paths remain declared
       --unit <UNIT>                    Graph unit to build, such as frontends.docs. Repeat for several; omit to build all units. Unselected services are not rebuilt
-      --unsigned                       Build the release without signing it: an APK or app no store takes, for measuring or testing. Without it, an Android, Quest, or iOS release is signed, or not built
+      --unsigned                       Build the release without signing it: an APK or app no store takes, for measuring or testing. Without it, an Android, Quest, or iOS release is signed, or not built. A push-enabled macOS app is built ad-hoc signed and without its push entitlement
       --export-method <EXPORT_METHOD>  Who an iOS release's `.ipa` is for: app-store-connect, ad-hoc, or development. Defaults to `native.ios.export-method`
       --build-number <BUILD_NUMBER>    The release's build number: Android's `versionCode`, and iOS's `CFBundleVersion`. Each store upload needs a higher one
   -h, --help                           Print help

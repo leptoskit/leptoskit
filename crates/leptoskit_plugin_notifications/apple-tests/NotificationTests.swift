@@ -58,6 +58,14 @@ private func payload(_ bytes: [UInt8]) throws -> NativeBuffer {
     return NativeBuffer(taking: request.payload)
 }
 
+/// A push carries a badge and a sound as well as an alert, and the system
+/// applies only what the permission request asked for.
+@Test
+@MainActor
+func thePermissionRequestCoversWhatAPushCarries() {
+    #expect(NotificationsPlugin.authorizationOptions == [.alert, .badge, .sound])
+}
+
 @Test
 @MainActor
 func cancellationRemovesLatePostAndPreventsReplacementRace() async throws {

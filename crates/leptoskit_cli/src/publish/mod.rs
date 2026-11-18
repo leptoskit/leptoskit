@@ -818,6 +818,10 @@ impl Session<'_> {
 		let version = apple_version(self.config);
 		let entitlements = out.join("SafariExtension.entitlements");
 		let app_entitlements = self.root.join(".leptoskit/macos/App.entitlements");
+		// A push-enabled app is checked for its provisioning profile here,
+		// before anything is built: without one embedded, macOS refuses to
+		// launch what this would sign and notarize.
+		let profile = crate::native::desktop::provisioning_profile(self.root, self.config)?;
 		let plan = macos::Plan {
 			built: &self.root.join(".leptoskit/macos/App.app"),
 			out: &out,
@@ -839,6 +843,7 @@ impl Session<'_> {
 				.aps_environment
 				.is_some()
 				.then_some(app_entitlements.as_path()),
+			provisioning_profile: profile.as_deref(),
 		};
 		let artifacts = plan.artifacts();
 		let (dmg, zip) = (self.relative(&artifacts.dmg), self.relative(&artifacts.zip));
@@ -863,7 +868,14 @@ impl Session<'_> {
 			crate::native::run(crate::native::NativeCommand::Build {
 				target: crate::native::Target::Macos,
 				release: true,
-				options: crate::native::signing::ReleaseOptions::default(),
+				// The distribution signs the app itself, below, with the
+				// Developer ID identity, the entitlements, and the profile.
+				// A push-enabled app's own build would otherwise ask for a
+				// second, local identity only to have its signature replaced.
+				options: crate::native::signing::ReleaseOptions {
+					unsigned: profile.is_some(),
+					..crate::native::signing::ReleaseOptions::default()
+				},
 			})?;
 			std::fs::create_dir_all(&out)?;
 

@@ -393,7 +393,11 @@ Options are part of the send's intent: the same idempotency key with different o
 | `apple { … }`   | subtitle, thread-id, category, interruption-level, relevance-score | mirrored into the APNs block FCM serves for iOS apps | —                                                                                      |
 | `web { … }`     | —                                                                  | —                                                    | icon, badge shape, up to two actions buttons, require-interaction, direction, language |
 
-The per-platform blocks only shape that platform: `android.channel_id` posts through an Android channel your app must have created (the local-notifications plugin does), `apple.interruption_level` is what Focus modes read, and `web.actions` become `showNotification` action buttons. Everything is checked on both sides with errors that name the field — a color must be `#RRGGBB`, an image or link at most 1,024 bytes of `https` URL (or, for a link, a path starting with `/`), a sound name 1–64 bytes of letters, digits, `-`, `_`, and `.`. A data send shows nothing, so the options that only shape what is shown — `image`, `sound`, `link`, and the `android`, `apple`, and `web` blocks — are refused on one; its `priority` and `badge` are accepted.
+The per-platform blocks only shape that platform: `android.channel_id` names an Android channel, `apple.interruption_level` is what Focus modes read, and `web.actions` become `showNotification` action buttons — a click on one opens the same page a click on the banner does, with the button's id added to the address as `lka`. Everything is checked on both sides with errors that name the field — a color must be `#RRGGBB`, an image or link at most 1,024 bytes of `https` URL (or, for a link, a path starting with `/`), a sound name 1–64 bytes of letters, digits, `-`, `_`, and `.`. A data send shows nothing, so the options that only shape what is shown — `image`, `sound`, `link`, and the `android`, `apple`, and `web` blocks — are refused on one; its `priority` and `badge` are accepted.
+
+**Android channels.** `android.channel_id` is the id you gave the [local-notifications plugin](#composing-with-local-notifications) when your app configured the channel: an app that calls `configure_channel` with `inbox` receives a send whose `android.channel_id` is `"inbox"` in that channel. The plugin keeps every channel it creates under its own `leptoskit.notifications.` prefix on the device, and the service adds that prefix for you; a channel your own Kotlin creates is reachable only if its id starts with the same prefix. A push that names no channel, or names one the device doesn't have, is posted through your app's **default** channel instead. A push-enabled app has that channel from its first launch, listed as "Notifications" in the system's settings until your app configures the channel `default` with its own name and importance.
+
+**Apple permissions and entitlements.** On iOS and macOS a push's badge and sound take effect only where the person allowed them. `request_permission` asks for alerts, badges, and sounds in one question. The system asks once: someone who answered in an earlier build of your app, which asked for alerts only, may have badges and sounds switched off until they change that in Settings. `apple.interruption_level: "time-sensitive"` needs Apple's Time Sensitive Notifications capability, which leptoskit doesn't add to the app yet; Apple documents that without it the system treats the push as an ordinary (`active`) one, so it won't break through a Focus.
 
 **When the payload is too big.** Every provider caps the message, and options count toward it: APNs takes 4 KiB of encoded JSON, FCM 4 KiB of the keys and values a device receives (the notification, the data, and the Android options, not the request around them), and a Web Push service must take a 4 KiB encrypted record. The longest title and body a send allows fit on every provider unless their text needs heavy JSON escaping, such as a body of quotation marks. When a send doesn't fit, the service drops the optional extras in the same fixed order on every provider before giving up on anything you'd miss: the per-platform blocks and the image first, then the sound, badge, and link, then the send's `data`, down to an id-only envelope that still shows the title and body and still collapses by the notification's id. A data message keeps its silent shape in the fallback. If even the id-only envelope doesn't fit, the delivery ends as `rejected` with the reason `oversized`, without a request.
 
@@ -505,18 +509,24 @@ let notifications = Notifications::new()?;
 // `request_permission` answers `Denied` without a dialog once the person
 // has refused, so a settings screen is the honest place to retry from.
 if notifications.request_permission().await? != leptoskit_plugin_notifications::Permission::Granted {
-	// Show your own "notifications are off" state; the OS shows nothing.
+	// Show your own "notifications are off" state and stop here: the OS
+	// shows nothing, and a post would be refused.
+	return Ok(());
 }
 
-notifications
-	.configure_channel(&Channel::new(
-		Identifier::new("inbox")?,
-		"Inbox".into(),
-		"New items in your inbox.".into(),
-		Importance::Default,
-		true,
-	)?)
-	.await?;
+// Channels are Android's. iOS, macOS, the browser, and Linux have none and
+// answer `Unavailable`, which is not a failure.
+let inbox = Channel::new(
+	Identifier::new("inbox")?,
+	"Inbox".into(),
+	"New items in your inbox.".into(),
+	Importance::Default,
+	true,
+)?;
+match notifications.configure_channel(&inbox).await {
+	Ok(()) | Err(leptoskit_bridge::Error::Unavailable) => {}
+	Err(error) => return Err(error.into()),
+}
 
 // Per item, when your screen sees one it hasn't shown yet. `item.id` is
 // the inbox item's own id, so re-showing the same item replaces its
@@ -531,7 +541,7 @@ notifications
 	.await?;
 ```
 
-This shows a banner only while your app runs, and only where the plugin is implemented: iOS and macOS through `UNUserNotificationCenter`, Android 26+ through `NotificationManager`, the browser through the `Notification` API, and Linux through D-Bus. **Windows returns `Unavailable`** — there is no Windows toast backend yet. On Android the channel must exist before a post (posts to a channel that doesn't are dropped), and Android 13+ also needs `POST_NOTIFICATIONS` — declared in your app's `android/app/src/main/AndroidManifest.xml` ([the `android/` folder is yours](../platforms/android.md)) and granted at runtime through `request_permission`, which uses the host's permission broker. On every platform a successful post doesn't prove the person saw anything: Focus modes, notification permissions, channel settings, and foreground presentation policy decide that. Scheduled **local** notifications, badges from the plugin, and click routing are not available everywhere either — see the [plugin inventory](../platforms/plugin-inventory.md) for what each platform does. None of this posting reaches a device where your app isn't running; that is what server push, below, is for.
+This shows a banner only while your app runs, and only where the plugin is implemented: iOS and macOS through `UNUserNotificationCenter`, Android 26+ through `NotificationManager`, the browser through the `Notification` API, and Linux through D-Bus. **Windows returns `Unavailable`** — there is no Windows toast backend yet. On Android the channel must exist before a post (posts to a channel that doesn't are dropped), and Android 13+ also needs `POST_NOTIFICATIONS` — declared in your app's `android/app/src/main/AndroidManifest.xml` ([the `android/` folder is yours](../platforms/android.md)) and granted at runtime through `request_permission`, which uses the host's permission broker. On every platform a successful post doesn't prove the person saw anything: Focus modes, notification permissions, channel settings, and foreground presentation policy decide that. **iOS and macOS are the sharp case**: the system shows no banner for an app that is in the foreground unless the app's notification-centre delegate asks for one, and the generated hosts don't install that delegate yet, so there a post made while your app is open lands in Notification Centre without a banner. Scheduled **local** notifications, badges from the plugin, and click routing are not available everywhere either — see the [plugin inventory](../platforms/plugin-inventory.md) for what each platform does. None of this posting reaches a device where your app isn't running; that is what server push, below, is for.
 
 ## Push delivery
 
@@ -636,10 +646,12 @@ leptoskit_notifications = { version = "0.3", features = ["native"] }
 plugins = ["notifications"]
 
 [native.ios]
-aps-environment = "development" # or "production"
+aps-environment = "development"
 ```
 
-The `aps-environment` line is the opt-in. It is a string — Apple's entitlement takes exactly `development` or `production`, not a boolean — and generation writes it into `.leptoskit/ios/App.entitlements`. It must match three things that have to agree: this setting, the provisioning profile your build signs with, and the notifications service's `LEPTOSKIT_NOTIFICATIONS_APNS_ENVIRONMENT` — a development-signed build registers with Apple's sandbox, and a TestFlight or store build registers with production. An app without the setting generates exactly as before, with no push entitlement: selecting the notifications plugin for local banners never turns an app into a push-enabled one. No provisioning or certificate access happens in the build.
+The `aps-environment` line is the opt-in. It is a string — Apple's entitlement takes exactly `development` or `production`, not a boolean — and generation writes it into `.leptoskit/ios/App.entitlements`. The value has to agree with the provisioning profile the build is signed with. With Xcode's automatic signing, which is what a leptoskit iOS build uses unless you configured manual signing, **keep `development`, for TestFlight and store builds too**: Xcode signs the archive with a development profile, and the export step re-signs it with your distribution profile, which is what puts the production environment into the build people install. Set `production` only when your own manual signing uses a distribution profile for the build itself. If a release build stops with a message that the provisioning profile doesn't match the `aps-environment` entitlement, this line is the one to change.
+
+What decides where a device registers is the signature of the build that is installed, not this line: a build run from Xcode registers with Apple's sandbox, and a TestFlight or App Store build registers with production. The notifications service's `LEPTOSKIT_NOTIFICATIONS_APNS_ENVIRONMENT` has to name the same one, so a service that serves TestFlight and store builds runs with `production`. An app without the setting generates exactly as before, with no push entitlement: selecting the notifications plugin for local banners never turns an app into a push-enabled one. No provisioning or certificate access happens in the build.
 
 The generated app delegate already forwards the OS's answers: `didRegisterForRemoteNotificationsWithDeviceToken` and `didFailToRegisterForRemoteNotificationsWithError` land in the notifications plugin's in-memory broker, which survives the early callbacks that can arrive before the plugin and its guest exist. The token is held in memory only — the OS hands it out again on the next launch — and Apple's bytes are forwarded as exact lower-case hex, of whatever length the OS chooses; nothing assumes the historical 32 bytes, and nothing is invented on failure.
 
@@ -654,7 +666,9 @@ use leptoskit_plugin_notifications::Permission;
 // mount or a render: the OS permission question.
 let notifications = Notifications::new()?;
 if notifications.request_permission().await? != Permission::Granted {
-	// Show your own "notifications are off" state; the OS shows nothing.
+	// Show your own "notifications are off" state and stop: enrolling a
+	// device that can show nothing only earns pushes nobody sees.
+	return Ok(());
 }
 
 // Still in the gesture: register, wait the OS's bounded answer, enroll.
@@ -703,9 +717,18 @@ plugins = ["notifications"]
 push = true
 ```
 
-The `push` line is the opt-in. Generation adds four things to the generated Android project and nothing else changes: the pinned `com.google.firebase:firebase-messaging` dependency, Google's services Gradle plugin (applied through `.leptoskit/android/gradle-plugins.txt`, which the current `leptoskit new` scaffold reads), the messaging service that receives FCM's token refreshes, and the `POST_NOTIFICATIONS` permission the local-notifications plugin already declares. An app without the line generates byte-for-byte as before, so selecting the plugin for local banners never turns an app into a push-enabled one.
+The `push` line is the opt-in. Generation adds the Firebase pieces to the generated Android project and nothing else changes:
 
-Two things are yours, not leptoskit's: **`google-services.json`** — the file the Firebase console issues for your app's package id, placed at `android/app/google-services.json`. Generation stops and names the path when push is on and it's missing; leptoskit never generates or commits it. And the Gradle script reader: apps scaffolded before this setting get a generation error that names the exact lines to add to their app-owned `android/app/build.gradle.kts`.
+- the pinned `com.google.firebase:firebase-messaging` dependency, and Google's services Gradle plugin, applied by id through `.leptoskit/android/gradle-plugins.txt`, which the `leptoskit new` scaffold reads;
+- the messaging service that receives FCM's token refreshes, declared with the `com.google.firebase.MESSAGING_EVENT` intent filter Firebase finds it by;
+- the default channel a push is posted through when the send names none: `leptoskit.notifications.default`, named in the manifest and created by the notifications plugin when the app starts ([Android channels](#shape-a-message) says how to rename it);
+- the small icon a push shows in the status bar, when your app has one: set `notification` under `[app.icons]` ([app icons](24-publishing.md)) and the manifest points Firebase at the generated `@drawable/ic_notification`. Without it Firebase falls back to your launcher icon, which Android draws as a plain white shape, and generation says so;
+- keep rules for the Firebase names the plugin looks up at runtime, so a minified release build still finds them;
+- the `POST_NOTIFICATIONS` permission the local-notifications plugin already declares.
+
+An app without the line generates byte-for-byte as before, so selecting the plugin for local banners never turns an app into a push-enabled one.
+
+Two things are yours, not leptoskit's: **`google-services.json`** — the file the Firebase console issues for your app's package id, placed at `android/app/google-services.json`. Generation stops and names the path when push is on and it's missing; leptoskit never generates or commits it. And the Gradle script: `android/app/build.gradle.kts` is your file, so generation checks it instead of rewriting it. An app scaffolded before this setting gets an error that names the exact lines to add, and an app scaffolded with a version whose lines read `apply(plugin)` gets one that says to change them to `apply(plugin = plugin)` — the first form asks Gradle for a script file named after the plugin, and the build fails.
 
 At runtime the flow is the iOS flow verbatim — request permission, enroll from the gesture, reconcile at launch with the saved enrollment, disable on sign out:
 
@@ -715,7 +738,7 @@ let enrollment = native::enroll().await?;
 
 What differs under the hood: Firebase answers with a registration token — printable ASCII of no assumed length, not hex — the generated messaging service forwards token **refreshes** to the same in-memory broker the registration task feeds, and a device without usable Firebase refuses instead of pretending. The refusal is a stable code, not SDK text: `firebase-not-configured` means the app generated without the push opt-in or has no `google-services.json` values (the Firebase classes are found reflectively, so an app that never opted in simply answers this), `os-refused` covers the rest, and `token-shape` means Firebase handed over something outside the contract's bounds. The token is held in memory only — Firebase hands it out again on the next launch — and its bytes never appear in a log, an error, or a `Debug` print.
 
-A device at Google Play services' mercy is a real constraint worth knowing: delivery needs Play services on the device, and while your app is **foregrounded** an arriving push is data your app must compose itself (the local-notifications plugin, above). What a push does while the app is **closed** is Google's work: the message's notification block shows the title and body in the system tray, collapsed by the notification's id, and your durable inbox row is already in the service. A tap opens the app — routing it into a screen is the same later work as iOS's. And as everywhere: acceptance at the provider is only ever proven by a real device with real credentials, which this setup doesn't exercise.
+A device at Google Play services' mercy is a real constraint worth knowing: delivery needs Play services on the device. While your app is in the **foreground**, Firebase hands an arriving push to the app instead of showing it, and the generated messaging service doesn't pass it on to your code yet, so nothing appears in the tray; the item is in the inbox, and your open screen's live inbox query is what shows it (compose a banner with the local-notifications plugin, above, if you want one). What a push does while the app is **closed** is Google's work: the message's notification block shows the title and body in the system tray, collapsed by the notification's id, and your durable inbox row is already in the service. A tap opens the app — routing it into a screen is the same later work as iOS's. And as everywhere: acceptance at the provider is only ever proven by a real device with real credentials, which this setup doesn't exercise.
 
 ### Enroll a macOS device
 
@@ -729,10 +752,20 @@ leptoskit_notifications = { version = "0.3", features = ["native"] }
 plugins = ["notifications"]
 
 [native.macos]
-aps-environment = "development" # or "production"
+aps-environment = "development"
+provisioning-profile = "signing/Notes_Development.provisionprofile"
 ```
 
-The `aps-environment` line is the opt-in. Generation writes Apple's macOS entitlement key — `com.apple.developer.aps-environment`, a string like iOS's — into `.leptoskit/macos/App.entitlements`, and both the local build's ad-hoc signature and a `leptoskit publish macos` distribution sign the app with it. It must match the notifications service's `LEPTOSKIT_NOTIFICATIONS_APNS_ENVIRONMENT`: a development-signed build registers with Apple's sandbox, and a notarized production build registers with production. An app without the setting generates exactly as before, with no push entitlement: selecting the notifications plugin for local banners never turns an app into a push-enabled one.
+The `aps-environment` line is the opt-in, and on a Mac it comes with two requirements that a local-only app doesn't have. Apple's push entitlement — `com.apple.developer.aps-environment`, a string like iOS's, which generation writes into `.leptoskit/macos/App.entitlements` — is a restricted one: macOS refuses to launch an app that claims it unless the app is signed by a real certificate and carries a provisioning profile that grants it. An ad-hoc signature, which is how leptoskit signs a Mac app that has no push, can't do that; the app would be killed as it starts.
+
+So a push-enabled Mac app needs:
+
+- **A provisioning profile**, named by `provisioning-profile` as a path under your project. Create it in your Apple developer account for this app's bundle id (`native.package_id`) with the Push Notifications capability, and download it. Generation stops, naming the setting, when `aps-environment` is set and the profile isn't configured or isn't there. The build copies it into the app as `Contents/embedded.provisionprofile` before signing.
+- **A signing identity** for local builds, in the `LEPTOSKIT_MACOS_IDENTITY` environment variable: the certificate's name as `security find-identity -v -p codesigning` lists it, such as `Apple Development: Your Name (TEAMID)`. `leptoskit build --platform macos` and `leptoskit dev --platform macos` stop without it rather than ad-hoc sign an app that can't launch. `leptoskit build --release --platform macos --unsigned` still builds, ad-hoc signed and without the push entitlement, for measuring or testing everything but push.
+
+The profile and the environment go together. For local work use a **macOS development** profile with `aps-environment = "development"`: it registers with Apple's sandbox, and it runs only on the Macs listed in the profile. For `leptoskit publish macos` switch both: a **Developer ID** profile with `aps-environment = "production"`. The distribution embeds that profile, signs with your `LEPTOSKIT_PUBLISH_MACOS_IDENTITY`, and registers with production. Either way the value must match the notifications service's `LEPTOSKIT_NOTIFICATIONS_APNS_ENVIRONMENT`. leptoskit copies the profile and checks that it is there; it doesn't read what the profile grants, so a profile for another bundle id, another environment, or one without the push capability is something macOS reports only when the app launches.
+
+An app without the `aps-environment` setting generates and signs exactly as before, with no push entitlement and no profile: selecting the notifications plugin for local banners never turns an app into a push-enabled one.
 
 The generated macOS app delegate already forwards the OS's answers — `didRegisterForRemoteNotificationsWithDeviceToken` and `didFailToRegisterForRemoteNotificationsWithError` land in the notifications plugin's in-memory broker, the same one iOS uses, which survives the early callbacks that can arrive before the plugin and its guest exist. `REMOTE_REGISTER` calls `NSApplication.registerForRemoteNotifications` and waits the bounded answer; a silent OS answers "unconfirmed" instead of replaying a prior token, and the token's bytes never reach a log.
 
@@ -742,7 +775,7 @@ At runtime the flow is the iOS flow verbatim — request permission from a gestu
 let enrollment = native::enroll().await?;
 ```
 
-One honest limitation: the stock **menu-bar host** (a `[native] mode = "menu-bar"` app that keeps the generated status-item lifecycle) carries no forwarding delegate, so its registration answers stay "unconfirmed" — a push-enabled app wants the standard windowed host, or its own delegate wired to the plugin's `noteDeviceToken` and `noteRegistrationFailure`. And what a push does while the app is **closed** is the OS's work, as on iOS: APNs shows the alert, your durable inbox row is already in the service, and routing a tap into a screen is still later work. As everywhere, provider acceptance is only ever proven by a real Mac with real credentials, which this setup doesn't exercise.
+One honest limitation: the stock **menu-bar host** (a `[native] mode = "menu-bar"` app that keeps the generated status-item lifecycle) carries no forwarding delegate, so its registration answers stay "unconfirmed" — a push-enabled app wants the standard windowed host, or its own delegate wired to the plugin's `noteDeviceToken` and `noteRegistrationFailure`. And what a push does while the app is **closed** is the OS's work, as on iOS: APNs shows the alert, your durable inbox row is already in the service, and routing a tap into a screen is still later work. As everywhere, provider acceptance is only ever proven by a real Mac with real credentials, which this setup doesn't exercise — and the same goes for the signing above: the profile and identity steps follow Apple's code-signing rules, but they haven't been run against a real Apple developer account as part of leptoskit's own testing, so treat your first push-enabled Mac build as the check.
 
 ### Enroll a browser
 
@@ -777,7 +810,7 @@ async fn sw_js() -> Response {
 // .route("/sw.js", get(sw_js)) on the same router that serves your app.
 ```
 
-The route is the only URL a notification click may open, checked against the worker's own origin again at click time — payload content can never add a host, a scheme, or a path, and a route the builder refuses (empty, not a `/`-rooted path, scheme-relative, backslash, control characters) never ships. Register the script once at startup, the way [the web platform page](../platforms/web.md#service-workers) does it, and wait for it to control the page:
+The route is the only URL a notification click may open, checked against the worker's own origin again at click time — payload content can never add a host, a scheme, or a path, and a route the builder refuses (empty, not a `/`-rooted path, scheme-relative, backslash, control characters) never ships. Register the script once at startup, the way [the web platform page](../platforms/web.md#service-workers) does it, and wait for the worker to be active:
 
 ```rust,ignore
 use leptoskit_notifications::browser;
@@ -785,6 +818,12 @@ use leptoskit_notifications::browser;
 let registration = browser::register("/sw.js", browser::RegisterOptions::default()).await?;
 let _ = browser::ready().await?;
 ```
+
+`ready` resolves once the registration has an **active** worker, which is all enrollment needs. It doesn't wait for that worker to control the page. The receiver takes control of the pages already open as it activates (`clients.claim()`), so the tab a person enrolls from is one a later click can route, without a reload first.
+
+**One worker per scope.** A browser keeps a single service worker for a scope, and registering a second script at the same scope replaces the first. If your app already ships its own worker — the caching `sw.js` from [the web platform page](../platforms/web.md#service-workers), say — don't register the receiver beside it. Serve the built receiver under another path (`/lkn-receiver.js`) and load it from the top of your own worker with `importScripts("/lkn-receiver.js")`, so one script holds both; leave the `push` and `notificationclick` events to the receiver. This combination is guidance rather than something leptoskit tests, so check a push and a click in your own app after wiring it.
+
+**iPhone and iPad.** Safari on iOS and iPadOS offers Web Push only to a web app the person has added to their Home Screen (iOS 16.4 and later), which needs a web app manifest that opens it standalone. In an ordinary Safari tab there is no Push API at all, so `availability()` answers `unsupported` — show "add this app to your Home Screen" there rather than a switch that can't work.
 
 **Ask before you offer.** `browser::availability()` reads where push stands — `ready`, `insecure_context` (serve `https`; nothing in code works around it), `unsupported`, or `denied` (the person refused; link to the browser's site settings rather than prompting again). It never prompts, so a settings screen may call it on every render. **Prompting is the browser's answer to subscribing, and it happens only inside `enroll`** — the two calls are split by when they may run:
 
@@ -811,7 +850,7 @@ Disable requires a successful authenticated revoke acknowledgement. Failures, in
 
 **When the browser changes the subscription on its own** — a rotated or replaced subscription, the `pushsubscriptionchange` event — the worker cannot reconcile anything: it deliberately holds no credentials, so it has no identity to enroll with. The supported reconciliation is the next authenticated app launch calling `reconcile` again; a stale handle's `disable` leaves the replaced subscription alone, and the replaced subscription's endpoint dies at its push service, whose answer invalidates the stale record on its next delivery. Churn is bounded by the ten-endpoint limit, and the person can revoke the dead ones from their own list.
 
-The receiver itself shows what the service pushed: the envelope's title and body under a tag built from the notification's id, so a repeat replaces rather than stacks; the send's `data` rides on the banner's own data, inert. A send's options reach it too — an image, a badge count (`navigator.setAppBadge` where the browser has it), a silent flag, and the web presentation set. The service never pushes a [data message](#silent-data-messages) to a browser; one flagged `lkdata` that arrived anyway would show nothing, leaving only the badge it asked to set. A push that is missing, oversized (past the service's 4 KiB record), malformed, or typed wrong still shows one truthful banner — "New notification", no invented text — under a stable tag, so a broken sender can never silently swallow a delivery. A click closes the banner, focuses an app window of this origin and opens the send's own link when it resolves to this origin — a path like `/invoice/42`, or an absolute URL of this origin — and otherwise brings it to your inbox route with the notification's id, or opens that route in a new window. A link anywhere else is refused at click time: payload content can never steer a click off the app's own origin. The worker holds no credentials and calls no server: nothing fetches, and **no read state changes until the authenticated app itself opens** and marks what it read.
+The receiver itself shows what the service pushed: the envelope's title and body under a tag built from the notification's id, so a repeat replaces rather than stacks; the send's `data` rides on the banner's own data, inert. A send's options reach it too — an image, a badge count (`navigator.setAppBadge` where the browser has it), a silent flag, and the web presentation set. The service never pushes a [data message](#silent-data-messages) to a browser; one flagged `lkdata` that arrived anyway would show nothing, leaving only the badge it asked to set. A push that is missing, oversized (past the service's 4 KiB record), malformed, or typed wrong still shows one truthful banner — "New notification", no invented text — under a stable tag, so a broken sender can never silently swallow a delivery. A click closes the banner, focuses an app window of this origin and opens the send's own link when it resolves to this origin — a path like `/invoice/42`, or an absolute URL of this origin — and otherwise brings it to your inbox route with the notification's id, or opens that route in a new window. A click on one of the `web.actions` buttons does the same and adds the button's id to the address as `lka`, so the page can tell "Approve" from a click on the banner. Bringing an open window to the address is a navigation — the page loads again there — not an in-app route change. A link anywhere else is refused at click time: payload content can never steer a click off the app's own origin. The worker holds no credentials and calls no server: nothing fetches, and **no read state changes until the authenticated app itself opens** and marks what it read.
 
 ### What a device says about itself
 

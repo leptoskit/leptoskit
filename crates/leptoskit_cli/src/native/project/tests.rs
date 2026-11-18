@@ -1202,6 +1202,48 @@ fn the_android_push_configuration_comes_and_goes_with_the_setting() {
 	assert!(service.exists());
 	assert_eq!(bytes(&plugins), b"com.google.gms.google-services\n");
 
+	// Firebase finds a messaging service by its intent filter: without one
+	// every event goes to the SDK's own default service, and a refreshed
+	// token never reaches the generated one.
+	let pushed = std::fs::read_to_string(&manifest).unwrap();
+	assert!(
+		pushed.contains(&format!(
+			"<service android:name=\"{MESSAGING_SERVICE}\" \
+			 android:exported=\"false\">\n<intent-filter><action \
+			 android:name=\"com.google.firebase.MESSAGING_EVENT\"/></intent-filter>\n</service>"
+		)),
+		"{pushed}"
+	);
+	// A push that names no channel posts through the plugin's default one,
+	// which the plugin creates, not Firebase's \"Miscellaneous\".
+	assert!(
+		pushed.contains(
+			"<meta-data \
+			 android:name=\"com.google.firebase.messaging.default_notification_channel_id\" \
+			 android:value=\"leptoskit.notifications.default\"/>"
+		),
+		"{pushed}"
+	);
+	// This app configured no notification icon, so the manifest names no
+	// drawable that doesn't exist: the build would stop on it.
+	assert!(!pushed.contains("default_notification_icon"), "{pushed}");
+	// Release builds shrink with R8, and the plugin reaches Firebase by
+	// name: the generated rules keep those names while push is on.
+	let rules = root.join(".leptoskit/android/proguard-rules.pro");
+	let kept = std::fs::read_to_string(&rules).unwrap();
+	assert!(kept.starts_with("// bridge fixture"), "{kept}");
+	for name in [
+		"com.google.firebase.messaging.FirebaseMessaging",
+		"com.google.android.gms.tasks.Task",
+		"com.google.android.gms.tasks.OnSuccessListener",
+		"com.google.android.gms.tasks.OnFailureListener",
+		"getToken",
+		"addOnSuccessListener",
+		"addOnFailureListener",
+	] {
+		assert!(kept.contains(name), "{name} is not kept:\n{kept}");
+	}
+
 	// Turning push off again leaves none of it behind, byte for byte.
 	config.native.android.push = false;
 	generate(&root, &config, &registry, Target::Android, false).unwrap();
@@ -1214,6 +1256,25 @@ fn the_android_push_configuration_comes_and_goes_with_the_setting() {
 	);
 	assert!(!service.exists());
 	assert!(!plugins.exists());
+	assert_eq!(
+		std::fs::read_to_string(&rules).unwrap(),
+		"// bridge fixture",
+		"the bridge's rules alone"
+	);
+}
+
+/// The scaffold's Gradle script applies each listed plugin by id. Gradle's
+/// Kotlin `apply` takes a script path first — `apply(from, plugin, to)` —
+/// so a positional `apply(plugin)` asks Gradle to read a script named
+/// `com.google.gms.google-services` and fails the build.
+#[test]
+fn the_gradle_script_applies_listed_plugins_by_id() {
+	let script = include_str!("../templates/build.gradle.kts");
+	assert!(
+		script.contains("?.forEach { plugin -> apply(plugin = plugin) }"),
+		"the template must apply by plugin id"
+	);
+	assert!(!script.contains("apply(plugin)"));
 }
 
 /// Whether the generated manifest declares the messaging service.
@@ -1275,4 +1336,19 @@ fn the_android_push_configuration_names_what_is_missing() {
 		!root.join(".leptoskit").exists(),
 		"validation precedes every generated write"
 	);
+
+	// A script scaffolded while the template applied the plugin as a script
+	// path reads the file and still cannot build: Gradle would look for a
+	// script named after the plugin. Generation names the one-word fix.
+	fixture(
+		&app_script,
+		&include_str!("../templates/build.gradle.kts")
+			.replace("apply(plugin = plugin)", "apply(plugin)"),
+	);
+	let error = generate(&root, &config, &registry, Target::Android, false)
+		.unwrap_err()
+		.to_string();
+	assert!(error.contains("apply(plugin = plugin)"), "{error}");
+	assert!(error.contains("as a script"), "{error}");
+	assert!(!root.join(".leptoskit").exists());
 }

@@ -1374,16 +1374,21 @@ pub struct IosConfig {
 	/// for registered devices, or `development`. `--export-method`
 	/// overrides it for one build.
 	pub export_method: ExportMethod,
-	/// The APNs environment the iOS app is signed for: `development` while
-	/// building from Xcode, `production` for TestFlight and store builds.
+	/// The APNs environment written into the iOS app's entitlements.
 	/// Setting it opts the iOS app into push: generation writes the matching
 	/// `aps-environment` entitlement, the generated app delegate forwards
 	/// APNs device tokens to the notifications plugin, and
 	/// `leptoskit_notifications`' `native` module can enroll them. It must
-	/// match the app's provisioning profile and the notifications service's
-	/// `LEPTOSKIT_NOTIFICATIONS_APNS_ENVIRONMENT`. Leave it unset for apps
-	/// that only post local notifications; they generate exactly as before,
-	/// with no push entitlement.
+	/// match the provisioning profile the build is signed with. Under
+	/// automatic signing that is a development profile, so keep
+	/// `development` for TestFlight and store builds too: exporting re-signs
+	/// the app with the distribution profile, which carries the production
+	/// environment. Use `production` when manual signing builds with a
+	/// distribution profile. The notifications service's
+	/// `LEPTOSKIT_NOTIFICATIONS_APNS_ENVIRONMENT` must name the environment
+	/// of the build people install. Leave this unset for apps that only
+	/// post local notifications; they generate exactly as before, with no
+	/// push entitlement.
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub aps_environment: Option<ApsEnvironment>,
 }
@@ -1459,9 +1464,21 @@ pub struct MacosConfig {
 	/// can enroll them. It must match the notifications service's
 	/// `LEPTOSKIT_NOTIFICATIONS_APNS_ENVIRONMENT`. Leave it unset for apps
 	/// that only post local notifications; they generate exactly as before,
-	/// with no push entitlement.
+	/// with no push entitlement. A push-enabled Mac app also needs
+	/// `provisioning-profile`.
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub aps_environment: Option<ApsEnvironment>,
+	/// The provisioning profile a push-enabled macOS app embeds, as a path
+	/// under the project: Apple's push entitlement is a restricted one, and
+	/// macOS refuses to launch an app that claims it without a matching
+	/// profile inside the bundle. Required when `aps-environment` is set,
+	/// and unused otherwise. Download it from your Apple developer account
+	/// for this app's bundle id with the Push Notifications capability: a
+	/// macOS development profile for `development`, a Developer ID profile
+	/// for `production`. The build copies it to
+	/// `Contents/embedded.provisionprofile` before signing.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub provisioning_profile: Option<String>,
 }
 
 impl MacosConfig {

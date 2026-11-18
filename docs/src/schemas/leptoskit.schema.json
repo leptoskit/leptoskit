@@ -2581,7 +2581,7 @@
 			"type": "object",
 			"properties": {
 				"aps-environment": {
-					"description": "The APNs environment the iOS app is signed for: `development` while\nbuilding from Xcode, `production` for TestFlight and store builds.\nSetting it opts the iOS app into push: generation writes the matching\n`aps-environment` entitlement, the generated app delegate forwards\nAPNs device tokens to the notifications plugin, and\n`leptoskit_notifications`' `native` module can enroll them. It must\nmatch the app's provisioning profile and the notifications service's\n`LEPTOSKIT_NOTIFICATIONS_APNS_ENVIRONMENT`. Leave it unset for apps\nthat only post local notifications; they generate exactly as before,\nwith no push entitlement.",
+					"description": "The APNs environment written into the iOS app's entitlements.\nSetting it opts the iOS app into push: generation writes the matching\n`aps-environment` entitlement, the generated app delegate forwards\nAPNs device tokens to the notifications plugin, and\n`leptoskit_notifications`' `native` module can enroll them. It must\nmatch the provisioning profile the build is signed with. Under\nautomatic signing that is a development profile, so keep\n`development` for TestFlight and store builds too: exporting re-signs\nthe app with the distribution profile, which carries the production\nenvironment. Use `production` when manual signing builds with a\ndistribution profile. The notifications service's\n`LEPTOSKIT_NOTIFICATIONS_APNS_ENVIRONMENT` must name the environment\nof the build people install. Leave this unset for apps that only\npost local notifications; they generate exactly as before, with no\npush entitlement.",
 					"anyOf": [
 						{
 							"$ref": "#/$defs/ApsEnvironment"
@@ -2874,7 +2874,7 @@
 			"type": "object",
 			"properties": {
 				"aps-environment": {
-					"description": "The APNs environment the macOS app is signed for: `development` while\nbuilding and running locally, `production` for notarized Developer ID\ndistributions. Setting it opts the macOS app into push: generation\nwrites the matching `com.apple.developer.aps-environment` entitlement,\nthe generated app delegate forwards APNs device tokens to the\nnotifications plugin, and `leptoskit_notifications`' `native` module\ncan enroll them. It must match the notifications service's\n`LEPTOSKIT_NOTIFICATIONS_APNS_ENVIRONMENT`. Leave it unset for apps\nthat only post local notifications; they generate exactly as before,\nwith no push entitlement.",
+					"description": "The APNs environment the macOS app is signed for: `development` while\nbuilding and running locally, `production` for notarized Developer ID\ndistributions. Setting it opts the macOS app into push: generation\nwrites the matching `com.apple.developer.aps-environment` entitlement,\nthe generated app delegate forwards APNs device tokens to the\nnotifications plugin, and `leptoskit_notifications`' `native` module\ncan enroll them. It must match the notifications service's\n`LEPTOSKIT_NOTIFICATIONS_APNS_ENVIRONMENT`. Leave it unset for apps\nthat only post local notifications; they generate exactly as before,\nwith no push entitlement. A push-enabled Mac app also needs\n`provisioning-profile`.",
 					"anyOf": [
 						{
 							"$ref": "#/$defs/ApsEnvironment"
@@ -2882,6 +2882,13 @@
 						{
 							"type": "null"
 						}
+					]
+				},
+				"provisioning-profile": {
+					"description": "The provisioning profile a push-enabled macOS app embeds, as a path\nunder the project: Apple's push entitlement is a restricted one, and\nmacOS refuses to launch an app that claims it without a matching\nprofile inside the bundle. Required when `aps-environment` is set,\nand unused otherwise. Download it from your Apple developer account\nfor this app's bundle id with the Push Notifications capability: a\nmacOS development profile for `development`, a Developer ID profile\nfor `production`. The build copies it to\n`Contents/embedded.provisionprofile` before signing.",
+					"type": [
+						"string",
+						"null"
 					]
 				}
 			},
