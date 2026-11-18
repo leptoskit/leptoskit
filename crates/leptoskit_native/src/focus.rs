@@ -30,6 +30,7 @@
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 
+use reactive_graph::owner::Owner;
 use reactive_graph::signal::RwSignal;
 use reactive_graph::traits::Get;
 use reactive_graph::traits::Set;
@@ -46,10 +47,15 @@ use crate::remember::remember;
 /// The handle is [remembered](crate::remember), so the same one comes back
 /// each time the screen builds, and the screen builds again when focus is
 /// requested.
+///
+/// A screen built outside a running app, as a test that builds one tree and
+/// inspects it does, has nowhere to keep the request. The handle is inert
+/// there: [`request`](Self::request) does nothing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FocusRequest {
-	/// The serial of the latest request, or zero before the first.
-	latest: RwSignal<u64>,
+	/// The serial of the latest request, or zero before the first. `None`
+	/// outside a reactive owner, where no signal can live.
+	latest: Option<RwSignal<u64>>,
 }
 
 /// The serial the next request takes. Serials are unique across every
@@ -63,20 +69,24 @@ impl FocusRequest {
 	#[track_caller]
 	pub fn new() -> Self {
 		Self {
-			latest: remember(|| 0),
+			latest: Owner::current().map(|_| remember(|| 0)),
 		}
 	}
 
 	/// Moves focus to the widget this request was given to, once, after the
 	/// next commit.
 	pub fn request(&self) {
-		self.latest.set(NEXT.fetch_add(1, Ordering::Relaxed));
+		if let Some(latest) = self.latest {
+			latest.set(NEXT.fetch_add(1, Ordering::Relaxed));
+		}
 	}
 
 	/// The serial of the latest request, or `None` before the first. Reading
 	/// it subscribes the build, so a request rebuilds the screen.
 	pub(crate) fn serial(&self) -> Option<u64> {
-		Some(self.latest.get()).filter(|&serial| serial > 0)
+		let serial = self.latest?.get();
+
+		(serial > 0).then_some(serial)
 	}
 }
 
@@ -89,8 +99,6 @@ impl Default for FocusRequest {
 
 #[cfg(test)]
 mod tests {
-	use reactive_graph::owner::Owner;
-
 	use super::*;
 	use crate::remember::ScreenState;
 
@@ -110,6 +118,14 @@ mod tests {
 			again.request();
 			assert!(first.serial().expect("a second request") > requested);
 		});
+	}
+
+	#[test]
+	fn a_request_outside_a_running_app_does_nothing() {
+		let request = FocusRequest::new();
+
+		request.request();
+		assert_eq!(request.serial(), None);
 	}
 
 	#[test]

@@ -38,7 +38,7 @@ One pull request per item. Every backend is kept in step, with AppKit as the ref
 | 1  | Text input hints                                            | G9       | #852, open  |
 | 2  | `TextArea`                                                  | G12      | #877, open  |
 | 3  | Labels that focus their fields                              | G13      | #879, open  |
-| 4  | One-shot focus requests                                     | G2       | PR open     |
+| 4  | One-shot focus requests                                     | G2       | #887, open  |
 | 5  | Arrow-key navigation for tabs, radio groups and menus       | G5       | not started |
 | 6  | `Modal` and `Popover`                                       | G1       | not started |
 | 7  | Scroll into view                                            | G4       | not started |
