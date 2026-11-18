@@ -86,6 +86,10 @@ pub struct JobSummary {
 	/// The worker that holds or last held it.
 	pub worker: Option<Uuid>,
 	pub lease_expires_at: Option<Timestamp>,
+	/// Why its worker said it failed, for a removal that failed: it stays
+	/// unknown until an operator reconciles it.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub failure: Option<String>,
 	pub created_at: Timestamp,
 	pub updated_at: Timestamp,
 }

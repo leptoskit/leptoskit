@@ -233,3 +233,111 @@ mod shipping {
 		}
 	}
 }
+
+/// What Control 2's security review found (`support/review.rs`), on
+/// Postgres.
+mod review {
+	use super::app;
+	use super::postgres;
+	use super::support;
+	use super::support::review;
+
+	#[tokio::test]
+	async fn an_upload_keeps_the_size_it_was_begun_with() {
+		if let Some((_postgres, app)) = app().await {
+			review::an_upload_keeps_the_size_it_was_begun_with(&app).await;
+		}
+	}
+
+	#[tokio::test]
+	async fn a_full_queue_never_hides_a_job_a_worker_may_take() {
+		if let Some((_postgres, app)) = app().await {
+			review::a_full_queue_never_hides_a_job_a_worker_may_take(&app).await;
+		}
+	}
+
+	#[tokio::test]
+	async fn a_build_attempt_has_a_deadline() {
+		if let Some((_postgres, app)) = app().await {
+			review::a_build_attempt_has_a_deadline(&app).await;
+		}
+	}
+
+	#[tokio::test]
+	async fn an_expired_lease_holds_nothing() {
+		if let Some((_postgres, app)) = app().await {
+			review::an_expired_lease_holds_nothing(&app).await;
+		}
+	}
+
+	#[tokio::test]
+	async fn a_build_cannot_name_another_repository() {
+		if let Some((_postgres, app)) = app().await {
+			review::a_build_cannot_name_another_repository(&app).await;
+		}
+	}
+
+	#[tokio::test]
+	async fn rollback_waits_for_a_certain_schema() {
+		if let Some((_postgres, app)) = app().await {
+			review::rollback_waits_for_a_certain_schema(&app).await;
+		}
+	}
+
+	#[tokio::test]
+	async fn the_largest_status_report_reads_back() {
+		if let Some((_postgres, app)) = app().await {
+			review::the_largest_status_report_reads_back(&app).await;
+		}
+	}
+
+	#[tokio::test]
+	async fn a_failed_teardown_stays_actionable() {
+		if let Some((_postgres, app)) = app().await {
+			review::a_failed_teardown_stays_actionable(&app).await;
+		}
+	}
+
+	#[tokio::test]
+	async fn a_swept_archive_never_takes_its_replacement() {
+		if let Some((_postgres, app)) = app().await {
+			review::a_swept_archive_never_takes_its_replacement(&app).await;
+		}
+	}
+
+	#[tokio::test]
+	async fn logs_hide_split_secrets_and_control_characters() {
+		if let Some((_postgres, app)) = app().await {
+			review::logs_hide_split_secrets_and_control_characters(&app).await;
+		}
+	}
+
+	#[tokio::test]
+	async fn a_release_is_reported_after_its_lease() {
+		if let Some((_postgres, app)) = app().await {
+			review::a_release_is_reported_after_its_lease(&app).await;
+		}
+	}
+
+	#[tokio::test]
+	async fn a_removal_that_then_works_is_done() {
+		if let Some((_postgres, app)) = app().await {
+			review::a_removal_that_then_works_is_done(&app).await;
+		}
+	}
+
+	#[tokio::test]
+	async fn build_logs_are_capped() {
+		let Some(server) = postgres::Postgres::start() else {
+			return;
+		};
+		let db = leptoskit_db::Db::connect(&server.database())
+			.await
+			.expect("connect");
+		db.migrate(leptoskit_cloud::POSTGRES_MIGRATIONS)
+			.await
+			.expect("the Postgres migrations apply");
+		let app = support::app_with(db, |config| review::settings(&mut config.shipping)).await;
+		review::build_logs_are_capped(&app).await;
+	}
+}

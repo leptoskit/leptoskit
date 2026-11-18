@@ -416,12 +416,16 @@ pub(crate) async fn reconcile(
 		}
 		(JobKind::DestroyEnvironment, Reconciliation::Applied) => {
 			row.state = JobState::Done;
+			// What the operator found replaces a failure the worker said.
+			row.outcome = Json(None);
 			row.save(cx.tx()).await?;
 		}
 		(JobKind::DestroyEnvironment, Reconciliation::NotApplied { .. }) => {
 			// Removing an environment is safe to run again.
 			row.state = JobState::Queued;
 			row.worker_id = None;
+			row.claimed_at = None;
+			row.outcome = Json(None);
 			row.queued_at = leptoskit_db::now();
 			row.save(cx.tx()).await?;
 			woke = true;

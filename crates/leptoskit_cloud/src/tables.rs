@@ -249,7 +249,8 @@ pub struct AuditEvent {
 }
 
 /// A source archive an organisation uploaded, kept under
-/// `sources/<organization>/<digest>` in the object store. Unique by
+/// `sources/<organization>/<archive id>/<digest>` in the object store, a key
+/// of its own so a deleted row's object is never a later row's. Unique by
 /// organisation and digest: bytes are shared within an organisation, never
 /// across them. Until `verified_at` is set it is an upload in progress,
 /// and `expires_at` is when its upload address stops working; after, it is
@@ -463,6 +464,11 @@ pub struct Job {
 	#[db(no_foreign_key)]
 	pub worker_id: Option<Id<Worker>>,
 	pub lease_expires_at: Option<Timestamp>,
+	/// When the attempt now held was claimed: a build's lease is never
+	/// renewed past this and the build deadline.
+	pub claimed_at: Option<Timestamp>,
+	/// The log bytes its attempts have sent, held to the build log cap.
+	pub log_bytes: i64,
 	pub outcome: Json<Option<JobOutcome>>,
 	/// When it first went unclaimed: a build nobody claims for long enough
 	/// fails with `builder_unavailable`.
@@ -512,6 +518,9 @@ pub struct LogChunk {
 	pub seq: i64,
 	pub first_line: i64,
 	pub lines: i64,
+	/// The bytes of its lines as the worker sent them, counted against the
+	/// organisation's log cap until the chunk is deleted.
+	pub bytes: i64,
 	/// SHA-256 of the lines as the worker sent them, so a chunk sent again
 	/// is recognised.
 	#[db(min_len = 64, max_len = 64)]
@@ -521,6 +530,17 @@ pub struct LogChunk {
 	pub expires_at: Timestamp,
 	#[db(created_at)]
 	pub created_at: Timestamp,
+}
+
+/// The build log bytes an organisation keeps: every chunk's bytes from
+/// when it is indexed until it is deleted, held to the organisation's log
+/// cap. One row per organisation, made by its first chunk.
+#[table(name = "log_usage")]
+pub struct LogUsage {
+	pub id: Id<Self>,
+	#[db(unique, no_foreign_key)]
+	pub organization_id: Id<Organization>,
+	pub bytes: i64,
 }
 
 /// What a cluster worker last reported an environment runs.

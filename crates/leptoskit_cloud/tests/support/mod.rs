@@ -8,6 +8,7 @@
 	reason = "each test binary uses the helpers it needs from this shared module"
 )]
 
+pub mod review;
 pub mod scenarios;
 pub mod shipping;
 

@@ -88,10 +88,12 @@ impl Bucket {
 	}
 }
 
-/// The key an organisation's archive is kept under.
+/// The key an organisation's archive is kept under: one per archive row,
+/// so bytes uploaded again after a row was deleted go under a new key, and
+/// the deletion of the old row's object can never remove them.
 #[must_use]
-pub fn archive_key(organization: Uuid, digest: &Digest) -> String {
-	format!("sources/{organization}/{}", digest.hex())
+pub fn archive_key(organization: Uuid, archive: Uuid, digest: &Digest) -> String {
+	format!("sources/{organization}/{archive}/{}", digest.hex())
 }
 
 /// The key a chunk of a log is kept under.
@@ -1145,7 +1147,7 @@ mod tests {
 	fn keys_are_the_control_planes_own() {
 		let organization = Uuid::now_v7();
 		let digest = Digest::parse(&format!("sha256:{}", "a".repeat(64))).unwrap();
-		assert!(is_key(&archive_key(organization, &digest)));
+		assert!(is_key(&archive_key(organization, Uuid::now_v7(), &digest)));
 		assert!(is_key(&log_key(
 			organization,
 			Uuid::now_v7(),
@@ -1315,7 +1317,7 @@ mod tests {
 		);
 		let bytes = b"an archive".to_vec();
 		let digest = digest_of(&bytes);
-		let key = archive_key(Uuid::now_v7(), &digest);
+		let key = archive_key(Uuid::now_v7(), Uuid::now_v7(), &digest);
 		let presigned = store
 			.presign_put(
 				Bucket::Sources,

@@ -17,6 +17,7 @@ use leptoskit_rpc::live::ServerFrame;
 use leptoskit_rpc::live::Update;
 use serde_json::Value;
 use serde_json::json;
+use support::review;
 use support::shipping;
 use support::shipping::Shop;
 use tokio_tungstenite::MaybeTlsStream;
@@ -82,6 +83,75 @@ async fn a_build_that_forgets_migrations_fails() {
 #[tokio::test]
 async fn races_have_one_winner() {
 	shipping::races_have_one_winner(&support::app().await).await;
+}
+
+// What Control 2's security review found: `support/review.rs`.
+
+#[tokio::test]
+async fn an_upload_keeps_the_size_it_was_begun_with() {
+	review::an_upload_keeps_the_size_it_was_begun_with(&support::app().await).await;
+}
+
+#[tokio::test]
+async fn a_full_queue_never_hides_a_job_a_worker_may_take() {
+	review::a_full_queue_never_hides_a_job_a_worker_may_take(&support::app().await).await;
+}
+
+#[tokio::test]
+async fn a_build_attempt_has_a_deadline() {
+	review::a_build_attempt_has_a_deadline(&support::app().await).await;
+}
+
+#[tokio::test]
+async fn an_expired_lease_holds_nothing() {
+	review::an_expired_lease_holds_nothing(&support::app().await).await;
+}
+
+#[tokio::test]
+async fn a_build_cannot_name_another_repository() {
+	review::a_build_cannot_name_another_repository(&support::app().await).await;
+}
+
+#[tokio::test]
+async fn rollback_waits_for_a_certain_schema() {
+	review::rollback_waits_for_a_certain_schema(&support::app().await).await;
+}
+
+#[tokio::test]
+async fn the_largest_status_report_reads_back() {
+	review::the_largest_status_report_reads_back(&support::app().await).await;
+}
+
+#[tokio::test]
+async fn a_failed_teardown_stays_actionable() {
+	review::a_failed_teardown_stays_actionable(&support::app().await).await;
+}
+
+#[tokio::test]
+async fn a_swept_archive_never_takes_its_replacement() {
+	review::a_swept_archive_never_takes_its_replacement(&support::app().await).await;
+}
+
+#[tokio::test]
+async fn logs_hide_split_secrets_and_control_characters() {
+	review::logs_hide_split_secrets_and_control_characters(&support::app().await).await;
+}
+
+#[tokio::test]
+async fn a_release_is_reported_after_its_lease() {
+	review::a_release_is_reported_after_its_lease(&support::app().await).await;
+}
+
+#[tokio::test]
+async fn a_removal_that_then_works_is_done() {
+	review::a_removal_that_then_works_is_done(&support::app().await).await;
+}
+
+#[tokio::test]
+async fn build_logs_are_capped() {
+	let db = leptoskit_db::testing::sqlite_migrated(leptoskit_cloud::MIGRATIONS).await;
+	let app = support::app_with(db, |config| review::settings(&mut config.shipping)).await;
+	review::build_logs_are_capped(&app).await;
 }
 
 /// With a price catalogue, a preview estimates the month.

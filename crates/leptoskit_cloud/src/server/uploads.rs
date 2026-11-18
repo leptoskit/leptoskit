@@ -75,8 +75,11 @@ pub(crate) async fn begin_upload(
 
 	match began {
 		Began::Stored(archive) => Ok(BeganUpload::Stored { archive }),
-		Began::Upload { organization } => {
-			let key = archive_key(organization, &digest);
+		Began::Upload {
+			organization,
+			archive,
+		} => {
+			let key = archive_key(organization, archive, &digest);
 			let presigned = shipping.store.presign_put(
 				Bucket::Sources,
 				&key,
@@ -100,7 +103,10 @@ pub(crate) async fn begin_upload(
 #[derive(Clone, Serialize, Deserialize)]
 enum Began {
 	Stored(ArchiveSummary),
-	Upload { organization: uuid::Uuid },
+	Upload {
+		organization: uuid::Uuid,
+		archive: uuid::Uuid,
+	},
 }
 
 /// `begin_upload`'s checks and row. Never registered.
@@ -162,6 +168,17 @@ async fn begin(cx: &rpc::MutationCx, args: BeginUpload) -> rpc::Result<Began> {
 
 			return Ok(Began::Stored(summary(&archive, &args.digest)));
 		}
+		// A digest names one sequence of bytes, so it has one size. A
+		// ticket already given out is bound to the size it was begun with:
+		// changing the size here would leave that ticket able to upload
+		// more than the reservation counts.
+		Some(archive) if archive.size != size => {
+			return Err(rpc::Error::conflict(format!(
+				"archive_size_conflict: an upload of {} was begun with {} bytes, not {}; begin it \
+				 with the size it has",
+				args.digest, archive.size, args.size
+			)));
+		}
 		existing => existing,
 	};
 
@@ -189,11 +206,11 @@ async fn begin(cx: &rpc::MutationCx, args: BeginUpload) -> rpc::Result<Began> {
 
 	let expires_at = now + delta(settings.upload);
 
-	match existing {
+	let archive = match existing {
 		Some(mut archive) => {
-			archive.size = size;
 			archive.expires_at = expires_at;
 			archive.save(cx.tx()).await?;
+			archive
 		}
 		None => {
 			NewSourceArchive {
@@ -205,12 +222,13 @@ async fn begin(cx: &rpc::MutationCx, args: BeginUpload) -> rpc::Result<Began> {
 				created_by: access.caller.account(),
 			}
 			.insert(cx.tx())
-			.await?;
+			.await?
 		}
-	}
+	};
 
 	Ok(Began::Upload {
 		organization: organization.uuid(),
+		archive: archive.id.uuid(),
 	})
 }
 
@@ -228,13 +246,17 @@ pub(crate) async fn complete_upload(
 			step: Step::Find,
 		})
 		.await?;
-	let (organization_id, size) = match found {
+	let (organization_id, archive, size) = match found {
 		Completed::Done(summary) => return Ok(summary),
-		Completed::Check { organization, size } => (organization, size),
+		Completed::Check {
+			organization,
+			archive,
+			size,
+		} => (organization, archive, size),
 	};
 	let services = services(cx.context())?;
 	let store = &services.shipping().store;
-	let key = archive_key(organization_id, &digest);
+	let key = archive_key(organization_id, archive, &digest);
 
 	match store.verify(Bucket::Sources, &key, size, &digest).await? {
 		Verification::Matches => {
@@ -243,7 +265,7 @@ pub(crate) async fn complete_upload(
 					organization,
 					project,
 					digest,
-					step: Step::Verified,
+					step: Step::Verified { archive, size },
 				})
 				.await?
 			{
@@ -263,7 +285,7 @@ pub(crate) async fn complete_upload(
 				organization,
 				project,
 				digest: digest.clone(),
-				step: Step::Drop,
+				step: Step::Drop { archive, size },
 			})
 			.await?;
 			Err(rpc::Error::conflict(format!(
@@ -279,10 +301,12 @@ pub(crate) async fn complete_upload(
 enum Step {
 	/// Find the upload.
 	Find,
-	/// The store holds what was promised: the archive may be deployed.
-	Verified,
-	/// It doesn't: forget the upload.
-	Drop,
+	/// The store holds what was promised for the archive row `archive` at
+	/// `size` bytes: the archive may be deployed, if the row is still that
+	/// one at that size.
+	Verified { archive: uuid::Uuid, size: u64 },
+	/// It doesn't: forget the upload, if the row is still the one checked.
+	Drop { archive: uuid::Uuid, size: u64 },
 }
 
 /// What [`Completing`] found.
@@ -290,8 +314,13 @@ enum Step {
 enum Completed {
 	/// The archive is verified.
 	Done(ArchiveSummary),
-	/// It waits to be checked: its organisation and promised size.
-	Check { organization: uuid::Uuid, size: u64 },
+	/// It waits to be checked: its organisation, its row, and its promised
+	/// size.
+	Check {
+		organization: uuid::Uuid,
+		archive: uuid::Uuid,
+		size: u64,
+	},
 }
 
 /// One step of `complete_upload`, in its own transaction, as the caller.
@@ -341,25 +370,43 @@ async fn complete(cx: &rpc::MutationCx, args: Completing) -> rpc::Result<Complet
 		return Ok(Completed::Done(summary(&archive, &args.digest)));
 	}
 
+	let checked = |archive_id: uuid::Uuid, size: u64| {
+		archive.id.uuid() == archive_id && u64::try_from(archive.size).ok() == Some(size)
+	};
+
 	match args.step {
 		Step::Find => {
 			Ok(Completed::Check {
 				organization: organization.uuid(),
+				archive: archive.id.uuid(),
 				size: u64::try_from(archive.size).unwrap_or_default(),
 			})
 		}
-		Step::Verified => {
+		Step::Verified { archive: id, size } => {
+			// The row changed while the store was checked: what was checked
+			// isn't what this row promises, so it is checked again.
+			if !checked(id, size) {
+				return Err(rpc::Error::conflict(format!(
+					"upload_changed: the upload of {} changed while it was checked; call \
+					 `complete_upload` again",
+					args.digest
+				)));
+			}
+
 			let now = leptoskit_db::now();
 			archive.verified_at = Some(now);
 			archive.expires_at = now + delta(services.shipping().settings.archive_keep);
 			archive.save(cx.tx()).await?;
 			Ok(Completed::Done(summary(&archive, &args.digest)))
 		}
-		Step::Drop => {
-			let size = u64::try_from(archive.size).unwrap_or_default();
-			archive.destroy(cx.tx()).await?;
+		Step::Drop { archive: id, size } => {
+			if checked(id, size) {
+				archive.destroy(cx.tx()).await?;
+			}
+
 			Ok(Completed::Check {
 				organization: organization.uuid(),
+				archive: id,
 				size,
 			})
 		}

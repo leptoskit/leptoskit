@@ -48,6 +48,8 @@ use crate::tables::Deployment;
 use crate::tables::Environment;
 use crate::tables::Job;
 use crate::tables::LogChunk;
+use crate::tables::LogKind;
+use crate::tables::LogUsage;
 use crate::tables::NewJob;
 use crate::tables::Organization;
 use crate::tables::Project;
@@ -55,9 +57,11 @@ use crate::tables::SourceArchive;
 use crate::workers::BuildServerInput;
 use crate::workers::DeploymentRef;
 use crate::workers::DestroyEnvironmentInput;
+use crate::workers::DestroyOutcome;
 use crate::workers::Download;
 use crate::workers::JobInput;
 use crate::workers::JobKind;
+use crate::workers::JobOutcome;
 use crate::workers::ReleaseInput;
 use crate::workers::WorkerRole;
 
@@ -136,6 +140,8 @@ pub(crate) async fn queue(tx: &Tx, job: Queue) -> rpc::Result<Job> {
 		cancel_requested: false,
 		worker_id: None,
 		lease_expires_at: None,
+		claimed_at: None,
+		log_bytes: 0,
 		outcome: Json(None),
 		queued_at: now,
 	}
@@ -247,6 +253,12 @@ pub(crate) async fn summary(db: &impl leptoskit_db::Read, job: &Job) -> rpc::Res
 		deployment,
 		worker: job.worker_id.map(|worker| worker.uuid()),
 		lease_expires_at: job.lease_expires_at,
+		failure: match &job.outcome.0 {
+			Some(JobOutcome::DestroyEnvironment(DestroyOutcome::Failed { reason })) => {
+				Some(reason.clone())
+			}
+			_ => None,
+		},
 		created_at: job.created_at,
 		updated_at: job.updated_at,
 	})
@@ -325,6 +337,7 @@ pub(crate) async fn lapse(tx: &Tx, mut job: Job, reason: &str) -> rpc::Result<La
 
 	job.state = JobState::Queued;
 	job.worker_id = None;
+	job.claimed_at = None;
 	job.queued_at = leptoskit_db::now();
 	let attempt = u32::try_from(job.attempt).unwrap_or(u32::MAX);
 	job.save(tx).await?;
@@ -501,8 +514,10 @@ async fn sweep_archives(services: &Services) -> rpc::Result<u32> {
 		let id = archive.id;
 		let gone = serializable(db, move |tx| {
 			Box::pin(async move {
+				// Read again, and expired again: a `begin_upload` of the
+				// same bytes since the candidates were listed renews it.
 				let Some(mut archive) = SourceArchive::query()
-					.filter(|row| row.id.eq(id))
+					.filter(|row| row.id.eq(id) & row.expires_at.lt(leptoskit_db::now()))
 					.first(tx)
 					.await?
 				else {
@@ -523,6 +538,7 @@ async fn sweep_archives(services: &Services) -> rpc::Result<u32> {
 
 				let key = super::storage::archive_key(
 					archive.organization_id.uuid(),
+					archive.id.uuid(),
 					&Digest::parse(&archive.digest)
 						.map_err(|_| rpc::Error::server("an archive's digest is malformed"))?,
 				);
@@ -533,8 +549,9 @@ async fn sweep_archives(services: &Services) -> rpc::Result<u32> {
 		.await?;
 
 		if let Some(key) = gone {
-			// The row is gone first: an object without one is unreachable,
-			// and a later upload of the same bytes writes it again.
+			// The row is gone first: an object without one is unreachable.
+			// The key is this row's own, so a later upload of the same bytes,
+			// which makes a new row, writes a key this can't delete.
 			services
 				.shipping()
 				.store
@@ -559,10 +576,43 @@ async fn sweep_logs(services: &Services) -> rpc::Result<u32> {
 	let mut deleted = 0;
 
 	for chunk in expired {
-		let key = chunk.object_key.clone();
-		chunk.destroy(db).await?;
-		services.shipping().store.delete(Bucket::Logs, &key).await?;
-		deleted += 1;
+		let id = chunk.id;
+		let gone = serializable(db, move |tx| {
+			Box::pin(async move {
+				let Some(chunk) = LogChunk::query()
+					.filter(|row| row.id.eq(id))
+					.first(tx)
+					.await?
+				else {
+					return Ok(None);
+				};
+
+				// A build's chunk stops counting against its organisation's
+				// log cap as it goes.
+				if chunk.kind == LogKind::Build {
+					let organization = chunk.organization_id;
+
+					if let Some(mut usage) = LogUsage::query()
+						.filter(|usage| usage.organization_id.eq(organization))
+						.first(tx)
+						.await?
+					{
+						usage.bytes = (usage.bytes - chunk.bytes).max(0);
+						usage.save(tx).await?;
+					}
+				}
+
+				let key = chunk.object_key.clone();
+				chunk.destroy(tx).await?;
+				Ok(Some(key))
+			})
+		})
+		.await?;
+
+		if let Some(key) = gone {
+			services.shipping().store.delete(Bucket::Logs, &key).await?;
+			deleted += 1;
+		}
 	}
 
 	Ok(deleted)
@@ -597,6 +647,8 @@ mod tests {
 			cancel_requested: false,
 			worker_id: None,
 			lease_expires_at: None,
+			claimed_at: None,
+			log_bytes: 0,
 			outcome: Json(None),
 			queued_at: now,
 			created_at: now,

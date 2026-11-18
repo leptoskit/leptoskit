@@ -152,6 +152,8 @@ CREATE TABLE "jobs" (
 	"cancel_requested" boolean NOT NULL,
 	"worker_id" uuid,
 	"lease_expires_at" timestamptz,
+	"claimed_at" timestamptz,
+	"log_bytes" bigint NOT NULL,
 	"outcome" jsonb NOT NULL,
 	"queued_at" timestamptz NOT NULL,
 	"created_at" timestamptz NOT NULL,
@@ -181,6 +183,11 @@ COMMENT ON COLUMN "jobs"."cancel_requested" IS 'Its deployment was cancelled: `r
 
 COMMENT ON COLUMN "jobs"."worker_id" IS 'The worker that holds it, or last held it.';
 
+COMMENT ON COLUMN "jobs"."claimed_at" IS 'When the attempt now held was claimed: a build''s lease is never
+renewed past this and the build deadline.';
+
+COMMENT ON COLUMN "jobs"."log_bytes" IS 'The log bytes its attempts have sent, held to the build log cap.';
+
 COMMENT ON COLUMN "jobs"."queued_at" IS 'When it first went unclaimed: a build nobody claims for long enough
 fails with `builder_unavailable`.';
 
@@ -195,6 +202,7 @@ CREATE TABLE "log_chunks" (
 	"seq" bigint NOT NULL,
 	"first_line" bigint NOT NULL,
 	"lines" bigint NOT NULL,
+	"bytes" bigint NOT NULL,
 	"digest" text NOT NULL,
 	"object_key" text NOT NULL,
 	"expires_at" timestamptz NOT NULL,
@@ -221,8 +229,24 @@ COMMENT ON COLUMN "log_chunks"."deployment_id" IS 'The deployment, for a build l
 
 COMMENT ON COLUMN "log_chunks"."job_id" IS 'The job and its attempt, for a build log.';
 
+COMMENT ON COLUMN "log_chunks"."bytes" IS 'The bytes of its lines as the worker sent them, counted against the
+organisation''s log cap until the chunk is deleted.';
+
 COMMENT ON COLUMN "log_chunks"."digest" IS 'SHA-256 of the lines as the worker sent them, so a chunk sent again
 is recognised.';
+
+CREATE TABLE "log_usage" (
+	"id" uuid NOT NULL,
+	"organization_id" uuid NOT NULL,
+	"bytes" bigint NOT NULL,
+	CONSTRAINT "log_usage_pkey" PRIMARY KEY ("id")
+);
+
+CREATE UNIQUE INDEX "log_usage_organization_id_key" ON "log_usage" ("organization_id");
+
+COMMENT ON TABLE "log_usage" IS 'The build log bytes an organisation keeps: every chunk''s bytes from
+when it is indexed until it is deleted, held to the organisation''s log
+cap. One row per organisation, made by its first chunk.';
 
 CREATE TABLE "source_archives" (
 	"id" uuid NOT NULL,
@@ -242,7 +266,8 @@ CREATE INDEX "source_archives_expires_at_idx" ON "source_archives" ("expires_at"
 CREATE UNIQUE INDEX "source_archives_organization_id_digest_key" ON "source_archives" ("organization_id", "digest");
 
 COMMENT ON TABLE "source_archives" IS 'A source archive an organisation uploaded, kept under
-`sources/<organization>/<digest>` in the object store. Unique by
+`sources/<organization>/<archive id>/<digest>` in the object store, a key
+of its own so a deleted row''s object is never a later row''s. Unique by
 organisation and digest: bytes are shared within an organisation, never
 across them. Until `verified_at` is set it is an upload in progress,
 and `expires_at` is when its upload address stops working; after, it is
@@ -334,4 +359,4 @@ CREATE TRIGGER "live_capture" AFTER INSERT OR UPDATE OR DELETE ON "deployments" 
 
 CREATE TRIGGER "live_capture" AFTER INSERT OR UPDATE OR DELETE ON "environment_statuses" FOR EACH ROW EXECUTE FUNCTION "live"."capture"('environment_statuses', 'id', 'id', 'environment_id', 'cluster_id', 'observed', 'reported_at');
 
-CREATE TRIGGER "live_capture" AFTER INSERT OR UPDATE OR DELETE ON "log_chunks" FOR EACH ROW EXECUTE FUNCTION "live"."capture"('log_chunks', 'id', 'id', 'kind', 'organization_id', 'environment_id', 'deployment_id', 'job_id', 'attempt', 'seq', 'first_line', 'lines', 'digest', 'object_key', 'expires_at', 'created_at');
+CREATE TRIGGER "live_capture" AFTER INSERT OR UPDATE OR DELETE ON "log_chunks" FOR EACH ROW EXECUTE FUNCTION "live"."capture"('log_chunks', 'id', 'id', 'kind', 'organization_id', 'environment_id', 'deployment_id', 'job_id', 'attempt', 'seq', 'first_line', 'lines', 'bytes', 'digest', 'object_key', 'expires_at', 'created_at');
