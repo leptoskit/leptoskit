@@ -60,3 +60,4 @@ The Flutter widget audit behind the component catalog's Flutter table is [`.audi
 
 - [Hosted deployment service](hosted-deployment-service.md): account isolation, dedicated workers, billing, state and operator recovery.
 - [Hosted pilot deployment and acceptance](hosted-pilot-acceptance.md): Linux release bundles, systemd installation, Cloudflare routing and credentialed cloud/payment acceptance.
+- [Notifications handoff](notifications-handoff/readme.md): where the Firebase-parity work stands, the ordered task list, the review reports behind it, and how to work on it from a cloud session.
