@@ -16,6 +16,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Looper
 import android.text.Editable
+import android.text.InputFilter
 import android.text.InputType
 import android.text.Layout
 import android.text.SpannableString
