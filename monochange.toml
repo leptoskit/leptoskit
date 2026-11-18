@@ -136,6 +136,7 @@ packages = [
 	"leptoskit_plugin_blob",
 	"leptoskit_plugin_application",
 	"leptoskit_plugin_app_shortcuts",
+	"leptoskit_plugin_app_usage",
 	"leptoskit_plugin_audio",
 	"leptoskit_plugin_autostart",
 	"leptoskit_plugin_background",
@@ -507,6 +508,9 @@ path = "crates/leptoskit_plugin_application"
 
 [package.leptoskit_plugin_app_shortcuts]
 path = "crates/leptoskit_plugin_app_shortcuts"
+
+[package.leptoskit_plugin_app_usage]
+path = "crates/leptoskit_plugin_app_usage"
 
 [package.leptoskit_plugin_audio]
 path = "crates/leptoskit_plugin_audio"

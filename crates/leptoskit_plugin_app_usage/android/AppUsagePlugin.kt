@@ -3,6 +3,7 @@ package dev.leptoskit.plugins.appusage
 import android.app.Activity
 import android.app.AppOpsManager
 import android.app.usage.UsageStatsManager
+import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -12,7 +13,10 @@ import android.os.Process
 import android.provider.Settings
 import dev.leptoskit.bridge.NativePlugin
 import dev.leptoskit.bridge.PluginException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.nio.ByteBuffer
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * App usage through Usage Access, which the app's owner grants on the
@@ -29,7 +33,7 @@ class AppUsagePlugin(
     private val activity = context as? Activity
     private val usage: UsageStatsManager? =
         context.getSystemService(Context.USAGE_STATS_SERVICE) as? UsageStatsManager
-    private val labels = mutableMapOf<String, String>()
+    private val labels = ConcurrentHashMap<String, String>()
     private var closed = false
 
     override suspend fun invoke(
@@ -107,26 +111,40 @@ class AppUsagePlugin(
 
         val intent = Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)
 
-        if (activity != null) {
-            activity.startActivity(intent)
-        } else {
-            appContext.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        try {
+            if (activity != null) {
+                activity.startActivity(intent)
+            } else {
+                appContext.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            }
+        } catch (error: ActivityNotFoundException) {
+            // Some managed or trimmed builds ship without the screen.
+            throw PluginException(PluginException.UNAVAILABLE, error)
         }
 
         return byteArrayOf()
     }
 
-    /** Typed events inside the range, capped to the caller's max. */
-    private fun events(payload: ByteBuffer): ByteArray {
+    /**
+     * Typed events inside the range, capped to the caller's max. The request
+     * is decoded on the UI thread, before the payload is released, and the
+     * system's usage log is read on the IO dispatcher.
+     */
+    private suspend fun events(payload: ByteBuffer): ByteArray {
         val query = UsageQuery.decode(payload, hasMax = true)
 
-        return encodeEventBatch(collect(query).take(query.max))
+        return withContext(Dispatchers.IO) { encodeEventBatch(collect(query).take(query.max)) }
     }
 
     /** Per-app foreground sessions clipped to the range's edges. */
-    private fun sessions(payload: ByteBuffer): ByteArray {
+    private suspend fun sessions(payload: ByteBuffer): ByteArray {
         val query = UsageQuery.decode(payload, hasMax = false)
-        val built = buildSessions(collect(query), query.sinceMs, query.untilMs, ::label)
+
+        return withContext(Dispatchers.IO) { sessionsReply(query) }
+    }
+
+    private fun sessionsReply(query: UsageQuery): ByteArray {
+        val built = buildSessions(collect(query), query.sinceMs, endOf(query), ::label)
 
         if (built.size > MAX_SESSIONS) {
             throw PluginException(
@@ -139,14 +157,23 @@ class AppUsagePlugin(
     }
 
     /** The range's screen time, unlock count and per-app totals. */
-    private fun summary(payload: ByteBuffer): ByteArray {
+    private suspend fun summary(payload: ByteBuffer): ByteArray {
         val query = UsageQuery.decode(payload, hasMax = false)
+
+        return withContext(Dispatchers.IO) { summaryReply(query) }
+    }
+
+    private fun summaryReply(query: UsageQuery): ByteArray {
         val events = collect(query)
-        val sessions = buildSessions(events, query.sinceMs, query.untilMs, ::label)
-        val (screenOn, unlocks) = screenOnAndUnlocks(events)
+        val end = endOf(query)
+        val sessions = buildSessions(events, query.sinceMs, end, ::label)
+        val (screenOn, unlocks) = screenOnAndUnlocks(events, query.sinceMs, end)
 
         return encodeSummary(screenOn, unlocks, appTotals(sessions))
     }
+
+    /** Where open sessions and screen time stop: the range's end, or now. */
+    private fun endOf(query: UsageQuery): Long = maxOf(query.sinceMs, minOf(query.untilMs, System.currentTimeMillis()))
 
     /** Every typed event the system logged inside the range. */
     private fun collect(query: UsageQuery): List<TypedEvent> {
@@ -159,7 +186,9 @@ class AppUsagePlugin(
             )
 
         return try {
-            typedEvents(manager.queryEvents(query.sinceMs, query.untilMs))
+            // The system's end is exclusive; the wire's range is closed.
+            val end = if (query.untilMs == Long.MAX_VALUE) query.untilMs else query.untilMs + 1
+            typedEvents(manager.queryEvents(query.sinceMs, end))
         } catch (error: SecurityException) {
             throw PluginException(PluginException.PERMISSION_DENIED, error)
         } catch (error: RuntimeException) {
@@ -172,10 +201,12 @@ class AppUsagePlugin(
         labels.getOrPut(packageName) {
             try {
                 @Suppress("DEPRECATION")
-                appContext.packageManager
-                    .getApplicationInfo(packageName, 0)
-                    .loadLabel(appContext.packageManager)
-                    .toString()
+                boundedLabel(
+                    appContext.packageManager
+                        .getApplicationInfo(packageName, 0)
+                        .loadLabel(appContext.packageManager)
+                        .toString(),
+                )
             } catch (_: PackageManager.NameNotFoundException) {
                 packageName
             }
@@ -183,6 +214,7 @@ class AppUsagePlugin(
 
     override fun close() {
         closed = true
+        labels.clear()
     }
 
     private companion object {

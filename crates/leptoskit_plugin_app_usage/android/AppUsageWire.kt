@@ -1,6 +1,6 @@
 package dev.leptoskit.plugins.appusage
 
-import android.app.UsageEvents
+import android.app.usage.UsageEvents
 import dev.leptoskit.bridge.PluginException
 import java.io.ByteArrayOutputStream
 import java.nio.ByteBuffer
@@ -117,6 +117,12 @@ internal fun typedEvents(manager: UsageEvents): List<TypedEvent> {
         val kind = typedKind(holder.eventType) ?: continue
         val packageName = if (carriesPackage(kind)) holder.packageName ?: continue else null
 
+        // A package name past the wire bound cannot be a real one; skip it
+        // rather than fail the whole query.
+        if (packageName != null && packageName.toByteArray().size > MAX_PACKAGE_BYTES) continue
+
+        if (holder.timeStamp < 0) continue
+
         events.add(TypedEvent(kind, holder.timeStamp, packageName))
     }
 
@@ -126,67 +132,117 @@ internal fun typedEvents(manager: UsageEvents): List<TypedEvent> {
 /**
  * Builds per-app foreground sessions from the typed events, oldest first.
  * A resume closes whichever app was open before opening the new one, and a
- * pause ends only the app it names; a session still open at the range's
- * end closes there. Every start clips to the range's `sinceMs`, because a
- * session can straddle it.
+ * pause ends only the app it names. When the first activity event is a
+ * pause, that app was already in the foreground at the range's start, so
+ * its session starts at `sinceMs`. A session still open at the end closes
+ * at `endMs`, which the caller sets to the earlier of the range's end and
+ * now, so an open session never runs into the future. Every edge clips to
+ * the range, and empty sessions are dropped.
  */
 internal fun buildSessions(
     events: List<TypedEvent>,
     sinceMs: Long,
-    untilMs: Long,
+    endMs: Long,
     labelFor: (String) -> String,
 ): List<TypedSession> {
     val sessions = mutableListOf<TypedSession>()
     var open: Pair<String, Long>? = null
+    var sawActivity = false
 
     fun close(
         packageName: String,
         started: Long,
         ended: Long,
     ) {
-        sessions.add(TypedSession(packageName, labelFor(packageName), started, ended))
+        val start = started.coerceIn(sinceMs, endMs)
+        val end = ended.coerceIn(start, endMs)
+
+        if (end > start) sessions.add(TypedSession(packageName, labelFor(packageName), start, end))
     }
 
     for (event in events) {
+        val packageName = event.packageName ?: continue
+
         when (event.kind) {
             KIND_ACTIVITY_RESUMED -> {
-                open?.let { (packageName, started) -> close(packageName, started, event.timestampMs) }
-                open = event.packageName to maxOf(event.timestampMs, sinceMs)
+                open?.let { (current, started) -> close(current, started, event.timestampMs) }
+                open = packageName to event.timestampMs
             }
 
             KIND_ACTIVITY_PAUSED -> {
-                if (open?.first == event.packageName) {
-                    open?.let { (packageName, started) -> close(packageName, started, event.timestampMs) }
+                val current = open
+
+                if (current?.first == packageName) {
+                    close(packageName, current.second, event.timestampMs)
                     open = null
+                } else if (!sawActivity) {
+                    close(packageName, sinceMs, event.timestampMs)
                 }
             }
         }
+
+        sawActivity = true
     }
 
-    open?.let { (packageName, started) -> close(packageName, started, untilMs) }
+    open?.let { (packageName, started) -> close(packageName, started, endMs) }
 
     return sessions
 }
 
-/** The range's screen-on time and unlock count, from the same events. */
-internal fun screenOnAndUnlocks(events: List<TypedEvent>): Pair<Long, Int> {
+/**
+ * The range's screen-on time and unlock count, from the same events. When
+ * the first screen event turns the screen off, it was on at the range's
+ * start; a screen still on at the end counts up to `endMs`.
+ */
+internal fun screenOnAndUnlocks(
+    events: List<TypedEvent>,
+    sinceMs: Long,
+    endMs: Long,
+): Pair<Long, Int> {
     var screenOn = 0L
     var interactiveSince: Long? = null
+    var sawScreen = false
+
+    fun add(
+        from: Long,
+        to: Long,
+    ) {
+        val start = from.coerceIn(sinceMs, endMs)
+        screenOn += to.coerceIn(start, endMs) - start
+    }
 
     for (event in events) {
         when (event.kind) {
             KIND_SCREEN_INTERACTIVE -> {
-                interactiveSince = event.timestampMs
+                if (interactiveSince == null) interactiveSince = event.timestampMs
+                sawScreen = true
             }
 
             KIND_SCREEN_NON_INTERACTIVE -> {
-                interactiveSince?.let { screenOn += event.timestampMs - it }
+                val since = interactiveSince ?: if (sawScreen) null else sinceMs
+                since?.let { add(it, event.timestampMs) }
                 interactiveSince = null
+                sawScreen = true
             }
         }
     }
 
+    interactiveSince?.let { add(it, endMs) }
+
     return screenOn to events.count { it.kind == KIND_KEYGUARD_HIDDEN }
+}
+
+/** Shortens a label to the wire bound without splitting a character. */
+internal fun boundedLabel(label: String): String {
+    if (label.toByteArray().size <= MAX_LABEL_BYTES) return label
+
+    var end = label.length
+
+    while (end > 0 && label.substring(0, end).toByteArray().size > MAX_LABEL_BYTES) {
+        end = label.offsetByCodePoints(end, -1)
+    }
+
+    return label.substring(0, end)
 }
 
 /** Per-app foreground totals from clipped sessions, sorted by package. */

@@ -33,11 +33,7 @@ impl AppUsage {
 	/// cancellable wait: it returns the lock and unlock transitions
 	/// buffered while the app has been alive, waiting for the next one when
 	/// the buffer is empty, and the range is ignored.
-	pub async fn events(
-		self,
-		range: UsageRange,
-		max: u32,
-	) -> Result<Vec<UsageEvent>, Error> {
+	pub async fn events(self, range: UsageRange, max: u32) -> Result<Vec<UsageEvent>, Error> {
 		if !(1..=MAX_EVENTS).contains(&max) {
 			return Err(Error::InvalidArgument);
 		}

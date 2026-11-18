@@ -1,6 +1,6 @@
 [package]
 name = "leptoskit_plugin_app_usage"
-version.workspace = true
+version = "0.3.0"
 authors.workspace = true
 edition.workspace = true
 homepage.workspace = true
@@ -17,10 +17,9 @@ apple-type = "AppUsagePlugin"
 android-type = "dev.leptoskit.plugins.appusage.AppUsagePlugin"
 android-context = true
 # Usage Access is granted on its own system screen, never at install time;
-# the protected declaration keeps Android Studio lint quiet while the
-# runtime checks the AppOps mode.
+# the declaration only lets the app appear there. The runtime checks the
+# AppOps mode before every read.
 android-permissions = ["android.permission.PACKAGE_USAGE_STATS"]
-android-protected-permissions = ["android.permission.PACKAGE_USAGE_STATS"]
 
 [features]
 guest = ["leptoskit_bridge/guest"]

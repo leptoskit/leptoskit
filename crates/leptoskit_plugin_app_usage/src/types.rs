@@ -78,8 +78,16 @@ impl UsageRange {
 		}
 
 		Self::new(
-			i64::from_le_bytes(payload[..8].try_into().map_err(|_| Error::InvalidArgument)?),
-			i64::from_le_bytes(payload[8..].try_into().map_err(|_| Error::InvalidArgument)?),
+			i64::from_le_bytes(
+				payload[..8]
+					.try_into()
+					.map_err(|_| Error::InvalidArgument)?,
+			),
+			i64::from_le_bytes(
+				payload[8..]
+					.try_into()
+					.map_err(|_| Error::InvalidArgument)?,
+			),
 		)
 	}
 }
@@ -193,7 +201,10 @@ impl UsageEvent {
 			return Err(Error::InvalidArgument);
 		}
 
-		if package.as_deref().is_some_and(|package| package.len() > MAX_PACKAGE_BYTES) {
+		if package
+			.as_deref()
+			.is_some_and(|package| package.len() > MAX_PACKAGE_BYTES)
+		{
 			return Err(Error::TooLarge);
 		}
 
@@ -255,7 +266,8 @@ impl UsageSession {
 		let start_ms = reader.i64()?;
 		let end_ms = reader.i64()?;
 
-		if package.is_empty() || package.len() > MAX_PACKAGE_BYTES || label.len() > MAX_LABEL_BYTES {
+		if package.is_empty() || package.len() > MAX_PACKAGE_BYTES || label.len() > MAX_LABEL_BYTES
+		{
 			return Err(Error::InvalidArgument);
 		}
 
@@ -300,11 +312,19 @@ impl UsageSummary {
 			return Err(Error::InvalidArgument);
 		}
 
+		let count = u32::try_from(self.apps.len())
+			.ok()
+			.filter(|count| *count <= MAX_SESSIONS)
+			.ok_or(Error::TooLarge)?;
 		let mut writer = Writer::default();
-		writer.i64(self.screen_on_ms).u32(self.unlocks).u32(self.apps.len() as u32);
+		writer.i64(self.screen_on_ms).u32(self.unlocks).u32(count);
 
 		for app in &self.apps {
-			if app.package.is_empty() || app.package.len() > MAX_PACKAGE_BYTES {
+			if app.package.is_empty() {
+				return Err(Error::InvalidArgument);
+			}
+
+			if app.package.len() > MAX_PACKAGE_BYTES {
 				return Err(Error::TooLarge);
 			}
 
@@ -321,6 +341,11 @@ impl UsageSummary {
 		let screen_on_ms = reader.i64()?;
 		let unlocks = reader.u32()?;
 		let count = reader.u32()?;
+
+		if count > MAX_SESSIONS {
+			return Err(Error::InvalidArgument);
+		}
+
 		let mut apps = Vec::new();
 
 		for _ in 0..count {
@@ -336,7 +361,11 @@ impl UsageSummary {
 
 		reader.finish()?;
 
-		if screen_on_ms < 0 || apps.windows(2).any(|pair| pair[0].package >= pair[1].package) {
+		if screen_on_ms < 0
+			|| apps
+				.windows(2)
+				.any(|pair| pair[0].package >= pair[1].package)
+		{
 			return Err(Error::InvalidArgument);
 		}
 
@@ -355,8 +384,8 @@ pub const MAX_LABEL_BYTES: usize = 256;
 /// Most events one query may return. A longer range reports its events in
 /// pages.
 pub const MAX_EVENTS: u32 = 1024;
-/// Most sessions one query may return; a range that yields more asks for a
-/// narrower one.
+/// Most sessions one query may return, and most apps one summary may list; a
+/// range that yields more sessions asks for a narrower one.
 pub const MAX_SESSIONS: u32 = 4096;
 
 #[cfg(test)]
@@ -412,7 +441,10 @@ mod tests {
 			timestamp_ms: SINCE,
 			package: Some("com.example.chat".to_owned()),
 		};
-		assert_eq!(UsageEvent::decode(&activity.encode().unwrap()), Ok(activity));
+		assert_eq!(
+			UsageEvent::decode(&activity.encode().unwrap()),
+			Ok(activity)
+		);
 
 		let device = UsageEvent {
 			kind: EventKind::Unlocked,
@@ -433,14 +465,13 @@ mod tests {
 			EventKind::Locked,
 			EventKind::Unlocked,
 		] {
-			assert_eq!(kind.carries_package(), kind == EventKind::ActivityResumed
-				|| kind == EventKind::ActivityPaused);
+			assert_eq!(
+				kind.carries_package(),
+				kind == EventKind::ActivityResumed || kind == EventKind::ActivityPaused
+			);
 		}
 
-		assert_eq!(
-			EventKind::from_code(10),
-			Err(Error::InvalidArgument)
-		);
+		assert_eq!(EventKind::from_code(10), Err(Error::InvalidArgument));
 	}
 
 	#[test]
@@ -600,9 +631,20 @@ mod tests {
 		};
 		assert_eq!(negative.encode(), Err(Error::InvalidArgument));
 
+		let mut oversized = 0_i64.to_le_bytes().to_vec();
+		oversized.extend_from_slice(&0_u32.to_le_bytes());
+		oversized.extend_from_slice(&(MAX_SESSIONS + 1).to_le_bytes());
+		assert_eq!(
+			UsageSummary::decode(&oversized),
+			Err(Error::InvalidArgument)
+		);
+
 		let payload = summary.encode().unwrap();
 		let mut truncated = payload.clone();
 		truncated.pop();
-		assert_eq!(UsageSummary::decode(&truncated), Err(Error::InvalidArgument));
+		assert_eq!(
+			UsageSummary::decode(&truncated),
+			Err(Error::InvalidArgument)
+		);
 	}
 }

@@ -276,6 +276,7 @@ leptoskit_plugin_android_alarm_manager = { path = "crates/leptoskit_plugin_andro
 leptoskit_plugin_android_intent = { path = "crates/leptoskit_plugin_android_intent", version = "0.3.0" }
 leptoskit_plugin_app_integrity = { path = "crates/leptoskit_plugin_app_integrity", version = "0.3.0" }
 leptoskit_plugin_app_shortcuts = { path = "crates/leptoskit_plugin_app_shortcuts", version = "0.3.0" }
+leptoskit_plugin_app_usage = { path = "crates/leptoskit_plugin_app_usage", version = "0.3.0" }
 leptoskit_plugin_application = { path = "crates/leptoskit_plugin_application", version = "0.3.0" }
 leptoskit_plugin_arguments = { path = "crates/leptoskit_plugin_arguments", version = "0.3.0" }
 leptoskit_plugin_asset = { path = "crates/leptoskit_plugin_asset", version = "0.3.0" }

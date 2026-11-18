@@ -3677,6 +3677,7 @@ dependencies = [
  "leptoskit_plugin_android_intent",
  "leptoskit_plugin_app_integrity",
  "leptoskit_plugin_app_shortcuts",
+ "leptoskit_plugin_app_usage",
  "leptoskit_plugin_application",
  "leptoskit_plugin_arguments",
  "leptoskit_plugin_asset",

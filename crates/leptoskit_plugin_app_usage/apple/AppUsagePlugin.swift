@@ -1,5 +1,8 @@
 import Foundation
 import LeptosKitBridge
+#if os(iOS)
+import UIKit
+#endif
 
 /// Wire bounds the request decoders enforce.
 private enum Wire {
@@ -20,25 +23,24 @@ private enum Wire {
     static let unlocked: UInt32 = 9
 }
 
-/// iOS has no per-app usage for third-party apps: sessions and summaries are
-/// unavailable, and events are the lock and unlock transitions buffered while
-/// this app is alive.
+/// Apple platforms give third-party apps no per-app usage: Screen Time data
+/// stays inside DeviceActivity report extensions the app cannot read back, so
+/// sessions and summaries are unavailable. Events are the lock and unlock
+/// transitions buffered while this app is alive: protected-data availability
+/// on iOS, and the screen lock distributed notifications on macOS.
 @MainActor
 public final class AppUsagePlugin: NativePlugin {
     public let name = "app-usage"
     public let methods: [UInt32] = [0, 1, 2, 3, 4]
     private var closed = false
-    private let buffer = EventBuffer(capacity: Wire.bufferCapacity)
+    private var buffer = EventBuffer(capacity: Wire.bufferCapacity)
     private var observers: [NSObjectProtocol] = []
     private var waiter: CheckedContinuation<Data, any Error>?
     private var waiterID: UUID?
+    private var waiterCap = 1
 
     public init() {
         observe()
-    }
-
-    deinit {
-        for observer in observers { NotificationCenter.default.removeObserver(observer) }
     }
 
     /// Answers one call. The status call never opens a screen; the events
@@ -68,14 +70,12 @@ public final class AppUsagePlugin: NativePlugin {
         }
     }
 
+    /// Stops observing and ends a waiting caller; a closed plugin answers
+    /// nothing more.
     public func close() {
         closed = true
-
-        if let waiter {
-            self.waiter = nil
-            waiterID = nil
-            waiter.resume(throwing: PluginError.cancelled)
-        }
+        stopObserving()
+        finishWaiter(.failure(PluginError.cancelled))
     }
 
     /// Returns the buffered lock and unlock events, or waits for the next
@@ -95,46 +95,77 @@ public final class AppUsagePlugin: NativePlugin {
             try await withCheckedThrowingContinuation { continuation in
                 waiter = continuation
                 waiterID = identifier
+                waiterCap = cap
             }
         } onCancel: { [weak self] in
             Task { @MainActor in self?.cancelWaiter(identifier) }
         }
     }
 
-    /// Abandons the waiter a cancelled caller left behind, if it still owns
-    /// the slot.
+    /// Ends the wait a cancelled caller left behind, if it still owns the
+    /// slot; a newer caller may already hold it.
     private func cancelWaiter(_ identifier: UUID) {
         guard waiterID == identifier else { return }
 
-        waiter = nil
-        waiterID = nil
+        finishWaiter(.failure(CancellationError()))
     }
 
-    /// Buffers both protected-data transitions for as long as the app lives.
+    /// Resumes the waiting caller exactly once and frees the slot.
+    private func finishWaiter(_ result: Result<Data, any Error>) {
+        guard let continuation = waiter else { return }
+
+        waiter = nil
+        waiterID = nil
+        continuation.resume(with: result)
+    }
+
+    /// Buffers both lock transitions for as long as the plugin lives.
     private func observe() {
-        observers = [
-            (Notification.Name.protectedDataWillBecomeUnavailable, Wire.locked),
-            (Notification.Name.protectedDataDidBecomeAvailable, Wire.unlocked),
-        ].map { (name, kind) in
-            NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) {
-                [weak self] _ in
-                MainActor.assumeIsolated {
-                    self?.buffer.append(kind: kind, timestampMs: Self.now())
-                    self?.answerWaiter()
-                }
+        #if os(iOS)
+        let center = NotificationCenter.default
+        let transitions = [
+            (UIApplication.protectedDataWillBecomeUnavailableNotification, Wire.locked),
+            (UIApplication.protectedDataDidBecomeAvailableNotification, Wire.unlocked),
+        ]
+        #elseif os(macOS)
+        let center: NotificationCenter = DistributedNotificationCenter.default()
+        let transitions = [
+            (Notification.Name("com.apple.screenIsLocked"), Wire.locked),
+            (Notification.Name("com.apple.screenIsUnlocked"), Wire.unlocked),
+        ]
+        #else
+        let center = NotificationCenter.default
+        let transitions: [(Notification.Name, UInt32)] = []
+        #endif
+
+        observers = transitions.map { name, kind in
+            center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.record(kind) }
             }
         }
     }
 
-    /// Hands a waiting events caller whatever the buffer holds now.
-    private func answerWaiter() {
-        guard let waiter else { return }
+    /// Removes every observer `observe` installed.
+    private func stopObserving() {
+        #if os(macOS)
+        let center: NotificationCenter = DistributedNotificationCenter.default()
+        #else
+        let center = NotificationCenter.default
+        #endif
 
-        guard let batch = buffer.drain() else { return }
+        for observer in observers { center.removeObserver(observer) }
+        observers.removeAll()
+    }
 
-        self.waiter = nil
-        waiterID = nil
-        waiter.resume(returning: batch)
+    /// Buffers one transition and answers a waiting caller with it.
+    private func record(_ kind: UInt32) {
+        guard !closed else { return }
+
+        buffer.append(kind: kind, timestampMs: Self.now())
+
+        if waiter != nil, let batch = buffer.drain(upTo: waiterCap) {
+            finishWaiter(.success(batch))
+        }
     }
 
     /// The current Unix time in milliseconds.
@@ -152,7 +183,7 @@ public final class AppUsagePlugin: NativePlugin {
 
 /// Validates a query the way the Android handler does, returning its cap;
 /// Apple platforms have no history, so only the wire bounds matter.
-private func decodeEventQuery(_ bytes: UnsafeRawBufferPointer) throws -> Int {
+func decodeEventQuery(_ bytes: UnsafeRawBufferPointer) throws -> Int {
     guard bytes.count == Wire.eventBytes else { throw PluginError.invalidArgument }
     let since = Int64(littleEndian: bytes.loadUnaligned(as: Int64.self))
     let until = Int64(littleEndian: bytes.loadUnaligned(fromByteOffset: 8, as: Int64.self))
@@ -197,10 +228,9 @@ struct EventBuffer {
 
     /// Frames one batch and clears what it returned.
     private mutating func batch(_ entries: [(kind: UInt32, timestampMs: Int64)]) -> Data {
-        let returned = Array(entries)
-        events.removeFirst(min(returned.count, events.count))
+        events.removeFirst(min(entries.count, events.count))
 
-        return encodeEventBatch(returned)
+        return encodeEventBatch(entries)
     }
 }
 

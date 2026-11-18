@@ -4,13 +4,13 @@
 //! `app-usage` plugin in `native.plugins`; supported generated hosts discover
 //! it from Cargo metadata. Generated Windows, Linux, and terminal hosts
 //! currently omit runtime plugins, so use explicit registration in a custom
-//! host there. Guests enable the `guest` feature and reuse
-//! `guest::AppUsage` rather than resolving the plugin on every call. Android
-//! reports typed usage events, foreground sessions and screen-time
-//! summaries from Usage Access, which the app's owner grants on the system's
-//! own screen; iOS has no per-app usage for third-party apps, so sessions
-//! and summaries are unavailable and events are the lock and unlock
-//! transitions buffered while the app is alive.
+//! host there. Guests enable the `guest` feature and reuse `guest::AppUsage`
+//! rather than resolving the plugin on every call. Android reports typed
+//! usage events, foreground sessions and screen-time summaries from Usage
+//! Access, which the app's owner grants on the system's own screen; iOS and
+//! macOS give third-party apps no per-app usage, so sessions and summaries are
+//! unavailable and events are the lock and unlock transitions buffered while
+//! the app is alive.
 //!
 //! <!-- {/p_appUsageSummary} -->
 
@@ -89,6 +89,11 @@ pub fn decode_sessions(payload: &[u8]) -> Result<Vec<UsageSession>, Error> {
 /// Per-app usage does not exist in the browser: a page cannot see other
 /// tabs, let alone other apps, and its own lifetime is all it can measure.
 #[cfg(all(target_arch = "wasm32", target_os = "unknown", not(feature = "guest")))]
+#[expect(
+	clippy::unused_async,
+	clippy::unused_async_trait_impl,
+	reason = "the stubs stay async so browser and native callers share one API"
+)]
 pub mod web {
 	use leptoskit_bridge::Error;
 
@@ -119,11 +124,7 @@ pub mod web {
 		}
 
 		/// Unavailable: the browser has no usage events.
-		pub async fn events(
-			self,
-			_range: UsageRange,
-			_max: u32,
-		) -> Result<Vec<UsageEvent>, Error> {
+		pub async fn events(self, _range: UsageRange, _max: u32) -> Result<Vec<UsageEvent>, Error> {
 			Err(Error::Unavailable)
 		}
 
