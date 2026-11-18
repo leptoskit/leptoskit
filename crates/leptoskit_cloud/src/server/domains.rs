@@ -7,9 +7,13 @@
 //!   which only whoever runs the domain can publish;
 //! - a verified row holds the hostname in `claim`, which is unique, so two
 //!   verifications of one hostname can't both commit;
-//! - a detached domain keeps its claim while a deployment may still serve it,
-//!   and a rollback's recorded routes are cut down to what the environment
-//!   holds now, so no release routes a hostname someone else has since proved.
+//! - a domain a release has carried to the cluster is `routed`, whether that
+//!   release was applied or failed part-way, and stays so until a release
+//!   without it is applied. Detached, or its environment deleted, while routed,
+//!   it keeps its claim until then, or until the cluster's worker has removed
+//!   the environment;
+//! - a rollback's recorded routes are cut down to what the environment holds
+//!   now, so no release routes a hostname someone else has since proved.
 
 use std::collections::BTreeSet;
 use std::future::Future;
@@ -35,7 +39,6 @@ use crate::domains::DomainSummary;
 use crate::domains::MAX_DOMAINS;
 use crate::domains::challenge_name;
 use crate::domains::challenge_value;
-use crate::tables::Deployment;
 use crate::tables::Domain;
 use crate::tables::Environment;
 use crate::tables::NewDomain;
@@ -43,6 +46,10 @@ use crate::tables::Placement;
 
 /// How many random bytes a challenge token has.
 const TOKEN_BYTES: usize = 16;
+
+/// The longest custom domain: a DNS name's 253 characters, less the
+/// challenge label and its dot.
+const MAX_HOSTNAME_LEN: usize = 253 - crate::domains::CHALLENGE_LABEL.len() - 1;
 
 fn invalid(why: impl std::fmt::Display) -> rpc::Error {
 	rpc::Error::invalid(format!("invalid_domain: {why}"))
@@ -85,15 +92,19 @@ fn at_or_under(hostname: &str, domain: &str) -> bool {
 /// rules of `leptoskit.toml`, and nothing at or under the domain this
 /// cloud serves environments on or is itself reached at.
 fn check(hostname: &str, apps_domain: &str, origin: &str) -> rpc::Result<()> {
-	if hostname.len() > 253 {
-		return Err(invalid(
-			"a hostname is at most 253 characters, such as `notes.example.com`",
-		));
+	// Its challenge record's name must fit in DNS too.
+	if hostname.len() > MAX_HOSTNAME_LEN {
+		return Err(invalid(format!(
+			"a custom domain is at most {MAX_HOSTNAME_LEN} characters, such as `notes.example.com`"
+		)));
 	}
 
 	Hostname::parse(hostname).map_err(invalid)?;
 
-	for own in [apps_domain, origin_host(origin)] {
+	let origin = origin_host(origin).to_ascii_lowercase();
+	let apps_domain = apps_domain.to_ascii_lowercase();
+
+	for own in [apps_domain.as_str(), origin.as_str()] {
 		if at_or_under(hostname, own) {
 			return Err(invalid(format!(
 				"`{hostname}` is under `{own}`, which is the cloud's own"
@@ -256,6 +267,7 @@ pub(crate) async fn attach_domain(
 		token,
 		claim: None,
 		verified_at: None,
+		routed: false,
 		removing: false,
 		created_by: access.caller.account(),
 	}
@@ -463,34 +475,6 @@ pub(crate) async fn verify_domain(
 	.await
 }
 
-/// Whether a deployment of `environment` serves `hostname` or may be about
-/// to: one is in flight, or the live one routes it.
-async fn served(
-	db: &impl leptoskit_db::Read,
-	environment: Id<Environment>,
-	hostname: &str,
-) -> leptoskit_db::Result<bool> {
-	let in_flight = Deployment::query()
-		.filter(|row| row.in_flight_environment.eq(Some(environment)))
-		.first(db)
-		.await?;
-
-	if in_flight.is_some() {
-		return Ok(true);
-	}
-
-	let live = Deployment::query()
-		.filter(|row| row.live_environment.eq(Some(environment)))
-		.first(db)
-		.await?;
-	Ok(live.is_some_and(|live| {
-		live.spec
-			.0
-			.as_ref()
-			.is_some_and(|spec| spec.routes.iter().any(|route| route.hostname == hostname))
-	}))
-}
-
 pub(crate) async fn detach_domain(
 	cx: &rpc::MutationCx,
 	organization: &str,
@@ -515,10 +499,10 @@ pub(crate) async fn detach_domain(
 		return Ok(());
 	}
 
-	// A verified domain a deployment still serves keeps its claim until one
-	// without it is live: otherwise someone else could verify the hostname
-	// while this environment's routes still answer on it.
-	if row.claim.is_some() && served(cx.tx(), environment_id, hostname).await? {
+	// A domain the cluster may route keeps its claim until a release
+	// without it is applied: otherwise someone else could verify the
+	// hostname while this environment's routes still answer on it.
+	if row.claim.is_some() && row.routed {
 		row.removing = true;
 		row.save(cx.tx()).await?;
 	} else {
@@ -556,22 +540,101 @@ pub(crate) async fn for_release(
 	Ok(hostnames)
 }
 
-/// A deployment of `environment` is live, routing `routed`: the domains
-/// that were waiting for that to go, go, and their hostnames are free.
+/// A release of `environment` that routes `hostnames` is being handed to
+/// its cluster: from now the cluster may answer on them, whatever becomes
+/// of the release.
+pub(crate) async fn routing(
+	tx: &impl leptoskit_db::Connection,
+	environment: Id<Environment>,
+	hostnames: &[String],
+) -> leptoskit_db::Result<()> {
+	if hostnames.is_empty() {
+		return Ok(());
+	}
+
+	let rows = Domain::query()
+		.filter(|row| row.environment_id.eq(environment))
+		.all(tx)
+		.await?;
+
+	for mut row in rows {
+		if !row.routed && hostnames.contains(&row.hostname) {
+			row.routed = true;
+			row.save(tx).await?;
+		}
+	}
+
+	Ok(())
+}
+
+/// A release of `environment` was applied, routing `routed`: its other
+/// domains are off the cluster. Those waiting for that go, and their
+/// hostnames are free.
 pub(crate) async fn released(
 	tx: &impl leptoskit_db::Connection,
 	environment: Id<Environment>,
 	routed: &BTreeSet<&str>,
 ) -> leptoskit_db::Result<()> {
 	let rows = Domain::query()
-		.filter(|row| row.environment_id.eq(environment) & row.removing.eq(true))
+		.filter(|row| row.environment_id.eq(environment) & row.routed.eq(true))
 		.all(tx)
 		.await?;
 
 	for mut row in rows {
-		if !routed.contains(row.hostname.as_str()) {
+		if routed.contains(row.hostname.as_str()) {
+			continue;
+		}
+
+		if row.removing {
+			row.delete(tx).await?;
+		} else {
+			row.routed = false;
+			row.save(tx).await?;
+		}
+	}
+
+	Ok(())
+}
+
+/// `environment` is being deleted. Its domains go with it, except those
+/// its cluster may still route when a removal was queued (`on_cluster`):
+/// they keep their hostnames until the cluster's worker has removed the
+/// environment ([`environment_destroyed`]).
+pub(crate) async fn environment_removed(
+	tx: &impl leptoskit_db::Connection,
+	environment: Id<Environment>,
+	on_cluster: bool,
+) -> leptoskit_db::Result<()> {
+	let rows = Domain::query()
+		.filter(|row| row.environment_id.eq(environment))
+		.all(tx)
+		.await?;
+
+	for mut row in rows {
+		if on_cluster && row.routed && row.claim.is_some() {
+			row.removing = true;
+			row.save(tx).await?;
+		} else {
 			row.delete(tx).await?;
 		}
+	}
+
+	Ok(())
+}
+
+/// The cluster no longer has `environment`: whatever hostnames it held are
+/// free.
+pub(crate) async fn environment_destroyed(
+	tx: &impl leptoskit_db::Connection,
+	environment: Id<Environment>,
+) -> leptoskit_db::Result<()> {
+	let rows = Domain::query()
+		.filter(|row| row.environment_id.eq(environment))
+		.all(tx)
+		.await?;
+
+	for mut row in rows {
+		row.delete(tx).await?;
 	}
 
 	Ok(())
@@ -623,5 +686,24 @@ mod tests {
 			)
 			.is_err()
 		);
+
+		// However the operator spelled their own names.
+		assert!(
+			check(
+				"x.cloud.example.com",
+				"Apps.Example.com",
+				"https://Cloud.Example.com"
+			)
+			.is_err()
+		);
+		assert!(check("x.apps.example.com", "Apps.Example.com", origin).is_err());
+
+		// The longest that leaves room for its challenge record's name.
+		let label = "a".repeat(63);
+		let longest = format!("{label}.{label}.{label}.{}", "b".repeat(232 - 3 * 64));
+		assert_eq!(longest.len(), 232);
+		assert!(check(&longest, "apps.example.com", origin).is_ok());
+		assert!(challenge_name(&longest).len() <= 253);
+		assert!(check(&format!("c{longest}"), "apps.example.com", origin).is_err());
 	}
 }

@@ -8,12 +8,12 @@ CREATE TABLE "domains" (
 	"token" TEXT NOT NULL,
 	"claim" TEXT CHECK (length("claim") <= 253),
 	"verified_at" TEXT,
+	"routed" INTEGER NOT NULL CHECK ("routed" IN (0, 1)),
 	"removing" INTEGER NOT NULL CHECK ("removing" IN (0, 1)),
 	"created_by" BLOB NOT NULL CHECK (length("created_by") = 16),
 	"created_at" TEXT NOT NULL,
 	"updated_at" TEXT NOT NULL,
 	CONSTRAINT "domains_pkey" PRIMARY KEY ("id"),
-	CONSTRAINT "domains_environment_id_fkey" FOREIGN KEY ("environment_id") REFERENCES "environments" ("id") ON DELETE CASCADE,
 	CONSTRAINT "domains_hostname_length" CHECK (length("hostname") >= 3 AND length("hostname") <= 253),
 	CONSTRAINT "domains_token_length" CHECK (length("token") >= 32 AND length("token") <= 64)
 ) STRICT;

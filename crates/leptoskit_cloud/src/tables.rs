@@ -620,7 +620,9 @@ pub struct Secret {
 #[table(name = "domains", unique(environment_id, hostname), index(hostname))]
 pub struct Domain {
 	pub id: Id<Self>,
-	#[db(on_delete = cascade)]
+	/// Not a foreign key: a hostname the cluster may still route outlives
+	/// its environment's row, until the cluster's worker has removed it.
+	#[db(no_foreign_key)]
 	pub environment_id: Id<Environment>,
 	#[db(min_len = 3, max_len = 253)]
 	pub hostname: String,
@@ -634,8 +636,13 @@ pub struct Domain {
 	#[db(unique, max_len = 253)]
 	pub claim: Option<String>,
 	pub verified_at: Option<Timestamp>,
-	/// Detached while a deployment still serves it. The row, and its
-	/// claim, go when a deployment without it is live.
+	/// Whether a release that routes it has been handed to the cluster,
+	/// applied or not: the cluster may answer on it. Cleared only when a
+	/// release without it is applied.
+	pub routed: bool,
+	/// Detached, or its environment deleted, while the cluster may still
+	/// route it. The row, and its claim, go when a release without it is
+	/// applied or the environment is removed from the cluster.
 	pub removing: bool,
 	#[db(no_foreign_key)]
 	pub created_by: Id<Account>,

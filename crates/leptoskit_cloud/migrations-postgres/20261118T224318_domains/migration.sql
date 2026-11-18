@@ -8,6 +8,7 @@ CREATE TABLE "domains" (
 	"token" text NOT NULL,
 	"claim" varchar(253),
 	"verified_at" timestamptz,
+	"routed" boolean NOT NULL,
 	"removing" boolean NOT NULL,
 	"created_by" uuid NOT NULL,
 	"created_at" timestamptz NOT NULL,
@@ -27,6 +28,9 @@ COMMENT ON TABLE "domains" IS 'A custom domain of an environment. It routes noth
 verified, and a verified hostname is one environment''s in the whole
 cloud: `claim` holds it, uniquely.';
 
+COMMENT ON COLUMN "domains"."environment_id" IS 'Not a foreign key: a hostname the cluster may still route outlives
+its environment''s row, until the cluster''s worker has removed it.';
+
 COMMENT ON COLUMN "domains"."token" IS 'What the challenge record must hold. It isn''t a secret: it is
 published in DNS.';
 
@@ -34,7 +38,10 @@ COMMENT ON COLUMN "domains"."claim" IS 'The hostname again, from when it is veri
 unique, so two environments never hold one hostname, whoever races
 to verify it.';
 
-COMMENT ON COLUMN "domains"."removing" IS 'Detached while a deployment still serves it. The row, and its
-claim, go when a deployment without it is live.';
+COMMENT ON COLUMN "domains"."routed" IS 'Whether a release that routes it has been handed to the cluster,
+applied or not: the cluster may answer on it. Cleared only when a
+release without it is applied.';
 
-ALTER TABLE "domains" ADD CONSTRAINT "domains_environment_id_fkey" FOREIGN KEY ("environment_id") REFERENCES "environments" ("id") ON DELETE CASCADE;
+COMMENT ON COLUMN "domains"."removing" IS 'Detached, or its environment deleted, while the cluster may still
+route it. The row, and its claim, go when a release without it is
+applied or the environment is removed from the cluster.';

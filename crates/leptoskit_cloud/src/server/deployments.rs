@@ -1174,6 +1174,7 @@ pub(crate) async fn rollback(
 	let held = super::domains::for_release(cx.tx(), environment_id).await?;
 	spec.routes
 		.retain(|route| route.hostname == placement.hostname || held.contains(&route.hostname));
+	super::domains::routing(cx.tx(), environment_id, &held).await?;
 	spec.validate()
 		.map_err(|error| rpc::Error::server(format!("a rollback's spec is invalid: {error}")))?;
 	let signer = signer(cx.tx(), &access.caller, None).await?;
@@ -1571,8 +1572,12 @@ pub(crate) async fn before_removal(
 		.first(tx)
 		.await?
 	else {
+		super::domains::environment_removed(tx, environment_id, false).await?;
 		return Ok(None);
 	};
+	// The cluster may still answer on its domains until the removal is
+	// done: they keep their hostnames until then.
+	super::domains::environment_removed(tx, environment_id, true).await?;
 	let job = jobs::queue(
 		tx,
 		Queue {
@@ -1831,6 +1836,8 @@ async fn built(tx: &Tx, mut changing: Changing, output: &BuildServerOutput) -> r
 	};
 	changing.row.build = Json(Some(output.clone()));
 	changing.row.spec = Json(Some(spec.clone()));
+	// From here the cluster may be asked to route them.
+	super::domains::routing(tx, environment.id, &domains).await?;
 	changing.advance(DeploymentState::Migrating)?;
 
 	// The schema check: the database's migrations must be where this

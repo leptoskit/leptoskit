@@ -898,7 +898,8 @@
           "type": {
             "kind": "uuid"
           },
-          "nullable": false
+          "nullable": false,
+          "comment": "Not a foreign key: a hostname the cluster may still route outlives\nits environment's row, until the cluster's worker has removed it."
         },
         {
           "name": "hostname",
@@ -932,12 +933,20 @@
           "nullable": true
         },
         {
+          "name": "routed",
+          "type": {
+            "kind": "bool"
+          },
+          "nullable": false,
+          "comment": "Whether a release that routes it has been handed to the cluster,\napplied or not: the cluster may answer on it. Cleared only when a\nrelease without it is applied."
+        },
+        {
           "name": "removing",
           "type": {
             "kind": "bool"
           },
           "nullable": false,
-          "comment": "Detached while a deployment still serves it. The row, and its\nclaim, go when a deployment without it is live."
+          "comment": "Detached, or its environment deleted, while the cluster may still\nroute it. The row, and its claim, go when a release without it is\napplied or the environment is removed from the cluster."
         },
         {
           "name": "created_by",
@@ -985,21 +994,6 @@
             "hostname"
           ],
           "unique": true
-        }
-      ],
-      "foreign_keys": [
-        {
-          "name": "domains_environment_id_fkey",
-          "columns": [
-            "environment_id"
-          ],
-          "references": {
-            "name": "environments"
-          },
-          "referenced_columns": [
-            "id"
-          ],
-          "on_delete": "cascade"
         }
       ],
       "checks": [

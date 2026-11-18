@@ -542,3 +542,125 @@ pub async fn a_detached_domain_is_held_until_it_stops_serving(app: &App) {
 	assert_eq!(routes(&rolled).len(), 1, "{rolled}");
 	shop.cluster.finish(&rolled, applied()).await.expect(200);
 }
+
+/// The cluster may answer on a hostname that no live deployment routes: a
+/// release that failed part-way put it there, or its environment was
+/// deleted and the cluster hasn't removed it yet. Either way the hostname
+/// stays held until the cluster is known to be without it.
+#[expect(
+	clippy::cognitive_complexity,
+	reason = "a scenario is one story, read top to bottom; its asserts are what count"
+)]
+pub async fn a_hostname_is_held_while_the_cluster_may_route_it(app: &App) {
+	let shop = Shop::open(app).await;
+	let (mallory, rival_org) = rival(app).await;
+	let mallory = As::Session(&mallory);
+	let theirs = |hostname: &str| named(&rival_org, "blog", hostname);
+
+	// Live without the domain, then a release with it that never became
+	// ready: the cluster has its route, and the live deployment doesn't.
+	let (_, first) = release(&shop, b"first").await;
+	shop.cluster.finish(&first, applied()).await.expect(200);
+	verified(&shop, HOSTNAME).await;
+	let (failed, second) = release(&shop, b"second").await;
+	assert!(
+		routes(&second).iter().any(|(host, _)| host == HOSTNAME),
+		"{second}"
+	);
+	shop.cluster
+		.finish(
+			&second,
+			json!({
+				"kind": "release",
+				"result": "not_ready",
+				"process": "app",
+				"reason": "it never answered",
+			}),
+		)
+		.await
+		.expect(200);
+	assert_eq!(
+		shop.state("production", failed).await["state"],
+		"failed",
+		"the release failed"
+	);
+
+	// Detached now, it is still held.
+	on(&shop, "detach_domain", HOSTNAME).await.expect(200);
+	assert_eq!(listed(&shop).await[0]["status"], "removing");
+	let attached = app.call("attach_domain", theirs(HOSTNAME), mallory).await;
+	publish(app, &attached.expect(200).json());
+	app.call("verify_domain", theirs(HOSTNAME), mallory)
+		.await
+		.refused(409, "domain_taken");
+
+	// A release without it, applied, takes it off the cluster.
+	let (_, third) = release(&shop, b"third").await;
+	assert!(
+		routes(&third).iter().all(|(host, _)| host != HOSTNAME),
+		"{third}"
+	);
+	shop.cluster.finish(&third, applied()).await.expect(200);
+	assert_eq!(listed(&shop).await, json!([]));
+	app.call("verify_domain", theirs(HOSTNAME), mallory)
+		.await
+		.expect(200);
+
+	// A deleted environment's hostname is held until its cluster's worker
+	// has removed it.
+	let other = "staging.example.org";
+	app.call(
+		"create_environment",
+		json!({
+			"organization": shop.org,
+			"project": "notes",
+			"name": "staging",
+			"kind": "staging",
+		}),
+		shop.as_ana(),
+	)
+	.await
+	.expect(200);
+	let mut staging = named(&shop.org, "notes", other);
+	staging["environment"] = json!("staging");
+	let attached = app
+		.call("attach_domain", staging.clone(), shop.as_ana())
+		.await;
+	publish(app, &attached.expect(200).json());
+	app.call("verify_domain", staging, shop.as_ana())
+		.await
+		.expect(200);
+	shop.ship("staging", b"short-lived", &[]).await;
+	app.call(
+		"delete_environment",
+		json!({
+			"organization": shop.org,
+			"project": "notes",
+			"environment": "staging",
+			"confirm": "staging",
+		}),
+		shop.as_ana(),
+	)
+	.await
+	.expect(200);
+	let attached = app.call("attach_domain", theirs(other), mallory).await;
+	publish(app, &attached.expect(200).json());
+	app.call("verify_domain", theirs(other), mallory)
+		.await
+		.refused(409, "domain_taken");
+
+	let destroy = shop.cluster.take().await;
+	assert_eq!(destroy["input"]["kind"], "destroy_environment");
+	shop.cluster
+		.finish(
+			&destroy,
+			json!({ "kind": "destroy_environment", "result": "destroyed" }),
+		)
+		.await
+		.expect(200);
+	app.call("verify_domain", theirs(other), mallory)
+		.await
+		.expect(200);
+	let rows = Domain::query().all(&app.system()).await.expect("domains");
+	assert_eq!(rows.len(), 2, "{rows:?}");
+}

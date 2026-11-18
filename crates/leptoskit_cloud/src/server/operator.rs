@@ -419,6 +419,10 @@ pub(crate) async fn reconcile(
 			// What the operator found replaces a failure the worker said.
 			row.outcome = Json(None);
 			row.save(cx.tx()).await?;
+
+			if let Some(environment) = row.environment_id {
+				super::domains::environment_destroyed(cx.tx(), environment).await?;
+			}
 		}
 		(JobKind::DestroyEnvironment, Reconciliation::NotApplied { .. }) => {
 			// Removing an environment is safe to run again.

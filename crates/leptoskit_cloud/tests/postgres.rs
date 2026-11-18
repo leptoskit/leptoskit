@@ -443,4 +443,11 @@ mod domains {
 			domains::a_detached_domain_is_held_until_it_stops_serving(&app).await;
 		}
 	}
+
+	#[tokio::test]
+	async fn a_hostname_is_held_while_the_cluster_may_route_it() {
+		if let Some((_postgres, app)) = app().await {
+			domains::a_hostname_is_held_while_the_cluster_may_route_it(&app).await;
+		}
+	}
 }

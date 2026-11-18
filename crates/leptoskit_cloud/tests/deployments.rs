@@ -486,3 +486,8 @@ async fn verifying_races_to_one_holder() {
 async fn a_detached_domain_is_held_until_it_stops_serving() {
 	domains::a_detached_domain_is_held_until_it_stops_serving(&support::app().await).await;
 }
+
+#[tokio::test]
+async fn a_hostname_is_held_while_the_cluster_may_route_it() {
+	domains::a_hostname_is_held_while_the_cluster_may_route_it(&support::app().await).await;
+}
