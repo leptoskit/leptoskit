@@ -839,6 +839,7 @@ pub async fn round(cx: &rpc::JobCx, send_key: &str, round: u32, push: &Push) -> 
 		.is_some_and(|send| send.state == crate::SendState::Cancelled.as_str());
 	let mut after: Option<Uuid> = None;
 	let mut attempted = 0_usize;
+	let mut spent = [false; QUEUED.len()];
 
 	let stopped_short = loop {
 		if attempted >= ROUND_DELIVERIES || started.elapsed() >= ROUND_BUDGET {
@@ -847,18 +848,7 @@ pub async fn round(cx: &rpc::JobCx, send_key: &str, round: u32, push: &Push) -> 
 
 		let now = leptoskit_db::now();
 		let take = crate::push::DELIVERY_CONCURRENCY.min(ROUND_DELIVERIES - attempted);
-		let page = PushDelivery::query()
-			.filter(|delivery| {
-				let mut condition = due(delivery, send_key, now);
-				if let Some(after) = after {
-					condition = condition & delivery.id.gt(after);
-				}
-				condition
-			})
-			.order_by(|delivery| delivery.id.asc())
-			.limit(u64::try_from(take).unwrap_or(u64::MAX))
-			.all(db)
-			.await?;
+		let page = due_page(db, send_key, now, after, take, &mut spent).await?;
 
 		let Some(last) = page.last() else {
 			break false;
@@ -870,6 +860,84 @@ pub async fn round(cx: &rpc::JobCx, send_key: &str, round: u32, push: &Push) -> 
 	};
 
 	next_round(cx, send_key, round, stopped_short).await
+}
+
+/// The states a delivery waits in the queue in, in the order a round reads
+/// them.
+const QUEUED: [DeliveryState; 2] = [DeliveryState::Enqueued, DeliveryState::Retrying];
+
+/// One page of a round: the send's next `take` due deliveries after
+/// `after`, in id order.
+///
+/// Each queued state is read on its own and the two answers are merged
+/// here. `(send_key, state, id)` hands one state's deliveries back in id
+/// order straight from the index, starting at the cursor; asked for both
+/// states at once in id order, the database instead walks the send through
+/// `(send_key, id)` — every delivery that already finished included, from
+/// the send's first, at the start of every round. Each state's read is its
+/// own first `take` due deliveries, so the first `take` of the two merged
+/// are the first `take` of them all: the page the single read answered.
+///
+/// `spent` remembers a state whose read came back short with all of it in
+/// the page: nothing more of that state is due after the cursor, so the
+/// round's later pages don't walk its waiting deliveries again to find
+/// that out. What comes due in the meantime is the next round's.
+///
+/// # Errors
+///
+/// Whatever a read fails with.
+async fn due_page(
+	db: &impl leptoskit_db::Read,
+	send_key: &str,
+	now: leptoskit_db::Timestamp,
+	after: Option<Uuid>,
+	take: usize,
+	spent: &mut [bool; QUEUED.len()],
+) -> rpc::Result<Vec<PushDelivery>> {
+	let mut page: Vec<PushDelivery> = Vec::new();
+	let mut short = [None; QUEUED.len()];
+
+	for (index, state) in QUEUED.into_iter().enumerate() {
+		if spent[index] {
+			continue;
+		}
+
+		let rows = PushDelivery::query()
+			.filter(|delivery| {
+				let mut condition = delivery.send_key.eq(send_key.to_owned())
+					& delivery.state.eq(state.as_str())
+					& (delivery.next_attempt_at.is_null() | delivery.next_attempt_at.lte(now));
+				if let Some(after) = after {
+					condition = condition & delivery.id.gt(after);
+				}
+				condition
+			})
+			.order_by(|delivery| delivery.id.asc())
+			.limit(u64::try_from(take).unwrap_or(u64::MAX))
+			.all(db)
+			.await?;
+
+		if rows.len() < take {
+			// The id of the last one, or nil when there was none: what the
+			// page has to reach for the state to be spent.
+			short[index] = Some(rows.last().map_or_else(Uuid::nil, |row| row.id));
+		}
+
+		page.extend(rows);
+	}
+
+	page.sort_by_key(|delivery| delivery.id);
+	page.truncate(take);
+
+	let reached = page.last().map_or_else(Uuid::nil, |delivery| delivery.id);
+
+	for (index, last) in short.into_iter().enumerate() {
+		if last.is_some_and(|last| last <= reached) {
+			spent[index] = true;
+		}
+	}
+
+	Ok(page)
 }
 
 /// Attempts one page of deliveries at once, each owning its row, and puts

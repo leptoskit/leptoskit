@@ -763,7 +763,8 @@ impl PushEndpoint {
 	name = "push_deliveries",
 	unique(notification, endpoint),
 	index(send_key, id),
-	index(state, next_attempt_at)
+	index(endpoint, state),
+	index(send_key, state, id)
 )]
 pub struct PushDelivery {
 	#[db(key)]

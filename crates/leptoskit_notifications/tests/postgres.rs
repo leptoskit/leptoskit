@@ -958,11 +958,14 @@ async fn the_device_details_migration_reverses_and_reapplies_on_postgres() {
 	let db = Db::connect(&postgres.database())
 		.await
 		.expect("the database opens");
-	db.migrate(POSTGRES_MIGRATIONS)
-		.await
-		.expect("migrations apply");
-	let last: &str = &POSTGRES_MIGRATIONS.last().expect("migrations").name;
-	assert!(last.ends_with("_device_details"), "{last}");
+	// Up to the migration under test, whatever has been added after it.
+	let position = POSTGRES_MIGRATIONS
+		.iter()
+		.position(|migration| migration.name.ends_with("_device_details"))
+		.expect("the registry lists device_details");
+	let through = &POSTGRES_MIGRATIONS[..=position];
+	db.migrate(through).await.expect("migrations apply");
+	let last: &str = &through[position].name;
 
 	let columns = |db: Db| {
 		async move {
@@ -996,20 +999,14 @@ async fn the_device_details_migration_reverses_and_reapplies_on_postgres() {
 	println!("up: {up:?}");
 	assert_eq!(up, ["app_version", "locale", "time_zone"]);
 
-	let reverted = db
-		.rollback(POSTGRES_MIGRATIONS, 1)
-		.await
-		.expect("down applies");
+	let reverted = db.rollback(through, 1).await.expect("down applies");
 	println!("down: reverted {reverted:?}");
 	assert_eq!(reverted, [last]);
 	let down = columns(db.clone()).await;
 	println!("down: {down:?}");
 	assert!(down.is_empty(), "{down:?}");
 
-	let applied = db
-		.migrate(POSTGRES_MIGRATIONS)
-		.await
-		.expect("up applies again");
+	let applied = db.migrate(through).await.expect("up applies again");
 	println!("up again: applied {applied:?}");
 	assert_eq!(applied, [last]);
 	assert_eq!(columns(db.clone()).await, up);

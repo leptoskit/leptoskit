@@ -1071,9 +1071,14 @@ async fn unknown_device_keys_are_refused_by_name_even_when_validating() {
 /// them back empty.
 #[tokio::test(flavor = "multi_thread")]
 async fn the_device_details_migration_reverses_and_reapplies() {
-	let db = leptoskit_db::testing::sqlite_migrated(MIGRATIONS).await;
-	let last: &str = &MIGRATIONS.last().expect("migrations").name;
-	assert!(last.ends_with("_device_details"), "{last}");
+	// Up to the migration under test, whatever has been added after it.
+	let position = MIGRATIONS
+		.iter()
+		.position(|migration| migration.name.ends_with("_device_details"))
+		.expect("the registry lists device_details");
+	let through = &MIGRATIONS[..=position];
+	let db = leptoskit_db::testing::sqlite_migrated(through).await;
+	let last: &str = &through[position].name;
 
 	db.execute(Statement {
 		sql: format!(
@@ -1105,7 +1110,7 @@ async fn the_device_details_migration_reverses_and_reapplies() {
 	println!("up: {up:?}");
 	assert!(up.ends_with(&["locale".into(), "time_zone".into(), "app_version".into()]));
 
-	let reverted = db.rollback(MIGRATIONS, 1).await.expect("down applies");
+	let reverted = db.rollback(through, 1).await.expect("down applies");
 	println!("down: reverted {reverted:?}");
 	assert_eq!(reverted, [last]);
 	let down = columns(db.clone()).await;
@@ -1121,7 +1126,7 @@ async fn the_device_details_migration_reverses_and_reapplies() {
 		"the endpoint survives the reversal"
 	);
 
-	let applied = db.migrate(MIGRATIONS).await.expect("up applies again");
+	let applied = db.migrate(through).await.expect("up applies again");
 	println!("up again: applied {applied:?}");
 	assert_eq!(applied, [last]);
 	assert_eq!(columns(db.clone()).await, up);

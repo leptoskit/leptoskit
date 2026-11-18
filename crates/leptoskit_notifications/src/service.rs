@@ -13,6 +13,7 @@
 
 pub mod config;
 pub mod push;
+pub mod retention;
 pub mod transport;
 
 use leptoskit_axum::axum::Router;
@@ -981,79 +982,48 @@ const FANOUT_PAGE: usize = crate::FANOUT_BATCH;
 
 /// The people one fanout page evaluates next, ordered by person id,
 /// after `cursor`, at most `limit`. Raw SQL because the page is one
-/// column's distinct values, which the typed query builder reads as
-/// whole rows; the statement still names its table, so a connection that
-/// tracks reads records it.
+/// column's values, which the typed query builder reads as whole rows;
+/// each statement still names its table, so a connection that tracks
+/// reads records it.
+///
+/// A walk over several topics reads each topic on its own and merges the
+/// answers here. `(topic, person)` hands one topic's subscribers back in
+/// person order straight from the index, but not several topics' at once:
+/// asked for `topic IN (…) ORDER BY person`, the database reads every
+/// remaining subscriber of every topic and sorts them, on each page of
+/// the walk. Each topic's read is its first `limit` people after the
+/// cursor, so anyone among the first `limit` of them all is in their own
+/// topic's read: the merged page is exactly the page the single statement
+/// answered, each person once, and the cursor means what it always did.
 ///
 /// # Errors
 ///
-/// Whatever the read fails with.
+/// Whatever a read fails with.
 async fn candidates(
 	db: &impl leptoskit_db::Read,
 	walk: &Walk,
 	cursor: Option<Uuid>,
 	limit: usize,
 ) -> rpc::Result<Vec<Uuid>> {
+	let dialect = db.dialect();
+
 	match walk {
 		Walk::Topics(condition) => {
-			let dialect = db.dialect();
-			let topics = condition.topics();
-			let mut sql = String::from(
-				"SELECT DISTINCT \"person\" FROM \"topic_subscriptions\" WHERE \"topic\" IN (",
-			);
-			let mut args: Vec<leptoskit_db::Value> = Vec::new();
+			let mut people = std::collections::BTreeSet::new();
 
-			for topic in &topics {
-				if !args.is_empty() {
-					sql.push_str(", ");
-				}
+			for topic in condition.topics() {
+				let rows = subscribers_read(dialect, topic, cursor, limit)
+					.reads::<TopicSubscription>()
+					.fetch(db)
+					.await?;
 
-				sql.push_str(&placeholder(dialect, args.len() + 1));
-				args.push(leptoskit_db::Value::Text((*topic).to_owned()));
+				people.extend(rows.into_iter().filter_map(|row| uuid_of(row.first()?)));
 			}
 
-			sql.push(')');
-
-			if let Some(cursor) = cursor {
-				sql.push_str(" AND \"person\" > ");
-				sql.push_str(&placeholder(dialect, args.len() + 1));
-				args.push(leptoskit_db::Value::Uuid(cursor));
-			}
-
-			sql.push_str(" ORDER BY \"person\" ASC LIMIT ");
-			sql.push_str(&placeholder(dialect, args.len() + 1));
-			args.push(leptoskit_db::Value::Int(
-				i64::try_from(limit).unwrap_or(i64::MAX),
-			));
-
-			let rows = Statement::new(sql, args)
-				.reads::<TopicSubscription>()
-				.fetch(db)
-				.await?;
-
-			Ok(rows
-				.into_iter()
-				.filter_map(|row| uuid_of(row.first()?))
-				.collect())
+			Ok(people.into_iter().take(limit).collect())
 		}
 		Walk::Registry(_) => {
-			let dialect = db.dialect();
-			let mut sql = String::from("SELECT \"person\" FROM \"audience_members\"");
-			let mut args: Vec<leptoskit_db::Value> = Vec::new();
-
-			if let Some(cursor) = cursor {
-				sql.push_str(" WHERE \"person\" > ");
-				sql.push_str(&placeholder(dialect, args.len() + 1));
-				args.push(leptoskit_db::Value::Uuid(cursor));
-			}
-
-			sql.push_str(" ORDER BY \"person\" ASC LIMIT ");
-			sql.push_str(&placeholder(dialect, args.len() + 1));
-			args.push(leptoskit_db::Value::Int(
-				i64::try_from(limit).unwrap_or(i64::MAX),
-			));
-
-			let rows = Statement::new(sql, args)
+			let rows = registry_read(dialect, cursor, limit)
 				.reads::<AudienceMember>()
 				.fetch(db)
 				.await?;
@@ -1064,6 +1034,56 @@ async fn candidates(
 				.collect())
 		}
 	}
+}
+
+/// The read of one topic's subscribers after `cursor`, in person order, at
+/// most `limit`: one range of the `(topic, person)` index, in its order.
+fn subscribers_read(
+	dialect: leptoskit_db::Dialect,
+	topic: &str,
+	cursor: Option<Uuid>,
+	limit: usize,
+) -> Statement {
+	let mut sql = String::from("SELECT \"person\" FROM \"topic_subscriptions\" WHERE \"topic\" = ");
+	let mut args: Vec<leptoskit_db::Value> = Vec::new();
+
+	sql.push_str(&placeholder(dialect, args.len() + 1));
+	args.push(leptoskit_db::Value::Text(topic.to_owned()));
+
+	if let Some(cursor) = cursor {
+		sql.push_str(" AND \"person\" > ");
+		sql.push_str(&placeholder(dialect, args.len() + 1));
+		args.push(leptoskit_db::Value::Uuid(cursor));
+	}
+
+	sql.push_str(" ORDER BY \"person\" ASC LIMIT ");
+	sql.push_str(&placeholder(dialect, args.len() + 1));
+	args.push(leptoskit_db::Value::Int(
+		i64::try_from(limit).unwrap_or(i64::MAX),
+	));
+
+	Statement::new(sql, args)
+}
+
+/// The read of the registry's people after `cursor`, in person order, at
+/// most `limit`.
+fn registry_read(dialect: leptoskit_db::Dialect, cursor: Option<Uuid>, limit: usize) -> Statement {
+	let mut sql = String::from("SELECT \"person\" FROM \"audience_members\"");
+	let mut args: Vec<leptoskit_db::Value> = Vec::new();
+
+	if let Some(cursor) = cursor {
+		sql.push_str(" WHERE \"person\" > ");
+		sql.push_str(&placeholder(dialect, args.len() + 1));
+		args.push(leptoskit_db::Value::Uuid(cursor));
+	}
+
+	sql.push_str(" ORDER BY \"person\" ASC LIMIT ");
+	sql.push_str(&placeholder(dialect, args.len() + 1));
+	args.push(leptoskit_db::Value::Int(
+		i64::try_from(limit).unwrap_or(i64::MAX),
+	));
+
+	Statement::new(sql, args)
 }
 
 /// What a walk's condition reads about one page of people: the topics and
@@ -2458,6 +2478,40 @@ pub(crate) fn inbox_item(row: Notification) -> InboxItem {
 	}
 }
 
+/// The statements one page of a fanout's audience walk runs, for the scale
+/// tests to ask the database how it would run them. Not part of the
+/// service's API.
+#[doc(hidden)]
+pub mod plans {
+	use leptoskit_rpc as rpc;
+	use uuid::Uuid;
+
+	/// The reads behind one page of `target`'s candidates after `cursor`,
+	/// exactly as the fanout issues them.
+	///
+	/// # Errors
+	///
+	/// [`rpc::Error::server`] for a target with no fanout.
+	pub fn candidate_reads(
+		dialect: leptoskit_db::Dialect,
+		target: &crate::SendTarget,
+		cursor: Option<Uuid>,
+	) -> rpc::Result<Vec<leptoskit_db::Statement>> {
+		let limit = super::FANOUT_PAGE + 1;
+
+		Ok(match super::walk_of(target)? {
+			super::Walk::Topics(condition) => {
+				condition
+					.topics()
+					.into_iter()
+					.map(|topic| super::subscribers_read(dialect, topic, cursor, limit))
+					.collect()
+			}
+			super::Walk::Registry(_) => vec![super::registry_read(dialect, cursor, limit)],
+		})
+	}
+}
+
 /// The service's routes, under `/_leptoskit/services/notifications`, with
 /// the live socket started separately. Callers presenting
 /// `LEPTOSKIT_SERVICE_TOKEN` are the app, and callers presenting a token
@@ -2473,9 +2527,10 @@ pub fn routes(db: Db, origin: Option<&str>) -> (Router, rpc::server::Live) {
 }
 
 /// The service's job workers: they run the [`wake_send`](crate::wake_send)
-/// jobs a scheduled or expiring send enqueues, and with them the change
-/// log's upkeep. Start them once beside [`routes`] — the service's own
-/// binary does — or a wake waits in `rpc_jobs` until someone does.
+/// jobs a scheduled or expiring send enqueues, the hourly
+/// [`prune`](crate::prune), and with them the change log's upkeep. Start them
+/// once beside [`routes`] — the service's own binary does — or a wake waits in
+/// `rpc_jobs` until someone does.
 ///
 /// They poll every second rather than the framework's five, so a
 /// scheduled notification's wake lands close to its time; everything else
@@ -2487,11 +2542,26 @@ pub fn workers(db: Db) -> rpc::server::Jobs {
 
 /// Workers sharing the same push configuration as [`routes_with_push`].
 /// Rebuild the runtime at startup; pending jobs use this allocation on
-/// recovery.
+/// recovery. Pruning keeps the default [`config::Retention`]; see
+/// [`workers_with_settings`].
 #[must_use]
 pub fn workers_with_push(db: Db, push: push::Push) -> rpc::server::Jobs {
+	workers_with_settings(db, push, config::Retention::default())
+}
+
+/// [`workers_with_push`], also carrying how long the service keeps what it
+/// no longer needs: what the hourly [`prune`](crate::prune) job deletes.
+/// The service's own binary reads it from its environment; an embedded one
+/// passes what it wants — [`config::Retention::forever`] to prune nothing.
+#[must_use]
+pub fn workers_with_settings(
+	db: Db,
+	push: push::Push,
+	retention: config::Retention,
+) -> rpc::server::Jobs {
 	rpc::server::Jobs::new(db)
 		.state(push)
+		.state(retention)
 		.service(Some(SERVICE))
 		.poll(std::time::Duration::from_secs(1))
 		.retention(Some(std::time::Duration::from_hours(24)))

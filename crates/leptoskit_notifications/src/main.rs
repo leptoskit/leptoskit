@@ -94,6 +94,13 @@ async fn run(env: ServiceEnv) -> Result<Router, Error> {
 		);
 	}
 
+	// How long the service keeps what it no longer needs: the defaults
+	// unless the operator says otherwise, and a value that isn't a number
+	// of days refuses to start, named.
+	let retention = service::config::Retention::from_env()
+		.map_err(|error| -> Box<dyn std::error::Error + Send + Sync> { error.into() })?;
+	println!("retention: {}", retention.describe());
+
 	let (router, live) = service::routes_with_settings(
 		db.clone(),
 		env.public_origin(),
@@ -103,8 +110,8 @@ async fn run(env: ServiceEnv) -> Result<Router, Error> {
 	);
 	live.start().await?;
 	// The workers run the wake jobs a scheduled or expiring send enqueues,
-	// the push deliveries' rounds, and keep the change log the live
-	// queries follow pruned.
-	service::workers_with_push(db, push).start();
+	// the push deliveries' rounds, the hourly pruning, and keep the change
+	// log the live queries follow pruned.
+	service::workers_with_settings(db, push, retention).start();
 	Ok(router)
 }

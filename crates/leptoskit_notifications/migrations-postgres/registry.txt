@@ -4,3 +4,4 @@
 20261117T000946_persons_and_segments
 20261117T011225_message_options
 20261118T132644_device_details
+20261118T200806_scale_indexes

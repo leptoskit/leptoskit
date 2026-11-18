@@ -15,9 +15,10 @@
 //! way to run — its platform is refused at enrollment and its inbox is
 //! untouched.
 //!
-//! Beside the secrets sits one plain setting, [`OpenTopics`]: the topic
-//! patterns a signed-in person may subscribe themselves to. It is read
-//! the same way, once at startup, and nothing being open is the default.
+//! Beside the secrets sit two plain settings, read the same way, once at
+//! startup: [`OpenTopics`], the topic patterns a signed-in person may
+//! subscribe themselves to — nothing being open is the default — and
+//! [`Retention`], how long the service keeps what it no longer needs.
 
 /// APNs's two servers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -372,6 +373,168 @@ impl OpenTopics {
 	}
 }
 
+/// How long the service keeps what it no longer needs, in whole days:
+/// what the pruning job ([`prune`](crate::prune)) deletes, an hour at a
+/// time. Read from `LEPTOSKIT_NOTIFICATIONS_RETENTION_*`; each value is a
+/// number of days, or `off` to keep that kind of row forever. A value
+/// that is neither refuses to start, named, like every other setting
+/// here.
+///
+/// The defaults keep a year of inbox, a month of what nobody can see or
+/// act on any more, and three months of send records. Nothing is deleted
+/// that the service still works with: a notification whose push is still
+/// queued, a send still fanning out, or a send record whose notifications
+/// are still stored.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Retention {
+	/// How long a notification stays in an inbox, counted from the moment
+	/// it became visible, read or not: `RETENTION_INBOX_DAYS`, 365 by
+	/// default. A scheduled notification is never old before its time.
+	pub inbox_days: Option<u32>,
+	/// How long a notification nobody can see any more is kept, counted
+	/// from the moment it ended — its expiry, its cancellation, or, for a
+	/// silent data message, the end of its delivery window:
+	/// `RETENTION_ENDED_DAYS`, 30 by default. A message cancelled before
+	/// the time it was scheduled for is counted from that time.
+	pub ended_days: Option<u32>,
+	/// How long a finished push delivery — accepted, rejected, or skipped
+	/// — stays readable through
+	/// [`push_deliveries`](crate::push::push_deliveries), counted from when
+	/// it finished: `RETENTION_DELIVERIES_DAYS`, 30 by default. A delivery
+	/// never outlives its notification.
+	pub deliveries_days: Option<u32>,
+	/// How long a send's record is kept after the send was made:
+	/// `RETENTION_SENDS_DAYS`, 90 by default, and at least
+	/// [`MIN_SENDS_DAYS`](Self::MIN_SENDS_DAYS). The record is what
+	/// recognises a repeated idempotency key, so this is how long a retry
+	/// is safe; it is also kept for as long as any notification the send
+	/// wrote is still stored, however long that is.
+	pub sends_days: Option<u32>,
+}
+
+impl Default for Retention {
+	fn default() -> Self {
+		Self {
+			inbox_days: Some(365),
+			ended_days: Some(30),
+			deliveries_days: Some(30),
+			sends_days: Some(90),
+		}
+	}
+}
+
+impl Retention {
+	/// The shortest a send's record may be kept, in days. The jobs a send
+	/// enqueues are keyed by its idempotency key, and the job table
+	/// remembers a finished job's key for a day: a record gone sooner
+	/// could let the same key be sent again while those keys still stand,
+	/// and its fanout would never start.
+	pub const MIN_SENDS_DAYS: u32 = 2;
+	/// The longest any of these may be: a century.
+	pub const MOST_DAYS: u32 = 36_500;
+
+	/// Keeps everything forever: no pruning at all.
+	#[must_use]
+	pub fn forever() -> Self {
+		Self {
+			inbox_days: None,
+			ended_days: None,
+			deliveries_days: None,
+			sends_days: None,
+		}
+	}
+
+	/// Reads the operator's environment.
+	///
+	/// # Errors
+	///
+	/// Every unusable value, named, so an operator sees the whole fix at
+	/// once.
+	pub fn from_env() -> Result<Self, String> {
+		Self::from_vars(std::env::vars())
+	}
+
+	/// Reads the operator's configuration from `vars` instead of the
+	/// process's, as a test does.
+	///
+	/// # Errors
+	///
+	/// As [`from_env`](Self::from_env).
+	pub fn from_vars<K: AsRef<str>, V: AsRef<str>>(
+		vars: impl IntoIterator<Item = (K, V)>,
+	) -> Result<Self, String> {
+		let mut retention = Self::default();
+		let mut problems = Vec::new();
+
+		for (key, value) in vars {
+			let Some(name) = key
+				.as_ref()
+				.strip_prefix("LEPTOSKIT_NOTIFICATIONS_RETENTION_")
+			else {
+				continue;
+			};
+			let (slot, least) = match name {
+				"INBOX_DAYS" => (&mut retention.inbox_days, 1),
+				"ENDED_DAYS" => (&mut retention.ended_days, 1),
+				"DELIVERIES_DAYS" => (&mut retention.deliveries_days, 1),
+				"SENDS_DAYS" => (&mut retention.sends_days, Self::MIN_SENDS_DAYS),
+				_ => {
+					problems.push(format!(
+						"LEPTOSKIT_NOTIFICATIONS_RETENTION_{name} isn't a retention setting: the \
+						 settings are INBOX_DAYS, ENDED_DAYS, DELIVERIES_DAYS, and SENDS_DAYS"
+					));
+					continue;
+				}
+			};
+			let value = value.as_ref().trim();
+
+			// Set but empty is unset, as it is for every other variable here.
+			if value.is_empty() {
+				continue;
+			}
+
+			if value == "off" {
+				*slot = None;
+				continue;
+			}
+
+			match value.parse::<u32>() {
+				Ok(days) if (least..=Self::MOST_DAYS).contains(&days) => *slot = Some(days),
+				_ => {
+					problems.push(format!(
+						"LEPTOSKIT_NOTIFICATIONS_RETENTION_{name} is {value:?}: use a whole \
+						 number of days from {least} to {}, or `off` to keep these rows forever",
+						Self::MOST_DAYS
+					));
+				}
+			}
+		}
+
+		if problems.is_empty() {
+			Ok(retention)
+		} else {
+			problems.sort();
+			Err(problems.join("; "))
+		}
+	}
+
+	/// The settings as one line, for the service's startup log.
+	#[must_use]
+	pub fn describe(&self) -> String {
+		let days = |days: Option<u32>| {
+			days.map_or_else(|| "kept forever".to_owned(), |days| format!("{days} days"))
+		};
+
+		format!(
+			"inbox {}, ended notifications {}, finished deliveries {}, send records {}",
+			days(self.inbox_days),
+			days(self.ended_days),
+			days(self.deliveries_days),
+			days(self.sends_days)
+		)
+	}
+}
+
 /// Whether `topic` fits `pattern`: the literal parts in order, each `*`
 /// any run of topic characters, including none.
 fn matches(pattern: &str, topic: &str) -> bool {
@@ -446,6 +609,69 @@ mod open_topics_tests {
 				error.contains(bad) && error.contains("topic pattern"),
 				"names the pattern and the rule: {error}"
 			);
+		}
+	}
+}
+
+#[cfg(test)]
+mod retention_tests {
+	use super::Retention;
+
+	fn read(vars: &[(&str, &str)]) -> Result<Retention, String> {
+		Retention::from_vars(vars.iter().copied())
+	}
+
+	#[test]
+	fn the_defaults_keep_a_year_of_inbox_and_three_months_of_sends() {
+		let retention = read(&[]).unwrap();
+		assert_eq!(retention, Retention::default());
+		assert_eq!(retention.inbox_days, Some(365));
+		assert_eq!(retention.ended_days, Some(30));
+		assert_eq!(retention.deliveries_days, Some(30));
+		assert_eq!(retention.sends_days, Some(90));
+		assert_eq!(
+			retention.describe(),
+			"inbox 365 days, ended notifications 30 days, finished deliveries 30 days, send \
+			 records 90 days"
+		);
+	}
+
+	#[test]
+	fn each_setting_reads_days_or_off() {
+		let retention = read(&[
+			("LEPTOSKIT_NOTIFICATIONS_RETENTION_INBOX_DAYS", "off"),
+			("LEPTOSKIT_NOTIFICATIONS_RETENTION_ENDED_DAYS", " 7 "),
+			("LEPTOSKIT_NOTIFICATIONS_RETENTION_DELIVERIES_DAYS", ""),
+			("LEPTOSKIT_NOTIFICATIONS_RETENTION_SENDS_DAYS", "2"),
+			("LEPTOSKIT_NOTIFICATIONS_OPEN_TOPICS", "news.*"),
+		])
+		.unwrap();
+
+		assert_eq!(retention.inbox_days, None, "`off` keeps them forever");
+		assert_eq!(retention.ended_days, Some(7));
+		assert_eq!(retention.deliveries_days, Some(30), "empty is unset");
+		assert_eq!(retention.sends_days, Some(2));
+		assert!(retention.describe().starts_with("inbox kept forever"));
+		assert_eq!(Retention::forever().sends_days, None);
+	}
+
+	#[test]
+	fn an_unusable_value_refuses_to_start_named() {
+		let error = read(&[
+			("LEPTOSKIT_NOTIFICATIONS_RETENTION_INBOX_DAYS", "0"),
+			("LEPTOSKIT_NOTIFICATIONS_RETENTION_ENDED_DAYS", "a week"),
+			("LEPTOSKIT_NOTIFICATIONS_RETENTION_SENDS_DAYS", "1"),
+			("LEPTOSKIT_NOTIFICATIONS_RETENTION_SEND_DAYS", "30"),
+		])
+		.unwrap_err();
+
+		for part in [
+			"RETENTION_INBOX_DAYS is \"0\"",
+			"RETENTION_ENDED_DAYS is \"a week\"",
+			"RETENTION_SENDS_DAYS is \"1\": use a whole number of days from 2",
+			"RETENTION_SEND_DAYS isn't a retention setting",
+		] {
+			assert!(error.contains(part), "names {part}: {error}");
 		}
 	}
 }

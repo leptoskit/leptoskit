@@ -863,6 +863,56 @@ async fn conditions_reach_the_matching_half(service: Service) {
 	service.assert_walked_in_batches("by-topics", UNEVEN).await;
 }
 
+/// A condition over two topics that overlap reaches everyone in either
+/// exactly once, across many batches. The walk reads each topic's
+/// subscribers on its own and merges them, so someone in both topics comes
+/// up twice within a batch, a batch's last person can be the next read's
+/// first in the other topic, and one topic can run out batches before the
+/// other: none of that may reach a person twice, or skip one.
+async fn a_union_of_overlapping_topics_reaches_each_once(service: Service) {
+	let audience = people(UNEVEN);
+	// Two in three people follow `left`, every other person `right`; one in
+	// three follows both, and one in six neither. Past position 4,000 only
+	// `right` goes on, so `left` runs out batches earlier.
+	let in_left = |position: usize| position % 3 != 0 && position < 4_000;
+	let in_right = |position: usize| position % 2 == 0;
+	let union = (0..UNEVEN)
+		.filter(|&position| in_left(position) || in_right(position))
+		.count();
+	let both = (0..UNEVEN)
+		.filter(|&position| in_left(position) && in_right(position))
+		.count();
+	assert!(both > 1_000 && union < UNEVEN, "the topics overlap in part");
+
+	service.register(&audience).await;
+	service.subscribe("left", &audience, in_left).await;
+	service.subscribe("right", &audience, in_right).await;
+	// Others' topics, which the walk must not read into the audience.
+	service
+		.subscribe("elsewhere", &audience, |position| position % 6 == 3)
+		.await;
+
+	let condition = json!({ "condition": "'left' in topics || 'right' in topics" });
+	let dry = service.would_reach(condition.clone()).await;
+	assert_eq!(
+		usize::try_from(dry.targeted).unwrap(),
+		union,
+		"a dry run counts each person in either topic once"
+	);
+
+	service.send("either", condition).await;
+	service.settled("either").await;
+
+	service
+		.assert_reached_exactly(
+			"either",
+			"SELECT DISTINCT person FROM topic_subscriptions WHERE topic IN ('left', 'right')",
+			union,
+		)
+		.await;
+	service.assert_walked_in_batches("either", union).await;
+}
+
 /// `cancel` part-way through a large fanout, as documented: the rows
 /// written so far are cancelled — all of them, however many batches that
 /// is, though they are already visible — the next steps write nothing, the
@@ -988,6 +1038,11 @@ async fn sqlite_conditions_over_5237_people_reach_the_matching_half() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn sqlite_a_union_of_overlapping_topics_reaches_each_once() {
+	a_union_of_overlapping_topics_reaches_each_once(on_sqlite(true).await).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn sqlite_cancelling_mid_fanout_cancels_every_row_written() {
 	cancelling_mid_fanout_cancels_every_row_written(on_sqlite(false).await).await;
 }
@@ -1051,6 +1106,15 @@ mod on_postgres {
 		};
 
 		conditions_reach_the_matching_half(on_postgres(&postgres, true).await).await;
+	}
+
+	#[tokio::test(flavor = "multi_thread")]
+	async fn postgres_a_union_of_overlapping_topics_reaches_each_once() {
+		let Some(postgres) = Postgres::start() else {
+			return;
+		};
+
+		a_union_of_overlapping_topics_reaches_each_once(on_postgres(&postgres, true).await).await;
 	}
 
 	#[tokio::test(flavor = "multi_thread")]

@@ -45,3 +45,24 @@ DROP FUNCTION "live"."seal" ();
 DROP SEQUENCE "live"."change_seq";
 
 DROP SEQUENCE "live"."version_seq";
+
+-- `init` creates the `live` and `rpc` schemas with `IF NOT EXISTS`, so it
+-- cannot know they were its own: a database shared with something else that
+-- uses those names had them first. Each is dropped only when this rollback
+-- left it empty — `RESTRICT` refuses a schema that still holds anything —
+-- and only when this role may drop it. Either refusal leaves the schema
+-- exactly as it is and the rollback goes on.
+DO '
+DECLARE
+	emptied text;
+BEGIN
+	FOREACH emptied IN ARRAY ARRAY[''live'', ''rpc''] LOOP
+		BEGIN
+			EXECUTE format(''DROP SCHEMA IF EXISTS %I RESTRICT'', emptied);
+		EXCEPTION
+			WHEN dependent_objects_still_exist OR insufficient_privilege THEN
+				NULL;
+		END;
+	END LOOP;
+END
+';
