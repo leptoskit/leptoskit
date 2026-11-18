@@ -14,6 +14,8 @@ use leptoskit_cloud::server::DEFAULT_REGION;
 use leptoskit_cloud::server::DISCOVERY_PATH;
 use leptoskit_cloud::server::OAuthApp;
 use leptoskit_cloud::server::SharedMailer;
+use leptoskit_cloud::server::ShippingSettings;
+use leptoskit_cloud::server::StorageConfig;
 use leptoskit_cloud_app::routes::Route;
 use leptoskit_cloud_app::routes::SignIn;
 use leptoskit_cloud_app::server::console;
@@ -32,6 +34,8 @@ struct Console {
 	origin: String,
 	mailbox: Mailbox,
 	client: reqwest::Client,
+	/// Where the control plane keeps objects; removed when the test ends.
+	_storage: tempfile::TempDir,
 }
 
 /// An answer: its status, where it redirects, and its body.
@@ -96,6 +100,7 @@ impl Console {
 		let address: SocketAddr = listener.local_addr().expect("an address");
 		let origin = format!("http://{address}");
 		let mailbox = Mailbox::new();
+		let storage = tempfile::tempdir().expect("a storage directory");
 		let control = Control::start(
 			&db,
 			ControlConfig {
@@ -110,6 +115,13 @@ impl Console {
 				}),
 				google: None,
 				default_region: DEFAULT_REGION.to_owned(),
+				storage: StorageConfig::Local {
+					directory: storage.path().to_owned(),
+				},
+				apps_domain: "apps.example.test".to_owned(),
+				registry: "registry.example.test/cloud".to_owned(),
+				catalogue: None,
+				shipping: ShippingSettings::default(),
 				dev: None,
 			},
 		)
@@ -125,6 +137,7 @@ impl Console {
 		Self {
 			origin,
 			mailbox,
+			_storage: storage,
 			client: reqwest::Client::builder()
 				.redirect(Policy::none())
 				.build()
@@ -232,6 +245,18 @@ impl Console {
 	}
 }
 
+/// Holds the process's one server for a test.
+///
+/// A page rendered on the server calls its operations in process, through
+/// the server `leptoskit_rpc` last installed, and a process has one. Tests
+/// that each start a control plane would otherwise render one test's page
+/// against another test's database.
+async fn one_server() -> tokio::sync::MutexGuard<'static, ()> {
+	static ONE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+	ONE.lock().await
+}
+
 /// The `<script` elements in `html`, each up to its closing tag.
 fn scripts(html: &str) -> Vec<&str> {
 	html.match_indices("<script")
@@ -323,6 +348,7 @@ fn signs_in_and_returns(page: &Page, next: &str) {
 
 #[tokio::test]
 async fn signed_out_visits_are_sent_to_sign_in_and_back() {
+	let _one = one_server().await;
 	let app = Console::start(false).await;
 
 	for path in [
@@ -351,6 +377,7 @@ async fn signed_out_visits_are_sent_to_sign_in_and_back() {
 
 #[tokio::test]
 async fn signed_in_pages_render_with_their_status() {
+	let _one = one_server().await;
 	let app = Console::start(false).await;
 	let ana = app.sign_in("ana@example.com").await;
 	let cookie = Some(ana.as_str());
@@ -435,6 +462,7 @@ fn serialized_queries(html: &str) -> Vec<(u32, String)> {
 
 #[tokio::test]
 async fn pages_number_their_queries_in_the_order_the_console_makes_them() {
+	let _one = one_server().await;
 	// The browser starts every query as the console makes it, and finds each
 	// answer by its number, so the server must number them in that order
 	// too, or hydration reads the wrong answers and fails.
@@ -503,6 +531,7 @@ async fn pages_number_their_queries_in_the_order_the_console_makes_them() {
 
 #[tokio::test]
 async fn sign_in_offers_only_the_methods_the_server_set_up() {
+	let _one = one_server().await;
 	let without = Console::start(false).await;
 	without
 		.get("/sign-in", None)
@@ -526,6 +555,7 @@ async fn sign_in_offers_only_the_methods_the_server_set_up() {
 
 #[tokio::test]
 async fn the_faces_are_served_and_kept() {
+	let _one = one_server().await;
 	let app = Console::start(false).await;
 	let font = app.get("/_leptoskit/fonts/skribble-mono.woff2", None).await;
 	font.expect(200);
@@ -537,6 +567,7 @@ async fn the_faces_are_served_and_kept() {
 
 #[tokio::test]
 async fn a_terminal_signs_in_by_approving_its_code_on_the_device_page() {
+	let _one = one_server().await;
 	let app = Console::start(false).await;
 	let discovery = app.get(DISCOVERY_PATH, None).await;
 	let discovery = discovery.expect(200).json();
