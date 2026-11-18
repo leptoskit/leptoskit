@@ -1123,6 +1123,34 @@ fn the_aps_environment_entitlement_is_a_string_that_comes_and_goes_with_the_sett
 	std::fs::remove_dir_all(root).unwrap();
 }
 
+/// The generated messaging service is where Firebase hands the app what
+/// arrives: a refreshed token, and every message it does not post itself —
+/// a data message, and any push while the app is open. Both reach the
+/// notifications plugin, which is the only place they are interpreted.
+#[test]
+fn the_generated_messaging_service_forwards_tokens_and_messages() {
+	let service = messaging_service_kotlin();
+
+	assert!(service.contains("package dev.leptoskit.plugins.notifications\n"));
+	assert!(service.contains("import com.google.firebase.messaging.FirebaseMessagingService\n"));
+	assert!(service.contains("import com.google.firebase.messaging.RemoteMessage\n"));
+	assert!(
+		service.contains(
+			"    override fun onNewToken(token: String) {\n        \
+			 RemoteRegistration.noteToken(token)\n    }\n"
+		),
+		"{service}"
+	);
+	assert!(
+		service.contains(
+			"    override fun onMessageReceived(message: RemoteMessage) {\n        val shown = \
+			 message.notification\n\n        ReceivedNotifications.noteMessage(this, \
+			 message.data, shown?.title, shown?.body, shown?.channelId)\n    }\n"
+		),
+		"{service}"
+	);
+}
+
 /// `[native.android] push` is opt-in: an app that never sets it generates
 /// byte-for-byte as before — no Firebase dependency, no messaging service,
 /// no Google services plugin file. Turning it on adds all four pieces and

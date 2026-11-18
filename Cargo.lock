@@ -8232,6 +8232,8 @@ dependencies = [
  "leptoskit_notifications",
  "leptoskit_query",
  "leptoskit_rpc",
+ "serde_json",
+ "uuid",
 ]
 
 [[package]]

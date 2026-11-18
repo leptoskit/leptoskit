@@ -597,3 +597,219 @@ func theDeviceMethodAnswersWhatTheOSReports() async throws {
     #expect(reported.methods.contains(9))
     #endif
 }
+
+/// A `RECEIVED` request: the wait bound in milliseconds, little-endian.
+private func waitBytes(_ millis: UInt32) -> [UInt8] {
+    var little = millis.littleEndian
+    return withUnsafeBytes(of: &little) { Array($0) }
+}
+
+/// A `RECEIVED` reply decoded the way the Rust contract does: a `u32`
+/// count, then for each item a `u32` kind and three length-prefixed strings.
+private func receivedItems(_ data: Data) -> [ReceivedNotifications.Item] {
+    let bytes = [UInt8](data)
+    var offset = 0
+    func u32() -> UInt32 {
+        let value = UInt32(bytes[offset]) | UInt32(bytes[offset + 1]) << 8 |
+            UInt32(bytes[offset + 2]) << 16 | UInt32(bytes[offset + 3]) << 24
+        offset += 4
+        return value
+    }
+    func text() -> String {
+        let length = Int(u32())
+        let value = String(decoding: bytes[offset..<(offset + length)], as: UTF8.self)
+        offset += length
+        return value
+    }
+
+    var items: [ReceivedNotifications.Item] = []
+
+    for _ in 0..<u32() {
+        let kind = ReceivedNotifications.Kind(rawValue: u32())
+        let action = text()
+        let local = text()
+        let payload = text()
+
+        if let kind {
+            items.append(ReceivedNotifications.Item(kind: kind, action: action, local: local, payload: payload))
+        } else {
+            Issue.record("an unknown kind crossed the wire")
+        }
+    }
+
+    #expect(offset == bytes.count, "the reply carries no trailing bytes")
+    return items
+}
+
+/// A push's payload as APNs hands it to the app: the alert, the
+/// notification's id, the send's link, and the send's data.
+private func pushed() -> [AnyHashable: Any] {
+    [
+        "aps": ["alert": ["title": "Paid", "body": "Invoice 42"]],
+        "lkn": "0190a1b2-0000-7000-8000-000000000001",
+        "lklink": "/invoice/42",
+        "lk": ["invoice": 42]
+    ]
+}
+
+/// The received tests share the process-wide broker, so this suite runs its
+/// tests one at a time, and every test resets the broker first.
+@Suite(.serialized)
+@MainActor
+struct ReceivedNotificationTests {
+    /// A tap that launches the app is recorded before any plugin or guest
+    /// exists, and a plugin created afterwards hands it over once, with the
+    /// payload as the JSON the Rust side reads.
+    @Test
+    func aTapRecordedBeforeAnyPluginReachesThePluginCreatedAfterIt() async throws {
+        ReceivedNotifications.reset()
+        ReceivedNotifications.note(.opened, action: "approve", identifier: "system-id", userInfo: pushed())
+
+        let plugin = NotificationsPlugin(service: Service())
+        let items = receivedItems(try await plugin.invoke(method: 10, payload: payload(waitBytes(0))))
+
+        try #require(items.count == 1)
+        #expect(items[0].kind == .opened)
+        #expect(items[0].action == "approve")
+        #expect(items[0].local == "", "a push is not one of the plugin's local notifications")
+
+        let object = try #require(
+            JSONSerialization.jsonObject(with: Data(items[0].payload.utf8)) as? [String: Any]
+        )
+        #expect(object["lkn"] as? String == "0190a1b2-0000-7000-8000-000000000001")
+        #expect(object["lklink"] as? String == "/invoice/42")
+        #expect((object["lk"] as? [String: Any])?["invoice"] as? Int == 42)
+        #expect(object["aps"] != nil)
+
+        // Taken once: the next read is empty, and never waits when asked not to.
+        #expect(receivedItems(try await plugin.invoke(method: 10, payload: payload(waitBytes(0)))).isEmpty)
+        plugin.close()
+        ReceivedNotifications.reset()
+    }
+
+    /// Each callback is its own kind, in the order it happened: a
+    /// notification shown while the app is open, a tap on it, and a silent
+    /// data message.
+    @Test
+    func eachCallbackIsItsOwnKindInOrder() async throws {
+        ReceivedNotifications.reset()
+        ReceivedNotifications.note(.presented, action: "", identifier: "system-id", userInfo: pushed())
+        ReceivedNotifications.note(.opened, action: "", identifier: "system-id", userInfo: pushed())
+        NotificationsPlugin.noteRemoteNotification(["aps": ["content-available": 1], "lk": ["sync": "orders"]])
+
+        let items = ReceivedNotifications.take()
+        #expect(items.map(\.kind) == [.presented, .opened, .message])
+        #expect(items[1].action == "", "a tap on the notification itself has no action")
+        #expect(items[2].payload.contains("\"sync\":\"orders\""))
+        #expect(ReceivedNotifications.take().isEmpty)
+    }
+
+    /// A tap on one of the plugin's own local notifications names the id
+    /// the app posted it with; a push's system identifier names nothing.
+    @Test
+    func aLocalNotificationTapNamesThePluginsOwnIdentifier() {
+        #expect(ReceivedNotifications.local("leptoskit.notifications.job-1") == "job-1")
+        #expect(ReceivedNotifications.local("leptoskit.notifications.") == "")
+        #expect(ReceivedNotifications.local("leptoskit.notifications.bad id") == "")
+        #expect(ReceivedNotifications.local("leptoskit.notifications." + String(repeating: "a", count: 65)) == "")
+        #expect(ReceivedNotifications.local("6C1F3B62-0000-4000-8000-000000000000") == "")
+
+        ReceivedNotifications.reset()
+        ReceivedNotifications.note(.opened, action: "", identifier: "leptoskit.notifications.job-1", userInfo: [:])
+        let items = ReceivedNotifications.take()
+        #expect(items == [ReceivedNotifications.Item(kind: .opened, action: "", local: "job-1", payload: "")])
+    }
+
+    /// Only the latest items are kept, and a field outside the contract's
+    /// bounds is recorded as empty rather than cut or refused.
+    @Test
+    func theBrokerKeepsTheLatestItemsAndBoundsEachField() {
+        ReceivedNotifications.reset()
+
+        for index in 0..<(ReceivedNotifications.maxItems + 4) {
+            ReceivedNotifications.note(.opened, action: "a\(index)", identifier: "", userInfo: [:])
+        }
+
+        let kept = ReceivedNotifications.take()
+        #expect(kept.count == ReceivedNotifications.maxItems)
+        #expect(kept.first?.action == "a4", "the oldest make room for the newest")
+        #expect(kept.last?.action == "a\(ReceivedNotifications.maxItems + 3)")
+
+        ReceivedNotifications.note(
+            .opened,
+            action: String(repeating: "x", count: ReceivedNotifications.maxActionBytes + 1),
+            identifier: "",
+            userInfo: ["big": String(repeating: "x", count: ReceivedNotifications.maxPayloadBytes)]
+        )
+        ReceivedNotifications.note(.opened, action: "two\nlines", identifier: "", userInfo: [1: "not a string key"])
+        let odd = ReceivedNotifications.take()
+        #expect(odd.map(\.action) == ["", ""])
+        #expect(odd.map(\.payload) == ["", ""])
+    }
+
+    /// A waiting call ends as soon as something arrives, an empty wait ends
+    /// at its bound, and the bound is never past the contract's own.
+    @Test
+    func aWaitEndsWhenSomethingArrivesAndIsBounded() async throws {
+        ReceivedNotifications.reset()
+        let plugin = NotificationsPlugin(service: Service())
+        let waiting = Task { try await plugin.invoke(method: 10, payload: payload(waitBytes(.max))) }
+
+        try await Task.sleep(nanoseconds: 150_000_000)
+        ReceivedNotifications.note(.opened, action: "", identifier: "", userInfo: pushed())
+        let items = receivedItems(try await waiting.value)
+        #expect(items.count == 1)
+
+        let started = ContinuousClock.now
+        #expect(receivedItems(try await plugin.invoke(method: 10, payload: payload(waitBytes(200)))).isEmpty)
+        let waited = ContinuousClock.now - started
+        #expect(waited >= .milliseconds(150))
+        #expect(waited < .seconds(5))
+        plugin.close()
+    }
+
+    /// The request is four bytes; a plugin closed while waiting never
+    /// answers, and what arrives afterwards stays for the next plugin.
+    @Test
+    func aMalformedRequestIsRefusedAndClosingEndsTheWait() async throws {
+        ReceivedNotifications.reset()
+        let plugin = NotificationsPlugin(service: Service())
+
+        for bad in [[], [0], [0, 0, 0, 0, 0]] as [[UInt8]] {
+            do {
+                _ = try await plugin.invoke(method: 10, payload: payload(bad))
+                Issue.record("a malformed wait must be refused")
+            } catch {
+                #expect(error as? PluginError == .invalidArgument)
+            }
+        }
+
+        let waiting = Task { try await plugin.invoke(method: 10, payload: payload(waitBytes(5_000))) }
+        try await Task.sleep(nanoseconds: 150_000_000)
+        plugin.close()
+        await #expect(throws: PluginError.cancelled) { try await waiting.value }
+
+        ReceivedNotifications.note(.opened, action: "", identifier: "", userInfo: pushed())
+        let next = NotificationsPlugin(service: Service())
+        #expect(receivedItems(try await next.invoke(method: 10, payload: payload(waitBytes(0)))).count == 1)
+        next.close()
+    }
+
+    /// Apple's hosts advertise the receiving method, and a notification
+    /// that arrives while the app is open shows, sounds, and badges as it
+    /// would with the app closed.
+    @Test
+    func appleHostsAdvertiseReceivingAndPresentInTheForeground() {
+        let plugin = NotificationsPlugin(service: Service())
+
+        #if os(iOS) || os(macOS)
+        #expect(plugin.methods.contains(10))
+        #else
+        #expect(!plugin.methods.contains(10))
+        #endif
+        #expect(ReceivedNotifications.foregroundPresentation == [.banner, .list, .sound, .badge])
+        let delegate: any UNUserNotificationCenterDelegate = NotificationCenterDelegate.shared
+        #expect(delegate === NotificationCenterDelegate.shared)
+        plugin.close()
+    }
+}

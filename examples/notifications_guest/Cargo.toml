@@ -17,6 +17,8 @@ leptoskit_bridge = { workspace = true, features = ["guest"] }
 leptoskit_notifications = { workspace = true, features = ["native"] }
 leptoskit_query = { workspace = true }
 leptoskit_rpc = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
 
 [lints]
 workspace = true

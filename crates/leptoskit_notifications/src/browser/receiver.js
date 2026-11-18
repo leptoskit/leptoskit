@@ -9,15 +9,20 @@
 // shape the banner: an image, a badge count, a click link, and the web
 // presentation set — and shows what arrived with the platform's own
 // presentation, tagged with the notification's id so a repeat replaces
-// rather than stacks. A data message — `lkdata` — shows nothing at all:
-// the app's own code decides what its `data` means, and the worker's whole
-// job for it is the badge it asked to set. On a click it closes the
-// banner, focuses a window of this origin the person already has, and
-// otherwise opens your inbox route — or the send's own link, when it
-// carries one that resolves to this origin — with the notification's id,
-// and with the pressed action button's id when the click was on one. As it
-// activates it claims the pages this origin already has open, so the tab a
-// person enrolled from is one a click can route.
+// rather than stacks, and tells the pages this origin has open that it
+// arrived. The service never pushes a data message — `lkdata` — to a
+// browser, because a push that shows nothing costs a site its
+// subscription; one that arrives anyway is handed to a page in view, and
+// shows one banner when there is none. On a click it closes the banner
+// and focuses a window of this origin the person already has. A page
+// whose app is listening is handed the tap — the notification's id, the
+// send's link, the pressed action button's id, and the send's data — and
+// answers; a page that doesn't answer is brought to the send's own link,
+// when it carries one that resolves to this origin, and otherwise to your
+// inbox route, with the notification's id and the pressed button's id on
+// the address. With no window open, that address opens in a new one. As
+// it activates it claims the pages this origin already has open, so the
+// tab a person enrolled from is one a click can route.
 //
 // This worker holds no credentials and calls no server: nothing fetches,
 // nothing evaluates, and no read state changes here — the authenticated app
@@ -54,6 +59,11 @@
 	const MAX_ACTIONS = 2;
 	const MAX_ACTION_CHARS = 100;
 	const MAX_LANG_CHARS = 35;
+
+	// How long a click waits for an open page to say it took the tap
+	// before the page is brought to the address instead. An app that
+	// listens answers at once; this bounds the wait for one that doesn't.
+	const ACK_WAIT_MS = 500;
 
 	// The tag an id-less or broken envelope falls back to, so even those
 	// collapse instead of stacking.
@@ -224,23 +234,53 @@
 
 	// Sets the app badge the platform shows, where the platform can: a
 	// count the send named, resolved by the service to the person's live
-	// unread number at push time. A zero clears it. Failures — an
-	// unsupported platform, a refused badge — are the platform's own
-	// answer, swallowed on purpose: a badge is a courtesy, never the
-	// delivery.
-	function setBadge(count) {
+	// unread number at push time. A zero clears it. The answer is waited
+	// for, so the push's lifetime covers it and the browser can't stop
+	// the worker with the badge still unset. Failures — an unsupported
+	// platform, a refused badge — are the platform's own answer,
+	// swallowed on purpose: a badge is a courtesy, never the delivery.
+	async function setBadge(count) {
 		if (count === null || typeof navigator === "undefined") {
 			return;
 		}
 
 		try {
 			if (count === 0 && typeof navigator.clearAppBadge === "function") {
-				navigator.clearAppBadge().catch(() => {});
+				await navigator.clearAppBadge();
 			} else if (typeof navigator.setAppBadge === "function") {
-				navigator.setAppBadge(count).catch(() => {});
+				await navigator.setAppBadge(count);
 			}
 		} catch (_error) {
-			// The badge API threw synchronously; the banner is unaffected.
+			// The badge API refused; the banner is unaffected.
+		}
+	}
+
+	// The pressed action button's id: the browser's own `event.action`,
+	// bounded like every action the service sends. A click on the
+	// banner's body is no action.
+	function pressedAction(action) {
+		return typeof action === "string" && action.length > 0 &&
+				action.length <= MAX_ACTION_CHARS
+			? action
+			: null;
+	}
+
+	// The send's link as a path on this origin — what a page can route
+	// to without loading again — or nothing when the link is missing,
+	// malformed, or anywhere else.
+	function ownPath(link) {
+		if (typeof link !== "string" || link.length === 0) {
+			return null;
+		}
+
+		try {
+			const linked = new URL(link, self.location.origin);
+
+			return linked.origin === self.location.origin
+				? linked.pathname + linked.search + linked.hash
+				: null;
+		} catch (_error) {
+			return null;
 		}
 	}
 
@@ -252,18 +292,22 @@
 	// rather than navigated. A click on one of the banner's action
 	// buttons adds that button's id as `lka`, as a query value the URL
 	// encodes: it can name an action, never a second parameter or a place.
+	// The send's link carries the notification's id too, so the page it
+	// opens knows which notification brought the person there.
 	function targetUrl(data, action) {
 		const link = data && typeof data.lklink === "string" ? data.lklink : null;
-		const pressed = typeof action === "string" && action.length > 0 &&
-				action.length <= MAX_ACTION_CHARS
-			? action
-			: null;
+		const pressed = pressedAction(action);
+		const id = identifier(data && data.lkn);
 
 		if (link) {
 			try {
 				const linked = new URL(link, self.location.origin);
 
 				if (linked.origin === self.location.origin) {
+					if (id) {
+						linked.searchParams.set("lkn", id);
+					}
+
 					if (pressed) {
 						linked.searchParams.set("lka", pressed);
 					}
@@ -287,8 +331,6 @@
 			return null;
 		}
 
-		const id = identifier(data && data.lkn);
-
 		if (id) {
 			url.searchParams.set("lkn", id);
 		}
@@ -310,18 +352,122 @@
 		}
 	}
 
-	// One push: show what arrived, or — for a data message — show
-	// nothing but the badge it asked for. The registration's own
-	// presentation is used, so what a banner looks like is the OS's
-	// business, not this script's.
+	// The windows of this origin the person has open, controlled by this
+	// worker or not. Nothing from a push decides this; only the browser's
+	// own client list.
+	async function pages() {
+		try {
+			const matches = await self.clients.matchAll({
+				type: "window",
+				includeUncontrolled: true,
+			});
+
+			return matches.filter((match) => match.url && sameOrigin(match.url));
+		} catch (_error) {
+			return [];
+		}
+	}
+
+	// Tells one page what happened, as a message its app's receiver
+	// reads. Answers whether the page could be told at all.
+	function tell(page, event) {
+		try {
+			if (typeof page.postMessage === "function") {
+				page.postMessage({ lkn_event: event });
+
+				return true;
+			}
+		} catch (_error) {
+			// A page that can't be posted to is a page that wasn't told.
+		}
+
+		return false;
+	}
+
+	// The taps handed to a page and not yet answered, by token.
+	const unanswered = new Map();
+	let handed = 0;
+
+	// Hands a tap to a page and waits, briefly, for its app to say it
+	// took it. A page with no listening app never answers, and the
+	// caller then brings it to the address instead.
+	function hand(page, event) {
+		handed += 1;
+		const token = Date.now().toString(36) + "-" + handed.toString(36);
+
+		return new Promise((resolve) => {
+			unanswered.set(token, resolve);
+
+			if (!tell(page, { ...event, token })) {
+				unanswered.delete(token);
+				resolve(false);
+
+				return;
+			}
+
+			setTimeout(() => {
+				if (unanswered.delete(token)) {
+					resolve(false);
+				}
+			}, ACK_WAIT_MS);
+		});
+	}
+
+	// One message from a page: its app's answer to a tap it was handed.
+	// Anything else is not this worker's.
+	function message(event) {
+		const token = event && event.data && event.data.lkn_ack;
+		const resolve = typeof token === "string" ? unanswered.get(token) : null;
+
+		if (resolve) {
+			unanswered.delete(token);
+			resolve(true);
+		}
+	}
+
+	// One push: set the badge it asked for and show what arrived. The
+	// two run together and both are waited for, so a slow badge never
+	// holds the banner back and neither outlives the push's lifetime.
 	async function deliver(event) {
 		const envelope = envelopeOf(event.data);
-		setBadge(envelope.badge);
+
+		await Promise.all([setBadge(envelope.badge), present(envelope)]);
+	}
+
+	// Shows what arrived and tells the open pages. The registration's own
+	// presentation is used, so what a banner looks like is the OS's
+	// business, not this script's.
+	async function present(envelope) {
+		const open = await pages();
 
 		if (envelope.data) {
-			// A silent data message: the browser may penalize pushes
-			// that show nothing, and the service documents that, but
-			// the sender's instruction is the sender's.
+			// The service never pushes a data message to a browser: a
+			// push that shows nothing makes Chrome show a banner of its
+			// own and makes Safari drop the subscription. One that
+			// arrives anyway goes to the pages that are open, and is
+			// silent only while one of them is in view — the one case
+			// browsers allow.
+			for (const page of open) {
+				tell(page, {
+					kind: "data",
+					id: envelope.id,
+					data: envelope.lk ?? null,
+					badge: envelope.badge,
+				});
+			}
+
+			if (open.some((page) => page.visibilityState === "visible")) {
+				return;
+			}
+
+			const quiet = { tag: envelope.tag };
+
+			if (envelope.id !== null) {
+				quiet.data = { lkn: envelope.id };
+			}
+
+			await self.registration.showNotification(envelope.title, quiet);
+
 			return;
 		}
 
@@ -373,40 +519,35 @@
 		}
 
 		await self.registration.showNotification(envelope.title, options);
+
+		// An open page hears that it arrived, so an inbox on screen can
+		// refresh. Only a push this worker could read by id is worth
+		// telling about.
+		if (envelope.id !== null) {
+			for (const page of open) {
+				tell(page, {
+					kind: "shown",
+					id: envelope.id,
+					data: envelope.lk ?? null,
+				});
+			}
+		}
 	}
 
 	// One click: close the banner, then put the person on the
-	// notification. An app window of this origin is focused and brought
-	// to the inbox route; without one, the route opens in a new window.
-	// The route is the constant this script was built with, checked
-	// against this origin at click time.
+	// notification. An app window of this origin is focused and handed
+	// the tap; a page that doesn't answer is brought to the address
+	// instead, and without a window the address opens in a new one. The
+	// route is the constant this script was built with, checked against
+	// this origin at click time.
 	async function open(event) {
 		event.notification.close();
 
 		// `event.action` is the browser's own: the id of the action button
 		// that was pressed, and the empty string for the banner's body.
-		const url = targetUrl(
-			event.notification && event.notification.data,
-			event.action,
-		);
-		let client = null;
-
-		try {
-			const matches = await self.clients.matchAll({
-				type: "window",
-				includeUncontrolled: true,
-			});
-
-			for (const match of matches) {
-				if (match.url && sameOrigin(match.url)) {
-					client = match;
-					break;
-				}
-			}
-		} catch (_error) {
-			// No window list, so no window to focus; the route still
-			// opens.
-		}
+		const data = event.notification && event.notification.data;
+		const url = targetUrl(data, event.action);
+		const client = (await pages())[0] ?? null;
 
 		if (client) {
 			try {
@@ -418,6 +559,20 @@
 					await self.clients.openWindow(url);
 				}
 
+				return;
+			}
+
+			const taken = await hand(client, {
+				kind: "opened",
+				id: identifier(data && data.lkn),
+				link: ownPath(data && data.lklink),
+				action: pressedAction(event.action),
+				data: plainObject(data && data.lk) ?? null,
+			});
+
+			if (taken) {
+				// The page's own app routes the tap; loading it again
+				// would only throw its state away.
 				return;
 			}
 
@@ -472,7 +627,9 @@
 		self.addEventListener("notificationclick", (event) => {
 			event.waitUntil(open(event));
 		});
+
+		self.addEventListener("message", message);
 	}
 
-	self.lkn = { activate, deliver, envelopeOf, open, targetUrl };
+	self.lkn = { activate, deliver, envelopeOf, message, open, targetUrl };
 })();

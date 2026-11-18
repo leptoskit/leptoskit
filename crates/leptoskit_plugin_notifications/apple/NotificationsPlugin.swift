@@ -183,6 +183,229 @@ public enum RemoteRegistration {
     }
 }
 
+/// What the app has received about notifications and not yet handed to its
+/// guest, as `RECEIVED` (method 10) answers it: a tap on a notification, a
+/// notification that arrived while the app was open, and a message handed
+/// to the app without a tap. Static on purpose, like `RemoteRegistration`:
+/// a tap that launches the app arrives before the plugin and its guest
+/// exist. Guarded by a lock rather than an actor, because the notification
+/// centre calls its delegate without promising one.
+///
+/// The host interprets nothing. Each item carries the provider's payload
+/// as JSON text, and the Rust side — which knows the envelope its service
+/// sends — reads the notification's id, the link, and the send's data out
+/// of it. Only the latest `maxItems` are kept: the inbox is the durable
+/// record.
+public enum ReceivedNotifications {
+    /// Which callback an item came from, as the Rust contract numbers
+    /// them.
+    public enum Kind: UInt32, Sendable {
+        /// The person tapped a notification or one of its action buttons.
+        case opened = 0
+        /// A notification arrived while the app was open, and was shown.
+        case presented = 1
+        /// A message was handed to the app without a tap.
+        case message = 2
+    }
+
+    public struct Item: Equatable, Sendable {
+        public var kind: Kind
+        /// The pressed action button's identifier; empty for a tap on the
+        /// notification itself.
+        public var action: String
+        /// The identifier of the local notification the plugin posted,
+        /// without the plugin's prefix; empty for a push.
+        public var local: String
+        /// The provider's payload as JSON text; empty when it has none
+        /// that fits.
+        public var payload: String
+    }
+
+    /// Bounds shared with the Rust contract.
+    static let maxItems = 16
+    static let maxPayloadBytes = 8192
+    static let maxActionBytes = 256
+    static let maxLocalBytes = 64
+    /// The prefix the plugin gives every local notification it posts.
+    static let localPrefix = "leptoskit.notifications."
+
+    /// What a notification that arrives while the app is open is allowed
+    /// to do: show its banner, stay in Notification Centre, and play the
+    /// sound and set the badge it carries. Without a delegate answering
+    /// this, the system shows nothing while the app is in front.
+    static let foregroundPresentation: UNNotificationPresentationOptions = [.banner, .list, .sound, .badge]
+
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var items: [Item] = []
+
+    /// The delegate's `didReceive response`: a tap. Dismissing a
+    /// notification is not a tap and is not recorded.
+    public static func noteResponse(_ response: UNNotificationResponse) {
+        guard response.actionIdentifier != UNNotificationDismissActionIdentifier else { return }
+
+        let request = response.notification.request
+        note(
+            .opened,
+            action: response.actionIdentifier == UNNotificationDefaultActionIdentifier
+                ? "" : response.actionIdentifier,
+            identifier: request.identifier,
+            userInfo: request.content.userInfo
+        )
+    }
+
+    /// The delegate's `willPresent notification`: a notification that
+    /// arrived while the app was open.
+    public static func notePresented(_ notification: UNNotification) {
+        let request = notification.request
+        note(.presented, action: "", identifier: request.identifier, userInfo: request.content.userInfo)
+    }
+
+    /// The app delegate's `didReceiveRemoteNotification`: a push handed to
+    /// the app without a tap — a silent data message.
+    public static func noteRemoteNotification(_ userInfo: [AnyHashable: Any]) {
+        note(.message, action: "", identifier: "", userInfo: userInfo)
+    }
+
+    /// Records one item, bounded: an action or a payload outside the
+    /// contract's bounds is recorded as empty rather than cut, and the
+    /// oldest item makes room for the newest.
+    static func note(_ kind: Kind, action: String, identifier: String, userInfo: [AnyHashable: Any]) {
+        let item = Item(
+            kind: kind,
+            action: shippable(action, maximum: maxActionBytes) ? action : "",
+            local: local(identifier),
+            payload: json(userInfo)
+        )
+
+        lock.withLock {
+            items.append(item)
+
+            if items.count > maxItems { items.removeFirst(items.count - maxItems) }
+        }
+    }
+
+    /// Takes everything recorded, oldest first, and clears it.
+    static func take() -> [Item] {
+        lock.withLock { () -> [Item] in
+            let taken = items
+            items = []
+            return taken
+        }
+    }
+
+    /// Clears the broker. Process-scoped state, so only tests call this.
+    static func reset() {
+        lock.withLock { items = [] }
+    }
+
+    /// The plugin's own identifier out of a request's: what follows the
+    /// plugin's prefix when it is an identifier the contract carries, and
+    /// empty for a push, whose identifier is the system's.
+    static func local(_ identifier: String) -> String {
+        guard identifier.hasPrefix(localPrefix) else { return "" }
+        let id = String(identifier.dropFirst(localPrefix.count))
+
+        guard !id.isEmpty, id.utf8.count <= maxLocalBytes,
+              id.utf8.allSatisfy({ (48...57).contains($0) || (65...90).contains($0) ||
+                  (97...122).contains($0) || [45, 46, 95].contains($0) }) else { return "" }
+
+        return id
+    }
+
+    /// A payload as JSON text. A push's payload arrived as JSON, so it
+    /// encodes as it came; anything that doesn't, or doesn't fit, is sent
+    /// as empty.
+    static func json(_ userInfo: [AnyHashable: Any]) -> String {
+        var object: [String: Any] = [:]
+
+        for (key, value) in userInfo {
+            if let key = key as? String { object[key] = value }
+        }
+
+        guard !object.isEmpty, JSONSerialization.isValidJSONObject(object),
+              let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]),
+              data.count <= maxPayloadBytes,
+              let text = String(data: data, encoding: .utf8) else { return "" }
+
+        return text
+    }
+
+    /// Whether the contract can carry a short text: within its bound and
+    /// free of control characters.
+    private static func shippable(_ value: String, maximum: Int) -> Bool {
+        value.utf8.count <= maximum &&
+            !value.unicodeScalars.contains(where: { $0.value <= 31 || (127...159).contains($0.value) })
+    }
+
+    /// Encodes a `RECEIVED` reply: a `u32` count, then for each item a
+    /// `u32` kind and three length-prefixed UTF-8 strings — action, local
+    /// identifier, payload — all little-endian.
+    static func encode(_ items: [Item]) -> Data {
+        var data = Data()
+        func append(_ value: UInt32) {
+            var little = value.littleEndian
+            withUnsafeBytes(of: &little) { data.append(contentsOf: $0) }
+        }
+
+        append(UInt32(items.count))
+
+        for item in items {
+            append(item.kind.rawValue)
+
+            for text in [item.action, item.local, item.payload] {
+                let bytes = Array(text.utf8)
+                append(UInt32(bytes.count))
+                data.append(contentsOf: bytes)
+            }
+        }
+
+        return data
+    }
+}
+
+/// The notification-centre delegate the generated apps install before
+/// launch finishes. Without one, the system shows nothing while the app is
+/// in front — neither a push nor the plugin's own local notification — and
+/// a tap opens the app and tells it nothing. This one lets a notification
+/// show as it would with the app closed, and records what arrived and what
+/// was tapped for the guest to take.
+///
+/// It keeps no state and decides nothing else, so an app that needs its
+/// own delegate can forward the same two callbacks to
+/// `ReceivedNotifications`.
+public final class NotificationCenterDelegate: NSObject, UNUserNotificationCenterDelegate, Sendable {
+    public static let shared = NotificationCenterDelegate()
+
+    /// Makes this the notification centre's delegate. Call it from
+    /// `application(_:willFinishLaunchingWithOptions:)` on iOS and
+    /// `applicationWillFinishLaunching(_:)` on macOS: a tap that launches
+    /// the app is delivered as launch finishes, and only to a delegate
+    /// that is already there. The centre holds its delegate weakly;
+    /// `shared` lives as long as the process.
+    @MainActor
+    public static func install() {
+        UNUserNotificationCenter.current().delegate = shared
+    }
+
+    public func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        willPresent notification: UNNotification,
+        withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
+    ) {
+        ReceivedNotifications.notePresented(notification)
+        completionHandler(ReceivedNotifications.foregroundPresentation)
+    }
+
+    public func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        didReceive response: UNNotificationResponse,
+        withCompletionHandler completionHandler: @escaping () -> Void
+    ) {
+        ReceivedNotifications.noteResponse(response)
+        completionHandler()
+    }
+}
+
 @MainActor
 private final class SystemNotificationService: NotificationService {
     private let center = UNUserNotificationCenter.current()
@@ -208,15 +431,18 @@ private final class SystemNotificationService: NotificationService {
     }
 }
 
-/// Immediate local notifications. Does not replace the app's notification center delegate.
+/// Immediate local notifications, remote registration, and what the app
+/// received. The plugin never sets the notification centre's delegate
+/// itself: the generated app installs `NotificationCenterDelegate`.
 @MainActor
 public final class NotificationsPlugin: NativePlugin {
     public let name = "notifications"
-    // The iOS and macOS hosts advertise the remote methods and the device
-    // details enrollment sends; the other hosts keep the local-only set.
+    // The iOS and macOS hosts advertise the remote methods, the device
+    // details enrollment sends, and what the app received; the other hosts
+    // keep the local-only set.
     // The dispatcher answers Unavailable for anything `methods` omits.
     #if os(iOS) || os(macOS)
-    public let methods: [UInt32] = [0, 1, 2, 3, 6, 7, 8, 9]
+    public let methods: [UInt32] = [0, 1, 2, 3, 6, 7, 8, 9, 10]
     #else
     public let methods: [UInt32] = [0, 1, 2, 3, 6]
     #endif
@@ -237,6 +463,14 @@ public final class NotificationsPlugin: NativePlugin {
     /// plain nanoseconds sleep keeps the wait off the Duration/Clock path,
     /// whose runtime support varies across SDKs.
     static let remoteWaitSliceNanos: UInt64 = 50_000_000
+    /// The longest `RECEIVED` waits for something to arrive, in
+    /// milliseconds, matching the Rust contract's
+    /// `MAX_RECEIVED_WAIT_MILLIS`. A caller that keeps listening asks
+    /// again.
+    static let maxReceivedWaitMillis: UInt32 = 10_000
+    /// How often a waiting `RECEIVED` re-reads the broker, in nanoseconds:
+    /// the longest a tap waits for a listening guest.
+    static let receivedWaitSliceNanos: UInt64 = 100_000_000
 
     private let service: any NotificationService
     private let registrar: any RemoteRegistrar
@@ -293,6 +527,20 @@ public final class NotificationsPlugin: NativePlugin {
         RemoteRegistration.noteRegistrationFailure(error)
     }
 
+    /// Installs the notification-centre delegate, so a notification shows
+    /// while the app is open and a tap reaches the guest. The app delegate
+    /// calls it before launch finishes.
+    public static func installDelegate() {
+        NotificationCenterDelegate.install()
+    }
+
+    /// Forwards the app delegate's `didReceiveRemoteNotification` into the
+    /// received broker: a silent data message. Safe whether or not a
+    /// plugin instance exists.
+    public static func noteRemoteNotification(_ userInfo: [AnyHashable: Any]) {
+        ReceivedNotifications.noteRemoteNotification(userInfo)
+    }
+
     public func invoke(method: UInt32, payload: NativeBuffer) async throws -> Data {
         guard !closed else { throw PluginError.cancelled }
         try Task.checkCancellation()
@@ -333,11 +581,47 @@ public final class NotificationsPlugin: NativePlugin {
         case 9:
             guard payload.count == 0 else { throw PluginError.invalidArgument }
             return Self.encodeDevice(device.current())
+        // Method 10 is dispatched where `methods` advertises it: the iOS
+        // and macOS hosts, whose delegates feed the received broker.
+        case 10:
+            return try await received(payload: payload)
         default:
             throw PluginError.unavailable
         }
 
         return Data()
+    }
+
+    /// Takes what the app received since the last call. With nothing
+    /// recorded it waits, up to the bound the caller named and never past
+    /// the contract's own, for something to arrive, and then answers an
+    /// empty batch. Cancelling the wait loses nothing: what arrives stays
+    /// in the broker for the next call. A plugin closed while waiting
+    /// never answers.
+    private func received(payload: NativeBuffer) async throws -> Data {
+        let limitNanos = try payload.withUnsafeBytes { bytes -> UInt64 in
+            guard bytes.count == 4 else { throw PluginError.invalidArgument }
+            let millis = UInt32(littleEndian: bytes.loadUnaligned(fromByteOffset: 0, as: UInt32.self))
+
+            return UInt64(min(millis, Self.maxReceivedWaitMillis)) * 1_000_000
+        }
+        var waited: UInt64 = 0
+
+        while true {
+            guard !closed else { throw PluginError.cancelled }
+            try Task.checkCancellation()
+
+            let items = ReceivedNotifications.take()
+
+            if !items.isEmpty || waited >= limitNanos { return ReceivedNotifications.encode(items) }
+
+            do {
+                try await Task.sleep(nanoseconds: Self.receivedWaitSliceNanos)
+            } catch {
+                throw mapped(error)
+            }
+            waited += Self.receivedWaitSliceNanos
+        }
     }
 
     /// Encodes a `DEVICE` reply: three length-prefixed UTF-8 strings —

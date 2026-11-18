@@ -1,7 +1,7 @@
 //! Compiled guest acceptance for the notifications native enrollment: the
 //! real `native` module — its real plugin guest transport, its real RPC
 //! client over the real HTTP plugin guest — run by the interpreter while
-//! the test plays the OS (`notifications` methods 7, 8, and 9) and the service
+//! the test plays the OS (`notifications` methods 7 to 10) and the service
 //! (`http`), scripted per scenario
 //! (`crates/leptoskit_wasm/tests/notifications_guest.rs`).
 //!
@@ -24,6 +24,8 @@ use leptoskit_notifications::native::EnrollError;
 use leptoskit_notifications::native::Enrollment;
 use leptoskit_notifications::native::Outcome;
 use leptoskit_notifications::native::Retirement;
+use leptoskit_notifications::receive::ReceiveError;
+use leptoskit_notifications::receive::Received;
 use leptoskit_rpc::FnError;
 use leptoskit_rpc::client::ClientConfig;
 use leptoskit_rpc::client::Credentials;
@@ -292,7 +294,62 @@ async fn run_scenario(scenario: u32) {
 			};
 			report_step("reconcile", &native::reconcile(Some(&kept)).await).await;
 		}
+		// What the host received reaches the app in order: the tap that
+		// launched it first, then what arrives while it runs.
+		11 => {
+			let mut receiver = native::Receiver::new();
+
+			for _ in 0..4 {
+				send(STEP, received_line(receiver.next().await).as_bytes()).await;
+			}
+		}
+		// A host without the receiving method answers that it has none.
+		12 => {
+			let mut receiver = native::Receiver::new();
+			send(STEP, received_line(receiver.next().await).as_bytes()).await;
+		}
 		other => report(PANICKED, format!("unknown scenario {other}").as_bytes()),
+	}
+}
+
+/// One received event as a stable line.
+fn received_line(result: Result<Received, ReceiveError>) -> String {
+	let id = |id: Option<uuid::Uuid>| id.map_or("-".to_owned(), |id| id.to_string());
+	let json = |data: &serde_json::Map<String, serde_json::Value>| {
+		serde_json::Value::Object(data.clone()).to_string()
+	};
+
+	match result {
+		Ok(Received::Opened(opened)) => {
+			format!(
+				"opened:{}:{}:{}:{}:{}",
+				id(opened.notification),
+				opened.route("/inbox"),
+				opened.action.as_deref().unwrap_or("-"),
+				if opened.launched {
+					"launched"
+				} else {
+					"running"
+				},
+				json(&opened.data),
+			)
+		}
+		Ok(Received::Shown(shown)) => {
+			format!("shown:{}:{}", id(shown.notification), json(&shown.data))
+		}
+		Ok(Received::Data(message)) => {
+			format!(
+				"data:{}:{}:{}",
+				id(message.notification),
+				message
+					.badge
+					.map_or("-".to_owned(), |badge| badge.to_string()),
+				json(&message.data),
+			)
+		}
+		Err(ReceiveError::Unavailable) => "received=err:unavailable".into(),
+		Err(ReceiveError::NoPlugin) => "received=err:no-plugin".into(),
+		Err(ReceiveError::Host(reason)) => format!("received=err:host:{reason}"),
 	}
 }
 

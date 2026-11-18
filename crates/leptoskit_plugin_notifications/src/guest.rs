@@ -76,6 +76,23 @@ impl Notifications {
 		DeviceInfo::decode(&self.0.call(DEVICE, &[])?.await?)
 	}
 
+	/// Takes what the host has received since the last call — taps,
+	/// notifications that arrived while the app was open, and silent data
+	/// messages — oldest first. With nothing queued the host waits up to
+	/// `wait_millis` (capped at [`MAX_RECEIVED_WAIT_MILLIS`]) and then
+	/// answers an empty batch; `0` never waits. Dropping the future
+	/// cancels the wait and loses nothing: what arrives stays queued for
+	/// the next call. iOS, macOS, and Android; every other platform, and a
+	/// host that predates the method, answers Unavailable.
+	pub async fn received(self, wait_millis: u32) -> Result<Vec<ReceivedItem>, Error> {
+		ReceivedItem::decode_batch(
+			&self
+				.0
+				.call(RECEIVED, &encode_received_wait(wait_millis))?
+				.await?,
+		)
+	}
+
 	async fn empty(self, method: MethodId, payload: &[u8]) -> Result<(), Error> {
 		if self.0.call(method, payload)?.await?.is_empty() {
 			Ok(())

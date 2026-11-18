@@ -59,6 +59,15 @@ pub const REMOTE_REGISTER: MethodId = MethodId(8);
 /// and the app's version — as a [`DeviceInfo`], without side effects. Other
 /// platforms, and hosts that predate it, report `Unavailable`.
 pub const DEVICE: MethodId = MethodId(9);
+/// iOS, macOS, and Android: a four-byte wait bound in milliseconds
+/// ([`encode_received_wait`]); takes what the host has received since the
+/// last call — taps on a notification, notifications that arrived while
+/// the app was open, and silent data messages — as a batch of
+/// [`ReceivedItem`]s, oldest first, and clears them. With nothing queued
+/// the host waits up to the bound for something to arrive and then answers
+/// an empty batch; a bound of `0` never waits. Other platforms, and hosts
+/// that predate it, report `Unavailable`.
+pub const RECEIVED: MethodId = MethodId(10);
 /// Exported independently grantable operations.
 pub const METHODS: &[MethodId] = &[
 	PERMISSION,
@@ -71,7 +80,196 @@ pub const METHODS: &[MethodId] = &[
 	REMOTE_TOKEN,
 	REMOTE_REGISTER,
 	DEVICE,
+	RECEIVED,
 ];
+
+/// The most received items a host keeps and one [`RECEIVED`] reply carries.
+/// A host that receives more before the app asks drops the oldest: the
+/// inbox is the durable record, and this queue is only what happened on
+/// this device just now.
+pub const MAX_RECEIVED_ITEMS: usize = 16;
+
+/// The longest payload a received item carries, in bytes: the provider's
+/// own message as JSON text. APNs and FCM both cap a message at 4 KiB; the
+/// bound leaves room for the host's re-encoding. A host sends a longer one
+/// as empty rather than cut.
+pub const MAX_RECEIVED_PAYLOAD_BYTES: usize = 8_192;
+
+/// The longest action identifier a received item carries, in bytes. A host
+/// sends a longer one as empty, which reads as a tap on the notification
+/// itself.
+pub const MAX_RECEIVED_ACTION_BYTES: usize = 256;
+
+/// The longest a host waits inside one [`RECEIVED`] call, in milliseconds.
+/// A caller that wants to keep listening asks again.
+pub const MAX_RECEIVED_WAIT_MILLIS: u32 = 10_000;
+
+/// Encodes a [`RECEIVED`] request: how long the host may wait for
+/// something to arrive, in milliseconds, capped at
+/// [`MAX_RECEIVED_WAIT_MILLIS`].
+#[must_use]
+pub fn encode_received_wait(millis: u32) -> Bytes {
+	let mut output = Encoder::with_capacity(4);
+	output.u32(millis.min(MAX_RECEIVED_WAIT_MILLIS));
+	output.finish()
+}
+
+/// Validates a [`RECEIVED`] request and answers its wait bound, capped at
+/// [`MAX_RECEIVED_WAIT_MILLIS`].
+pub fn decode_received_wait(payload: &[u8]) -> Result<u32, Error> {
+	let mut input = Decoder::new(payload);
+	let millis = input.u32()?;
+	input.finish()?;
+
+	Ok(millis.min(MAX_RECEIVED_WAIT_MILLIS))
+}
+
+/// Which host callback a [`ReceivedItem`] came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u32)]
+pub enum ReceivedKind {
+	/// The person tapped a notification, or one of its action buttons.
+	Opened = 0,
+	/// A notification arrived while the app was open, and the host showed
+	/// it.
+	Presented = 1,
+	/// A message was handed to the app without a tap: a silent data
+	/// message, or a push that woke the app.
+	Message = 2,
+}
+
+/// One thing the host received, exactly as the OS handed it over. The host
+/// interprets nothing: which notification it was, where a tap should go,
+/// and what the send's `data` held are read from [`ReceivedItem::payload`]
+/// by `leptoskit_notifications`, which knows the envelope its service
+/// sends.
+///
+/// The wire form of a batch is a `u32` count, then for each item a `u32`
+/// kind and three length-prefixed UTF-8 strings: the action, the local
+/// identifier, and the payload.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReceivedItem {
+	kind: ReceivedKind,
+	action: String,
+	local: String,
+	payload: String,
+}
+impl ReceivedItem {
+	/// Builds an item within the contract's bounds: an action of at most
+	/// [`MAX_RECEIVED_ACTION_BYTES`] without control characters, a local
+	/// identifier that is empty or a valid [`Identifier`], and a payload
+	/// of at most [`MAX_RECEIVED_PAYLOAD_BYTES`].
+	pub fn new(
+		kind: ReceivedKind,
+		action: impl Into<String>,
+		local: impl Into<String>,
+		payload: impl Into<String>,
+	) -> Result<Self, Error> {
+		let action = action.into();
+		let local = local.into();
+		let payload = payload.into();
+		validate_text(&action, MAX_RECEIVED_ACTION_BYTES, false, false)?;
+
+		if !local.is_empty() {
+			validate_id(&local)?;
+		}
+
+		if payload.len() > MAX_RECEIVED_PAYLOAD_BYTES {
+			return Err(Error::InvalidArgument);
+		}
+
+		Ok(Self {
+			kind,
+			action,
+			local,
+			payload,
+		})
+	}
+
+	/// Which host callback this came from.
+	#[must_use]
+	pub fn kind(&self) -> ReceivedKind {
+		self.kind
+	}
+
+	/// The pressed action button's identifier; empty for a tap on the
+	/// notification itself, and for anything that isn't a tap.
+	#[must_use]
+	pub fn action(&self) -> &str {
+		&self.action
+	}
+
+	/// The identifier of the local notification this plugin's `SHOW`
+	/// posted, when the item is about one; empty for a push.
+	#[must_use]
+	pub fn local(&self) -> &str {
+		&self.local
+	}
+
+	/// The provider's message as JSON text: the APNs payload on iOS and
+	/// macOS, the FCM data map on Android. Empty when the OS handed over
+	/// nothing the host could encode.
+	#[must_use]
+	pub fn payload(&self) -> &str {
+		&self.payload
+	}
+
+	/// Encodes a [`RECEIVED`] reply of at most [`MAX_RECEIVED_ITEMS`]
+	/// items.
+	pub fn encode_batch(items: &[Self]) -> Result<Bytes, Error> {
+		if items.len() > MAX_RECEIVED_ITEMS {
+			return Err(Error::TooLarge);
+		}
+
+		let mut output = Encoder::with_capacity(
+			4 + items
+				.iter()
+				.map(|item| 16 + item.action.len() + item.local.len() + item.payload.len())
+				.sum::<usize>(),
+		);
+		output.u32(items.len() as u32);
+
+		for item in items {
+			output.u32(item.kind as u32);
+
+			for value in [&item.action, &item.local, &item.payload] {
+				output.bytes(value.as_bytes())?;
+			}
+		}
+
+		Ok(output.finish())
+	}
+
+	/// Validates a complete [`RECEIVED`] reply, including trailing bytes,
+	/// under the same rules as [`ReceivedItem::new`].
+	pub fn decode_batch(payload: &[u8]) -> Result<Vec<Self>, Error> {
+		let mut input = Decoder::new(payload);
+		let count = input.u32()? as usize;
+
+		if count > MAX_RECEIVED_ITEMS {
+			return Err(Error::InvalidArgument);
+		}
+
+		let mut items = Vec::with_capacity(count);
+
+		for _ in 0..count {
+			let kind = match input.u32()? {
+				0 => ReceivedKind::Opened,
+				1 => ReceivedKind::Presented,
+				2 => ReceivedKind::Message,
+				_ => return Err(Error::InvalidArgument),
+			};
+			let action = input.string()?;
+			let local = input.string()?;
+			let payload = input.string()?;
+			items.push(Self::new(kind, action, local, payload)?);
+		}
+
+		input.finish()?;
+
+		Ok(items)
+	}
+}
 
 /// The longest APNs device token, in hex characters. Apple's tokens are 64
 /// hex characters today; the bound leaves room for longer ones rather than
@@ -1217,5 +1415,94 @@ mod tests {
 		] {
 			assert!(RemoteRegistration::new(1, RemoteState::Failed(code.into())).is_ok());
 		}
+	}
+
+	fn tap(payload: &str) -> ReceivedItem {
+		ReceivedItem::new(ReceivedKind::Opened, "approve", "", payload).unwrap()
+	}
+
+	#[test]
+	fn received_batches_round_trip_every_kind() {
+		let batch = vec![
+			tap(r#"{"lkn":"0190a1b2-0000-7000-8000-000000000001","lk":{"invoice":42}}"#),
+			ReceivedItem::new(ReceivedKind::Presented, "", "", r#"{"aps":{"alert":{}}}"#).unwrap(),
+			ReceivedItem::new(ReceivedKind::Message, "", "", r#"{"lkn":"x","é":"✓"}"#).unwrap(),
+			ReceivedItem::new(ReceivedKind::Opened, "", "job-1", "").unwrap(),
+		];
+		let bytes = ReceivedItem::encode_batch(&batch).unwrap();
+
+		assert_eq!(ReceivedItem::decode_batch(&bytes).unwrap(), batch);
+		assert_eq!(batch[0].kind(), ReceivedKind::Opened);
+		assert_eq!(batch[0].action(), "approve");
+		assert_eq!(batch[3].local(), "job-1");
+		assert_eq!(batch[3].payload(), "");
+
+		// Nothing waiting is an empty batch, not an error.
+		let empty = ReceivedItem::encode_batch(&[]).unwrap();
+		assert_eq!(empty.as_ref(), [0, 0, 0, 0]);
+		assert_eq!(ReceivedItem::decode_batch(&empty).unwrap(), Vec::new());
+	}
+
+	#[test]
+	fn received_batches_reject_broken_replies() {
+		let bytes = ReceivedItem::encode_batch(&[tap(r#"{"lkn":"a"}"#)]).unwrap();
+
+		for length in 0..bytes.len() {
+			assert!(ReceivedItem::decode_batch(&bytes[..length]).is_err());
+		}
+
+		let mut trailing = bytes.to_vec();
+		trailing.push(0);
+		assert!(ReceivedItem::decode_batch(&trailing).is_err());
+
+		// Kind 3 is nothing.
+		let mut unknown = Encoder::default();
+		unknown.u32(1);
+		unknown.u32(3);
+		for _ in 0..3 {
+			unknown.bytes(b"").unwrap();
+		}
+		assert!(ReceivedItem::decode_batch(&unknown.finish()).is_err());
+
+		// A host can't claim more items than the queue holds.
+		let mut crowded = Encoder::default();
+		crowded.u32(MAX_RECEIVED_ITEMS as u32 + 1);
+		assert!(ReceivedItem::decode_batch(&crowded.finish()).is_err());
+		assert!(ReceivedItem::encode_batch(&vec![tap(""); MAX_RECEIVED_ITEMS + 1]).is_err());
+		assert!(ReceivedItem::encode_batch(&vec![tap(""); MAX_RECEIVED_ITEMS]).is_ok());
+	}
+
+	#[test]
+	fn received_items_keep_each_field_in_bounds() {
+		let kind = ReceivedKind::Opened;
+
+		assert!(ReceivedItem::new(kind, "x".repeat(MAX_RECEIVED_ACTION_BYTES), "", "").is_ok());
+		assert!(
+			ReceivedItem::new(kind, "x".repeat(MAX_RECEIVED_ACTION_BYTES + 1), "", "").is_err()
+		);
+		assert!(ReceivedItem::new(kind, "two\nlines", "", "").is_err());
+		assert!(ReceivedItem::new(kind, "", "job-1", "").is_ok());
+		assert!(ReceivedItem::new(kind, "", "../job", "").is_err());
+		assert!(ReceivedItem::new(kind, "", "", "x".repeat(MAX_RECEIVED_PAYLOAD_BYTES)).is_ok());
+		assert!(
+			ReceivedItem::new(kind, "", "", "x".repeat(MAX_RECEIVED_PAYLOAD_BYTES + 1)).is_err()
+		);
+	}
+
+	#[test]
+	fn a_received_wait_is_four_bytes_and_bounded() {
+		assert_eq!(encode_received_wait(0).as_ref(), [0, 0, 0, 0]);
+		assert_eq!(
+			decode_received_wait(&encode_received_wait(250)).unwrap(),
+			250
+		);
+		// A longer wait than the contract's is asked as the longest one.
+		assert_eq!(
+			decode_received_wait(&encode_received_wait(u32::MAX)).unwrap(),
+			MAX_RECEIVED_WAIT_MILLIS
+		);
+		assert!(decode_received_wait(&[]).is_err());
+		assert!(decode_received_wait(&[0; 5]).is_err());
+		assert!(METHODS.contains(&RECEIVED));
 	}
 }

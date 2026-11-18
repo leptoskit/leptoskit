@@ -15,6 +15,20 @@ import LeptosKitNotifications
 final class AppDelegate: UIResponder, UIApplicationDelegate {
     func application(
         _ application: UIApplication,
+        willFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
+    ) -> Bool {
+        #if canImport(LeptosKitNotifications)
+        // Before launch finishes: a tap that starts the app is delivered as
+        // launch ends, and only to a delegate that is already installed. The
+        // delegate also lets a notification show while the app is open.
+        NotificationsPlugin.installDelegate()
+        #endif
+
+        return true
+    }
+
+    func application(
+        _ application: UIApplication,
         configurationForConnecting session: UISceneSession,
         options: UIScene.ConnectionOptions
     ) -> UISceneConfiguration {
@@ -49,6 +63,20 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
     ) {
         #if canImport(LeptosKitNotifications)
         NotificationsPlugin.noteRegistrationFailure(error)
+        #endif
+    }
+
+    func application(
+        _ application: UIApplication,
+        didReceiveRemoteNotification userInfo: [AnyHashable: Any],
+        fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void
+    ) {
+        // A push handed to the app without a tap: a silent data message.
+        #if canImport(LeptosKitNotifications)
+        NotificationsPlugin.noteRemoteNotification(userInfo)
+        completionHandler(.newData)
+        #else
+        completionHandler(.noData)
         #endif
     }
 }

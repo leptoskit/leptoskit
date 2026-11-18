@@ -219,7 +219,7 @@ fn remove_fakes() {
 				"__lknShown", "__lknOpened", "__lknFocused", "__lknNavigated",
 				"__lknClosed", "__lknPending", "__lknClients", "__lknBadges",
 				"__lknRegistration", "__lknPushEvent", "__lknClickEvent",
-				"__lknClaimed",
+				"__lknClaimed", "__lknPosted",
 			]) {
 				delete w[name];
 			}
@@ -503,12 +503,15 @@ async fn the_id_only_envelope_shows_without_data() {
 	remove_fakes();
 }
 
-/// A data message shows nothing and only sets the badge it asked for:
-/// the worker's whole job for it is `lkbadge`, and a zero clears.
+/// A data message shows nothing while a page is in view — the one case
+/// a browser lets a push stay silent — and sets the badge it asked for;
+/// a zero clears. Without a page in view it must not stay silent, which
+/// `a_data_message_that_arrives_anyway_is_never_a_silent_push` covers.
 #[wasm_bindgen_test]
 async fn a_data_message_shows_nothing_but_sets_the_badge() {
 	install_fakes();
 	install_script();
+	install_page(true, "visible");
 
 	let id = notification_id();
 	let envelope = format!(
@@ -636,8 +639,8 @@ async fn a_click_opens_the_links_own_origin_and_refuses_foreign_ones() {
 	wait_for_handlers().await;
 	assert_eq!(
 		navigated(),
-		vec![format!("{}/invoice/42", origin())],
-		"the link is the click's own address"
+		vec![format!("{}/invoice/42?lkn={id}", origin())],
+		"the link is the click's own address, naming the notification"
 	);
 
 	// An absolute URL of this origin: itself too.
@@ -646,7 +649,7 @@ async fn a_click_opens_the_links_own_origin_and_refuses_foreign_ones() {
 	wait_for_handlers().await;
 	assert_eq!(
 		navigated()[1],
-		absolute,
+		format!("{absolute}&lkn={id}"),
 		"an absolute same-origin link opens"
 	);
 
@@ -897,7 +900,7 @@ async fn an_action_button_click_carries_its_action_to_the_page() {
 	wait_for_handlers().await;
 	assert_eq!(
 		navigated()[1],
-		format!("{}/invoice/42?tab=pay&lka=a%26b%3Dc", origin())
+		format!("{}/invoice/42?tab=pay&lkn={id}&lka=a%26b%3Dc", origin())
 	);
 
 	// A click on the body — the browser's empty action — adds nothing,
@@ -1034,6 +1037,368 @@ async fn the_wait_until_promise_covers_the_whole_show() {
 	assert_eq!(shown().len(), 1, "the banner is inside the lifetime");
 
 	remove_fakes();
+}
+
+// ---------------------------------------------------------------------------
+// Receiving: what the worker tells open pages, and what the page's own
+// `Receiver` makes of it.
+// ---------------------------------------------------------------------------
+
+/// Puts one same-origin window client in the handlers' way that can be
+/// posted to, recording what it is sent. `answers` makes it a page with a
+/// listening app: it acknowledges a tap the way the page-side receiver
+/// does, by posting the token back to the worker's message handler.
+fn install_page(answers: bool, visibility: &str) {
+	eval(&format!(
+		r#"
+		(() => {{
+			window.__lknPosted = [];
+			window.__lknClients.push({{
+				url: window.location.origin + "/app",
+				visibilityState: "{visibility}",
+				focus: async () => {{ window.__lknFocused.push("page"); }},
+				navigate: async (url) => {{ window.__lknNavigated.push(url); }},
+				postMessage: (message) => {{
+					window.__lknPosted.push(JSON.stringify(message));
+					const token = message.lkn_event && message.lkn_event.token;
+					if ({answers} && token) {{
+						setTimeout(() => window.lkn.message({{ data: {{ lkn_ack: token }} }}), 0);
+					}}
+				}},
+			}});
+		}})();
+	"#
+	));
+}
+
+/// What the posted-to page was sent, in order, each without the token
+/// the worker mints per message.
+fn posted() -> Vec<serde_json::Value> {
+	counter("__lknPosted")
+		.iter()
+		.map(|value| {
+			let mut message: serde_json::Value =
+				serde_json::from_str(&value.as_string().expect("a posted message"))
+					.expect("posted JSON");
+			if let Some(event) = message
+				.get_mut("lkn_event")
+				.and_then(serde_json::Value::as_object_mut)
+			{
+				event.remove("token");
+			}
+			message
+		})
+		.collect()
+}
+
+/// A page whose app is listening takes the tap itself — the id, the
+/// link as a path, the pressed action, and the send's data — and is not
+/// reloaded.
+#[wasm_bindgen_test]
+async fn a_click_hands_the_tap_to_a_listening_page_instead_of_reloading_it() {
+	install_fakes();
+	install_script();
+	install_page(true, "visible");
+
+	let id = notification_id();
+	let absolute = format!("{}/invoice/42?tab=pay", origin());
+	click_action(
+		&format!(r#"{{"lkn":"{id}","lklink":"{absolute}","lk":{{"invoice":42}}}}"#),
+		"approve",
+	)
+	.await;
+	wait_for_handlers().await;
+
+	assert_eq!(count("__lknClosed"), 1, "the banner closes");
+	assert_eq!(focused_markers(), vec!["page"], "the page is focused");
+	assert_eq!(
+		posted(),
+		vec![serde_json::json!({ "lkn_event": {
+			"kind": "opened",
+			"id": id,
+			"link": "/invoice/42?tab=pay",
+			"action": "approve",
+			"data": { "invoice": 42 },
+		} })],
+		"the page is told what was tapped"
+	);
+	assert!(
+		navigated().is_empty() && opened().is_empty(),
+		"a page that took the tap is not reloaded: {:?}",
+		navigated()
+	);
+
+	// A link off this origin never reaches the page as a link.
+	click(&format!(
+		r#"{{"lkn":"{id}","lklink":"https://evil.test/a"}}"#
+	))
+	.await;
+	wait_for_handlers().await;
+	assert_eq!(posted()[1]["lkn_event"]["link"], serde_json::Value::Null);
+	assert_eq!(posted()[1]["lkn_event"]["action"], serde_json::Value::Null);
+
+	remove_fakes();
+}
+
+/// A page that can be posted to but never answers — an app that doesn't
+/// listen, or a page still loading — is brought to the address as before.
+#[wasm_bindgen_test]
+async fn a_click_reloads_a_page_that_never_answers() {
+	install_fakes();
+	install_script();
+	install_page(false, "visible");
+
+	let id = notification_id();
+	click(&format!(r#"{{"lkn":"{id}","lklink":"/invoice/42"}}"#)).await;
+	wait_for_handlers().await;
+
+	assert_eq!(posted().len(), 1, "the page was offered the tap");
+	assert_eq!(
+		navigated(),
+		vec![format!("{}/invoice/42?lkn={id}", origin())],
+		"an unanswered tap falls back to opening the address, which names the notification"
+	);
+
+	remove_fakes();
+}
+
+/// A push that shows a banner also tells the pages that are open, so an
+/// open inbox can refresh.
+#[wasm_bindgen_test]
+async fn a_shown_push_tells_the_open_pages() {
+	install_fakes();
+	install_script();
+	install_page(true, "visible");
+
+	let id = notification_id();
+	let envelope = format!(r#"{{"title":"Paid","body":"b","lkn":"{id}","lk":{{"invoice":42}}}}"#);
+	deliver(&envelope, Some(envelope.len() as u32)).await;
+
+	assert_eq!(shown().len(), 1, "the banner still shows");
+	assert_eq!(
+		posted(),
+		vec![serde_json::json!({ "lkn_event": {
+			"kind": "shown",
+			"id": id,
+			"data": { "invoice": 42 },
+		} })]
+	);
+
+	remove_fakes();
+}
+
+/// The service never pushes a data message to a browser. One that
+/// arrives anyway must not be a push that shows nothing: with a page in
+/// view the page gets the data and nothing shows, and with none the
+/// worker shows one banner rather than letting the browser show its own
+/// or drop the subscription.
+#[wasm_bindgen_test]
+async fn a_data_message_that_arrives_anyway_is_never_a_silent_push() {
+	install_fakes();
+	install_script();
+
+	let id = notification_id();
+	let envelope = format!(
+		r#"{{"title":"Sync","lkn":"{id}","lk":{{"since":"42"}},"lkdata":true,"lkbadge":3}}"#
+	);
+
+	// No page in view: one banner, under the notification's tag.
+	deliver(&envelope, Some(envelope.len() as u32)).await;
+	assert_eq!(
+		shown().len(),
+		1,
+		"a push with no page in view shows a banner"
+	);
+	assert_eq!(shown_title(&shown()[0]), "Sync");
+	assert_eq!(
+		option(&shown_options(&shown()[0]), "tag").as_string(),
+		Some(id.clone())
+	);
+
+	// A page that is open but hidden doesn't count as in view.
+	install_page(true, "hidden");
+	deliver(&envelope, Some(envelope.len() as u32)).await;
+	assert_eq!(shown().len(), 2, "a hidden page is not a page in view");
+
+	// A page in view: the data reaches it and nothing shows.
+	eval("window.__lknClients.length = 0;");
+	install_page(true, "visible");
+	deliver(&envelope, Some(envelope.len() as u32)).await;
+	assert_eq!(shown().len(), 2, "with a page in view nothing shows");
+	assert_eq!(
+		posted(),
+		vec![serde_json::json!({ "lkn_event": {
+			"kind": "data",
+			"id": id,
+			"data": { "since": "42" },
+			"badge": 3,
+		} })],
+		"the page in view gets the data"
+	);
+
+	remove_fakes();
+}
+
+/// The badge is set inside the push's lifetime: the handler's promise
+/// doesn't settle before the platform has answered the badge call, so
+/// the browser can't stop the worker with the badge still unset.
+#[wasm_bindgen_test]
+async fn the_badge_is_set_before_the_push_settles() {
+	install_fakes();
+	install_script();
+	eval(
+		r#"
+		navigator.setAppBadge = (count) =>
+			new Promise((resolve) => setTimeout(() => {
+				window.__lknBadges.push(count);
+				resolve();
+			}, 20));
+	"#,
+	);
+
+	let id = notification_id();
+	let envelope = format!(r#"{{"title":"t","body":"b","lkn":"{id}","lkbadge":7}}"#);
+	deliver(&envelope, Some(envelope.len() as u32)).await;
+
+	let badges = counter("__lknBadges");
+	assert_eq!(badges.length(), 1, "the badge landed inside the lifetime");
+	assert_eq!(badges.get(0).as_f64(), Some(7.0));
+	assert_eq!(shown().len(), 1, "and the banner shows as always");
+
+	remove_fakes();
+}
+
+/// Runs `script` and awaits the promise it evaluates to.
+async fn settle(script: &str) {
+	as_promise(js_sys::eval(script).expect("the script evaluates"))
+		.await
+		.expect("the script's promise resolves");
+}
+
+/// The whole round trip on one page: the shipped worker script hands a
+/// tap to a page, the page's own `Receiver` — the API an app uses —
+/// delivers it as a typed event and answers, and the worker, answered,
+/// leaves the page where it is.
+#[wasm_bindgen_test]
+async fn the_page_receiver_takes_a_tap_from_the_worker_and_answers_it() {
+	install_fakes();
+	install_script();
+	// A client that delivers the worker's message the way the browser
+	// does: as a `message` event on `navigator.serviceWorker`, whose
+	// source the page answers through.
+	eval(
+		r#"
+		(() => {
+			const channel = new MessageChannel();
+			channel.port2.onmessage = (event) => window.lkn.message({ data: event.data });
+			window.__lknChannel = channel;
+			window.__lknClients.push({
+				url: window.location.origin + "/app",
+				visibilityState: "visible",
+				focus: async () => { window.__lknFocused.push("page"); },
+				navigate: async (url) => { window.__lknNavigated.push(url); },
+				postMessage: (message) => {
+					navigator.serviceWorker.dispatchEvent(new MessageEvent("message", {
+						data: message,
+						source: channel.port1,
+					}));
+				},
+			});
+		})();
+	"#,
+	);
+
+	let mut receiver = lkn::Receiver::new();
+	let id = notification_id();
+	click_action(
+		&format!(r#"{{"lkn":"{id}","lklink":"/invoice/42","lk":{{"invoice":42}}}}"#),
+		"approve",
+	)
+	.await;
+	wait_for_handlers().await;
+
+	let received = receiver.next().await.expect("the tap is delivered");
+	let lkn::Received::Opened(opened) = received else {
+		panic!("a tap, not {received:?}");
+	};
+	assert_eq!(opened.notification, Some(id.parse().expect("a uuid")));
+	assert_eq!(opened.link.as_deref(), Some("/invoice/42"));
+	assert_eq!(opened.action.as_deref(), Some("approve"));
+	assert_eq!(opened.data.get("invoice"), Some(&serde_json::json!(42)));
+	assert!(!opened.launched, "the page was already open");
+	assert_eq!(opened.route("/inbox"), "/invoice/42");
+	assert!(
+		navigated().is_empty(),
+		"the worker heard the page's answer and did not reload it: {:?}",
+		navigated()
+	);
+
+	// A push that shows while the page is open arrives the same way.
+	let envelope = format!(r#"{{"title":"Paid","lkn":"{id}","lk":{{"invoice":43}}}}"#);
+	deliver(&envelope, Some(envelope.len() as u32)).await;
+	let received = receiver.next().await.expect("the arrival is delivered");
+	let lkn::Received::Shown(arrived) = received else {
+		panic!("an arrival, not {received:?}");
+	};
+	assert_eq!(arrived.notification, Some(id.parse().expect("a uuid")));
+	assert_eq!(
+		receiver.pending().await.expect("nothing else"),
+		Vec::new(),
+		"nothing else is waiting"
+	);
+
+	// Another worker's messages are not the receiver's.
+	settle(
+		r#"
+		navigator.serviceWorker.dispatchEvent(new MessageEvent("message", {
+			data: { type: "cache-updated" },
+		}));
+		Promise.resolve()
+	"#,
+	)
+	.await;
+	assert_eq!(receiver.pending().await.expect("still nothing"), Vec::new());
+
+	drop(receiver);
+	eval("window.__lknChannel.port1.close(); delete window.__lknChannel;");
+	remove_fakes();
+}
+
+/// A page the worker opened for a click reads the tap from its own
+/// address — the tap that launched it — and cleans the address, so a
+/// reload doesn't report the tap again.
+#[wasm_bindgen_test]
+async fn a_page_opened_by_a_click_reads_the_tap_from_its_address() {
+	let before = window().location().href().expect("an address");
+	let id = notification_id();
+	eval(&format!(
+		r#"history.replaceState(history.state, "", "/invoice/42?tab=pay&lkn={id}&lka=approve#top");"#
+	));
+
+	let mut receiver = lkn::Receiver::new();
+	let received = receiver.pending().await.expect("the launch tap");
+	let [lkn::Received::Opened(opened)] = received.as_slice() else {
+		panic!("one tap, not {received:?}");
+	};
+	assert!(opened.launched, "the tap is the one that opened the page");
+	assert_eq!(opened.notification, Some(id.parse().expect("a uuid")));
+	assert_eq!(opened.action.as_deref(), Some("approve"));
+	assert_eq!(opened.route("/inbox"), "/invoice/42?tab=pay#top");
+
+	let after = window().location();
+	assert_eq!(after.pathname().expect("a path"), "/invoice/42");
+	assert_eq!(after.search().expect("a query"), "?tab=pay");
+	assert_eq!(after.hash().expect("a fragment"), "#top");
+
+	// A second receiver on the cleaned address reports nothing.
+	drop(receiver);
+	let mut again = lkn::Receiver::new();
+	assert_eq!(again.pending().await.expect("nothing"), Vec::new());
+
+	eval(&format!(
+		r#"history.replaceState(history.state, "", {});"#,
+		serde_json::to_string(&before).expect("a string")
+	));
 }
 
 // ---------------------------------------------------------------------------
