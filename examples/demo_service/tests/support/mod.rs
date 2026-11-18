@@ -5,6 +5,7 @@
 #![allow(dead_code, reason = "each proof uses the pieces it needs")]
 
 use std::fmt::Write as _;
+use std::fs::File;
 use std::io::Read as _;
 use std::io::Write as _;
 use std::net::IpAddr;
@@ -13,14 +14,19 @@ use std::net::Ipv6Addr;
 use std::net::SocketAddr;
 use std::net::TcpListener;
 use std::net::TcpStream;
+use std::os::fd::AsFd as _;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Child;
 use std::process::Command;
 use std::process::Stdio;
+use std::sync::Arc;
+use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
 use std::time::Instant;
+
+use rustix::fs::FlockOperation;
 
 /// The site's host: loopback HTTP, accepted by every layer for
 /// development, and distinct from the admin's.
@@ -50,8 +56,13 @@ pub struct Server {
 	/// The address family the process binds, so the polling helpers
 	/// connect where it actually listens.
 	pub addr: IpAddr,
-	/// The process's stderr, on a thread, for honest failure reports.
-	pub stderr: Option<thread::JoinHandle<String>>,
+	/// The process's stderr, collected on a thread and readable while
+	/// the process runs, so a proof can wait for a log line instead of
+	/// sleeping for a guess at when it appears.
+	stderr: Option<Arc<Mutex<String>>>,
+	/// The collecting thread, joined by [`Server::stderr_of`] once the
+	/// process has ended.
+	stderr_thread: Option<thread::JoinHandle<()>>,
 }
 
 impl Server {
@@ -131,13 +142,36 @@ fn terminate(_pid: u32) {}
 /// Distinct, verified-free ports for parallel tests: the counter hands
 /// each caller a different port even mid-parallel, and each is checked
 /// for a live listener before it is handed out.
+///
+/// Two facts about the range keep one machine's many copies of this
+/// suite apart. First, other checkouts still hand ports out
+/// sequentially from 31000 — every copy of the deterministic allocator
+/// lives in the first few dozen ports below 31100 — so this sweep
+/// starts no lower than that. Second, where this run's sweep starts is
+/// random per test binary, so two randomized copies land in different
+/// parts of the range instead of racing the same port: both would
+/// check a port free, drop the probe, and lose the bind to the other's
+/// child, which the service truthfully refuses with "Address already
+/// in use". The probe-and-skip loop below still avoids whatever is
+/// genuinely held.
 pub fn free_port() -> u16 {
+	use std::sync::OnceLock;
 	use std::sync::atomic::AtomicU16;
 	use std::sync::atomic::Ordering;
+
+	static OFFSET: OnceLock<u16> = OnceLock::new();
+	let offset = *OFFSET.get_or_init(|| {
+		let nanos = std::time::SystemTime::now()
+			.duration_since(std::time::UNIX_EPOCH)
+			.expect("the clock is sane")
+			.subsec_nanos();
+		(std::process::id() ^ nanos) as u16
+	});
+
 	static NEXT: AtomicU16 = AtomicU16::new(0);
 
 	for _ in 0..64 {
-		let port = 31000 + NEXT.fetch_add(1, Ordering::SeqCst) % 8000;
+		let port = 31100 + offset.wrapping_add(NEXT.fetch_add(1, Ordering::SeqCst)) % 7900;
 		let Ok(listener) = TcpListener::bind(("127.0.0.1", port)) else {
 			continue;
 		};
@@ -145,6 +179,22 @@ pub fn free_port() -> u16 {
 		return port;
 	}
 	panic!("no free port in the test range")
+}
+
+/// A port the kernel agrees is free on both loopback families. The IPv6
+/// proofs bind `[::1]`, a namespace the IPv4-only probe inside
+/// [`free_port`] cannot see: a listener there would both trip a
+/// "nothing listens" probe that had checked nothing and steal a child's
+/// bind. Every candidate still comes from `free_port`, so the range
+/// rules there apply here too.
+pub fn free_port_on_both_families() -> u16 {
+	for _ in 0..16 {
+		let port = free_port();
+		if TcpListener::bind((CONNECT_V6, port)).is_ok() {
+			return port;
+		}
+	}
+	panic!("no port is free on both loopback families")
 }
 
 /// A fresh volume: mode 0700, owned by this account, not a symlink.
@@ -157,6 +207,25 @@ pub fn volume() -> PathBuf {
 			.expect("the volume is restrictable");
 	}
 	root
+}
+
+/// Holds the volume's `build.lock` exclusively, as the service's own
+/// builder would. While a proof holds it, a spawned process binds its
+/// listener and serves the fallback but cannot start building, which
+/// makes "before any generation" a fact rather than a race against the
+/// build finishing first; dropping the file lets the process proceed.
+#[cfg(unix)]
+pub fn hold_build_lock(root: &Path) -> File {
+	let file = std::fs::OpenOptions::new()
+		.read(true)
+		.write(true)
+		.create(true)
+		.truncate(false)
+		.open(root.join("build.lock"))
+		.expect("the build lock opens");
+	rustix::fs::flock(file.as_fd(), FlockOperation::LockExclusive)
+		.expect("the exclusive build lock is taken");
+	file
 }
 
 /// One server's environment: the given bind, and the loopback HTTP
@@ -185,6 +254,52 @@ pub fn env(root: &Path, bind: SocketAddr, extra: &[(&str, String)]) -> Vec<(Stri
 /// ignores them.
 pub fn spawn(root: &Path, port: u16, extra: &[(&str, String)]) -> Server {
 	spawn_on(SocketAddr::new(CONNECT_V4, port), root, extra)
+}
+
+/// Starts a service on a fresh port, retrying a refused bind.
+pub fn spawn_fresh(root: &Path, extra: &[(&str, String)]) -> Server {
+	spawn_fresh_with(free_port, |port| spawn(root, port, extra))
+}
+
+/// Starts an IPv6 service on a fresh port, retrying a refused bind.
+pub fn spawn_fresh_ipv6(root: &Path, extra: &[(&str, String)]) -> Server {
+	spawn_fresh_with(free_port_on_both_families, |port| {
+		spawn_ipv6(root, port, extra)
+	})
+}
+
+fn spawn_fresh_with(
+	mut choose: impl FnMut() -> u16,
+	mut start: impl FnMut(u16) -> Server,
+) -> Server {
+	let mut refused = Vec::new();
+	for _ in 0..5 {
+		let port = choose();
+		let mut server = start(port);
+		let deadline = Instant::now() + READY;
+		loop {
+			if let Some(exit) = server.try_wait() {
+				let stderr = stderr_of(&mut server);
+				let address = SocketAddr::new(server.addr, port);
+				if stderr.contains(&format!("binding {address}: Address already in use")) {
+					eprintln!("port {port} was refused; trying another port");
+					refused.push(port);
+					break;
+				}
+				panic!("the service exited with {exit} before binding its listener\n{stderr}");
+			}
+			let (status, _) = get_on(server.addr, port, SITE_HOST, "/healthz");
+			if status != 0 && server.alive() {
+				return server;
+			}
+			if Instant::now() > deadline {
+				let stderr = stderr_of(&mut server);
+				panic!("the service never bound its listener\n{stderr}");
+			}
+			thread::sleep(Duration::from_millis(50));
+		}
+	}
+	panic!("the service could not bind after five attempts; refused ports: {refused:?}");
 }
 
 /// Spawns the real binary bound to IPv6 loopback, with the admin origin
@@ -234,12 +349,26 @@ fn spawn_with_variables(variables: Vec<(String, String)>) -> Server {
 		.spawn()
 		.expect("the demo service binary spawns");
 
-	let stderr = child.stderr.take().map(|mut stderr| {
-		thread::spawn(move || {
-			let mut collected = String::new();
-			let _ = stderr.read_to_string(&mut collected);
-			collected
-		})
+	// The stderr tee: a thread reads the pipe into shared text a proof
+	// can poll, so "the refusal is on stderr" can be waited for rather
+	// than slept past.
+	let (stderr, stderr_thread) = child.stderr.take().map_or((None, None), |mut stderr| {
+		let collected = Arc::new(Mutex::new(String::new()));
+		let sink = Arc::clone(&collected);
+		let handle = thread::spawn(move || {
+			let mut chunk = [0_u8; 4096];
+			loop {
+				match stderr.read(&mut chunk) {
+					Ok(0) | Err(_) => break,
+					Ok(read) => {
+						sink.lock()
+							.unwrap_or_else(std::sync::PoisonError::into_inner)
+							.push_str(&String::from_utf8_lossy(&chunk[..read]));
+					}
+				}
+			}
+		});
+		(Some(collected), Some(handle))
 	});
 
 	Server {
@@ -247,11 +376,17 @@ fn spawn_with_variables(variables: Vec<(String, String)>) -> Server {
 		port: bind.port(),
 		addr: bind.ip(),
 		stderr,
+		stderr_thread,
 	}
 }
 
 /// Polls until `/readyz` says ready. Takes the server mutably so a
 /// failure can report the process's own stderr.
+///
+/// A child that has exited never becomes ready: the wait fails at once
+/// with the exit status and stderr instead of polling a dead process
+/// for the whole budget — which is what turned a refused bind into a
+/// minute of silence and a timeout whose cause it never named.
 pub fn wait_ready(server: &mut Server, timeout: Duration) -> u16 {
 	let deadline = Instant::now() + timeout;
 	loop {
@@ -266,6 +401,13 @@ pub fn wait_ready(server: &mut Server, timeout: Duration) -> u16 {
 		if status == 200 {
 			return status;
 		}
+		if let Some(exit) = server.try_wait() {
+			let stderr = stderr_of(server);
+			panic!(
+				"the service exited with {exit} before becoming ready (last /readyz was \
+				 {status})\n{stderr}"
+			);
+		}
 		if Instant::now() > deadline {
 			let stderr = stderr_of(server);
 			panic!("the service never became ready (last /readyz was {status})\n{stderr}");
@@ -275,12 +417,17 @@ pub fn wait_ready(server: &mut Server, timeout: Duration) -> u16 {
 }
 
 /// Polls until the process answers at all (it has bound its listener).
+/// As [`wait_ready`], a child that has exited fails the wait at once.
 pub fn wait_bound(server: &mut Server, timeout: Duration) {
 	let deadline = Instant::now() + timeout;
 	loop {
 		let (status, _) = get_on(server.addr, server.port, SITE_HOST, "/healthz");
 		if status != 0 {
 			return;
+		}
+		if let Some(exit) = server.try_wait() {
+			let stderr = stderr_of(server);
+			panic!("the service exited with {exit} before binding its listener\n{stderr}");
 		}
 		if Instant::now() > deadline {
 			let stderr = stderr_of(server);
@@ -651,17 +798,64 @@ pub fn appears_within(path: &Path, timeout: Duration) -> bool {
 	false
 }
 
-/// A concise report of one server's stderr, for failure messages. Only
-/// completes once the process has exited.
-pub fn stderr_of(server: &mut Server) -> String {
-	match server.stderr.take() {
-		Some(handle) if handle.is_finished() => handle.join().unwrap_or_default(),
-		Some(handle) => {
-			let _ = server.child.kill();
-			handle.join().unwrap_or_default()
+/// The child's stderr so far, read live from the tee thread: what a
+/// wait helper sees while the process still runs.
+pub fn stderr_so_far(server: &Server) -> String {
+	server.stderr.as_ref().map_or_else(
+		|| "<no stderr pipe>".to_owned(),
+		|collected| {
+			collected
+				.lock()
+				.unwrap_or_else(std::sync::PoisonError::into_inner)
+				.clone()
+		},
+	)
+}
+
+/// Waits until the child's stderr holds `needle` at least `times`
+/// times, so a proof can wait for the log line it is about to assert
+/// on instead of sleeping past a guessed delay. `false` on timeout.
+pub fn stderr_contains_within(
+	server: &Server,
+	needle: &str,
+	times: usize,
+	timeout: Duration,
+) -> bool {
+	let deadline = Instant::now() + timeout;
+	loop {
+		let occurrences = server.stderr.as_ref().map_or(0, |collected| {
+			collected
+				.lock()
+				.unwrap_or_else(std::sync::PoisonError::into_inner)
+				.split(needle)
+				.count()
+				.saturating_sub(1)
+		});
+		if occurrences >= times {
+			return true;
 		}
-		None => String::from("<stderr already taken>"),
+		if Instant::now() > deadline {
+			return false;
+		}
+		thread::sleep(Duration::from_millis(50));
 	}
+}
+
+/// A concise report of one server's stderr, for failure messages.
+/// Completes once the process has exited; a live process is killed so
+/// the pipe ends.
+pub fn stderr_of(server: &mut Server) -> String {
+	let finished = server
+		.stderr_thread
+		.as_ref()
+		.is_none_or(thread::JoinHandle::is_finished);
+	if !finished {
+		let _ = server.child.kill();
+	}
+	if let Some(handle) = server.stderr_thread.take() {
+		let _ = handle.join();
+	}
+	stderr_so_far(server)
 }
 
 /// Formats a failure context into panic messages consistently.

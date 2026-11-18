@@ -30,12 +30,11 @@ use support::SITE_HOST;
 use support::Sse;
 use support::appears_within;
 use support::clock_hooks;
-use support::free_port;
 use support::generation_names;
 use support::noon;
 use support::secrets;
 use support::set_clock;
-use support::spawn;
+use support::spawn_fresh;
 use support::volume;
 use support::wait_ready;
 use support::wait_unready;
@@ -63,8 +62,8 @@ fn a_sigterm_during_the_reset_drain_exits_zero_and_publishes_no_new_day() {
 	let clock = root.join("clock");
 	set_clock(&clock, noon(0));
 
-	let port = free_port();
-	let mut server = spawn(&root, port, &clock_hooks(&clock));
+	let mut server = spawn_fresh(&root, &clock_hooks(&clock));
+	let port = server.port;
 	wait_ready(&mut server, READY);
 	let pid = server.pid();
 
@@ -129,8 +128,7 @@ fn a_sigterm_at_the_final_handoff_boundary_exits_zero_instead_of_re_execing() ->
 	]
 	.concat();
 
-	let port = free_port();
-	let mut server = spawn(&root, port, &hooks);
+	let mut server = spawn_fresh(&root, &hooks);
 	wait_ready(&mut server, READY);
 	let pid = server.pid();
 	let old_secrets = secrets(&root);

@@ -55,7 +55,8 @@ use support::secrets;
 use support::set_clock;
 use support::spawn;
 use support::spawn_env;
-use support::spawn_ipv6;
+use support::spawn_fresh;
+use support::spawn_fresh_ipv6;
 use support::today;
 use support::tomorrow;
 use support::volume;
@@ -68,7 +69,7 @@ use support::worker_owner;
 #[test]
 fn cold_start_builds_one_generation_with_private_modes() {
 	let root = volume();
-	let mut server = spawn(&root, free_port(), &[]);
+	let mut server = spawn_fresh(&root, &[]);
 	wait_ready(&mut server, READY);
 
 	let generation = generation_dir(&root);
@@ -108,11 +109,14 @@ fn bad_roots_are_refused_with_a_nonzero_exit() {
 		let holder = tempfile::tempdir().expect("a temporary directory").keep();
 		let link = holder.join("demo-state");
 		std::os::unix::fs::symlink(&target, &link).expect("the symlink is created");
+		// This process is expected to exit before binding.
 		let mut server = spawn(&link, free_port(), &[]);
 		let status = server
 			.wait_within(Duration::from_secs(15))
 			.expect("the process refuses a symlinked root and exits");
 		assert!(!status.success(), "a symlinked root is refused: {status:?}");
+		let stderr = support::stderr_of(&mut server);
+		assert!(stderr.contains("must not be a symlink"), "{stderr}");
 	}
 
 	// A world-readable root fails the 0700 check.
@@ -122,11 +126,14 @@ fn bad_roots_are_refused_with_a_nonzero_exit() {
 		use std::os::unix::fs::PermissionsExt as _;
 		std::fs::set_permissions(&loose, std::fs::Permissions::from_mode(0o755))
 			.expect("the mode changes");
+		// This process is expected to exit before binding.
 		let mut server = spawn(&loose, free_port(), &[]);
 		let status = server
 			.wait_within(Duration::from_secs(15))
 			.expect("the process refuses a loose root and exits");
 		assert!(!status.success(), "a 0755 root is refused: {status:?}");
+		let stderr = support::stderr_of(&mut server);
+		assert!(stderr.contains("must be mode 0700"), "{stderr}");
 	}
 }
 
@@ -136,7 +143,7 @@ fn bad_roots_are_refused_with_a_nonzero_exit() {
 fn a_killed_process_reopens_the_same_generation_without_reseeding() -> Result<()> {
 	let root = volume();
 	let clock = root.join("clock");
-	let mut server = spawn(&root, free_port(), &clock_hooks(&clock));
+	let mut server = spawn_fresh(&root, &clock_hooks(&clock));
 	wait_ready(&mut server, READY);
 
 	let before_secrets = secrets(&root);
@@ -146,8 +153,10 @@ fn a_killed_process_reopens_the_same_generation_without_reseeding() -> Result<()
 	server.kill();
 	assert!(!server.alive(), "the process is dead after SIGKILL");
 
-	let port = server.port;
-	let mut restarted = spawn(&root, port, &clock_hooks(&clock));
+	// A fresh port, not the killed image's: a SIGKILL leaves the old
+	// listener's connections to drain in the kernel, and this proof is
+	// about the generation, not the address.
+	let mut restarted = spawn_fresh(&root, &clock_hooks(&clock));
 	wait_ready(&mut restarted, READY);
 
 	let after_secrets = secrets(&root);
@@ -242,8 +251,8 @@ fn a_published_generation_survives_visitor_changes_and_deletions_across_restarts
 	let clock = root.join("clock");
 	set_clock(&clock, noon(0));
 
-	let port = free_port();
-	let mut server = spawn(&root, port, &clock_hooks(&clock));
+	let mut server = spawn_fresh(&root, &clock_hooks(&clock));
+	let port = server.port;
 	wait_ready(&mut server, READY);
 
 	let marker_path = generation_dir(&root).join("published");
@@ -270,7 +279,7 @@ fn a_published_generation_survives_visitor_changes_and_deletions_across_restarts
 	);
 
 	// An overlapping candidate opens the same, now-changed generation.
-	let mut candidate = spawn(&root, free_port(), &clock_hooks(&clock));
+	let mut candidate = spawn_fresh(&root, &clock_hooks(&clock));
 	assert_eq!(
 		wait_ready(&mut candidate, READY),
 		200,
@@ -279,10 +288,12 @@ fn a_published_generation_survives_visitor_changes_and_deletions_across_restarts
 	candidate.terminate_within(SIGTERM_BUDGET);
 
 	// Same-day SIGKILL and restart: keys, the extra row, and the marker
-	// are all kept, and nothing reseeds.
+	// are all kept, and nothing reseeds. A fresh port, not the killed
+	// image's: its connections drain in the kernel after the SIGKILL,
+	// and this proof is about the generation, not the address.
 	server.kill();
 	assert!(!server.alive(), "the process is dead after SIGKILL");
-	let mut restarted = spawn(&root, port, &clock_hooks(&clock));
+	let mut restarted = spawn_fresh(&root, &clock_hooks(&clock));
 	assert_eq!(
 		wait_ready(&mut restarted, READY),
 		200,
@@ -316,7 +327,7 @@ fn a_published_generation_survives_visitor_changes_and_deletions_across_restarts
 	ensure!(deleted == 2, "the deletion removed the rows it names");
 	drop(connection);
 
-	let mut after_deletion = spawn(&root, port, &clock_hooks(&clock));
+	let mut after_deletion = spawn_fresh(&root, &clock_hooks(&clock));
 	assert_eq!(
 		wait_ready(&mut after_deletion, READY),
 		200,
@@ -334,8 +345,8 @@ fn a_reset_replaces_the_image_and_collects_what_nobody_holds() -> Result<()> {
 	let clock = root.join("clock");
 	set_clock(&clock, noon(0));
 
-	let port = free_port();
-	let mut server = spawn(&root, port, &clock_hooks(&clock));
+	let mut server = spawn_fresh(&root, &clock_hooks(&clock));
+	let port = server.port;
 	wait_ready(&mut server, READY);
 
 	// The generation event stream, open while the day turns.
@@ -488,8 +499,8 @@ fn a_sigterm_with_a_stream_open_exits_zero_within_eight_seconds() {
 	let clock = root.join("clock");
 	set_clock(&clock, noon(0));
 
-	let port = free_port();
-	let mut server = spawn(&root, port, &clock_hooks(&clock));
+	let mut server = spawn_fresh(&root, &clock_hooks(&clock));
+	let port = server.port;
 	wait_ready(&mut server, READY);
 
 	let (mut stream, _) = Sse::open(port, SITE_HOST, "/demo/generation");
@@ -535,12 +546,10 @@ fn an_overlap_hands_the_worker_over_and_completes_operations() -> Result<()> {
 	]
 	.concat();
 
-	let port_a = free_port();
-	let mut active = spawn(&root, port_a, &hooks);
+	let mut active = spawn_fresh(&root, &hooks);
 	wait_ready(&mut active, READY);
 
-	let port_b = free_port();
-	let mut candidate = spawn(&root, port_b, &hooks);
+	let mut candidate = spawn_fresh(&root, &hooks);
 	wait_ready(&mut candidate, READY);
 
 	// One generation, two processes, one worker.
@@ -578,27 +587,35 @@ fn an_overlap_hands_the_worker_over_and_completes_operations() -> Result<()> {
 
 	std::fs::remove_file(root.join("pause")).expect("operations resume");
 
-	let deadline = std::time::Instant::now() + Duration::from_secs(5);
-	while worker_owner(&root).as_deref() != Some(candidate.pid().to_string().as_str()) {
+	// The new worker announces itself in `worker.owner` *before* its
+	// first act — interrupting the operations the dead holder left
+	// running — so the owner changing is not yet the outcome. Wait for
+	// the abandoned operation to leave the live phases, which only the
+	// candidate's worker can do, and then hold it to `Interrupted`.
+	let deadline = std::time::Instant::now() + Duration::from_secs(15);
+	let finished = loop {
+		let operation = store
+			.operation(&abandoned.id)?
+			.expect("the abandoned operation is in the store");
+		if !matches!(operation.phase, Phase::Queued | Phase::Running) {
+			break operation;
+		}
 		ensure!(
 			std::time::Instant::now() < deadline,
-			"the candidate takes the worker lock within seconds of the exit; owner is {:?}",
+			"the abandoned operation ends interrupted under the new worker; it is still {:?}, \
+			 worker owner {:?}",
+			operation.phase,
 			worker_owner(&root)
 		);
 		std::thread::sleep(Duration::from_millis(100));
-	}
-
-	// The abandoned operation is interrupted by the new worker, and the
-	// next queued operation completes.
-	let finished = store
-		.operation(&abandoned.id)?
-		.expect("the abandoned operation is in the store");
+	};
 	assert_eq!(
 		finished.phase,
 		Phase::Interrupted,
 		"the abandoned operation ends interrupted, not half-applied"
 	);
 
+	// The next queued operation completes under the candidate's worker.
 	let next = store.enqueue(
 		"notes-production",
 		&Intent {
@@ -658,9 +675,9 @@ fn a_simultaneous_midnight_builds_exactly_one_new_generation() -> Result<()> {
 	set_clock(&clock, noon(0));
 	let hooks = clock_hooks(&clock);
 
-	let mut first = spawn(&root, free_port(), &hooks);
+	let mut first = spawn_fresh(&root, &hooks);
 	wait_ready(&mut first, READY);
-	let mut second = spawn(&root, free_port(), &hooks);
+	let mut second = spawn_fresh(&root, &hooks);
 	wait_ready(&mut second, READY);
 
 	let first_pid = first.pid();
@@ -715,9 +732,26 @@ fn a_crash_during_a_build_publishes_nothing_and_the_next_image_recovers() -> Res
 	let mut hooks = clock_hooks(&clock);
 	hooks.push(("DEMO_TEST_CRASH_AFTER_SEED", "1".to_owned()));
 
+	// The crash can occur before the listener answers, so verify its hook
+	// directly.
 	let mut server = spawn(&root, free_port(), &hooks);
+	// The crash announces itself on stderr between the committed seed
+	// and the abort, so waiting for the line proves the death is the
+	// intended one: a process that died at startup — a refused bind,
+	// say — fails here, naming why, instead of passing as "a crash" and
+	// leaving nothing on disk to recover.
+	assert!(
+		support::stderr_contains_within(
+			&server,
+			"DEMO_TEST_CRASH_AFTER_SEED",
+			1,
+			Duration::from_secs(60),
+		),
+		"the build crashes after the committed seed: {}",
+		support::stderr_so_far(&server),
+	);
 	let status = server
-		.wait_within(Duration::from_secs(60))
+		.wait_within(Duration::from_secs(15))
 		.expect("the crashed build ends the process");
 	assert!(
 		!status.success(),
@@ -741,7 +775,7 @@ fn a_crash_during_a_build_publishes_nothing_and_the_next_image_recovers() -> Res
 
 	// The next image recovers: the unpublished state is rebuilt only
 	// once the crashed initializer's lifetime lock is gone, which it is.
-	let mut recovery = spawn(&root, free_port(), &clock_hooks(&clock));
+	let mut recovery = spawn_fresh(&root, &clock_hooks(&clock));
 	assert_eq!(
 		wait_ready(&mut recovery, READY),
 		200,
@@ -774,8 +808,8 @@ fn a_failed_initialization_stays_unready_and_retries_in_a_fresh_image() {
 	hooks.push(("DEMO_TEST_FAIL_INIT", fail_file.display().to_string()));
 	hooks.extend(retry_hook());
 
-	let port = free_port();
-	let mut server = spawn(&root, port, &hooks);
+	let mut server = spawn_fresh(&root, &hooks);
+	let port = server.port;
 	wait_bound(&mut server, READY);
 
 	// The fallback serves: alive, not ready, honest about why.
@@ -790,8 +824,15 @@ fn a_failed_initialization_stays_unready_and_retries_in_a_fresh_image() {
 	let (page, _) = get(port, SITE_HOST, "/");
 	assert_eq!(page, 503, "ordinary pages answer 503 during the failure");
 
-	// Long enough for at least one bounded retry, the fallback holds.
-	std::thread::sleep(Duration::from_secs(3));
+	// The bounded retry is a re-exec, and a re-exec prints the startup
+	// banner again: waiting for the second banner makes "through at
+	// least one bounded retry" an observed fact rather than a sleep
+	// long enough to hope for one.
+	assert!(
+		support::stderr_contains_within(&server, "demo: site", 2, RETRY + Duration::from_secs(10),),
+		"the failed initialization retries in a fresh image; stderr so far:\n{}",
+		support::stderr_so_far(&server),
+	);
 	assert!(
 		server.alive(),
 		"the process keeps the fallback rather than exiting"
@@ -841,8 +882,14 @@ fn dispatch_answers_its_own_authorities_and_refuses_everyone_else() {
 	let clock = root.join("clock");
 	set_clock(&clock, noon(0));
 
-	let port = free_port();
-	let mut server = spawn(&root, port, &clock_hooks(&clock));
+	// Hold the build lock through the "before any generation" phase: the
+	// process binds and serves its fallback but cannot start building,
+	// so these 503s are the documented pre-generation answers, not a
+	// race the build happened to lose. Releasing the file below lets
+	// the process build and go ready.
+	let build = support::hold_build_lock(&root);
+	let mut server = spawn_fresh(&root, &clock_hooks(&clock));
+	let port = server.port;
 	wait_bound(&mut server, READY);
 
 	// Before any generation: alive, not ready, Retry-After on pages, and
@@ -861,6 +908,8 @@ fn dispatch_answers_its_own_authorities_and_refuses_everyone_else() {
 	assert_eq!(get(port, "stranger.example", "/healthz").0, 421);
 	duplicated_host_is_not_served(port);
 
+	// The build may proceed; the after-readiness proofs follow.
+	drop(build);
 	wait_ready(&mut server, READY);
 
 	// After: public hosts serve, the loopback serves only health and the
@@ -976,13 +1025,33 @@ fn invalid_configuration_exits_nonzero_without_listening_or_writing_a_generation
 			.wait_within(Duration::from_secs(15))
 			.unwrap_or_else(|| panic!("{name}: the process refuses the configuration and exits"));
 		assert!(!status.success(), "{name} is refused: {status:?}");
+		let expected = match name {
+			"an empty configured client IP header" => "DEMO_CLIENT_IP_HEADER must not be empty",
+			"a whitespace-only configured client IP header" => {
+				"DEMO_CLIENT_IP_HEADER must be a header token"
+			}
+			"an ftp site origin on loopback" | "a plain-http admin origin off loopback" => {
+				"must be an HTTPS origin"
+			}
+			"credentials in the site origin" => "must not carry credentials",
+			"a path in the site origin" => "must be a bare origin",
+			"repeated trailing dots" => "not a usable domain name",
+			"a bind off loopback" => "the bind must stay on private loopback",
+			"the site and the admin fold to one authority" => "must be different hosts",
+			_ => unreachable!(),
+		};
+		let stderr = support::stderr_of(&mut server);
+		assert!(
+			stderr.contains(expected),
+			"{name}: expected {expected:?}, got {stderr}"
+		);
 		assert!(
 			std::net::TcpStream::connect_timeout(
 				&std::net::SocketAddr::new(CONNECT_V4, port),
 				Duration::from_millis(250)
 			)
 			.is_err(),
-			"{name}: nothing listens"
+			"{name}: nothing listens on port {port}"
 		);
 		assert!(
 			generation_names(&root).is_empty(),
@@ -997,7 +1066,11 @@ fn invalid_configuration_exits_nonzero_without_listening_or_writing_a_generation
 #[test]
 fn an_ipv6_site_origin_colliding_with_the_bind_is_refused() {
 	let root = volume();
-	let port = free_port();
+	// Both families, because the proof probes both and the child binds
+	// neither: a port already held on `[::1]` is invisible to the IPv4
+	// probe inside `free_port` and would fail the check below without
+	// the service ever having done anything.
+	let port = support::free_port_on_both_families();
 	let overrides = vec![
 		("DEMO_BIND", format!("[::1]:{port}")),
 		("DEMO_SITE_ORIGIN", format!("http://[::1]:{port}")),
@@ -1007,6 +1080,8 @@ fn an_ipv6_site_origin_colliding_with_the_bind_is_refused() {
 		.wait_within(Duration::from_secs(15))
 		.expect("the process refuses the configuration and exits");
 	assert!(!status.success(), "the collision is refused: {status:?}");
+	let stderr = support::stderr_of(&mut server);
+	assert!(stderr.contains("must be distinct authorities"), "{stderr}");
 	assert!(
 		std::net::TcpStream::connect_timeout(
 			&std::net::SocketAddr::new(CONNECT_V4, port),
@@ -1018,7 +1093,7 @@ fn an_ipv6_site_origin_colliding_with_the_bind_is_refused() {
 				Duration::from_millis(250)
 			)
 			.is_err(),
-		"nothing listens on the collided authority"
+		"nothing listens on the collided authority, port {port}"
 	);
 	assert!(generation_names(&root).is_empty(), "no generation is built");
 }
@@ -1046,8 +1121,12 @@ fn ipv6_loopback_authorities_route_and_foreign_hosts_are_refused() {
 	let clock = root.join("clock");
 	set_clock(&clock, noon(0));
 
-	let port = free_port();
-	let mut server = spawn_ipv6(&root, port, &clock_hooks(&clock));
+	// As in the IPv4 dispatch proof: hold the build lock so the
+	// pre-generation answers below are facts, not a race with the build
+	// finishing first.
+	let build = support::hold_build_lock(&root);
+	let mut server = spawn_fresh_ipv6(&root, &clock_hooks(&clock));
+	let port = server.port;
 	wait_bound(&mut server, READY);
 
 	let bind_host = format!("[::1]:{port}");
@@ -1072,6 +1151,8 @@ fn ipv6_loopback_authorities_route_and_foreign_hosts_are_refused() {
 	);
 	assert_eq!(get_on(CONNECT_V6, port, "stranger.example", "/").0, 421);
 
+	// The build may proceed; the after-readiness proofs follow.
+	drop(build);
 	wait_ready(&mut server, READY);
 
 	// After readiness: the bind answers no pages, the admin serves, the
@@ -1091,8 +1172,7 @@ fn schema_drift_is_refused_before_any_database_changes() -> Result<()> {
 	let root = volume();
 	let clock = root.join("clock");
 	set_clock(&clock, noon(0));
-	let port = free_port();
-	let mut server = spawn(&root, port, &clock_hooks(&clock));
+	let mut server = spawn_fresh(&root, &clock_hooks(&clock));
 	wait_ready(&mut server, READY);
 	server.terminate_within(SIGTERM_BUDGET);
 
@@ -1112,9 +1192,16 @@ fn schema_drift_is_refused_before_any_database_changes() -> Result<()> {
 		.collect::<Vec<_>>();
 
 	// The process refuses the marker and stays unready; it never opens
-	// the databases, so no migration touches them.
-	let mut refused = spawn(&root, free_port(), &clock_hooks(&clock));
-	std::thread::sleep(Duration::from_secs(4));
+	// the databases, so no migration touches them. The refusal is on
+	// stderr before anything is asserted: waiting for it makes the 503
+	// below provably the refusal's fallback, not the not-yet-started
+	// one, and no fixed sleep has to guess how long startup takes.
+	let mut refused = spawn_fresh(&root, &clock_hooks(&clock));
+	assert!(
+		support::stderr_contains_within(&refused, "fingerprint", 1, READY),
+		"the refusal names the fingerprint contract: {}",
+		support::stderr_so_far(&refused),
+	);
 	assert_eq!(
 		get(refused.port, SITE_HOST, "/readyz").0,
 		503,
@@ -1165,8 +1252,7 @@ fn a_corrupt_published_marker_fails_closed_without_touching_the_generation() -> 
 	let clock = root.join("clock");
 	set_clock(&clock, noon(0));
 
-	let port = free_port();
-	let mut server = spawn(&root, port, &clock_hooks(&clock));
+	let mut server = spawn_fresh(&root, &clock_hooks(&clock));
 	wait_ready(&mut server, READY);
 	server.terminate_within(SIGTERM_BUDGET);
 
@@ -1187,7 +1273,7 @@ fn a_corrupt_published_marker_fails_closed_without_touching_the_generation() -> 
 		.map(|name| (*name, file_hash(&generation.join(name))))
 		.collect();
 
-	let mut refused = spawn(&root, free_port(), &clock_hooks(&clock));
+	let mut refused = spawn_fresh(&root, &clock_hooks(&clock));
 
 	// Long enough that a rebuild — the old behavior — would have served.
 	// This process must keep the fallback instead, through at least one
@@ -1276,7 +1362,7 @@ fn collection_keeps_recent_published_generations_and_never_deletes_what_it_canno
 		false,
 	);
 
-	let mut server = spawn(&root, free_port(), &clock_hooks(&clock));
+	let mut server = spawn_fresh(&root, &clock_hooks(&clock));
 	wait_ready(&mut server, READY);
 
 	let names = generation_names(&root);
@@ -1327,7 +1413,7 @@ fn cleanup_refuses_a_held_lifetime_lock_and_the_budget_fails_honestly() {
 	);
 	let locks = [hold_shared(&held_a), hold_shared(&held_b)];
 
-	let mut server = spawn(&root, free_port(), &clock_hooks(&clock));
+	let mut server = spawn_fresh(&root, &clock_hooks(&clock));
 	wait_ready(&mut server, READY);
 
 	let names = generation_names(&root);
@@ -1344,7 +1430,7 @@ fn cleanup_refuses_a_held_lifetime_lock_and_the_budget_fails_honestly() {
 	drop(locks);
 
 	// With the locks gone, the next start collects them.
-	let mut next = spawn(&root, free_port(), &clock_hooks(&clock));
+	let mut next = spawn_fresh(&root, &clock_hooks(&clock));
 	assert_eq!(
 		wait_ready(&mut next, READY),
 		200,
@@ -1372,10 +1458,12 @@ fn an_uncollectable_volume_stays_unready_with_an_honest_error() -> Result<()> {
 		held.push(hold_shared(&dir));
 	}
 
-	let mut server = spawn(&root, free_port(), &clock_hooks(&clock));
+	let mut server = spawn_fresh(&root, &clock_hooks(&clock));
 
 	// The process stays up, unready, and says why rather than unlinking
-	// live databases or growing without bound.
+	// live databases or growing without bound. The verdict lands on
+	// stderr after today's generation is published — the documented
+	// order — so wait for the line instead of sleeping past a guess.
 	let published = root
 		.join("gen")
 		.join(format!("{}.f{}", today(), GENERATION_FORMAT))
@@ -1384,7 +1472,11 @@ fn an_uncollectable_volume_stays_unready_with_an_honest_error() -> Result<()> {
 		appears_within(&published, Duration::from_secs(90)),
 		"today's generation builds before the collection verdict"
 	);
-	std::thread::sleep(Duration::from_secs(2));
+	assert!(
+		support::stderr_contains_within(&server, "cannot be collected", 1, Duration::from_secs(30),),
+		"the honest budget error is reported: {}",
+		support::stderr_so_far(&server),
+	);
 	assert_eq!(get(server.port, SITE_HOST, "/readyz").0, 503, "not ready");
 	assert!(server.alive(), "the process keeps the fallback");
 	let stderr = support::stderr_of(&mut server);
