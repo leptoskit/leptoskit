@@ -643,7 +643,7 @@ impl Fixture {
 					"number": 1,
 				})
 			}
-			"variables" | "secrets" | "domains" => {
+			"variables" | "secrets" | "domains" | "database" => {
 				json!({ "organization": organization, "project": "web", "environment": "staging" })
 			}
 			// Whoever may unset may set, and set these just before.
@@ -693,6 +693,7 @@ impl Fixture {
 				})
 			}
 			"register_cluster" => json!({ "name": "eu-two", "region": "eu-central" }),
+			"set_cluster_facts" => json!({ "name": "eu-one", "facts": { "wakes_sleeping": true } }),
 			"issue_pairing" => json!({ "role": "build" }),
 			"revoke_worker" => json!({ "worker": nothing }),
 			"reconcile" => json!({ "job": nothing, "found": { "found": "applied" } }),

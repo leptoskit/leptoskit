@@ -107,6 +107,102 @@ pub(crate) async fn clusters(cx: &rpc::QueryCx) -> rpc::Result<Vec<ClusterSummar
 	Ok(out)
 }
 
+/// The longest name a Postgres server is reached by.
+const MAX_HOST_LEN: usize = 253;
+
+/// `Invalid` (`invalid_facts`) for facts no release spec could be written
+/// from.
+fn check_facts(facts: &ClusterFacts) -> rpc::Result<()> {
+	if let Some(class) = &facts.runtime_class
+		&& !crate::release::is_dns_label(class)
+	{
+		return Err(rpc::Error::invalid(
+			"invalid_facts: a runtime class is a DNS label, such as `gvisor`",
+		));
+	}
+
+	let Some(postgres) = &facts.postgres else {
+		return Ok(());
+	};
+
+	if !crate::release::is_dns_label(&postgres.namespace) {
+		return Err(rpc::Error::invalid(
+			"invalid_facts: the Postgres server's namespace is a DNS label, such as \
+			 `leptoskit-postgres`",
+		));
+	}
+
+	// The host goes into every `DATABASE_URL` as it is: a DNS name and
+	// nothing a URL reads as anything else.
+	let host = &postgres.host;
+	let named = !host.is_empty()
+		&& host.len() <= MAX_HOST_LEN
+		&& host.split('.').all(|label| {
+			!label.is_empty()
+				&& label.len() <= crate::release::MAX_LABEL_LEN
+				&& !label.starts_with('-')
+				&& !label.ends_with('-')
+				&& label.chars().all(|character| {
+					character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-'
+				})
+		});
+
+	if !named {
+		return Err(rpc::Error::invalid(
+			"invalid_facts: the Postgres server's host is a DNS name in lower case, such as \
+			 `postgres-rw.leptoskit-postgres.svc`",
+		));
+	}
+
+	if postgres.port == 0 {
+		return Err(rpc::Error::invalid(
+			"invalid_facts: the Postgres server's port is 1 to 65535",
+		));
+	}
+
+	Ok(())
+}
+
+pub(crate) async fn set_cluster_facts(
+	cx: &rpc::MutationCx,
+	name: String,
+	facts: ClusterFacts,
+) -> rpc::Result<ClusterSummary> {
+	let account = operator(cx.tx(), cx.context()).await?;
+	check_facts(&facts)?;
+	let wanted = name.clone();
+	let Some(mut cluster) = Cluster::query()
+		.filter(|cluster| cluster.name.eq(wanted))
+		.first(cx.tx())
+		.await?
+	else {
+		return Err(rpc::Error::not_found(format!(
+			"cluster_not_found: no cluster is called `{name}`"
+		)));
+	};
+
+	if facts.postgres.is_none() && super::databases::on_cluster(cx.tx(), cluster.id).await? {
+		return Err(rpc::Error::conflict(format!(
+			"cluster_has_databases: environments keep a database on `{name}`'s Postgres server, \
+			 so its facts must say where it is"
+		)));
+	}
+
+	cluster.facts = Json(facts);
+	cluster.save(cx.tx()).await?;
+	audit::record(
+		cx.tx(),
+		&Actor::Person(account),
+		"cluster.set_facts",
+		None,
+		None,
+		Some(name),
+		&client(cx.context()),
+	)
+	.await?;
+	cluster_summary(cx.tx(), &cluster).await
+}
+
 pub(crate) async fn register_cluster(
 	cx: &rpc::MutationCx,
 	name: String,
@@ -125,13 +221,7 @@ pub(crate) async fn register_cluster(
 		)));
 	}
 
-	if let Some(class) = &facts.runtime_class
-		&& !crate::release::is_dns_label(class)
-	{
-		return Err(rpc::Error::invalid(
-			"invalid_facts: a runtime class is a DNS label, such as `gvisor`",
-		));
-	}
+	check_facts(&facts)?;
 
 	let cluster = NewCluster {
 		name: name.clone(),

@@ -36,6 +36,26 @@ pub struct ClusterFacts {
 	/// KEDA HTTP add-on). Without it, nothing sleeps: a process that would
 	/// keeps one replica.
 	pub wakes_sleeping: bool,
+	/// Its shared Postgres server, when it has one: environments whose app
+	/// has a Postgres `[db]` get a database and a role of their own on it.
+	/// Without it, such an app can't be deployed here.
+	pub postgres: Option<ClusterPostgres>,
+}
+
+/// A cluster's shared Postgres server, as its processes reach it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ClusterPostgres {
+	/// The namespace it runs in: a release opens its processes' network
+	/// to that namespace on `port`, and to nothing else in the cluster.
+	pub namespace: String,
+	/// The name processes connect to, such as
+	/// `postgres-rw.leptoskit-postgres.svc`.
+	pub host: String,
+	pub port: u16,
+	/// Whether it takes TLS connections. Then every `DATABASE_URL` ends
+	/// `?sslmode=require`.
+	#[serde(default)]
+	pub tls: bool,
 }
 
 /// A cluster environments run on.
@@ -158,6 +178,24 @@ pub async fn register_cluster(
 	#[serde(default)] capacity_notes: String,
 ) -> rpc::Result<ClusterSummary> {
 	crate::server::operator::register_cluster(cx, name, region, facts, capacity_notes).await
+}
+
+/// Replaces what the control plane knows about a cluster's setup. It reaches
+/// the releases planned from then on: nothing running changes.
+///
+/// # Errors
+///
+/// `NotFound` (`cluster_not_found`); `Invalid` (`invalid_facts`); `Conflict`
+/// (`cluster_has_databases`) for facts without the shared Postgres server
+/// while environments keep a database on it.
+#[rpc::api(scope = crate::OAuthScope::Cloud, tag = "operator")]
+#[rpc::mutation]
+pub async fn set_cluster_facts(
+	cx: &rpc::MutationCx,
+	name: String,
+	facts: ClusterFacts,
+) -> rpc::Result<ClusterSummary> {
+	crate::server::operator::set_cluster_facts(cx, name, facts).await
 }
 
 /// Every worker, newest first, revoked ones included.

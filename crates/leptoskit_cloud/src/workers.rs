@@ -452,6 +452,20 @@ pub enum MigrationStep {
 	},
 }
 
+/// The managed Postgres database a release's processes use.
+///
+/// Before it applies the spec, the worker makes sure its cluster's Postgres
+/// server has a role `role` that logs in with the password in the claim's
+/// `DATABASE_URL` secret, and a database `name` that role owns and no other
+/// role can connect to. Doing so again changes nothing but the password.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct DatabaseStep {
+	pub name: String,
+	pub role: String,
+	pub size: crate::size::DatabaseSize,
+	pub backups: crate::size::Backups,
+}
+
 /// `release`'s input: the spec to apply, and what it does to the database.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ReleaseInput {
@@ -462,6 +476,10 @@ pub struct ReleaseInput {
 	/// ready.
 	#[serde(default)]
 	pub previous: Option<u64>,
+	/// The environment's managed Postgres database, to make sure of before
+	/// the spec is applied.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub database: Option<DatabaseStep>,
 }
 
 /// How a release ended.
@@ -481,6 +499,10 @@ pub enum ReleaseOutcome {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct DestroyEnvironmentInput {
 	pub environment: RuntimeValue<EnvironmentRef>,
+	/// The environment's managed Postgres database, by its name and its
+	/// role's: both are dropped with the environment.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub database: Option<String>,
 }
 
 /// How removing an environment ended.

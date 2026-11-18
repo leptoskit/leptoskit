@@ -18,6 +18,7 @@ use leptoskit_rpc::live::Update;
 use serde_json::Value;
 use serde_json::json;
 use support::config;
+use support::databases;
 use support::domains;
 use support::review;
 use support::shipping;
@@ -490,4 +491,29 @@ async fn a_detached_domain_is_held_until_it_stops_serving() {
 #[tokio::test]
 async fn a_hostname_is_held_while_the_cluster_may_route_it() {
 	domains::a_hostname_is_held_while_the_cluster_may_route_it(&support::app().await).await;
+}
+
+#[tokio::test]
+async fn a_postgres_app_gets_a_database() {
+	databases::a_postgres_app_gets_a_database(&support::app().await).await;
+}
+
+#[tokio::test]
+async fn a_database_password_opens_nowhere_else() {
+	databases::a_database_password_opens_nowhere_else(&support::app().await).await;
+}
+
+#[tokio::test]
+async fn a_rollback_finds_its_database_where_it_is_now() {
+	databases::a_rollback_finds_its_database_where_it_is_now(&support::app().await).await;
+}
+
+#[tokio::test]
+async fn a_deleted_environment_takes_its_database() {
+	databases::a_deleted_environment_takes_its_database(&support::app().await).await;
+}
+
+#[tokio::test]
+async fn a_clusters_postgres_is_checked() {
+	databases::a_clusters_postgres_is_checked(&support::app().await).await;
 }

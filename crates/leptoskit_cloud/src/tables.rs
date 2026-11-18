@@ -652,6 +652,38 @@ pub struct Domain {
 	pub updated_at: Timestamp,
 }
 
+/// An environment's managed Postgres database: a database and a login role
+/// of the same name on its cluster's shared server. The cluster's worker
+/// makes them; this row is what the control plane decided, and the role's
+/// password, sealed with the organisation's data key and bound to this row.
+/// No operation returns the password.
+#[table(name = "databases")]
+pub struct Database {
+	pub id: Id<Self>,
+	#[db(unique, on_delete = cascade)]
+	pub environment_id: Id<Environment>,
+	#[db(no_foreign_key)]
+	pub organization_id: Id<Organization>,
+	#[db(no_foreign_key)]
+	pub cluster_id: Id<Cluster>,
+	/// The database's name and its role's, from the environment's ID:
+	/// never another environment's, and never used again.
+	#[db(unique, min_len = 8, max_len = 63)]
+	pub name: String,
+	/// The size and backups its latest deployment planned.
+	pub settings: Json<crate::release::PlannedDatabase>,
+	/// Counts the passwords the role has had, from 1.
+	pub credential_version: i64,
+	#[db(secret)]
+	pub sealed_password: Vec<u8>,
+	/// Whether a release that uses it has been applied.
+	pub ready: bool,
+	#[db(created_at)]
+	pub created_at: Timestamp,
+	#[db(updated_at)]
+	pub updated_at: Timestamp,
+}
+
 /// That a job was given a secret's value: which secret, and which version,
 /// written in the transaction that leases the job, before the value leaves.
 /// Kept after the secret and the job are gone, as the record of where a

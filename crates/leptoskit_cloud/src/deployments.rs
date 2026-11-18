@@ -138,7 +138,8 @@ pub struct ServiceFacts {
 	/// It is `trust = "isolated"`: third-party code that never sees the
 	/// app's cookies.
 	pub isolated: bool,
-	/// It uses the app's database.
+	/// It has `database = true`: a database of its own, on the app's
+	/// engine.
 	pub database: bool,
 }
 

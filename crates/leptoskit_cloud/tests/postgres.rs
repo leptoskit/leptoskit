@@ -451,3 +451,44 @@ mod domains {
 		}
 	}
 }
+
+/// Managed Postgres databases (`support/databases.rs`), on Postgres.
+mod databases {
+	use super::app;
+	use super::support::databases;
+
+	#[tokio::test]
+	async fn a_postgres_app_gets_a_database() {
+		if let Some((_postgres, app)) = app().await {
+			databases::a_postgres_app_gets_a_database(&app).await;
+		}
+	}
+
+	#[tokio::test]
+	async fn a_database_password_opens_nowhere_else() {
+		if let Some((_postgres, app)) = app().await {
+			databases::a_database_password_opens_nowhere_else(&app).await;
+		}
+	}
+
+	#[tokio::test]
+	async fn a_rollback_finds_its_database_where_it_is_now() {
+		if let Some((_postgres, app)) = app().await {
+			databases::a_rollback_finds_its_database_where_it_is_now(&app).await;
+		}
+	}
+
+	#[tokio::test]
+	async fn a_deleted_environment_takes_its_database() {
+		if let Some((_postgres, app)) = app().await {
+			databases::a_deleted_environment_takes_its_database(&app).await;
+		}
+	}
+
+	#[tokio::test]
+	async fn a_clusters_postgres_is_checked() {
+		if let Some((_postgres, app)) = app().await {
+			databases::a_clusters_postgres_is_checked(&app).await;
+		}
+	}
+}

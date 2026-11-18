@@ -22,6 +22,7 @@
 
 use std::collections::BTreeMap;
 
+use leptoskit_cloud_runtime::DatabaseAccess;
 use leptoskit_cloud_runtime::Egress;
 use leptoskit_cloud_runtime::EnvironmentRef;
 use leptoskit_cloud_runtime::Image;
@@ -55,6 +56,8 @@ use crate::deployments::DeployConfig;
 use crate::operator::ClusterFacts;
 use crate::projects::EnvironmentScale;
 use crate::projects::ProcessScale;
+use crate::size::Backups;
+use crate::size::DatabaseSize;
 use crate::size::Size;
 use crate::size::Sleep;
 use crate::workers::BuildServerOutput;
@@ -73,6 +76,9 @@ pub const SQLITE_VOLUME_GIB: u32 = 1;
 
 /// The `DATABASE_URL` a SQLite app gets.
 pub const SQLITE_URL: &str = "sqlite:///data/app.db";
+
+/// The name a process finds its database's address under.
+pub const DATABASE_URL: &str = "DATABASE_URL";
 
 /// The path prefix a public service is reached under on the app's hostname.
 #[must_use]
@@ -210,6 +216,10 @@ pub fn resolve(
 
 /// One process, as the plan runs it.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[expect(
+	clippy::struct_excessive_bools,
+	reason = "each is a fact of its own, and the plans deployments keep name them this way"
+)]
 pub struct PlannedProcess {
 	pub name: String,
 	pub kind: ProcessKind,
@@ -221,6 +231,17 @@ pub struct PlannedProcess {
 	pub routed: bool,
 	/// Keeps the app's SQLite database on a volume.
 	pub sqlite: bool,
+	/// Uses the environment's managed Postgres database, as the app does:
+	/// it starts with `DATABASE_URL` as a secret.
+	#[serde(default)]
+	pub postgres: bool,
+}
+
+/// The managed Postgres database a plan's environment has.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct PlannedDatabase {
+	pub size: DatabaseSize,
+	pub backups: Backups,
 }
 
 /// What a deployment will run, before the build says how each process
@@ -233,6 +254,9 @@ pub struct Plan {
 	pub sqlite: bool,
 	/// Whether the app has a database at all.
 	pub database: bool,
+	/// The managed Postgres database, when that is the app's database.
+	#[serde(default)]
+	pub postgres: Option<PlannedDatabase>,
 	/// What the release won't do, as sentences.
 	pub fine_print: Vec<String>,
 }
@@ -240,12 +264,25 @@ pub struct Plan {
 /// Why the cloud can't run a configuration yet.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum PlanError {
-	/// The app's database is Postgres, and the managed one comes later.
+	/// The app's database is Postgres, and the environment's cluster has no
+	/// Postgres server.
 	#[error(
-		"postgres_unavailable: managed Postgres is not available yet; the app's `[db]` is \
-		 Postgres, so it can't be deployed until the databases slice ships"
+		"postgres_unavailable: the app's `[db]` is Postgres, and the cluster this environment \
+		 runs on has no managed Postgres"
 	)]
 	PostgresUnavailable,
+	/// A dedicated Postgres instance, which comes later.
+	#[error(
+		"dedicated_database_unavailable: `[cloud.database] size = \"{size}\"` is a dedicated \
+		 Postgres instance, which the cloud can't run yet; use `shared`"
+	)]
+	DedicatedDatabase { size: DatabaseSize },
+	/// A service with a Postgres database of its own, which comes later.
+	#[error(
+		"service_database_unavailable: `{name}` has `database = true`, and the cloud can't give a \
+		 service a Postgres database of its own yet"
+	)]
+	ServiceDatabase { name: String },
 	/// An isolated service is public, and stripping cookies on its route
 	/// comes later.
 	#[error(
@@ -286,9 +323,22 @@ pub fn plan(
 ) -> Result<Plan, PlanError> {
 	let mut fine_print = Vec::new();
 	let sqlite = match resolved.database {
-		ResolvedDatabase::Postgres { .. } => return Err(PlanError::PostgresUnavailable),
+		ResolvedDatabase::Postgres { .. } | ResolvedDatabase::None => false,
 		ResolvedDatabase::Sqlite { .. } => true,
-		ResolvedDatabase::None => false,
+	};
+	let postgres = match resolved.database {
+		ResolvedDatabase::Postgres { size, backups } => {
+			if cluster.postgres.is_none() {
+				return Err(PlanError::PostgresUnavailable);
+			}
+
+			if size != DatabaseSize::Shared {
+				return Err(PlanError::DedicatedDatabase { size });
+			}
+
+			Some(PlannedDatabase { size, backups })
+		}
+		ResolvedDatabase::Sqlite { .. } | ResolvedDatabase::None => None,
 	};
 
 	if stored.is_some() {
@@ -309,6 +359,7 @@ pub fn plan(
 		cluster,
 		&mut fine_print,
 	)];
+	processes[0].postgres = postgres.is_some();
 
 	for (name, service) in &resolved.services {
 		if name == APP || !is_dns_label(name) {
@@ -325,6 +376,10 @@ pub fn plan(
 			return Err(PlanError::SqliteShared { name: name.clone() });
 		}
 
+		if postgres.is_some() && service.database {
+			return Err(PlanError::ServiceDatabase { name: name.clone() });
+		}
+
 		let scale = stored
 			.and_then(|stored| stored.services.get(name).copied())
 			.unwrap_or_else(|| from_resolved(service.process));
@@ -337,6 +392,14 @@ pub fn plan(
 			cluster,
 			&mut fine_print,
 		));
+	}
+
+	if postgres.is_some() {
+		fine_print.push(
+			"Its Postgres database is a database and a role of its own on the cluster's shared \
+			 server. It isn't backed up yet, whatever `[cloud.database] backups` says."
+				.to_owned(),
+		);
 	}
 
 	if sqlite {
@@ -367,6 +430,7 @@ pub fn plan(
 		processes,
 		sqlite,
 		database: !matches!(resolved.database, ResolvedDatabase::None),
+		postgres,
 		fine_print,
 	})
 }
@@ -430,6 +494,7 @@ fn planned(
 		sleep,
 		routed,
 		sqlite,
+		postgres: false,
 	}
 }
 
@@ -439,6 +504,10 @@ pub enum SpecBuildError {
 	/// The build didn't say how a process starts.
 	#[error("the build didn't say how to run `{name}`")]
 	MissingProcess { name: String },
+	/// The plan has a Postgres database, and the cluster's facts no longer
+	/// say where its server is.
+	#[error("the cluster no longer has a Postgres server for this environment's database")]
+	NoPostgres,
 	/// The spec failed [`ReleaseSpec::validate`].
 	#[error("the release spec is invalid: {0}")]
 	Invalid(#[from] SpecError),
@@ -503,12 +572,27 @@ pub fn spec(
 		let mut volumes = Vec::new();
 
 		if planned.sqlite {
-			env.insert("DATABASE_URL".to_owned(), SQLITE_URL.to_owned());
+			env.insert(DATABASE_URL.to_owned(), SQLITE_URL.to_owned());
 			volumes.push(Volume {
 				name: "data".to_owned(),
 				mount_path: SQLITE_MOUNT.to_owned(),
 				size_gib: SQLITE_VOLUME_GIB,
 			});
+		}
+
+		let mut secret_env: BTreeMap<String, String> = target
+			.secrets
+			.iter()
+			.filter(|name| !env.contains_key(*name))
+			.map(|name| (name.clone(), name.clone()))
+			.collect();
+
+		if planned.postgres {
+			// The address holds the role's password, so it is a secret:
+			// named here, and given to the cluster's worker with the
+			// release it claims.
+			env.remove(DATABASE_URL);
+			secret_env.insert(DATABASE_URL.to_owned(), DATABASE_URL.to_owned());
 		}
 
 		processes.push(Process {
@@ -525,12 +609,7 @@ pub fn spec(
 				ready: facts.ready_path.clone(),
 				live: facts.live_path.clone(),
 			},
-			secret_env: target
-				.secrets
-				.iter()
-				.filter(|name| !env.contains_key(*name))
-				.map(|name| (name.clone(), name.clone()))
-				.collect(),
+			secret_env,
 			env,
 			resources: Resources {
 				cpu_request_millis: planned.size.cpu_request_millicores(),
@@ -572,6 +651,16 @@ pub fn spec(
 		}
 	}
 
+	let database = match (&plan.postgres, &target.cluster.postgres) {
+		(None, _) => None,
+		(Some(_), None) => return Err(SpecBuildError::NoPostgres),
+		(Some(_), Some(server)) => {
+			Some(DatabaseAccess {
+				namespace: server.namespace.clone(),
+				port: server.port,
+			})
+		}
+	};
 	let quota = Quota::for_processes(&processes);
 	let spec = ReleaseSpec {
 		environment: target.environment.clone(),
@@ -582,7 +671,7 @@ pub fn spec(
 			runtime_class: target.cluster.runtime_class.clone(),
 			egress: Egress::Internet,
 			quota,
-			database: None,
+			database,
 		},
 	};
 	spec.validate()?;
@@ -679,6 +768,7 @@ mod tests {
 		let cluster = ClusterFacts {
 			runtime_class: Some("gvisor".to_owned()),
 			wakes_sleeping: true,
+			postgres: Some(server()),
 		};
 		let spec = spec(
 			plan,
@@ -704,7 +794,17 @@ mod tests {
 	const WAKES: ClusterFacts = ClusterFacts {
 		runtime_class: None,
 		wakes_sleeping: true,
+		postgres: None,
 	};
+
+	fn server() -> crate::operator::ClusterPostgres {
+		crate::operator::ClusterPostgres {
+			namespace: "leptoskit-postgres".to_owned(),
+			host: "postgres-rw.leptoskit-postgres.svc".to_owned(),
+			port: 5432,
+			tls: true,
+		}
+	}
 
 	#[test]
 	fn an_app_alone() {
@@ -806,7 +906,7 @@ mod tests {
 	}
 
 	#[test]
-	fn postgres_is_refused_until_the_databases_slice() {
+	fn postgres_needs_a_cluster_with_a_server() {
 		let cloud = resolve(
 			"[app]\nname = \"notes\"\n[db]\ndialect = \"postgres\"\n[cloud]\nproject = \"notes\"\n",
 		);
@@ -814,6 +914,102 @@ mod tests {
 			plan(production(&cloud), None, &AppFacts::default(), &WAKES),
 			Err(PlanError::PostgresUnavailable)
 		);
+	}
+
+	#[test]
+	fn postgres_is_a_secret_address_and_a_door() {
+		let cloud = resolve(
+			"[app]\nname = \"notes\"\n[db]\ndialect = \"postgres\"\n[services.mailer]\npackage = \
+			 \"mailer\"\n[cloud]\nproject = \"notes\"\n[cloud.environments.production]\nmin = \
+			 1\nmax = 3\n",
+		);
+		let with_server = ClusterFacts {
+			postgres: Some(server()),
+			..WAKES
+		};
+		let plan = plan(production(&cloud), None, &AppFacts::default(), &with_server).unwrap();
+		assert!(!plan.sqlite && plan.database);
+		assert_eq!(
+			plan.postgres,
+			Some(PlannedDatabase {
+				size: DatabaseSize::Shared,
+				backups: Backups::Daily,
+			})
+		);
+		assert!(
+			plan.fine_print
+				.iter()
+				.any(|line| line.contains("isn't backed up yet")),
+			"{:?}",
+			plan.fine_print
+		);
+		let spec = built(&plan, &["app", "mailer"]);
+
+		for process in &spec.processes {
+			// Never in the plain environment, and only the app's.
+			assert!(!process.env.contains_key(DATABASE_URL), "{}", process.name);
+			assert_eq!(process.volumes, []);
+			assert_eq!(
+				process.secret_env.contains_key(DATABASE_URL),
+				process.name == APP,
+				"{}",
+				process.name
+			);
+		}
+
+		// More than one replica, unlike SQLite.
+		assert_eq!(spec.processes[0].scale.max, 3);
+		assert_eq!(
+			spec.policy.database,
+			Some(DatabaseAccess {
+				namespace: "leptoskit-postgres".to_owned(),
+				port: 5432,
+			})
+		);
+	}
+
+	#[test]
+	fn a_dedicated_instance_is_refused() {
+		let cloud = resolve(
+			"[app]\nname = \"notes\"\n[db]\ndialect = \"postgres\"\n[cloud]\nproject = \
+			 \"notes\"\n[cloud.database]\nsize = \"m\"\n",
+		);
+		let with_server = ClusterFacts {
+			postgres: Some(server()),
+			..WAKES
+		};
+		assert_eq!(
+			plan(production(&cloud), None, &AppFacts::default(), &with_server),
+			Err(PlanError::DedicatedDatabase {
+				size: DatabaseSize::M
+			})
+		);
+	}
+
+	#[test]
+	fn a_service_with_its_own_postgres_is_refused() {
+		let cloud = resolve(
+			"[app]\nname = \"notes\"\n[db]\ndialect = \"postgres\"\n[services.search]\npackage = \
+			 \"search\"\ndatabase = true\n[cloud]\nproject = \"notes\"\n",
+		);
+		let with_server = ClusterFacts {
+			postgres: Some(server()),
+			..WAKES
+		};
+		assert_eq!(
+			plan(production(&cloud), None, &AppFacts::default(), &with_server),
+			Err(PlanError::ServiceDatabase {
+				name: "search".to_owned()
+			})
+		);
+	}
+
+	#[test]
+	fn a_plan_stored_before_databases_still_reads() {
+		let stored = r#"{"processes":[{"name":"app","kind":"app","size":"s","min":1,"max":1,"sleep":false,"routed":true,"sqlite":false}],"sqlite":false,"database":false,"fine_print":[]}"#;
+		let plan: Plan = serde_json::from_str(stored).expect("an older plan");
+		assert_eq!(plan.postgres, None);
+		assert!(!plan.processes[0].postgres);
 	}
 
 	#[test]
