@@ -20,6 +20,7 @@ use k8s_openapi::api::autoscaling::v2 as autoscaling;
 use k8s_openapi::api::core::v1 as core;
 use k8s_openapi::api::networking::v1 as networking;
 use k8s_openapi::api::policy::v1 as policy;
+use k8s_openapi::api::rbac::v1 as rbac;
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1 as meta;
 use k8s_openapi::apimachinery::pkg::util::intstr::IntOrString;
@@ -63,6 +64,99 @@ const SERVICE_ACCOUNT: &str = "app";
 
 /// The emptyDir that gives a read-only-root container a writable `/tmp`.
 const TMP_VOLUME: &str = "tmp";
+
+/// Permissions used by the cluster adapter, without exec, watch, wildcard
+/// resources, role delegation, or individual Secret get operations.
+/// Secret list permission exposes Secret data. Kubernetes RBAC cannot scope
+/// a `ClusterRole` by namespace labels or future namespace names: these verbs
+/// are cluster-wide. Restrict the worker's job authorization separately.
+/// Existing namespaces can instead bind this role per tenant, but namespace
+/// creation/deletion still requires separate cluster-scoped authorization.
+#[must_use]
+pub fn worker_rbac(
+	namespace: &str,
+	service_account: &str,
+) -> (rbac::ClusterRole, rbac::ClusterRoleBinding) {
+	let rule = |group: &str, resources: &[&str], verbs: &[&str]| {
+		rbac::PolicyRule {
+			api_groups: Some(vec![group.to_owned()]),
+			resources: Some(
+				resources
+					.iter()
+					.map(|resource| (*resource).to_owned())
+					.collect(),
+			),
+			verbs: verbs.iter().map(|verb| (*verb).to_owned()).collect(),
+			..Default::default()
+		}
+	};
+	let name = "leptoskit-cloud-runtime";
+	let permissions = rbac::ClusterRole {
+		metadata: meta::ObjectMeta {
+			name: Some(name.to_owned()),
+			..Default::default()
+		},
+		rules: Some(vec![
+			rule("", &["namespaces"], &["get", "patch", "delete"]),
+			rule(
+				"",
+				&[
+					"resourcequotas",
+					"limitranges",
+					"serviceaccounts",
+					"secrets",
+					"services",
+				],
+				&["list", "patch", "delete"],
+			),
+			rule("", &["persistentvolumeclaims"], &["patch"]),
+			rule("", &["pods"], &["list"]),
+			rule("", &["pods/log"], &["get"]),
+			rule("apps", &["deployments"], &["list", "patch", "delete"]),
+			rule("apps", &["replicasets"], &["list"]),
+			rule(
+				"networking.k8s.io",
+				&["networkpolicies", "ingresses"],
+				&["list", "patch", "delete"],
+			),
+			rule(
+				"autoscaling",
+				&["horizontalpodautoscalers"],
+				&["list", "patch", "delete"],
+			),
+			rule(
+				"http.keda.sh",
+				&["interceptorroutes"],
+				&["list", "patch", "delete"],
+			),
+			rule("keda.sh", &["scaledobjects"], &["list", "patch", "delete"]),
+			rule(
+				"policy",
+				&["poddisruptionbudgets"],
+				&["list", "patch", "delete"],
+			),
+		]),
+		..Default::default()
+	};
+	let binding = rbac::ClusterRoleBinding {
+		metadata: meta::ObjectMeta {
+			name: Some(name.to_owned()),
+			..Default::default()
+		},
+		role_ref: rbac::RoleRef {
+			api_group: Some("rbac.authorization.k8s.io".to_owned()),
+			kind: "ClusterRole".to_owned(),
+			name: name.to_owned(),
+		},
+		subjects: Some(vec![rbac::Subject {
+			kind: "ServiceAccount".to_owned(),
+			name: service_account.to_owned(),
+			namespace: Some(namespace.to_owned()),
+			api_group: None,
+		}]),
+	};
+	(permissions, binding)
+}
 
 /// How a process's replicas are owned, decided once and read by both the
 /// Deployment and the scaling stage.
