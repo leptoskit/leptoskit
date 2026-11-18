@@ -20,7 +20,7 @@ This file is the working memory for that effort. It was written on 18 November 2
 | Message options, silent data messages, test sends | [#849](https://github.com/leptoskit/leptoskit/pull/849) | Merged                                     |
 | Migration, backfill and large-audience tests      | [#850](https://github.com/leptoskit/leptoskit/pull/850) | Merged                                     |
 | A. Fanout and push engine fixes                   | [#871](https://github.com/leptoskit/leptoskit/pull/871) | Ready: crate gates pass, base of the stack |
-| B. Provider transport fixes                       | [#872](https://github.com/leptoskit/leptoskit/pull/872) | Draft: code written, gates unfinished      |
+| B. Provider transport fixes                       | [#872](https://github.com/leptoskit/leptoskit/pull/872) | Ready: crate gates pass, stacked on A      |
 | C. Device details and device targeting            | [#873](https://github.com/leptoskit/leptoskit/pull/873) | Draft: code written, gates unfinished      |
 | D to L                                            | Not started                                             | See below                                  |
 
@@ -42,7 +42,7 @@ Tried on 18 November 2026 by the session that finished task A. This is what work
   export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER="runuser -u postgres --"
   ```
 
-  The build still runs as root; only the test binaries change user. Once `devenv shell` has run, `target/` is a link into `/root/.cache/mbx`, which `postgres` cannot reach: `chmod o+x /root /root/.cache && chmod -R o+rX /root/.cache/mbx/targets` lets it run the binaries. The one exception is `tests/dependencies.rs`, which runs `cargo` itself and cannot reach root's toolchain as `postgres`: run that file again without the runner (`env -u CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER cargo test … --test dependencies`). Its four failures under the runner are this, not a defect.
+  The build still runs as root; only the test binaries change user. Once `devenv shell` has run, `target/` is a link into `/root/.cache/mbx`, which `postgres` cannot reach: `chmod o+x /root /root/.cache && chmod -R o+rX /root/.cache/mbx/targets` lets it run the binaries (repeat the second command after a build adds new ones). `tests/dependencies.rs` runs `cargo` itself and fails with `Permission denied` while `postgres` cannot reach root's toolchain: if it does, run that file again without the runner (`env -u CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER cargo test … --test dependencies`).
 - **Browser tests.** `tests/browser.rs` is compiled only for `wasm32-unknown-unknown` and runs under `wasm-bindgen-test-runner` with a webdriver, as `test:browser` does; a native `cargo test` reports it as zero tests. Chromium is installed at `/opt/pw-browsers/chromium`.
 - **Long commands.** A foreground command is cut off after ten minutes. Run builds and test runs in the background and read their log.
 - **GitHub.** `gh api` works against the REST endpoints (`repos/leptoskit/leptoskit/pulls`, `…/commits/<sha>/check-runs`). The cloud GitHub app cannot merge (403).

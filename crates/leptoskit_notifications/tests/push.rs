@@ -4619,7 +4619,9 @@ async fn a_refused_apns_provider_token_is_replaced_and_the_push_retried() {
 	let (status, _) = send(&service, "stale-token", spec(), &[ALICE]).await;
 	assert_eq!(status, 200);
 
-	let outcomes = settled(&service, "stale-token").await;
+	// The retry waits out the engine's one-minute backoff like any other,
+	// so the test moves the queue's clock rather than waiting for it.
+	let outcomes = settled_rewinding(&service, "stale-token").await;
 	assert_eq!(
 		outcomes,
 		vec![("accepted".to_owned(), None)],
