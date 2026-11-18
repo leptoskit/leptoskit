@@ -127,7 +127,7 @@ fn script(
 	}
 	let firewall = firewall(config, machine, peers)?;
 	let configuration = serde_json::to_string_pretty(&settings)?;
-	let runtime = "version = 3\n{{ template \"base\" . \
+	let runtime = "{{ template \"base\" . \
 	               }}\n[plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.runsc]\n  \
 	               runtime_type = \
 	               \"io.containerd.runsc.v1\"\n[plugins.'io.containerd.cri.v1.runtime'.containerd.\

@@ -1,6 +1,7 @@
 //! Offline, two-phase platform infrastructure generation.
 
 pub mod bootstrap;
+pub mod cli;
 pub mod config;
 pub mod tofu;
 mod topology;

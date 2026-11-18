@@ -51,3 +51,171 @@ fn ha_and_virtualization_constraints() {
 			.contains("nested virtualization")
 	);
 }
+
+#[test]
+fn required_values_and_rendering_boundaries() {
+	let config = PlatformConfig::parse(include_str!("../examples/launch.toml")).unwrap();
+	let original = serde_json::to_value(config).unwrap();
+	for (pointer, invalid) in [
+		("/name", serde_json::json!("")),
+		("/apps_domain", serde_json::json!("invalid")),
+		("/default_region", serde_json::json!("missing")),
+		("/admin_cidrs", serde_json::json!([])),
+		("/admin_cidrs", serde_json::json!(["2001:db8::/32"])),
+		("/admin_cidrs", serde_json::json!(["192.0.2.1/24"])),
+		("/admin_cidrs", serde_json::json!(["192.0.2.0/33"])),
+		("/isolation/runtime_class", serde_json::json!("runc")),
+		("/isolation/sha512", serde_json::json!("unverified")),
+		("/isolation/release", serde_json::json!("latest")),
+		("/isolation/release", serde_json::json!("20261116.x")),
+		(
+			"/isolation/denied_egress_cidrs",
+			serde_json::json!(["not-a-cidr"]),
+		),
+		(
+			"/object_storage/endpoint",
+			serde_json::json!("http://s3.example.com"),
+		),
+		("/object_storage/sources", serde_json::json!("${unsafe}")),
+		(
+			"/object_storage/credentials/access_key",
+			serde_json::json!("bad/key"),
+		),
+		("/postgres/retention_days", serde_json::json!(0)),
+		("/postgres/wal_bucket", serde_json::json!("different")),
+		("/postgres/storage_size", serde_json::json!("0Gi")),
+		("/edge/account_id", serde_json::json!("invalid")),
+		("/edge/zone_id", serde_json::json!("invalid")),
+		("/edge/cluster", serde_json::json!("missing")),
+		("/addons/keda", serde_json::json!("latest")),
+		("/addons/acme_email", serde_json::json!("injected\nline")),
+		(
+			"/regions/eu/clusters/launch/version",
+			serde_json::json!("v0.0.0"),
+		),
+		(
+			"/regions/eu/clusters/launch/service_cidr",
+			serde_json::json!("2001:db8::/32"),
+		),
+		(
+			"/regions/eu/clusters/launch/registration_address",
+			serde_json::json!("https://bad"),
+		),
+		(
+			"/regions/eu/clusters/launch/nodes/box/public_address",
+			serde_json::json!("10.0.0.1"),
+		),
+		(
+			"/regions/eu/clusters/launch/nodes/box/role",
+			serde_json::json!("agent"),
+		),
+	] {
+		let mut changed = original.clone();
+		*changed.pointer_mut(pointer).unwrap() = invalid;
+		let changed: PlatformConfig = serde_json::from_value(changed).unwrap();
+		assert!(changed.validate().is_err(), "{pointer}");
+	}
+}
+
+#[test]
+fn cloud_private_network_and_node_groups_are_checked() {
+	let config = PlatformConfig::parse(include_str!("../examples/growth.toml")).unwrap();
+	let original = serde_json::to_value(config).unwrap();
+	for (pointer, invalid) in [
+		(
+			"/regions/eu/clusters/growth/private_cidr",
+			serde_json::json!(null),
+		),
+		(
+			"/regions/eu/clusters/growth/private_cidr",
+			serde_json::json!("10.42.0.0/16"),
+		),
+		(
+			"/regions/eu/clusters/growth/private_cidr",
+			serde_json::json!("192.0.2.0/24"),
+		),
+		(
+			"/regions/eu/clusters/growth/network_zone",
+			serde_json::json!(null),
+		),
+		(
+			"/regions/eu/clusters/growth/nodes/control/count",
+			serde_json::json!(0),
+		),
+		(
+			"/regions/eu/clusters/growth/nodes/control/count",
+			serde_json::json!(101),
+		),
+		(
+			"/regions/eu/clusters/growth/nodes/control/ssh_key_ids",
+			serde_json::json!([]),
+		),
+		(
+			"/regions/eu/clusters/growth/nodes/control/server_type",
+			serde_json::json!("bad/type"),
+		),
+		(
+			"/regions/eu/clusters/growth/nodes/control/location",
+			serde_json::json!("bad/location"),
+		),
+		(
+			"/regions/eu/clusters/growth/nodes/tenant-b/public_address",
+			serde_json::json!("203.0.113.10"),
+		),
+	] {
+		let mut changed = original.clone();
+		*changed.pointer_mut(pointer).unwrap() = invalid;
+		let changed: PlatformConfig = serde_json::from_value(changed).unwrap();
+		assert!(changed.validate().is_err(), "{pointer}");
+	}
+}
+
+#[test]
+fn existing_ha_requires_private_addresses_and_one_provider() {
+	let mut config = PlatformConfig::parse(include_str!("../examples/launch.toml")).unwrap();
+	let nodes = &mut config
+		.regions
+		.get_mut("eu")
+		.unwrap()
+		.clusters
+		.get_mut("launch")
+		.unwrap()
+		.nodes;
+	for (name, address) in [("second", "203.0.113.11"), ("third", "203.0.113.12")] {
+		nodes.insert(
+			name.into(),
+			leptoskit_cloud_platform::config::Node::Existing {
+				role: leptoskit_cloud_platform::config::Role::Server,
+				pool: leptoskit_cloud_platform::config::Pool::Platform,
+				public_address: address.parse().unwrap(),
+				private_address: None,
+			},
+		);
+	}
+	assert!(
+		config
+			.validate()
+			.unwrap_err()
+			.to_string()
+			.contains("private network")
+	);
+	for (index, node) in config
+		.regions
+		.get_mut("eu")
+		.unwrap()
+		.clusters
+		.get_mut("launch")
+		.unwrap()
+		.nodes
+		.values_mut()
+		.enumerate()
+	{
+		if let leptoskit_cloud_platform::config::Node::Existing {
+			private_address, ..
+		} = node
+		{
+			*private_address = Some(format!("10.44.0.{}", index + 10).parse().unwrap());
+		}
+	}
+	config.validate().unwrap();
+}
