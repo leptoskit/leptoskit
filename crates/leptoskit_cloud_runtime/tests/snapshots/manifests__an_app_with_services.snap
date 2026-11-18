@@ -29,10 +29,10 @@ metadata:
   namespace: lk-0b64f478d99c825f63ac
 spec:
   hard:
-    limits.cpu: 12000m
+    limits.cpu: 14000m
     limits.memory: 4096Mi
     pods: '12'
-    requests.cpu: 12000m
+    requests.cpu: 14000m
     requests.memory: 4096Mi
     requests.storage: 10Gi
 ---
@@ -50,7 +50,7 @@ metadata:
 spec:
   limits:
   - max:
-      cpu: 12000m
+      cpu: 14000m
       memory: 4096Mi
     type: Container
 ---

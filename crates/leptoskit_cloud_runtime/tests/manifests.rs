@@ -146,8 +146,8 @@ fn minimal_sleeping_app() -> (ReleaseSpec, ClusterProfile, SecretValues) {
 			runtime_class: Some("gvisor".to_owned()),
 			egress: Egress::Internet,
 			quota: Quota {
-				cpu_millis: 500,
-				memory_mib: 128,
+				cpu_millis: 1000,
+				memory_mib: 256,
 				pods: 2,
 				storage_gib: 1,
 			},
@@ -263,7 +263,7 @@ fn app_with_services() -> (ReleaseSpec, ClusterProfile, SecretValues) {
 			runtime_class: Some("gvisor".to_owned()),
 			egress: Egress::Internet,
 			quota: Quota {
-				cpu_millis: 12000,
+				cpu_millis: 14000,
 				memory_mib: 4096,
 				pods: 12,
 				storage_gib: 10,
@@ -323,6 +323,45 @@ fn a_minimal_sleeping_app() {
 		]
 	);
 	insta::assert_snapshot!(as_yaml(&objects));
+}
+
+#[test]
+fn one_xs_app_has_room_for_its_rolling_surge() {
+	let (mut spec, cluster, secrets) = minimal_sleeping_app();
+	spec.processes[0].scale.min = 1;
+	spec.processes[0].scale.sleep = false;
+	spec.policy.quota = Quota::for_processes(&spec.processes);
+	let objects = build(&spec, &cluster, &secrets);
+	let quota = objects
+		.iter()
+		.find_map(|object| {
+			match object {
+				Object::ResourceQuota(quota) => quota.spec.as_ref()?.hard.as_ref(),
+				_ => None,
+			}
+		})
+		.expect("quota");
+	assert_eq!(quota["pods"].0, "2");
+	assert_eq!(quota["limits.cpu"].0, "1000m");
+	assert_eq!(quota["limits.memory"].0, "256Mi");
+	let deployment = objects
+		.iter()
+		.find_map(|object| {
+			match object {
+				Object::Deployment(deployment) => deployment.spec.as_ref(),
+				_ => None,
+			}
+		})
+		.expect("deployment");
+	let rolling = deployment
+		.strategy
+		.as_ref()
+		.and_then(|strategy| strategy.rolling_update.as_ref())
+		.expect("rolling update");
+	assert_eq!(
+		rolling.max_surge,
+		Some(k8s_openapi::apimachinery::pkg::util::intstr::IntOrString::Int(1))
+	);
 }
 
 #[test]
@@ -459,12 +498,7 @@ fn every_spec_builds_the_same_manifests_the_same_way() {
 				namespace: "postgres-shared".to_owned(),
 				port: 5432,
 			});
-			spec.policy.quota = Quota {
-				cpu_millis: 500,
-				memory_mib: 128,
-				pods: 2,
-				storage_gib: 1,
-			};
+			spec.policy.quota = Quota::for_processes(&spec.processes);
 			("private".to_owned(), spec, cluster, secrets, vec![])
 		},
 		{

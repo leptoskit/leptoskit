@@ -329,9 +329,9 @@ mod tests {
 				runtime_class: None,
 				egress: crate::spec::Egress::None,
 				quota: crate::spec::Quota {
-					cpu_millis: 1000,
-					memory_mib: 256,
-					pods: 2,
+					cpu_millis: 1500,
+					memory_mib: 384,
+					pods: 3,
 					storage_gib: 1,
 				},
 				database: None,
