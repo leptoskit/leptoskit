@@ -39,6 +39,11 @@ ignore = [
 	# latest postgresql_embedded, reqwest-retry and wasmtimer all still
 	# depend on it. Drop this once wasmtimer replaces it.
 	{ id = "RUSTSEC-2026-0441", reason = "pin-utils via wasmtimer (wasm only) under postgresql_embedded; never compiled for the CLI's targets" },
+	# `chrono` is unmaintained, not vulnerable, and no release fixes that.
+	# `leptoskit_db::Timestamp` and every service's time handling are built
+	# on it, so leaving it is a workspace-wide migration to `jiff` or `time`,
+	# not a version bump. Drop this once that migration lands.
+	{ id = "RUSTSEC-2026-0543", reason = "chrono is unmaintained with no fixed release; the workspace's timestamps are built on it until a planned move to jiff or time" },
 ]
 
 [licenses]
