@@ -24,6 +24,8 @@ use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1 as meta;
 use k8s_openapi::apimachinery::pkg::util::intstr::IntOrString;
 use serde::Serialize;
+use sha2::Digest;
+use sha2::Sha256;
 
 use crate::spec::DatabaseAccess;
 use crate::spec::Egress;
@@ -84,8 +86,9 @@ pub struct ClusterProfile {
 	/// The namespace the edge's controllers run in, the one tenant pods
 	/// accept traffic from.
 	pub ingress_namespace: String,
-	/// The wildcard certificate's secret name, copied into every tenant
-	/// namespace for the default hostnames.
+	/// The ingress controller's default certificate Secret in its own
+	/// namespace. Tenant Ingress objects omit secretName; private keys are
+	/// never copied.
 	pub wildcard_tls_secret: Option<String>,
 	/// The cert-manager cluster issuer that issues per-host certificates.
 	pub cluster_issuer: Option<String>,
@@ -131,6 +134,106 @@ impl Default for ClusterProfile {
 	}
 }
 
+impl ClusterProfile {
+	/// Defaults for `LeptosKit`'s platform: Traefik in kube-system, its default
+	/// wildcard certificate, `CoreDNS`, and HTTP add-on chart 0.16.0 in keda.
+	/// Operators must enable Traefik's
+	/// kubernetesIngress.allowExternalNameServices.
+	#[must_use]
+	pub fn platform_defaults() -> Self {
+		Self {
+			ingress_class: "traefik".to_owned(),
+			ingress_namespace: "kube-system".to_owned(),
+			wildcard_tls_secret: Some("apps-wildcard-tls".to_owned()),
+			cluster_issuer: Some("apps".to_owned()),
+			dns_namespace: "kube-system".to_owned(),
+			image_pull_secret: None,
+			blocked_egress_cidrs: [
+				"10.0.0.0/8",
+				"172.16.0.0/12",
+				"192.168.0.0/16",
+				"169.254.0.0/16",
+				"127.0.0.0/8",
+			]
+			.into_iter()
+			.map(str::to_owned)
+			.collect(),
+			keda_http: Some(HttpAddon {
+				namespace: "keda".to_owned(),
+				interceptor_service: "keda-add-ons-http-interceptor-proxy".to_owned(),
+				interceptor_port: 8080,
+				scaler_service: "keda-add-ons-http-external-scaler".to_owned(),
+				scaler_port: 9090,
+				interceptor_labels: BTreeMap::from([
+					(
+						"app.kubernetes.io/name".to_owned(),
+						"http-add-on".to_owned(),
+					),
+					(
+						"app.kubernetes.io/component".to_owned(),
+						"interceptor".to_owned(),
+					),
+				]),
+			}),
+		}
+	}
+
+	/// Refuse missing namespace names, invalid endpoints and malformed IPv4
+	/// egress ranges. # Errors
+	/// Returns `ManifestError::Profile` for an unusable cluster profile.
+	pub fn validate(&self) -> Result<(), ManifestError> {
+		let valid_name = |name: &str| {
+			!name.is_empty()
+				&& name.len() <= 63
+				&& name
+					.bytes()
+					.all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+				&& !name.starts_with('-')
+				&& !name.ends_with('-')
+		};
+		if [
+			&self.ingress_class,
+			&self.ingress_namespace,
+			&self.dns_namespace,
+		]
+		.into_iter()
+		.any(|name| !valid_name(name))
+		{
+			return Err(ManifestError::Profile(
+				"invalid ingress or DNS name".to_owned(),
+			));
+		}
+		if let Some(addon) = &self.keda_http
+			&& ([
+				&addon.namespace,
+				&addon.interceptor_service,
+				&addon.scaler_service,
+			]
+			.into_iter()
+			.any(|name| !valid_name(name))
+				|| addon.interceptor_port == 0
+				|| addon.scaler_port == 0
+				|| addon.interceptor_labels.is_empty())
+		{
+			return Err(ManifestError::Profile(
+				"invalid HTTP add-on endpoint or selector".to_owned(),
+			));
+		}
+		for cidr in &self.blocked_egress_cidrs {
+			let valid = cidr.split_once('/').is_some_and(|(address, prefix)| {
+				address.parse::<std::net::Ipv4Addr>().is_ok()
+					&& prefix.parse::<u8>().is_ok_and(|prefix| prefix <= 32)
+			});
+			if !valid {
+				return Err(ManifestError::Profile(
+					"invalid IPv4 egress CIDR".to_owned(),
+				));
+			}
+		}
+		Ok(())
+	}
+}
+
 /// The values behind a release spec's `secret_env` keys.
 ///
 /// The map is deliberately not `Serialize`, so a value cannot be serialized
@@ -153,6 +256,15 @@ impl SecretValues {
 	pub fn get(&self, key: &str) -> Option<&str> {
 		self.inner.get(key).map(String::as_str)
 	}
+
+	#[cfg(feature = "kube")]
+	pub(crate) fn redact(&self, text: &str) -> String {
+		let mut redacted = text.to_owned();
+		for value in self.inner.values().filter(|value| !value.is_empty()) {
+			redacted = redacted.replace(value, "[redacted]");
+		}
+		redacted
+	}
 }
 
 impl std::fmt::Debug for SecretValues {
@@ -170,6 +282,13 @@ impl std::fmt::Display for SecretValues {
 /// Why a release cannot be turned into manifests.
 #[derive(Debug, thiserror::Error)]
 pub enum ManifestError {
+	#[error(
+		"sleeping HTTP processes require at least one route and reserve the Service name \
+		 http-interceptor"
+	)]
+	SleepRouting,
+	#[error("invalid cluster profile: {0}")]
+	Profile(String),
 	/// The spec is not applicable anywhere; fix it first.
 	#[error("the release spec is invalid: {0}")]
 	Invalid(#[from] SpecError),
@@ -348,7 +467,7 @@ pub struct HttpTrigger {
 }
 
 /// HTTP add-on 0.16 route schema:
-/// https://github.com/kedacore/http-add-on/blob/v0.16.0/config/crd/bases/http.keda.sh_interceptorroutes.yaml
+/// <https://github.com/kedacore/http-add-on/blob/v0.16.0/config/crd/bases/http.keda.sh_interceptorroutes.yaml>
 #[derive(Debug, Clone, Serialize)]
 pub struct InterceptorRoute {
 	#[serde(rename = "apiVersion")]
@@ -410,6 +529,21 @@ pub fn manifests(
 	secrets: &SecretValues,
 ) -> Result<Vec<Object>, ManifestError> {
 	spec.validate()?;
+	cluster.validate()?;
+	if spec.processes.iter().any(|process| process.scale.sleep)
+		&& (spec
+			.processes
+			.iter()
+			.any(|process| process.name == "http-interceptor")
+			|| spec.processes.iter().any(|process| {
+				process.scale.sleep
+					&& !spec
+						.routes
+						.iter()
+						.any(|route| route.process == process.name)
+			})) {
+		return Err(ManifestError::SleepRouting);
+	}
 	let namespace = spec.environment.namespace();
 	let labels = labels(spec);
 	let mut objects = Vec::new();
@@ -421,31 +555,71 @@ pub fn manifests(
 	objects.extend(claim_objects(spec, &namespace, &labels));
 	objects.extend(deployment_objects(spec, cluster, &namespace, &labels)?);
 	objects.extend(service_objects(spec, &namespace, &labels));
-	if spec.processes.iter().any(|process| process.scale.sleep) {
-		if let Some(addon) = &cluster.keda_http {
-			// The add-on documents an ExternalName bridge for namespace-local
-			// Ingress backends: https://github.com/kedacore/http-add-on/blob/v0.16.0/examples/xkcd/templates/externalservice.yaml
-			objects.push(Object::Service(core::Service {
-				metadata: object_meta(Some(&namespace), "http-interceptor", &labels),
-				spec: Some(core::ServiceSpec {
-					type_: Some("ExternalName".to_owned()),
-					external_name: Some(format!(
-						"{}.{}.svc.cluster.local",
-						addon.interceptor_service, addon.namespace
-					)),
-					ports: Some(vec![core::ServicePort {
-						port: i32::from(addon.interceptor_port),
-						..Default::default()
-					}]),
+	if spec.processes.iter().any(|process| process.scale.sleep)
+		&& let Some(addon) = &cluster.keda_http
+	{
+		// The add-on documents an ExternalName bridge for namespace-local
+		// Ingress backends: https://github.com/kedacore/http-add-on/blob/v0.16.0/examples/xkcd/templates/externalservice.yaml
+		objects.push(Object::Service(core::Service {
+			metadata: object_meta(Some(&namespace), "http-interceptor", &labels),
+			spec: Some(core::ServiceSpec {
+				type_: Some("ExternalName".to_owned()),
+				external_name: Some(format!(
+					"{}.{}.svc.cluster.local",
+					addon.interceptor_service, addon.namespace
+				)),
+				ports: Some(vec![core::ServicePort {
+					port: i32::from(addon.interceptor_port),
 					..Default::default()
-				}),
-				status: None,
-			}));
-		}
+				}]),
+				..Default::default()
+			}),
+			status: None,
+		}));
 	}
 	objects.extend(scaling_objects(spec, cluster, &namespace, &labels)?);
 	objects.extend(budget_objects(spec, &namespace, &labels));
 	objects.extend(ingress_objects(spec, cluster, &namespace, &labels)?);
+	for object in &mut objects {
+		let Object::Deployment(deployment) = object else {
+			continue;
+		};
+		let Some(process) = spec
+			.processes
+			.iter()
+			.find(|process| Some(&process.name) == deployment.metadata.name.as_ref())
+		else {
+			continue;
+		};
+		if !process.secret_env.is_empty() {
+			let mut checksum = Sha256::new();
+			for key in process.secret_env.values() {
+				let value = secrets.get(key).ok_or_else(|| {
+					ManifestError::MissingSecret {
+						process: process.name.clone(),
+						key: key.clone(),
+						variable: String::new(),
+					}
+				})?;
+				checksum.update((key.len() as u64).to_be_bytes());
+				checksum.update(key);
+				checksum.update((value.len() as u64).to_be_bytes());
+				checksum.update(value);
+			}
+			if let Some(deployment_spec) = &mut deployment.spec {
+				deployment_spec
+					.template
+					.metadata
+					.get_or_insert_default()
+					.annotations
+					.get_or_insert_default()
+					.insert(
+						"leptoskit.cloud/secrets-checksum".to_owned(),
+						format!("{:x}", checksum.finalize()),
+					);
+			}
+		}
+	}
 	Ok(objects)
 }
 
@@ -1502,7 +1676,7 @@ fn host_tls(
 	}
 	match tls {
 		Tls::Wildcard => {
-			let secret = cluster.wildcard_tls_secret.as_ref().ok_or_else(|| {
+			let _secret = cluster.wildcard_tls_secret.as_ref().ok_or_else(|| {
 				ManifestError::NoWildcardSecret {
 					hostname: hostname.to_owned(),
 				}
@@ -1510,7 +1684,7 @@ fn host_tls(
 			Ok((
 				Some(networking::IngressTLS {
 					hosts: Some(vec![hostname.to_owned()]),
-					secret_name: Some(secret.clone()),
+					secret_name: None,
 				}),
 				None,
 			))

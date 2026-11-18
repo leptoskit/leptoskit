@@ -1,5 +1,6 @@
 ---
 source: crates/leptoskit_cloud_platform/tests/addons.rs
+assertion_line: 11
 expression: "files.iter().map(|(path, content)|\nformat!(\"# {path}\\n{content}\")).collect::<Vec<_>>().join(\"---\\n\")"
 ---
 # eu/growth/addons/00-namespaces-00.yaml
@@ -453,7 +454,7 @@ expression: "files.iter().map(|(path, content)|\nformat!(\"# {path}\\n{content}\
     "chart": "traefik",
     "repo": "https://traefik.github.io/charts",
     "targetNamespace": "kube-system",
-    "valuesContent": "{\n  \"fullnameOverride\": \"traefik\",\n  \"nodeSelector\": {\n    \"leptoskit.dev/pool\": \"platform\"\n  },\n  \"ports\": {\n    \"web\": {\n      \"forwardedHeaders\": {\n        \"trustedIPs\": [\n          \"10.42.0.0/16\"\n        ]\n      }\n    },\n    \"websecure\": {\n      \"forwardedHeaders\": {\n        \"trustedIPs\": []\n      }\n    }\n  },\n  \"service\": {\n    \"type\": \"ClusterIP\"\n  },\n  \"tolerations\": [\n    {\n      \"effect\": \"PreferNoSchedule\",\n      \"key\": \"leptoskit.dev/pool\",\n      \"operator\": \"Equal\",\n      \"value\": \"platform\"\n    }\n  ]\n}",
+    "valuesContent": "{\n  \"fullnameOverride\": \"traefik\",\n  \"nodeSelector\": {\n    \"leptoskit.dev/pool\": \"platform\"\n  },\n  \"ports\": {\n    \"web\": {\n      \"forwardedHeaders\": {\n        \"trustedIPs\": [\n          \"10.42.0.0/16\"\n        ]\n      }\n    },\n    \"websecure\": {\n      \"forwardedHeaders\": {\n        \"trustedIPs\": []\n      }\n    }\n  },\n  \"providers\": {\n    \"kubernetesIngress\": {\n      \"allowExternalNameServices\": true\n    }\n  },\n  \"service\": {\n    \"type\": \"ClusterIP\"\n  },\n  \"tolerations\": [\n    {\n      \"effect\": \"PreferNoSchedule\",\n      \"key\": \"leptoskit.dev/pool\",\n      \"operator\": \"Equal\",\n      \"value\": \"platform\"\n    }\n  ]\n}",
     "version": "42.4.1"
   }
 }
