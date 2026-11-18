@@ -112,9 +112,12 @@ fn number(value: i64) -> u64 {
 	u64::try_from(value).unwrap_or_default()
 }
 
-/// `text` cut to [`MAX_DETAIL_LEN`] bytes at a character boundary.
+/// `text` cut to [`MAX_DETAIL_LEN`] bytes at a character boundary, with
+/// what a log line would have redacted replaced: a worker's reason may
+/// quote an address with a password in it.
 fn detail(text: &str) -> String {
-	let text = text.trim();
+	let text = super::logs::scrub(text.trim());
+	let text = text.as_str();
 
 	if text.len() <= MAX_DETAIL_LEN {
 		return text.to_owned();
@@ -646,12 +649,20 @@ pub(crate) async fn release_secrets(
 	let vault = &services.shipping().vault;
 	// Opened before any lease is written: a lease row says a value went.
 	let address = if managed {
+		// A release goes to its deployment's cluster and no other.
+		if job.cluster_id != Some(deployment.cluster_id) {
+			return Ok(Err("this release isn't queued for its deployment's \
+			               cluster"
+				.to_owned()));
+		}
+
 		match super::databases::address(
 			tx,
 			vault,
 			&organization,
 			&environment,
 			deployment.cluster_id,
+			input.spec.0.policy.database.as_ref(),
 		)
 		.await?
 		{
@@ -878,20 +889,7 @@ pub(crate) async fn deploy(
 	)
 	.map_err(|error| rpc::Error::invalid(error.to_string()))?;
 
-	// A Postgres app's database is decided now, and its role's password
-	// sealed: the cluster's worker makes both when the release reaches it.
-	if let Some(planned) = plan.postgres {
-		super::databases::ensure(
-			cx.tx(),
-			&shipping.vault,
-			&organization,
-			&environment,
-			cluster.id,
-			planned,
-		)
-		.await?;
-	}
-
+	let planned_database = plan.postgres;
 	let number = next_number(cx.tx(), &environment).await?;
 	let source_detail = format!(
 		"builds from {} ({})",
@@ -926,6 +924,22 @@ pub(crate) async fn deploy(
 		vec![EventKind::Created { signer }],
 	)
 	.await?;
+
+	// A Postgres app's database is decided now, and its role's password
+	// sealed: the cluster's worker makes both when the release reaches it.
+	// After the deployment's row, so of two first deployments at once the
+	// second is told one is in flight.
+	if let Some(planned) = planned_database {
+		super::databases::ensure(
+			cx.tx(),
+			&shipping.vault,
+			&organization,
+			&environment,
+			cluster.id,
+			planned,
+		)
+		.await?;
+	}
 
 	// The archive stays while this deployment needs it, and a while after.
 	let mut archive = archive;

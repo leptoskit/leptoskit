@@ -13,6 +13,7 @@
 //! - `DATABASE_URL` is put together when a release is claimed, from the
 //!   cluster's facts as they are then, and a lease row records that it went.
 
+use leptoskit_cloud_runtime::DatabaseAccess;
 use leptoskit_db::Id;
 use leptoskit_db::Json;
 use leptoskit_rpc as rpc;
@@ -206,10 +207,11 @@ impl std::fmt::Debug for Address {
 /// the facts were set, so nothing needs escaping.
 fn url(server: &ClusterPostgres, name: &str, password: &str) -> String {
 	format!(
-		"postgres://{name}:{password}@{}:{}/{name}{}",
+		"postgres://{name}:{password}@{}:{}/{name}?sslmode={}",
 		server.host,
 		server.port,
-		if server.tls { "?sslmode=require" } else { "" }
+		// Said either way, so no client falls back to its own default.
+		if server.tls { "require" } else { "disable" }
 	)
 }
 
@@ -229,6 +231,7 @@ pub(crate) async fn address(
 	organization: &Organization,
 	environment: &Environment,
 	cluster: Id<Cluster>,
+	door: Option<&DatabaseAccess>,
 ) -> rpc::Result<Result<Address, String>> {
 	let Some(row) = for_environment(db, environment.id).await? else {
 		return Ok(Err(format!(
@@ -257,6 +260,14 @@ pub(crate) async fn address(
 		               is; ask the operator"
 			.to_owned()));
 	};
+	// The spec opens the network to where the server was when the release
+	// was built. An address somewhere else would be one nothing can reach.
+	if door.is_none_or(|door| door.namespace != server.namespace || door.port != server.port) {
+		return Ok(Err("its cluster's Postgres server moved after this \
+		               release was built; deploy again"
+			.to_owned()));
+	}
+
 	let unreadable = || {
 		"the vault couldn't open the database's password; ask the operator about the vault's keys"
 			.to_owned()
@@ -336,7 +347,8 @@ mod tests {
 		};
 		assert_eq!(
 			url(&server, "env_ab", "c0ffee"),
-			"postgres://env_ab:c0ffee@postgres-rw.leptoskit-postgres.svc:5432/env_ab"
+			"postgres://env_ab:c0ffee@postgres-rw.leptoskit-postgres.svc:5432/env_ab?\
+			 sslmode=disable"
 		);
 		server.tls = true;
 		assert!(url(&server, "env_ab", "c0ffee").ends_with("/env_ab?sslmode=require"));

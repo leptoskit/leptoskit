@@ -10,9 +10,11 @@
 //!
 //! Every line is redacted before it is stored ([`redact_lines`]): worker keys,
 //! API tokens, pairing codes, presigned addresses' signatures, bearer
-//! tokens, and the values the control plane was configured with as
-//! secrets. A chunk expires with the log's retention, and the sweeper
-//! deletes its row and its object.
+//! tokens, the password in an address such as `postgres://user:…@host`, and
+//! the values the control plane was configured with as secrets. An
+//! environment's own secrets are not known here: one an app prints in
+//! another shape is kept as printed. A chunk expires with the log's retention,
+//! and the sweeper deletes its row and its object.
 
 use leptoskit_db::Id;
 use leptoskit_db::Timestamp;
@@ -317,8 +319,35 @@ fn secret_spans(text: &str, secrets: &[String]) -> Vec<(usize, usize)> {
 		});
 	}
 
+	// A password in an address, `scheme://user:password@host`, as a
+	// database's is: a server that can't connect prints the whole of it.
+	let mut from = 0;
+
+	while let Some(found) = text[from..].find("://") {
+		let authority_at = from + found + 3;
+		let rest = &text[authority_at..];
+		let end = rest
+			.find(['/', '?', '#', ' ', '"', '\'', '\n', '\t'])
+			.unwrap_or(rest.len());
+		let authority = &rest[..end];
+
+		if let Some(at) = authority.rfind('@')
+			&& let Some(colon) = authority[..at].find(':')
+		{
+			spans.push((authority_at + colon + 1, authority_at + at));
+		}
+
+		from = authority_at + end;
+	}
+
 	spans.retain(|(start, end)| start < end);
 	spans
+}
+
+/// `text` with every secret it can be seen to carry replaced: for a reason
+/// a worker gives, which is shown on a deployment's sheet.
+pub(crate) fn scrub(text: &str) -> String {
+	redact_lines(&[text], &[]).remove(0)
 }
 
 /// The length of the run of hex digits `text` starts with.
@@ -597,6 +626,18 @@ mod tests {
 			"{redacted}"
 		);
 		assert_eq!(redact("nothing to see", &[]), "nothing to see");
+		assert_eq!(
+			redact(
+				"error connecting to postgres://env_ab:c0ffee@pg.svc:5432/env_ab?sslmode=require",
+				&[]
+			),
+			"error connecting to postgres://env_ab:[redacted]@pg.svc:5432/env_ab?sslmode=require"
+		);
+		assert_eq!(
+			redact("see https://example.com/a:b@c and http://host:80/", &[]),
+			"see https://example.com/a:b@c and http://host:80/"
+		);
+		assert_eq!(scrub("redis://:hunter2@cache"), "redis://:[redacted]@cache");
 		assert_eq!(redact("lkw_short", &[]), "lkw_short");
 	}
 

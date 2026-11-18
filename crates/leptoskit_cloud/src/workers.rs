@@ -456,8 +456,23 @@ pub enum MigrationStep {
 ///
 /// Before it applies the spec, the worker makes sure its cluster's Postgres
 /// server has a role `role` that logs in with the password in the claim's
-/// `DATABASE_URL` secret, and a database `name` that role owns and no other
-/// role can connect to. Doing so again changes nothing but the password.
+/// `DATABASE_URL` secret, and a database `name` that role owns. Doing so
+/// again changes nothing but the password.
+///
+/// Environments of every organisation share the server, so the worker
+/// must hold to all of this:
+///
+/// - the role is `LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION
+///   NOBYPASSRLS`, a member of no other role, with a connection limit;
+/// - the database is made from `template0`, and `CONNECT` on it is revoked from
+///   `PUBLIC`, so only its own role connects;
+/// - `CONNECT` is revoked from `PUBLIC` on `template1` and `postgres` once,
+///   when the server is set up, so no tenant reaches a database every later one
+///   is copied from;
+/// - `name` and `role` are quoted as identifiers, never spliced into SQL.
+///
+/// A tenant can still list the server's database and role names, which
+/// are environments' IDs.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct DatabaseStep {
 	pub name: String,
@@ -500,7 +515,8 @@ pub enum ReleaseOutcome {
 pub struct DestroyEnvironmentInput {
 	pub environment: RuntimeValue<EnvironmentRef>,
 	/// The environment's managed Postgres database, by its name and its
-	/// role's: both are dropped with the environment.
+	/// role's: both are dropped with the environment, if they exist. A
+	/// database named here may never have been made.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub database: Option<String>,
 }

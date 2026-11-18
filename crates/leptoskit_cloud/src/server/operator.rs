@@ -163,6 +163,31 @@ fn check_facts(facts: &ClusterFacts) -> rpc::Result<()> {
 	Ok(())
 }
 
+/// A cluster's facts in a line, for the audit log.
+fn described(facts: &ClusterFacts) -> String {
+	let postgres = facts.postgres.as_ref().map_or_else(
+		|| "none".to_owned(),
+		|server| {
+			format!(
+				"{}:{} in {}{}",
+				server.host,
+				server.port,
+				server.namespace,
+				if server.tls { ", tls" } else { ", no tls" }
+			)
+		},
+	);
+	format!(
+		"runtime class {}, {}, postgres {postgres}",
+		facts.runtime_class.as_deref().unwrap_or("none"),
+		if facts.wakes_sleeping {
+			"wakes sleeping"
+		} else {
+			"never sleeps"
+		}
+	)
+}
+
 pub(crate) async fn set_cluster_facts(
 	cx: &rpc::MutationCx,
 	name: String,
@@ -188,6 +213,18 @@ pub(crate) async fn set_cluster_facts(
 		)));
 	}
 
+	// Where every environment's processes send their database password
+	// is worth a full record: none of it is secret.
+	// The new facts first: the audit log keeps a target's first 400
+	// characters.
+	let change: String = format!(
+		"{name}: now {}; was {}",
+		described(&facts),
+		described(&cluster.facts.0)
+	)
+	.chars()
+	.take(400)
+	.collect();
 	cluster.facts = Json(facts);
 	cluster.save(cx.tx()).await?;
 	audit::record(
@@ -196,7 +233,7 @@ pub(crate) async fn set_cluster_facts(
 		"cluster.set_facts",
 		None,
 		None,
-		Some(name),
+		Some(change),
 		&client(cx.context()),
 	)
 	.await?;

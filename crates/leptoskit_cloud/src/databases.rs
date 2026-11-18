@@ -8,8 +8,9 @@
 //! cluster worker that claims the release.
 //!
 //! Nothing here answers the password or the address. The database stays
-//! with the environment, whatever later deployments do, and goes when the
-//! environment is deleted.
+//! with the environment, whatever later deployments do. When the
+//! environment is deleted, the control plane forgets it and tells the
+//! cluster's worker to drop it.
 
 use leptoskit_db::Timestamp;
 use leptoskit_rpc as rpc;

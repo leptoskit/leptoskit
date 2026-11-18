@@ -517,3 +517,8 @@ async fn a_deleted_environment_takes_its_database() {
 async fn a_clusters_postgres_is_checked() {
 	databases::a_clusters_postgres_is_checked(&support::app().await).await;
 }
+
+#[tokio::test]
+async fn a_failed_release_does_not_print_the_password() {
+	databases::a_failed_release_does_not_print_the_password(&support::app().await).await;
+}

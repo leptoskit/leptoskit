@@ -44,6 +44,7 @@ use crate::tables::Placement;
 use crate::tables::StatusReport;
 use crate::tables::Worker;
 use crate::workers::Assignment;
+use crate::workers::BuildOutcome;
 use crate::workers::DestroyOutcome;
 use crate::workers::Finished;
 use crate::workers::JobKind;
@@ -53,6 +54,7 @@ use crate::workers::MAX_LOG_LINES;
 use crate::workers::MAX_STATUS_LOG_LINES;
 use crate::workers::MAX_WAIT_SECONDS;
 use crate::workers::PairedWorker;
+use crate::workers::ReleaseOutcome;
 use crate::workers::Renewed;
 use crate::workers::RuntimeValue;
 use crate::workers::StatusReceived;
@@ -721,6 +723,25 @@ async fn next_line(
 	Ok(last.map_or(1, |chunk| chunk.first_line + chunk.lines))
 }
 
+/// `outcome` with every secret its reason can be seen to carry replaced,
+/// as a log line's are: a worker's reason for a failure often quotes what
+/// the process printed, and a server that can't reach its database prints
+/// the address, password and all.
+fn scrubbed(mut outcome: JobOutcome, secrets: &[String]) -> JobOutcome {
+	let reason = match &mut outcome {
+		JobOutcome::BuildServer(BuildOutcome::Failed { reason, .. })
+		| JobOutcome::Release(
+			ReleaseOutcome::NotReady { reason, .. } | ReleaseOutcome::MigrationsFailed { reason },
+		)
+		| JobOutcome::DestroyEnvironment(DestroyOutcome::Failed { reason }) => reason,
+		JobOutcome::BuildServer(_)
+		| JobOutcome::Release(ReleaseOutcome::Applied)
+		| JobOutcome::DestroyEnvironment(DestroyOutcome::Destroyed) => return outcome,
+	};
+	*reason = logs::redact_lines(&[reason.as_str()], secrets).remove(0);
+	outcome
+}
+
 pub(crate) async fn finish(
 	cx: &rpc::MutationCx,
 	job: Uuid,
@@ -729,6 +750,8 @@ pub(crate) async fn finish(
 ) -> rpc::Result<Finished> {
 	let caller = worker(cx.context())?;
 	let services = services(cx.context())?;
+	// Before anything keeps it: the job's row, the sheet, an event.
+	let outcome = scrubbed(outcome, &services.shipping().redactions);
 	let tx = cx.tx();
 	live_worker(tx, caller).await?;
 	let worker_id = caller.id;

@@ -491,4 +491,11 @@ mod databases {
 			databases::a_clusters_postgres_is_checked(&app).await;
 		}
 	}
+
+	#[tokio::test]
+	async fn a_failed_release_does_not_print_the_password() {
+		if let Some((_postgres, app)) = app().await {
+			databases::a_failed_release_does_not_print_the_password(&app).await;
+		}
+	}
 }

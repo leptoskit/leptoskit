@@ -52,9 +52,9 @@ pub struct ClusterPostgres {
 	/// `postgres-rw.leptoskit-postgres.svc`.
 	pub host: String,
 	pub port: u16,
-	/// Whether it takes TLS connections. Then every `DATABASE_URL` ends
-	/// `?sslmode=require`.
-	#[serde(default)]
+	/// Whether it takes TLS connections: every `DATABASE_URL` ends
+	/// `?sslmode=require` or `?sslmode=disable`. It must be said. `require`
+	/// encrypts and doesn't check the server's certificate.
 	pub tls: bool,
 }
 

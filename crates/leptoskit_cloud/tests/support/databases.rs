@@ -2,6 +2,7 @@
 //! (`deployments.rs`) and Postgres (`postgres.rs`), as `shipping.rs`'s
 //! scenarios are.
 
+use leptoskit_cloud::tables::AuditEvent;
 use leptoskit_cloud::tables::Database;
 use leptoskit_cloud::tables::SecretLease;
 use serde_json::Value;
@@ -354,6 +355,71 @@ pub async fn a_rollback_finds_its_database_where_it_is_now(app: &App) {
 	);
 	assert_eq!(now, was);
 	shop.cluster.finish(&release, applied()).await.expect(200);
+
+	// A release built before the server moved has the old door in its
+	// spec: it is never handed an address the door doesn't open to.
+	let stale = build(&shop, "production", b"third").await;
+	with_postgres(&shop, 7432).await;
+	assert_eq!(shop.cluster.claim().await, None);
+	let sheet = shop.on("deployment", "production", stale).await;
+	assert_eq!(
+		sheet.expect(200).json()["deployment"]["state"],
+		json!({ "state": "failed", "stage": "rolling_out", "blocker": "secret_unavailable" }),
+		"{}",
+		sheet.text
+	);
+	assert!(
+		sheet.text.contains("moved after this release was built"),
+		"{}",
+		sheet.text
+	);
+	let (_, release) = ship(&shop, "production", b"fourth").await;
+	assert_eq!(release["input"]["spec"]["policy"]["database"]["port"], 7432);
+}
+
+/// A reason a worker gives for a failed release is shown on the sheet with
+/// any address's password taken out.
+pub async fn a_failed_release_does_not_print_the_password(app: &App) {
+	let shop = Shop::open(app).await;
+	with_postgres(&shop, 5432).await;
+	let number = build(&shop, "production", b"first").await;
+	let release = shop.cluster.take().await;
+	let url = release["secrets"]["DATABASE_URL"]
+		.as_str()
+		.expect("an address")
+		.to_owned();
+	let name = release["input"]["database"]["name"]
+		.as_str()
+		.expect("a name");
+	let password = password(&url, name, 5432);
+	shop.cluster
+		.finish(
+			&release,
+			json!({
+				"kind": "release",
+				"result": "not_ready",
+				"process": "app",
+				"reason": format!("could not connect to {url}: connection refused"),
+			}),
+		)
+		.await
+		.expect(200);
+
+	for answer in [
+		shop.on("deployment", "production", number).await,
+		shop.on("deployment_events", "production", number).await,
+	] {
+		assert!(
+			!answer.expect(200).text.contains(&password),
+			"{}",
+			answer.text
+		);
+	}
+
+	assert_eq!(
+		app.find_in_every_table(&password).await,
+		Vec::<String>::new()
+	);
 }
 
 /// Deleting an environment tells the cluster's worker which database to
@@ -407,7 +473,7 @@ pub async fn a_clusters_postgres_is_checked(app: &App) {
 			shop.as_ops(),
 		)
 	};
-	let server = |namespace: &str, host: &str, port: u16| json!({ "namespace": namespace, "host": host, "port": port });
+	let server = |namespace: &str, host: &str, port: u16| json!({ "namespace": namespace, "host": host, "port": port, "tls": false });
 
 	for host in [
 		"",
@@ -446,8 +512,29 @@ pub async fn a_clusters_postgres_is_checked(app: &App) {
 	.await
 	.refused(403, "operator_required");
 
+	// Whether the server takes TLS must be said.
+	let silent =
+		set(json!({ "namespace": "leptoskit-postgres", "host": HOST, "port": 5432 })).await;
+	assert_ne!(silent.status, 200, "{}", silent.text);
+
 	let answer = set(server("leptoskit-postgres", HOST, 5432)).await;
 	let cluster = answer.expect(200).json();
 	assert_eq!(cluster["facts"]["postgres"]["host"], HOST);
 	assert_eq!(cluster["facts"]["postgres"]["tls"], false);
+
+	// The audit log says where the server is now, and where it was.
+	let rows = AuditEvent::query()
+		.filter(|row| row.action.eq("cluster.set_facts"))
+		.all(&app.system())
+		.await
+		.expect("the audit log");
+	assert_eq!(rows.len(), 1, "{}", rows.len());
+	let target = rows[0].target.clone().unwrap_or_default();
+	assert!(
+		target.starts_with(&format!(
+			"eu-one: now runtime class none, never sleeps, postgres {HOST}:5432 in \
+			 leptoskit-postgres, no tls; was runtime class gvisor, wakes sleeping, postgres none"
+		)),
+		"{target}"
+	);
 }
