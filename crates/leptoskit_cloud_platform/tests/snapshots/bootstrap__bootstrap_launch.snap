@@ -19,6 +19,8 @@ modprobe br_netfilter
 printf 'net.ipv4.ip_forward=1\n' > /etc/sysctl.d/90-leptoskit.conf
 sysctl --system
 mkdir -p /etc/rancher/k3s /var/lib/rancher/k3s/agent/etc/containerd /etc/containerd /etc/ssh/sshd_config.d
+test -s /etc/rancher/k3s/registries.yaml
+chmod 600 /etc/rancher/k3s/registries.yaml
 cat > /etc/ssh/sshd_config.d/00-leptoskit.conf <<'LEPTOSKIT_DOCUMENT'
 PasswordAuthentication no
 PermitRootLogin prohibit-password
