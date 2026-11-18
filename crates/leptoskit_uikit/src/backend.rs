@@ -1084,10 +1084,18 @@ fn apply_input_props(
 			),
 		];
 
-		if props.autocorrect == Some(false) {
-			traits.push((sel!(setAutocorrectionType:), UITextAutocorrectionType::No.0));
-			traits.push((sel!(setSpellCheckingType:), UITextSpellCheckingType::No.0));
-		}
+		// Unset or `true` hands correction back to the platform's default,
+		// so a field that turns `autocorrect(false)` off again recovers it.
+		let (correction, spelling) = if props.autocorrect == Some(false) {
+			(UITextAutocorrectionType::No, UITextSpellCheckingType::No)
+		} else {
+			(
+				UITextAutocorrectionType::Default,
+				UITextSpellCheckingType::Default,
+			)
+		};
+		traits.push((sel!(setAutocorrectionType:), correction.0));
+		traits.push((sel!(setSpellCheckingType:), spelling.0));
 
 		if let Some(label) = props.submit_label {
 			traits.push((sel!(setReturnKeyType:), return_key(Some(label)).0));

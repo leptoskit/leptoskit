@@ -1262,7 +1262,7 @@ fn configure_entry(entry: &gtk::Entry, kind: NativeKind, props: &NativeProps, rt
 			Some(Keyboard::Url) => gtk::InputPurpose::Url,
 			Some(Keyboard::Number) => gtk::InputPurpose::Digits,
 			Some(Keyboard::Decimal) => gtk::InputPurpose::Number,
-			Some(Keyboard::Text) | Some(Keyboard::Search) | None => gtk::InputPurpose::FreeForm,
+			Some(Keyboard::Text | Keyboard::Search) | None => gtk::InputPurpose::FreeForm,
 		};
 		entry.set_input_purpose(purpose);
 	}

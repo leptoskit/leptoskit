@@ -1910,12 +1910,12 @@ fn update_input(control: HWND, props: &NativeProps, rtl: bool) {
 		SendMessageW(
 			control,
 			EM_SETREADONLY,
-			Some(WPARAM(if props.read_only == Some(true) { 1 } else { 0 })),
+			Some(WPARAM(usize::from(props.read_only == Some(true)))),
 			None,
 		);
 		// The longest value the field accepts, the way HTML's `maxlength`
 		// behaves.
-		let limit = props.max_length.map_or(0, |length| length);
+		let limit = props.max_length.unwrap_or(0);
 		SendMessageW(control, EM_LIMITTEXT, Some(WPARAM(limit)), None);
 	}
 }

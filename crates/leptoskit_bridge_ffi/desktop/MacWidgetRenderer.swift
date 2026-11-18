@@ -528,7 +528,10 @@ enum MacWidgetStyle {
     }
 
     private static func applyField(_ props: WidgetProps, to field: NSTextField) {
-        let value = text(props, editable: field.isEditable)
+        // Every `NSTextField` here is an input; labels are `TextLabel`s. Read
+        // the value whether or not the field is read-only, since `isEditable`
+        // is turned off below for a read-only one.
+        let value = props.value ?? props.text ?? ""
 
         if field.stringValue != value { field.stringValue = value }
         field.placeholderString = props.placeholder
@@ -550,12 +553,6 @@ enum MacWidgetStyle {
         case .newPassword: .newPassword
         case nil: nil
         }
-    }
-
-    private static func text(_ props: WidgetProps, editable: Bool) -> String {
-        guard editable else { return props.text ?? "" }
-
-        return props.value ?? props.text ?? ""
     }
 
     private static func color(_ rgba: UInt32) -> NSColor {

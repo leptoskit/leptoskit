@@ -91,10 +91,10 @@ enum WidgetTextStyle {
         if let capitalize = props.capitalize {
             field.autocapitalizationType = capitalization(capitalize)
         }
-        if props.autocorrect == false {
-            field.autocorrectionType = .no
-            field.spellCheckingType = .no
-        }
+        // Unset or `true` hands correction back to the platform's default.
+        let corrects = props.autocorrect != false
+        field.autocorrectionType = corrects ? .default : .no
+        field.spellCheckingType = corrects ? .default : .no
         if let label = props.submitLabel {
             field.returnKeyType = returnKey(label)
         }
