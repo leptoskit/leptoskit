@@ -50,14 +50,6 @@ wasm-bindgen-futures = { workspace = true }
 wasm-bindgen-test = { workspace = true }
 web-sys = { workspace = true, features = ["Blob", "BlobPropertyBag", "CanvasRenderingContext2d", "CssStyleDeclaration", "Document", "DomRect", "EventInit", "FocusEvent", "HtmlCanvasElement", "HtmlCollection", "HtmlElement", "HtmlIFrameElement", "ImageData", "KeyboardEventInit", "MouseEvent", "MouseEventInit", "MutationObserver", "MutationObserverInit", "MutationRecord", "NodeList", "Range", "Url", "Window"] }
 
-[[bench]]
-name = "vector"
-harness = false
-
-[[bench]]
-name = "gesture"
-harness = false
-
 [[example]]
 name = "grid_parity_probe"
 required-features = ["web"]

@@ -79,10 +79,5 @@ web = ["dep:js-sys", "dep:wasm-bindgen", "dep:wasm-bindgen-futures", "dep:web-sy
 # with.
 host = ["dep:leptoskit_bridge", "leptoskit_bridge/async-host", "renderer"]
 
-[[bench]]
-name = "frame"
-harness = false
-required-features = ["renderer"]
-
 [lints]
 workspace = true

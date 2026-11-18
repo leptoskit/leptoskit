@@ -1,8 +1,5 @@
 name: harmonyos
 on:
-  pull_request:
-  push:
-    branches: [main]
   workflow_dispatch:
 permissions:
   contents: read
@@ -32,13 +29,9 @@ jobs:
         with:
           persist-credentials: false
       - name: install rust and both OHOS targets
-        shell: bash
-        run: |
-          set -euo pipefail
-          rustup toolchain install
-          rustup target add aarch64-unknown-linux-ohos x86_64-unknown-linux-ohos
-          toolchain="$(rustup show active-toolchain | cut -d' ' -f1)"
-          echo "RUSTUP_TOOLCHAIN=$toolchain" >> "$GITHUB_ENV"
+        uses: ./.github/actions/rust
+        with:
+          targets: aarch64-unknown-linux-ohos,x86_64-unknown-linux-ohos
       - name: cache rust artifacts
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
@@ -47,11 +40,11 @@ jobs:
       - name: install Deno
         uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed # v2.0.5
         with:
-          deno-version: v2.8.0
+          deno-version: 2.9.8
       - name: install Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: "22"
+          node-version: "22.23.0"
       - name: install pinned Hvigor
         run: npx --yes npm@10.9.4 ci --prefix setup/harmonyos --ignore-scripts
       - name: install public API 12 SDK and test framework

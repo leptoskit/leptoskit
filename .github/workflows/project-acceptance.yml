@@ -22,6 +22,8 @@ jobs:
       CARGO_PROFILE_DEV_DEBUG: "0"
       CARGO_PROFILE_TEST_DEBUG: "0"
       CARGO_NET_RETRY: "10"
+      CC: gcc
+      CXX: g++
 
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -29,13 +31,48 @@ jobs:
           ref: ${{ inputs.revision || github.sha }}
           persist-credentials: false
 
-      - uses: ./.github/actions/devenv
-        with:
-          github-token: ${{ github.token }}
-          nix-cache: /tmp/nixcache
-          install-tools: "false"
-
       - uses: ./.github/actions/rust
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          prefix-key: project-acceptance
+          cache-on-failure: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24.21.0"
+
+      - name: install cargo-nextest
+        uses: taiki-e/install-action@e407f7bafb71fd004bc5c2da3032e5470cbb6ef0 # v2.87.24
+        with:
+          tool: cargo-nextest@0.9.146
+
+      - name: install native libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config libssl-dev cmake clang libclang-dev \
+            libgtk-4-dev libasound2-dev
+
+      - name: install binaryen and esbuild
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/binaryen.tar.gz"
+          curl --fail --silent --show-error --location --retry 3 \
+            https://github.com/WebAssembly/binaryen/releases/download/version_132/binaryen-version_132-x86_64-linux.tar.gz \
+            -o "$archive"
+          echo "195ddc94f9bc89f45abdabb0b9eea86023d727ba90eac8b35b80f2544fc30572  $archive" | sha256sum --check --strict
+          tar -xzf "$archive" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/binaryen-version_132/bin" >> "$GITHUB_PATH"
+          archive="$RUNNER_TEMP/esbuild.tgz"
+          curl --fail --silent --show-error --location --retry 3 \
+            https://registry.npmjs.org/@esbuild/linux-x64/-/linux-x64-0.27.2.tgz \
+            -o "$archive"
+          echo "4ac0a36a8573ef6b612263661e7c77343a38789485344e1875cf33a498292310  $archive" | sha256sum --check --strict
+          mkdir -p "$RUNNER_TEMP/esbuild"
+          tar -xzf "$archive" -C "$RUNNER_TEMP/esbuild"
+          echo "$RUNNER_TEMP/esbuild/package/bin" >> "$GITHUB_PATH"
 
       - name: validate acceptance command failures
         run: |
@@ -43,4 +80,4 @@ jobs:
           python3 -m unittest discover -s setup/scripts/tests -p 'test_schema_pack_state.py'
 
       - name: exercise generated applications
-        run: test:projects
+        run: bash setup/scripts/project-acceptance.sh

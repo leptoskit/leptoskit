@@ -267,7 +267,7 @@ After 1.2 merges, the Windows/Linux track (2, 4) and the HarmonyOS track (3) tou
 - `HostCapabilities` for Windows/Linux/TUI: sync, worker and async.
 - Tests:
   - Registrant unit tests in `rust_desktop.rs`.
-  - Extend `tests/dev_reload.rs` with a worker call in flight during a reload.
+  - Cover a worker call that stays in flight across a `leptoskit dev` reload.
   - A fixture app (or extend the existing native plugin suite) selecting `os`, `crypto` (worker), `http` (async, against a local server) and `haptics` (expected `Unavailable`), run by `ci.yml` `applications` on Windows and `coverage` on Linux.
 - Docs:
   - `windows-linux.md`: a new "Plugins" section explaining what works, the migration note for runners created earlier, and the data directory.
