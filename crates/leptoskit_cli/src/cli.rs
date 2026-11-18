@@ -159,6 +159,8 @@ pub enum Command {
 		#[command(subcommand)]
 		command: crate::console::ConsoleCommand,
 	},
+	/// Signs in and manages cloud accounts, projects, environments and tokens.
+	Cloud(crate::cloud::CloudArgs),
 	/// Runs the admin: analytics, infrastructure and lessons, signed in
 	/// through the main site.
 	Admin {
@@ -852,6 +854,7 @@ pub fn run(cli: Cli) -> anyhow::Result<()> {
 			Ok(())
 		}
 		Command::Console { command } => crate::console::run(command),
+		Command::Cloud(args) => crate::cloud::run(&args),
 		Command::Admin { command } => crate::admin::run(command),
 		Command::Infra { command } => crate::console::infra(command),
 		Command::Deploy(args) => crate::console::deploy(&args),

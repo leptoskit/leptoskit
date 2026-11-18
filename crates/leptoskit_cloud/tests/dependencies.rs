@@ -16,6 +16,7 @@ const SERVER: &[&str] = &[
 	"axum",
 	"deadpool-postgres",
 	"hyper",
+	"leptoskit_auth",
 	"leptoskit_axum",
 	"reqwest",
 	"rusqlite",
@@ -89,4 +90,59 @@ fn crates(tree: &str) -> impl Iterator<Item = &str> {
 fn assert_absent(tree: &str, banned: &[&str]) {
 	let found: Vec<&str> = crates(tree).filter(|name| banned.contains(name)).collect();
 	assert!(found.is_empty(), "this build depends on {found:?}:\n{tree}");
+}
+
+/// A client may share a build with a database user without enabling Cloud's
+/// server. Check each backend separately so one cannot mask the other.
+#[test]
+fn shared_types_compile_with_unified_database_backends() {
+	let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+	let directory = tempfile::tempdir().expect("temporary client");
+	std::fs::create_dir(directory.path().join("src")).expect("source directory");
+	std::fs::write(directory.path().join("src/lib.rs"), "").expect("client source");
+	for backend in [
+		&[][..],
+		&["sqlite"][..],
+		&["postgres"][..],
+		&["sqlite", "postgres"][..],
+	] {
+		let manifest = format!(
+			"[package]\nname = \"cloud-feature-client\"\nversion = \"0.0.0\"\nedition = \
+			 \"2024\"\n[dependencies]\nleptoskit_cloud = {{ path = {:?}, default-features = false \
+			 }}\nleptoskit_db = {{ path = {:?}, default-features = false, features = {backend:?} \
+			 }}\n",
+			root,
+			root.join("../leptoskit_db")
+		);
+		std::fs::write(directory.path().join("Cargo.toml"), manifest).expect("manifest");
+		let output = Command::new("cargo")
+			.args(["check", "--offline", "--manifest-path"])
+			.arg(directory.path().join("Cargo.toml"))
+			.current_dir(root)
+			.output()
+			.expect("cargo check runs");
+		assert!(
+			output.status.success(),
+			"{backend:?}:\n{}",
+			String::from_utf8_lossy(&output.stderr)
+		);
+	}
+	let output = Command::new("cargo")
+		.args([
+			"check",
+			"--offline",
+			"--package",
+			"leptoskit_cloud",
+			"--no-default-features",
+			"--target",
+			"wasm32-unknown-unknown",
+		])
+		.current_dir(root)
+		.output()
+		.expect("wasm cargo check runs");
+	assert!(
+		output.status.success(),
+		"{}",
+		String::from_utf8_lossy(&output.stderr)
+	);
 }

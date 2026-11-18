@@ -4,6 +4,75 @@ Engineering note, 18 November 2026. LeptosKit Cloud is a hosted platform that ru
 
 This note is the contract every cloud pull request builds against. When a slice finds it wrong, the slice stops and the note changes first. The foundation and Control 1 are built; §12 says what exists and what each part's evidence is.
 
+## CLI accounts and projects
+
+Implementation checkpoint, not built. The CLI now passes `cargo check -p leptoskit_cli --all-targets`, but the new isolated backend-unification regression fails in the featureless `leptoskit_auth` dependency: seven policies require `SignedIn: Setting`, whose implementation is gated on auth’s server feature. Fixing that crate needs a separate authorized task. Cloud tests report 96 passed and one failed (this regression). The recorded CLI test run reports 11 passed and two failed; its fixture corrections and subsequent lint fixes remain unverified. The real-control-plane login test receives HTTP 404 during device authorization, and existing CLI help snapshots still need updating. Generated snapshots remain review artifacts, not accepted baselines.
+
+The account part of CLI 1 lives in `crates/leptoskit_cli/src/cloud/`. It adds this command tree; deployment commands belong to a later slice, and `lk deploy` keeps its existing behavior:
+
+```text
+lk cloud login [--no-browser]
+lk cloud logout
+lk cloud whoami
+lk cloud org list
+lk cloud org create <name> [--slug <slug>]
+lk cloud org members <org>
+lk cloud org invite <org> <email> --role <role>
+lk cloud org invitations <org>
+lk cloud org revoke-invitation <org> <invitation-id> --confirm <invitation-id>
+lk cloud org set-role <org> <account-id> --role <role>
+lk cloud org remove-member <org> <account-id> --confirm <account-id>
+lk cloud project list
+lk cloud project create <name> [--region <region>]
+lk cloud project show
+lk cloud project delete <project> --confirm <project>
+lk cloud env list
+lk cloud env create <name> [--kind staging|preview]
+lk cloud env update <name> [--size xs|s|m|l|xl] [--min <n>] [--max <n>] [--sleep never|when-idle]
+lk cloud env delete <name> --confirm <name>
+lk cloud token list
+lk cloud token create <name> --scope <scope> [--scope <scope>] [--expires 30|90|365]
+lk cloud token revoke <token-id> --confirm <token-id>
+lk cloud link [--force]
+```
+
+Every command accepts `--json`, `--url`, `--org` and `--project`, before or after its subcommand. Organization and project default from `[cloud]`; without an organization link, the caller's personal organization is used. Organization operations name their organization positionally. Token creation's optional `--project` binds the token to that project; omit it to create an organization token. Destructive operations always require `--confirm`, including in a terminal. There are no interactive confirmation prompts.
+
+The cloud origin is chosen from `--url`, `LEPTOSKIT_CLOUD_URL`, `[cloud].url`, then `https://cloud.leptoskit.dev`. It must be HTTPS, or HTTP on loopback, without credentials, path, query or fragment. Requests have a 30-second timeout, follow no redirects and bypass proxies for loopback.
+
+Login reads `/.well-known/leptoskit-cloud` for the first-party client ID, scopes and RPC path. It prints the verification URL and user code, opens a browser only in an interactive terminal unless `--no-browser` was supplied, and polls at the server's interval, adding five seconds after `slow_down`. Device codes, access tokens and refresh tokens are never displayed. The identity provider has no client-description field in device authorization, so no host name is sent. The control plane must add this field before the release sheet can say “signed from the terminal on <host>”.
+
+Sessions are stored per normalized origin in `$XDG_CONFIG_HOME/leptoskit/cloud/<sha256-origin>.json`, falling back to `~/.config/leptoskit/cloud/`. On Unix the directory is mode 0700 and the files mode 0600. Broader permissions and symbolic links are refused with a repair command. Writes use a private temporary file, file synchronization, atomic replacement and directory synchronization. A separate `<sha256-origin>.lock` file is locked throughout refresh and storage. The session is read again after acquiring the lock, preventing two processes from reusing a rotating refresh token. Login replacement and logout use the same lock. Access tokens are refreshed 30 seconds before expiry and once after an HTTP 401. Logout removes local credentials even when revocation cannot reach the server, and reports that the remote session may remain live.
+
+`LEPTOSKIT_CLOUD_TOKEN` supplies a CI API token instead of the stored session for that invocation and is never stored. Listing members accepts API tokens. Membership changes, invitations and token management use `Permission::requires_person` and reject this override before making a request, explaining that they need a person signed in through `lk cloud login`.
+
+JSON output is the bare operation result, without a wrapper or terminal styling. UUIDs are strings, timestamps are RFC 3339 strings, roles and scopes use their lower-case API spellings, and optional fields are `null`. These shapes come from the client-safe types in `leptoskit_cloud`:
+
+| Command                                                     | JSON result                                                                                                                    |
+| ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `login`                                                     | `{ "signed_in": true }`                                                                                                        |
+| `logout`                                                    | `{ "local_credentials_removed": true, "revoked": boolean }`                                                                    |
+| `whoami`                                                    | `WhoAmI`: `account`, `email`, `via`, `operator`, `organizations`, `token`                                                      |
+| `org list`                                                  | Array of `OrganizationSummary`: `id`, `slug`, `name`, `plan`, `personal`, `role`                                               |
+| `org create`                                                | One `OrganizationSummary`                                                                                                      |
+| `org members`                                               | Array of `Member`: `account`, `email`, `role`, `joined_at`                                                                     |
+| `org invite`, `org invitations`                             | One or an array of `PendingInvitation`: `id`, `email`, `role`, `invited_by`, `expires_at`, `created_at`                        |
+| `project list`                                              | Array of `ProjectSummary`: `id`, `slug`, `name`, `region`, `created_at`                                                        |
+| `project create`                                            | `CreatedProject`: `project`, `environment`, `detected`                                                                         |
+| `project show`                                              | `ProjectDetail`: `project`, `environments`, `detected`                                                                         |
+| `env list`                                                  | Array of `EnvironmentSummary`                                                                                                  |
+| `env create`, `env update`                                  | `EnvironmentSummary`: `id`, `name`, `kind`, `scale`, `revision`, `scale_differs`, `created_at`, `updated_at`                   |
+| `token list`                                                | Array of `TokenSummary`: `id`, `name`, `prefix`, `scopes`, `project`, `expires_at`, `last_used_at`, `created_by`, `created_at` |
+| `token create`                                              | `{ "token": TokenSummary, "value": string }`; this is the only output containing a token value                                 |
+| `link`                                                      | `{ "organization": string, "project": string, "url": string }`                                                                 |
+| All deletions, revocations, member removal and role changes | `null`                                                                                                                         |
+
+`scale` contains `app` and a map of `services`; each process has `size`, `min`, `max` and `sleep`. `detected` contains arrays `targets` and `variables`. `whoami.token` contains public caller-token metadata, never its secret. Token creation warns on stderr that the value is shown once, including in JSON mode. A lost response is not retried: `token_name_taken` preserves the server's explanation naming the token to revoke. Environment updates first read their revision, preserve service scale, and report `stale_revision` as a request to retry after another writer's change.
+
+`link` checks the project through the API before editing `leptoskit.toml` with `toml_edit`. It writes `project`, omits `organization` for the personal organization, omits the default `url`, preserves unrelated comments and formatting, and requires `--force` to replace a different link.
+
+Evidence is in `cloud/tests.rs` (fake control plane, device outcomes, refresh rotation and lock race, CI precedence, logout, permissions, command requests, error messages, help and human snapshots) and `leptoskit_cloud_app/tests/cloud_cli.rs` (real `serve --dev`, device approval, whoami, project creation and API-token creation/use).
+
 ## 1. Why a separate product
 
 The repository already deploys apps in three ways, and all three keep working unchanged:

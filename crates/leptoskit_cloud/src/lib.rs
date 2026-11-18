@@ -51,6 +51,7 @@ pub mod projects;
 pub mod server;
 pub mod size;
 pub mod slug;
+#[cfg(feature = "server")]
 pub mod tables;
 pub mod tokens;
 
@@ -70,6 +71,7 @@ leptoskit_rpc::scopes! {
 #[cfg(feature = "server")]
 leptoskit_db::packs!(leptoskit_auth, leptoskit_idp, leptoskit_rpc);
 
+#[cfg(feature = "server")]
 leptoskit_db::export_schema!();
 
 /// Every migration of the control plane's database on SQLite, generated with
