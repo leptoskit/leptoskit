@@ -17,9 +17,14 @@
 //!   table, in integer minor units.
 //! - [`access`]: roles, token scopes, and the one table that turns them into
 //!   permissions.
-//! - [`tables`]: the control plane's tables.
-//! - [`account`], [`tokens`], [`projects`]: the control plane's operations, as
-//!   every client calls them.
+//! - `tables`, with `server`: the control plane's tables. Clients never see a
+//!   row; every operation answers a view type.
+//! - [`account`], [`tokens`], [`projects`], [`deployments`], [`operator`]: the
+//!   control plane's operations, as every client calls them.
+//! - [`workers`]: the protocol build and cluster workers speak, its operations,
+//!   and the jobs' payloads.
+//! - [`release`]: how a deployment becomes the `ReleaseSpec` a cluster applies,
+//!   and the hostname it is served at.
 //!
 //! Without features it has no server dependencies and compiles for
 //! `wasm32-unknown-unknown`. The `[cloud]` table itself lives in
@@ -32,8 +37,7 @@
 //! operations' bodies exist only in that build: a crate that links this one
 //! for its client, such as the CLI, compiles none of them.
 //!
-//! Deployments, workers, billing, secrets, and domains arrive in later
-//! slices.
+//! Billing, secrets, domains, and managed databases arrive in later slices.
 #![doc(
 	html_logo_url = "https://raw.githubusercontent.com/leptoskit/leptoskit/main/docs/src/assets/icon.svg"
 )]
@@ -45,15 +49,22 @@ pub mod access;
 pub mod account;
 pub mod archive;
 pub mod deployment;
+pub mod deployments;
+pub mod operator;
 pub mod pricing;
 pub mod projects;
+pub mod release;
 #[cfg(feature = "server")]
 pub mod server;
 pub mod size;
 pub mod slug;
+// Tables are server-only: `#[table]` expands by `leptoskit_db`'s unified
+// features, so a client build that shares a graph with a database backend
+// would otherwise compile rows it can't. Clients see view types instead.
 #[cfg(feature = "server")]
 pub mod tables;
 pub mod tokens;
+pub mod workers;
 
 leptoskit_rpc::scopes! {
 	/// What the CLI may ask for when someone signs it in with the device

@@ -21,13 +21,23 @@ pub mod account;
 mod audit;
 mod authorize;
 mod control;
+pub(crate) mod deployments;
 mod identity;
+mod jobs;
+mod lifecycle;
+pub(crate) mod logs;
+pub(crate) mod operator;
 mod personal;
 pub mod projects;
 mod secret;
+pub(crate) mod status;
+mod storage;
 pub mod tokens;
+pub(crate) mod uploads;
+pub(crate) mod workers;
 
 use std::sync::Arc;
+use std::time::Duration;
 
 pub use control::CLI_CLIENT_NAME;
 pub use control::CLI_SCOPES;
@@ -40,22 +50,32 @@ pub use control::DevMode;
 pub use control::OAuthApp;
 pub use control::RPC_PATH;
 pub use control::SharedMailer;
+pub use control::catalogue_from_json;
 pub use identity::Caller;
 pub use identity::ClientDescription;
 pub use identity::CloudIdentify;
 pub use identity::TokenCaller;
+pub use identity::WorkerCaller;
+pub use jobs::StoredInput;
+pub use jobs::Swept;
 use leptoskit_auth::Account;
 use leptoskit_db::Db;
 use leptoskit_db::Id;
 use leptoskit_rpc as rpc;
+pub use storage::S3Config;
+pub use storage::SecretValue;
+pub use storage::StorageConfig;
 
+use self::storage::ObjectStore;
+use crate::pricing::Catalogue;
 use crate::tables::NewOperator;
 use crate::tables::Operator;
 
 /// What the operations' bodies need beyond the caller's transaction: the
 /// database without policies, for reading other people's addresses; the
-/// mailer, for invitations; and the public origin, for the links mail
-/// carries. [`CloudIdentify`] adds it to every caller's context.
+/// mailer, for invitations; the public origin, for the links mail
+/// carries; and what shipping needs ([`Shipping`]). [`CloudIdentify`] adds
+/// it to every caller's context.
 #[derive(Clone)]
 pub struct Services {
 	inner: Arc<ServicesInner>,
@@ -66,15 +86,92 @@ struct ServicesInner {
 	mailer: SharedMailer,
 	origin: String,
 	default_region: String,
+	shipping: Shipping,
+}
+
+/// What deployments need: where archives and logs are kept, the domain
+/// environments are served under, the registry images go to, the price
+/// catalogue, the settings, and the signal that wakes workers waiting to
+/// claim a job.
+#[derive(Clone, Debug)]
+pub(crate) struct Shipping {
+	pub(crate) store: ObjectStore,
+	pub(crate) apps_domain: String,
+	pub(crate) registry: String,
+	pub(crate) catalogue: Option<Catalogue>,
+	pub(crate) settings: ShippingSettings,
+	pub(crate) jobs: Arc<tokio::sync::Notify>,
+	/// Values no log may show: the store's secret key.
+	pub(crate) redactions: Arc<[String]>,
+}
+
+/// How long leases and addresses last, how long things are kept, and how
+/// much an organisation may store. Tests shorten them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ShippingSettings {
+	/// How long a claim holds a job before the worker must renew it.
+	pub lease: Duration,
+	/// How long an upload address works.
+	pub upload: Duration,
+	/// How long a build's download address works.
+	pub download: Duration,
+	/// How long a build may wait for a worker before it fails with
+	/// `builder_unavailable`.
+	pub unclaimed_build: Duration,
+	/// How often the sweeper looks for expired leases, archives, and logs.
+	pub sweep: Duration,
+	/// How long an archive no deployment uses is kept.
+	pub archive_keep: Duration,
+	/// How long a build's logs are kept.
+	pub build_logs: Duration,
+	/// How long an environment's runtime logs are kept.
+	pub runtime_logs: Duration,
+	/// The most archive bytes one organisation may keep.
+	pub storage_cap: u64,
+}
+
+impl Default for ShippingSettings {
+	/// Two-minute leases, fifteen-minute addresses, an hour for a build to
+	/// be claimed, a sweep every fifteen seconds, archives kept a week,
+	/// build logs thirty days and runtime logs seven, and 5 GiB of archives
+	/// per organisation.
+	fn default() -> Self {
+		Self {
+			lease: Duration::from_mins(2),
+			upload: Duration::from_mins(15),
+			download: Duration::from_mins(15),
+			unclaimed_build: Duration::from_hours(1),
+			sweep: Duration::from_secs(15),
+			archive_keep: Duration::from_hours(7 * 24),
+			build_logs: Duration::from_hours(30 * 24),
+			runtime_logs: Duration::from_hours(7 * 24),
+			storage_cap: 5 * 1024 * 1024 * 1024,
+		}
+	}
+}
+
+impl ShippingSettings {
+	/// A lease, in whole seconds, for the wire.
+	pub(crate) fn lease_seconds(&self) -> u32 {
+		u32::try_from(self.lease.as_secs())
+			.unwrap_or(u32::MAX)
+			.max(1)
+	}
+}
+
+/// `duration` as a database interval.
+pub(crate) fn delta(duration: Duration) -> chrono::TimeDelta {
+	chrono::TimeDelta::from_std(duration).unwrap_or(chrono::TimeDelta::MAX)
 }
 
 impl Services {
 	/// The services over `db`, sending mail with `mailer`, at `origin`.
-	pub fn new(
+	pub(crate) fn new(
 		db: &Db,
 		mailer: SharedMailer,
 		origin: impl Into<String>,
 		default_region: impl Into<String>,
+		shipping: Shipping,
 	) -> Self {
 		Self {
 			inner: Arc::new(ServicesInner {
@@ -82,6 +179,7 @@ impl Services {
 				mailer,
 				origin: origin.into().trim_end_matches('/').to_owned(),
 				default_region: default_region.into(),
+				shipping,
 			}),
 		}
 	}
@@ -101,6 +199,10 @@ impl Services {
 
 	pub(crate) fn default_region(&self) -> &str {
 		&self.inner.default_region
+	}
+
+	pub(crate) fn shipping(&self) -> &Shipping {
+		&self.inner.shipping
 	}
 }
 

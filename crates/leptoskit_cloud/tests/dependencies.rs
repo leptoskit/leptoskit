@@ -27,8 +27,11 @@ const SERVER: &[&str] = &[
 /// Crates only the `archive` feature may pull in: they read and write the
 /// filesystem. `walkdir` isn't here: leptos brings it (through
 /// `leptos_hot_reload`) into every leptoskit wasm build, and the tables and
-/// operations this library declares need leptos's query client.
-const ARCHIVE: &[&str] = &["flate2", "ignore", "sha2", "tar"];
+/// operations this library declares need leptos's query client. Nor is
+/// `sha2`: it is pure computation, and the shared types need it for the
+/// release spec (`leptoskit_cloud_runtime` hashes IDs into namespaces) and
+/// for shortening hostnames.
+const ARCHIVE: &[&str] = &["flate2", "ignore", "tar"];
 
 #[test]
 fn the_shared_types_compile_neither_server_nor_filesystem_crates() {

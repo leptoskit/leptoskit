@@ -23,29 +23,44 @@ description = "LeptosKit Cloud's shared types: slugs, sizes, deployment states, 
 # The optional crates other than `archive`'s are the control plane's
 # server: the operations' bodies, identity, sign-in, the device flow, and
 # the routes. Only the `server` feature compiles them.
+# `server`: the checksum header a presigned upload is bound to.
+base64 = { workspace = true, optional = true }
 # Timestamps, as `leptoskit_db` keeps them.
 chrono = { workspace = true }
 flate2 = { workspace = true, optional = true }
+# `server`: streaming a local upload to disk, and the S3 store's bodies.
+futures = { workspace = true, optional = true }
 getrandom = { workspace = true, optional = true }
 hex = { workspace = true, optional = true }
+# `server`: the local store signs its upload and download addresses.
+hmac = { workspace = true, optional = true }
 http = { workspace = true, optional = true }
 ignore = { workspace = true, optional = true }
 leptoskit_auth = { workspace = true, optional = true }
 leptoskit_axum = { workspace = true, optional = true }
+# The release spec a deployment becomes and the cluster worker applies.
+# Its base is plain data that compiles to wasm, so the dashboard shows the
+# spec and the worker payloads carry it without any feature.
+leptoskit_cloud_runtime = { workspace = true }
 # `schema`: the sizes and sleep the environment operations carry describe
 # themselves to generated clients.
 leptoskit_config = { workspace = true, features = ["schema"] }
 leptoskit_db = { workspace = true }
 leptoskit_idp = { workspace = true, optional = true }
 leptoskit_rpc = { workspace = true, features = ["client"] }
+# `server`: the S3-compatible object store.
+reqwest = { workspace = true, optional = true, features = ["rustls-tls"] }
+rusty-s3 = { workspace = true, optional = true, features = ["rustcrypto"] }
 schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
-sha2 = { workspace = true, optional = true }
+# Hashing a hostname that's too long into one that fits. Pure computation
+# that compiles to wasm; `leptoskit_cloud_runtime`'s base needs it as well.
+sha2 = { workspace = true }
 subtle = { workspace = true, optional = true }
 tar = { workspace = true, optional = true }
 thiserror = { workspace = true }
-tokio = { workspace = true, optional = true, features = ["rt", "sync", "time"] }
+tokio = { workspace = true, optional = true, features = ["fs", "io-util", "macros", "rt", "sync", "time"] }
 url = { workspace = true }
 uuid = { workspace = true, features = ["serde", "v7"] }
 
@@ -56,24 +71,31 @@ reqwest = { workspace = true, features = ["json", "rustls-tls"] }
 serde_json = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "net"] }
+# The live socket, for the live queries' tests, as `leptoskit_notifications`
+# pins it.
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "handshake"] }
 toml = { workspace = true }
 
 [features]
 default = []
 # `archive::pack` and `archive::unpack`, which read and write the filesystem
 # and, for the file list, run `git`.
-archive = ["dep:flate2", "dep:ignore", "dep:sha2", "dep:tar"]
+archive = ["dep:flate2", "dep:ignore", "dep:tar"]
 # The control plane: the operations' bodies and registrations, identity and
 # authorisation, sign-in (email codes, passkeys, GitHub and Google, Solana
 # wallets), the device flow for the CLI, and the routes, on SQLite.
 # `leptoskit_cloud_app` turns it on; the CLI and the dashboard never do.
 server = [
+	"dep:base64",
+	"dep:futures",
 	"dep:getrandom",
 	"dep:hex",
+	"dep:hmac",
 	"dep:http",
 	"dep:leptoskit_axum",
 	"dep:leptoskit_idp",
-	"dep:sha2",
+	"dep:reqwest",
+	"dep:rusty-s3",
 	"dep:subtle",
 	"dep:tokio",
 	"leptoskit_auth/axum",
@@ -116,6 +138,10 @@ required-features = ["server"]
 
 [[test]]
 name = "authorization"
+required-features = ["server"]
+
+[[test]]
+name = "deployments"
 required-features = ["server"]
 
 [[test]]

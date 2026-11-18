@@ -9,6 +9,7 @@
 )]
 
 pub mod scenarios;
+pub mod shipping;
 
 use std::net::SocketAddr;
 use std::sync::atomic::AtomicUsize;
@@ -20,6 +21,8 @@ use leptoskit_cloud::server::Control;
 use leptoskit_cloud::server::ControlConfig;
 use leptoskit_cloud::server::DEFAULT_REGION;
 use leptoskit_cloud::server::SharedMailer;
+use leptoskit_cloud::server::ShippingSettings;
+use leptoskit_cloud::server::StorageConfig;
 use leptoskit_db::Db;
 use serde_json::Value;
 use serde_json::json;
@@ -42,6 +45,8 @@ pub struct App {
 	client: reqwest::Client,
 	/// How many tokens [`App::token`] has made, to name the next.
 	tokens: AtomicUsize,
+	/// The local object store'"'"'s directory, removed with the app.
+	pub storage: tempfile::TempDir,
 }
 
 /// Who a call is from.
@@ -176,26 +181,55 @@ pub async fn app() -> App {
 
 /// A control plane over `db`, which must be migrated.
 pub async fn app_on(db: Db) -> App {
+	app_with(db, |_| {}).await
+}
+
+/// The domain environments are served under in tests.
+pub const APPS_DOMAIN: &str = "apps.example.test";
+/// The registry images go to in tests.
+pub const REGISTRY: &str = "registry.example.test/leptoskit";
+
+/// Settings for tests: the sweeper runs only when a test calls
+/// [`Control::sweep`], after its first run at start.
+pub fn test_settings() -> ShippingSettings {
+	ShippingSettings {
+		sweep: std::time::Duration::from_secs(3600),
+		..ShippingSettings::default()
+	}
+}
+
+/// A control plane over `db`, which must be migrated, with `configure`
+/// applied to its configuration: a local store in a fresh directory,
+/// [`APPS_DOMAIN`], [`REGISTRY`], no price catalogue, and
+/// [`test_settings`].
+pub async fn app_with(db: Db, configure: impl FnOnce(&mut ControlConfig)) -> App {
 	let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
 		.await
 		.expect("a free port");
 	let address = listener.local_addr().expect("an address");
 	let origin = format!("http://{address}");
 	let mailbox = Mailbox::new();
-	let control = Control::start(
-		&db,
-		ControlConfig {
-			origin: origin.clone(),
-			keys: keys(),
-			mailer: SharedMailer::new(mailbox.clone()),
-			github: None,
-			google: None,
-			default_region: DEFAULT_REGION.to_owned(),
-			dev: None,
+	let storage = tempfile::tempdir().expect("a storage directory");
+	let mut config = ControlConfig {
+		origin: origin.clone(),
+		keys: keys(),
+		mailer: SharedMailer::new(mailbox.clone()),
+		github: None,
+		google: None,
+		default_region: DEFAULT_REGION.to_owned(),
+		storage: StorageConfig::Local {
+			directory: storage.path().to_owned(),
 		},
-	)
-	.await
-	.expect("the control plane starts");
+		apps_domain: APPS_DOMAIN.to_owned(),
+		registry: REGISTRY.to_owned(),
+		catalogue: None,
+		shipping: test_settings(),
+		dev: None,
+	};
+	configure(&mut config);
+	let control = Control::start(&db, config)
+		.await
+		.expect("the control plane starts");
 	let router = control.router();
 	tokio::spawn(async move {
 		leptoskit_axum::axum::serve(listener, router)
@@ -211,6 +245,7 @@ pub async fn app_on(db: Db) -> App {
 		control,
 		client: reqwest::Client::new(),
 		tokens: AtomicUsize::new(1),
+		storage,
 	}
 }
 
@@ -267,6 +302,34 @@ impl App {
 			.header("idempotency-key", key)
 			.json(&args);
 		self.send(request, caller).await
+	}
+
+	/// `method url` with `headers` and `body`, as a client uses a presigned
+	/// address: no cookie, no bearer.
+	pub async fn presigned(
+		&self,
+		method: &str,
+		url: &str,
+		headers: &Value,
+		body: Vec<u8>,
+	) -> (u16, Vec<u8>) {
+		let method = reqwest::Method::from_bytes(method.as_bytes()).expect("a method");
+		let mut request = self.client.request(method, url).body(body);
+
+		// The client sets `content-length` from the body, as a real one does,
+		// so a body of the wrong size reaches the store as one.
+		if let Some(headers) = headers.as_object() {
+			for (name, value) in headers
+				.iter()
+				.filter(|(name, _)| !name.eq_ignore_ascii_case("content-length"))
+			{
+				request = request.header(name, value.as_str().expect("a header value"));
+			}
+		}
+
+		let response = request.send().await.expect("the store answers");
+		let status = response.status().as_u16();
+		(status, response.bytes().await.expect("a body").to_vec())
 	}
 
 	/// `GET path`.

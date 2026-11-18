@@ -245,6 +245,7 @@ pub(crate) async fn delete_project(
 	confirmed(confirm, &row.slug, "project")?;
 	let organization_id = access.organization.id;
 	let project_id = row.id;
+	let removals = before_removal(cx, &access.organization, &row).await?;
 	let target = format!("{} {}", row.id, row.slug);
 	// Its environments and the tokens bound to it go with it.
 	row.destroy(cx.tx()).await?;
@@ -258,7 +259,7 @@ pub(crate) async fn delete_project(
 		&client(cx.context()),
 	)
 	.await?;
-	Ok(())
+	wake_after(cx, removals)
 }
 
 pub(crate) async fn environments(
@@ -278,7 +279,7 @@ pub(crate) async fn environments(
 }
 
 /// The environment `name` in `project`, or `NotFound`.
-async fn environment(
+pub(crate) async fn environment(
 	db: &impl leptoskit_db::Read,
 	project: &Project,
 	name: &str,
@@ -449,6 +450,8 @@ pub(crate) async fn delete_environment(
 	}
 
 	confirmed(confirm, &row.name, "environment")?;
+	let removal =
+		super::deployments::before_removal(cx.tx(), &access.organization, &project, &row).await?;
 	let target = format!("{} {}", row.id, row.name);
 	row.destroy(cx.tx()).await?;
 	audit::record(
@@ -461,5 +464,42 @@ pub(crate) async fn delete_environment(
 		&client(cx.context()),
 	)
 	.await?;
+	wake_after(cx, usize::from(removal.is_some()))
+}
+
+/// Readies every environment of `project` for deletion, as
+/// [`before_removal`](super::deployments::before_removal) does; answers how
+/// many removals it queued.
+async fn before_removal(
+	cx: &rpc::MutationCx,
+	organization: &crate::tables::Organization,
+	project: &Project,
+) -> rpc::Result<usize> {
+	let project_id = project.id;
+	let environments = Environment::query()
+		.filter(|environment| environment.project_id.eq(project_id))
+		.all(cx.tx())
+		.await?;
+	let mut queued = 0;
+
+	for environment in &environments {
+		queued += usize::from(
+			super::deployments::before_removal(cx.tx(), organization, project, environment)
+				.await?
+				.is_some(),
+		);
+	}
+
+	Ok(queued)
+}
+
+/// Wakes the cluster workers waiting to claim once the deletion commits,
+/// when it queued removals.
+fn wake_after(cx: &rpc::MutationCx, removals: usize) -> rpc::Result<()> {
+	if removals > 0 {
+		let waker = services(cx.context())?.clone();
+		cx.after_commit(async move { super::jobs::wake(&waker) });
+	}
+
 	Ok(())
 }

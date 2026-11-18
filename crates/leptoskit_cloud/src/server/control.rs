@@ -26,8 +26,15 @@ use leptoskit_rpc::spec::SpecOptions;
 use serde::Serialize;
 
 use super::Services;
+use super::Shipping;
+use super::ShippingSettings;
 use super::identity::CloudIdentify;
+use super::jobs;
+use super::jobs::Swept;
+use super::storage::ObjectStore;
+use super::storage::StorageConfig;
 use crate::OAuthScope;
+use crate::pricing::Catalogue;
 
 /// The name the CLI's OAuth client is registered under, and found by.
 pub const CLI_CLIENT_NAME: &str = "LeptosKit CLI";
@@ -116,6 +123,19 @@ pub struct ControlConfig {
 	pub google: Option<OAuthApp>,
 	/// Where projects run when they don't say.
 	pub default_region: String,
+	/// Where source archives and logs are kept.
+	pub storage: StorageConfig,
+	/// The domain environments are served under, such as
+	/// `apps.leptoskit.dev`: a production environment at
+	/// `<project>-<organization>.<domain>`.
+	pub apps_domain: String,
+	/// Where built images are pushed, such as `registry.example.com/leptoskit`:
+	/// each project's under `<registry>/<organization id>/<project id>`.
+	pub registry: String,
+	/// The prices `preview_release` estimates with, when there are any.
+	pub catalogue: Option<Catalogue>,
+	/// Leases, addresses, retention, and the storage cap.
+	pub shipping: ShippingSettings,
 	/// Development mode, in debug builds only.
 	pub dev: Option<DevMode>,
 }
@@ -150,6 +170,17 @@ pub struct Control {
 	live: Live,
 	router: Router,
 	cli_client_id: String,
+	services: Services,
+	_sweeper: Arc<Sweeper>,
+}
+
+/// The sweeper's task, stopped when the last [`Control`] goes.
+struct Sweeper(tokio::task::JoinHandle<()>);
+
+impl Drop for Sweeper {
+	fn drop(&mut self) {
+		self.0.abort();
+	}
 }
 
 impl std::fmt::Debug for Control {
@@ -186,13 +217,26 @@ impl Control {
 			.scopes::<OAuthScope>()
 			.build()?;
 		let cli_client_id = cli_client(&idp).await?;
+		check_apps_domain(&config.apps_domain)?;
+		check_registry(&config.registry)?;
+		let store = ObjectStore::new(&config.storage, &origin)
+			.map_err(|error| ControlError::Config(error.to_string()))?;
 		let services = Services::new(
 			db,
 			config.mailer.clone(),
 			origin.clone(),
 			config.default_region.clone(),
+			Shipping {
+				redactions: store.secrets().into(),
+				store: store.clone(),
+				apps_domain: config.apps_domain.clone(),
+				registry: config.registry.trim_end_matches('/').to_owned(),
+				catalogue: config.catalogue.clone(),
+				settings: config.shipping,
+				jobs: Arc::new(tokio::sync::Notify::new()),
+			},
 		);
-		let identify = CloudIdentify::new(auth.clone(), services, cli_client_id.clone());
+		let identify = CloudIdentify::new(auth.clone(), services.clone(), cli_client_id.clone());
 		let server = Server::new(db.clone()).identify(identify);
 		let live = server.live().origin(origin.clone());
 		live.start()
@@ -225,10 +269,16 @@ impl Control {
 			router = router.merge(dev_routes(dev));
 		}
 
+		if let Some(routes) = store.routes() {
+			router = router.merge(routes);
+		}
+
 		// The session layer, then the OAuth provider's outside it: the
 		// provider turns the CLI's access token into a delegation the
 		// session layer then carries.
 		let router = router.layer(auth.layer()).layer(idp.layer());
+
+		let sweeper = Sweeper(tokio::spawn(sweep_forever(services.clone())));
 
 		Ok(Self {
 			auth,
@@ -236,6 +286,8 @@ impl Control {
 			live,
 			router,
 			cli_client_id,
+			services,
+			_sweeper: Arc::new(sweeper),
 		})
 	}
 
@@ -266,6 +318,92 @@ impl Control {
 	#[must_use]
 	pub fn cli_client_id(&self) -> &str {
 		&self.cli_client_id
+	}
+
+	/// Sweeps now, as the sweeper does on its own every
+	/// [`ShippingSettings::sweep`]: lapsed leases, builds nobody claimed,
+	/// expired archives, and expired logs.
+	///
+	/// # Errors
+	///
+	/// When the database or the store fails.
+	pub async fn sweep(&self) -> leptoskit_rpc::Result<Swept> {
+		jobs::sweep(&self.services).await
+	}
+}
+
+/// The price catalogue in `text`, a JSON object of `currency`, `plans`, and
+/// `meters`, as [`Catalogue`] reads it.
+///
+/// # Errors
+///
+/// `Config` when `text` isn't a catalogue, or the catalogue can't work.
+pub fn catalogue_from_json(text: &str) -> Result<Catalogue, ControlError> {
+	serde_json::from_str(text)
+		.map_err(|error| ControlError::Config(format!("isn't a price catalogue: {error}")))
+}
+
+/// Runs the sweeper every [`ShippingSettings::sweep`]. A failed sweep is
+/// reported and tried again at the next.
+async fn sweep_forever(services: Services) {
+	let mut interval = tokio::time::interval(services.shipping().settings.sweep);
+	interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
+	loop {
+		interval.tick().await;
+
+		if let Err(error) = jobs::sweep(&services).await {
+			eprintln!("leptoskit-cloud: the sweep failed: {error}");
+		}
+	}
+}
+
+/// `Config` unless `domain` is a lower-case DNS name of two labels or more,
+/// short enough to put a 63-character label before.
+fn check_apps_domain(domain: &str) -> Result<(), ControlError> {
+	let labels: Vec<&str> = domain.split('.').collect();
+	let valid = domain.len() <= 253 - 64
+		&& labels.len() >= 2
+		&& labels.iter().all(|label| {
+			(1..=63).contains(&label.len())
+				&& label
+					.bytes()
+					.all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+				&& !label.starts_with('-')
+				&& !label.ends_with('-')
+		});
+
+	if valid {
+		Ok(())
+	} else {
+		Err(ControlError::Config(format!(
+			"the apps domain must be a lower-case DNS name, such as apps.example.com, of at most \
+			 {} characters; `{domain}` isn't",
+			253 - 64
+		)))
+	}
+}
+
+/// `Config` unless `registry` is a host and path, such as
+/// `registry.example.com/leptoskit`.
+fn check_registry(registry: &str) -> Result<(), ControlError> {
+	let registry = registry.trim_end_matches('/');
+	let valid = !registry.is_empty()
+		&& !registry.contains("://")
+		&& registry.bytes().all(|byte| {
+			byte.is_ascii_lowercase()
+				|| byte.is_ascii_digit()
+				|| matches!(byte, b'.' | b'-' | b'_' | b'/' | b':')
+		});
+
+	if valid {
+		Ok(())
+	} else {
+		Err(ControlError::Config(
+			"the registry must be a host and path with no scheme, such as \
+			 registry.example.com/leptoskit"
+				.to_owned(),
+		))
 	}
 }
 

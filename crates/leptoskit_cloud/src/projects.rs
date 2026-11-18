@@ -418,6 +418,25 @@ pub async fn delete_environment(
 		.await
 }
 
+/// What an environment runs, as its cluster worker last reported it: each
+/// process's ready and desired replicas, whether it sleeps, restarts, and
+/// out-of-memory kills, and when the worker was last heard from. Subscribe
+/// to it to watch.
+///
+/// # Errors
+///
+/// `NotFound` for an environment the caller can't see.
+#[rpc::api(scope = crate::OAuthScope::Cloud, tag = "projects")]
+#[rpc::query]
+pub async fn environment_status(
+	cx: &rpc::QueryCx,
+	organization: String,
+	project: String,
+	environment: String,
+) -> rpc::Result<crate::deployments::EnvironmentStatus> {
+	crate::server::status::environment_status(cx, &organization, &project, &environment).await
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;

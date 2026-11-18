@@ -16,6 +16,7 @@
 //! | `manage_environments` | project      |   ✓   |   ✓   |     ✓     |         |        | `manage`         |
 //! | `delete_project`      | project      |   ✓   |   ✓   |           |         |        | `admin`          |
 //! | `delete_environment`  | project      |   ✓   |   ✓   |           |         |        | `admin`          |
+//! | `deploy`              | project      |   ✓   |   ✓   |     ✓     |         |        | `deploy`         |
 //!
 //! A person, signed in themselves or through the CLI, has their role's
 //! permissions. A token has a permission when one of its scopes grants it
@@ -32,7 +33,16 @@
 //!
 //! The deletions need the `admin` scope by name: no narrower scope grants
 //! them, which is how "a scope that names them" reads for the six scopes
-//! the contract has.
+//! the contract has. Shipping (`deploy`) needs the `deploy` scope by name in
+//! the same way: uploading an archive, deploying, cancelling, and rolling
+//! back. Reading deployments, their events, and logs is `view_projects`.
+//!
+//! Two kinds of caller are outside the table. Operators run the cloud
+//! itself: a person in the `operators` table, never a token
+//! ([`Requirement::Operator`]). Workers call with a worker key, which works
+//! on the worker operations and nowhere else, and no other credential works
+//! on those ([`Requirement::Worker`]); pairing takes only a pairing code
+//! ([`Requirement::Pairing`]).
 
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -79,7 +89,7 @@ impl Role {
 			| Permission::ManageTokens
 			| Permission::DeleteProject
 			| Permission::DeleteEnvironment => matches!(self, Self::Owner | Self::Admin),
-			Permission::CreateProject | Permission::ManageEnvironments => {
+			Permission::CreateProject | Permission::ManageEnvironments | Permission::Deploy => {
 				matches!(self, Self::Owner | Self::Admin | Self::Developer)
 			}
 		}
@@ -126,7 +136,7 @@ impl Role {
 pub enum TokenScope {
 	/// Read the organisation, its projects, and their environments.
 	Read,
-	/// Deployments, when they arrive. Reads, today.
+	/// Shipping: uploading archives, deploying, cancelling, and rolling back.
 	Deploy,
 	/// Projects, environments, and later configuration and domains.
 	Manage,
@@ -177,6 +187,7 @@ impl TokenScope {
 			Permission::DeleteProject | Permission::DeleteEnvironment => {
 				matches!(self, Self::Admin)
 			}
+			Permission::Deploy => matches!(self, Self::Deploy),
 			Permission::ManageMembers | Permission::ManageOwners | Permission::ManageTokens => {
 				false
 			}
@@ -212,11 +223,13 @@ pub enum Permission {
 	DeleteProject,
 	/// Delete an environment other than production.
 	DeleteEnvironment,
+	/// Ship an environment: upload archives, deploy, cancel, and roll back.
+	Deploy,
 }
 
 impl Permission {
 	/// Every permission.
-	pub const ALL: [Self; 9] = [
+	pub const ALL: [Self; 10] = [
 		Self::ViewOrganization,
 		Self::ViewProjects,
 		Self::ManageMembers,
@@ -226,6 +239,7 @@ impl Permission {
 		Self::ManageEnvironments,
 		Self::DeleteProject,
 		Self::DeleteEnvironment,
+		Self::Deploy,
 	];
 
 	/// The permission's name, as errors and the docs spell it.
@@ -241,6 +255,7 @@ impl Permission {
 			Self::ManageEnvironments => "manage_environments",
 			Self::DeleteProject => "delete_project",
 			Self::DeleteEnvironment => "delete_environment",
+			Self::Deploy => "deploy",
 		}
 	}
 
@@ -270,6 +285,7 @@ impl Permission {
 				| Self::ManageEnvironments
 				| Self::DeleteProject
 				| Self::DeleteEnvironment
+				| Self::Deploy
 		)
 	}
 
@@ -299,6 +315,13 @@ pub enum Requirement {
 	/// jobs, of which the cloud has none, and `rpc.service_token` answers
 	/// `null` because the cloud forwards nobody's identity to a service.
 	Builtin,
+	/// An operator: a person in the `operators` table, never a token.
+	Operator,
+	/// A worker, with its key. Nobody else, whatever their role.
+	Worker,
+	/// A pairing code in the arguments, which is the credential: anyone
+	/// holding a live one may pair a worker with it, once.
+	Pairing,
 }
 
 /// Every operation the control plane serves, with what it asks of its
@@ -381,6 +404,53 @@ pub const OPERATIONS: &[(&str, Requirement)] = &[
 		"delete_environment",
 		Requirement::Project(Permission::DeleteEnvironment),
 	),
+	(
+		"environment_status",
+		Requirement::Project(Permission::ViewProjects),
+	),
+	("begin_upload", Requirement::Project(Permission::Deploy)),
+	("complete_upload", Requirement::Project(Permission::Deploy)),
+	("deploy", Requirement::Project(Permission::Deploy)),
+	(
+		"preview_release",
+		Requirement::Project(Permission::ViewProjects),
+	),
+	(
+		"cancel_deployment",
+		Requirement::Project(Permission::Deploy),
+	),
+	("rollback", Requirement::Project(Permission::Deploy)),
+	("deployment", Requirement::Project(Permission::ViewProjects)),
+	(
+		"deployments",
+		Requirement::Project(Permission::ViewProjects),
+	),
+	(
+		"deployment_events",
+		Requirement::Project(Permission::ViewProjects),
+	),
+	(
+		"in_flight",
+		Requirement::Organization(Permission::ViewOrganization),
+	),
+	("build_logs", Requirement::Project(Permission::ViewProjects)),
+	(
+		"runtime_logs",
+		Requirement::Project(Permission::ViewProjects),
+	),
+	("pair", Requirement::Pairing),
+	("claim", Requirement::Worker),
+	("renew", Requirement::Worker),
+	("append_log", Requirement::Worker),
+	("finish", Requirement::Worker),
+	("report_status", Requirement::Worker),
+	("clusters", Requirement::Operator),
+	("register_cluster", Requirement::Operator),
+	("workers", Requirement::Operator),
+	("jobs", Requirement::Operator),
+	("issue_pairing", Requirement::Operator),
+	("revoke_worker", Requirement::Operator),
+	("reconcile", Requirement::Operator),
 ];
 
 /// What `name` asks of its caller, from [`OPERATIONS`].
@@ -419,7 +489,7 @@ mod tests {
 
 	#[test]
 	fn the_table_is_the_module_docs() {
-		let expected: [(Permission, [bool; 5]); 9] = [
+		let expected: [(Permission, [bool; 5]); 10] = [
 			(Permission::ViewOrganization, [true, true, true, true, true]),
 			(Permission::ViewProjects, [true, true, true, true, true]),
 			(Permission::ManageMembers, [true, true, false, false, false]),
@@ -435,6 +505,7 @@ mod tests {
 				Permission::DeleteEnvironment,
 				[true, true, false, false, false],
 			),
+			(Permission::Deploy, [true, true, true, false, false]),
 		];
 
 		for (permission, roles) in expected {
@@ -453,6 +524,15 @@ mod tests {
 				.collect();
 			assert_eq!(granting, [TokenScope::Admin], "{permission:?}");
 		}
+	}
+
+	#[test]
+	fn deploying_needs_the_deploy_scope_by_name() {
+		let granting: Vec<TokenScope> = TokenScope::ALL
+			.into_iter()
+			.filter(|scope| scope.allows(Permission::Deploy))
+			.collect();
+		assert_eq!(granting, [TokenScope::Deploy]);
 	}
 
 	#[test]
@@ -531,7 +611,13 @@ mod tests {
 			Some(Requirement::Organization(Permission::ManageMembers))
 		);
 		assert_eq!(requirement("rpc.inbox"), Some(Requirement::Builtin));
-		assert_eq!(requirement("deploy"), None);
+		assert_eq!(
+			requirement("deploy"),
+			Some(Requirement::Project(Permission::Deploy))
+		);
+		assert_eq!(requirement("claim"), Some(Requirement::Worker));
+		assert_eq!(requirement("reconcile"), Some(Requirement::Operator));
+		assert_eq!(requirement("ship_it"), None);
 	}
 
 	#[test]
