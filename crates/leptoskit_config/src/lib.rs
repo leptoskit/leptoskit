@@ -23,6 +23,7 @@ use serde::Serialize;
 
 pub mod application;
 pub mod assets;
+pub mod cloud;
 pub mod deployment;
 pub mod extension;
 pub mod graph;
@@ -42,6 +43,7 @@ pub use assets::IconPlatform;
 pub use assets::IconsConfig;
 pub use assets::PlatformIcons;
 pub use assets::WebIcons;
+pub use cloud::CloudConfig;
 pub use extension::Browser;
 pub use extension::ContentScript;
 pub use extension::ExtensionConfig;
@@ -129,6 +131,10 @@ pub struct LeptoskitConfig {
 	/// here.
 	#[serde(skip_serializing_if = "PublishConfig::is_empty")]
 	pub publish: PublishConfig,
+	/// `LeptosKit` Cloud: where the cloud runs the app, and how big. Present
+	/// once `lk cloud launch` has run, or when written by hand.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub cloud: Option<CloudConfig>,
 	/// The leptos and leptoskit plugins activated for this project.
 	pub plugins: Vec<PluginSpec>,
 	/// Services: other processes the app runs beside its server, each with
@@ -174,6 +180,7 @@ impl Default for LeptoskitConfig {
 			auth: None,
 			extension: None,
 			publish: PublishConfig::default(),
+			cloud: None,
 			plugins: Vec::new(),
 			services: BTreeMap::new(),
 			artifacts: BTreeMap::new(),
@@ -3683,6 +3690,11 @@ impl LeptoskitConfig {
 	///   the `extension` platform, has no surface, names a route or match
 	///   pattern that can't work, lacks Firefox's add-on ID or the package ID
 	///   Safari needs, or is combined with code push.
+	/// - [`ConfigError::InvalidCloud`] when `[cloud]` breaks a rule: a scale
+	///   out of bounds, sleep that disagrees with `min` or with live queries,
+	///   SQLite with more than one replica, settings for a service that is
+	///   missing or remote, a bad `url` or domain, or `infra.control_url`
+	///   beside it.
 	pub fn validate(&self) -> Result<(), ConfigError> {
 		self.validate_application()?;
 		if self.schema_version != SCHEMA_VERSION {
@@ -3729,6 +3741,10 @@ impl LeptoskitConfig {
 
 		if let Some(problem) = self.publish_problem(builds_extension) {
 			return Err(ConfigError::InvalidPublish(problem));
+		}
+
+		if let Some(cloud) = &self.cloud {
+			cloud.resolved(self).map_err(ConfigError::InvalidCloud)?;
 		}
 
 		if builds_extension && self.codepush.enabled {
@@ -4324,6 +4340,9 @@ pub enum ConfigError {
 	/// `[publish]` can't work as written.
 	#[error("invalid [publish]: {0}")]
 	InvalidPublish(String),
+	/// `[cloud]` can't work as written.
+	#[error("invalid [cloud]: {0}")]
+	InvalidCloud(cloud::CloudError),
 	/// A `[services]` table can't work as written.
 	#[error("invalid [services]: {0}")]
 	InvalidServices(String),

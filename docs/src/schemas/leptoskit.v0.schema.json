@@ -63,6 +63,17 @@
 				"wasm_opt": true
 			}
 		},
+		"cloud": {
+			"description": "`LeptosKit` Cloud: where the cloud runs the app, and how big. Present\nonce `lk cloud launch` has run, or when written by hand.",
+			"anyOf": [
+				{
+					"$ref": "#/$defs/CloudConfig"
+				},
+				{
+					"type": "null"
+				}
+			]
+		},
 		"codepush": {
 			"description": "Over-the-air update settings.",
 			"$ref": "#/$defs/CodePushConfig",
@@ -936,6 +947,21 @@
 			},
 			"additionalProperties": false
 		},
+		"Backups": {
+			"description": "How often the database is backed up.",
+			"oneOf": [
+				{
+					"description": "A snapshot every day.",
+					"type": "string",
+					"const": "daily"
+				},
+				{
+					"description": "The write-ahead log is archived as it is written, so the database can\nbe restored to any moment. Postgres only.",
+					"type": "string",
+					"const": "continuous"
+				}
+			]
+		},
 		"Browser": {
 			"description": "A family of browsers that share one extension package.",
 			"oneOf": [
@@ -1089,6 +1115,181 @@
 					"const": "preserve"
 				}
 			]
+		},
+		"CloudConfig": {
+			"description": "`LeptosKit` Cloud: where the app runs and how big. `lk deploy` deploys to\nthe cloud while `project` is set.",
+			"type": "object",
+			"properties": {
+				"database": {
+					"description": "The database every environment gets when the app has `[db]`.",
+					"anyOf": [
+						{
+							"$ref": "#/$defs/CloudDatabase"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"environments": {
+					"description": "Each environment's size, scale, and domains, by name, such as\n`[cloud.environments.production]`. Production exists even when it\nisn't listed.",
+					"type": "object",
+					"additionalProperties": {
+						"$ref": "#/$defs/CloudEnvironment"
+					}
+				},
+				"organization": {
+					"description": "The organisation that owns the project. Defaults to the signed-in\nperson's own organisation.",
+					"anyOf": [
+						{
+							"$ref": "#/$defs/Slug"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"project": {
+					"description": "The project's slug in the cloud, such as `notes`. `lk cloud launch`\nwrites it.",
+					"anyOf": [
+						{
+							"$ref": "#/$defs/Slug"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"region": {
+					"description": "Where the environments run, such as `eu-central`. Defaults to the\ncloud's default region.",
+					"anyOf": [
+						{
+							"$ref": "#/$defs/Region"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"url": {
+					"description": "The cloud's address, for a self-hosted cloud: `https://` with no path,\nor `http://` on localhost. Defaults to `https://cloud.leptoskit.dev`.",
+					"type": [
+						"string",
+						"null"
+					]
+				}
+			},
+			"additionalProperties": false
+		},
+		"CloudDatabase": {
+			"description": "`[cloud.database]`: the database each environment gets.",
+			"type": "object",
+			"properties": {
+				"backups": {
+					"description": "`daily` snapshots, or `continuous` archiving of Postgres's\nwrite-ahead log.",
+					"$ref": "#/$defs/Backups",
+					"default": "daily"
+				},
+				"size": {
+					"description": "`shared` (a database on a shared Postgres cluster), or `s`, `m`, `l`\n(a dedicated Postgres instance with 1, 2, or 4 GiB). A SQLite app's\ndatabase is a file on its volume, so it stays `shared`.",
+					"$ref": "#/$defs/DatabaseSize",
+					"default": "shared"
+				}
+			},
+			"additionalProperties": false
+		},
+		"CloudEnvironment": {
+			"description": "`[cloud.environments.<name>]`: one running copy of the app.",
+			"type": "object",
+			"properties": {
+				"allow_sleep_with_live": {
+					"description": "Lets an app that serves live queries sleep anyway. Sleeping closes\nevery live connection, so screens reconnect when it wakes.",
+					"type": "boolean"
+				},
+				"domains": {
+					"description": "Custom hostnames the environment answers on, such as\n`notes.example.com`: lower case, no wildcards.",
+					"type": "array",
+					"items": {
+						"type": "string"
+					}
+				},
+				"max": {
+					"description": "The most replicas that run under load, up to 20. Defaults to `min`,\nor `1`.",
+					"type": [
+						"integer",
+						"null"
+					],
+					"format": "uint32",
+					"maximum": 20,
+					"minimum": 1
+				},
+				"min": {
+					"description": "The fewest replicas that run. `0` sleeps when idle. Defaults to `0`,\nor `1` when the app serves live queries.",
+					"type": [
+						"integer",
+						"null"
+					],
+					"format": "uint32",
+					"maximum": 20,
+					"minimum": 0
+				},
+				"services": {
+					"description": "Size and scale for the app's `[services.<name>]`, by the same name.",
+					"type": "object",
+					"additionalProperties": {
+						"$ref": "#/$defs/CloudService"
+					}
+				},
+				"size": {
+					"description": "How much CPU and memory each replica of the app's server gets: `xs`,\n`s`, `m`, `l`, or `xl`.",
+					"$ref": "#/$defs/Size",
+					"default": "xs"
+				},
+				"sleep": {
+					"description": "`never`, or `when-idle`, which needs `min = 0`. Follows `min` when\nunset.",
+					"anyOf": [
+						{
+							"$ref": "#/$defs/Sleep"
+						},
+						{
+							"type": "null"
+						}
+					]
+				}
+			},
+			"additionalProperties": false
+		},
+		"CloudService": {
+			"description": "`[cloud.environments.<env>.services.<name>]`: one service's process.",
+			"type": "object",
+			"properties": {
+				"max": {
+					"description": "The most replicas that run under load, up to 20. Defaults to `min`,\nor `1`.",
+					"type": [
+						"integer",
+						"null"
+					],
+					"format": "uint32",
+					"maximum": 20,
+					"minimum": 1
+				},
+				"min": {
+					"description": "The fewest replicas that run; `0` sleeps when idle. Defaults to `1`\nwhen the app's server keeps a replica running, and `0` when it\nsleeps.",
+					"type": [
+						"integer",
+						"null"
+					],
+					"format": "uint32",
+					"maximum": 20,
+					"minimum": 0
+				},
+				"size": {
+					"description": "How much CPU and memory each replica gets.",
+					"$ref": "#/$defs/Size",
+					"default": "xs"
+				}
+			},
+			"additionalProperties": false
 		},
 		"CodePushConfig": {
 			"description": "Over-the-air update settings.",
@@ -1302,6 +1503,31 @@
 			"required": [
 				"name",
 				"route"
+			]
+		},
+		"DatabaseSize": {
+			"description": "The database an environment gets when the app has a Postgres `[db]`.",
+			"oneOf": [
+				{
+					"description": "A database and login role of its own on a Postgres cluster shared with\nother environments.",
+					"type": "string",
+					"const": "shared"
+				},
+				{
+					"description": "A dedicated Postgres instance with 1 GiB of memory.",
+					"type": "string",
+					"const": "s"
+				},
+				{
+					"description": "A dedicated Postgres instance with 2 GiB of memory.",
+					"type": "string",
+					"const": "m"
+				},
+				{
+					"description": "A dedicated Postgres instance with 4 GiB of memory.",
+					"type": "string",
+					"const": "l"
+				}
 			]
 		},
 		"DbConfig": {
@@ -3661,6 +3887,14 @@
 				}
 			]
 		},
+		"Region": {
+			"description": "A region the cloud offers, such as `eu-central`.",
+			"type": "string",
+			"not": {
+				"pattern": "--"
+			},
+			"pattern": "^[a-z][a-z0-9-]{0,30}[a-z0-9]$"
+		},
 		"RenderMode": {
 			"description": "How a web build renders its interface.\n\nThe mode decides which cargo features each side of the build gets, which\nfollows the leptos convention: the server package is built with its `ssr`\nfeature and the wasm client with its `hydrate` feature.",
 			"oneOf": [
@@ -4318,6 +4552,75 @@
 					"const": "manual"
 				}
 			]
+		},
+		"Size": {
+			"description": "How much CPU and memory one replica of a process gets.\n\n| Size | CPU request / limit (millicores) | Memory (MiB) |\n| ---- | -------------------------------- | ------------ |\n| xs   | 100 / 500                        | 128          |\n| s    | 250 / 1000                       | 256          |\n| m    | 500 / 2000                       | 512          |\n| l    | 1000 / 2000                      | 1024         |\n| xl   | 2000 / 4000                      | 2048         |\n\nThe numbers are the defaults; an operator may override them later.",
+			"oneOf": [
+				{
+					"description": "0.1 CPU guaranteed, bursting to 0.5, and 128 MiB.",
+					"type": "string",
+					"const": "xs"
+				},
+				{
+					"description": "0.25 CPU guaranteed, bursting to 1, and 256 MiB.",
+					"type": "string",
+					"const": "s"
+				},
+				{
+					"description": "0.5 CPU guaranteed, bursting to 2, and 512 MiB.",
+					"type": "string",
+					"const": "m"
+				},
+				{
+					"description": "1 CPU guaranteed, bursting to 2, and 1 GiB.",
+					"type": "string",
+					"const": "l"
+				},
+				{
+					"description": "2 CPUs guaranteed, bursting to 4, and 2 GiB.",
+					"type": "string",
+					"const": "xl"
+				}
+			]
+		},
+		"Sleep": {
+			"description": "Whether a process sleeps when nothing is using it.",
+			"oneOf": [
+				{
+					"description": "Always running, at `min >= 1` replicas.",
+					"type": "string",
+					"const": "never"
+				},
+				{
+					"description": "Stops after a quiet spell and starts again on the next request, which\nwaits for it. Needs `min = 0`, and closes live connections when it\nsleeps.",
+					"type": "string",
+					"const": "when-idle"
+				}
+			]
+		},
+		"Slug": {
+			"description": "3 to 40 lower-case letters, digits, and hyphens, starting with a letter and ending with a letter or digit, with no `--`.",
+			"type": "string",
+			"not": {
+				"anyOf": [
+					{
+						"enum": [
+							"api",
+							"www",
+							"admin",
+							"cloud",
+							"console",
+							"app",
+							"status",
+							"docs"
+						]
+					},
+					{
+						"pattern": "--"
+					}
+				]
+			},
+			"pattern": "^[a-z][a-z0-9-]{1,38}[a-z0-9]$"
 		},
 		"SplashUntil": {
 			"description": "When the animated splash overlay is removed.",

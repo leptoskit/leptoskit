@@ -5680,6 +5680,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "leptoskit_cloud"
+version = "0.3.0"
+dependencies = [
+ "flate2",
+ "ignore",
+ "leptoskit_config",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tar",
+ "tempfile",
+ "thiserror 2.0.21",
+ "toml 0.9.12+spec-1.1.0",
+ "url",
+ "uuid",
+]
+
+[[package]]
 name = "leptoskit_cloud_platform"
 version = "0.3.0"
 dependencies = [

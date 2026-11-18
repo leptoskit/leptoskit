@@ -207,6 +207,7 @@ packages = [
 	"leptoskit_auth",
 	"leptoskit_idp",
 	"leptoskit_notifications",
+	"leptoskit_cloud",
 	"leptoskit_extension",
 	"leptoskit_service_worker",
 	"leptoskit_devtools_protocol",
@@ -763,6 +764,10 @@ type = "cargo"
 
 [package.leptoskit_notifications]
 path = "crates/leptoskit_notifications"
+type = "cargo"
+
+[package.leptoskit_cloud]
+path = "crates/leptoskit_cloud"
 type = "cargo"
 
 [package.leptoskit_db_macros]
