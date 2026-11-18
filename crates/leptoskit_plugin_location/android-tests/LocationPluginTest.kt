@@ -103,10 +103,120 @@ class LocationPluginTest {
         expectInvalid(PluginException.INVALID_ARGUMENT) { LocationOptions.decode(payload(1000), true) }
     }
 
+    /** Rejects update options the Rust crate would refuse. */
+    @Test
+    fun updateOptionsDecodeEveryFieldAndRejectBadWire() {
+        fun payload(
+            accuracy: Int = 1,
+            distance: Double = 12.5,
+            interval: Int = 5_000,
+            background: Int = 1,
+            pauses: Int = 0,
+            indicator: Int = 1,
+        ): ByteBuffer {
+            val bytes =
+                ByteBuffer
+                    .allocate(UPDATE_OPTIONS_BYTES)
+                    .order(ByteOrder.LITTLE_ENDIAN)
+                    .putInt(accuracy)
+                    .putDouble(distance)
+                    .putInt(interval)
+                    .putInt(background)
+                    .putInt(pauses)
+                    .putInt(indicator)
+            bytes.rewind()
+
+            return bytes
+        }
+
+        val valid = UpdateOptions.decode(payload())
+        assertEquals(1, valid.accuracy)
+        assertEquals(12.5, valid.distanceFilterM, 0.0)
+        assertEquals(5_000, valid.intervalMs)
+        assertTrue(valid.background)
+        assertTrue(!valid.pausesAutomatically)
+        assertTrue(valid.showBackgroundIndicator)
+
+        for (accuracy in intArrayOf(3, -1)) {
+            expectInvalid(PluginException.INVALID_ARGUMENT) { UpdateOptions.decode(payload(accuracy = accuracy)) }
+        }
+
+        for (distance in doubleArrayOf(-1.0, MAX_DISTANCE_FILTER_M + 1.0, Double.NaN)) {
+            expectInvalid(PluginException.INVALID_ARGUMENT) { UpdateOptions.decode(payload(distance = distance)) }
+        }
+
+        for (interval in intArrayOf(0, MAX_INTERVAL_MS + 1)) {
+            expectInvalid(PluginException.INVALID_ARGUMENT) { UpdateOptions.decode(payload(interval = interval)) }
+        }
+
+        for (flag in intArrayOf(2, -1)) {
+            expectInvalid(PluginException.INVALID_ARGUMENT) {
+                UpdateOptions.decode(payload(background = flag))
+            }
+        }
+
+        expectInvalid(PluginException.INVALID_ARGUMENT) {
+            UpdateOptions.decode(ByteBuffer.allocate(UPDATE_OPTIONS_BYTES - 1))
+        }
+    }
+
+    /** The bounded buffer drops the oldest fix and reports the drop once. */
+    @Test
+    fun updateBufferDropsOldestRecordsAndCountsThem() {
+        val buffer = UpdateBuffer(capacity = 3)
+        val records = (0..2).map { byteArrayOf(it.toByte()) }
+        records.forEach(buffer::append)
+        assertEquals(records.map { it.toList() }, buffer.drain().map { it.toList() })
+        assertEquals(0, buffer.takeDropped())
+        assertTrue(buffer.isEmpty())
+
+        records.forEach(buffer::append)
+        buffer.append(byteArrayOf(3))
+        buffer.append(byteArrayOf(4))
+        assertEquals(2, buffer.takeDropped())
+        assertEquals(
+            listOf(byteArrayOf(2), byteArrayOf(3), byteArrayOf(4)).map { it.toList() },
+            buffer.drain().map { it.toList() },
+        )
+        assertEquals(0, buffer.takeDropped())
+    }
+
+    /** One batch is its drop count, its record count, then the records. */
+    @Test
+    fun updateBatchesFrameDropsAndRecordsInOrder() {
+        val location =
+            Location("test").apply {
+                time = 1_800_000_000_000
+                latitude = 37.0
+                longitude = -122.0
+                accuracy = 5f
+            }
+        val record = fixRecord(location)
+        assertEquals(RECORD_BYTES, record.size)
+
+        // The record is the acquisition reply without its leading tag.
+        assertEquals(encodeLocation(location).drop(4), record.toList())
+
+        val reply = encodeBatch(9, listOf(record, record))
+        assertEquals(8 + 2 * RECORD_BYTES, reply.size)
+        val input = ByteBuffer.wrap(reply).order(ByteOrder.LITTLE_ENDIAN)
+        assertEquals(9, input.int)
+        assertEquals(2, input.int)
+        assertEquals(record.toList(), ByteArray(RECORD_BYTES).also { input.get(it) }.toList())
+        assertEquals(record.toList(), ByteArray(RECORD_BYTES).also { input.get(it) }.toList())
+        assertEquals(0, input.remaining())
+    }
+
     private companion object {
         /** Three bounds fields, or those plus one timestamp. */
         const val BOUNDS_BYTES = 12
         const val PREVIOUS_BYTES = 20
+
+        /** An update request is six little-endian fields. */
+        const val UPDATE_OPTIONS_BYTES = 28
+
+        /** One fix record is five u32 fields and eight doubles. */
+        const val RECORD_BYTES = 80
 
         /** Where the eight doubles start: five u32 fields precede them. */
         const val DOUBLES_OFFSET = 20
@@ -117,6 +227,8 @@ class LocationPluginTest {
         /** Values the decoder must reject. */
         const val MAX_TIMEOUT_MS = 120_000
         const val MAX_LATITUDE = 90.0
+        const val MAX_INTERVAL_MS = 3_600_000
+        const val MAX_DISTANCE_FILTER_M = 10_000.0
     }
 
     private fun expectInvalid(

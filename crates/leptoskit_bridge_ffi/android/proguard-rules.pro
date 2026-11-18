@@ -31,3 +31,10 @@
     static byte[] readAsset(android.content.res.AssetManager, byte[]);
 }
 -keepnames class dev.leptoskit.mobile.NativeScene3dView
+
+# The location and recorder plugins read the background plugin's service state
+# by name, so apps without that plugin still build; R8 would rename it.
+-keep class dev.leptoskit.plugins.background.BackgroundState {
+    boolean running;
+    int serviceTypes;
+}

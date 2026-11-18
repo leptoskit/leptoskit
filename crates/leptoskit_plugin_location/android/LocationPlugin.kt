@@ -13,6 +13,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.util.Log
 import dev.leptoskit.bridge.NativePermissionHost
 import dev.leptoskit.bridge.NativePlugin
 import dev.leptoskit.bridge.PluginException
@@ -23,12 +24,24 @@ import java.nio.ByteOrder
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
-/** Foreground location only. Reads require existing permission and never prompt. */
+/** Foreground and background location. Reads require existing permission and never prompt. */
 class LocationPlugin(
     context: Context,
 ) : NativePlugin {
     override val name = "location"
-    override val methods = intArrayOf(STATUS, REQUEST, LOCATE, LOCATE_AFTER)
+    override val methods =
+        intArrayOf(
+            STATUS,
+            REQUEST,
+            LOCATE,
+            LOCATE_AFTER,
+            REQUEST_BACKGROUND,
+            START_UPDATES,
+            STOP_UPDATES,
+            NEXT_UPDATES,
+            START_VISITS,
+            START_SIGNIFICANT_CHANGES,
+        )
     private val appContext = context.applicationContext
     private val activity = context as? Activity
     private val permissionHost = context as? NativePermissionHost
@@ -39,6 +52,10 @@ class LocationPlugin(
     private var timeout: Runnable? = null
     private var lifecycle: Application.ActivityLifecycleCallbacks? = null
     private var requesting = false
+    private var updating = false
+    private var updateListener: LocationListener? = null
+    private var updateWaiter: CancellableContinuation<ByteArray>? = null
+    private val updateBuffer = UpdateBuffer(UPDATE_BUFFER_CAPACITY)
     private var closed = false
 
     override suspend fun invoke(
@@ -51,9 +68,25 @@ class LocationPlugin(
 
         return when (method) {
             STATUS -> reportedScope(payload)
+
             REQUEST -> requestPermission(wantsPrecise(payload))
+
             LOCATE -> acquire(LocationOptions.decode(payload, hasPrevious = false))
+
             LOCATE_AFTER -> acquire(LocationOptions.decode(payload, hasPrevious = true))
+
+            REQUEST_BACKGROUND -> requestBackgroundPermission(payload)
+
+            START_UPDATES -> startUpdates(UpdateOptions.decode(payload))
+
+            STOP_UPDATES -> stopUpdates(payload)
+
+            NEXT_UPDATES -> nextUpdates(payload)
+
+            // Visit and significant-change monitoring have no Android
+            // equivalent through the platform LocationManager.
+            START_VISITS, START_SIGNIFICANT_CHANGES -> throw PluginException(PluginException.UNAVAILABLE)
+
             else -> throw PluginException(PluginException.UNAVAILABLE)
         }
     }
@@ -176,6 +209,242 @@ class LocationPlugin(
         if (status == STATUS_UNKNOWN) response[0] = STATUS_DENIED.toByte()
 
         return response
+    }
+
+    /**
+     * Asks only for background access. Android 10 and later require it as a
+     * separate step after the foreground grant; earlier versions grant it
+     * implicitly with the foreground one.
+     */
+    private suspend fun requestBackgroundPermission(payload: ByteBuffer): ByteArray {
+        if (payload.hasRemaining()) throw PluginException(PluginException.INVALID_ARGUMENT)
+
+        val fine = granted(Manifest.permission.ACCESS_FINE_LOCATION)
+        val coarse = granted(Manifest.permission.ACCESS_COARSE_LOCATION)
+
+        if (!fine && !coarse) {
+            Log.w(TAG, "background request refused: request foreground location first")
+            throw PluginException(PluginException.INVALID_ARGUMENT)
+        }
+
+        if (Build.VERSION.SDK_INT < BACKGROUND_API || granted(Manifest.permission.ACCESS_BACKGROUND_LOCATION)) {
+            return backgroundScope(fine, coarse)
+        }
+
+        if (pending != null || requesting) throw PluginException(PluginException.BUSY)
+        val host = permissionHost ?: throw PluginException(PluginException.UNAVAILABLE)
+        val permissions = arrayOf(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+        requireDeclared(permissions)
+        requesting = true
+
+        try {
+            host.requestNativePermissions(permissions)
+        } finally {
+            requesting = false
+        }
+
+        if (closed) throw PluginException(PluginException.CANCELLED)
+
+        return backgroundScope(
+            granted(Manifest.permission.ACCESS_FINE_LOCATION),
+            granted(Manifest.permission.ACCESS_COARSE_LOCATION),
+        )
+    }
+
+    /** The background grant's own scope, distinct from the foreground one. */
+    private fun backgroundScope(
+        fine: Boolean,
+        coarse: Boolean,
+    ): ByteArray {
+        val background =
+            if (Build.VERSION.SDK_INT < BACKGROUND_API) {
+                fine || coarse
+            } else {
+                granted(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+            }
+
+        return ByteBuffer
+            .allocate(SCOPE_BYTES)
+            .order(ByteOrder.LITTLE_ENDIAN)
+            .putInt(if (background) STATUS_GRANTED else STATUS_DENIED)
+            .putInt(if (background) scopePrecision(fine, coarse) else PRECISION_NONE)
+            .array()
+    }
+
+    /** Starts continuous updates into the bounded buffer. */
+    private fun startUpdates(options: UpdateOptions): ByteArray {
+        if (updating) throw PluginException(PluginException.BUSY)
+
+        if (!granted(Manifest.permission.ACCESS_FINE_LOCATION) &&
+            !granted(Manifest.permission.ACCESS_COARSE_LOCATION)
+        ) {
+            throw PluginException(PluginException.PERMISSION_DENIED)
+        }
+
+        if (options.background && !locationServiceRunning()) {
+            Log.w(
+                TAG,
+                "background updates refused: no location-typed foreground service is running; " +
+                    "start the background plugin's service first",
+            )
+            throw PluginException(PluginException.UNAVAILABLE)
+        }
+
+        val manager = manager ?: throw PluginException(PluginException.UNAVAILABLE)
+        val providers = updateProviders(manager, options.accuracy)
+        val observer = UpdateListener()
+
+        try {
+            for (provider in providers) {
+                manager.requestLocationUpdates(
+                    provider,
+                    options.intervalMs.toLong(),
+                    options.distanceFilterM.toFloat(),
+                    observer,
+                    Looper.getMainLooper(),
+                )
+            }
+        } catch (error: SecurityException) {
+            manager.removeUpdates(observer)
+            throw PluginException(PluginException.PERMISSION_DENIED, error)
+        } catch (error: RuntimeException) {
+            manager.removeUpdates(observer)
+            throw PluginException(PluginException.NATIVE, error)
+        }
+
+        updateListener = observer
+        updating = true
+
+        return byteArrayOf()
+    }
+
+    /** Providers a continuous stream asks, best first for the chosen accuracy. */
+    private fun updateProviders(
+        manager: LocationManager,
+        accuracy: Int,
+    ): List<String> {
+        val enabled = enabledProviders(manager)
+
+        if (FUSED in enabled) return listOf(FUSED)
+
+        val gps = canUseGps(enabled)
+        val network = LocationManager.NETWORK_PROVIDER in enabled
+        val selected =
+            when (accuracy) {
+                UpdateOptions.ACCURACY_NAVIGATION -> {
+                    if (gps) listOf(LocationManager.GPS_PROVIDER) else emptyList()
+                }
+
+                UpdateOptions.ACCURACY_BALANCED -> {
+                    when {
+                        network -> listOf(LocationManager.NETWORK_PROVIDER)
+                        gps -> listOf(LocationManager.GPS_PROVIDER)
+                        else -> emptyList()
+                    }
+                }
+
+                else -> {
+                    listOfNotNull(
+                        if (network) LocationManager.NETWORK_PROVIDER else null,
+                        if (gps) LocationManager.GPS_PROVIDER else null,
+                    )
+                }
+            }
+
+        if (selected.isEmpty()) throw PluginException(PluginException.UNAVAILABLE)
+
+        return selected
+    }
+
+    /** Stops the stream. Buffered fixes stay buffered for the next batch. */
+    private fun stopUpdates(payload: ByteBuffer): ByteArray {
+        if (payload.hasRemaining()) throw PluginException(PluginException.INVALID_ARGUMENT)
+
+        updateListener?.let { manager?.removeUpdates(it) }
+        updateListener = null
+        updating = false
+
+        // A waiter that can never see another fix gets what is buffered, or
+        // the stream's end.
+        // A cancelled waiter must not drain the buffer it can no longer answer.
+        val waiter = updateWaiter
+        updateWaiter = null
+        waiter?.takeIf { it.isActive }?.resume(deliverBatch())
+
+        return byteArrayOf()
+    }
+
+    /** Delivers the buffered batch, waits while a stream runs, or ends it. */
+    private suspend fun nextUpdates(payload: ByteBuffer): ByteArray {
+        if (payload.hasRemaining()) throw PluginException(PluginException.INVALID_ARGUMENT)
+
+        if (updateBuffer.isEmpty() && updating) {
+            if (updateWaiter != null) throw PluginException(PluginException.BUSY)
+
+            return suspendCancellableCoroutine { continuation ->
+                updateWaiter = continuation
+                continuation.invokeOnCancellation { releaseUpdates(continuation) }
+            }
+        }
+
+        return deliverBatch()
+    }
+
+    /** Answers one batch: the drops since the last one, then every buffered fix. */
+    private fun deliverBatch(): ByteArray = encodeBatch(updateBuffer.takeDropped(), updateBuffer.drain())
+
+    /** Drops the waiter a cancelled caller abandoned, if it is still the one waiting. */
+    private fun releaseUpdates(continuation: CancellableContinuation<ByteArray>) {
+        val remove =
+            Runnable {
+                if (updateWaiter === continuation) updateWaiter = null
+            }
+
+        if (Looper.myLooper() == Looper.getMainLooper()) remove.run() else handler.post(remove)
+    }
+
+    /**
+     * Whether the `background` plugin's foreground service runs with the
+     * location type. Read reflectively so apps that only track in the
+     * foreground do not need that plugin compiled in.
+     */
+    private fun locationServiceRunning(): Boolean =
+        try {
+            val state = Class.forName("dev.leptoskit.plugins.background.BackgroundState")
+            val running = state.getField("running").getBoolean(null)
+            val types = state.getField("serviceTypes").getInt(null)
+            running && (types and LOCATION_SERVICE_TYPE) != 0
+        } catch (_: Throwable) {
+            false
+        }
+
+    /** Buffers every fix a continuous stream delivers. */
+    private inner class UpdateListener : LocationListener {
+        override fun onLocationChanged(location: Location) {
+            val record =
+                try {
+                    fixRecord(location)
+                } catch (_: PluginException) {
+                    return // A fix the wire cannot carry is dropped, never fatal.
+                }
+
+            updateBuffer.append(record)
+
+            val waiter = updateWaiter
+            updateWaiter = null
+            waiter?.takeIf { it.isActive }?.resume(deliverBatch())
+        }
+
+        override fun onProviderEnabled(provider: String) {}
+
+        override fun onProviderDisabled(provider: String) {}
+
+        @Deprecated("Required on older Android versions")
+        override fun onStatusChanged(
+            provider: String?,
+            status: Int,
+            extras: Bundle?,
+        ) {}
     }
 
     /** Waits for one fix from the best provider the device can offer. */
@@ -393,6 +662,13 @@ class LocationPlugin(
         val continuation = pending
         cleanup()
         continuation?.cancel()
+
+        updateListener?.let { manager?.removeUpdates(it) }
+        updateListener = null
+        updating = false
+        val waiter = updateWaiter
+        updateWaiter = null
+        waiter?.cancel()
     }
 
     private fun finish(
@@ -426,11 +702,20 @@ class LocationPlugin(
     }
 
     private companion object {
+        /** Logs under the plugin's own tag. */
+        const val TAG = "leptoskit.location"
+
         /** Methods the Rust crate calls. */
         const val STATUS = 0
         const val REQUEST = 1
         const val LOCATE = 2
         const val LOCATE_AFTER = 3
+        const val REQUEST_BACKGROUND = 4
+        const val START_UPDATES = 5
+        const val STOP_UPDATES = 6
+        const val NEXT_UPDATES = 7
+        const val START_VISITS = 8
+        const val START_SIGNIFICANT_CHANGES = 9
 
         /** A permission request carries one little-endian precision flag. */
         const val PRECISION_BYTES = 4
@@ -449,6 +734,12 @@ class LocationPlugin(
         const val PRECISION_NONE = 0
         const val PRECISION_COARSE = 1
         const val PRECISION_FINE = 2
+
+        /** Android 10 moved background access behind its own permission. */
+        const val BACKGROUND_API = 29
+
+        /** The background plugin's location foreground-service type bit. */
+        const val LOCATION_SERVICE_TYPE = 8
     }
 }
 
@@ -458,6 +749,128 @@ internal fun permitsLocationDelivery(
     authorized: Boolean,
     precise: Boolean,
 ): Boolean = authorized && (!startedPrecise || precise)
+
+/** Fixes a native update buffer keeps before dropping the oldest. */
+internal const val UPDATE_BUFFER_CAPACITY = 64
+
+/** Validated continuous-update request; the bounds mirror the Rust crate. */
+internal data class UpdateOptions(
+    val accuracy: Int,
+    val distanceFilterM: Double,
+    val intervalMs: Int,
+    val background: Boolean,
+    val pausesAutomatically: Boolean,
+    val showBackgroundIndicator: Boolean,
+) {
+    companion object {
+        /** An update request is a u32 accuracy, an f64 distance, a u32 interval and three u32 flags. */
+        const val OPTIONS_BYTES = 28
+
+        /** The accuracy codes the request carries, in wire order. */
+        const val ACCURACY_BEST = 0
+        const val ACCURACY_NAVIGATION = 1
+        const val ACCURACY_BALANCED = 2
+
+        /** Longest requested interval, in milliseconds. */
+        const val MAX_INTERVAL_MS = 3_600_000
+
+        /** Widest distance filter, in metres; zero disables filtering. */
+        const val MAX_DISTANCE_FILTER_M = 10_000.0
+
+        /** Rejects options the Rust crate would refuse to decode. */
+        fun decode(payload: ByteBuffer): UpdateOptions {
+            if (payload.remaining() != OPTIONS_BYTES) throw PluginException(PluginException.INVALID_ARGUMENT)
+
+            val input = payload.duplicate().order(ByteOrder.LITTLE_ENDIAN)
+            val accuracy = input.int
+
+            if (accuracy !in ACCURACY_BEST..ACCURACY_BALANCED) {
+                throw PluginException(PluginException.INVALID_ARGUMENT)
+            }
+
+            val distance = input.double
+
+            if (!distance.isFinite() || distance !in 0.0..MAX_DISTANCE_FILTER_M) {
+                throw PluginException(PluginException.INVALID_ARGUMENT)
+            }
+
+            val interval = input.int
+
+            if (interval !in 1..MAX_INTERVAL_MS) throw PluginException(PluginException.INVALID_ARGUMENT)
+
+            val background = input.int
+            val pauses = input.int
+            val indicator = input.int
+
+            if (background !in 0..1 || pauses !in 0..1 || indicator !in 0..1) {
+                throw PluginException(PluginException.INVALID_ARGUMENT)
+            }
+
+            return UpdateOptions(accuracy, distance, interval, background == 1, pauses == 1, indicator == 1)
+        }
+    }
+}
+
+/** Bounded fix-record buffer; the oldest record is dropped first and counted. */
+internal class UpdateBuffer(
+    private val capacity: Int,
+) {
+    private val records = ArrayDeque<ByteArray>()
+    private var discarded = 0
+
+    /** Adds one record, counting the drop when the buffer is already full. */
+    fun append(record: ByteArray) {
+        if (records.size == capacity) {
+            records.removeFirst()
+            discarded += 1
+        }
+
+        records.addLast(record)
+    }
+
+    /** Every buffered record, oldest first, clearing the buffer. */
+    fun drain(): List<ByteArray> {
+        val drained = records.toList()
+        records.clear()
+
+        return drained
+    }
+
+    /** Fixes dropped since the last take, then resets the count. */
+    fun takeDropped(): Int {
+        val value = discarded
+        discarded = 0
+
+        return value
+    }
+
+    /** Whether any record waits for a batch. */
+    fun isEmpty(): Boolean = records.isEmpty()
+}
+
+/** One batch header is two little-endian u32 fields before the records. */
+internal fun encodeBatch(
+    dropped: Int,
+    records: List<ByteArray>,
+): ByteArray {
+    val bytes =
+        ByteBuffer
+            .allocate(8 + records.sumOf { it.size })
+            .order(ByteOrder.LITTLE_ENDIAN)
+            .putInt(dropped)
+            .putInt(records.size)
+
+    records.forEach(bytes::put)
+
+    return bytes.array()
+}
+
+/** The 80-byte fix record without the acquisition tag, shared by batches. */
+internal fun fixRecord(location: Location): ByteArray {
+    val full = encodeLocation(location)
+
+    return full.copyOfRange(4, full.size)
+}
 
 internal data class LocationOptions(
     val highAccuracy: Boolean,
