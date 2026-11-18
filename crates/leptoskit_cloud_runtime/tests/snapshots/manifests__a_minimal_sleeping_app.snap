@@ -1,5 +1,6 @@
 ---
 source: crates/leptoskit_cloud_runtime/tests/manifests.rs
+assertion_line: 344
 expression: as_yaml(&objects)
 ---
 apiVersion: v1
@@ -371,7 +372,7 @@ metadata:
   name: notes.leptoskit.app
   namespace: lk-0b64f478d99c825f63ac
 spec:
-  ingressClassName: nginx
+  ingressClassName: traefik
   rules:
   - host: notes.leptoskit.app
     http:
@@ -386,4 +387,3 @@ spec:
   tls:
   - hosts:
     - notes.leptoskit.app
-    secretName: leptoskit-wildcard-tls

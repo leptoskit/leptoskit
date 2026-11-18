@@ -23,6 +23,69 @@ fn launch() {
 	snapshot("addons_launch", include_str!("../examples/launch.toml"));
 }
 
+#[test]
+fn runtime_profile_and_platform_selectors_agree() {
+	let config = PlatformConfig::parse(include_str!("../examples/launch.toml")).unwrap();
+	let cluster = config
+		.regions
+		.values()
+		.next()
+		.unwrap()
+		.clusters
+		.values()
+		.next()
+		.unwrap();
+	let profile = addons::runtime_profile(&config, cluster);
+	profile.validate().unwrap();
+	assert_eq!(profile.ingress_class, "traefik");
+	assert_eq!(profile.ingress_namespace, "kube-system");
+	assert_eq!(profile.dns_namespace, "kube-system");
+	assert_eq!(
+		profile.wildcard_tls_secret.as_deref(),
+		Some("apps-wildcard-tls")
+	);
+	assert!(profile.blocked_egress_cidrs.contains(&cluster.pod_cidr));
+	assert!(profile.blocked_egress_cidrs.contains(&cluster.service_cidr));
+	let spec: leptoskit_cloud_runtime::ReleaseSpec = serde_json::from_value(serde_json::json!({
+		"environment":{"organization":{"slug":"org","id":"00000000-0000-0000-0000-000000000001"},"project":{"slug":"app","id":"00000000-0000-0000-0000-000000000002"},"environment":{"slug":"test","id":"00000000-0000-0000-0000-000000000003"}},
+		"deployment":1,"processes":[{"name":"app","kind":"app","image":{"repository":"example.invalid/app","digest":format!("sha256:{}","a".repeat(64))},"command":[],"args":[],"port":8080,"probes":{"ready":"/","live":"/"},"env":{},"secret_env":{},"resources":{"cpu_request_millis":100,"cpu_limit_millis":500,"memory_mib":128},"scale":{"min":1,"max":1,"sleep":false},"volumes":[]}],"routes":[],"policy":{"runtime_class":null,"egress":"none","quota":{"cpu_millis":1000,"memory_mib":256,"pods":2,"storage_gib":0},"database":{"namespace":"database","port":5432}}
+	})).unwrap();
+	let objects = leptoskit_cloud_runtime::manifests(
+		&spec,
+		&profile,
+		&leptoskit_cloud_runtime::SecretValues::default(),
+	)
+	.unwrap();
+	let tenant = serde_json::to_value(&objects[0]).unwrap();
+	let labels = tenant["metadata"]["labels"].as_object().unwrap();
+	let files = addons::generate(&config).unwrap();
+	let documents: Vec<Value> = files
+		.values()
+		.map(|content| serde_json::from_str(content).unwrap())
+		.collect();
+	for policy in documents
+		.iter()
+		.filter(|document| document["kind"] == "NetworkPolicy")
+	{
+		for ingress in policy["spec"]["ingress"].as_array().unwrap() {
+			for peer in ingress["from"].as_array().unwrap() {
+				if let Some(selector) = peer["namespaceSelector"]["matchLabels"].as_object() {
+					if selector.contains_key("app.kubernetes.io/managed-by") {
+						assert!(
+							selector
+								.iter()
+								.all(|(key, value)| labels.get(key) == Some(value))
+						);
+						if policy["metadata"]["namespace"] == "database" {
+							assert_eq!(ingress["ports"][0]["port"], 5432);
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
 fn refs(value: &Value, namespace: &str, found: &mut BTreeSet<(String, String)>) {
 	match value {
 		Value::Object(map) => {

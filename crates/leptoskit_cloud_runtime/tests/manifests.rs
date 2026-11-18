@@ -94,10 +94,10 @@ fn resources_m() -> Resources {
 /// own clusters look like.
 fn cluster() -> ClusterProfile {
 	ClusterProfile {
-		ingress_class: "nginx".to_owned(),
-		ingress_namespace: "ingress-nginx".to_owned(),
-		wildcard_tls_secret: Some("leptoskit-wildcard-tls".to_owned()),
-		cluster_issuer: Some("leptoskit-ca".to_owned()),
+		ingress_class: "traefik".to_owned(),
+		ingress_namespace: "kube-system".to_owned(),
+		wildcard_tls_secret: Some("apps-wildcard-tls".to_owned()),
+		cluster_issuer: Some("apps".to_owned()),
 		dns_namespace: "kube-system".to_owned(),
 		blocked_egress_cidrs: vec![
 			"10.0.0.0/8".to_owned(),
@@ -286,7 +286,7 @@ fn app_with_services() -> (ReleaseSpec, ClusterProfile, SecretValues) {
 				storage_gib: 10,
 			},
 			database: Some(DatabaseAccess {
-				namespace: "postgres-shared".to_owned(),
+				namespace: "database".to_owned(),
 				port: 5432,
 			}),
 		},
@@ -514,7 +514,7 @@ fn every_spec_builds_the_same_manifests_the_same_way() {
 			};
 			spec.policy.egress = Egress::None;
 			spec.policy.database = Some(DatabaseAccess {
-				namespace: "postgres-shared".to_owned(),
+				namespace: "database".to_owned(),
 				port: 5432,
 			});
 			spec.policy.quota = Quota::for_processes(&spec.processes);
@@ -685,6 +685,140 @@ fn the_sleeper_wakes_on_its_routes() {
 		Some("app")
 	);
 	assert_eq!(trigger.kind, "external-push");
+	let route = objects
+		.iter()
+		.find_map(|object| {
+			match object {
+				Object::InterceptorRoute(route) => Some(route),
+				_ => None,
+			}
+		})
+		.unwrap();
+	assert_eq!(route.api_version, "http.keda.sh/v1beta1");
+	assert_eq!(route.spec.target.service, "app");
+	assert_eq!(route.spec.target.port, 80);
+	assert_eq!(route.spec.rules[0].hosts, ["notes.leptoskit.app"]);
+	assert_eq!(route.spec.rules[0].paths[0].value, "/");
+	let ingress = objects
+		.iter()
+		.find_map(|object| {
+			match object {
+				Object::Ingress(ingress) => ingress.spec.as_ref(),
+				_ => None,
+			}
+		})
+		.unwrap();
+	let backend = ingress.rules.as_ref().unwrap()[0]
+		.http
+		.as_ref()
+		.unwrap()
+		.paths[0]
+		.backend
+		.service
+		.as_ref()
+		.unwrap();
+	assert_eq!(backend.name, "http-interceptor");
+	assert_eq!(backend.port.as_ref().unwrap().number, Some(8080));
+	let external = objects
+		.iter()
+		.find_map(|object| {
+			match object {
+				Object::Service(service)
+					if service.metadata.name.as_deref() == Some("http-interceptor") =>
+				{
+					service.spec.as_ref()
+				}
+				_ => None,
+			}
+		})
+		.unwrap();
+	assert_eq!(external.type_.as_deref(), Some("ExternalName"));
+	assert_eq!(
+		external.external_name.as_deref(),
+		Some("keda-add-ons-http-interceptor-proxy.keda.svc.cluster.local")
+	);
+	let policy = objects
+		.iter()
+		.find_map(|object| {
+			match object {
+				Object::NetworkPolicy(policy)
+					if policy.metadata.name.as_deref() == Some("allow-from-ingress-app") =>
+				{
+					policy.spec.as_ref()
+				}
+				_ => None,
+			}
+		})
+		.unwrap();
+	let peers = policy.ingress.as_ref().unwrap()[0].from.as_ref().unwrap();
+	assert_eq!(peers.len(), 1);
+	assert_eq!(
+		peers[0]
+			.namespace_selector
+			.as_ref()
+			.unwrap()
+			.match_labels
+			.as_ref()
+			.unwrap()["kubernetes.io/metadata.name"],
+		"keda"
+	);
+	assert_eq!(
+		peers[0]
+			.pod_selector
+			.as_ref()
+			.unwrap()
+			.match_labels
+			.as_ref()
+			.unwrap()["app.kubernetes.io/component"],
+		"interceptor"
+	);
+}
+
+#[test]
+fn secret_changes_only_roll_processes_that_use_them() {
+	let (spec, cluster, secrets) = app_with_services();
+	let before = build(&spec, &cluster, &secrets);
+	let changed = SecretValues::new(BTreeMap::from([(
+		"search-token".to_owned(),
+		"changed-secret".to_owned(),
+	)]));
+	let after = build(&spec, &cluster, &changed);
+	for name in ["app", "search", "files"] {
+		let template = |objects: &[Object]| {
+			objects
+				.iter()
+				.find_map(|object| {
+					match object {
+						Object::Deployment(deployment)
+							if deployment.metadata.name.as_deref() == Some(name) =>
+						{
+							Some(deployment.spec.as_ref().unwrap().template.clone())
+						}
+						_ => None,
+					}
+				})
+				.unwrap()
+		};
+		assert_eq!(template(&before) == template(&after), name != "search");
+	}
+}
+
+#[test]
+fn platform_defaults_validate_and_use_the_controller_certificate() {
+	let profile = ClusterProfile::platform_defaults();
+	profile.validate().unwrap();
+	let (spec, _, secrets) = minimal_sleeping_app();
+	for object in build(&spec, &profile, &secrets) {
+		if let Object::Ingress(ingress) = object {
+			let spec = ingress.spec.unwrap();
+			assert_eq!(spec.ingress_class_name.as_deref(), Some("traefik"));
+			assert_eq!(spec.tls.unwrap()[0].secret_name, None);
+		}
+	}
+	assert!(ClusterProfile::default().validate().is_err());
+	let mut invalid = profile;
+	invalid.keda_http.as_mut().unwrap().interceptor_port = 0;
+	assert!(invalid.validate().is_err());
 }
 
 /// Where a `kubectl` is installed, the snapshots are real Kubernetes. Run

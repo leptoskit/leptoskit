@@ -17,6 +17,26 @@ mod registry;
 /// Origin shared with the `OpenTofu` tunnel configuration.
 pub const TUNNEL_ORIGIN: &str = "http://traefik.kube-system.svc.cluster.local:80";
 
+/// Runtime profile for one configured cluster. The database is the shared
+/// CNPG cluster in namespace `database`, TCP 5432; releases name that door.
+/// No runtime dependency on this operator crate is needed.
+#[must_use]
+pub fn runtime_profile(
+	config: &PlatformConfig,
+	cluster: &Cluster,
+) -> leptoskit_cloud_runtime::ClusterProfile {
+	let mut profile = leptoskit_cloud_runtime::ClusterProfile::platform_defaults();
+	profile
+		.blocked_egress_cidrs
+		.extend(config.isolation.denied_egress_cidrs.clone());
+	profile
+		.blocked_egress_cidrs
+		.extend([cluster.pod_cidr.clone(), cluster.service_cidr.clone()]);
+	profile.blocked_egress_cidrs.sort();
+	profile.blocked_egress_cidrs.dedup();
+	profile
+}
+
 #[derive(Serialize)]
 struct Metadata<'a> {
 	name: &'a str,
@@ -223,6 +243,10 @@ pub fn generate(config: &PlatformConfig) -> Result<Generated, PlatformError> {
 			if region == &config.default_region && name == &config.edge.cluster {
 				let mut traefik = placement(cluster, Pool::Ingress);
 				traefik["fullnameOverride"] = json!("traefik");
+				// Tenant Ingress uses the HTTP add-on's documented ExternalName
+				// bridge.
+				traefik["providers"] =
+					json!({"kubernetesIngress":{"allowExternalNameServices":true}});
 				traefik["service"] = json!({"type":"ClusterIP"});
 				// Tunnel requests originate from connector pods, not Cloudflare
 				// IPs.
