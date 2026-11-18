@@ -112,4 +112,8 @@ unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
 # `leptos-use` tracks an unreleased commit of the 0.8 beta line.
 # `canvist` is git-pinned until its per-extension crates are released.
-allow-git = ["https://github.com/Synphonyte/leptos-use", "https://github.com/openbudgetfun/skribble", "https://github.com/canvist/canvist"]
+allow-git = [
+	"https://github.com/Synphonyte/leptos-use",
+	"https://github.com/openbudgetfun/skribble",
+	"https://github.com/canvist/canvist",
+]

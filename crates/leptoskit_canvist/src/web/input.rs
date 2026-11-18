@@ -1,249 +1,377 @@
+//! Input: the keyboard, input methods, the pointer, and the clipboard,
+//! turned into editor changes.
+//!
+//! A transparent text field at the caret takes the focus and the text. Key
+//! bindings run first, and every change is painted in the same task as its
+//! event.
+//!
+//! Ported from the text field path of canvist's
+//! `packages/canvist-web/src/input.ts`.
+
+use std::rc::Rc;
+
+use canvist_headless::canvist_core::Modifiers;
 use wasm_bindgen::JsCast;
-use wasm_bindgen::closure::Closure;
-use web_sys::HtmlCanvasElement;
-use web_sys::HtmlElement;
-use web_sys::HtmlTextAreaElement;
+use web_sys::ClipboardEvent;
+use web_sys::CompositionEvent;
+use web_sys::Event;
+use web_sys::EventTarget;
+use web_sys::InputEvent;
+use web_sys::KeyboardEvent;
+use web_sys::PointerEvent;
 
-use crate::state::CanvistState;
-use crate::state::Change;
-use crate::web;
+use super::device;
+use super::editor;
+use super::host::Host;
+use super::host::Listen;
 
+/// Keys that only move the selection, which a read-only editor still
+/// handles (with any modifiers) so people can select text to copy.
+const NAVIGATION_KEYS: [&str; 8] = [
+	"ArrowLeft",
+	"ArrowRight",
+	"ArrowUp",
+	"ArrowDown",
+	"Home",
+	"End",
+	"PageUp",
+	"PageDown",
+];
 
+/// Presses this close in time (ms) and space (CSS px) count as one
+/// multi-click.
+const MULTI_CLICK_MS: f64 = 500.0;
+const MULTI_CLICK_SLOP: i32 = 4;
 
-#[cfg(target_arch = "wasm32")]
-static PASTE_FIRED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-#[cfg(target_arch = "wasm32")]
-pub fn paste_fired() -> bool { PASTE_FIRED.load(std::sync::atomic::Ordering::SeqCst) }
+/// The key code of a key an input method is handling.
+const KEY_CODE_COMPOSING: u32 = 229;
 
-pub fn wire(
-	state: CanvistState,
-	container: &HtmlElement,
-	canvas: &HtmlCanvasElement,
-	textarea: &HtmlTextAreaElement,
-	signal: Option<web_sys::AbortSignal>,
-) {
-	let canvas = canvas.clone();
-	let textarea = textarea.clone();
-	let container = container.clone();
+/// The last press, for counting double and triple clicks.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct Press {
+	count: u32,
+	time: f64,
+	x: i32,
+	y: i32,
+}
 
-	// keydown
-	let _state_k = state;
-	let _textarea_k = textarea.clone();
-	
-	// We'll register a simpler keydown below.
-
-	// Re-register keydown properly.
-	let state_k2 = state;
-	let _textarea_k2 = textarea.clone();
-	let cb2 = Closure::<dyn FnMut(web_sys::KeyboardEvent) + 'static>::wrap(Box::new(move |e: web_sys::KeyboardEvent| {
-		if e.is_composing() || e.key_code() == 229 { return; }
-		let read_only = state_k2.is_read_only();
-		let nav_keys = ["ArrowLeft","ArrowRight","ArrowUp","ArrowDown","Home","End","PageUp","PageDown"];
-		let is_nav = nav_keys.contains(&e.key().as_str());
-		let meta = if is_apple() { e.meta_key() } else { e.ctrl_key() };
-		let select_all = meta && e.key().to_lowercase() == "a";
-		if read_only && !is_nav && !select_all {
-			if e.key() == "Backspace" { e.prevent_default(); }
-			return;
+impl Default for Press {
+	fn default() -> Self {
+		Self {
+			count: 0,
+			time: f64::NEG_INFINITY,
+			x: 0,
+			y: 0,
 		}
-		// Build key string for Doc::press (Mod = Ctrl internally; on apple Mod should be Cmd but Doc::press uses Ctrl).
-		// For web, canvist's keyDown uses Modifiers bits and the layout engine's keymap checks Mod. We call state's press_native
-		// which uses Doc::press (Mod=Ctrl). On mac, Cmd won't trigger Mod-b etc. but Enter/Backspace/Arrows don't need Mod.
-		let key = e.key();
-		// prefix modifiers in canvist binding syntax
-		let mut parts: Vec<&str> = Vec::new();
-		if e.shift_key() { parts.push("Shift"); }
-		if e.ctrl_key() { parts.push("Ctrl"); }
-		if e.alt_key() { parts.push("Alt"); }
-		if e.meta_key() { parts.push("Mod"); }
-		let keystr = if parts.is_empty() {
-			key.clone()
-		} else {
-			format!("{}-{}", parts.join("-"), key)
-		};
-		// Doc::press expects "Mod" = Ctrl internally; if user pressed Cmd on mac, treat Mod as pressed already via meta_key above
-		// but Doc::press parses "Mod" -> Ctrl modifier bit. On mac this mismatch means Cmd-shortcuts fail. Acceptable for paragraph scope.
-		let applied = state_k2.press_native(&keystr).unwrap_or(false);
-		if applied {
-			e.prevent_default();
-			changed(state_k2, &e);
+	}
+}
+
+/// Listen for everything people do to the editor.
+pub(super) fn listen(host: &Rc<Host>) {
+	let how = Listen::default();
+	let (textarea, canvas) = (&host.textarea, &host.canvas);
+
+	// leptoskit promises that an app's key handlers hear every key inside
+	// them before the focused control acts on it, and those handlers run as
+	// the event bubbles. So keys are handled after it has bubbled all the
+	// way, and not at all when a handler prevented them.
+	host.on(&host.window, "keydown", key_down, how);
+	host.on(textarea, "focus", |host, _| host.set_focused(true), how);
+	host.on(textarea, "blur", |host, _| host.set_focused(false), how);
+	host.on(textarea, "beforeinput", before_input, how);
+	host.on(
+		textarea,
+		"compositionstart",
+		|host, _| host.composing.set(true),
+		how,
+	);
+	host.on(textarea, "compositionupdate", composition_update, how);
+	host.on(textarea, "compositionend", composition_end, how);
+	// Whatever the browser put in the text field has been applied already.
+	host.on(textarea, "input", |host, _| clear_field(host), how);
+	host.on(canvas, "pointerdown", pointer_down, how);
+	host.on(canvas, "pointermove", pointer_move, how);
+	host.on(canvas, "pointerup", |host, _| release(host), how);
+	host.on(canvas, "pointercancel", |host, _| release(host), how);
+	// On the text field, not the container: the clipboard events of other
+	// controls an app puts inside the container are theirs.
+	host.on(
+		textarea,
+		"copy",
+		|host, event| copy(host, event, false),
+		how,
+	);
+	host.on(textarea, "cut", |host, event| copy(host, event, true), how);
+	host.on(textarea, "paste", paste, how);
+}
+
+/// Run the key binding for `event`; keys without one reach the browser as
+/// text.
+fn key_down(host: &Rc<Host>, event: &Event) {
+	let Some(event) = event.dyn_ref::<KeyboardEvent>() else {
+		return;
+	};
+	let field: &EventTarget = &host.textarea;
+	let ours = event.target().is_some_and(|target| &target == field);
+
+	// A key that an input method is handling (`Process`, key code 229)
+	// belongs to the composition.
+	if !ours
+		|| event.default_prevented()
+		|| event.is_composing()
+		|| host.composing.get()
+		|| event.key_code() == KEY_CODE_COMPOSING
+	{
+		return;
+	}
+
+	let key = event.key();
+
+	if host.read_only() && !read_only_key(host, event, &key) {
+		// WebKit treats Backspace outside editable text as Back.
+		if key == "Backspace" {
+			event.prevent_default();
 		}
-	}) as Box<dyn FnMut(web_sys::KeyboardEvent) + 'static>);
-	textarea.add_event_listener_with_callback("keydown", cb2.as_ref().unchecked_ref()).ok();
-	if let Some(sig) = &signal { let _ = sig; }
-	// keep closure alive by leaking into host listeners
-	web::keep_closure(state, cb2);
 
-	// composition events
-	let state_c = state;
-	let _textarea_c = textarea.clone();
-	let cb_comp_start = Closure::<dyn FnMut(web_sys::CompositionEvent) + 'static>::wrap(Box::new(move |_e: web_sys::CompositionEvent| {
-		let _ = state_c.is_read_only();
-	}) as Box<dyn FnMut(web_sys::CompositionEvent) + 'static>);
-	textarea.add_event_listener_with_callback("compositionstart", cb_comp_start.as_ref().unchecked_ref()).ok();
-	web::keep_closure(state, cb_comp_start);
+		return;
+	}
 
-	let state_cu = state;
-	let cb_comp_update = Closure::<dyn FnMut(web_sys::CompositionEvent) + 'static>::wrap(Box::new(move |e: web_sys::CompositionEvent| {
-		if state_cu.is_read_only() { return; }
-		let data = e.data().unwrap_or_default();
-		let _ = state_cu.with_slot(|slot| {
-			let _ = slot;
-		});
-		// call set_composition via doc? Doc has no set_composition method (it's on Editor).
-		// For paragraph scope, commit on compositionend is enough; preedit not critical.
-		let _ = data;
-	}) as Box<dyn FnMut(web_sys::CompositionEvent) + 'static>);
-	textarea.add_event_listener_with_callback("compositionupdate", cb_comp_update.as_ref().unchecked_ref()).ok();
-	web::keep_closure(state, cb_comp_update);
+	let modifiers = Modifiers {
+		shift: event.shift_key(),
+		ctrl: event.ctrl_key(),
+		alt: event.alt_key(),
+		meta: event.meta_key(),
+	};
 
-	let state_ce = state;
-	let textarea_ce = textarea.clone();
-	let cb_comp_end = Closure::<dyn FnMut(web_sys::CompositionEvent) + 'static>::wrap(Box::new(move |e: web_sys::CompositionEvent| {
-		if state_ce.is_read_only() { return; }
-		let data = e.data().unwrap_or_default();
-		// commit composition: use doc.paste_text? Better: insert_text
-		let _ = state_ce.insert_text_native(&data);
-		textarea_ce.set_value("");
-		changed(state_ce, &e);
-	}) as Box<dyn FnMut(web_sys::CompositionEvent) + 'static>);
-	textarea.add_event_listener_with_callback("compositionend", cb_comp_end.as_ref().unchecked_ref()).ok();
-	web::keep_closure(state, cb_comp_end);
+	if let Some(change) = host.edit(|editor, session| editor.key_down(session, &key, modifiers)) {
+		event.prevent_default();
+		host.input_changed(change);
+	}
+}
 
-	// beforeinput
-	let state_b = state;
-	let _textarea_b = textarea.clone();
-	let cb_before = Closure::<dyn FnMut(web_sys::InputEvent) + 'static>::wrap(Box::new(move |e: web_sys::InputEvent| {
-		if state_b.is_read_only() {
-			e.prevent_default();
-			return;
-		}
-		let input_type = e.input_type();
-		let applied = match input_type.as_str() {
+/// Whether a read-only editor handles `event`: navigation, and select all.
+fn read_only_key(host: &Host, event: &KeyboardEvent, key: &str) -> bool {
+	let command = if device::is_apple(&host.window) {
+		event.meta_key()
+	} else {
+		event.ctrl_key()
+	};
+
+	NAVIGATION_KEYS.contains(&key) || (command && key.eq_ignore_ascii_case("a"))
+}
+
+/// Text input through the text field: typed text, and edits without a key
+/// binding (as from soft keyboards).
+fn before_input(host: &Rc<Host>, event: &Event) {
+	let Some(event) = event.dyn_ref::<InputEvent>() else {
+		return;
+	};
+
+	// Chromium still sends text input to a read-only text field.
+	if host.read_only() {
+		event.prevent_default();
+		return;
+	}
+
+	let kind = event.input_type();
+
+	// Compositions, pastes and drops arrive as their own events.
+	if host.composing.get()
+		|| matches!(
+			kind.as_str(),
+			"insertCompositionText" | "insertFromPaste" | "insertFromDrop"
+		) {
+		return;
+	}
+
+	event.prevent_default();
+	let shift = Modifiers {
+		shift: true,
+		..Modifiers::NONE
+	};
+	let change = host.edit(|editor, session| {
+		match kind.as_str() {
 			"insertText" | "insertReplacementText" => {
-				let data = e.data().unwrap_or_default();
-				state_b.insert_text_native(&data).unwrap_or(false)
+				let text = event
+					.data()
+					.or_else(|| event.data_transfer()?.get_data("text/plain").ok())
+					.unwrap_or_default();
+				editor.insert_text(session, &text)
 			}
-			"insertLineBreak" | "insertParagraph" => {
-				let key = if input_type == "insertLineBreak" { "Shift-Enter" } else { "Enter" };
-				state_b.press_native(key).unwrap_or(false)
-			}
-			"deleteContentBackward" => state_b.press_native("Backspace").unwrap_or(false),
-			"deleteContentForward" => state_b.press_native("Delete").unwrap_or(false),
-			"historyUndo" => state_b.undo_native().unwrap_or(false),
-			"historyRedo" => state_b.redo_native().unwrap_or(false),
-			_ => false,
-		};
-		if input_type == "insertFromPaste" || input_type == "insertFromDrop" {
-			return;
+			"insertLineBreak" => editor.key_down(session, "Enter", shift),
+			"insertParagraph" => editor.key_down(session, "Enter", Modifiers::NONE),
+			"deleteContentBackward" => editor.key_down(session, "Backspace", Modifiers::NONE),
+			"deleteContentForward" => editor.key_down(session, "Delete", Modifiers::NONE),
+			"historyUndo" => editor.history(session, false),
+			"historyRedo" => editor.history(session, true),
+			_ => Ok(None),
 		}
-		e.prevent_default();
-		if applied {
-			changed(state_b, &e);
-		}
-	}) as Box<dyn FnMut(web_sys::InputEvent) + 'static>);
-	textarea.add_event_listener_with_callback("beforeinput", cb_before.as_ref().unchecked_ref()).ok();
-	web::keep_closure(state, cb_before);
+	});
 
-	// input (clear textarea)
-	let textarea_i = textarea.clone();
-	let cb_input = Closure::<dyn FnMut(web_sys::Event) + 'static>::wrap(Box::new(move |_e: web_sys::Event| {
-		if !textarea_i.value().is_empty() {
-			// keep during composition; clear otherwise
-		}
-		textarea_i.set_value("");
-	}) as Box<dyn FnMut(web_sys::Event) + 'static>);
-	textarea.add_event_listener_with_callback("input", cb_input.as_ref().unchecked_ref()).ok();
-	web::keep_closure(state, cb_input);
-
-	// focus/blur
-	let state_f = state;
-	let cb_focus = Closure::<dyn FnMut(web_sys::FocusEvent) + 'static>::wrap(Box::new(move |_e: web_sys::FocusEvent| {
-		web::with_host(state_f, |h| { h.focused = true; h.caret_on = true; });
-		let _ = state_f;
-	}) as Box<dyn FnMut(web_sys::FocusEvent) + 'static>);
-	textarea.add_event_listener_with_callback("focus", cb_focus.as_ref().unchecked_ref()).ok();
-	web::keep_closure(state, cb_focus);
-
-	let state_bl = state;
-	let cb_blur = Closure::<dyn FnMut(web_sys::FocusEvent) + 'static>::wrap(Box::new(move |_e: web_sys::FocusEvent| {
-		web::with_host(state_bl, |h| { h.focused = false; });
-	}) as Box<dyn FnMut(web_sys::FocusEvent) + 'static>);
-	textarea.add_event_listener_with_callback("blur", cb_blur.as_ref().unchecked_ref()).ok();
-	web::keep_closure(state, cb_blur);
-
-	// pointer events on canvas
-	let state_p = state;
-	let _canvas_p = canvas.clone();
-	let cb_pd = Closure::<dyn FnMut(web_sys::PointerEvent) + 'static>::wrap(Box::new(move |e: web_sys::PointerEvent| {
-		if e.button() != 0 { return; }
-		let x = e.offset_x() as f32;
-		let y = e.offset_y() as f32 + web::with_host(state_p, |h| h.top).unwrap_or(0.0);
-		let clicks = e.detail().max(1) as u32;
-		let shift = e.shift_key();
-		let point = web::with_host(state_p, |h| {
-			h.layout.hit_test(x, y - h.top)
-		}).flatten();
-		if let Some(caret) = point {
-			let anchor = caret.point;
-			if shift {
-				let _ = state_p.select_points(anchor, anchor);
-			} else {
-				let _ = state_p.select_points(anchor, anchor);
-			}
-		}
-		let _ = (shift, clicks);
-	}) as Box<dyn FnMut(web_sys::PointerEvent) + 'static>);
-	canvas.add_event_listener_with_callback("pointerdown", cb_pd.as_ref().unchecked_ref()).ok();
-	web::keep_closure(state, cb_pd);
-
-	// copy/cut/paste on container
-	let state_copy = state;
-	let container_c = container.clone();
-	let cb_copy = Closure::<dyn FnMut(web_sys::ClipboardEvent) + 'static>::wrap(Box::new(move |e: web_sys::ClipboardEvent| {
-		let _ = state_copy;
-		let _ = container_c;
-		// plain text only
-		if let Some(_cd) = e.clipboard_data() {
-			// get selected text from doc export? We don't have selection export easily.
-			// For scope, copy the whole doc text? Better: leave as no-op for now.
-		}
-	}) as Box<dyn FnMut(web_sys::ClipboardEvent) + 'static>);
-	container.add_event_listener_with_callback("copy", cb_copy.as_ref().unchecked_ref()).ok();
-	web::keep_closure(state, cb_copy);
-
-	let state_paste = state;
-	let cb_paste = Closure::<dyn FnMut(web_sys::ClipboardEvent) + 'static>::wrap(Box::new(move |e: web_sys::ClipboardEvent| {
-		PASTE_FIRED.store(true, std::sync::atomic::Ordering::SeqCst);
-		if state_paste.is_read_only() { return; }
-		let cd_text = e.clipboard_data().map(|cd| cd.get_data("text/plain").unwrap_or_default());
-		let text = match cd_text {
-			Some(t) if !t.is_empty() => t,
-			_ => "hello".to_owned(),
-		};
-		let applied = state_paste.insert_text_native(&text).unwrap_or(false);
-		if applied { e.prevent_default(); changed(state_paste, &e); }
-	}) as Box<dyn FnMut(web_sys::ClipboardEvent) + 'static>);
-	container.add_event_listener_with_callback("paste", cb_paste.as_ref().unchecked_ref()).ok();
-	web::keep_closure(state, cb_paste);
-
-	let _ = signal;
+	if let Some(change) = change {
+		host.input_changed(change);
+	}
 }
 
-fn changed(state: CanvistState, e: &impl AsRef<web_sys::Event>) {
-	let _ = e;
-	web::with_host(state, |h| { h.full_repaint = true; });
-	// notify listeners
-	let change = Change { doc_changed: true, selection_changed: true };
-	state.notify_change(change);
-	// schedule frame
-	web::schedule_frame_host(state);
+/// An input method changed its unfinished text.
+fn composition_update(host: &Rc<Host>, event: &Event) {
+	let text = composed(event);
+
+	if let Some(change) = host.edit(|editor, session| editor.set_composition(session, &text)) {
+		host.input_changed(change);
+	}
 }
 
-fn is_apple() -> bool {
-	web_sys::window()
-		.is_some_and(|w| {
-			let ua = w.navigator().user_agent().unwrap_or_default();
-			ua.contains("Mac") || ua.contains("iPhone") || ua.contains("iPad")
-		})
+/// An input method finished: its text goes into the document once.
+fn composition_end(host: &Rc<Host>, event: &Event) {
+	let text = composed(event);
+	host.composing.set(false);
+	let change = host.edit(|editor, session| editor.commit_composition(session, &text));
+	host.textarea.set_value("");
+
+	if let Some(change) = change {
+		host.input_changed(change);
+	}
+}
+
+fn composed(event: &Event) -> String {
+	event
+		.dyn_ref::<CompositionEvent>()
+		.and_then(CompositionEvent::data)
+		.unwrap_or_default()
+}
+
+fn clear_field(host: &Host) {
+	if !host.composing.get() {
+		host.textarea.set_value("");
+	}
+}
+
+fn pointer_down(host: &Rc<Host>, event: &Event) {
+	let Some(event) = event.dyn_ref::<PointerEvent>() else {
+		return;
+	};
+
+	if event.button() != 0 {
+		return;
+	}
+
+	let point = host.document_point(f64::from(event.client_x()), f64::from(event.client_y()));
+	let clicks = count(host, event);
+	// Keep focus in the text field rather than letting the press blur it.
+	event.prevent_default();
+	host.focus();
+	host.pressed.set(true);
+	// A pointer that is already gone cannot be captured, which is fine.
+	let _ = host.canvas.set_pointer_capture(event.pointer_id());
+	let extend = event.shift_key();
+
+	if let Some(change) =
+		host.edit(|editor, session| editor.pointer_down(session, point, extend, clicks))
+	{
+		host.input_changed(change);
+	}
+}
+
+/// How many clicks `event` makes in a row. Pointer events don't count
+/// clicks in every browser, so presses close in time and place are counted
+/// here when `detail` is zero.
+fn count(host: &Host, event: &PointerEvent) -> u32 {
+	let last = host.last_press.get();
+	let (x, y, time) = (event.client_x(), event.client_y(), event.time_stamp());
+	let near = (x - last.x).abs() <= MULTI_CLICK_SLOP
+		&& (y - last.y).abs() <= MULTI_CLICK_SLOP
+		&& time - last.time <= MULTI_CLICK_MS;
+	let count = match u32::try_from(event.detail()) {
+		Ok(detail) if detail > 0 => detail,
+		_ if near => last.count + 1,
+		_ => 1,
+	};
+	host.last_press.set(Press { count, time, x, y });
+
+	count
+}
+
+fn pointer_move(host: &Rc<Host>, event: &Event) {
+	let Some(event) = event
+		.dyn_ref::<PointerEvent>()
+		.filter(|_| host.pressed.get())
+	else {
+		return;
+	};
+	let point = host.document_point(f64::from(event.client_x()), f64::from(event.client_y()));
+
+	if let Some(change) = host.edit(|editor, session| editor.pointer_move(session, point)) {
+		host.input_changed(change);
+	}
+}
+
+fn release(host: &Host) {
+	host.pressed.set(false);
+
+	if let Ok(mut editor) = host.editor.try_borrow_mut() {
+		editor.pointer_up();
+	}
+}
+
+/// Put the selection on the clipboard as plain text, and remove it from
+/// the document when `cut`.
+fn copy(host: &Rc<Host>, event: &Event, cut: bool) {
+	let Some((event, data)) = event
+		.dyn_ref::<ClipboardEvent>()
+		.and_then(|event| Some((event, event.clipboard_data()?)))
+	else {
+		return;
+	};
+	// Cutting from a read-only document copies.
+	let cut = cut && !host.read_only();
+	let mut copied = None;
+	let change = host.edit(|editor, session| {
+		if cut {
+			let cut = editor.cut(session)?;
+			let (text, change) = cut.unzip();
+			copied = text;
+			Ok(change.flatten())
+		} else {
+			copied = editor::copy(&session.doc)?;
+			Ok(None)
+		}
+	});
+
+	// With nothing selected, the browser's own copy stands: of nothing.
+	let Some(text) = copied else {
+		return;
+	};
+
+	event.prevent_default();
+	let _ = data.set_data("text/plain", &text);
+
+	if let Some(change) = change {
+		host.input_changed(change);
+	}
+}
+
+/// Paste the clipboard's plain text over the selection.
+fn paste(host: &Rc<Host>, event: &Event) {
+	let Some((event, data)) = event
+		.dyn_ref::<ClipboardEvent>()
+		.and_then(|event| Some((event, event.clipboard_data()?)))
+	else {
+		return;
+	};
+
+	if host.read_only() {
+		return;
+	}
+
+	event.prevent_default();
+	let text = data.get_data("text/plain").unwrap_or_default();
+
+	if text.is_empty() {
+		return;
+	}
+
+	if let Some(change) = host.edit(|editor, session| editor.paste_text(session, &text)) {
+		host.input_changed(change);
+	}
 }

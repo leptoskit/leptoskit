@@ -48,7 +48,7 @@ host() {
 # Every feature, every target.
 wasm_full=(
 	gallery leptoskit_3d leptoskit_bench_counter leptoskit_bench_guest leptoskit_bridge
-	leptoskit_canvas
+	leptoskit_canvas leptoskit_canvist
 	leptoskit_extension
 	leptoskit_l10n
 	leptoskit_plugin_age_range leptoskit_plugin_app_integrity leptoskit_plugin_asset leptoskit_plugin_diagnostics leptoskit_plugin_blob leptoskit_plugin_accelerometer leptoskit_plugin_android_alarm_manager leptoskit_plugin_android_intent leptoskit_plugin_application leptoskit_plugin_app_usage leptoskit_plugin_audio leptoskit_plugin_recorder

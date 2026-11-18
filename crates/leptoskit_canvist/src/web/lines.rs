@@ -1,3 +1,5 @@
+//! The editor's line navigation, answered by the live layout.
+
 use canvist_headless::canvist_core::Caret;
 use canvist_headless::canvist_core::LineEdge;
 use canvist_headless::canvist_core::LineNavigator;
@@ -8,13 +10,16 @@ use canvist_headless::canvist_model::Document;
 use canvist_layout::DocumentLayout;
 use canvist_layout::TextMeasurer;
 
-pub struct HostLines<'a> {
-	pub layout: &'a mut DocumentLayout,
-	pub measurer: &'a mut dyn TextMeasurer,
+/// Borrows the layout and measurer for one editor call. Each question is
+/// asked about the document the editor passes in, which is the document the
+/// layout was last brought up to date with.
+pub(crate) struct HostLines<'a> {
+	layout: &'a mut DocumentLayout,
+	measurer: &'a mut dyn TextMeasurer,
 }
 
 impl<'a> HostLines<'a> {
-	pub fn new(layout: &'a mut DocumentLayout, measurer: &'a mut dyn TextMeasurer) -> Self {
+	pub(crate) fn new(layout: &'a mut DocumentLayout, measurer: &'a mut dyn TextMeasurer) -> Self {
 		Self { layout, measurer }
 	}
 }

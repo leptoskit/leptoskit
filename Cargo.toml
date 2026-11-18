@@ -94,13 +94,14 @@ blocking = "1.6"
 brotli = "8"
 bytemuck = "1"
 bytes = "1"
+camino = "1"
+canvist_extension_clipboard = { git = "https://github.com/canvist/canvist", rev = "ee11cba6ff942d82d30958c8c8612c26c98370dd", default-features = false }
 canvist_extension_document = { git = "https://github.com/canvist/canvist", rev = "ee11cba6ff942d82d30958c8c8612c26c98370dd", default-features = false }
 canvist_extension_hard_break = { git = "https://github.com/canvist/canvist", rev = "ee11cba6ff942d82d30958c8c8612c26c98370dd", default-features = false }
 canvist_extension_history = { git = "https://github.com/canvist/canvist", rev = "ee11cba6ff942d82d30958c8c8612c26c98370dd", default-features = false }
 canvist_extension_paragraph = { git = "https://github.com/canvist/canvist", rev = "ee11cba6ff942d82d30958c8c8612c26c98370dd", default-features = false }
 canvist_headless = { git = "https://github.com/canvist/canvist", rev = "ee11cba6ff942d82d30958c8c8612c26c98370dd", default-features = false }
 canvist_layout = { git = "https://github.com/canvist/canvist", rev = "ee11cba6ff942d82d30958c8c8612c26c98370dd", default-features = false, features = ["editor", "json"] }
-camino = "1"
 cc = { version = "1", features = ["parallel"] }
 chrono = "0.4"
 clap = "4"

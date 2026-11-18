@@ -1,112 +1,342 @@
-use std::sync::Arc;
-use canvist_layout::Color;
-use canvist_layout::StarterKitOptions;
-use canvist_layout::Theme;
-use web_sys::HtmlElement;
+//! The editor's theme, read from the styles of the element it lives in.
+//!
+//! The canvas cannot inherit CSS, so the host reads what the container's
+//! text would look like (font, size, line height, colours) and has canvist
+//! lay out and paint with the same values. Utility classes and `var(--…)`
+//! tokens on the container therefore style the editor as they would a
+//! `<textarea>`.
 
-pub struct ThemeReader;
+use std::sync::Arc;
+
+use canvist_layout::BlockPatch;
+use canvist_layout::BlockRule;
+use canvist_layout::Chrome;
+use canvist_layout::Color;
+use canvist_layout::Decorations;
+use canvist_layout::EmbedRule;
+use canvist_layout::EmbedStyle;
+use canvist_layout::FontSpec;
+use canvist_layout::Motion;
+use canvist_layout::TextStyle;
+use canvist_layout::Theme;
+use wasm_bindgen::JsCast;
+use web_sys::CanvasRenderingContext2d;
+use web_sys::CssStyleDeclaration;
+use web_sys::Document;
+use web_sys::Element;
+use web_sys::HtmlCanvasElement;
+use web_sys::HtmlElement;
+use web_sys::Window;
+
+use super::dom;
+
+/// The space above and below a paragraph, as a multiple of the font size:
+/// what canvist's `StarterKit` theme uses.
+const PARAGRAPH_SPACE: f32 = 0.75;
+
+/// The line height when the container's cannot be read.
+const FALLBACK_LINE_HEIGHT: f32 = 1.5;
+
+/// The font size when the container's cannot be read.
+const FALLBACK_SIZE: f32 = 16.0;
+
+/// The page background browsers paint when nothing sets one.
+const LIGHT_PAGE: Color = Color::rgb(0xff, 0xff, 0xff);
+const DARK_PAGE: Color = Color::rgb(0x12, 0x12, 0x12);
+
+/// Everything read from the container that the theme depends on.
+#[derive(Clone, Debug, PartialEq)]
+struct Style {
+	family: String,
+	size: f32,
+	weight: u16,
+	italic: bool,
+	line_height: f32,
+	letter_spacing: f32,
+	color: Color,
+	background: Color,
+	caret: Color,
+}
+
+/// Reads the theme, and remembers the last one so an unchanged style costs
+/// no relayout.
+pub(crate) struct ThemeReader {
+	/// A 1×1 canvas that turns any CSS colour into its sRGB bytes.
+	scratch: Option<CanvasRenderingContext2d>,
+	last: Option<Style>,
+}
 
 impl ThemeReader {
-	pub fn read(container: &HtmlElement) -> Theme {
-		let computed = web_sys::window().and_then(|w| w.get_computed_style(container).ok().flatten());
-		let scheme = if prefers_dark() { canvist_layout::ColorScheme::Dark } else { canvist_layout::ColorScheme::Light };
-		// Actually ColorScheme lives in theme module; check path.
-		let _ = scheme;
-		let size = computed.as_ref()
-			.map_or(16.0, |s| parse_px(&s.get_property_value("font-size").unwrap_or_default()));
-		let size = if size <= 0.0 { 16.0 } else { size };
-		let family = computed.as_ref()
-			.map(|s| s.get_property_value("font-family").unwrap_or_default())
-			.unwrap_or_default();
-		let family = if family.trim().is_empty() { "sans-serif".to_owned() } else { family };
-		let line_height_px = computed.as_ref()
-			.map_or(0.0, |s| parse_px(&s.get_property_value("line-height").unwrap_or_default()));
-		let line_height = if line_height_px > 0.0 && size > 0.0 { line_height_px / size } else { 1.5 };
-		let letter_spacing = computed.as_ref()
-			.map_or(0.0, |s| parse_px(&s.get_property_value("letter-spacing").unwrap_or_default()));
-		let code_family = "monospace".to_owned();
-		let opts = StarterKitOptions {
-			scheme: if prefers_dark() {
-				canvist_layout::ColorScheme::Dark
-			} else {
-				canvist_layout::ColorScheme::Light
-			},
-			body_family: Arc::from(family.as_str()),
-			code_family: Arc::from(code_family.as_str()),
-			size,
-			line_height,
-			letter_spacing,
+	pub(crate) fn new(document: &Document) -> Self {
+		let scratch = document
+			.create_element("canvas")
+			.ok()
+			.and_then(|canvas| canvas.dyn_into::<HtmlCanvasElement>().ok())
+			.and_then(|canvas| {
+				canvas.set_width(1);
+				canvas.set_height(1);
+				canvas.get_context("2d").ok().flatten()
+			})
+			.and_then(|context| context.dyn_into::<CanvasRenderingContext2d>().ok());
+
+		Self {
+			scratch,
+			last: None,
+		}
+	}
+
+	/// The theme `container`'s styles ask for, or `None` when they ask for
+	/// the one read last.
+	pub(crate) fn read(
+		&mut self,
+		window: &Window,
+		document: &Document,
+		container: &HtmlElement,
+	) -> Option<Arc<Theme>> {
+		let style = self.style(window, document, container);
+
+		if self.last.as_ref() == Some(&style) {
+			return None;
+		}
+
+		let theme = theme(&style);
+		self.last = Some(style);
+		Some(Arc::new(theme))
+	}
+
+	fn style(&self, window: &Window, document: &Document, container: &HtmlElement) -> Style {
+		let Some(computed) = dom::computed(window, container) else {
+			return Style {
+				family: "sans-serif".into(),
+				size: FALLBACK_SIZE,
+				weight: 400,
+				italic: false,
+				line_height: FALLBACK_LINE_HEIGHT,
+				letter_spacing: 0.0,
+				color: Color::rgb(0, 0, 0),
+				background: LIGHT_PAGE,
+				caret: Color::rgb(0, 0, 0),
+			};
 		};
-		let theme = Theme::starter_kit_with(&opts);
-		let mut chrome = *theme.chrome();
-		if let Some(s) = &computed {
-			let caret = s.get_property_value("caret-color").unwrap_or_default();
-			if !caret.is_empty() && caret != "auto"
-				&& let Some(c) = parse_color(&caret) {
-					chrome.caret = c;
-				}
-			let bg = s.get_property_value("background-color").unwrap_or_default();
-			if let Some(c) = parse_color(&bg) {
-				chrome.background = c;
+		let family = Some(dom::property(&computed, "font-family"))
+			.filter(|family| !family.trim().is_empty())
+			.unwrap_or_else(|| "sans-serif".into());
+		let size = Some(dom::pixels(&computed, "font-size") as f32)
+			.filter(|size| *size > 0.0)
+			.unwrap_or(FALLBACK_SIZE);
+		let weight = dom::property(&computed, "font-weight")
+			.trim()
+			.parse::<f32>()
+			.map_or(400, |weight| weight.clamp(1.0, 1000.0).round() as u16);
+		let italic = matches!(
+			dom::property(&computed, "font-style").split(' ').next(),
+			Some("italic" | "oblique")
+		);
+		let font = FontSpec {
+			family: Arc::from(family.as_str()),
+			size,
+			weight,
+			italic,
+		};
+		let color = self
+			.color(&dom::property(&computed, "color"))
+			.unwrap_or(Color::rgb(0, 0, 0));
+
+		Style {
+			line_height: line_height(document, &computed, &font),
+			letter_spacing: dom::pixels(&computed, "letter-spacing") as f32,
+			color,
+			background: self.background(window, document, container),
+			caret: self
+				.color(&dom::property(&computed, "caret-color"))
+				.unwrap_or(color),
+			family,
+			size,
+			weight,
+			italic,
+		}
+	}
+
+	/// The opaque colour behind `container`'s text: its own background over
+	/// each ancestor's, down to the page's.
+	///
+	/// The canvas is opaque, so the browser can antialias its text as it
+	/// does the text around it; it therefore needs a colour to fill. A
+	/// background image or gradient behind the editor cannot show through.
+	fn background(&self, window: &Window, document: &Document, container: &HtmlElement) -> Color {
+		let mut seen = Color::TRANSPARENT;
+		let mut element: Option<Element> = Some(container.clone().into());
+
+		while let Some(current) = element {
+			let behind = dom::computed(window, &current)
+				.and_then(|style| self.color(&dom::property(&style, "background-color")))
+				.unwrap_or(Color::TRANSPARENT);
+			seen = over(seen, behind);
+
+			if seen.a == u8::MAX {
+				return seen;
 			}
+
+			element = current.parent_element();
 		}
-		theme.to_builder().chrome(chrome).build()
+
+		over(seen, page(window, document))
 	}
 
-	pub fn apply(state: crate::state::CanvistState) {
-		// Re-read theme and update host.
-		let container = with_container(state);
-		if let Some(c) = container {
-			let t = Self::read(&c);
-			let _ = crate::web::with_host(state, |h| {
-				h.theme = Arc::new(t);
-				h.full_repaint = true;
-			});
+	/// A computed CSS colour as sRGB bytes.
+	fn color(&self, css: &str) -> Option<Color> {
+		let css = css.trim();
+
+		if css.is_empty() || css == "auto" {
+			return None;
+		}
+
+		parse_rgb(css).or_else(|| self.rasterized(css))
+	}
+
+	/// Any colour the browser can paint, read back from a pixel it painted:
+	/// computed styles keep `oklch()`, `color()` and the like as written.
+	fn rasterized(&self, css: &str) -> Option<Color> {
+		let context = self.scratch.as_ref()?;
+		context.clear_rect(0.0, 0.0, 1.0, 1.0);
+		// An unreadable colour leaves this one in place.
+		context.set_fill_style_str("rgba(0, 0, 0, 0)");
+		context.set_fill_style_str(css);
+		context.fill_rect(0.0, 0.0, 1.0, 1.0);
+		let pixel = context.get_image_data(0.0, 0.0, 1.0, 1.0).ok()?.data();
+
+		match pixel.as_slice() {
+			[r, g, b, a] => Some(Color::rgba(*r, *g, *b, *a)),
+			_ => None,
 		}
 	}
 }
 
-fn with_container(state: crate::state::CanvistState) -> Option<HtmlElement> {
-	crate::web::with_host(state, |h| h.container.clone())
+/// The canvist theme for `style`: paragraphs and line breaks, which is all a
+/// plain-paragraph editor holds.
+fn theme(style: &Style) -> Theme {
+	let base = Theme::builder(TextStyle {
+		font: FontSpec {
+			family: Arc::from(style.family.as_str()),
+			size: style.size,
+			weight: style.weight,
+			italic: style.italic,
+		},
+		line_height: style.line_height,
+		color: style.color,
+		background: None,
+		decorations: Decorations::default(),
+		letter_spacing: style.letter_spacing,
+		baseline_shift: 0.0,
+		motion: Motion::None,
+	})
+	.build();
+	let chrome = Chrome {
+		background: style.background,
+		caret: style.caret,
+		..*base.chrome()
+	};
+	let space = PARAGRAPH_SPACE * style.size;
+
+	base.to_builder()
+		.chrome(chrome)
+		.block(BlockRule::new(
+			"paragraph",
+			BlockPatch::new().space(space, space).tag("p"),
+		))
+		.embed(EmbedRule::new("hardBreak", EmbedStyle::LineBreak))
+		.build()
 }
 
-fn prefers_dark() -> bool {
-	web_sys::window()
-		.and_then(|w| w.match_media("(prefers-color-scheme: dark)").ok().flatten())
-		.is_some_and(|m| m.matches())
-}
+/// The container's line height as a multiple of its font size. CSS computes
+/// a length, or `normal`, which depends on the font and has to be measured.
+fn line_height(document: &Document, computed: &CssStyleDeclaration, font: &FontSpec) -> f32 {
+	let length = dom::pixels(computed, "line-height") as f32;
 
-fn parse_px(v: &str) -> f32 {
-	v.trim_end_matches("px").trim().parse().unwrap_or(0.0)
-}
-
-fn parse_color(v: &str) -> Option<Color> {
-	let v = v.trim();
-	if v.starts_with('#') {
-		let hex = v.trim_start_matches('#');
-		if hex.len() == 6 {
-			let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
-			let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
-			let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
-			return Some(Color { r, g, b, a: 255 });
-		}
+	if length > 0.0 {
+		return length / font.size;
 	}
-	if v.starts_with("rgb") {
-		let nums: Vec<u8> = v
-			.trim_start_matches("rgba")
-			.trim_start_matches("rgb")
-			.trim_matches(|c: char| c == '(' || c == ')' || c.is_whitespace())
-			.split(',')
-			.filter_map(|p| p.trim().trim_end_matches('%').parse::<f32>().ok().map(|n| n as u8))
-			.collect();
-		if nums.len() >= 3 {
-			let a = if nums.len() >= 4 { nums[3] } else { 255 };
-			return Some(Color { r: nums[0], g: nums[1], b: nums[2], a });
-		}
-	}
-	None
+
+	let style = format!(
+		"position:absolute;left:0;top:0;visibility:hidden;white-space:pre;font:{};line-height:\
+		 normal",
+		font.css()
+	);
+
+	dom::probe(document, "div", &style)
+		.and_then(|probe| {
+			probe.set_text_content(Some("x"));
+			dom::laid_out(document, &probe, || {
+				probe.get_bounding_client_rect().height()
+			})
+		})
+		.map(|height| height as f32 / font.size)
+		.filter(|ratio| *ratio > 0.0)
+		.unwrap_or(FALLBACK_LINE_HEIGHT)
 }
 
-// Need ColorScheme path. Check canvist_layout re-exports ColorScheme.
-// It's in theme module. Access via canvist_layout::ColorScheme if re-exported.
+/// The colour the browser paints behind the page when no element sets one:
+/// dark only when the page opted into a dark scheme and is using it.
+fn page(window: &Window, document: &Document) -> Color {
+	let scheme = document
+		.document_element()
+		.and_then(|root| dom::computed(window, &root))
+		.map(|style| dom::property(&style, "color-scheme"))
+		.unwrap_or_default();
+	let allows = |name: &str| scheme.split_whitespace().any(|word| word == name);
+	let prefers_dark = window
+		.match_media("(prefers-color-scheme: dark)")
+		.ok()
+		.flatten()
+		.is_some_and(|query| query.matches());
 
+	if allows("dark") && (prefers_dark || !allows("light")) {
+		DARK_PAGE
+	} else {
+		LIGHT_PAGE
+	}
+}
+
+/// `top` painted over `bottom`, both with straight alpha.
+fn over(top: Color, bottom: Color) -> Color {
+	let (top_alpha, bottom_alpha) = (f32::from(top.a) / 255.0, f32::from(bottom.a) / 255.0);
+	let alpha = top_alpha + bottom_alpha * (1.0 - top_alpha);
+
+	if alpha <= 0.0 {
+		return Color::TRANSPARENT;
+	}
+
+	let channel = |top: u8, bottom: u8| {
+		let mixed =
+			f32::from(top) * top_alpha + f32::from(bottom) * bottom_alpha * (1.0 - top_alpha);
+		(mixed / alpha).round() as u8
+	};
+
+	Color::rgba(
+		channel(top.r, bottom.r),
+		channel(top.g, bottom.g),
+		channel(top.b, bottom.b),
+		(alpha * 255.0).round() as u8,
+	)
+}
+
+/// A colour as computed styles write sRGB ones: `rgb(r, g, b)` or
+/// `rgba(r, g, b, a)`.
+fn parse_rgb(css: &str) -> Option<Color> {
+	let numbers = css
+		.strip_prefix("rgba(")
+		.or_else(|| css.strip_prefix("rgb("))?
+		.strip_suffix(')')?;
+	let mut parts = numbers.split(',').map(|part| part.trim().parse::<f32>());
+	let mut channel = || Some(parts.next()?.ok()?.round().clamp(0.0, 255.0) as u8);
+	let (r, g, b) = (channel()?, channel()?, channel()?);
+	let alpha = match parts.next() {
+		Some(alpha) => (alpha.ok()?.clamp(0.0, 1.0) * 255.0).round() as u8,
+		None => u8::MAX,
+	};
+
+	parts
+		.next()
+		.is_none()
+		.then_some(Color::rgba(r, g, b, alpha))
+}

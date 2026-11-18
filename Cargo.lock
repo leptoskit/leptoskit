@@ -5752,6 +5752,7 @@ dependencies = [
 name = "leptoskit_canvist"
 version = "0.3.0"
 dependencies = [
+ "canvist_extension_clipboard",
  "canvist_extension_document",
  "canvist_extension_hard_break",
  "canvist_extension_history",
