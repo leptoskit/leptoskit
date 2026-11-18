@@ -1,0 +1,49 @@
+[package]
+name = "leptoskit_cloud_runtime"
+version = "0.3.0"
+authors.workspace = true
+edition.workspace = true
+homepage.workspace = true
+license.workspace = true
+readme = "readme.md"
+repository.workspace = true
+rust-version.workspace = true
+description = "The desired state of a LeptosKit Cloud environment as data, the runtime adapter boundary, and the Kubernetes manifests for one release."
+
+# The manifest tests build whole releases and snapshot them.
+[[test]]
+name = "manifests"
+required-features = ["kubernetes"]
+
+[dependencies]
+# The Kubernetes bindings, behind the `kubernetes` feature below: the base
+# never compiles them, so the wasm client of the cloud dashboard reads the
+# spec without them. Secrets ride in `k8s-openapi`'s `ByteString`, which
+# serializes as base64, so the feature needs no encoder of its own.
+k8s-openapi = { workspace = true, optional = true }
+# The base: pure data with no features on, safe in a browser build. `uuid`
+# carries the workspace's `js` feature, so ids generate on
+# wasm32-unknown-unknown too.
+serde = { workspace = true, features = ["derive"] }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+uuid = { workspace = true, features = ["serde", "v7"] }
+# The `kubernetes` feature's YAML writer.
+yaml_serde = { workspace = true, optional = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+# `block_on` for the fake adapter's futures, and snapshots for the manifests.
+futures = { workspace = true }
+insta = { workspace = true }
+
+[features]
+default = []
+# Kubernetes manifests for one release: the objects, their deterministic
+# order, and the refusals a plain cluster cannot honor.
+kubernetes = ["dep:k8s-openapi", "dep:yaml_serde"]
+# A recording fake: every call is kept, specs are validated, and a test
+# scripts what a rollout should look like. No dependency beyond the base.
+testing = []
+
+[lints]
+workspace = true

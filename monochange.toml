@@ -210,6 +210,7 @@ packages = [
 	"leptoskit_idp",
 	"leptoskit_notifications",
 	"leptoskit_cloud",
+	"leptoskit_cloud_runtime",
 	"leptoskit_extension",
 	"leptoskit_service_worker",
 	"leptoskit_devtools_protocol",
@@ -776,6 +777,10 @@ type = "cargo"
 
 [package.leptoskit_cloud]
 path = "crates/leptoskit_cloud"
+type = "cargo"
+
+[package.leptoskit_cloud_runtime]
+path = "crates/leptoskit_cloud_runtime"
 type = "cargo"
 
 [package.leptoskit_db_macros]
