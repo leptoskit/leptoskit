@@ -63,24 +63,31 @@ fn runtime_profile_and_platform_selectors_agree() {
 		.values()
 		.map(|content| serde_json::from_str(content).unwrap())
 		.collect();
-	for policy in documents
+	let policies = documents
 		.iter()
-		.filter(|document| document["kind"] == "NetworkPolicy")
-	{
+		.filter(|document| document["kind"] == "NetworkPolicy");
+
+	for policy in policies {
 		for ingress in policy["spec"]["ingress"].as_array().unwrap() {
-			for peer in ingress["from"].as_array().unwrap() {
-				if let Some(selector) = peer["namespaceSelector"]["matchLabels"].as_object() {
-					if selector.contains_key("app.kubernetes.io/managed-by") {
-						assert!(
-							selector
-								.iter()
-								.all(|(key, value)| labels.get(key) == Some(value))
-						);
-						if policy["metadata"]["namespace"] == "database" {
-							assert_eq!(ingress["ports"][0]["port"], 5432);
-						}
-					}
-				}
+			// The peers that select tenant namespaces, by the label the runtime
+			// puts on them.
+			let tenant_selectors = ingress["from"]
+				.as_array()
+				.unwrap()
+				.iter()
+				.filter_map(|peer| peer["namespaceSelector"]["matchLabels"].as_object())
+				.filter(|selector| selector.contains_key("app.kubernetes.io/managed-by"));
+
+			for selector in tenant_selectors {
+				assert!(
+					selector
+						.iter()
+						.all(|(key, value)| labels.get(key) == Some(value))
+				);
+				assert!(
+					policy["metadata"]["namespace"] != "database"
+						|| ingress["ports"][0]["port"] == 5432
+				);
 			}
 		}
 	}
