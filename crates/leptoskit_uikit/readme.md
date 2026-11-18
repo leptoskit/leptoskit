@@ -45,6 +45,8 @@ Images accept local paths, percent-encoded local file URLs, and `resource://name
 
 Vector drawings paint each path with its own `CAShapeLayer`, in order, so a path's fill sits under its stroke and later paths cover earlier ones. Points map from the view box onto the frame before the `CGPath` is built, so stroke widths stay in points under any scaling. Layout and drawing changes redraw at once, without implicit layer animations. Shapes paint outside the frame unless the element clips. A labelled drawing is one image accessibility element; an unlabelled one is decorative.
 
+A `Modal` is presented as a form sheet and a `Popover` as a system popover hanging from its anchor's view, each in a view controller of its own, so neither one's view sits in its parent's. The sheet is sized to what the modal holds. A swipe on the sheet, a press outside the popover, Escape and the `VoiceOver` escape gesture dispatch `NativeEvent::Dismiss` and leave the overlay up: the next tree closes it. `overlay_shown`, `overlay_controller` and `perform_dismiss` let tests check and drive this. An overlay needs a window to show over, so a controller that mounts the tree itself calls `present_overlays` from `viewDidAppear:`.
+
 Determinate bars use `UIProgressView`. Indeterminate bars use a clipped native Core Animation segment. Spinners use `UIActivityIndicatorView`. Hidden, stopped, deleted, and dropped controls stop animations; a stopped spinner hides while its Yoga layout space remains.
 
 Run the real simulator verifier on macOS with Xcode and an installed runtime:

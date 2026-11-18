@@ -12,6 +12,7 @@ use leptoskit_native::MutationList;
 use leptoskit_native::NativeBackend;
 use leptoskit_native::NativeKind;
 use leptoskit_native::NativeProps;
+use leptoskit_native::Overlay;
 use leptoskit_native::Progress;
 use leptoskit_native::Role;
 use leptoskit_native::SharedTextMeasurer;
@@ -20,6 +21,7 @@ use leptoskit_native::TextContent;
 use leptoskit_yoga::NodeId;
 use objc2::MainThreadMarker;
 use objc2::MainThreadOnly;
+use objc2::Message;
 use objc2::rc::Retained;
 use objc2::rc::autoreleasepool;
 use objc2::runtime::NSObjectProtocol;
@@ -73,6 +75,7 @@ use objc2_ui_kit::UITextView;
 use objc2_ui_kit::UIUserInterfaceStyle;
 use objc2_ui_kit::UIView;
 use objc2_ui_kit::UIViewContentMode;
+use objc2_ui_kit::UIViewController;
 
 use crate::events::ActionTarget;
 use crate::events::ContentButton;
@@ -86,6 +89,8 @@ use crate::events::slider_coordinate;
 use crate::events::visible;
 use crate::measure::UIKitTextMeasurer;
 use crate::measure::font_weight;
+use crate::overlay::Presented;
+use crate::overlay::controller_of;
 use crate::text::alignment;
 use crate::text::attributed;
 use crate::vector::VectorLayers;
@@ -104,6 +109,8 @@ pub struct UIKitBackend {
 	dark: Option<bool>,
 	applying: bool,
 	animations_active: Cell<bool>,
+	/// Every live `Modal` and `Popover`, in the order they were created.
+	overlays: Vec<NodeId>,
 }
 
 impl std::fmt::Debug for UIKitBackend {
@@ -122,10 +129,16 @@ struct Widget {
 	control: Control,
 	props: NativeProps,
 	children: Vec<NodeId>,
+	/// The node this one was inserted into. An overlay's view is not in its
+	/// parent's view, so this is how it finds the controller to show over.
+	parent: Option<NodeId>,
 }
 
 enum Control {
 	Plain,
+	/// A `Modal` or `Popover`, which UIKit presents in a controller of its
+	/// own.
+	Overlay(Presented),
 	Label(Retained<UILabel>),
 	Button {
 		button: Retained<UIButton>,
@@ -168,6 +181,17 @@ enum Control {
 }
 
 impl Widget {
+	/// Whether UIKit presents this widget above the screen, so its view
+	/// never goes into its parent's.
+	const fn is_overlay(&self) -> bool {
+		matches!(self.control, Control::Overlay(_))
+	}
+
+	/// What a `Modal` or `Popover` was last told to show.
+	fn overlay(&self) -> Option<&Overlay> {
+		self.props.overlay.as_ref().filter(|_| self.is_overlay())
+	}
+
 	fn target(&self) -> Option<&ActionTarget> {
 		match &self.control {
 			Control::Button { target, .. }
@@ -238,6 +262,7 @@ impl UIKitBackend {
 			dark: None,
 			applying: false,
 			animations_active: Cell::new(true),
+			overlays: Vec::new(),
 		}
 	}
 
@@ -420,8 +445,6 @@ impl UIKitBackend {
 			// A 3D scene draws in the generated hosts' Swift and Kotlin renderers;
 			// this backend holds its place as an empty view.
 			NativeKind::View
-			| NativeKind::Modal
-			| NativeKind::Popover
 			| NativeKind::Custom(_)
 			| NativeKind::Scene3d
 			| NativeKind::Video
@@ -433,10 +456,15 @@ impl UIKitBackend {
 					Control::Plain,
 				)
 			}
+			NativeKind::Modal | NativeKind::Popover => self.build_overlay(id, kind),
 		};
 
 		if let Some(dark) = self.dark {
 			view.setOverrideUserInterfaceStyle(appearance(dark));
+
+			if let Control::Overlay(presented) = &control {
+				presented.set_appearance(appearance(dark));
+			}
 		}
 
 		Widget {
@@ -446,7 +474,17 @@ impl UIKitBackend {
 			control,
 			props: NativeProps::default(),
 			children: Vec::new(),
+			parent: None,
 		}
+	}
+
+	/// The view of a `Modal` or `Popover`, inside the controller UIKit
+	/// presents for it.
+	fn build_overlay(&self, id: NodeId, kind: NativeKind) -> (Retained<UIView>, Control) {
+		let view = UIView::initWithFrame(UIView::alloc(self.mtm), CGRect::ZERO);
+		let popover = kind == NativeKind::Popover;
+		let presented = Presented::new(self.mtm, id, &self.sink, popover, &view);
+		(view, Control::Overlay(presented))
 	}
 
 	/// The button class for a pressable, radio, checkbox, or plain button,
@@ -724,9 +762,12 @@ fn apply_props(widget: &mut Widget, props: &NativeProps, mtm: MainThreadMarker) 
 	let foreground = props.color.map_or_else(UIColor::labelColor, color);
 	let enabled = props.enabled.unwrap_or(true);
 	view.setOpaque(false);
-	view.setBackgroundColor(Some(
-		&props.background.map_or_else(UIColor::clearColor, color),
-	));
+	// A sheet dims the screen behind it, so the backdrop a modal draws on the
+	// web has nothing to cover here.
+	let background = props
+		.background
+		.filter(|_| widget.kind != NativeKind::Modal);
+	view.setBackgroundColor(Some(&background.map_or_else(UIColor::clearColor, color)));
 	view.setHidden(props.hidden.unwrap_or(false));
 	view.setAlpha(f64::from(props.opacity.unwrap_or(1.0)));
 	view.setUserInteractionEnabled(enabled);
@@ -785,7 +826,7 @@ fn apply_props(widget: &mut Widget, props: &NativeProps, mtm: MainThreadMarker) 
 	);
 
 	match &mut widget.control {
-		Control::Plain => {
+		Control::Plain | Control::Overlay(_) => {
 			view.setIsAccessibilityElement(crate::accessibility::is_element(props), mtm);
 		}
 		Control::Label(label) => {
@@ -1337,6 +1378,175 @@ fn apply_progress_props(
 }
 
 impl UIKitBackend {
+	/// Whether a `Modal`'s sheet or a `Popover` is on screen. Other node
+	/// kinds return `None`.
+	///
+	/// An open overlay is only shown once its parent, or a popover's anchor,
+	/// is in a window, and a modal only once it holds something.
+	pub fn overlay_shown(&self, id: NodeId) -> Option<bool> {
+		match &self.live(id)?.control {
+			Control::Overlay(presented) => Some(presented.is_shown()),
+			_ => None,
+		}
+	}
+
+	/// The view controller UIKit presents for a `Modal` or `Popover`,
+	/// whether or not it is on screen now.
+	pub fn overlay_controller(&self, id: NodeId) -> Option<Retained<UIViewController>> {
+		match &self.live(id)?.control {
+			Control::Overlay(presented) => Some(presented.controller().retain()),
+			_ => None,
+		}
+	}
+
+	/// Asks an overlay to close as the Escape key and the `VoiceOver` escape
+	/// gesture do: [`NativeEvent::Dismiss`](leptoskit_native::NativeEvent)
+	/// reaches the listener, and the overlay stays until the next tree
+	/// closes it. Returns `false` when the node is not an overlay on screen.
+	pub fn perform_dismiss(&self, id: NodeId) -> bool {
+		match self.live(id).map(|widget| &widget.control) {
+			Some(Control::Overlay(presented)) if presented.is_shown() => {
+				presented.cancel();
+				true
+			}
+			_ => false,
+		}
+	}
+
+	/// Shows each open `Modal` and `Popover` that is not on screen yet, and
+	/// takes down each closed one.
+	///
+	/// Every batch does this by itself. Call it when the controller holding
+	/// the tree has joined a window, for example from `viewDidAppear:`,
+	/// because an overlay that was open before then had nothing to show
+	/// over. [`UIKitHost`](crate::UIKitHost) does so for its own controller.
+	pub fn present_overlays(&self) {
+		let _events = self.sink.suppress();
+		self.refresh_overlays();
+	}
+
+	fn live(&self, id: NodeId) -> Option<&Widget> {
+		self.widgets
+			.get(id.index())
+			.and_then(Option::as_ref)
+			.filter(|widget| widget.id == id)
+	}
+
+	/// The widget the app gave this `id`.
+	fn named(&self, name: &str) -> Option<&Widget> {
+		self.widgets
+			.iter()
+			.flatten()
+			.find(|widget| widget.props.id.as_deref() == Some(name))
+	}
+
+	/// Whether presentations animate: not while the host has paused
+	/// animations, and not while UIKit has them switched off.
+	fn animated(&self) -> bool {
+		self.animations_active.get() && UIView::areAnimationsEnabled(self.mtm)
+	}
+
+	fn refresh_overlays(&self) {
+		for &id in &self.overlays {
+			let Some(widget) = self.live(id) else {
+				continue;
+			};
+			let (Some(overlay), Control::Overlay(presented)) = (widget.overlay(), &widget.control)
+			else {
+				continue;
+			};
+			let shown = if widget.kind == NativeKind::Popover {
+				self.refresh_popover(presented, overlay)
+			} else {
+				self.refresh_sheet(widget, presented, overlay.open)
+			};
+
+			if shown {
+				self.focus_inside(overlay.initial_focus.as_deref());
+			}
+		}
+	}
+
+	/// The controller to present over: the one holding `view`, once it is in
+	/// a window, or whatever that one has already presented.
+	fn presenter(view: &UIView, presented: &Presented) -> Option<Retained<UIViewController>> {
+		view.window()?;
+		let mut controller = controller_of(view)?;
+
+		while let Some(above) = controller.presentedViewController() {
+			if std::ptr::eq(&raw const *above, &raw const *presented.controller()) {
+				break;
+			}
+
+			controller = above;
+		}
+
+		Some(controller)
+	}
+
+	/// Shows or takes down a modal's sheet. Returns whether it was shown by
+	/// this call.
+	fn refresh_sheet(&self, widget: &Widget, presented: &Presented, open: bool) -> bool {
+		// What the modal holds decides the sheet's size: the modal itself
+		// covers the viewport.
+		let content = widget
+			.children
+			.iter()
+			.filter_map(|&child| self.live(child))
+			.filter(|child| !child.is_overlay() && !child.view.isHidden())
+			.map(|child| child.view.frame())
+			.reduce(|a, b| objc2_core_graphics::CGRectUnion(a, b))
+			.filter(|content| content.size.width > 0.0 && content.size.height > 0.0);
+		let below = widget
+			.parent
+			.and_then(|parent| self.live(parent))
+			.and_then(|parent| Self::presenter(&parent.view, presented));
+
+		if let (true, Some(content), Some(below)) = (open, content, below) {
+			presented.show_sheet(&widget.view, content, &below, self.animated())
+		} else {
+			presented.hide(self.animated());
+			false
+		}
+	}
+
+	/// Shows or takes down a popover. Returns whether it was shown by this
+	/// call.
+	fn refresh_popover(&self, presented: &Presented, overlay: &Overlay) -> bool {
+		let anchor = overlay
+			.anchor
+			.as_deref()
+			.and_then(|name| self.named(name))
+			.map(|anchor| &*anchor.view);
+		let below = anchor.and_then(|anchor| Self::presenter(anchor, presented));
+
+		if let (true, Some(anchor), Some(below)) = (overlay.open, anchor, below) {
+			presented.show_popover(anchor, overlay.placement, &below, self.animated())
+		} else {
+			presented.hide(self.animated());
+			false
+		}
+	}
+
+	/// Moves focus to the widget named `initial` inside an overlay that has
+	/// just been shown. Without a name, UIKit moves `VoiceOver` into the
+	/// presentation by itself.
+	fn focus_inside(&self, initial: Option<&str>) {
+		let Some(widget) = initial.and_then(|name| self.named(name)) else {
+			return;
+		};
+
+		match &widget.control {
+			Control::Input { field, .. } => {
+				field.becomeFirstResponder();
+			}
+			Control::Area { text, .. } => {
+				text.becomeFirstResponder();
+			}
+			_ => crate::accessibility::move_cursor(&widget.view),
+		}
+	}
+
 	/// Moves focus to the widget the batch asks to focus, once its views
 	/// are in place.
 	///
@@ -1443,6 +1653,7 @@ impl NativeBackend for UIKitBackend {
 
 			self.applying = false;
 			self.refresh();
+			self.refresh_overlays();
 			self.focus_requested(mutations);
 		});
 	}
@@ -1454,6 +1665,10 @@ impl NativeBackend for UIKitBackend {
 
 		if self.widgets.len() <= id.index() {
 			self.widgets.resize_with(id.index() + 1, || None);
+		}
+
+		if widget.is_overlay() {
+			self.overlays.push(id);
 		}
 
 		self.widgets[id.index()] = Some(widget);
@@ -1472,9 +1687,20 @@ impl NativeBackend for UIKitBackend {
 		let widget = self.widget_mut(id);
 		let size = CGSize::new(f64::from(width), f64::from(height));
 		let resized = widget.view.frame().size != size;
-		widget
-			.view
-			.setFrame(CGRect::new(CGPoint::new(f64::from(x), f64::from(y)), size));
+		// UIKit places an overlay. Its frame says only how large it is: a
+		// sheet shifts its view to show what it holds, and a popover's view
+		// fills the popover.
+		let origin = if widget.is_overlay() {
+			CGPoint::ZERO
+		} else {
+			CGPoint::new(f64::from(x), f64::from(y))
+		};
+		widget.view.setFrame(CGRect::new(origin, size));
+
+		if let (NativeKind::Popover, Control::Overlay(presented)) = (widget.kind, &widget.control) {
+			presented.resize(size);
+		}
+
 		sync_corner_radius(&widget.view, widget.props.corner_radius);
 		// Only a new size changes where the drawing maps; moving the frame
 		// carries its layers along.
@@ -1550,12 +1776,23 @@ impl NativeBackend for UIKitBackend {
 
 	fn insert_child(&mut self, parent: NodeId, child: NodeId, index: usize) {
 		let _events = self.sink.suppress();
-		let view = self.widget(child).view.clone();
+		let child_widget = self.widget(child);
+		let presented = child_widget.is_overlay();
+		let view = child_widget.view.clone();
 		let parent_widget = self.widget(parent);
 		let index = index.min(parent_widget.children.len());
-		parent_widget
-			.view
-			.insertSubview_atIndex(&view, index as isize);
+
+		// An overlay's view is not among its parent's subviews, so the
+		// overlays before this child do not count towards where it goes.
+		if !presented {
+			let below = parent_widget.children[..index]
+				.iter()
+				.filter(|&&sibling| !self.widget(sibling).is_overlay())
+				.count();
+			parent_widget
+				.view
+				.insertSubview_atIndex(&view, below as isize);
+		}
 
 		if parent_widget.kind == NativeKind::Pressable {
 			view.setUserInteractionEnabled(false);
@@ -1565,12 +1802,23 @@ impl NativeBackend for UIKitBackend {
 		}
 
 		self.widget_mut(parent).children.insert(index, child);
+		self.widget_mut(child).parent = Some(parent);
 		self.refresh_unbatched();
 	}
 
 	fn remove_child(&mut self, parent: NodeId, child: NodeId) {
 		let _events = self.sink.suppress();
-		self.widget(child).view.removeFromSuperview();
+		let animated = self.animated();
+		let child_widget = self.widget_mut(child);
+		child_widget.parent = None;
+
+		// An overlay keeps its view in its own controller, and comes down
+		// now that it has no parent to show over.
+		match &child_widget.control {
+			Control::Overlay(presented) => presented.hide(animated),
+			_ => child_widget.view.removeFromSuperview(),
+		}
+
 		self.widget_mut(parent)
 			.children
 			.retain(|node| *node != child);
@@ -1586,6 +1834,12 @@ impl NativeBackend for UIKitBackend {
 			.filter(|widget| widget.id == id)
 			.expect("mutation deletes a live UIKit node");
 		widget.deactivate();
+
+		if let Control::Overlay(presented) = &widget.control {
+			presented.hide(false);
+			self.overlays.retain(|&existing| existing != id);
+		}
+
 		widget.view.removeFromSuperview();
 		self.refresh_unbatched();
 	}
@@ -1600,7 +1854,15 @@ impl NativeBackend for UIKitBackend {
 
 		for widget in self.widgets.iter().flatten() {
 			widget.view.setOverrideUserInterfaceStyle(appearance(dark));
+
+			if let Control::Overlay(presented) = &widget.control {
+				presented.set_appearance(appearance(dark));
+			}
 		}
+	}
+
+	fn presents_overlays(&self) -> bool {
+		true
 	}
 }
 
@@ -1610,6 +1872,10 @@ impl Drop for UIKitBackend {
 
 		for widget in self.widgets.iter().flatten() {
 			widget.deactivate();
+
+			if let Control::Overlay(presented) = &widget.control {
+				presented.hide(false);
+			}
 		}
 	}
 }

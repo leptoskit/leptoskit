@@ -114,7 +114,7 @@ impl EventSink {
 		button.sendActionsForControlEvents(UIControlEvents::PrimaryActionTriggered);
 	}
 
-	fn emit(&self, node: NodeId, event: &NativeEvent) {
+	pub(crate) fn emit(&self, node: NodeId, event: &NativeEvent) {
 		if self.suppressed.get() {
 			return;
 		}

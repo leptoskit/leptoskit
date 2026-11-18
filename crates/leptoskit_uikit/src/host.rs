@@ -132,6 +132,8 @@ impl UIKitBackend {
 		}
 
 		container.addSubview(view);
+		// An overlay that was already open shows now, if there is a window.
+		self.present_overlays();
 		true
 	}
 
@@ -259,6 +261,14 @@ define_class!(
 			let view = self.view().expect("UIKit controller loads its root view");
 			let size = view.bounds().size;
 			if (size, view.safeAreaInsets()) != self.ivars().host.layout.get() { self.ivars().host.render(self, size); }
+		}
+
+		#[unsafe(method(viewDidAppear:))]
+		fn appeared(&self, animated: bool) {
+			// SAFETY: UIViewController implements this lifecycle selector.
+			unsafe { let _: () = msg_send![super(self), viewDidAppear: animated]; }
+			// An overlay that was already open had no window to show over.
+			self.ivars().host.surface.borrow().backend().present_overlays();
 		}
 	}
 	unsafe impl NSObjectProtocol for SurfaceController {}

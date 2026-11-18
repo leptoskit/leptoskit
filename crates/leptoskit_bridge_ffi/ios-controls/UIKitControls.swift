@@ -288,6 +288,7 @@ final class UIKitControls: UIResponder, UIApplicationDelegate {
             initialErrorBeforeLayout()
             try labelledTextAccessibility()
             try interactionControls()
+            try overlayControls()
             try await nativeRiveImage()
             try await coldCandidate()
             try await replacement()

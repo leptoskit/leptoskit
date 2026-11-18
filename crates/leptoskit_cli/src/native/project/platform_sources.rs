@@ -56,6 +56,7 @@ pub(crate) const IOS: &[&str] = &[
 	"mobile/NativeRequestExecutor.swift",
 	"mobile/MobileWidgetRenderer.swift",
 	"mobile/MobileWidgetControls.swift",
+	"mobile/MobileOverlayView.swift",
 	"mobile/DevtoolsOverlay.swift",
 	"mobile/MobileApplicationChrome.swift",
 	"mobile/MobileApplicationTeardown.swift",

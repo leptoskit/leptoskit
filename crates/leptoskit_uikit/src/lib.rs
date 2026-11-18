@@ -22,6 +22,8 @@ mod host;
 #[cfg(target_os = "ios")]
 mod measure;
 #[cfg(target_os = "ios")]
+mod overlay;
+#[cfg(target_os = "ios")]
 mod rive;
 #[cfg(target_os = "ios")]
 mod text;

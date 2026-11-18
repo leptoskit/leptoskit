@@ -532,6 +532,12 @@ mod probe {
 			"PASS\tnative accessibility editor and scroll callbacks tolerate synchronous deletion"
 				.into(),
 		);
+		overlays(window, mtm);
+		passed.push(
+			"PASS\tmodals present as sheets and popovers from their anchors, and ask before \
+			 closing"
+				.into(),
+		);
 		assert!(surface.borrow().backend().mount(root, &controller));
 		window.makeKeyAndVisible();
 		passed
@@ -1602,6 +1608,174 @@ mod probe {
 		);
 
 		reopened.setRootViewController(None);
+	}
+
+	/// A page with a button, a confirmation and a menu hanging above the
+	/// button, then a line of text after both overlays.
+	fn overlay_page(confirming: bool, menu: bool) -> Element {
+		use leptoskit_native::components::Button;
+		use leptoskit_native::components::Modal;
+		use leptoskit_native::components::Popover;
+		use leptoskit_native::components::TextInput;
+		use leptoskit_native::components::View;
+
+		View()
+			.class("w-full h-full")
+			.child(Button("Menu").id("menu").class("w-20 h-10"))
+			.child(
+				Modal(confirming).class("bg-black").child(
+					View()
+						.class("w-64 h-32")
+						.child(TextInput().id("reason").class("w-48 h-8")),
+				),
+			)
+			.child(
+				Popover("menu", menu)
+					.placement(leptoskit_native::Placement::Above)
+					.child(View().class("w-40 h-24")),
+			)
+			.child(Element::text("After").class("h-5"))
+	}
+
+	/// Opens the fixture's popover and checks where it hangs from.
+	fn popover_hangs(
+		surface: &Surface,
+		events: &RefCell<Vec<(NodeId, NativeEvent)>>,
+		button: NodeId,
+		popover: NodeId,
+	) {
+		surface.borrow_mut().set_root(&overlay_page(false, true));
+		assert_eq!(
+			surface.borrow().backend().overlay_shown(popover),
+			Some(true),
+			"an open popover is presented"
+		);
+		let hanging = surface
+			.borrow()
+			.backend()
+			.overlay_controller(popover)
+			.expect("popover controller");
+		let size = hanging.preferredContentSize();
+		assert!((size.width - 160.0).abs() < 1.0 && (size.height - 96.0).abs() < 1.0);
+		let presentation = hanging
+			.popoverPresentationController()
+			.expect("popover presentation");
+		let anchor = surface
+			.borrow()
+			.backend()
+			.view(button)
+			.expect("anchor view")
+			.retain();
+		assert!(
+			presentation
+				.sourceView()
+				.is_some_and(|source| std::ptr::eq(&raw const *source, &raw const *anchor))
+		);
+		assert_eq!(
+			presentation.permittedArrowDirections(),
+			objc2_ui_kit::UIPopoverArrowDirection::Down,
+			"a popover above its anchor points down at it"
+		);
+		assert!(surface.borrow().backend().perform_dismiss(popover));
+		assert_eq!(
+			events.borrow_mut().drain(..).collect::<Vec<_>>(),
+			vec![(popover, NativeEvent::Dismiss)]
+		);
+	}
+
+	fn overlays(window: &UIWindow, mtm: MainThreadMarker) {
+		// Without animation a presentation is in place when the call
+		// returns, so each step can be checked in this turn of the run loop.
+		let animated = UIView::areAnimationsEnabled(mtm);
+		UIView::setAnimationsEnabled(false, mtm);
+		let surface = mounted_fixture(&overlay_page(false, false), window, mtm);
+		let events = Rc::new(RefCell::new(Vec::<(NodeId, NativeEvent)>::new()));
+		let record = Rc::clone(&events);
+		surface
+			.borrow_mut()
+			.backend_mut()
+			.set_event_listener(Some(Rc::new(move |node, event| {
+				record.borrow_mut().push((node, event.clone()));
+			})));
+		let root = surface.borrow().root().expect("overlay fixture root");
+		let nodes = surface.borrow().children(root).to_vec();
+		let (button, modal, popover) = (nodes[0], nodes[1], nodes[2]);
+		let host = window.rootViewController().expect("probe controller");
+		let shown = |node| surface.borrow().backend().overlay_shown(node);
+		let presented = |node| {
+			surface
+				.borrow()
+				.backend()
+				.overlay_controller(node)
+				.expect("overlay controller")
+		};
+
+		assert_eq!(shown(button), None, "a button is not an overlay");
+		assert_eq!(shown(modal), Some(false));
+		assert_eq!(shown(popover), Some(false));
+		assert!(host.presentedViewController().is_none());
+		// The overlays' views are not among the root's: only the button and
+		// the text are, in tree order.
+		let root_view = surface
+			.borrow()
+			.backend()
+			.view(root)
+			.expect("root view")
+			.retain();
+		assert_eq!(root_view.subviews().count(), 2);
+		assert!(
+			root_view
+				.subviews()
+				.objectAtIndex(1)
+				.downcast_ref::<UILabel>()
+				.is_some(),
+			"the text after the overlays is the second subview"
+		);
+
+		surface.borrow_mut().set_root(&overlay_page(true, false));
+		assert_eq!(shown(modal), Some(true), "an open modal is presented");
+		let sheet = presented(modal);
+		assert!(
+			host.presentedViewController()
+				.is_some_and(|above| std::ptr::eq(&raw const *above, &raw const *sheet))
+		);
+		// The modal covers the viewport and centres its panel. The sheet
+		// asks for the panel's size alone.
+		let size = sheet.preferredContentSize();
+		assert!((size.width - 256.0).abs() < 1.0 && (size.height - 128.0).abs() < 1.0);
+		let viewport = window.bounds().size;
+		let origin = surface
+			.borrow()
+			.backend()
+			.view(modal)
+			.expect("modal view")
+			.frame()
+			.origin;
+		assert!((origin.x + (viewport.width - 256.0) / 2.0).abs() < 1.0);
+		assert!((origin.y + (viewport.height - 128.0) / 2.0).abs() < 1.0);
+		assert_eq!(root_view.subviews().count(), 2);
+
+		assert!(surface.borrow().backend().perform_dismiss(modal));
+		assert_eq!(
+			events.borrow_mut().drain(..).collect::<Vec<_>>(),
+			vec![(modal, NativeEvent::Dismiss)]
+		);
+		assert_eq!(shown(modal), Some(true), "the app decides when it closes");
+		assert!(!surface.borrow().backend().perform_dismiss(popover));
+
+		surface.borrow_mut().set_root(&overlay_page(false, false));
+		assert_eq!(shown(modal), Some(false));
+		assert!(host.presentedViewController().is_none());
+
+		popover_hangs(&surface, &events, button, popover);
+
+		// Removing an open overlay from the tree takes it down.
+		surface
+			.borrow_mut()
+			.set_root(&Element::text("Gone").class("w-full h-8"));
+		assert!(host.presentedViewController().is_none());
+		drop(surface);
+		UIView::setAnimationsEnabled(animated, mtm);
 	}
 
 	fn mounted_fixture(element: &Element, window: &UIWindow, mtm: MainThreadMarker) -> Surface {

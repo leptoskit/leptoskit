@@ -15,6 +15,7 @@ let controllerTargets: [Target] = [
             "mobile/WidgetTextStyle.swift", "mobile/WidgetImageStyle.swift",
             "mobile/NativeReleases.swift", "mobile/LeptosKitApplicationView.kt",
             "mobile/MobileWidgetRenderer.swift", "mobile/MobileWidgetControls.swift",
+            "mobile/MobileOverlayView.swift",
             "mobile/LeptosKitViewController.swift",
             "mobile/MobileApplicationChrome.swift", "desktop/LeptosKitMacViewController.swift",
             "mobile/NativeAppFactory.swift", "mobile/NativeAppRuntime.swift", "mobile/NativeGuestRuntime.swift",
