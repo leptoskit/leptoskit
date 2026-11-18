@@ -45,7 +45,8 @@ Use the crate directly or enable `leptoskit`'s `aria` feature and import `leptos
 | -------------------------------------- | --------------------------------------------------------------------------- |
 | `DisclosureButton` / `DisclosurePanel` | Expand and collapse a region, wired by `aria-expanded` and `aria-controls`. |
 | `ToggleButton`                         | A pressed-state button, including the mixed state.                          |
-| `Tabs`                                 | Tabs with selection, set position, and panel relationships.                 |
+| `Tabs`                                 | Tabs with selection, arrow keys, set position, and panel relationships.     |
+| `RadioGroup`                           | A choice of one among cards or rows, as one Tab stop with arrow keys.       |
 | `Field`                                | Label, help text, and error wiring for any input element.                   |
 | `Dialog`                               | A dialog container named by its title and described by its description.     |
 

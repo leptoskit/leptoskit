@@ -18,6 +18,8 @@ leptoskit_yoga = { workspace = true }
 
 [dev-dependencies]
 leptoskit_testing = { workspace = true }
+leptoskit_tui = { workspace = true }
+reactive_graph = { workspace = true }
 
 [lints]
 workspace = true

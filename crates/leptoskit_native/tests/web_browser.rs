@@ -1846,6 +1846,100 @@ async fn a_focus_request_moves_focus_once_and_lets_the_person_move_on() {
 	parent.remove();
 }
 
+/// What `leptoskit_aria`'s tabs and radio groups build: one Tab stop, a key
+/// handler on the group, and a focus request on the current item.
+#[wasm_bindgen_test]
+async fn a_roving_group_moves_focus_with_the_arrow_keys() {
+	use leptoskit_native::FocusRequest;
+	use leptoskit_native::components::Button;
+
+	const LABELS: [&str; 3] = ["Rust", "SQL", "HTTP"];
+	let parent = container();
+	let selected = ArcRwSignal::new(0_usize);
+	let mount = mount_to(parent.clone(), {
+		let selected = selected.clone();
+		move || {
+			let focus = FocusRequest::new();
+
+			move || {
+				let current = selected.get();
+				let state = selected.clone();
+				let tabs = LABELS.iter().enumerate().map(|(index, label)| {
+					let tab = Button(*label)
+						.role(Role::Tab)
+						.aria_selected(index == current)
+						.tab_index(if index == current { 0 } else { -1 });
+
+					if index == current {
+						tab.focus_on(focus)
+					} else {
+						tab
+					}
+				});
+
+				render(
+					View()
+						.role(Role::TabList)
+						.on_key(move |key| {
+							let next = match key.key.as_str() {
+								"ArrowRight" => (current + 1) % LABELS.len(),
+								"ArrowLeft" => (current + LABELS.len() - 1) % LABELS.len(),
+								_ => return EventOutcome::Unhandled,
+							};
+							state.set(next);
+							focus.request();
+							EventOutcome::Handled
+						})
+						.children(tabs),
+				)
+			}
+		}
+	});
+	tick().await;
+	next_frame().await;
+	let tab = |label: &str| -> web_sys::HtmlElement {
+		let tabs = parent.query_selector_all("[role=tab]").unwrap();
+		(0..tabs.length())
+			.filter_map(|index| tabs.item(index)?.dyn_into::<web_sys::HtmlElement>().ok())
+			.find(|tab| tab.text_content().as_deref() == Some(label))
+			.expect("a tab with the label")
+	};
+	let press = |from: &web_sys::HtmlElement, key: &str| {
+		let options = web_sys::KeyboardEventInit::new();
+		options.set_key(key);
+		options.set_bubbles(true);
+		options.set_cancelable(true);
+		from.dispatch_event(
+			&web_sys::KeyboardEvent::new_with_keyboard_event_init_dict("keydown", &options)
+				.unwrap(),
+		)
+		.unwrap()
+	};
+	assert_eq!(tab("Rust").tab_index(), 0);
+	assert_eq!(tab("SQL").tab_index(), -1);
+
+	tab("Rust").focus().expect("focus the first tab");
+	assert!(!press(&tab("Rust"), "ArrowRight"), "the arrow is taken");
+	tick().await;
+	next_frame().await;
+	assert_eq!(selected.get_untracked(), 1);
+	assert_eq!(document().active_element(), Some(tab("SQL").into()));
+	assert_eq!(tab("SQL").tab_index(), 0);
+	assert_eq!(tab("Rust").tab_index(), -1);
+
+	press(&tab("SQL"), "ArrowLeft");
+	tick().await;
+	next_frame().await;
+	press(&tab("Rust"), "ArrowLeft");
+	tick().await;
+	next_frame().await;
+	assert_eq!(document().active_element(), Some(tab("HTTP").into()));
+	assert!(press(&tab("HTTP"), "a"), "other keys are left alone");
+
+	drop(mount);
+	parent.remove();
+}
+
 #[wasm_bindgen_test]
 fn vector_paths_map_their_view_box_onto_the_frame() {
 	use leptoskit_native::PathData;

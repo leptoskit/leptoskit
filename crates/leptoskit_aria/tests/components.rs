@@ -2,6 +2,7 @@
 //! renderer: press dispatch, reconciliation, validation, and semantics.
 
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
@@ -10,22 +11,29 @@ use leptoskit_aria::Dialog;
 use leptoskit_aria::DisclosureButton;
 use leptoskit_aria::DisclosurePanel;
 use leptoskit_aria::Field;
+use leptoskit_aria::RadioGroup;
 use leptoskit_aria::Tabs;
 use leptoskit_aria::ToggleButton;
+use leptoskit_native::Element;
+use leptoskit_native::KeyPress;
+use leptoskit_native::Orientation;
 use leptoskit_native::Role;
 use leptoskit_native::Tristate;
 use leptoskit_native::components::Text;
 use leptoskit_native::components::TextInput;
 use leptoskit_native::components::View;
+use leptoskit_native::remember::ScreenState;
 use leptoskit_testing::Finder;
+use leptoskit_testing::TestError;
 use leptoskit_testing::WidgetTester;
+use reactive_graph::owner::Owner;
 
 fn find_button() -> Finder {
 	Finder::aria_role(Role::Button, "Frequently asked questions")
 }
 
 #[test]
-fn disclosure_toggles_expanded_and_panel_visibility() -> Result<(), leptoskit_testing::TestError> {
+fn disclosure_toggles_expanded_and_panel_visibility() -> Result<(), TestError> {
 	let open = Arc::new(AtomicBool::new(false));
 	let mut tester = WidgetTester::new(
 		{
@@ -84,7 +92,7 @@ fn tristate_of(value: usize) -> Tristate {
 }
 
 #[test]
-fn toggle_button_walks_pressed_states() -> Result<(), leptoskit_testing::TestError> {
+fn toggle_button_walks_pressed_states() -> Result<(), TestError> {
 	// 0 off, 1 on, 2 mixed: the walk starts from mixed.
 	let pressed = Arc::new(AtomicUsize::new(2));
 	let mut tester = WidgetTester::new(
@@ -113,59 +121,278 @@ fn toggle_button_walks_pressed_states() -> Result<(), leptoskit_testing::TestErr
 	Ok(())
 }
 
-#[test]
-fn tabs_switch_panels_and_stay_in_the_tab_order() -> Result<(), leptoskit_testing::TestError> {
+/// A screen with three settings tabs, selecting whichever `selected` holds.
+fn settings_tabs(selected: &Arc<AtomicUsize>, orientation: Orientation) -> Element {
 	const LABELS: [&str; 3] = ["General", "Notifications", "Privacy"];
+	let tabs = Tabs::new("settings", LABELS.len(), selected.load(Ordering::Relaxed))
+		.orientation(orientation);
+	let state = Arc::clone(selected);
+	let list = tabs
+		.list(move |index| state.store(index, Ordering::Relaxed))
+		.children(
+			LABELS
+				.iter()
+				.enumerate()
+				.map(|(index, label)| tabs.tab(index, *label)),
+		);
+
+	View().child(list).child(
+		View().children(
+			LABELS
+				.iter()
+				.enumerate()
+				.map(|(index, label)| tabs.panel(index).child(Text(format!("{label} panel")))),
+		),
+	)
+}
+
+/// Runs `test` over a screen whose remembered state lives across pumps, as
+/// it does in a running app.
+fn with_screen(
+	screen: impl Fn() -> Element + 'static,
+	test: impl FnOnce(&mut WidgetTester) -> Result<(), TestError>,
+) -> Result<(), TestError> {
+	Owner::new().with(|| {
+		let state = ScreenState::new();
+		state.provide();
+		let mut tester = WidgetTester::new(move || state.build(&screen), 390.0, 844.0)?;
+
+		test(&mut tester)
+	})
+}
+
+#[test]
+fn tabs_switch_panels_and_keep_one_tab_stop() -> Result<(), TestError> {
 	let selected = Arc::new(AtomicUsize::new(0));
+	let screen = {
+		let selected = Arc::clone(&selected);
+		move || settings_tabs(&selected, Orientation::Horizontal)
+	};
 
-	let mut tester = WidgetTester::new(
-		{
-			let selected = Arc::clone(&selected);
-			move || {
-				let tabs = Tabs::new("settings", LABELS.len(), selected.load(Ordering::Relaxed));
-				let list = LABELS
-					.iter()
-					.enumerate()
-					.fold(tabs.list(), |list, (index, label)| {
-						let state = Arc::clone(&selected);
-						list.child(tabs.tab(index, *label, move |index| {
-							state.store(index, Ordering::Relaxed);
-						}))
-					});
-				View().child(list).child(View().children(
-					LABELS.iter().enumerate().map(|(index, label)| {
-						tabs.panel(index).child(Text(format!("{label} panel")))
-					}),
-				))
-			}
-		},
-		390.0,
-		844.0,
-	)?;
+	with_screen(screen, |tester| {
+		let first = tester.find(&Finder::aria_role(Role::Tab, "General"))?;
+		assert_eq!(first.props.aria().selected, Some(true));
+		assert_eq!(first.props.aria().tab_index, Some(0));
+		let second = tester.find(&Finder::aria_role(Role::Tab, "Notifications"))?;
+		assert_eq!(second.props.aria().selected, Some(false));
+		assert_eq!(second.props.aria().pos_in_set, Some(2));
+		assert_eq!(second.props.aria().set_size, Some(3));
+		// Only the selected tab is a Tab stop; the arrows reach the rest.
+		assert_eq!(second.props.aria().tab_index, Some(-1));
+		tester.find(&Finder::text("General panel"))?;
+		assert!(tester.find(&Finder::text("Notifications panel")).is_err());
 
-	let first = tester.find(&Finder::aria_role(Role::Tab, "General"))?;
-	assert_eq!(first.props.aria().selected, Some(true));
-	let second = tester.find(&Finder::aria_role(Role::Tab, "Notifications"))?;
-	assert_eq!(second.props.aria().selected, Some(false));
-	assert_eq!(second.props.aria().pos_in_set, Some(2));
-	assert_eq!(second.props.aria().set_size, Some(3));
-	// Without arrow-key motion a roving tabindex would strand this tab out of
-	// keyboard reach, so no tab leaves the sequential focus order.
-	assert_eq!(second.props.aria().tab_index, None);
-	tester.find(&Finder::text("General panel"))?;
+		tester.tap(&Finder::aria_role(Role::Tab, "Notifications"))?;
 
-	assert!(tester.find(&Finder::text("Notifications panel")).is_err());
+		let first = tester.find(&Finder::aria_role(Role::Tab, "General"))?;
+		assert_eq!(first.props.aria().selected, Some(false));
+		assert_eq!(first.props.aria().tab_index, Some(-1));
+		let second = tester.find(&Finder::aria_role(Role::Tab, "Notifications"))?;
+		assert_eq!(second.props.aria().selected, Some(true));
+		assert_eq!(second.props.aria().tab_index, Some(0));
+		// A press focuses the tab on its own; no request is needed.
+		assert_eq!(second.props.focus_request, None);
+		assert!(tester.find(&Finder::text("General panel")).is_err());
+		tester.find(&Finder::text("Notifications panel"))?;
+		Ok(())
+	})
+}
 
-	tester.tap(&Finder::aria_role(Role::Tab, "Notifications"))?;
+#[test]
+fn arrow_keys_move_between_tabs_and_take_focus_along() -> Result<(), TestError> {
+	let selected = Arc::new(AtomicUsize::new(0));
+	let screen = {
+		let selected = Arc::clone(&selected);
+		move || settings_tabs(&selected, Orientation::Horizontal)
+	};
+	let tab = |name: &str| Finder::aria_role(Role::Tab, name);
 
-	let first = tester.find(&Finder::aria_role(Role::Tab, "General"))?;
-	assert_eq!(first.props.aria().selected, Some(false));
-	assert_eq!(first.props.aria().tab_index, None);
-	let second = tester.find(&Finder::aria_role(Role::Tab, "Notifications"))?;
-	assert_eq!(second.props.aria().selected, Some(true));
-	assert!(tester.find(&Finder::text("General panel")).is_err());
-	tester.find(&Finder::text("Notifications panel"))?;
+	with_screen(screen, |tester| {
+		tester.press_key(&tab("General"), KeyPress::new("ArrowRight"))?;
+		let notifications = tester.find(&tab("Notifications"))?;
+		assert_eq!(notifications.props.aria().selected, Some(true));
+		let first_move = notifications.props.focus_request;
+		assert!(first_move.is_some(), "focus follows the selection");
+		assert_eq!(tester.find(&tab("General"))?.props.focus_request, None);
+
+		// Left from the first tab wraps to the last, and End stays there.
+		tester.press_key(&tab("Notifications"), KeyPress::new("ArrowLeft"))?;
+		tester.press_key(&tab("General"), KeyPress::new("ArrowLeft"))?;
+		let privacy = tester.find(&tab("Privacy"))?;
+		assert_eq!(privacy.props.aria().selected, Some(true));
+		assert!(privacy.props.focus_request > first_move);
+		let at_the_end = privacy.props.focus_request;
+		tester.press_key(&tab("Privacy"), KeyPress::new("End"))?;
+		assert_eq!(
+			tester.find(&tab("Privacy"))?.props.focus_request,
+			at_the_end
+		);
+
+		tester.press_key(&tab("Privacy"), KeyPress::new("Home"))?;
+		assert_eq!(
+			tester.find(&tab("General"))?.props.aria().selected,
+			Some(true)
+		);
+
+		// A horizontal set leaves the vertical arrows to the page.
+		assert!(
+			tester
+				.press_key(&tab("General"), KeyPress::new("ArrowDown"))
+				.is_err()
+		);
+		assert!(
+			tester
+				.press_key(&tab("General"), KeyPress::new("ArrowRight").ctrl())
+				.is_err()
+		);
+		Ok(())
+	})
+}
+
+#[test]
+fn a_vertical_tab_set_moves_with_up_and_down() -> Result<(), TestError> {
+	let selected = Arc::new(AtomicUsize::new(0));
+	let screen = {
+		let selected = Arc::clone(&selected);
+		move || settings_tabs(&selected, Orientation::Vertical)
+	};
+	let tab = |name: &str| Finder::aria_role(Role::Tab, name);
+
+	with_screen(screen, |tester| {
+		tester.press_key(&tab("General"), KeyPress::new("ArrowDown"))?;
+		assert_eq!(
+			tester.find(&tab("Notifications"))?.props.aria().selected,
+			Some(true)
+		);
+		tester.press_key(&tab("Notifications"), KeyPress::new("ArrowUp"))?;
+		assert_eq!(
+			tester.find(&tab("General"))?.props.aria().selected,
+			Some(true)
+		);
+		assert!(
+			tester
+				.press_key(&tab("General"), KeyPress::new("ArrowRight"))
+				.is_err()
+		);
+		Ok(())
+	})
+}
+
+/// A persona chooser whose options are cards.
+fn personas(chosen: &Arc<Mutex<Option<usize>>>, locked: bool) -> Element {
+	let state = Arc::clone(chosen);
+	let card = |name: &str, role: &str| View().child(Text(name)).child(Text(role));
+
+	View().child(
+		Element::from(
+			RadioGroup::new(
+				"persona",
+				["Ada", "Grace", "Linus"],
+				*chosen.lock().unwrap(),
+			)
+			.option(0, card("Ada", "Writes the engine"))
+			.option(1, card("Grace", "Writes the compiler"))
+			.on_change(move |index| {
+				if !locked {
+					*state.lock().unwrap() = Some(index);
+				}
+			}),
+		)
+		.aria_label("Persona"),
+	)
+}
+
+#[test]
+fn a_radio_group_of_cards_checks_one_option_and_keeps_one_tab_stop() -> Result<(), TestError> {
+	let chosen = Arc::new(Mutex::new(None));
+	let screen = {
+		let chosen = Arc::clone(&chosen);
+		move || personas(&chosen, false)
+	};
+	let radio = |name: &str| Finder::aria_role(Role::Radio, name);
+
+	with_screen(screen, |tester| {
+		tester.find(&Finder::aria_role(Role::RadioGroup, "Persona"))?;
+		let ada = tester.find(&radio("Ada"))?;
+		assert_eq!(ada.props.aria().checked, Some(Tristate::False));
+		assert_eq!(ada.props.aria().pos_in_set, Some(1));
+		assert_eq!(ada.props.aria().set_size, Some(3));
+		// Nothing is checked, so Tab lands on the first option.
+		assert_eq!(ada.props.aria().tab_index, Some(0));
+		assert_eq!(
+			tester.find(&radio("Grace"))?.props.aria().tab_index,
+			Some(-1)
+		);
+		// An option given no content shows its label.
+		tester.find(&Finder::text("Linus"))?;
+
+		tester.tap(&radio("Grace"))?;
+		let grace = tester.find(&radio("Grace"))?;
+		assert_eq!(grace.props.aria().checked, Some(Tristate::True));
+		assert_eq!(grace.props.aria().tab_index, Some(0));
+		assert_eq!(tester.find(&radio("Ada"))?.props.aria().tab_index, Some(-1));
+
+		// Any arrow moves, chooses, and takes focus along.
+		tester.press_key(&radio("Grace"), KeyPress::new("ArrowDown"))?;
+		let linus = tester.find(&radio("Linus"))?;
+		assert_eq!(linus.props.aria().checked, Some(Tristate::True));
+		assert!(linus.props.focus_request.is_some());
+		tester.press_key(&radio("Linus"), KeyPress::new("ArrowRight"))?;
+		assert_eq!(
+			tester.find(&radio("Ada"))?.props.aria().checked,
+			Some(Tristate::True)
+		);
+		tester.press_key(&radio("Ada"), KeyPress::new("ArrowUp"))?;
+		assert_eq!(*chosen.lock().unwrap(), Some(2));
+		Ok(())
+	})
+}
+
+#[test]
+fn an_unanswered_radio_group_is_entered_from_either_end() -> Result<(), TestError> {
+	for (key, expected) in [("ArrowRight", 0), ("ArrowUp", 2), ("End", 2), ("Home", 0)] {
+		let chosen = Arc::new(Mutex::new(None));
+		let screen = {
+			let chosen = Arc::clone(&chosen);
+			move || personas(&chosen, false)
+		};
+
+		with_screen(screen, |tester| {
+			tester.press_key(&Finder::aria_role(Role::Radio, "Ada"), KeyPress::new(key))
+		})?;
+		assert_eq!(*chosen.lock().unwrap(), Some(expected), "{key}");
+	}
+
 	Ok(())
+}
+
+#[test]
+fn a_radio_group_that_keeps_its_state_refuses_the_choice() -> Result<(), TestError> {
+	let chosen = Arc::new(Mutex::new(Some(0)));
+	let screen = {
+		let chosen = Arc::clone(&chosen);
+		move || personas(&chosen, true)
+	};
+	let radio = |name: &str| Finder::aria_role(Role::Radio, name);
+
+	with_screen(screen, |tester| {
+		tester.press_key(&radio("Ada"), KeyPress::new("ArrowRight"))?;
+		assert_eq!(
+			tester.find(&radio("Ada"))?.props.aria().checked,
+			Some(Tristate::True)
+		);
+		assert_eq!(
+			tester.find(&radio("Grace"))?.props.aria().checked,
+			Some(Tristate::False)
+		);
+		Ok(())
+	})
+}
+
+#[test]
+#[should_panic(expected = "selected option Some(2) is outside a group of 2")]
+fn radio_groups_reject_a_selection_outside_the_group() {
+	let _ = RadioGroup::new("persona", ["Ada", "Grace"], Some(2));
 }
 
 #[test]
@@ -177,7 +404,7 @@ fn tabs_reject_a_selection_outside_the_set() {
 #[test]
 #[should_panic(expected = "tab 2 is outside a set of 2")]
 fn tabs_reject_a_tab_outside_the_set() {
-	let _ = Tabs::new("settings", 2, 0).tab(2, "Extra", |_| ());
+	let _ = Tabs::new("settings", 2, 0).tab(2, "Extra");
 }
 
 #[test]
@@ -249,7 +476,7 @@ fn field_keeps_descriptions_the_input_already_carries() {
 }
 
 #[test]
-fn dialog_opens_named_and_described() -> Result<(), leptoskit_testing::TestError> {
+fn dialog_opens_named_and_described() -> Result<(), TestError> {
 	let open = Arc::new(AtomicBool::new(false));
 	let dialog = Dialog::new("discard", "Discard draft?").description("This cannot be undone.");
 	let mut tester = WidgetTester::new(

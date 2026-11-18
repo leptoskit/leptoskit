@@ -33,6 +33,7 @@ use leptoskit_native::Element;
 use leptoskit_native::EventOutcome;
 use leptoskit_native::Frame;
 use leptoskit_native::HeadlessBackend;
+use leptoskit_native::KeyPress;
 use leptoskit_native::NativeBackend;
 use leptoskit_native::NativeEvent;
 use leptoskit_native::NativeKind;
@@ -403,6 +404,17 @@ impl<B: NativeBackend> WidgetTester<B> {
 			NativeKind::Radio => self.dispatch(id, &NativeEvent::Toggle { checked: true }, finder),
 			_ => self.dispatch(hit, &NativeEvent::Press, finder),
 		}
+	}
+
+	/// Presses a key as if a visible, enabled widget had focus, and pumps
+	/// once. The press bubbles to the nearest `on_key` handler that takes
+	/// it, as it does on the web and in the terminal; a key nothing handles
+	/// is an error. This is a semantic event: it does not move focus or type
+	/// into a field.
+	pub fn press_key(&mut self, finder: &Finder, key: KeyPress) -> Result<(), TestError> {
+		let id = self.action_target(finder)?;
+
+		self.dispatch(id, &NativeEvent::Key(key), finder)
 	}
 
 	/// Holds a visible, enabled `Button` or `Pressable` down without
