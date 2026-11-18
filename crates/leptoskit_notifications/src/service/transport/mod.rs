@@ -444,8 +444,15 @@ impl Outcome {
 		match self {
 			Self::Accepted | Self::Transient { .. } | Self::AuthRejected { .. } => true,
 			Self::Stalled { .. } | Self::WaitUntil(_) => false,
+			// Only a provider's answer ends a delivery for these reasons;
+			// every other ending is decided before a request.
 			Self::Ended { reason, .. } => {
-				reason == DeliveryReason::Unregistered || reason == DeliveryReason::ProviderRejected
+				matches!(
+					reason,
+					DeliveryReason::Unregistered
+						| DeliveryReason::ProviderRejected
+						| DeliveryReason::OperatorConfiguration
+				)
 			}
 		}
 	}

@@ -188,6 +188,22 @@ impl Apns {
 		Ok(token)
 	}
 
+	/// Drops the cached provider token when it is the one APNs refused, so
+	/// the next attempt signs a fresh one. A token another attempt already
+	/// replaced stays: every delivery that saw the same refusal clears it
+	/// once, not once each, and Apple asks for a new token no more than
+	/// every twenty minutes.
+	fn drop_token(&self, refused: &str) {
+		let mut cached = self
+			.token
+			.lock()
+			.unwrap_or_else(std::sync::PoisonError::into_inner);
+
+		if cached.as_ref().is_some_and(|(token, _)| token == refused) {
+			*cached = None;
+		}
+	}
+
 	/// Posts one payload and classifies the answer.
 	async fn post(
 		&self,
@@ -239,7 +255,17 @@ impl Apns {
 		let answer = self.boundary.post(request).await;
 
 		match answer {
-			Ok(response) => classify(&response),
+			Ok(response) => {
+				let outcome = classify(&response);
+
+				// A refused provider token is this server's: the retry
+				// signs a new one rather than presenting it again.
+				if matches!(outcome, Outcome::AuthRejected { .. }) {
+					self.drop_token(token);
+				}
+
+				outcome
+			}
 			Err(_) => Outcome::Transient { after: None },
 		}
 	}
@@ -337,6 +363,7 @@ impl Trim {
 
 				if let Some(object) = payload.as_object_mut() {
 					object.remove("lklink");
+					object.remove("lkbadge");
 				}
 			}
 			Self::Minimal => {
@@ -362,22 +389,32 @@ fn apns_payload(message: &Message) -> serde_json::Value {
 		payload["lk"] = serde_json::Value::Object(object);
 	}
 
+	// Apple's background push takes `content-available` alone in `aps`,
+	// with nothing that would interact with the person: a badge rides
+	// beside it as data for the app to apply, and what only shapes a
+	// banner doesn't ride at all.
+	if message.options.is_data() {
+		if let Some(badge) = message.badge {
+			payload["lkbadge"] = serde_json::json!(badge);
+		}
+
+		return payload;
+	}
+
 	let mut aps = payload["aps"].take();
 
-	if !message.options.is_data() {
-		// An image needs a Notification Service Extension in the app to
-		// display: the mutable-content flag hands the payload to it,
-		// with the URL beside.
-		if let Some(image) = message.options.image.as_deref() {
-			aps["mutable-content"] = serde_json::json!(1);
-			payload["lkimg"] = serde_json::json!(image);
-		}
+	// An image needs a Notification Service Extension in the app to
+	// display: the mutable-content flag hands the payload to it, with the
+	// URL beside.
+	if let Some(image) = message.options.image.as_deref() {
+		aps["mutable-content"] = serde_json::json!(1);
+		payload["lkimg"] = serde_json::json!(image);
+	}
 
-		if let Some(apple) = message.options.apple.as_ref()
-			&& let Some(subtitle) = apple.subtitle.as_deref()
-		{
-			aps["alert"]["subtitle"] = serde_json::json!(subtitle);
-		}
+	if let Some(apple) = message.options.apple.as_ref()
+		&& let Some(subtitle) = apple.subtitle.as_deref()
+	{
+		aps["alert"]["subtitle"] = serde_json::json!(subtitle);
 	}
 
 	if let Some(apple) = message.options.apple.as_ref() {
@@ -454,34 +491,60 @@ fn data_object(message: &Message) -> Option<serde_json::Map<String, serde_json::
 		.and_then(|data| data.as_object().cloned())
 }
 
-/// Classifies one APNs answer. The provider's reason strings are read
-/// here for classification and never surface anywhere else.
+/// Classifies one APNs answer, as Apple's "Handling notification
+/// responses from APNs" documents each status and reason. The provider's
+/// reason strings are read here for classification and never surface
+/// anywhere else.
+///
+/// Only `410` — the token is no longer active for the topic, or has
+/// expired — invalidates the endpoint. `BadDeviceToken` and
+/// `DeviceTokenNotForTopic` are what every token gets when the operator's
+/// environment or topic is wrong, so they end the delivery as the
+/// operator's configuration: one misconfigured deploy must not mark every
+/// device dead. A provider token APNs calls stale or invalid is retried
+/// under a freshly signed one; the other `403`s are the key's setup.
 fn classify(response: &WireResponse) -> Outcome {
+	let operator = Outcome::Ended {
+		reason: DeliveryReason::OperatorConfiguration,
+		invalidate: false,
+	};
+	let rejected = Outcome::Ended {
+		reason: DeliveryReason::ProviderRejected,
+		invalidate: false,
+	};
+	let oversized = Outcome::Ended {
+		reason: DeliveryReason::Oversized,
+		invalidate: false,
+	};
+	let reason = reason(response);
+
 	match response.status {
 		200..=299 => Outcome::Accepted,
-		400 | 413 => {
-			if response.status == 413 || reason(response).as_deref() == Some("PayloadTooLarge") {
-				return Outcome::Ended {
-					reason: DeliveryReason::Oversized,
-					invalidate: false,
-				};
+		400 => {
+			match reason.as_deref() {
+				Some(
+					"BadDeviceToken"
+					| "DeviceTokenNotForTopic"
+					| "BadTopic"
+					| "MissingTopic"
+					| "TopicDisallowed",
+				) => operator,
+				Some("PayloadTooLarge") => oversized,
+				// The connection sat idle too long: the network's, not the
+				// request's.
+				Some("IdleTimeout") => Outcome::Transient { after: None },
+				_ => rejected,
 			}
-
-			// A token that means nothing to this topic or environment is
-			// dead as far as this server is concerned.
-			if matches!(
-				reason(response).as_deref(),
-				Some("BadDeviceToken" | "DeviceTokenNotForTopic")
-			) {
-				return Outcome::Ended {
-					reason: DeliveryReason::Unregistered,
-					invalidate: true,
-				};
-			}
-
-			Outcome::Ended {
-				reason: DeliveryReason::ProviderRejected,
-				invalidate: false,
+		}
+		403 => {
+			match reason.as_deref() {
+				Some(
+					"ExpiredProviderToken"
+					| "InvalidProviderToken"
+					| "MissingProviderToken"
+					| "UnrelatedKeyIdInToken",
+				) => Outcome::AuthRejected { after: None },
+				_ => operator,
 			}
 		}
 		410 => {
@@ -490,23 +553,17 @@ fn classify(response: &WireResponse) -> Outcome {
 				invalidate: true,
 			}
 		}
+		413 => oversized,
 		429 => {
 			Outcome::Transient {
 				after: retry_after(response),
 			}
 		}
 		500..=599 => Outcome::Transient { after: None },
-		// Invalid provider credentials or a topic mismatch are the
-		// operator's configuration: the endpoint is fine, so nothing is
-		// invalidated. Redirects are refused by the boundary, so a
-		// provider answering one isn't taking the message. Either way the
-		// delivery ends clearly.
-		_ => {
-			Outcome::Ended {
-				reason: DeliveryReason::ProviderRejected,
-				invalidate: false,
-			}
-		}
+		// A bad path or method is the request's own. Redirects are refused
+		// by the boundary, so a provider answering one isn't taking the
+		// message. Either way the delivery ends clearly.
+		_ => rejected,
 	}
 }
 
@@ -522,4 +579,99 @@ fn reason(response: &WireResponse) -> Option<String> {
 
 fn retry_after(response: &WireResponse) -> Option<Duration> {
 	super::retry_after(response, std::time::SystemTime::now())
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	fn answer(status: u16, reason: &str) -> WireResponse {
+		WireResponse {
+			status,
+			headers: Vec::new(),
+			body: if reason.is_empty() {
+				Vec::new()
+			} else {
+				serde_json::json!({ "reason": reason })
+					.to_string()
+					.into_bytes()
+			},
+		}
+	}
+
+	fn ended(reason: DeliveryReason, invalidate: bool) -> Outcome {
+		Outcome::Ended { reason, invalidate }
+	}
+
+	/// Every status and reason string Apple documents for a push request,
+	/// and what each comes to. Only `410` — the token is no longer active
+	/// for the topic — invalidates the endpoint. `BadDeviceToken` and
+	/// `DeviceTokenNotForTopic` are what every token gets when the
+	/// operator's environment or topic is wrong, so they end as the
+	/// operator's configuration and leave the device enrolled; a refused
+	/// provider token is retried under a freshly signed one.
+	#[test]
+	fn apns_answers_classify_as_apple_documents_them() {
+		let configuration = ended(DeliveryReason::OperatorConfiguration, false);
+		let rejected = ended(DeliveryReason::ProviderRejected, false);
+		let retry_token = Outcome::AuthRejected { after: None };
+		let transient = Outcome::Transient { after: None };
+
+		for (status, reason, expected) in [
+			(200, "", Outcome::Accepted),
+			(400, "BadDeviceToken", configuration),
+			(400, "DeviceTokenNotForTopic", configuration),
+			(400, "BadTopic", configuration),
+			(400, "MissingTopic", configuration),
+			(400, "TopicDisallowed", configuration),
+			(400, "BadCollapseId", rejected),
+			(400, "BadExpirationDate", rejected),
+			(400, "BadMessageId", rejected),
+			(400, "BadPriority", rejected),
+			(400, "DuplicateHeaders", rejected),
+			(400, "InvalidPushType", rejected),
+			(400, "MissingDeviceToken", rejected),
+			(400, "PayloadEmpty", rejected),
+			(400, "IdleTimeout", transient),
+			(400, "", rejected),
+			(403, "ExpiredProviderToken", retry_token),
+			(403, "InvalidProviderToken", retry_token),
+			(403, "MissingProviderToken", retry_token),
+			(403, "UnrelatedKeyIdInToken", retry_token),
+			(403, "BadEnvironmentKeyIdInToken", configuration),
+			(403, "Forbidden", configuration),
+			(403, "BadCertificate", configuration),
+			(403, "BadCertificateEnvironment", configuration),
+			(403, "", configuration),
+			(404, "BadPath", rejected),
+			(405, "MethodNotAllowed", rejected),
+			(
+				410,
+				"Unregistered",
+				ended(DeliveryReason::Unregistered, true),
+			),
+			(
+				410,
+				"ExpiredToken",
+				ended(DeliveryReason::Unregistered, true),
+			),
+			(
+				413,
+				"PayloadTooLarge",
+				ended(DeliveryReason::Oversized, false),
+			),
+			(429, "TooManyRequests", transient),
+			(429, "TooManyProviderTokenUpdates", transient),
+			(500, "InternalServerError", transient),
+			(503, "ServiceUnavailable", transient),
+			(503, "Shutdown", transient),
+			(302, "", rejected),
+		] {
+			assert_eq!(
+				classify(&answer(status, reason)),
+				expected,
+				"{status} {reason}"
+			);
+		}
+	}
 }

@@ -1,6 +1,10 @@
 //! The operator's push configuration: which transports this service
-//! speaks, from the environment `lk` passes through, and what each
-//! provider needs to sign with.
+//! speaks, from its environment, and what each provider needs to sign
+//! with. A service `lk` starts gets a cleared environment and only the
+//! variables its `[services.notifications]` table lists under `secrets`,
+//! so the guide shows that list; the crate's own manifest names none,
+//! because a deploy requires every listed secret and most apps configure
+//! one or two transports, not all three.
 //!
 //! Every variable is operator-provided secret material, read once at
 //! startup and held only in the transports' parsed keys. A provider with
@@ -200,22 +204,28 @@ impl PushConfig {
 			}
 		});
 
-		let web = required(
-			"web push",
-			&[
-				(
-					"WEB_PUSH_VAPID_PRIVATE_KEY",
-					take("WEB_PUSH_VAPID_PRIVATE_KEY"),
-				),
-				(
-					"WEB_PUSH_VAPID_PUBLIC_KEY",
-					take("WEB_PUSH_VAPID_PUBLIC_KEY"),
-				),
-				("WEB_PUSH_VAPID_SUBJECT", take("WEB_PUSH_VAPID_SUBJECT")),
-			],
-		)?
-		.map(|values| {
-			let extra_hosts = take("WEB_PUSH_EXTRA_HOSTS")
+		let vapid = [
+			(
+				"WEB_PUSH_VAPID_PRIVATE_KEY",
+				take("WEB_PUSH_VAPID_PRIVATE_KEY"),
+			),
+			(
+				"WEB_PUSH_VAPID_PUBLIC_KEY",
+				take("WEB_PUSH_VAPID_PUBLIC_KEY"),
+			),
+			("WEB_PUSH_VAPID_SUBJECT", take("WEB_PUSH_VAPID_SUBJECT")),
+		];
+		let extra_hosts = take("WEB_PUSH_EXTRA_HOSTS");
+
+		// The extra hosts are optional beside a VAPID pair, and half a
+		// transport without one: they say where pushes may go, not how
+		// to sign them.
+		if extra_hosts.is_some() && vapid.iter().all(|(_, value)| value.is_none()) {
+			return Err(half_configured("web push", &vapid));
+		}
+
+		let web = required("web push", &vapid)?.map(|values| {
+			let extra_hosts = extra_hosts
 				.unwrap_or_default()
 				.split(',')
 				.map(str::trim)
@@ -264,6 +274,12 @@ fn required(
 		return Ok(Some(values));
 	}
 
+	Err(half_configured(provider, variables))
+}
+
+/// The refusal for a provider with some of its variables set: every
+/// missing one, named in full.
+fn half_configured(provider: &str, variables: &[(&'static str, Option<String>)]) -> String {
 	let missing = variables
 		.iter()
 		.filter(|(_, value)| value.is_none())
@@ -271,10 +287,10 @@ fn required(
 		.collect::<Vec<_>>()
 		.join(", ");
 
-	Err(format!(
+	format!(
 		"the {provider} push transport is half configured: set all of its variables or none. \
 		 Missing: {missing}"
-	))
+	)
 }
 
 /// The topics a signed-in person may subscribe themselves to: patterns
