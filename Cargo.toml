@@ -354,6 +354,7 @@ leptoskit_plugin_speech = { path = "crates/leptoskit_plugin_speech", version = "
 leptoskit_plugin_sqlite = { path = "crates/leptoskit_plugin_sqlite", version = "0.3.0" }
 leptoskit_plugin_store = { path = "crates/leptoskit_plugin_store", version = "0.3.0" }
 leptoskit_plugin_store_review = { path = "crates/leptoskit_plugin_store_review", version = "0.3.0" }
+leptoskit_plugin_thermal = { path = "crates/leptoskit_plugin_thermal", version = "0.3.0" }
 leptoskit_plugin_tracking_transparency = { path = "crates/leptoskit_plugin_tracking_transparency", version = "0.3.0" }
 leptoskit_plugin_tray = { path = "crates/leptoskit_plugin_tray", version = "0.3.0" }
 leptoskit_plugin_updater = { path = "crates/leptoskit_plugin_updater", version = "0.3.0" }

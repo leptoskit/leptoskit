@@ -3749,6 +3749,7 @@ dependencies = [
  "leptoskit_plugin_sqlite",
  "leptoskit_plugin_store",
  "leptoskit_plugin_store_review",
+ "leptoskit_plugin_thermal",
  "leptoskit_plugin_tracking_transparency",
  "leptoskit_plugin_tray",
  "leptoskit_plugin_updater",
@@ -7118,6 +7119,13 @@ dependencies = [
 
 [[package]]
 name = "leptoskit_plugin_store_review"
+version = "0.3.0"
+dependencies = [
+ "leptoskit_bridge",
+]
+
+[[package]]
+name = "leptoskit_plugin_thermal"
 version = "0.3.0"
 dependencies = [
  "leptoskit_bridge",

@@ -1,0 +1,27 @@
+[package]
+name = "leptoskit_plugin_thermal"
+version = "0.3.0"
+authors.workspace = true
+edition.workspace = true
+homepage.workspace = true
+license.workspace = true
+readme = "readme.md"
+repository.workspace = true
+rust-version.workspace = true
+description = "Device thermal state and its changes for LeptosKit applications."
+
+[package.metadata.leptoskit.runtime]
+name = "thermal"
+apple-module = "LeptosKitThermal"
+apple-type = "ThermalPlugin"
+android-type = "dev.leptoskit.plugins.thermal.ThermalPlugin"
+android-context = true
+
+[features]
+guest = ["leptoskit_bridge/guest"]
+
+[dependencies]
+leptoskit_bridge = { workspace = true }
+
+[lints]
+workspace = true
