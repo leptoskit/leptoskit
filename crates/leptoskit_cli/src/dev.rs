@@ -1562,9 +1562,12 @@ mod tests {
 			temporary.path().join("real/dist").canonicalize().unwrap(),
 			"an existing path resolves like the events that name it"
 		);
+		// Nothing at the far end either: Windows resolves `..` before it
+		// looks, so a path through a missing directory to a real one exists
+		// there.
 		assert_eq!(
-			resolve_event_path(&temporary.path().join("missing/../real/dist")),
-			temporary.path().join("real/dist"),
+			resolve_event_path(&temporary.path().join("missing/../absent/dist")),
+			temporary.path().join("absent").join("dist"),
 			"a path that is not there yet normalises without one"
 		);
 

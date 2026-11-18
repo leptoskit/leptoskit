@@ -475,10 +475,13 @@ fn the_client_crate_needs_a_root_file_and_leptoskit() {
 	)
 	.unwrap();
 	let error = generate(path, &config, false, false).unwrap_err();
+	// With the host's separator, as the manifest's path is shown.
+	let manifest = Path::new("app_app").join("Cargo.toml");
 	assert!(
-		error
-			.to_string()
-			.contains("app_app/Cargo.toml doesn't depend on leptoskit"),
+		error.to_string().contains(&format!(
+			"{} doesn't depend on leptoskit",
+			manifest.display()
+		)),
 		"{error:#}"
 	);
 }

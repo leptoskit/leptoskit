@@ -84,6 +84,10 @@ fn modern_plan_recovery_keeps_its_original_worker_identity() {
 }
 
 #[test]
+#[cfg_attr(
+	not(unix),
+	ignore = "exact asset capture requires Unix permission metadata"
+)]
 fn historical_plan_bytes_require_an_independent_pin() {
 	let temp = tempfile::tempdir().unwrap();
 	let path = temp.path().join("release.json");

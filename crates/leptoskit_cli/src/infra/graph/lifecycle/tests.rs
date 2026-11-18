@@ -84,6 +84,7 @@ fn saved(dir: &Path, config: &LeptoskitConfig) {
 }
 
 #[test]
+#[cfg_attr(not(unix), ignore = "graph provisioning requires a Unix operator host")]
 fn saved_graph_plan_is_bound_and_consumed_once() {
 	let (_root, config, dir) = fixture();
 	saved(&dir, &config);
@@ -126,6 +127,7 @@ fn saved_graph_plan_is_bound_and_consumed_once() {
 }
 
 #[test]
+#[cfg_attr(not(unix), ignore = "graph provisioning requires a Unix operator host")]
 fn changed_files_and_current_configuration_cannot_use_an_old_plan() {
 	for name in [
 		"main.tf.json",
@@ -159,6 +161,7 @@ fn changed_files_and_current_configuration_cannot_use_an_old_plan() {
 }
 
 #[test]
+#[cfg_attr(not(unix), ignore = "graph provisioning requires a Unix operator host")]
 fn failed_replan_or_apply_cannot_leave_a_previous_plan_usable() {
 	for stage in ["init", "validate", "plan", "show"] {
 		let (_root, config, dir) = fixture();
@@ -197,6 +200,7 @@ fn failed_replan_or_apply_cannot_leave_a_previous_plan_usable() {
 }
 
 #[test]
+#[cfg_attr(not(unix), ignore = "graph provisioning requires a Unix operator host")]
 fn host_replacement_and_incomplete_plans_are_rejected() {
 	for kind in ["hcloud_server", "digitalocean_droplet", "hcloud_network"] {
 		let (_root, config, dir) = fixture();
@@ -239,6 +243,7 @@ fn host_replacement_and_incomplete_plans_are_rejected() {
 }
 
 #[test]
+#[cfg_attr(not(unix), ignore = "graph provisioning requires a Unix operator host")]
 fn tool_or_workspace_changes_and_budget_failures_prevent_apply() {
 	let (_root, config, dir) = fixture();
 	saved(&dir, &config);
@@ -275,6 +280,7 @@ fn tool_or_workspace_changes_and_budget_failures_prevent_apply() {
 }
 
 #[test]
+#[cfg_attr(not(unix), ignore = "graph provisioning requires a Unix operator host")]
 fn injected_inputs_and_mid_operation_changes_are_detected() {
 	for name in [
 		"extra.tf",
@@ -328,6 +334,7 @@ fn injected_inputs_and_mid_operation_changes_are_detected() {
 }
 
 #[test]
+#[cfg_attr(not(unix), ignore = "graph provisioning requires a Unix operator host")]
 fn backend_state_identity_and_symlink_inputs_are_bound() {
 	let (_root, config, dir) = fixture();
 	saved(&dir, &config);
@@ -347,6 +354,7 @@ fn backend_state_identity_and_symlink_inputs_are_bound() {
 }
 
 #[test]
+#[cfg_attr(not(unix), ignore = "graph provisioning requires a Unix operator host")]
 fn generated_inputs_are_checked_without_another_range_fetch() {
 	let (root, mut config, dir) = fixture();
 	let leptoskit_config::infra::InfraConfig::Graph(infra) = config.infra.as_mut().unwrap() else {
@@ -402,6 +410,7 @@ fn concurrent_operations_and_redirected_state_directories_are_refused() {
 }
 
 #[test]
+#[cfg_attr(not(unix), ignore = "graph provisioning requires a Unix operator host")]
 fn historical_recovery_checks_exact_retained_files_without_regenerating_them() {
 	let (_root, config, dir) = fixture();
 	let mut pins = inputs::generated(&dir, &config).unwrap();

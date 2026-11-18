@@ -246,6 +246,7 @@ mod tests {
 	}
 
 	#[test]
+	#[cfg_attr(not(unix), ignore = "graph provisioning requires a Unix operator host")]
 	fn tunnel_generation_preserves_edits_until_force_is_explicit() {
 		let mut config = website();
 		let leptoskit_config::infra::InfraConfig::Graph(infra) = config.infra.as_mut().unwrap()
