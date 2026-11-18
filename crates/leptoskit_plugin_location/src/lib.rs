@@ -7,8 +7,12 @@
 //! runtime plugins, so use explicit registration in a custom host there. Guests
 //! enable the `guest` feature and reuse `guest::Location` rather than resolving
 //! the plugin on every call. Native reads never prompt; request permission as a
-//! separate, intentional action, and the app supplies its usage description and
-//! manifest permissions.
+//! separate, intentional action, and the app supplies its usage descriptions
+//! and manifest permissions. Continuous updates run through `start_updates`
+//! with an accuracy request, distance filter and interval, buffered into a
+//! bounded batch stream by `next_updates`; background updates need the
+//! `background` plugin's location-typed foreground service on Android and the
+//! "Always" grant on iOS.
 //!
 //! <!-- {/p_locationSummary} -->
 
@@ -25,8 +29,36 @@ pub const REQUEST_PERMISSION: MethodId = MethodId(1);
 pub const CURRENT: MethodId = MethodId(2);
 /// Options followed by a previous Unix timestamp as f64; returns a newer fix.
 pub const NEXT: MethodId = MethodId(3);
+/// Empty request; upgrades "When In Use" to "Always" on iOS and requests
+/// `ACCESS_BACKGROUND_LOCATION` on Android, each as its own system step.
+pub const REQUEST_BACKGROUND_PERMISSION: MethodId = MethodId(4);
+/// [`UpdateOptions`]; starts continuous updates into a bounded native buffer.
+pub const START_UPDATES: MethodId = MethodId(5);
+/// Empty request; stops every running update source. Buffered fixes stay
+/// buffered for [`NEXT_UPDATES`].
+pub const STOP_UPDATES: MethodId = MethodId(6);
+/// Empty request; a cancellable wait for the fixes buffered since the last
+/// call. An empty batch means no source is running and the buffer is empty.
+pub const NEXT_UPDATES: MethodId = MethodId(7);
+/// Empty request; iOS visit monitoring, delivered as fixes at arrival and
+/// departure. Other platforms return `Unavailable`.
+pub const START_VISITS: MethodId = MethodId(8);
+/// Empty request; iOS significant-change monitoring, which relaunches a
+/// killed app. Other platforms return `Unavailable`.
+pub const START_SIGNIFICANT_CHANGES: MethodId = MethodId(9);
 /// Runtime methods.
-pub const METHODS: &[MethodId] = &[PERMISSION, REQUEST_PERMISSION, CURRENT, NEXT];
+pub const METHODS: &[MethodId] = &[
+	PERMISSION,
+	REQUEST_PERMISSION,
+	CURRENT,
+	NEXT,
+	REQUEST_BACKGROUND_PERMISSION,
+	START_UPDATES,
+	STOP_UPDATES,
+	NEXT_UPDATES,
+	START_VISITS,
+	START_SIGNIFICANT_CHANGES,
+];
 
 /// A permission reply is two little-endian u32 fields.
 const PERMISSION_BYTES: usize = 8;
@@ -51,6 +83,17 @@ const FULL_TURN: f64 = 360.0;
 const MAX_TIMEOUT_MS: u32 = 120_000;
 /// Longest accepted cache tolerance, in milliseconds.
 const MAX_AGE_MS: u32 = 3_600_000;
+/// An update request is six little-endian fields: accuracy, distance, four
+/// flags.
+const UPDATE_OPTIONS_BYTES: usize = 28;
+/// Longest update interval, in milliseconds.
+const MAX_INTERVAL_MS: u32 = 3_600_000;
+/// Widest distance filter, in metres; zero disables filtering.
+const MAX_DISTANCE_FILTER_M: f64 = 10_000.0;
+/// Fixes a native update buffer keeps before dropping the oldest.
+pub const UPDATE_BUFFER_CAPACITY: usize = 64;
+/// An update batch header is two little-endian u32 fields.
+const UPDATES_HEADER_BYTES: usize = 8;
 
 /// Foreground permission state, distinct from device service availability.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -408,6 +451,229 @@ impl Options {
 		)
 	}
 }
+/// The accuracy a continuous update stream asks the platform for; it is a
+/// request, not a promise, and never overrides an approximate grant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u32)]
+pub enum UpdateAccuracy {
+	/// Best the platform offers.
+	Best = 0,
+	/// Highest accuracy, for active navigation guidance.
+	Navigation = 1,
+	/// Lower power; less precise fixes are acceptable.
+	Balanced = 2,
+}
+
+impl UpdateAccuracy {
+	/// Decodes the accuracy field of an update request.
+	pub fn from_code(code: u32) -> Result<Self, Error> {
+		Ok(match code {
+			0 => Self::Best,
+			1 => Self::Navigation,
+			2 => Self::Balanced,
+			_ => return Err(Error::InvalidArgument),
+		})
+	}
+}
+
+/// Validated configuration for one continuous update stream.
+///
+/// `pauses_automatically` and `show_background_indicator` are iOS settings the
+/// other platforms decode and ignore. Background updates need the
+/// platform's own support: the `background` plugin's location-typed
+/// foreground service on Android, and "Always" authorization on iOS.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct UpdateOptions {
+	accuracy: UpdateAccuracy,
+	distance_filter_m: f64,
+	interval_ms: u32,
+	background: bool,
+	pauses_automatically: bool,
+	show_background_indicator: bool,
+}
+
+impl UpdateOptions {
+	/// Best-accuracy updates every second, no distance filter,
+	/// foreground-only, with iOS's automatic pausing on.
+	pub fn new(accuracy: UpdateAccuracy) -> Self {
+		Self {
+			accuracy,
+			distance_filter_m: 0.0,
+			interval_ms: 1000,
+			background: false,
+			pauses_automatically: true,
+			show_background_indicator: false,
+		}
+	}
+
+	/// Minimum distance, in metres, between delivered fixes; 0..=10,000,
+	/// where zero delivers every platform fix.
+	pub fn with_distance_filter_m(mut self, metres: f64) -> Result<Self, Error> {
+		if !metres.is_finite() || !(0.0..=MAX_DISTANCE_FILTER_M).contains(&metres) {
+			return Err(Error::InvalidArgument);
+		}
+
+		self.distance_filter_m = metres;
+		Ok(self)
+	}
+
+	/// Longest requested interval, in milliseconds; 1..=3,600,000. The
+	/// platform remains free to deliver fixes sooner.
+	pub fn with_interval_ms(mut self, milliseconds: u32) -> Result<Self, Error> {
+		(1..=MAX_INTERVAL_MS)
+			.contains(&milliseconds)
+			.then_some(())
+			.ok_or(Error::InvalidArgument)?;
+		self.interval_ms = milliseconds;
+		Ok(self)
+	}
+
+	/// Keeps updates running while the app is in the background.
+	#[must_use]
+	pub fn with_background(mut self, background: bool) -> Self {
+		self.background = background;
+		self
+	}
+
+	/// iOS only: lets the system pause updates, for example when the device
+	/// stops moving. Ignored elsewhere.
+	#[must_use]
+	pub fn with_pauses_automatically(mut self, pauses: bool) -> Self {
+		self.pauses_automatically = pauses;
+		self
+	}
+
+	/// iOS only: shows the background location indicator while updates run
+	/// without the app being visible. Ignored elsewhere.
+	#[must_use]
+	pub fn with_show_background_indicator(mut self, visible: bool) -> Self {
+		self.show_background_indicator = visible;
+		self
+	}
+
+	/// The accuracy the stream asked for.
+	#[must_use]
+	pub const fn accuracy(&self) -> UpdateAccuracy {
+		self.accuracy
+	}
+
+	/// Minimum metres between fixes; zero delivers every fix.
+	#[must_use]
+	pub const fn distance_filter_m(&self) -> f64 {
+		self.distance_filter_m
+	}
+
+	/// The requested interval, in milliseconds.
+	#[must_use]
+	pub const fn interval_ms(&self) -> u32 {
+		self.interval_ms
+	}
+
+	/// Whether updates must keep running in the background.
+	#[must_use]
+	pub const fn background(&self) -> bool {
+		self.background
+	}
+
+	/// Whether iOS may pause updates automatically.
+	#[must_use]
+	pub const fn pauses_automatically(&self) -> bool {
+		self.pauses_automatically
+	}
+
+	/// Whether iOS shows its background location indicator.
+	#[must_use]
+	pub const fn show_background_indicator(&self) -> bool {
+		self.show_background_indicator
+	}
+
+	/// Exact request representation: six little-endian fields.
+	pub fn encode(self) -> [u8; UPDATE_OPTIONS_BYTES] {
+		let mut bytes = [0; UPDATE_OPTIONS_BYTES];
+
+		bytes[..4].copy_from_slice(&(self.accuracy as u32).to_le_bytes());
+		bytes[4..12].copy_from_slice(&self.distance_filter_m.to_le_bytes());
+		bytes[12..16].copy_from_slice(&self.interval_ms.to_le_bytes());
+		bytes[16..20].copy_from_slice(&u32::from(self.background).to_le_bytes());
+		bytes[20..24].copy_from_slice(&u32::from(self.pauses_automatically).to_le_bytes());
+		bytes[24..].copy_from_slice(&u32::from(self.show_background_indicator).to_le_bytes());
+		bytes
+	}
+
+	/// Validates options from a complete native request.
+	pub fn decode(bytes: &[u8]) -> Result<Self, Error> {
+		if bytes.len() != UPDATE_OPTIONS_BYTES {
+			return Err(Error::InvalidArgument);
+		}
+
+		let accuracy = UpdateAccuracy::from_code(u32_value(&bytes[..4])?)?;
+		let distance = f64::from_le_bytes(
+			bytes[4..12]
+				.try_into()
+				.map_err(|_| Error::InvalidArgument)?,
+		);
+
+		if !distance.is_finite() || !(0.0..=MAX_DISTANCE_FILTER_M).contains(&distance) {
+			return Err(Error::InvalidArgument);
+		}
+
+		for field in [16, 20, 24] {
+			if u32_value(&bytes[field..field + 4])? > 1 {
+				return Err(Error::InvalidArgument);
+			}
+		}
+
+		Ok(Self::new(accuracy)
+			.with_distance_filter_m(distance)?
+			.with_interval_ms(u32_value(&bytes[12..16])?)?
+			.with_background(u32_value(&bytes[16..20])? == 1)
+			.with_pauses_automatically(u32_value(&bytes[20..24])? == 1)
+			.with_show_background_indicator(u32_value(&bytes[24..])? == 1))
+	}
+}
+/// One [`NEXT_UPDATES`] batch: the fixes buffered since the previous call,
+/// plus how many older fixes the bounded native buffer dropped.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Updates {
+	/// Fixes the buffer discarded, oldest first, since the last batch.
+	pub dropped: u32,
+	/// Buffered fixes, oldest first, at most [`UPDATE_BUFFER_CAPACITY`].
+	pub fixes: Vec<Fix>,
+}
+
+/// Decodes a tagged native update batch. `None` means no source is running
+/// and nothing is buffered: the stream has ended.
+pub fn decode_updates(bytes: &[u8]) -> Result<Option<Updates>, Error> {
+	if bytes.len() < UPDATES_HEADER_BYTES {
+		return Err(Error::InvalidArgument);
+	}
+
+	let dropped = u32_value(&bytes[..4])?;
+	let count = u32_value(&bytes[4..UPDATES_HEADER_BYTES])?;
+
+	if count == 0 {
+		if dropped != 0 || bytes.len() != UPDATES_HEADER_BYTES {
+			return Err(Error::InvalidArgument);
+		}
+
+		return Ok(None);
+	}
+
+	if count as usize > UPDATE_BUFFER_CAPACITY
+		|| bytes.len() != UPDATES_HEADER_BYTES + count as usize * FIX_BYTES
+	{
+		return Err(Error::InvalidArgument);
+	}
+
+	let fixes = (0..count as usize)
+		.map(|index| {
+			let start = UPDATES_HEADER_BYTES + index * FIX_BYTES;
+			Fix::decode(&bytes[start..start + FIX_BYTES])
+		})
+		.collect::<Result<Vec<_>, _>>()?;
+
+	Ok(Some(Updates { dropped, fixes }))
+}
 /// Acquisition failure. Timeout is distinct from permission denial or
 /// unavailability.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -502,6 +768,63 @@ pub mod guest {
 			payload[..12].copy_from_slice(&options.encode());
 			payload[12..].copy_from_slice(&after_timestamp_ms.to_le_bytes());
 			decode_response(&self.0.call(NEXT, &payload)?.await?)
+		}
+
+		/// Upgrades "When In Use" to "Always" on iOS, or requests
+		/// `ACCESS_BACKGROUND_LOCATION` on Android. Both platforms require the
+		/// foreground grant first; calling this before
+		/// [`Self::request_permission`] fails. Cancelling the call cannot
+		/// dismiss the system screen.
+		pub async fn request_background_permission(self) -> Result<Permission, Error> {
+			Permission::decode(&self.0.call(REQUEST_BACKGROUND_PERMISSION, &[])?.await?)
+		}
+
+		/// Starts continuous updates. On Android, `background` needs the
+		/// `background` plugin's location-typed foreground service running;
+		/// the call fails without it. On iOS it needs "Always" authorization.
+		pub async fn start_updates(self, options: UpdateOptions) -> Result<(), Error> {
+			self.empty(START_UPDATES, &options.encode()).await
+		}
+
+		/// Stops every running update source. Fixes already buffered stay
+		/// buffered for [`Self::next_updates`].
+		pub async fn stop_updates(self) -> Result<(), Error> {
+			self.empty(STOP_UPDATES, &[]).await
+		}
+
+		/// Waits for the fixes buffered since the last call, oldest first.
+		/// The wait is cancellable: dropping the future abandons it without
+		/// losing buffered fixes. A `None` reply means no source is running
+		/// and nothing is buffered, so the stream has ended. `dropped`
+		/// counts fixes the bounded native buffer discarded, oldest first,
+		/// since the previous batch.
+		pub async fn next_updates(self) -> Result<Option<Updates>, Error> {
+			decode_updates(&self.0.call(NEXT_UPDATES, &[])?.await?)
+		}
+
+		/// Starts iOS visit monitoring. Each visit is buffered as two fixes:
+		/// one at the visit's coordinate timestamped at arrival, and one at
+		/// departure once the visit ends. Other platforms return
+		/// `Unavailable`.
+		pub async fn start_visits(self) -> Result<(), Error> {
+			self.empty(START_VISITS, &[]).await
+		}
+
+		/// Starts iOS significant-change monitoring, a low-power source that
+		/// relaunches a killed app on the next event. After a relaunch the
+		/// app must call this and [`Self::start_updates`] again at startup;
+		/// iOS then delivers the event that woke it to the new listener.
+		/// Other platforms return `Unavailable`.
+		pub async fn start_significant_changes(self) -> Result<(), Error> {
+			self.empty(START_SIGNIFICANT_CHANGES, &[]).await
+		}
+
+		async fn empty(self, method: MethodId, payload: &[u8]) -> Result<(), Error> {
+			if self.0.call(method, payload)?.await?.is_empty() {
+				Ok(())
+			} else {
+				Err(Error::InvalidArgument)
+			}
 		}
 	}
 }
@@ -702,6 +1025,158 @@ mod tests {
 		assert_eq!(
 			LocationError::from(Error::Unavailable).to_string(),
 			format!("location bridge error: {}", Error::Unavailable)
+		);
+	}
+	#[test]
+	fn update_options_carry_defaults_and_round_trip() {
+		let options = UpdateOptions::new(UpdateAccuracy::Best);
+		assert_eq!(options.distance_filter_m(), 0.0);
+		assert_eq!(options.interval_ms(), 1000);
+		assert!(!options.background());
+		assert!(options.pauses_automatically());
+		assert!(!options.show_background_indicator());
+
+		let tuned = UpdateOptions::new(UpdateAccuracy::Navigation)
+			.with_distance_filter_m(12.5)
+			.unwrap()
+			.with_interval_ms(5_000)
+			.unwrap()
+			.with_background(true)
+			.with_pauses_automatically(false)
+			.with_show_background_indicator(true);
+		assert_eq!(UpdateOptions::decode(&tuned.encode()), Ok(tuned));
+
+		let balanced = UpdateOptions::new(UpdateAccuracy::Balanced).with_background(true);
+		assert_eq!(UpdateOptions::decode(&balanced.encode()), Ok(balanced));
+		for accuracy in [
+			UpdateAccuracy::Best,
+			UpdateAccuracy::Navigation,
+			UpdateAccuracy::Balanced,
+		] {
+			let options = UpdateOptions::new(accuracy);
+			assert_eq!(UpdateOptions::decode(&options.encode()), Ok(options));
+		}
+	}
+	#[test]
+	fn update_options_reject_out_of_bounds_and_bad_wire() {
+		for metres in [-1.0, MAX_DISTANCE_FILTER_M + 1.0, f64::NAN, f64::INFINITY] {
+			assert_eq!(
+				UpdateOptions::new(UpdateAccuracy::Best).with_distance_filter_m(metres),
+				Err(Error::InvalidArgument)
+			);
+		}
+
+		for interval in [0, MAX_INTERVAL_MS + 1] {
+			assert_eq!(
+				UpdateOptions::new(UpdateAccuracy::Best).with_interval_ms(interval),
+				Err(Error::InvalidArgument)
+			);
+		}
+
+		assert_eq!(UpdateAccuracy::from_code(3), Err(Error::InvalidArgument));
+
+		let encoded = UpdateOptions::new(UpdateAccuracy::Best)
+			.with_background(true)
+			.encode();
+		assert_eq!(
+			UpdateOptions::decode(&encoded[..UPDATE_OPTIONS_BYTES - 1]),
+			Err(Error::InvalidArgument)
+		);
+
+		for index in [0, 16, 20, 24] {
+			let mut invalid = encoded;
+			invalid[index] = if index == 0 { 3 } else { 2 };
+			assert_eq!(UpdateOptions::decode(&invalid), Err(Error::InvalidArgument));
+		}
+
+		let mut nonfinite = encoded;
+		nonfinite[4..12].copy_from_slice(&f64::NAN.to_le_bytes());
+		assert_eq!(
+			UpdateOptions::decode(&nonfinite),
+			Err(Error::InvalidArgument)
+		);
+	}
+	/// Builds a native batch from fixes, the way the handlers do.
+	fn batch(dropped: u32, fixes: &[Fix]) -> Vec<u8> {
+		let mut bytes = dropped.to_le_bytes().to_vec();
+		bytes.extend_from_slice(&(fixes.len() as u32).to_le_bytes());
+
+		for fix in fixes {
+			bytes.extend_from_slice(&fix.encode().unwrap());
+		}
+
+		bytes
+	}
+	#[test]
+	fn update_batches_round_trip_and_end_the_stream() {
+		let fixes: Vec<_> = (0..3)
+			.map(|index| {
+				Fix {
+					timestamp_ms: 1_800_000_000_000.0 + f64::from(index),
+					latitude: 37.0 + f64::from(index),
+					..fix()
+				}
+			})
+			.collect();
+		let payload = batch(7, &fixes);
+		assert_eq!(
+			decode_updates(&payload),
+			Ok(Some(Updates {
+				dropped: 7,
+				fixes: fixes.clone()
+			}))
+		);
+		assert_eq!(decode_updates(&payload).unwrap().unwrap().fixes, fixes);
+
+		// An empty batch ends the stream, and only without unreported drops.
+		assert_eq!(decode_updates(&batch(0, &[])), Ok(None));
+		assert_eq!(decode_updates(&batch(3, &[])), Err(Error::InvalidArgument));
+	}
+	#[test]
+	fn update_batches_reject_bad_framing_and_invalid_fixes() {
+		let fixes: Vec<_> = (0..2).map(|_| Fix { ..fix() }).collect();
+		let payload = batch(0, &fixes);
+
+		for length in 0..payload.len() {
+			assert!(decode_updates(&payload[..length]).is_err());
+		}
+
+		let mut oversized = (fixes.len() as u32 + 1).to_le_bytes().to_vec();
+		oversized.extend_from_slice(&(UPDATE_BUFFER_CAPACITY as u32 + 1).to_le_bytes());
+		oversized.resize(UPDATES_HEADER_BYTES, 0);
+		assert_eq!(decode_updates(&oversized), Err(Error::InvalidArgument));
+
+		let mut invalid_fix = payload.clone();
+		invalid_fix[UPDATES_HEADER_BYTES + 16..UPDATES_HEADER_BYTES + 24]
+			.copy_from_slice(&f64::NAN.to_le_bytes());
+		assert_eq!(decode_updates(&invalid_fix), Err(Error::InvalidArgument));
+
+		let mut full = batch(0, &[]);
+		let count = UPDATE_BUFFER_CAPACITY as u32;
+		full[4..8].copy_from_slice(&count.to_le_bytes());
+		full.resize(
+			UPDATES_HEADER_BYTES + UPDATE_BUFFER_CAPACITY * FIX_BYTES - FIX_BYTES,
+			0,
+		);
+		assert_eq!(decode_updates(&full), Err(Error::InvalidArgument));
+	}
+	#[test]
+	fn update_batches_hold_a_full_buffer_of_valid_fixes() {
+		let fixes: Vec<_> = (0..UPDATE_BUFFER_CAPACITY)
+			.map(|index| {
+				Fix {
+					timestamp_ms: index as f64,
+					..fix()
+				}
+			})
+			.collect();
+		let payload = batch(UPDATE_BUFFER_CAPACITY as u32, &fixes);
+		assert_eq!(
+			decode_updates(&payload),
+			Ok(Some(Updates {
+				dropped: UPDATE_BUFFER_CAPACITY as u32,
+				fixes
+			}))
 		);
 	}
 }

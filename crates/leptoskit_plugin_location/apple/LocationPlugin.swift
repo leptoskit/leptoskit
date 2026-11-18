@@ -15,6 +15,11 @@ import AppKit
 private enum Wire {
     /// One record is five u32 fields and eight doubles.
     static let recordBytes = 84
+    /// One update request is one u32 accuracy, one distance double and four
+    /// u32 flags.
+    static let updateOptionsBytes = 28
+    /// Fixes a native update buffer keeps before dropping the oldest.
+    static let updateBufferCapacity = 64
     /// Coordinates are real degrees on the sphere.
     static let maxLatitude: Double = 90
     static let maxLongitude: Double = 180
@@ -35,12 +40,19 @@ public final class LocationPlugin: NSObject, NativePlugin, @preconcurrency CLLoc
     private var closed = false
     private var pending: CheckedContinuation<Data, any Error>?
     private var pendingID: UUID?
-    private var authorizationRequest = false
+    private var authorizationRequest: AuthorizationRequest?
     private var options: LocationOptions?
     private var preciseAtStart = false
     private var started = 0.0
     private var timeout: Task<Void, Never>?
     private var backgroundObserver: NSObjectProtocol?
+    private var updating = false
+    private var visiting = false
+    private var significant = false
+    private var updateWaiter: CheckedContinuation<Data, any Error>?
+    private var updateWaiterID: UUID?
+    private var updateBuffer: [Data] = []
+    private var updateDropped: UInt32 = 0
 
     /// The wire methods the Rust crate calls.
     private enum Method: UInt32 {
@@ -48,6 +60,18 @@ public final class LocationPlugin: NSObject, NativePlugin, @preconcurrency CLLoc
         case requestPermission = 1
         case current = 2
         case next = 3
+        case requestBackgroundPermission = 4
+        case startUpdates = 5
+        case stopUpdates = 6
+        case nextUpdates = 7
+        case startVisits = 8
+        case startSignificantChanges = 9
+    }
+
+    /// Which authorization a pending request is waiting for.
+    private enum AuthorizationRequest {
+        case whenInUse
+        case always
     }
 
     public override init() {
@@ -65,6 +89,17 @@ public final class LocationPlugin: NSObject, NativePlugin, @preconcurrency CLLoc
         case .requestPermission: return try await requestAccess(payload)
         case .current: return try await locate(payload, hasPrevious: false)
         case .next: return try await locate(payload, hasPrevious: true)
+        case .requestBackgroundPermission: return try await requestBackgroundAccess(payload)
+        case .startUpdates: return try startUpdatesCall(payload)
+        case .stopUpdates: return try stopUpdatesCall(payload)
+        case .nextUpdates: return try await nextUpdatesCall(payload)
+        case .startVisits, .startSignificantChanges:
+            #if os(iOS)
+            return try startMonitoringCall(method, payload: payload)
+            #else
+            // Visit and significant-change monitoring exist only on iOS.
+            throw PluginError.unavailable
+            #endif
         case nil: throw PluginError.unavailable
         }
     }
@@ -76,7 +111,8 @@ public final class LocationPlugin: NSObject, NativePlugin, @preconcurrency CLLoc
         return permission()
     }
 
-    /// Asks the OS once, or reports the scope when it has already answered.
+    /// Asks the OS once for "When In Use", or reports the scope when it has
+    /// already answered.
     private func requestAccess(_ payload: NativeBuffer) async throws -> Data {
         try payload.withUnsafeBytes { bytes in
 
@@ -90,7 +126,204 @@ public final class LocationPlugin: NSObject, NativePlugin, @preconcurrency CLLoc
         try requireUsageDescription()
         try requireForeground()
 
-        return try await wait(options: nil)
+        return try await wait(options: nil, request: .whenInUse)
+    }
+
+    /// Upgrades "When In Use" to "Always", the separate step iOS requires.
+    private func requestBackgroundAccess(_ payload: NativeBuffer) async throws -> Data {
+        guard payload.count == 0 else { throw PluginError.invalidArgument }
+
+        #if os(iOS)
+        // "Always" can only follow the foreground grant.
+        guard manager.authorizationStatus == .authorizedAlways ||
+                manager.authorizationStatus == .authorizedWhenInUse else {
+            throw PluginError.invalidArgument
+        }
+        #else
+        // macOS has a single always grant; nothing to upgrade.
+        guard manager.authorizationStatus == .authorizedAlways else { throw PluginError.invalidArgument }
+        #endif
+
+        guard manager.authorizationStatus != .authorizedAlways else { return backgroundScope() }
+
+        try requireAlwaysUsageDescription()
+        try requireForeground()
+
+        return try await wait(options: nil, request: .always)
+    }
+
+    /// Starts continuous updates into the bounded buffer.
+    private func startUpdatesCall(_ payload: NativeBuffer) throws -> Data {
+        let options = try payload.withUnsafeBytes { try UpdateOptions(bytes: $0) }
+
+        guard pending == nil else { throw PluginError.busy }
+        guard isAuthorized else { throw PluginError.permissionDenied }
+
+        try requireUsageDescription()
+
+        #if os(iOS)
+        if options.background {
+            // Background updates need the "Always" grant and the location
+            // background mode, which the plugin registry adds.
+            guard manager.authorizationStatus == .authorizedAlways else { throw PluginError.permissionDenied }
+        }
+        #endif
+
+        switch options.accuracy {
+        case .navigation: manager.desiredAccuracy = kCLLocationAccuracyBestForNavigation
+        case .balanced: manager.desiredAccuracy = kCLLocationAccuracyHundredMeters
+        case .best: manager.desiredAccuracy = kCLLocationAccuracyBest
+        }
+
+        manager.distanceFilter =
+            options.distanceFilterM <= 0 ? kCLDistanceFilterNone : CLLocationDistance(options.distanceFilterM)
+
+        #if os(iOS)
+        manager.pausesLocationUpdatesAutomatically = options.pausesAutomatically
+        manager.allowsBackgroundLocationUpdates = options.background
+        manager.showsBackgroundLocationIndicator = options.showBackgroundIndicator
+        #endif
+
+        manager.startUpdatingLocation()
+        updating = true
+
+        return Data()
+    }
+
+    /// Stops every running update source. Buffered fixes stay buffered.
+    private func stopUpdatesCall(_ payload: NativeBuffer) throws -> Data {
+        guard payload.count == 0 else { throw PluginError.invalidArgument }
+
+        if updating {
+            manager.stopUpdatingLocation()
+            updating = false
+        }
+
+        #if os(iOS)
+        if visiting {
+            manager.stopMonitoringVisits()
+            visiting = false
+        }
+
+        if significant {
+            manager.stopMonitoringSignificantLocationChanges()
+            significant = false
+        }
+        #endif
+
+        // A waiter that can never see another fix gets what is buffered, or
+        // the stream's end.
+        answerUpdateWaiter()
+
+        return Data()
+    }
+
+    /// Delivers the buffered batch, waits while a source runs, or ends it.
+    private func nextUpdatesCall(_ payload: NativeBuffer) async throws -> Data {
+        guard payload.count == 0 else { throw PluginError.invalidArgument }
+
+        guard updateBuffer.isEmpty && sourceRunning else { return deliverBatch() }
+        guard updateWaiter == nil else { throw PluginError.busy }
+
+        try Task.checkCancellation()
+        let identifier = UUID()
+
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                updateWaiter = continuation
+                updateWaiterID = identifier
+            }
+        } onCancel: { [weak self] in
+            Task { @MainActor in self?.cancelUpdateWaiter(identifier) }
+        }
+    }
+
+    #if os(iOS)
+    /// Starts one of the iOS-only monitoring sources that feed the buffer.
+    private func startMonitoringCall(_ method: UInt32, payload: NativeBuffer) throws -> Data {
+        guard payload.count == 0 else { throw PluginError.invalidArgument }
+        guard isAuthorized else { throw PluginError.permissionDenied }
+
+        try requireUsageDescription()
+
+        if method == Method.startVisits.rawValue {
+            manager.startMonitoringVisits()
+            visiting = true
+        } else {
+            manager.startMonitoringSignificantLocationChanges()
+            significant = true
+        }
+
+        return Data()
+    }
+    #endif
+
+    /// Whether any source still feeds the update buffer.
+    private var sourceRunning: Bool {
+        updating || visiting || significant
+    }
+
+    /// Buffers the fixes a source reported, dropping the oldest when full.
+    private func bufferLocations(_ locations: [CLLocation]) {
+        for location in locations {
+            guard let record = try? fixRecord(location) else { continue }
+
+            updateBuffer.append(record)
+
+            if updateBuffer.count > Wire.updateBufferCapacity {
+                updateBuffer.removeFirst()
+                updateDropped &+= 1
+            }
+        }
+    }
+
+    /// Hands a waiting update caller whatever is buffered, or the stream's end.
+    private func answerUpdateWaiter() {
+        guard let waiter = updateWaiter else { return }
+
+        updateWaiter = nil
+        updateWaiterID = nil
+        waiter.resume(returning: deliverBatch())
+    }
+
+    /// Abandons the waiter a cancelled caller left behind, if it still owns
+    /// the slot.
+    private func cancelUpdateWaiter(_ identifier: UUID) {
+        guard updateWaiterID == identifier else { return }
+
+        updateWaiter = nil
+        updateWaiterID = nil
+    }
+
+    /// Answers one batch: the drops since the previous one, then every
+    /// buffered fix.
+    private func deliverBatch() -> Data {
+        let reply = batch(dropped: updateDropped, records: updateBuffer)
+        updateBuffer.removeAll()
+        updateDropped = 0
+
+        return reply
+    }
+
+    /// Reports the background grant's own scope: granted only under Always.
+    private func backgroundScope() -> Data {
+        let always = manager.authorizationStatus == .authorizedAlways
+        let status: UInt32 = always ? Self.granted : 2
+        // Accuracy is meaningful only to a granted scope; elsewhere unknown.
+        let accuracy: UInt32 = always ? (manager.accuracyAuthorization == .fullAccuracy ? 2 : 1) : 0
+
+        return permissionData(status: status, accuracy: accuracy)
+    }
+
+    /// Frames one permission reply from its two little-endian fields.
+    private func permissionData(status: UInt32, accuracy: UInt32) -> Data {
+        var result = Data()
+
+        for var field in [status.littleEndian, accuracy.littleEndian] {
+            withUnsafeBytes(of: &field) { result.append(contentsOf: $0) }
+        }
+
+        return result
     }
 
     /// Waits for a bounded fix the caller's options describe.
@@ -102,7 +335,7 @@ public final class LocationPlugin: NSObject, NativePlugin, @preconcurrency CLLoc
         try requireUsageDescription()
         try requireForeground()
 
-        return try await wait(options: options)
+        return try await wait(options: options, request: nil)
     }
 
     #if os(iOS)
@@ -121,6 +354,29 @@ public final class LocationPlugin: NSObject, NativePlugin, @preconcurrency CLLoc
         closed = true
         finish(.failure(PluginError.cancelled))
         manager.delegate = nil
+
+        if updating {
+            manager.stopUpdatingLocation()
+            updating = false
+        }
+
+        #if os(iOS)
+        if visiting {
+            manager.stopMonitoringVisits()
+            visiting = false
+        }
+
+        if significant {
+            manager.stopMonitoringSignificantLocationChanges()
+            significant = false
+        }
+        #endif
+
+        if let waiter = updateWaiter {
+            updateWaiter = nil
+            updateWaiterID = nil
+            waiter.resume(throwing: PluginError.cancelled)
+        }
     }
 
     private var isAuthorized: Bool {
@@ -145,15 +401,29 @@ public final class LocationPlugin: NSObject, NativePlugin, @preconcurrency CLLoc
         }
     }
 
-    private func wait(options: LocationOptions?) async throws -> Data {
-        guard pending == nil else { throw PluginError.busy }
+    /// The usage description the "Always" upgrade prompt needs.
+    private func requireAlwaysUsageDescription() throws {
+        #if os(macOS)
+        // macOS has a single location usage description and an always grant.
+        try requireUsageDescription()
+        #else
+        let key = "NSLocationAlwaysAndWhenInUseUsageDescription"
+        guard let description = Bundle.main.object(forInfoDictionaryKey: key) as? String,
+              !description.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw PluginError.invalidArgument
+        }
+        #endif
+    }
+
+    private func wait(options: LocationOptions?, request: AuthorizationRequest?) async throws -> Data {
+        guard pending == nil, !sourceRunning else { throw PluginError.busy }
 
         try Task.checkCancellation()
         let identifier = UUID()
 
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
-                begin(continuation, options: options, identifier: identifier)
+                begin(continuation, options: options, request: request, identifier: identifier)
             }
         } onCancel: { [weak self] in
             Task { @MainActor in self?.cancelIfCurrent(identifier) }
@@ -164,11 +434,12 @@ public final class LocationPlugin: NSObject, NativePlugin, @preconcurrency CLLoc
     private func begin(
         _ continuation: CheckedContinuation<Data, any Error>,
         options: LocationOptions?,
+        request: AuthorizationRequest?,
         identifier: UUID
     ) {
         pending = continuation
         pendingID = identifier
-        authorizationRequest = options == nil
+        authorizationRequest = request
         self.options = options
         preciseAtStart = manager.accuracyAuthorization == .fullAccuracy
 
@@ -179,11 +450,16 @@ public final class LocationPlugin: NSObject, NativePlugin, @preconcurrency CLLoc
         }
 
         started = Date().timeIntervalSince1970 * 1000
-        scheduleTimeout(milliseconds: options?.timeout ?? Self.promptTimeoutMilliseconds, identifier: identifier)
+        scheduleTimeout(
+            milliseconds: options?.timeout ?? Self.promptTimeoutMilliseconds,
+            identifier: identifier
+        )
         observeBackground()
 
         if let options {
             startUpdates(options)
+        } else if request == .always {
+            manager.requestAlwaysAuthorization()
         } else {
             manager.requestWhenInUseAuthorization()
         }
@@ -228,9 +504,11 @@ public final class LocationPlugin: NSObject, NativePlugin, @preconcurrency CLLoc
 
     /// The answer a waiter gets when its deadline passes first.
     private func timeoutAnswer() -> Data {
-        if authorizationRequest { return permission() }
-
-        return Data([1, 0, 0, 0])
+        switch authorizationRequest {
+        case .always: return backgroundScope()
+        case .whenInUse: return permission()
+        case nil: return Data([1, 0, 0, 0])
+        }
     }
 
     /// The notification the host posts when the app can no longer show a prompt.
@@ -241,7 +519,7 @@ public final class LocationPlugin: NSObject, NativePlugin, @preconcurrency CLLoc
         #else
         // A system authorization dialog can itself remove focus; hiding the
         // app still cancels its waiter without attempting to dismiss that dialog.
-        return authorizationRequest
+        return authorizationRequest != nil
             ? NSApplication.didHideNotification : NSApplication.didResignActiveNotification
         #endif
     }
@@ -256,26 +534,30 @@ public final class LocationPlugin: NSObject, NativePlugin, @preconcurrency CLLoc
 
     /// Answers a permission change; a downgrade cannot satisfy a waiting fix.
     public func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
-        guard pending != nil else { return }
-
-        if authorizationRequest {
+        if authorizationRequest != nil {
             answeredAuthorization(manager)
 
             return
         }
 
-        if !canDeliverLocation { finish(.failure(PluginError.permissionDenied)) }
+        if pending != nil, !canDeliverLocation { finish(.failure(PluginError.permissionDenied)) }
     }
 
     /// Answers a pending permission request once the OS has made a choice.
     private func answeredAuthorization(_ manager: CLLocationManager) {
         guard manager.authorizationStatus != .notDetermined else { return }
 
-        finish(.success(permission()))
+        finish(.success(authorizationRequest == .always ? backgroundScope() : permission()))
     }
 
-    /// Answers with the newest fix inside the request's age and cursor window.
+    /// Answers with the newest fix inside the request's age and cursor window,
+    /// and buffers every fix an update source reported.
     public func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
+        if sourceRunning {
+            bufferLocations(locations)
+            answerUpdateWaiter()
+        }
+
         guard let options else { return }
 
         guard canDeliverLocation else {
@@ -288,6 +570,35 @@ public final class LocationPlugin: NSObject, NativePlugin, @preconcurrency CLLoc
 
         deliver(location)
     }
+
+    #if os(iOS)
+    /// Answers a visit by buffering one fix at arrival and one at departure.
+    public func locationManager(_ manager: CLLocationManager, didVisit visit: CLVisit) {
+        guard visiting else { return }
+
+        bufferLocations(visitLocations(visit))
+        answerUpdateWaiter()
+    }
+
+    /// One visit's arrival and, once it ended, its departure.
+    private func visitLocations(_ visit: CLVisit) -> [CLLocation] {
+        let locations = [visitLocation(visit, at: visit.arrivalDate)]
+
+        return visit.departureDate == .distantPast
+            ? locations : locations + [visitLocation(visit, at: visit.departureDate)]
+    }
+
+    /// The visit's coordinate as a fix at one of its timestamps.
+    private func visitLocation(_ visit: CLVisit, at timestamp: Date) -> CLLocation {
+        CLLocation(
+            coordinate: visit.coordinate,
+            altitude: 0,
+            horizontalAccuracy: visit.horizontalAccuracy,
+            verticalAccuracy: -1,
+            timestamp: timestamp
+        )
+    }
+    #endif
 
     /// Answers with an encoded fix, or the encoding failure.
     private func deliver(_ location: CLLocation) {
@@ -383,11 +694,13 @@ public final class LocationPlugin: NSObject, NativePlugin, @preconcurrency CLLoc
         pendingID = nil
         options = nil
         preciseAtStart = false
-        authorizationRequest = false
+        authorizationRequest = nil
         timeout?.cancel()
         timeout = nil
 
-        manager.stopUpdatingLocation()
+        // A running update stream owns the updates; an acquisition does not
+        // stop them.
+        if !sourceRunning { manager.stopUpdatingLocation() }
 
         if let backgroundObserver { NotificationCenter.default.removeObserver(backgroundObserver) }
 
@@ -457,6 +770,20 @@ private func timestamp(_ bits: UInt64) throws -> Double {
 
 /// Pure conversion also used by tests with synthetic coordinates; never starts location acquisition.
 func encodeLocation(_ location: CLLocation) throws -> Data {
+    var result = Data(capacity: Wire.recordBytes)
+
+    for var field in [UInt32(0)].map(\.littleEndian) {
+        withUnsafeBytes(of: &field) { result.append(contentsOf: $0) }
+    }
+
+    result.append(try fixRecord(location))
+
+    return result
+}
+
+/// The 80-byte fix record without the acquisition tag, shared by update
+/// batches. Pure conversion; never starts location acquisition.
+func fixRecord(_ location: CLLocation) throws -> Data {
     let optional = optionalValues(location)
     let values = requiredValues(location) + optional.map { $0 ?? 0 }
 
@@ -468,9 +795,9 @@ func encodeLocation(_ location: CLLocation) throws -> Data {
     }
 
     let simulated: UInt32 = location.sourceInformation.map { $0.isSimulatedBySoftware ? 2 : 1 } ?? 0
-    var result = Data(capacity: Wire.recordBytes)
+    var result = Data(capacity: Wire.recordBytes - 4)
 
-    for var field in [UInt32(0), mask, 0, simulated, 0].map(\.littleEndian) {
+    for var field in [mask, 0, simulated, 0].map(\.littleEndian) {
         withUnsafeBytes(of: &field) { result.append(contentsOf: $0) }
     }
 
@@ -507,5 +834,86 @@ private func requireDeliverable(_ values: [Double]) throws {
           (-Wire.maxLatitude...Wire.maxLatitude).contains(values[1]),
           (-Wire.maxLongitude...Wire.maxLongitude).contains(values[2]),
           values[3] >= 0 else { throw PluginError.native }
+}
+
+/// Frames one native update batch: two little-endian u32 header fields,
+/// then the fix records.
+func batch(dropped: UInt32, records: [Data]) -> Data {
+    var result = Data(capacity: 8 + records.reduce(0) { $0 + $1.count })
+
+    for var field in [dropped, UInt32(records.count)].map(\.littleEndian) {
+        withUnsafeBytes(of: &field) { result.append(contentsOf: $0) }
+    }
+
+    for record in records {
+        result.append(record)
+    }
+
+    return result
+}
+
+/// Validated continuous-update request; the bounds mirror the Rust crate.
+struct UpdateOptions {
+    /// Byte counts and value bounds the request enforces.
+    private enum Bound {
+        static let bytes = 28
+        static let maxDistance: Double = 10_000
+        static let maxInterval: UInt32 = 3_600_000
+    }
+
+    /// Where each field starts in the request bytes.
+    private enum Field {
+        static let distance = 4
+        static let interval = 12
+        static let background = 16
+        static let pauses = 20
+        static let indicator = 24
+    }
+
+    /// The accuracy a stream asks the platform for.
+    enum Accuracy: UInt32 {
+        case best = 0
+        case navigation = 1
+        case balanced = 2
+    }
+
+    let accuracy: Accuracy
+    let distanceFilterM: Double
+    let intervalMs: UInt32
+    let background: Bool
+    let pausesAutomatically: Bool
+    let showBackgroundIndicator: Bool
+
+    init(bytes: UnsafeRawBufferPointer) throws {
+        guard bytes.count == Bound.bytes else { throw PluginError.invalidArgument }
+        guard let accuracy = Accuracy(rawValue: UInt32(littleEndian: bytes.loadUnaligned(as: UInt32.self))) else {
+            throw PluginError.invalidArgument
+        }
+
+        let distance = Double(bitPattern: UInt64(littleEndian: bytes.loadUnaligned(
+            fromByteOffset: Field.distance,
+            as: UInt64.self
+        )))
+
+        guard distance.isFinite, (0...Bound.maxDistance).contains(distance) else { throw PluginError.invalidArgument }
+
+        let interval = UInt32(littleEndian: bytes.loadUnaligned(fromByteOffset: Field.interval, as: UInt32.self))
+        guard (1...Bound.maxInterval).contains(interval) else { throw PluginError.invalidArgument }
+
+        var flags: [UInt32] = []
+
+        for offset in [Field.background, Field.pauses, Field.indicator] {
+            let flag = UInt32(littleEndian: bytes.loadUnaligned(fromByteOffset: offset, as: UInt32.self))
+            guard flag <= 1 else { throw PluginError.invalidArgument }
+            flags.append(flag)
+        }
+
+        self.accuracy = accuracy
+        distanceFilterM = distance
+        intervalMs = interval
+        background = flags[0] == 1
+        pausesAutomatically = flags[1] == 1
+        showBackgroundIndicator = flags[2] == 1
+    }
 }
 // swiftlint:enable file_length

@@ -97,3 +97,110 @@ func locationRequestBoundsRejectUnboundedAndNonfiniteRequests() throws {
         try request(timeout: 1000, after: .nan).withUnsafeBytes { try LocationOptions(bytes: $0, hasPrevious: true) }
     }
 }
+
+@Test
+func updateRequestsDecodeEveryFieldAndRejectBadWire() throws {
+    func request(
+        accuracy: UInt32 = 1,
+        distance: Double = 12.5,
+        interval: UInt32 = 5_000,
+        background: UInt32 = 1,
+        pauses: UInt32 = 0,
+        indicator: UInt32 = 1
+    ) -> Data {
+        var bytes = Data()
+
+        for var field in [accuracy].map(\.littleEndian) {
+            withUnsafeBytes(of: &field) { bytes.append(contentsOf: $0) }
+        }
+
+        var bits = distance.bitPattern.littleEndian
+        withUnsafeBytes(of: &bits) { bytes.append(contentsOf: $0) }
+
+        for var field in [interval, background, pauses, indicator].map(\.littleEndian) {
+            withUnsafeBytes(of: &field) { bytes.append(contentsOf: $0) }
+        }
+
+        return bytes
+    }
+
+    let valid = try request().withUnsafeBytes { try UpdateOptions(bytes: $0) }
+    #expect(valid.accuracy == .navigation && valid.distanceFilterM == 12.5)
+    #expect(valid.intervalMs == 5_000 && valid.background && !valid.pausesAutomatically)
+    #expect(valid.showBackgroundIndicator)
+
+    for accuracy in [UInt32(3), UInt32(4_294_967_295)] {
+        #expect(throws: PluginError.invalidArgument) {
+            try request(accuracy: accuracy).withUnsafeBytes { try UpdateOptions(bytes: $0) }
+        }
+    }
+
+    for distance in [-1.0, 10_000.5, .nan, .infinity] {
+        #expect(throws: PluginError.invalidArgument) {
+            try request(distance: distance).withUnsafeBytes { try UpdateOptions(bytes: $0) }
+        }
+    }
+
+    for interval in [UInt32(0), 3_600_001] {
+        #expect(throws: PluginError.invalidArgument) {
+            try request(interval: interval).withUnsafeBytes { try UpdateOptions(bytes: $0) }
+        }
+    }
+
+    for background in [UInt32(2), 99] {
+        #expect(throws: PluginError.invalidArgument) {
+            try request(background: background).withUnsafeBytes { try UpdateOptions(bytes: $0) }
+        }
+    }
+
+    #expect(throws: PluginError.invalidArgument) {
+        try request().dropFirst(4).withUnsafeBytes { try UpdateOptions(bytes: $0) }
+    }
+}
+
+@Test
+func updateRecordsShareTheAcquisitionLayoutWithoutItsTag() throws {
+    let location = CLLocation(
+        coordinate: CLLocationCoordinate2D(latitude: Sample.latitude, longitude: Sample.longitude),
+        altitude: 0,
+        horizontalAccuracy: Sample.accuracy,
+        verticalAccuracy: -1,
+        timestamp: Date(timeIntervalSince1970: Sample.timestamp)
+    )
+    let record = try fixRecord(location)
+    #expect(record.count == Record.bytes - 4)
+
+    let tagged = try encodeLocation(location)
+    #expect(tagged.count == Record.bytes)
+    #expect(Data(tagged.dropFirst(4)) == record)
+
+    record.withUnsafeBytes { bytes in
+        // The optional mask moved to the front, so unknown stays unknown.
+        #expect(UInt32(littleEndian: bytes.loadUnaligned(as: UInt32.self)) == 0)
+        let bits = UInt64(littleEndian: bytes.loadUnaligned(fromByteOffset: Record.latitude - 4, as: UInt64.self))
+        #expect(Double(bitPattern: bits) == Sample.latitude)
+    }
+}
+
+@Test
+func updateBatchesCarryDropCountsAndRecordsInOrder() throws {
+    let location = CLLocation(
+        coordinate: CLLocationCoordinate2D(latitude: Sample.latitude, longitude: Sample.longitude),
+        altitude: 0,
+        horizontalAccuracy: Sample.accuracy,
+        verticalAccuracy: -1,
+        timestamp: Date(timeIntervalSince1970: Sample.timestamp)
+    )
+    let record = try fixRecord(location)
+    let reply = batch(dropped: 9, records: [record, record])
+    #expect(reply.count == 8 + 2 * (Record.bytes - 4))
+
+    reply.withUnsafeBytes { bytes in
+        #expect(UInt32(littleEndian: bytes.loadUnaligned(as: UInt32.self)) == 9)
+        #expect(UInt32(littleEndian: bytes.loadUnaligned(fromByteOffset: 4, as: UInt32.self)) == 2)
+        #expect(reply.dropFirst(8) == record + record)
+    }
+
+    let ended = batch(dropped: 0, records: [])
+    #expect(ended == Data([0, 0, 0, 0, 0, 0, 0, 0]))
+}

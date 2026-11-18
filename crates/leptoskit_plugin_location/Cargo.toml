@@ -1,6 +1,6 @@
 [package]
 name = "leptoskit_plugin_location"
-version = "0.3.0"
+version = "0.4.0"
 authors.workspace = true
 edition.workspace = true
 homepage.workspace = true
@@ -8,7 +8,7 @@ license.workspace = true
 readme = "readme.md"
 repository.workspace = true
 rust-version.workspace = true
-description = "Explicit foreground location permissions and cancellable bounded fixes for LeptosKit."
+description = "Explicit location permissions, bounded fixes and continuous background updates for LeptosKit."
 
 [package.metadata.leptoskit.runtime]
 name = "location"
@@ -16,7 +16,20 @@ apple-module = "LeptosKitLocation"
 apple-type = "LocationPlugin"
 android-type = "dev.leptoskit.plugins.location.LocationPlugin"
 android-context = true
-android-permissions = ["android.permission.ACCESS_COARSE_LOCATION", "android.permission.ACCESS_FINE_LOCATION"]
+# The app owns the consent text for both prompt levels; the build fails until
+# each key is present in the app's ios/Info.plist.
+apple-usage-descriptions = [
+	"NSLocationWhenInUseUsageDescription",
+	"NSLocationAlwaysAndWhenInUseUsageDescription",
+]
+# Continuous background updates need the location background mode.
+apple-background-modes = ["location"]
+android-permissions = [
+	"android.permission.ACCESS_COARSE_LOCATION",
+	"android.permission.ACCESS_FINE_LOCATION",
+	"android.permission.ACCESS_BACKGROUND_LOCATION",
+	"android.permission.FOREGROUND_SERVICE_LOCATION",
+]
 
 [features]
 guest = ["leptoskit_bridge/guest"]
