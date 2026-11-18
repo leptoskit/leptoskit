@@ -1,0 +1,49 @@
+---
+source: crates/leptoskit_cloud_app/tests/screens.rs
+expression: phone.tree()
+---
+scroll_view text=None label=None value=None frame=(0.0,0.0,400.0,1600.0) visible=true enabled=true
+  view text=None label=None value=None frame=(0.0,0.0,400.0,1600.0) visible=true enabled=true
+    view text=None label=None value=None frame=(16.0,32.0,368.0,703.9) visible=true enabled=true
+      view text=None label=None value=None frame=(16.0,32.0,368.0,703.9) visible=true enabled=true
+      view text=None label=None value=None frame=(16.0,32.0,368.0,703.9) visible=true enabled=true
+        view text=None label=None value=None frame=(37.0,57.0,326.0,20.0) visible=true enabled=true
+          view text=None label=None value=None frame=(37.0,57.0,20.0,20.0) visible=true enabled=true
+            view text=None label=None value=None frame=(37.0,59.9,7.9,17.1) visible=true enabled=true
+            view text=None label=None value=None frame=(47.0,69.1,7.9,7.9) visible=true enabled=true
+            view text=None label=None value=None frame=(47.7,57.0,7.9,7.9) visible=true enabled=true
+          text text=Some("LeptosKit Cloud") label=None value=None frame=(65.0,59.0,120.0,16.0) visible=true enabled=true
+        view text=None label=None value=None frame=(37.0,97.0,326.0,103.2) visible=true enabled=true
+          text text=Some("Sign here.") label=None value=None frame=(37.0,97.0,326.0,32.2) visible=true enabled=true
+          text text=Some("One account for your apps' servers, databases, over-the-air updates and store releases.") label=None value=None frame=(37.0,137.2,326.0,63.0) visible=true enabled=true
+        view text=None label=None value=None frame=(37.0,220.2,326.0,1.0) visible=true enabled=true
+        view text=None label=Some("What you get") value=None frame=(37.0,241.2,326.0,100.0) visible=true enabled=true
+          view text=None label=None value=None frame=(37.0,241.2,326.0,42.0) visible=true enabled=true
+            text text=Some("✓") label=None value=None frame=(37.0,241.2,8.0,16.0) visible=true enabled=true
+            text text=Some("A server and database for one app, free") label=None value=None frame=(53.0,241.2,310.0,42.0) visible=true enabled=true
+          view text=None label=None value=None frame=(37.0,291.2,326.0,21.0) visible=true enabled=true
+            text text=Some("✓") label=None value=None frame=(37.0,291.2,8.0,16.0) visible=true enabled=true
+            text text=Some("Every release can be rolled back") label=None value=None frame=(53.0,291.2,310.0,21.0) visible=true enabled=true
+          view text=None label=None value=None frame=(37.0,320.2,326.0,21.0) visible=true enabled=true
+            text text=Some("✓") label=None value=None frame=(37.0,320.2,8.0,16.0) visible=true enabled=true
+            text text=Some("A spend cap from the first minute") label=None value=None frame=(53.0,320.2,310.0,21.0) visible=true enabled=true
+        view text=None label=None value=None frame=(37.0,361.2,326.0,1.0) visible=true enabled=true
+        view text=None label=None value=None frame=(37.0,382.2,326.0,48.0) visible=true enabled=true
+          view text=None label=None value=None frame=(39.0,384.2,322.0,44.0) visible=true enabled=true
+            view text=None label=None value=None frame=(39.0,384.2,322.0,44.0) visible=true enabled=true
+            pressable text=None label=Some("Continue with GitHub") value=None frame=(39.0,384.2,322.0,44.0) visible=true enabled=true
+              text text=Some("Continue with GitHub") label=None value=None frame=(120.0,398.2,160.0,16.0) visible=true enabled=true
+        view text=None label=None value=None frame=(37.0,450.2,326.0,119.7) visible=true enabled=true
+          view text=None label=None value=None frame=(37.0,450.2,326.0,63.7) visible=true enabled=true
+            view text=None label=None value=None frame=(37.0,450.2,326.0,63.7) visible=true enabled=true
+              text text=Some("Email") label=None value=None frame=(37.0,450.2,326.0,13.7) visible=true enabled=true
+              text_input text=None label=Some("Email") value=Some("") frame=(37.0,469.9,326.0,44.0) visible=true enabled=true
+          view text=None label=None value=None frame=(37.0,521.9,158.0,48.0) visible=true enabled=true
+            view text=None label=None value=None frame=(37.0,521.9,158.0,48.0) visible=true enabled=true
+              pressable text=None label=Some("Email me a code") value=None frame=(39.0,523.9,154.0,44.0) visible=true enabled=true
+                text text=Some("Email me a code") label=None value=None frame=(56.0,537.9,120.0,16.0) visible=true enabled=true
+        view text=None label=Some("Other ways to sign in") value=None frame=(37.0,589.9,326.0,44.0) visible=true enabled=true
+          pressable text=None label=Some("Google") value=None frame=(37.0,589.9,72.0,44.0) visible=true enabled=true
+            text text=Some("Google") label=None value=None frame=(49.0,603.9,48.0,16.0) visible=true enabled=true
+        view text=None label=None value=None frame=(37.0,653.9,326.0,1.0) visible=true enabled=true
+        text text=Some("By continuing you accept the Terms and the Privacy notice.") label=None value=None frame=(37.0,674.9,326.0,36.0) visible=true enabled=true

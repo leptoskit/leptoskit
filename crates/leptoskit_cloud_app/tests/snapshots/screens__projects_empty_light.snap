@@ -1,0 +1,23 @@
+---
+source: crates/leptoskit_cloud_app/tests/screens.rs
+expression: "readable(desktop.palette(Appearance::Light))"
+---
+"ana"                                        #16111f on #fffdf8 18.22
+"Hobby"                                      #4d4558 on #fffdf8  8.95
+"A"                                          #16111f on #f3ede4 15.91
+"ana"                                        #16111f on #fffdf8 18.22
+"Filter projects"                            #6e6578 on #fffdf8  5.44
+"/"                                          #6e6578 on #fffdf8  5.44
+"Projects"                                   #16111f on #f3ede4 15.91
+"New project"                                #4d4558 on #fffdf8  8.95
+"Ship your first app"                        #16111f on #fffaf0 17.80
+"Three ways in. Each ends the same way: a"   #4d4558 on #fffaf0  8.75
+"From your terminal"                         #16111f on #fffaf0 17.80
+"For an app you already have."               #4d4558 on #fffaf0  8.75
+"→"                                          #4d4558 on #fffaf0  8.75
+"A starter, in one press"                    #16111f on #fffaf0 17.80
+"No code yet? Ship one of ours and change"   #4d4558 on #fffaf0  8.75
+"→"                                          #4d4558 on #fffaf0  8.75
+"From GitHub"                                #16111f on #fffaf0 17.80
+"Ship a repository you already have on Gi"   #4d4558 on #fffaf0  8.75
+"→"                                          #4d4558 on #fffaf0  8.75

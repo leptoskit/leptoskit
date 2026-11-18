@@ -1,0 +1,13 @@
+---
+source: crates/leptoskit_cloud_app/tests/screens.rs
+expression: approved.semantics()
+---
+text "LeptosKit Cloud"
+text "CONNECT A TERMINAL"
+img "Approved"
+heading(1) "Your terminal is signed in."
+text "Next, in the same terminal:"
+text "lk cloud launch"
+button "Copy lk cloud launch"
+text "or “lk deploy” in a project you've launched before."
+button "Continue"

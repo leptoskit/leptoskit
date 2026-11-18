@@ -1,0 +1,8 @@
+---
+source: crates/leptoskit_cloud_app/tests/screens.rs
+expression: chips.semantics()
+---
+button "Shipping: notes v42 · Building 1:12"
+status "Plan: Hobby. Spend isn't available yet." live=polite atomic
+button "Spend this month: $4.12 of a $20.00 cap. On course to pass it."
+status "Reconnecting · trying again in 8s" live=polite atomic

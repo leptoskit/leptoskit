@@ -1,0 +1,14 @@
+---
+source: crates/leptoskit_cloud_app/tests/screens.rs
+expression: desktop.semantics()
+---
+main
+  text "LeptosKit Cloud"
+  heading(1) "Hello, ana."
+  text "Your projects live at cloud.example.test/ana."
+  text "You're on Hobby, and nothing here can charge you until you add a card."
+  text "Do you have a leptoskit app already?"
+  group "Do you have a leptoskit app already?"
+    button "Yes, ship it from my terminal"
+    button "Not yet, ship a starter"
+  button "Look around first"

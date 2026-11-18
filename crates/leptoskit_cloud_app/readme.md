@@ -36,6 +36,7 @@ Every setting comes from the environment. Nothing secret has a default, and an e
 | `LEPTOSKIT_CLOUD_GOOGLE_CLIENT_SECRET` | with its ID             |                                                                                                                                                                       |
 | `LEPTOSKIT_CLOUD_BIND`                 | no; `127.0.0.1:8080`    | The address to listen on. Port 0 picks a free one.                                                                                                                    |
 | `LEPTOSKIT_CLOUD_DEFAULT_REGION`       | no; `eu-central`        | Where projects run when they don't say.                                                                                                                               |
+| `LEPTOSKIT_CLOUD_SITE`                 | no                      | With `ssr`: the directory holding the console's client build in `pkg/`. Without it the console's pages render but don't hydrate.                                      |
 
 Sign-in offers email codes, passkeys, and Solana wallets always, and GitHub and Google when configured. Passwords are off.
 
@@ -60,3 +61,10 @@ Sign-in offers email codes, passkeys, and Solana wallets always, and GitHub and 
 | `GET /.well-known/leptoskit-cloud` | The CLI's client ID, its scopes, and the operations' path.           |
 | `GET /openapi.json`                | The operations' OpenAPI document.                                    |
 | `GET /healthz`, `GET /readyz`      | Liveness, and readiness (which fails once shutdown starts).          |
+| `GET /sign-in`, `/welcome`, …      | With `ssr`: the console's pages, rendered and then hydrated.         |
+| `GET /_leptoskit/pkg/…`            | With `ssr` and `LEPTOSKIT_CLOUD_SITE`: the console's client.         |
+| `GET /_leptoskit/fonts/…`          | With `ssr`: the console's two faces.                                 |
+
+## The console
+
+Built with `ssr`, the server also renders the console: leptoskit components in file routes under `src/routes/`, hydrated in the browser by the library built with `hydrate` for `wasm32-unknown-unknown`. There is no hand-written JavaScript; the only script on a page is leptos's loader for the Wasm. `docs/agents/cloud.md` says how to build the client and run both.

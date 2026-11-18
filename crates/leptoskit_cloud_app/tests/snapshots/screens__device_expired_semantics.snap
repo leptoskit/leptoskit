@@ -1,0 +1,10 @@
+---
+source: crates/leptoskit_cloud_app/tests/screens.rs
+expression: expired.semantics()
+---
+text "LeptosKit Cloud"
+text "CONNECT A TERMINAL"
+heading(1) "This code can't be used."
+text "W D J B, M J H T"
+alert "✕ This code has expired or was already used. Run “lk cloud login” again for a new one." live=assertive atomic
+button "Enter a different code →"

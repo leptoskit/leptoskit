@@ -1,0 +1,9 @@
+---
+source: crates/leptoskit_cloud_app/tests/screens.rs
+expression: denied.semantics()
+---
+text "LeptosKit Cloud"
+text "CONNECT A TERMINAL"
+img "Denied"
+heading(1) "Denied."
+text "Your terminal will say so. If you didn't start this, someone may have sent you the link; you don't need to do anything else."

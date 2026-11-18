@@ -1,0 +1,18 @@
+---
+source: crates/leptoskit_cloud_app/tests/screens.rs
+expression: "readable(desktop.palette(Appearance::Light))"
+---
+"LeptosKit Cloud"                            #16111f on #fffaf0 17.80
+"Sign here."                                 #16111f on #fffaf0 17.80
+"One account for your apps' servers, data"   #4d4558 on #fffaf0  8.75
+"✓"                                          #1f7a45 on #fffaf0  5.14
+"A server and database for one app, free"    #16111f on #fffaf0 17.80
+"✓"                                          #1f7a45 on #fffaf0  5.14
+"Every release can be rolled back"           #16111f on #fffaf0 17.80
+"✓"                                          #1f7a45 on #fffaf0  5.14
+"A spend cap from the first minute"          #16111f on #fffaf0 17.80
+"Continue with GitHub"                       #faf6f0 on #16111f 17.20
+"Email"                                      #6e6578 on #fffaf0  5.32
+"Email me a code"                            #16111f on #fffdf8 18.22
+"Google"                                     #4d4558 on #fffaf0  8.75
+"By continuing you accept the Terms and t"   #6e6578 on #fffaf0  5.32

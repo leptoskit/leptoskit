@@ -1,0 +1,21 @@
+---
+source: crates/leptoskit_cloud_app/tests/screens.rs
+expression: desktop.semantics()
+---
+main
+  text "LeptosKit Cloud"
+  heading(1) "Sign here."
+  text "One account for your apps' servers, databases, over-the-air updates and store releases."
+  list "What you get"
+    listitem
+      text "A server and database for one app, free"
+    listitem
+      text "Every release can be rolled back"
+    listitem
+      text "A spend cap from the first minute"
+  button "Continue with GitHub"
+  textbox "Email"
+  button "Email me a code"
+  group "Other ways to sign in"
+    button "Google"
+  text "By continuing you accept the Terms and the Privacy notice."

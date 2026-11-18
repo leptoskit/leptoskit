@@ -6,11 +6,14 @@
 //! ([`config`]), and refuses to start when it is incomplete or unsafe.
 
 pub mod config;
+#[cfg(feature = "ssr")]
+pub mod console;
 
 use std::net::SocketAddr;
 
 use leptoskit_axum::GracefulShutdown;
 use leptoskit_axum::Readiness;
+use leptoskit_axum::axum::Router;
 use leptoskit_cloud::server::Control;
 use leptoskit_db::Db;
 use leptoskit_db::Migration;
@@ -176,9 +179,14 @@ async fn serve(config: ServeConfig) -> Result<(), Error> {
 		.local_addr()
 		.map_err(|error| Error::Serve(error.to_string()))?;
 	let dev = config.control.dev.is_some();
+	#[cfg(feature = "ssr")]
+	let site = config.site.clone();
 	let control = Control::start(&db, config.control_for(address)).await?;
 	let readiness = Readiness::new();
-	let router = control.router().merge(readiness.routes());
+	let own = Router::new().merge(readiness.routes());
+	#[cfg(feature = "ssr")]
+	let own = own.merge(console::routes(site));
+	let router = router(&control, own);
 	let live = control.live().clone();
 	let shutdown = GracefulShutdown::new()
 		.readiness(&readiness)
@@ -190,6 +198,23 @@ async fn serve(config: ServeConfig) -> Result<(), Error> {
 	leptoskit_axum::serve_listener_with(listener, router, shutdown)
 		.await
 		.map_err(|error| Error::Serve(error.to_string()))
+}
+
+/// Everything the binary answers: the control plane's routes, then `own`,
+/// the routes this binary adds, for whatever those don't claim.
+///
+/// The OAuth provider serves discovery, tokens and the device flow from its
+/// layer rather than from routes, so they answer only through a fallback
+/// inside that layer. `Control::start` builds its routes and layers them
+/// last, sign-in inside the provider; `own` is built in full and layered
+/// the same way, last, and nothing is merged afterwards. Merging into a
+/// layered router instead would swap its fallback for the merged router's
+/// unlayered one, and those endpoints would answer 404.
+pub fn router(control: &Control, own: Router) -> Router {
+	let own = own
+		.layer(control.auth().layer())
+		.layer(control.idp().layer());
+	control.router().fallback_service(own)
 }
 
 /// Says where the server listens: the one line a supervisor, or a test,

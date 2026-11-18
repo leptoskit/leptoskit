@@ -193,6 +193,68 @@ async fn a_migrated_database_serves_and_is_ready() {
 	);
 }
 
+/// The OAuth provider serves discovery, tokens and the device flow from its
+/// layer, not from routes, so they answer only if every route and fallback
+/// the binary serves sits inside that layer.
+#[tokio::test]
+async fn the_oauth_provider_answers_beside_the_probes() {
+	let vars = [
+		("LEPTOSKIT_CLOUD_DATABASE_URL", "sqlite::memory:"),
+		("LEPTOSKIT_CLOUD_BIND", "127.0.0.1:0"),
+	];
+	let server = start(control(&vars, &["serve", "--dev"])).await;
+	let client = reqwest::Client::new();
+	let get = async |path: &str| {
+		client
+			.get(format!("{}{path}", server.origin))
+			.send()
+			.await
+			.unwrap_or_else(|error| panic!("GET {path}: {error}"))
+	};
+
+	for path in ["/readyz", "/healthz"] {
+		assert_eq!(get(path).await.status().as_u16(), 200, "{path}");
+	}
+
+	let openid = get("/.well-known/openid-configuration").await;
+	assert_eq!(openid.status().as_u16(), 200, "OpenID discovery");
+	let openid: Value = openid.json().await.expect("JSON");
+	assert!(
+		openid["device_authorization_endpoint"]
+			.as_str()
+			.is_some_and(|endpoint| endpoint.ends_with("/oauth/device_authorization")),
+		"{openid}"
+	);
+
+	let cloud = get("/.well-known/leptoskit-cloud").await;
+	assert_eq!(cloud.status().as_u16(), 200, "the CLI's discovery");
+	let cloud: Value = cloud.json().await.expect("JSON");
+	let client_id = cloud["cli_client_id"].as_str().expect("the CLI's client");
+	let scope = cloud["scope"].as_str().expect("the CLI's scopes");
+
+	let started = client
+		.post(format!("{}/oauth/device_authorization", server.origin))
+		.form(&[("client_id", client_id), ("scope", scope)])
+		.send()
+		.await
+		.expect("device authorization");
+	assert_eq!(started.status().as_u16(), 200, "the device flow");
+	let started: Value = started.json().await.expect("JSON");
+	assert!(started["user_code"].is_string(), "{started}");
+	assert!(started["device_code"].is_string(), "{started}");
+
+	// With the console built in, its pages answer beside them, and an
+	// address nothing claims is the console's not-found page.
+	#[cfg(feature = "ssr")]
+	{
+		assert_eq!(get("/sign-in").await.status().as_u16(), 200, "/sign-in");
+		let missing = get("/no-such-organisation/or-page").await;
+		assert_eq!(missing.status().as_u16(), 404);
+		let page = missing.text().await.expect("text");
+		assert!(page.contains("<!DOCTYPE html>"), "{page}");
+	}
+}
+
 #[tokio::test]
 async fn operators_are_granted_on_the_command_line() {
 	let directory = tempfile::tempdir().expect("a directory");

@@ -1,0 +1,36 @@
+---
+source: crates/leptoskit_cloud_app/tests/screens.rs
+expression: desktop.semantics()
+---
+banner
+  button "LeptosKit Cloud: your projects"
+  button "ana: projects"
+  status "Plan: Hobby. Spend isn't available yet." live=polite atomic
+  button "Your account"
+navigation "Console"
+  text "ana"
+  textbox "Filter projects"
+  button "Projects" [current=page]
+  list "Projects"
+    listitem
+      button "notes"
+    listitem
+      button "Blog"
+  button "New project"
+main
+  heading(1) "Projects"
+  button "New project"
+  list "Projects"
+    listitem
+      heading(2) "notes"
+      button "Show workings for notes: projects::projects"
+      text "ana/notes"
+      text "Region eu-central · since 2 Nov 2026"
+    listitem
+      heading(2) "Blog"
+      button "Show workings for Blog: projects::projects"
+      text "ana/blog"
+      text "Region eu-central · since 2 Nov 2026"
+navigation "Sections"
+  button "Apps" [current=page]
+  button "You"
