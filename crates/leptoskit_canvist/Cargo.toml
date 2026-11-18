@@ -1,0 +1,101 @@
+[package]
+name = "leptoskit_canvist"
+version = "0.3.0"
+authors.workspace = true
+categories = ["text-editors", "wasm", "web-programming"]
+edition.workspace = true
+homepage.workspace = true
+keywords = ["editor", "canvas", "rich-text", "leptos", "wasm"]
+license.workspace = true
+readme = "readme.md"
+repository.workspace = true
+rust-version.workspace = true
+description = "The canvist text editor for leptoskit on the web: a canvas-based paragraph editor with no hand-written JavaScript."
+publish = false
+
+[dependencies]
+canvist_extension_document = { workspace = true, default-features = false }
+canvist_extension_hard_break = { workspace = true, default-features = false }
+canvist_extension_history = { workspace = true, default-features = false }
+canvist_extension_paragraph = { workspace = true, default-features = false }
+canvist_headless = { workspace = true, default-features = false }
+canvist_layout = { workspace = true, optional = true, default-features = false, features = ["editor", "json"] }
+unicode-segmentation = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+js-sys = { workspace = true, optional = true }
+wasm-bindgen = { workspace = true, optional = true }
+wasm-bindgen-futures = { workspace = true, optional = true }
+web-sys = { workspace = true, optional = true, features = [
+	"AbortController",
+	"AbortSignal",
+	"AddEventListenerOptions",
+	"CanvasRenderingContext2d",
+	"CharacterData",
+	"ClipboardEvent",
+	"ClipboardEventInit",
+	"CompositionEvent",
+	"CompositionEventInit",
+	"ContextAttributes2d",
+	"CssStyleDeclaration",
+	"DataTransfer",
+	"Document",
+	"DomTokenList",
+	"DomRect",
+	"DomRectReadOnly",
+	"Element",
+	"Event",
+	"EventTarget",
+	"FocusEvent",
+	"HtmlCanvasElement",
+	"HtmlElement",
+	"HtmlTextAreaElement",
+	"InputEvent",
+	"InputEventInit",
+	"KeyboardEvent",
+	"MediaQueryList",
+	"MediaQueryListEvent",
+	"Navigator",
+	"Node",
+	"PointerEvent",
+	"Range",
+	"ResizeObserver",
+	"ResizeObserverEntry",
+	"ResizeObserverSize",
+	"TextMetrics",
+	"Window",
+	"WheelEvent",
+] }
+
+[dev-dependencies]
+wasm-bindgen-test = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+js-sys = { workspace = true }
+wasm-bindgen = { workspace = true }
+web-sys = { workspace = true, features = [
+	"ClipboardEvent",
+	"ClipboardEventInit",
+	"CompositionEvent",
+	"CompositionEventInit",
+	"DataTransfer",
+	"Document",
+	"Element",
+	"HtmlElement",
+	"HtmlTextAreaElement",
+	"InputEvent",
+	"InputEventInit",
+] }
+
+[features]
+default = []
+web = [
+	"dep:js-sys",
+	"dep:wasm-bindgen",
+	"dep:wasm-bindgen-futures",
+	"dep:web-sys",
+	"dep:canvist_layout",
+]
+
+[lints]
+workspace = true
