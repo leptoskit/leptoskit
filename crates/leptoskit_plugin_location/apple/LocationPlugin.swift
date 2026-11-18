@@ -15,8 +15,8 @@ import AppKit
 private enum Wire {
     /// One record is five u32 fields and eight doubles.
     static let recordBytes = 84
-    /// One update request is one u32 accuracy, one distance double and four
-    /// u32 flags.
+    /// One update request is a u32 accuracy, a distance double, a u32
+    /// interval and three u32 flags.
     static let updateOptionsBytes = 28
     /// Fixes a native update buffer keeps before dropping the oldest.
     static let updateBufferCapacity = 64
@@ -572,7 +572,8 @@ public final class LocationPlugin: NSObject, NativePlugin, @preconcurrency CLLoc
     }
 
     #if os(iOS)
-    /// Answers a visit by buffering one fix at arrival and one at departure.
+    /// Answers a visit by buffering one fix: at arrival while it is ongoing,
+    /// at departure once it ended.
     public func locationManager(_ manager: CLLocationManager, didVisit visit: CLVisit) {
         guard visiting else { return }
 
@@ -580,12 +581,16 @@ public final class LocationPlugin: NSObject, NativePlugin, @preconcurrency CLLoc
         answerUpdateWaiter()
     }
 
-    /// One visit's arrival and, once it ended, its departure.
+    /// The fix one visit report stands for. iOS reports an ongoing visit with
+    /// a `distantFuture` departure and an unknown arrival as `distantPast`,
+    /// so a report carries an arrival or a departure, never both, and a
+    /// visit iOS reports twice is not buffered twice.
     private func visitLocations(_ visit: CLVisit) -> [CLLocation] {
-        let locations = [visitLocation(visit, at: visit.arrivalDate)]
+        if visit.departureDate != .distantFuture {
+            return [visitLocation(visit, at: visit.departureDate)]
+        }
 
-        return visit.departureDate == .distantPast
-            ? locations : locations + [visitLocation(visit, at: visit.departureDate)]
+        return visit.arrivalDate == .distantPast ? [] : [visitLocation(visit, at: visit.arrivalDate)]
     }
 
     /// The visit's coordinate as a fix at one of its timestamps.

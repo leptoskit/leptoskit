@@ -29,11 +29,18 @@ internal object BackgroundState {
     const val EXTRA_TYPES = "types"
     const val EXTRA_INTERVAL = "interval"
 
+    /**
+     * Whether the service runs. A JVM field, because the location and
+     * recorder plugins read it by name so they do not need this plugin
+     * compiled in; the bridge's keep rules keep it through R8.
+     */
     @Volatile
+    @JvmField
     var running = false
 
     /** The foreground-service type mask the running service was started with. */
     @Volatile
+    @JvmField
     var serviceTypes = 0
 
     @Volatile

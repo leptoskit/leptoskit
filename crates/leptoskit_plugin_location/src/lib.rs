@@ -83,8 +83,8 @@ const FULL_TURN: f64 = 360.0;
 const MAX_TIMEOUT_MS: u32 = 120_000;
 /// Longest accepted cache tolerance, in milliseconds.
 const MAX_AGE_MS: u32 = 3_600_000;
-/// An update request is six little-endian fields: accuracy, distance, four
-/// flags.
+/// An update request is six little-endian fields: a u32 accuracy, an f64
+/// distance filter, a u32 interval and three u32 flags.
 const UPDATE_OPTIONS_BYTES: usize = 28;
 /// Longest update interval, in milliseconds.
 const MAX_INTERVAL_MS: u32 = 3_600_000;
@@ -802,10 +802,10 @@ pub mod guest {
 			decode_updates(&self.0.call(NEXT_UPDATES, &[])?.await?)
 		}
 
-		/// Starts iOS visit monitoring. Each visit is buffered as two fixes:
-		/// one at the visit's coordinate timestamped at arrival, and one at
-		/// departure once the visit ends. Other platforms return
-		/// `Unavailable`.
+		/// Starts iOS visit monitoring. Each visit report is buffered as one
+		/// fix at the visit's coordinate: timestamped at arrival while the
+		/// visit is ongoing, and at departure once iOS reports that it ended.
+		/// Other platforms return `Unavailable`.
 		pub async fn start_visits(self) -> Result<(), Error> {
 			self.empty(START_VISITS, &[]).await
 		}

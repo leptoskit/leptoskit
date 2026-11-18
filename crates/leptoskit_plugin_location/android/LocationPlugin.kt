@@ -331,11 +331,11 @@ class LocationPlugin(
         val network = LocationManager.NETWORK_PROVIDER in enabled
         val selected =
             when (accuracy) {
-                ACCURACY_NAVIGATION -> {
+                UpdateOptions.ACCURACY_NAVIGATION -> {
                     if (gps) listOf(LocationManager.GPS_PROVIDER) else emptyList()
                 }
 
-                ACCURACY_BALANCED -> {
+                UpdateOptions.ACCURACY_BALANCED -> {
                     when {
                         network -> listOf(LocationManager.NETWORK_PROVIDER)
                         gps -> listOf(LocationManager.GPS_PROVIDER)
@@ -366,10 +366,10 @@ class LocationPlugin(
 
         // A waiter that can never see another fix gets what is buffered, or
         // the stream's end.
-        updateWaiter?.let { waiter ->
-            updateWaiter = null
-            waiter.resume(deliverBatch())
-        }
+        // A cancelled waiter must not drain the buffer it can no longer answer.
+        val waiter = updateWaiter
+        updateWaiter = null
+        waiter?.takeIf { it.isActive }?.resume(deliverBatch())
 
         return byteArrayOf()
     }
@@ -740,11 +740,6 @@ class LocationPlugin(
 
         /** The background plugin's location foreground-service type bit. */
         const val LOCATION_SERVICE_TYPE = 8
-
-        /** The update stream's accuracy codes, in wire order. */
-        const val ACCURACY_BEST = 0
-        const val ACCURACY_NAVIGATION = 1
-        const val ACCURACY_BALANCED = 2
     }
 }
 
@@ -768,7 +763,7 @@ internal data class UpdateOptions(
     val showBackgroundIndicator: Boolean,
 ) {
     companion object {
-        /** An update request is six little-endian fields. */
+        /** An update request is a u32 accuracy, an f64 distance, a u32 interval and three u32 flags. */
         const val OPTIONS_BYTES = 28
 
         /** The accuracy codes the request carries, in wire order. */
