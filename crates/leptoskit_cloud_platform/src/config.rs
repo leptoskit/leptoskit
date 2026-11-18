@@ -13,6 +13,13 @@ use crate::PlatformError;
 /// Tested k3s release: <https://github.com/k3s-io/k3s/releases/tag/v1.35.10%2Bk3s1>
 pub const K3S_VERSION: &str = "v1.35.10+k3s1";
 
+/// Verified point release: <https://gvisor.dev/docs/user_guide/install/#point-release>.
+pub const GVISOR_RELEASE: &str = "20261116.0";
+
+/// Official x86-64 tarball digest, verified at
+/// <https://storage.googleapis.com/gvisor/releases/release/20261116.0/x86_64/gvisor.tar.zstd.sha512>.
+pub const GVISOR_SHA512: &str = "a34261504066142b6c1cc4d1813bb2d092761675416e350edc98c4cc66469b63b6f41acdeed09681b6c717c00e80e437f5f2f9c8d37705b8a9260632867c2b7d";
+
 /// Official origin ranges, verified 2026-11-18 at
 /// <https://www.cloudflare.com/ips-v4> and <https://www.cloudflare.com/ips-v6>.
 pub const CLOUDFLARE_CIDRS: &[&str] = &[
@@ -210,8 +217,10 @@ pub struct Isolation {
 	/// Kernel isolation backend.
 	pub platform: GvisorPlatform,
 	/// Immutable gVisor point release (YYYYMMDD.N).
+	#[serde(default = "gvisor_release")]
 	pub release: String,
-	/// Required official tarball SHA-512, with no invented default.
+	/// Verified official tarball SHA-512 for the supported point release.
+	#[serde(default = "gvisor_sha512")]
 	pub sha512: String,
 	/// Destinations forbidden to tenants by the later add-on policy.
 	pub denied_egress_cidrs: Vec<String>,
@@ -219,6 +228,13 @@ pub struct Isolation {
 
 fn runtime_class() -> String {
 	"gvisor".into()
+}
+
+fn gvisor_release() -> String {
+	GVISOR_RELEASE.into()
+}
+fn gvisor_sha512() -> String {
+	GVISOR_SHA512.into()
 }
 
 /// `CloudNativePG` shared database inputs.
@@ -426,6 +442,13 @@ impl PlatformConfig {
 	/// Enforce supported topology, safe rendering and explicit operational
 	/// inputs.
 	pub fn validate(&self) -> Result<(), PlatformError> {
+		// A release and digest move together: accepting an overridden release
+		// with the default checksum would produce a document that cannot boot.
+		require(
+			self.isolation.release == GVISOR_RELEASE
+				&& self.isolation.sha512.eq_ignore_ascii_case(GVISOR_SHA512),
+			"gVisor release and checksum must match the supported verified artifact",
+		)?;
 		require(
 			self.admin_cidrs.iter().any(|cidr| !cidr.contains(':')),
 			"IPv4-only node addressing requires at least one IPv4 admin CIDR",

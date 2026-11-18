@@ -16,6 +16,23 @@ fn examples_and_defaults_round_trip() {
 }
 
 #[test]
+fn verified_gvisor_pin_defaults_are_coupled() {
+	use leptoskit_cloud_platform::config::GVISOR_RELEASE;
+	use leptoskit_cloud_platform::config::GVISOR_SHA512;
+	let input = include_str!("../examples/launch.toml");
+	let input = input
+		.lines()
+		.filter(|line| !line.starts_with("release =") && !line.starts_with("sha512 ="))
+		.collect::<Vec<_>>()
+		.join("\n");
+	let mut config = PlatformConfig::parse(&input).unwrap();
+	assert_eq!(config.isolation.release, GVISOR_RELEASE);
+	assert_eq!(config.isolation.sha512, GVISOR_SHA512);
+	config.isolation.sha512 = "a".repeat(128);
+	assert!(config.validate().is_err());
+}
+
+#[test]
 fn invalid_inputs_fail_without_echoing_values() {
 	let original = include_str!("../examples/launch.toml");
 	for (from, to) in [
