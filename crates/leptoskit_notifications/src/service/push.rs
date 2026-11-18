@@ -596,9 +596,9 @@ const FANOUT_POLL_SECS: i64 = 5;
 /// The next round comes at once when this one stopped short; at the
 /// earliest moment a waiting delivery may run again otherwise; and every
 /// few seconds while the send still fans out — for at most a day — because
-/// its later batches add deliveries no round has seen. Its key is that moment, so two chains
-/// of rounds that meet at the same moment become one, and a moment still
-/// ahead is never a key a finished round holds.
+/// its later batches add deliveries no round has seen. Its key is that moment,
+/// so two chains of rounds that meet at the same moment become one, and a
+/// moment still ahead is never a key a finished round holds.
 ///
 /// The job framework runs one round of a send at a time. The deliveries'
 /// own writes are fenced regardless (see [`write_outcome`]), so a lease

@@ -12,30 +12,41 @@ This file is the working memory for that effort. It was written on 18 November 2
 
 ## Status
 
-| Work                                              | Where                                                   | State                                 |
-| ------------------------------------------------- | ------------------------------------------------------- | ------------------------------------- |
-| Service, inbox, push on every platform            | [#846](https://github.com/leptoskit/leptoskit/pull/846) | Merged                                |
-| Topics, conditions, durable fanout                | [#847](https://github.com/leptoskit/leptoskit/pull/847) | Merged                                |
-| Person attributes, segments, send to everyone     | [#848](https://github.com/leptoskit/leptoskit/pull/848) | Merged                                |
-| Message options, silent data messages, test sends | [#849](https://github.com/leptoskit/leptoskit/pull/849) | Merged                                |
-| Migration, backfill and large-audience tests      | [#850](https://github.com/leptoskit/leptoskit/pull/850) | Merged                                |
-| A. Fanout and push engine fixes                   | [#871](https://github.com/leptoskit/leptoskit/pull/871) | Draft: code written, gates unfinished |
-| B. Provider transport fixes                       | [#872](https://github.com/leptoskit/leptoskit/pull/872) | Draft: code written, gates unfinished |
-| C. Device details and device targeting            | [#873](https://github.com/leptoskit/leptoskit/pull/873) | Draft: code written, gates unfinished |
-| D to L                                            | Not started                                             | See below                             |
+| Work                                              | Where                                                   | State                                      |
+| ------------------------------------------------- | ------------------------------------------------------- | ------------------------------------------ |
+| Service, inbox, push on every platform            | [#846](https://github.com/leptoskit/leptoskit/pull/846) | Merged                                     |
+| Topics, conditions, durable fanout                | [#847](https://github.com/leptoskit/leptoskit/pull/847) | Merged                                     |
+| Person attributes, segments, send to everyone     | [#848](https://github.com/leptoskit/leptoskit/pull/848) | Merged                                     |
+| Message options, silent data messages, test sends | [#849](https://github.com/leptoskit/leptoskit/pull/849) | Merged                                     |
+| Migration, backfill and large-audience tests      | [#850](https://github.com/leptoskit/leptoskit/pull/850) | Merged                                     |
+| A. Fanout and push engine fixes                   | [#871](https://github.com/leptoskit/leptoskit/pull/871) | Ready: crate gates pass, base of the stack |
+| B. Provider transport fixes                       | [#872](https://github.com/leptoskit/leptoskit/pull/872) | Draft: code written, gates unfinished      |
+| C. Device details and device targeting            | [#873](https://github.com/leptoskit/leptoskit/pull/873) | Draft: code written, gates unfinished      |
+| D to L                                            | Not started                                             | See below                                  |
 
-Each draft's description says what was checked, where, and what is left. All three sit on `main` at `511655984` and have not been built since they were moved there.
+Each pull request's description says what was checked, where, and what is left. A sits on `main`; the others are stacked on it in order.
 
 ## Working in a cloud session
 
-Nothing in this section has been tried in a cloud session yet. It comes from the cloud documentation and from reading this repository. **The first session corrects it with what actually worked.**
+Tried on 18 November 2026 by the session that finished task A. This is what worked.
 
-- **The machine** is Linux (x86_64) with about 4 CPUs, 16 GB of memory and 30 GB of disk. It has no macOS, iOS simulator or Android emulator. The whole workspace suite is about 7,300 tests and will not fit, so build and test only the crates a task names. **CI is the full gate.**
-- **Toolchain.** Run `rustup toolchain install` in the checkout; it reads the pinned nightly from `rust-toolchain.toml`. The repository's `devenv` scripts need Nix. [`.cursor/install.sh`](../../../.cursor/install.sh) installs Nix and devenv on another vendor's Linux VM and may work here; if it does not, use plain `cargo` as below.
-- **Disk.** Export `CARGO_BUILD_JOBS=4`, `CARGO_PROFILE_DEV_DEBUG=line-tables-only` and `CARGO_PROFILE_TEST_DEBUG=line-tables-only`, as CI does. Run `cargo fetch --locked` once; `tests/dependencies.rs` needs the registry populated.
-- **Postgres.** The tests start their own throwaway cluster from the binaries they find. Point them at the installed ones and make a missing Postgres a failure, not a skip: `LEPTOSKIT_POSTGRES_BIN=/usr/lib/postgresql/<major>/bin` and `LEPTOSKIT_REQUIRE_POSTGRES=1`. `initdb` refuses to run as root, so run the tests as another user if the session is root.
+- **The machine** is Linux (x86_64) with 4 CPUs, 15 GB of memory and about 29 GB of free disk, and the session runs as root. It has no macOS, iOS simulator or Android emulator. The whole workspace suite (`lint:push`) does not fit, so build and test only the crates a task names. **CI is the full gate.**
+- **History.** The checkout is shallow. Run `git fetch --unshallow origin main` and fetch the task branches by name before rebasing.
+- **Toolchain.** `rustup` and Nix with `devenv` are already installed. The pinned nightly from `rust-toolchain.toml` installs itself the first time `cargo` or `rustup` runs in the checkout. Plain `cargo` works for building, testing and clippy; a cold build of the notifications crate's tests took about a minute and a half.
+- **devenv** works: `devenv shell -- true` warms it in a few minutes, after which `devenv shell -- dprint check <files>` takes seconds. Entering the shell installs the git hooks. The pre-commit hook runs `fix:format`, which needs tools only the shell puts on the path (`mdt`), so commit with `devenv shell -- git commit …`; the pre-push hook runs `lint:push`, which cannot finish here, so push with `--no-verify` once the crate gates below have passed.
+- **Disk and build settings.** Export `CARGO_BUILD_JOBS=4`, `CARGO_PROFILE_DEV_DEBUG=line-tables-only` and `CARGO_PROFILE_TEST_DEBUG=line-tables-only`, as CI does.
+- **Postgres.** Postgres 16 is installed at `/usr/lib/postgresql/16/bin`. `initdb` refuses to run as root, so run the test binaries as the `postgres` user through a cargo runner, and make a missing Postgres a failure:
+
+  ```sh
+  export LEPTOSKIT_POSTGRES_BIN=/usr/lib/postgresql/16/bin LEPTOSKIT_REQUIRE_POSTGRES=1
+  export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER="runuser -u postgres --"
+  ```
+
+  The build still runs as root; only the test binaries change user. Once `devenv shell` has run, `target/` is a link into `/root/.cache/mbx`, which `postgres` cannot reach: `chmod o+x /root /root/.cache && chmod -R o+rX /root/.cache/mbx/targets` lets it run the binaries. The one exception is `tests/dependencies.rs`, which runs `cargo` itself and cannot reach root's toolchain as `postgres`: run that file again without the runner (`env -u CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER cargo test … --test dependencies`). Its four failures under the runner are this, not a defect.
+- **Browser tests.** `tests/browser.rs` is compiled only for `wasm32-unknown-unknown` and runs under `wasm-bindgen-test-runner` with a webdriver, as `test:browser` does; a native `cargo test` reports it as zero tests. Chromium is installed at `/opt/pw-browsers/chromium`.
 - **Long commands.** A foreground command is cut off after ten minutes. Run builds and test runs in the background and read their log.
-- **GitHub.** `gh pr` and `gh issue` may fail in a cloud session; use `gh api` against the REST endpoints (`repos/leptoskit/leptoskit/pulls`, `…/pulls/<n>/merge`, `…/commits/<sha>/check-runs`).
+- **GitHub.** `gh api` works against the REST endpoints (`repos/leptoskit/leptoskit/pulls`, `…/commits/<sha>/check-runs`). The cloud GitHub app cannot merge (403).
+- **Stacked pull requests.** The owner asked on 18 November 2026 that every task's pull request be based on the previous task's branch (A on `main`, B on A, C on B, and on), so work goes on without waiting for merges. The owner merges the stack at the end. When a lower branch changes, rebase the ones above it.
 
 ### The gates for a notifications change
 
