@@ -5680,6 +5680,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "leptoskit_cloud_platform"
+version = "0.3.0"
+dependencies = [
+ "clap",
+ "insta",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+ "toml 0.9.12+spec-1.1.0",
+ "url",
+]
+
+[[package]]
 name = "leptoskit_codepush"
 version = "0.3.0"
 dependencies = [
