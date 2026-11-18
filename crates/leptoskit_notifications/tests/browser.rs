@@ -1216,7 +1216,7 @@ async fn enrollment_rides_a_real_worker_and_reaches_the_service_over_rpc() {
 	install_boundaries().await;
 	let registration = register_fixture(FIXTURE_SCRIPT).await;
 
-	let mut options = lkn::EnrollOptions::new(vapid_key());
+	let mut options = lkn::EnrollOptions::new(vapid_key()).app_version("2.1.0");
 	options.worker_scope = Some(FIXTURE_SCOPE.to_owned());
 	let enrollment = lkn::enroll(&options).await.expect("the browser enrolls");
 
@@ -1256,6 +1256,25 @@ async fn enrollment_rides_a_real_worker_and_reaches_the_service_over_rpc() {
 		.as_object()
 		.expect("keys");
 	assert!(keys.contains_key("p256dh") && keys.contains_key("auth"));
+
+	// The browser's own details rode along with no app code — its
+	// language in canonical case, its `Intl` time zone — beside the
+	// version the app named.
+	let language = eval_string("navigator.language");
+	let time_zone = eval_string("Intl.DateTimeFormat().resolvedOptions().timeZone");
+	assert_eq!(
+		body["device"],
+		serde_json::to_value(lkn::device_details(
+			Some(language),
+			Some(time_zone),
+			Some("2.1.0".to_owned())
+		))
+		.expect("JSON"),
+		"{body}"
+	);
+	assert_eq!(body["device"]["app_version"], "2.1.0");
+	assert!(body["device"]["locale"].is_string(), "{body}");
+	assert!(body["device"]["time_zone"].is_string(), "{body}");
 
 	// The browser was asked to subscribe exactly once, with this app's
 	// key, and the registration's worker is the active one waited for.

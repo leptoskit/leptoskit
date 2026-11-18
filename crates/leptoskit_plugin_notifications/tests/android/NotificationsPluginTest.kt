@@ -172,6 +172,59 @@ class NotificationsPluginTest {
             }
         }
 
+    /** The device method answers what the platform reports — the default
+     * locale's tag, the default time zone's id, the package's version name
+     * — as three length-prefixed strings, an unknown value as empty, and an
+     * unshippable one as unknown rather than a refusal of the rest. */
+    @Test
+    fun theDeviceMethodAnswersWhatThePlatformReports() =
+        runBlocking {
+            val context = InstrumentationRegistry.getInstrumentation().targetContext
+            val reported =
+                withContext(Dispatchers.Main) {
+                    NotificationsPlugin(context, null, {}, 5_000) {
+                        DeviceDetails("en-GB", "Europe/London", "2.1.0")
+                    }
+                }
+            val odd =
+                withContext(Dispatchers.Main) {
+                    NotificationsPlugin(context, null, {}, 5_000) {
+                        DeviceDetails("en\u0007GB", null, "9".repeat(NotificationsPlugin.MAX_DEVICE_DETAIL_BYTES + 1))
+                    }
+                }
+            val system = withContext(Dispatchers.Main) { NotificationsPlugin(context) }
+            try {
+                withContext(Dispatchers.Main) {
+                    assertEquals(
+                        listOf("en-GB", "Europe/London", "2.1.0"),
+                        strings(reported.invoke(9, ByteBuffer.allocate(0))),
+                    )
+                    assertEquals(listOf("", "", ""), strings(odd.invoke(9, ByteBuffer.allocate(0))))
+
+                    try {
+                        reported.invoke(9, ByteBuffer.wrap(byteArrayOf(1)))
+                        fail("a payload must be refused")
+                    } catch (error: PluginException) {
+                        assertEquals(PluginException.INVALID_ARGUMENT, error.code)
+                    }
+
+                    val details = strings(system.invoke(9, ByteBuffer.allocate(0)))
+                    assertEquals(java.util.Locale.getDefault().toLanguageTag(), details[0])
+                    assertEquals(java.util.TimeZone.getDefault().id, details[1])
+                    assertEquals(
+                        context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "",
+                        details[2],
+                    )
+                }
+            } finally {
+                withContext(Dispatchers.Main) {
+                    reported.close()
+                    odd.close()
+                    system.close()
+                }
+            }
+        }
+
     /** Silence at the bound is an explicit non-answer: revision 0, state
      * Unconfirmed, never the broker's previous token dressed up as fresh.
      * That previous answer stays readable through `REMOTE_TOKEN`. */
@@ -346,6 +399,21 @@ class NotificationsPluginTest {
     ) = withTimeout(5000) {
         while (manager.activeNotifications.any { it.tag == tag }) delay(20)
         assertFalse(manager.activeNotifications.any { it.tag == tag })
+    }
+
+    /** A reply of length-prefixed strings, decoded, with nothing left over. */
+    private fun strings(reply: ByteArray): List<String> {
+        val data = ByteBuffer.wrap(reply).order(ByteOrder.LITTLE_ENDIAN)
+        val strings = mutableListOf<String>()
+
+        while (data.hasRemaining()) {
+            val bytes = ByteArray(data.int)
+
+            data.get(bytes)
+            strings.add(String(bytes, Charsets.UTF_8))
+        }
+
+        return strings
     }
 
     private fun fields(

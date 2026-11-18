@@ -776,7 +776,7 @@ pub(crate) async fn audience_now(
 				let page = &page[..page.len().saturating_sub(usize::from(more))];
 				cursor = page.last().copied();
 
-				let matching = evaluate(db, &walk, page).await?;
+				let matching = evaluate(db, &walk, page).await?.matching;
 				audience.targeted = audience
 					.targeted
 					.saturating_add(matching.len().try_into().unwrap_or(u32::MAX));
@@ -995,9 +995,58 @@ async fn candidates(
 	}
 }
 
+/// What a walk's condition reads about one page of people: the topics and
+/// attributes it names, per person. The fanout keeps it past the audience
+/// decision, so the deliveries it writes can judge each endpoint against
+/// the same facts.
+#[derive(Debug, Default)]
+pub(crate) struct Facts {
+	topics: std::collections::HashMap<Uuid, std::collections::BTreeSet<String>>,
+	attributes: std::collections::HashMap<Uuid, std::collections::BTreeMap<String, String>>,
+}
+
+impl Facts {
+	/// Whether `condition` holds for `person` on `device` — or with no
+	/// device at all, where every device predicate answers false.
+	pub(crate) fn holds(
+		&self,
+		condition: &Condition,
+		person: Uuid,
+		device: Option<crate::condition::Device<'_>>,
+	) -> bool {
+		condition.matches_on(
+			|topic| {
+				self.topics
+					.get(&person)
+					.is_some_and(|topics| topics.contains(topic))
+			},
+			|key| {
+				self.attributes
+					.get(&person)
+					.and_then(|held| held.get(key).map(String::as_str))
+			},
+			device,
+		)
+	}
+}
+
+/// Which of a page's people a walk matches, and what it read to decide.
+#[derive(Debug, Default)]
+struct Verdict {
+	/// The matching people, in the page's order.
+	matching: Vec<Uuid>,
+	/// What the condition read about the page.
+	facts: Facts,
+}
+
 /// Which of `people` the walk matches, evaluated against the topics and
 /// attributes they hold among the ones its condition names. A registry
 /// walk with no condition — everyone — matches every person in the page.
+///
+/// A condition that asks about devices is judged per device too: once with
+/// no device, and once for each of the person's live endpoints, read for
+/// the whole page in one query. The person matches when any of those
+/// holds.
 ///
 /// # Errors
 ///
@@ -1006,18 +1055,20 @@ async fn evaluate(
 	db: &impl leptoskit_db::Read,
 	walk: &Walk,
 	people: &[Uuid],
-) -> rpc::Result<Vec<Uuid>> {
+) -> rpc::Result<Verdict> {
 	let Some(condition) = walk.condition() else {
-		return Ok(people.to_vec());
+		return Ok(Verdict {
+			matching: people.to_vec(),
+			facts: Facts::default(),
+		});
 	};
 
 	if people.is_empty() {
-		return Ok(Vec::new());
+		return Ok(Verdict::default());
 	}
 
+	let mut facts = Facts::default();
 	let topics = condition.topics();
-	let mut held: std::collections::HashMap<Uuid, std::collections::BTreeSet<String>> =
-		std::collections::HashMap::new();
 
 	if !topics.is_empty() {
 		let rows = TopicSubscription::query()
@@ -1031,14 +1082,14 @@ async fn evaluate(
 			.await?;
 
 		for row in rows {
-			held.entry(row.person).or_default().insert(row.topic);
+			facts
+				.topics
+				.entry(row.person)
+				.or_default()
+				.insert(row.topic);
 		}
 	}
 
-	let mut attributes: std::collections::HashMap<
-		Uuid,
-		std::collections::BTreeMap<String, String>,
-	> = std::collections::HashMap::new();
 	let keys = condition.attribute_keys();
 
 	if !keys.is_empty() {
@@ -1053,30 +1104,37 @@ async fn evaluate(
 			.await?;
 
 		for row in rows {
-			attributes
+			facts
+				.attributes
 				.entry(row.person)
 				.or_default()
 				.insert(row.key, row.value);
 		}
 	}
 
-	Ok(people
+	// One read for the page's devices, and only when the condition asks
+	// about one: a condition with no `device.` is judged once per person,
+	// exactly as before devices existed.
+	let devices = if condition.mentions_device() {
+		push::live_endpoints(db, people.iter().copied()).await?
+	} else {
+		std::collections::HashMap::new()
+	};
+
+	let matching = people
 		.iter()
 		.copied()
 		.filter(|person| {
-			condition.matches_over(
-				|topic| {
-					held.get(person)
-						.is_some_and(|topics| topics.contains(topic))
-				},
-				|key| {
-					attributes
-						.get(person)
-						.and_then(|held| held.get(key).map(String::as_str))
-				},
-			)
+			facts.holds(condition, *person, None)
+				|| devices.get(person).is_some_and(|endpoints| {
+					endpoints.iter().any(|endpoint| {
+						facts.holds(condition, *person, Some(push::device_of(endpoint)))
+					})
+				})
 		})
-		.collect())
+		.collect();
+
+	Ok(Verdict { matching, facts })
 }
 
 /// One step of a topic or condition send's fanout, the body of the
@@ -1137,7 +1195,7 @@ pub(crate) async fn fanout_step(cx: &rpc::JobCx, send_key: &str, step: u32) -> r
 		return Ok(());
 	};
 
-	let matching = evaluate(db, &walk, page).await?;
+	let verdict = evaluate(db, &walk, page).await?;
 	let scheduled = spec
 		.visible_at
 		.is_some_and(|visible_at| visible_at > leptoskit_db::now());
@@ -1153,7 +1211,29 @@ pub(crate) async fn fanout_step(cx: &rpc::JobCx, send_key: &str, step: u32) -> r
 		return continue_fanout(db, send_key, step).await;
 	}
 
-	let batch = deliver_batch(&tx, send_key, &spec, &send, &matching).await?;
+	// The push goes only to the endpoints a device condition holds for,
+	// judged where the deliveries are written, against the endpoints as
+	// this transaction reads them — even for a scheduled send, whose
+	// deliveries wait in the queue for its time. A condition that never
+	// mentions `device.` reaches every live endpoint.
+	let filter = walk
+		.condition()
+		.filter(|condition| condition.mentions_device())
+		.map(|condition| {
+			push::DeviceFilter {
+				condition,
+				facts: &verdict.facts,
+			}
+		});
+	let batch = deliver_batch(
+		&tx,
+		send_key,
+		&spec,
+		&send,
+		&verdict.matching,
+		filter.as_ref(),
+	)
+	.await?;
 
 	if !scheduled {
 		wake_people(
@@ -1242,6 +1322,7 @@ async fn deliver_batch(
 	spec: &crate::SendSpec,
 	send: &AppSend,
 	matching: &[Uuid],
+	filter: Option<&push::DeviceFilter<'_>>,
 ) -> rpc::Result<Batch> {
 	let already: std::collections::BTreeSet<Uuid> = Notification::query()
 		.filter(|notification| {
@@ -1269,7 +1350,7 @@ async fn deliver_batch(
 		fanout(tx, send_key, spec, &fresh).await?
 	};
 
-	let deliveries = push::deliveries_in_tx(tx, send_key, &fanout).await?;
+	let deliveries = push::deliveries_in_tx(tx, send_key, &fanout, filter).await?;
 
 	// The claim held the cursor where this step read it, so the counts it
 	// read are the counts to add to.

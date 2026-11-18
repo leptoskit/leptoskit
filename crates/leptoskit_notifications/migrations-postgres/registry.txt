@@ -3,3 +3,4 @@
 20261116T215213_topics_and_fanout
 20261117T000946_persons_and_segments
 20261117T011225_message_options
+20261118T132644_device_details

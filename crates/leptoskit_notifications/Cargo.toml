@@ -50,6 +50,12 @@ required-features = ["service"]
 name = "options"
 required-features = ["service"]
 
+# The devices tests exercise device details on enrollment and the
+# per-device meaning of a condition's `device.` predicates.
+[[test]]
+name = "devices"
+required-features = ["service"]
+
 [[test]]
 name = "boundary"
 required-features = ["service"]

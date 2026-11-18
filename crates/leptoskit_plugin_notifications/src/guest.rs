@@ -68,6 +68,14 @@ impl Notifications {
 		RemoteRegistration::decode(&self.0.call(REMOTE_REGISTER, &[])?.await?)
 	}
 
+	/// Reads what the device says about itself — preferred locale, time
+	/// zone, app version — without side effects. iOS, macOS, and Android;
+	/// every other platform, and a host that predates the method, answers
+	/// Unavailable.
+	pub async fn device_info(self) -> Result<DeviceInfo, Error> {
+		DeviceInfo::decode(&self.0.call(DEVICE, &[])?.await?)
+	}
+
 	async fn empty(self, method: MethodId, payload: &[u8]) -> Result<(), Error> {
 		if self.0.call(method, payload)?.await?.is_empty() {
 			Ok(())

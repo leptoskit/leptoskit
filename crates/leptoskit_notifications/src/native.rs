@@ -45,10 +45,19 @@
 //!    register again — registration prompts nothing on any platform; iOS
 //!    expects it every launch, macOS re-reads the OS's answer the same way, and
 //!    Android refreshes its token the same way — waits the bounded answer, and
-//!    brings the service up to date with whatever the OS now issues. The answer
-//!    is an explicit [`Outcome`]: unchanged, rotated with the old handle's
-//!    retirement acknowledged, or rotated with a stale handle — a previous
-//!    account's leftover — dropped rather than operated under this one.
+//!    brings the service up to date with whatever the OS now issues and
+//!    whatever the device now says about itself. When neither changed since the
+//!    enrollment last sent them, nothing is sent at all. The answer is an
+//!    explicit [`Outcome`]: unchanged, rotated with the old handle's retirement
+//!    acknowledged, or rotated with a stale handle — a previous account's
+//!    leftover — dropped rather than operated under this one. Persist the
+//!    enrollment every outcome carries: it remembers what was sent.
+//!
+//! Every enrollment carries the device's details — its preferred locale, its
+//! time zone, and the app's version, read from the OS by the notifications
+//! plugin ([`device_details`]) — so a send can target devices with
+//! `device.` conditions. The app writes no code for them: an app update or a
+//! language change reaches the service at the next launch's [`reconcile`].
 //! 5. On **sign out**, while this person is still authenticated, call
 //!    [`disable`]. It requires an acknowledged server revoke and replays a
 //!    stable idempotency key derived from the endpoint id — the same contract
@@ -64,13 +73,12 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 
+use crate::push::DeviceDetails;
 #[cfg(target_arch = "wasm32")]
 use crate::push::EndpointSummary;
 use crate::push::PushCredential;
 #[cfg(target_arch = "wasm32")]
 use crate::push::PushEndpoints;
-#[cfg(target_arch = "wasm32")]
-use crate::push::RegisterPushEndpoint;
 #[cfg(target_arch = "wasm32")]
 use crate::push::RevokePushEndpoint;
 
@@ -83,6 +91,108 @@ use crate::push::RevokePushEndpoint;
 pub struct Enrollment {
 	/// The endpoint's opaque id, as [`crate::push::EndpointSummary`] lists it.
 	pub endpoint: uuid::Uuid,
+	/// A [`digest`] of what this enrollment last sent — the token and the
+	/// device's details — so [`reconcile`] can tell whether anything changed
+	/// without storing either. Not the token: a 64-bit digest can't give it
+	/// back. `None` for an enrollment saved before details existed; the
+	/// next reconcile sends once and fills it in.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub sent: Option<u64>,
+}
+
+impl Enrollment {
+	/// Whether this enrollment already carries what a launch would send
+	/// now: the same token and the same details. [`reconcile`] sends
+	/// nothing when it does, and brings the service up to date when it
+	/// doesn't — after an app update, a language change, a move across time
+	/// zones, or a rotated token.
+	#[must_use]
+	pub fn is_current(&self, credential: &PushCredential, details: &DeviceDetails) -> bool {
+		self.sent == Some(digest(credential, details))
+	}
+}
+
+/// What reconciliation compares: a 64-bit FNV-1a digest of what an
+/// enrollment sends — the credential's platform and destination, and each
+/// device detail, absent and present told apart. Stable across builds and
+/// platforms, because the app persists it.
+#[must_use]
+pub fn digest(credential: &PushCredential, details: &DeviceDetails) -> u64 {
+	const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+	const PRIME: u64 = 0x0000_0100_0000_01b3;
+
+	let mut hash = OFFSET;
+	let mut feed = |bytes: &[u8]| {
+		for byte in bytes {
+			hash ^= u64::from(*byte);
+			hash = hash.wrapping_mul(PRIME);
+		}
+	};
+
+	feed(credential.platform().as_str().as_bytes());
+	feed(&[0]);
+	// A credential that won't canonicalize can't enroll either; its raw
+	// shape still digests, so it never compares equal to a real one.
+	feed(
+		credential
+			.destination()
+			.unwrap_or_else(|problem| problem)
+			.as_bytes(),
+	);
+
+	for detail in [&details.locale, &details.time_zone, &details.app_version] {
+		match detail {
+			None => feed(&[0]),
+			Some(value) => {
+				feed(&[1]);
+				feed(value.as_bytes());
+				feed(&[0]);
+			}
+		}
+	}
+
+	hash
+}
+
+/// What the device says about itself, as the notifications plugin read it
+/// from the OS, made ready to send: each detail
+/// [sanitized](DeviceDetails::sanitized), so one the service would refuse is
+/// dropped instead of costing the device its enrollment.
+#[must_use]
+pub fn details_from(info: &leptoskit_plugin_notifications::DeviceInfo) -> DeviceDetails {
+	DeviceDetails {
+		locale: info.locale.clone(),
+		time_zone: info.time_zone.clone(),
+		app_version: info.app_version.clone(),
+	}
+	.sanitized()
+}
+
+/// What this device says about itself right now — its preferred locale,
+/// its time zone, and the app's version — read through the notifications
+/// plugin and [sanitized](details_from). A host that predates the plugin's
+/// device method, or answers nothing, answers no details: enrollment goes
+/// on without them, as it always did.
+#[cfg_attr(
+	not(target_arch = "wasm32"),
+	allow(clippy::unused_async, reason = "matches the wasm signature")
+)]
+pub async fn device_details() -> DeviceDetails {
+	#[cfg(not(target_arch = "wasm32"))]
+	return DeviceDetails::default();
+
+	#[cfg(target_arch = "wasm32")]
+	{
+		let Ok(notifications) = leptoskit_plugin_notifications::guest::Notifications::new() else {
+			return DeviceDetails::default();
+		};
+
+		notifications
+			.device_info()
+			.await
+			.map(|info| details_from(&info))
+			.unwrap_or_default()
+	}
 }
 
 /// Why enrolling this device did not happen, and what still stands. Every
@@ -211,10 +321,12 @@ pub enum Outcome {
 	/// previous one, so nothing registered and nothing was asked. The app's
 	/// cue to offer the opt-in switch.
 	Off,
-	/// The OS still issues the token this enrollment holds: the service
-	/// answered the same endpoint id, the refresh was one idempotent
-	/// re-registration, and the handle the app saved is still the one to
-	/// keep.
+	/// The OS still issues the token this enrollment was made with. When
+	/// the device's details are unchanged too, nothing was sent and this is
+	/// the enrollment the app passed in; when they changed — an app update,
+	/// a new language — the service took the new ones under the same
+	/// endpoint id, with no credential rotation, and this enrollment
+	/// remembers them. Persist it either way.
 	Kept(Enrollment),
 	/// The OS now issues a different token. `current` is the new live
 	/// enrollment — the handle to keep from now on — and `retired` says how
@@ -245,9 +357,9 @@ pub enum Retirement {
 /// Enrolls this device for the signed-in person, from an explicit user
 /// gesture: permission is the app's own prior call, so this asks the OS to
 /// register, waits the host's bounded time for the answer, and registers
-/// the token — APNs on an iOS or macOS host, FCM on an Android one. Two
-/// racing calls converge on one endpoint: the service answers the same id
-/// for the same destination.
+/// the token — APNs on an iOS or macOS host, FCM on an Android one — with
+/// the device's [details](device_details). Two racing calls converge on one
+/// endpoint: the service answers the same id for the same destination.
 ///
 /// # Errors
 ///
@@ -269,7 +381,7 @@ pub async fn enroll() -> Result<Enrollment, EnrollError> {
 
 		match decide(&snapshot)? {
 			Some(credential) => {
-				register(&credential)
+				register(&credential, &device_details().await)
 					.await
 					.map_err(|cause| EnrollError::Enroll(None, cause))
 			}
@@ -287,10 +399,16 @@ pub async fn enroll() -> Result<Enrollment, EnrollError> {
 /// code. With it, the module registers with the OS again — registration
 /// prompts nothing on any platform; only permission requests do, and
 /// those stay the gesture's — and reconciles whatever the OS now issues,
-/// under whoever is signed in right now:
+/// and whatever the device now says about itself, under whoever is signed
+/// in right now:
 ///
-/// - The same token keeps the same endpoint id (the service dedupes the
-///   destination): [`Outcome::Kept`], one idempotent call.
+/// - The same token and the same [details](device_details) the enrollment last
+///   sent: [`Outcome::Kept`], and nothing is sent — a launch where nothing
+///   changed costs the service nothing.
+/// - The same token with changed details — an app update, a language change, a
+///   new time zone — keeps the same endpoint id and sends the new details in
+///   one idempotent call: [`Outcome::Kept`], with the new details remembered.
+///   The service rotates nothing for it.
 /// - A rotated token is a new destination. The module verifies the previous
 ///   handle against this person's endpoint list — cleanup runs only for the
 ///   authenticated owner — and retires it with the stable [`disable_key`], so
@@ -331,21 +449,32 @@ pub async fn reconcile(previous: Option<&Enrollment>) -> Result<Outcome, EnrollE
 			plugin_snapshot(leptoskit_plugin_notifications::guest::Notifications::register_remote)
 				.await?;
 		let credential = decide(&snapshot)?.ok_or(EnrollError::Unconfirmed)?;
-		rotate(previous, &credential).await
+		let details = device_details().await;
+
+		// Nothing changed since this enrollment last sent: the same token,
+		// the same details. The service already holds exactly this.
+		if previous.is_current(&credential, &details) {
+			return Ok(Outcome::Kept(*previous));
+		}
+
+		rotate(previous, &credential, &details).await
 	}
 }
 
-/// Brings the service up to date with the token the OS just issued:
-/// registers it, then retires the previous handle when — and only when —
-/// the destination actually changed and the handle is this person's.
+/// Brings the service up to date with the token the OS just issued and the
+/// details the device reports: registers them, then retires the previous
+/// handle when — and only when — the destination actually changed and the
+/// handle is this person's.
 #[cfg(target_arch = "wasm32")]
 async fn rotate(
 	previous: &Enrollment,
 	credential: &PushCredential,
+	details: &DeviceDetails,
 ) -> Result<Outcome, EnrollError> {
-	match register(credential).await {
-		// Same destination: one idempotent refresh, nothing to retire.
-		Ok(enrollment) if enrollment == *previous => Ok(Outcome::Kept(*previous)),
+	match register(credential, details).await {
+		// Same destination: one idempotent refresh — new details at most —
+		// and nothing to retire.
+		Ok(enrollment) if enrollment.endpoint == previous.endpoint => Ok(Outcome::Kept(enrollment)),
 		Ok(enrollment) => retire(previous, enrollment).await,
 		Err(cause) if quota_refused(&cause) => {
 			// The service's own remedy: revoke one first. The previous
@@ -377,7 +506,7 @@ async fn rotate(
 
 			// Room made: one more registration, and the rotation completes
 			// with the retirement this attempt already acknowledged.
-			register(credential)
+			register(credential, details)
 				.await
 				.map(|current| {
 					Outcome::Rotated {
@@ -391,17 +520,31 @@ async fn rotate(
 	}
 }
 
-/// Registers a token and answers the enrollment its endpoint id names.
+/// Registers a token with the device's details and answers the enrollment
+/// its endpoint id names, remembering what was sent.
 #[cfg(target_arch = "wasm32")]
-async fn register(credential: &PushCredential) -> Result<Enrollment, leptoskit_rpc::FnError> {
-	let summary: EndpointSummary = leptoskit_rpc::client::call(RegisterPushEndpoint {
-		credential: credential.clone(),
-	})
-	.await?;
+async fn register(
+	credential: &PushCredential,
+	details: &DeviceDetails,
+) -> Result<Enrollment, leptoskit_rpc::FnError> {
+	let summary: EndpointSummary =
+		leptoskit_rpc::client::call(request(credential.clone(), details.clone())).await?;
 
 	Ok(Enrollment {
 		endpoint: summary.id,
+		sent: Some(digest(credential, details)),
 	})
+}
+
+/// The typed request an enrollment sends: the credential the OS issued and
+/// the details the device reports — never an identity, which the service
+/// reads from the forwarded session.
+#[must_use]
+pub fn request(
+	credential: PushCredential,
+	device: DeviceDetails,
+) -> crate::push::RegisterPushEndpoint {
+	crate::push::RegisterPushEndpoint { credential, device }
 }
 
 /// Whether `cause` is the service's endpoint-quota refusal, whose words are
@@ -547,6 +690,7 @@ pub async fn disable(enrollment: &Enrollment) -> Result<(), DisableError> {
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
+	use leptoskit_plugin_notifications::DeviceInfo;
 	use leptoskit_plugin_notifications::DeviceToken;
 	use leptoskit_plugin_notifications::FcmToken;
 	use leptoskit_plugin_notifications::RemoteRegistration;
@@ -556,6 +700,7 @@ mod tests {
 	use super::EnrollError;
 	use super::decide;
 	use super::disable_key;
+	use crate::push::DeviceDetails;
 	use crate::push::PushCredential;
 	use crate::push::RegisterPushEndpoint;
 
@@ -638,31 +783,176 @@ mod tests {
 	}
 
 	/// The typed RPC request the guest sends: the credential serialized
-	/// exactly as the service parses it, per platform, with no identity
-	/// field to forge. The identity half runs against the real service in
-	/// `tests/native.rs`.
+	/// exactly as the service parses it, per platform, and the device's
+	/// details, with no identity field to forge. The identity half runs
+	/// against the real service in `tests/native.rs`.
 	#[test]
 	fn the_request_is_the_service_typed_envelope_and_nothing_else() {
 		let token = "a1b2c3d4e5f67890".repeat(4); // gitleaks:allow (a fake device token a test builds)
 		let credential = decide(&fake_host_token(&token)).unwrap().unwrap();
-		let request = serde_json::to_value(RegisterPushEndpoint { credential }).unwrap();
+		let details = super::details_from(&DeviceInfo {
+			locale: Some("en_GB".into()),
+			time_zone: Some("Europe/London".into()),
+			app_version: Some("2.1.0".into()),
+		});
+		let request = serde_json::to_value(super::request(credential, details)).unwrap();
 
 		assert_eq!(
 			request,
 			serde_json::json!({
-				"credential": { "apns": { "device_token": token } }
+				"credential": { "apns": { "device_token": token } },
+				"device": {
+					"locale": "en-GB",
+					"time_zone": "Europe/London",
+					"app_version": "2.1.0",
+				},
 			})
 		);
 
+		// A host that reported nothing sends no details, and the request
+		// is the one every service version parses.
 		let fcm = "WebView-Help:dTOkay8-_fake".repeat(6); // gitleaks:allow (a fake FCM token a test builds)
 		let credential = decide(&fake_host_fcm_token(&fcm)).unwrap().unwrap();
-		let request = serde_json::to_value(RegisterPushEndpoint { credential }).unwrap();
+		let request =
+			serde_json::to_value(super::request(credential, DeviceDetails::default())).unwrap();
 
 		assert_eq!(
 			request,
 			serde_json::json!({
-				"credential": { "fcm": { "registration_token": fcm } }
+				"credential": { "fcm": { "registration_token": fcm } },
+				"device": {},
 			})
+		);
+		let parsed: RegisterPushEndpoint = serde_json::from_value(request).unwrap();
+		assert_eq!(parsed.device, DeviceDetails::default());
+	}
+
+	/// What the OS reports is sanitized before it's sent: the locale in
+	/// canonical case, and a detail the service would refuse dropped
+	/// rather than costing the device its enrollment.
+	#[test]
+	fn reported_details_are_sanitized_before_they_are_sent() {
+		let details = super::details_from(&DeviceInfo {
+			locale: Some("zh_hant_tw".into()),
+			time_zone: Some("not a zone".into()),
+			app_version: Some(" 3.0 (41) ".into()),
+		});
+		assert_eq!(
+			details,
+			DeviceDetails {
+				locale: Some("zh-Hant-TW".into()),
+				time_zone: None,
+				app_version: Some("3.0 (41)".into()),
+			}
+		);
+
+		assert_eq!(
+			super::details_from(&DeviceInfo::default()),
+			DeviceDetails::default()
+		);
+
+		// Off a guest there is no plugin to ask: no details, no failure.
+		assert_eq!(
+			futures::executor::block_on(super::device_details()),
+			DeviceDetails::default()
+		);
+	}
+
+	/// The launch decision: the same token and the same details send
+	/// nothing; an app update, a language change, a new time zone, a
+	/// rotated token, or an enrollment saved before details existed sends
+	/// once.
+	#[test]
+	fn reconcile_sends_only_when_the_token_or_the_details_changed() {
+		use super::Enrollment;
+		use super::digest;
+
+		let token = "a1b2c3d4e5f67890".repeat(4); // gitleaks:allow (a fake device token a test builds)
+		let credential = decide(&fake_host_token(&token)).unwrap().unwrap();
+		let details = DeviceDetails {
+			locale: Some("en-GB".into()),
+			time_zone: Some("Europe/London".into()),
+			app_version: Some("2.1.0".into()),
+		};
+		let endpoint = "6ec0f4b1-0000-7000-8000-000000000001".parse().unwrap();
+		let saved = Enrollment {
+			endpoint,
+			sent: Some(digest(&credential, &details)),
+		};
+
+		assert!(
+			saved.is_current(&credential, &details),
+			"nothing changed: nothing is sent"
+		);
+
+		let updated = DeviceDetails {
+			app_version: Some("2.2.0".into()),
+			..details.clone()
+		};
+		let french = DeviceDetails {
+			locale: Some("fr-FR".into()),
+			..details.clone()
+		};
+		let travelled = DeviceDetails {
+			time_zone: Some("America/New_York".into()),
+			..details.clone()
+		};
+		let forgotten = DeviceDetails {
+			app_version: None,
+			..details.clone()
+		};
+		for changed in [&updated, &french, &travelled, &forgotten] {
+			assert!(
+				!saved.is_current(&credential, changed),
+				"{changed:?} is a change to send"
+			);
+		}
+
+		let rotated = decide(&fake_host_token(&"0f1e2d3c4b5a6978".repeat(4)))
+			.unwrap()
+			.unwrap();
+		assert!(!saved.is_current(&rotated, &details), "a rotated token");
+
+		// Absent and empty are told apart, and details can't run into the
+		// token or each other.
+		let shifted = DeviceDetails {
+			locale: None,
+			time_zone: Some("en-GB".into()),
+			app_version: Some("Europe/London".into()),
+		};
+		assert_ne!(digest(&credential, &details), digest(&credential, &shifted));
+
+		// An enrollment saved before details existed sends once, and it
+		// still reads from storage as it was written.
+		let old: Enrollment = serde_json::from_value(serde_json::json!({
+			"endpoint": endpoint,
+		}))
+		.unwrap();
+		assert_eq!(old.sent, None);
+		assert!(!old.is_current(&credential, &DeviceDetails::default()));
+		assert_eq!(
+			serde_json::to_value(Enrollment {
+				endpoint,
+				sent: None
+			})
+			.unwrap(),
+			serde_json::json!({ "endpoint": endpoint })
+		);
+
+		// The digest is stable across builds: the app persists it.
+		assert_eq!(
+			digest(&credential, &DeviceDetails::default()),
+			digest(&credential, &DeviceDetails::default())
+		);
+		assert_eq!(
+			digest(
+				&PushCredential::Fcm {
+					registration_token: "token".into()
+				},
+				&DeviceDetails::default()
+			),
+			0x9dcd_6d26_c72e_e0a8_u64,
+			"the FNV-1a digest of `fcm\\0token\\0\\0\\0`"
 		);
 	}
 
@@ -705,6 +995,7 @@ mod tests {
 
 		let enrollment = super::Enrollment {
 			endpoint: "6ec0f4b1-0000-7000-8000-000000000001".parse().unwrap(),
+			sent: None,
 		};
 		let error = futures::executor::block_on(super::reconcile(Some(&enrollment)));
 		assert_eq!(error, Err(EnrollError::Unavailable));

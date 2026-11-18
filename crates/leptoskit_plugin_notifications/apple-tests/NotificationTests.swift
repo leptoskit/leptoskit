@@ -510,3 +510,81 @@ private final class FakeRegistrar: RemoteRegistrar {
     var calls = 0
     func register() async { calls += 1 }
 }
+
+/// A fake for what the OS reports about the device.
+@MainActor
+private struct FakeDevice: DeviceFacts {
+    var details: DeviceDetails
+    func current() -> DeviceDetails { details }
+}
+
+/// A `DEVICE` reply's three strings, decoded.
+private func deviceFields(_ data: Data) -> [String] {
+    var fields: [String] = []
+    var offset = 0
+    let bytes = [UInt8](data)
+
+    while offset + 4 <= bytes.count {
+        let length = Int(UInt32(bytes[offset]) | UInt32(bytes[offset + 1]) << 8 |
+            UInt32(bytes[offset + 2]) << 16 | UInt32(bytes[offset + 3]) << 24)
+        offset += 4
+        fields.append(String(decoding: bytes[offset..<(offset + length)], as: UTF8.self))
+        offset += length
+    }
+
+    #expect(offset == bytes.count, "no trailing bytes")
+    return fields
+}
+
+/// The device method answers what the OS reports — the preferred locale,
+/// the time zone, the app's version — as the contract's three strings, an
+/// unknown value as empty, and an unshippable one as unknown rather than a
+/// refusal of the rest.
+@Test
+@MainActor
+func theDeviceMethodAnswersWhatTheOSReports() async throws {
+    let reported = NotificationsPlugin(
+        service: Service(),
+        device: FakeDevice(details: DeviceDetails(locale: "en-GB", timeZone: "Europe/London", appVersion: "2.1.0"))
+    )
+    #expect(
+        deviceFields(try await reported.invoke(method: 9, payload: payload([])))
+            == ["en-GB", "Europe/London", "2.1.0"]
+    )
+    reported.close()
+
+    let silent = NotificationsPlugin(
+        service: Service(),
+        device: FakeDevice(details: DeviceDetails(locale: nil, timeZone: nil, appVersion: nil))
+    )
+    #expect(deviceFields(try await silent.invoke(method: 9, payload: payload([]))) == ["", "", ""])
+
+    // A payload is refused: the method takes none.
+    do {
+        _ = try await silent.invoke(method: 9, payload: payload([1]))
+        Issue.record("a payload must be refused")
+    } catch {
+        #expect(error as? PluginError == .invalidArgument)
+    }
+    silent.close()
+
+    let odd = NotificationsPlugin(
+        service: Service(),
+        device: FakeDevice(details: DeviceDetails(
+            locale: "en\u{7}GB",
+            timeZone: "Europe/London",
+            appVersion: String(repeating: "9", count: NotificationsPlugin.maxDeviceDetailBytes + 1)
+        ))
+    )
+    #expect(deviceFields(try await odd.invoke(method: 9, payload: payload([]))) == ["", "Europe/London", ""])
+    odd.close()
+
+    // The system facts are Foundation's own answers.
+    let system = SystemDeviceFacts().current()
+    #expect(system.timeZone == TimeZone.current.identifier)
+    #expect(system.locale == Locale.preferredLanguages.first)
+
+    #if os(iOS) || os(macOS)
+    #expect(reported.methods.contains(9))
+    #endif
+}
