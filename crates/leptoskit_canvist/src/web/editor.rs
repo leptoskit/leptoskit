@@ -46,9 +46,13 @@ use super::paint::Region;
 use super::paint::Surface;
 use crate::CanvistError;
 use crate::Change;
+use crate::session::Action;
 use crate::session::Session;
 use crate::session::engine_error;
 use crate::text::word_around;
+
+#[cfg(feature = "ink")]
+mod ink;
 
 /// More dirty rectangles than this repaint the whole canvas instead: past
 /// a handful, clipping costs more than it saves.
@@ -121,6 +125,9 @@ pub(crate) struct Editor {
 	caret_on: bool,
 	/// The pointer drag selecting text, while the pointer is pressed.
 	drag: Option<Drag>,
+	/// The stroke the pointer is drawing on a drawing.
+	#[cfg(feature = "ink")]
+	scribble: Option<ink::Scribble>,
 }
 
 impl Editor {
@@ -145,6 +152,8 @@ impl Editor {
 			focused: false,
 			caret_on: true,
 			drag: None,
+			#[cfg(feature = "ink")]
+			scribble: None,
 		})
 	}
 
@@ -162,6 +171,10 @@ impl Editor {
 		self.layout = DocumentLayout::new(doc.document(), Arc::clone(self.layout.theme()), options);
 		self.painted = None;
 		self.drag = None;
+		#[cfg(feature = "ink")]
+		{
+			self.scribble = None;
+		}
 		self.full_repaint = true;
 	}
 
@@ -213,6 +226,8 @@ impl Editor {
 		let list = self
 			.layout
 			.display_list(&self.display_options(session, bottom));
+		#[cfg(feature = "ink")]
+		let list = self.with_scribble(session, list);
 		let mut frame = Frame {
 			height: self.layout.height(),
 			shift: update.shift,
@@ -356,6 +371,24 @@ impl Editor {
 		}
 	}
 
+	/// Make a change the app asked for through the handle.
+	pub(crate) fn act(
+		&mut self,
+		session: &mut Session,
+		action: Action,
+	) -> Result<Option<Change>, CanvistError> {
+		match action {
+			Action::Undo => self.history(session, false),
+			Action::Redo => self.history(session, true),
+			#[cfg(feature = "ink")]
+			Action::InsertDrawing => {
+				let ink = session.ink().ok_or(CanvistError::Missing("ink"))?;
+				let command = ink.insert(canvist_extension_ink::DEFAULT_HEIGHT);
+				self.change(session, &mut |engine, env| engine.run(&command, env))
+			}
+		}
+	}
+
 	/// Press the pointer at document coordinates `(x, y)`. One click places
 	/// the caret, or extends the selection with `extend`; two select a word
 	/// and three the whole paragraph, and dragging afterwards extends by
@@ -486,6 +519,8 @@ impl Editor {
 		};
 
 		let damage = self.layout.apply(session.doc.document(), &update.commit);
+		#[cfg(feature = "ink")]
+		self.reread_drawings(session, &update.commit.touched);
 
 		if damage.from_y.is_some() {
 			self.full_repaint = true;

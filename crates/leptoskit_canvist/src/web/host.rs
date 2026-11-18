@@ -44,6 +44,7 @@ use crate::CanvistError;
 use crate::CanvistState;
 use crate::Change;
 use crate::session;
+use crate::session::Action;
 use crate::session::Session;
 use crate::session::Shared;
 
@@ -162,6 +163,12 @@ pub(super) struct Host {
 	/// The pointer is pressed and selecting.
 	pub(super) pressed: Cell<bool>,
 	pub(super) last_press: Cell<input::Press>,
+	/// Whether the editor holds drawings, which never changes.
+	#[cfg(feature = "ink")]
+	pub(super) inked: bool,
+	/// What the pointer last hovered over.
+	#[cfg(feature = "ink")]
+	pub(super) hover: Cell<input::ink::Hover>,
 	/// The container was `position: static` and the host changed that.
 	positioned: Cell<bool>,
 	pub(super) detached: Cell<bool>,
@@ -244,6 +251,8 @@ impl Host {
 		)
 		.map_err(|error| unavailable(&describe(&error)))?;
 		let abort = AbortController::new().map_err(|error| unavailable(&describe(&error)))?;
+		#[cfg(feature = "ink")]
+		let inked = session::lock(&session).ink().is_some();
 
 		let _ = canvas.set_attribute("data-canvist", "canvas");
 		let _ = spacer.set_attribute("data-canvist", "spacer");
@@ -301,6 +310,10 @@ impl Host {
 			composing: Cell::new(false),
 			pressed: Cell::new(false),
 			last_press: Cell::new(input::Press::default()),
+			#[cfg(feature = "ink")]
+			inked,
+			#[cfg(feature = "ink")]
+			hover: Cell::default(),
 			positioned: Cell::new(positioned),
 			detached: Cell::new(false),
 		}))
@@ -576,6 +589,30 @@ impl Host {
 		self.reveal_caret();
 		self.schedule_mirror();
 		session::notify(&self.session, change);
+	}
+
+	/// The pointer finished a stroke: paint it and tell the app. The caret
+	/// did not move, so the page stays where the person is drawing rather
+	/// than scrolling to it.
+	#[cfg(feature = "ink")]
+	pub(super) fn drawn(self: &Rc<Self>, change: Change) {
+		self.render();
+		session::notify(&self.session, change);
+	}
+
+	/// Make a change the app asked for through the handle. Returns whether
+	/// anything changed.
+	pub(super) fn act(self: &Rc<Self>, action: Action) -> Result<bool, CanvistError> {
+		let change = self
+			.with_editor(|editor, session| editor.act(session, action))
+			.transpose()?
+			.flatten();
+
+		if let Some(change) = change {
+			self.input_changed(change);
+		}
+
+		Ok(change.is_some())
 	}
 
 	/// The app replaced the document.

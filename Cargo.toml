@@ -42,6 +42,7 @@ members = [
 	"examples/postcard",
 	"examples/rebuild_guest",
 	"examples/scene3d",
+	"examples/sketchnote",
 	"examples/soundboard",
 	"examples/timer_guest",
 	"game/lantern",
@@ -99,6 +100,7 @@ canvist_extension_clipboard = { git = "https://github.com/canvist/canvist", rev 
 canvist_extension_document = { git = "https://github.com/canvist/canvist", rev = "ee11cba6ff942d82d30958c8c8612c26c98370dd", default-features = false }
 canvist_extension_hard_break = { git = "https://github.com/canvist/canvist", rev = "ee11cba6ff942d82d30958c8c8612c26c98370dd", default-features = false }
 canvist_extension_history = { git = "https://github.com/canvist/canvist", rev = "ee11cba6ff942d82d30958c8c8612c26c98370dd", default-features = false }
+canvist_extension_ink = { git = "https://github.com/canvist/canvist", rev = "ee11cba6ff942d82d30958c8c8612c26c98370dd", default-features = false }
 canvist_extension_paragraph = { git = "https://github.com/canvist/canvist", rev = "ee11cba6ff942d82d30958c8c8612c26c98370dd", default-features = false }
 canvist_headless = { git = "https://github.com/canvist/canvist", rev = "ee11cba6ff942d82d30958c8c8612c26c98370dd", default-features = false }
 canvist_layout = { git = "https://github.com/canvist/canvist", rev = "ee11cba6ff942d82d30958c8c8612c26c98370dd", default-features = false, features = ["editor", "json"] }
@@ -259,6 +261,7 @@ leptoskit_bridge = { path = "crates/leptoskit_bridge", version = "0.3.0" }
 leptoskit_bridge_ffi = { path = "crates/leptoskit_bridge_ffi", version = "0.3.0" }
 leptoskit_build = { path = "crates/leptoskit_build", version = "0.3.0" }
 leptoskit_canvas = { path = "crates/leptoskit_canvas", version = "0.3.0" }
+leptoskit_canvist = { path = "crates/leptoskit_canvist", version = "0.3.0" }
 leptoskit_cli = { path = "crates/leptoskit_cli", version = "0.3.0" }
 leptoskit_cloud = { path = "crates/leptoskit_cloud", version = "0.3.0" }
 leptoskit_cloud_runtime = { path = "crates/leptoskit_cloud_runtime", version = "0.3.0" }

@@ -1355,6 +1355,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "canvist_extension_ink"
+version = "0.2.1"
+source = "git+https://github.com/canvist/canvist?rev=ee11cba6ff942d82d30958c8c8612c26c98370dd#ee11cba6ff942d82d30958c8c8612c26c98370dd"
+dependencies = [
+ "canvist_core",
+ "canvist_model",
+]
+
+[[package]]
 name = "canvist_extension_paragraph"
 version = "0.2.1"
 source = "git+https://github.com/canvist/canvist?rev=ee11cba6ff942d82d30958c8c8612c26c98370dd#ee11cba6ff942d82d30958c8c8612c26c98370dd"
@@ -5905,6 +5914,7 @@ dependencies = [
  "canvist_extension_document",
  "canvist_extension_hard_break",
  "canvist_extension_history",
+ "canvist_extension_ink",
  "canvist_extension_paragraph",
  "canvist_headless",
  "canvist_layout",
@@ -11714,6 +11724,23 @@ name = "siphasher"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "33f4fe9184a62d842c9ef383018f3306d8ba224fd9d836f56d7288308847c256"
+
+[[package]]
+name = "sketchnote_example"
+version = "0.3.0"
+dependencies = [
+ "js-sys",
+ "leptos",
+ "leptoskit",
+ "leptoskit_canvist",
+ "leptoskit_testing",
+ "reactive_graph",
+ "serde_json",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "wasm-bindgen-test",
+ "web-sys",
+]
 
 [[package]]
 name = "skribble_core"

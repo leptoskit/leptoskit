@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<!-- Files load relative to the base, so the same page serves from any
+		     path. -->
+		<base href="/" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<meta name="color-scheme" content="light" />
+		<link rel="icon" href="data:," />
+		<title>Sketchnote</title>
+		<style>
+			html,
+			body {
+				margin: 0;
+				min-height: 100%;
+				background: #fafaf9;
+			}
+		</style>
+	</head>
+	<body>
+		<!-- The whole page is the Rust library compiled to Wasm. These two
+		     lines only load it, as in every app `leptoskit new` writes. -->
+		<script type="module">
+			import init from "./pkg/sketchnote_example.js";
+			await init();
+		</script>
+	</body>
+</html>

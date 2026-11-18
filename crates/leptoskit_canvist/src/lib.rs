@@ -33,8 +33,33 @@
 //!   documents, so a server can read what an editor saved, but nothing draws an
 //!   editor yet: a `CanvistEditor` element is an empty view.
 //!
-//! This first slice edits plain paragraphs. Formatting, lists, ink and the
-//! native hosts come later.
+//! The editor holds plain paragraphs, and with the `ink` feature drawings
+//! between them. Formatting, lists and the native hosts come later.
+//!
+//! # Drawings
+//!
+//! Some things are quicker to draw than to describe. With the `ink` feature,
+//! an editor made with `Extensions::paragraphs().ink()` holds drawings in the
+//! flow of its text: `insert_drawing()` puts a sheet where the caret is, and
+//! on the web a mouse, a pen or a finger draws on it in the `Pen` the app
+//! chose. Each stroke is one change and one step of undo, and the drawings
+//! are saved with the text in JSON and Markdown.
+//!
+//! ```
+//! # #[cfg(feature = "ink")]
+//! # {
+//! use leptoskit_canvist::CanvistState;
+//! use leptoskit_canvist::Extensions;
+//! use leptoskit_canvist::Pen;
+//!
+//! let page = CanvistState::new(Extensions::paragraphs().ink());
+//! page.set_pen(Pen::new().color(0xe1, 0x1d, 0x48).width(12.0));
+//! assert_eq!(page.insert_drawing(), Ok(true));
+//! assert!(page.undo());
+//! # page.dispose();
+//! # }
+//! ```
+//!
 //!
 //! canvist's own types stay out of this crate's API: canvist is still moving
 //! fast, and its releases should not break apps that only hold a handle.
@@ -52,4 +77,6 @@ pub use state::CanvistState;
 pub use state::Change;
 pub use state::Extensions;
 pub use state::Format;
+#[cfg(feature = "ink")]
+pub use state::Pen;
 pub use state::Subscription;

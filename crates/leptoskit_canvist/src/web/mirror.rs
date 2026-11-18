@@ -40,12 +40,26 @@ impl Mirror {
 	}
 
 	/// Show `doc`: one `<p>` per paragraph, with a `<br>` at each line
-	/// break.
+	/// break, and an image named "Drawing" for each drawing.
 	pub(crate) fn refresh(&self, document: &Document, doc: &Doc) {
 		self.element.set_text_content(None);
 		let model = doc.document();
+		let drawing = model.schema().block_type("ink");
 
 		for block in model.children(None) {
+			let is_drawing = drawing.is_some()
+				&& model
+					.block(*block)
+					.map(canvist_headless::canvist_model::Block::kind)
+					== drawing;
+
+			if is_drawing && let Ok(image) = document.create_element("div") {
+				let _ = image.set_attribute("role", "img");
+				let _ = image.set_attribute("aria-label", "Drawing");
+				let _ = self.element.append_child(&image);
+				continue;
+			}
+
 			let (Some(text), Ok(paragraph)) = (model.inline(*block), document.create_element("p"))
 			else {
 				continue;

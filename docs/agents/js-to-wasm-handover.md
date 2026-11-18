@@ -259,17 +259,22 @@ Twenty-three commits: the public demo service. One process serves one UTC day's 
 - **Not verified:** the Linux-only descriptor and lifecycle tests have never run (all work so far was on macOS). Nothing is deployed. systemd behaviour, the edge deployment, the admin hand-over in a real browser across a process restart, and the link from the website are all outstanding.
 - **Known gaps:** the admin's Live page sometimes needs a reload before a new event appears (about one run in four). The People page cannot find a demo visitor, because a visitor has no person row.
 
-### The canvist editor stack: #857, #881, and `feat/canvist-editor-component`
+### The canvist editor stack: #857, #881, #884, and `feat/canvist-ink`
 
-Three layers, in the order [The canvist editor](#the-canvist-editor) sets. Merge them in this order; the third needs the first two.
+Four layers, in the order [The canvist editor](#the-canvist-editor) sets. Merge them in this order; each needs the ones before it.
 
 - **#857, `feat/leptoskit-canvist-web`, on `main`.** `crates/leptoskit_canvist`: the `CanvistState` handle on every target, and the web host for plain paragraphs behind the `web` feature, all Rust through `web-sys`. The unbuilt `wip` commit this section used to warn about was reviewed against the brief and almost all rewritten. 19 native tests and 24 browser tests pass in headless Chrome. The example page is 259 KB gzipped with the `smallest` settings.
 - **#881, `feat/canvist-element-kind`, on `feat/text-area`.** `NativeKind::CanvistEditor` and `CanvistEditor(id)` in the core, following the host-owned surface pattern of `Scene3d`. The web renders an empty `<div data-lk-canvist-editor="id">`; every native backend holds an empty view, the terminal draws a dim block, and the watch refuses it. Nothing in core depends on canvist.
-- **`feat/canvist-editor-component`, on #881's branch with #857's two commits.** Joins them: asking a `CanvistState` for its `id()` starts a watcher in the page that puts the editor in the `CanvistEditor` element that names it, follows the element's placeholder, `read_only`, label, `focused` and classes, and takes the editor out when the element leaves. A server-rendered page gets its editor when it hydrates. Browser tests cover each of those.
+- **#884, `feat/canvist-editor-component`, on #881's branch with #857's two commits.** Joins them: asking a `CanvistState` for its `id()` starts a watcher in the page that puts the editor in the `CanvistEditor` element that names it, follows the element's placeholder, `read_only`, label, `focused` and classes, and takes the editor out when the element leaves. A server-rendered page gets its editor when it hydrates. Browser tests cover each of those.
+- **`feat/canvist-ink`, on #884's branch.** The `ink` feature: `Extensions::ink()`, `Pen`, `insert_drawing()`, `undo()` and `redo()` on the handle, and pointer drawing in the web host (`web/editor/ink.rs` holds the stroke being drawn, `web/input/ink.rs` the pointer and touch handling). `examples/sketchnote` is the first public example: a notebook page that opens with a sketch already drawn. 15 browser tests draw with synthetic mouse, pen and touch events and read the canvas back, and the example has its own browser test. The feature adds 11 KB gzipped to the editor page; the example's whole web build is 501 KB gzipped.
 
 - **Run on Linux:** the tests and clippy each pull request lists, for the host and for `wasm32-unknown-unknown`, and the browser tests in headless Chrome.
 - **Not run anywhere:** Safari and Firefox, a real input method, a screen reader, and every native platform beyond compiling.
-- **Known gaps:** plain paragraphs only, plain-text clipboard, no `EditContext`, no server-rendered first paint, and no native editor. The ink example comes next, then the native hosts.
+- **Known gaps:** paragraphs and drawings only, plain-text clipboard, no `EditContext`, no server-rendered first paint, and no native editor. The native hosts come next.
+- **Ink has not met a real device.** Touch and pen behaviour (no scroll while drawing, `touch-action: none` under a hovering pen, no on-screen keyboard) is tested with synthetic events in Chrome only. Try a phone, an iPad with a Pencil, and Safari before calling it done. There is no eraser, no pressure, and no way to resize a sheet.
+- **A canvist bug the host works around.** At the pinned revision, `DocumentLayout::apply` does not read a drawing's strokes again when a commit changed only the block's attributes, which is all that adding or undoing a stroke changes, so the new stroke never reaches the display list. `Editor::reread_drawings` calls `layout.resync` after any commit that touched an ink block. Report it upstream, and drop the workaround when a newer pin fixes it; `each_stroke_is_one_step_of_undo` in `tests/ink.rs` fails without one or the other.
+- **The example has no player on the docs site.** `docs/src/examples.md` lists it with the commands to run it. Adding it to the players there is its own change.
+- **The example's `web/index.html` holds the two-line inline module loader** that `leptoskit new` writes for every app (`import init from "./pkg/…js"; await init();`). It is not behaviour, and it goes when the scaffold's does.
 
 ### `docs/js-to-wasm-handover`
 

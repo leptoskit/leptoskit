@@ -714,7 +714,9 @@ in
         CHROMEDRIVER="$DEVENV_PROFILE/bin/chromedriver" \
           cargo test --target wasm32-unknown-unknown --package leptoskit_native --features web --test web_browser --test web_splash
         CHROMEDRIVER="$DEVENV_PROFILE/bin/chromedriver" \
-          cargo test --target wasm32-unknown-unknown --package leptoskit_canvist --features web --test web --test element
+          cargo test --target wasm32-unknown-unknown --package leptoskit_canvist --features web,ink --test web --test element --test ink
+        CHROMEDRIVER="$DEVENV_PROFILE/bin/chromedriver" \
+          cargo test --target wasm32-unknown-unknown --package sketchnote_example --features web --test browser
         CHROMEDRIVER="$DEVENV_PROFILE/bin/chromedriver" \
           cargo test --target wasm32-unknown-unknown --package leptoskit_aria --test web
         CHROMEDRIVER="$DEVENV_PROFILE/bin/chromedriver" \

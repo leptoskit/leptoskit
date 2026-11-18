@@ -16,6 +16,8 @@ use canvist_layout::Decorations;
 use canvist_layout::EmbedRule;
 use canvist_layout::EmbedStyle;
 use canvist_layout::FontSpec;
+#[cfg(feature = "ink")]
+use canvist_layout::LeafStyle;
 use canvist_layout::Motion;
 use canvist_layout::TextStyle;
 use canvist_layout::Theme;
@@ -33,6 +35,25 @@ use super::dom;
 /// The space above and below a paragraph, as a multiple of the font size:
 /// what canvist's `StarterKit` theme uses.
 const PARAGRAPH_SPACE: f32 = 0.75;
+
+/// A drawing's shape and pen where it sets none, in drawing units: five
+/// wide to two tall, drawn with a fine pen. They are what canvist's
+/// `StarterKit` theme uses.
+#[cfg(feature = "ink")]
+const INK_HEIGHT: f32 = 400.0;
+#[cfg(feature = "ink")]
+pub(super) const INK_STROKE: f32 = 4.0;
+
+/// The space above and below a drawing, and how round its corners are, as
+/// multiples of the font size.
+#[cfg(feature = "ink")]
+const INK_SPACE: f32 = 1.5;
+#[cfg(feature = "ink")]
+const INK_RADIUS: f32 = 0.5;
+
+/// How much of the text colour tints the paper behind a drawing, of 255.
+#[cfg(feature = "ink")]
+const INK_PAPER: u8 = 13;
 
 /// The line height when the container's cannot be read.
 const FALLBACK_LINE_HEIGHT: f32 = 1.5;
@@ -212,8 +233,8 @@ impl ThemeReader {
 	}
 }
 
-/// The canvist theme for `style`: paragraphs and line breaks, which is all a
-/// plain-paragraph editor holds.
+/// The canvist theme for `style`: paragraphs and line breaks, and with the
+/// `ink` feature drawings, which is all an editor holds.
 fn theme(style: &Style) -> Theme {
 	let base = Theme::builder(TextStyle {
 		font: FontSpec {
@@ -238,14 +259,40 @@ fn theme(style: &Style) -> Theme {
 	};
 	let space = PARAGRAPH_SPACE * style.size;
 
-	base.to_builder()
+	let builder = base
+		.to_builder()
 		.chrome(chrome)
 		.block(BlockRule::new(
 			"paragraph",
 			BlockPatch::new().space(space, space).tag("p"),
 		))
-		.embed(EmbedRule::new("hardBreak", EmbedStyle::LineBreak))
-		.build()
+		.embed(EmbedRule::new("hardBreak", EmbedStyle::LineBreak));
+	#[cfg(feature = "ink")]
+	let builder = builder.block(drawing(style));
+
+	builder.build()
+}
+
+/// How a drawing looks: a sheet of paper a shade off the background, so an
+/// empty one shows where to draw. It has no padding, so its strokes fill
+/// the whole rectangle a press is measured against.
+#[cfg(feature = "ink")]
+fn drawing(style: &Style) -> BlockRule {
+	let Color { r, g, b, .. } = style.color;
+	let paper = over(Color::rgba(r, g, b, INK_PAPER), style.background);
+	let space = INK_SPACE * style.size;
+
+	BlockRule::new(
+		"ink",
+		BlockPatch::new()
+			.leaf(LeafStyle::Ink {
+				height: INK_HEIGHT,
+				stroke: INK_STROKE,
+			})
+			.background(paper, INK_RADIUS * style.size)
+			.space(space, space)
+			.tag("figure"),
+	)
 }
 
 /// The container's line height as a multiple of its font size. CSS computes
