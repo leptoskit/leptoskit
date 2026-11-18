@@ -61,4 +61,5 @@ The [packaged consumer acceptance](packaged-consumer-acceptance.md) checks indep
 The Flutter widget audit behind the component catalog's Flutter table is [`.audit/component-catalog/flutter-widgets.tsv`](../../.audit/component-catalog/flutter-widgets.tsv): all 229 entries in the published Flutter index as of 20 October 2026, each with its mapping or missing foundation.
 
 - [Hosted deployment service](hosted-deployment-service.md): account isolation, dedicated workers, billing, state and operator recovery.
+- [Cloud platform operations](cloud-platform.md): generated k3s infrastructure, add-ons, secret references, node growth and recovery checks.
 - [Hosted pilot deployment and acceptance](hosted-pilot-acceptance.md): Linux release bundles, systemd installation, Cloudflare routing and credentialed cloud/payment acceptance.
