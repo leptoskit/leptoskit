@@ -111,7 +111,7 @@ The first part of G1: the API, the shared surface, the web and the terminal. The
 - **Native:** nothing has run. AppKit, UIKit, GTK, Windows, Android and the Swift and Kotlin renderers only receive a `View`, so the change to them is the two new match arms. Nothing there asks to dismiss an overlay, moves focus into it, or lifts it out of a clipping parent.
 - **Not tested:** hydrating a server-rendered `<dialog open>` into a modal. The code path is the same `sync` the Chrome tests run, but no test starts from server markup.
 
-### `feat/aria-menu`: stacked on `feat/overlays`
+### `feat/aria-menu` (#901): stacked on `feat/overlays`
 
 The second part of G1: the two `leptoskit_aria` components the audit names.
 
