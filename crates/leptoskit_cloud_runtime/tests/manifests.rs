@@ -28,7 +28,8 @@ use leptoskit_cloud_runtime::Scale;
 use leptoskit_cloud_runtime::SecretValues;
 use leptoskit_cloud_runtime::Tls;
 use leptoskit_cloud_runtime::Volume;
-use leptoskit_cloud_runtime::kubernetes::HttpScaledObject;
+use leptoskit_cloud_runtime::kubernetes::HttpAddon;
+use leptoskit_cloud_runtime::kubernetes::ScaledObject;
 use leptoskit_cloud_runtime::manifests;
 
 /// The digest of the word `test`, in the form a release names.
@@ -104,7 +105,23 @@ fn cluster() -> ClusterProfile {
 			"192.168.0.0/16".to_owned(),
 		],
 		image_pull_secret: None,
-		keda_http: true,
+		keda_http: Some(HttpAddon {
+			namespace: "keda".to_owned(),
+			interceptor_service: "keda-add-ons-http-interceptor-proxy".to_owned(),
+			interceptor_port: 8080,
+			scaler_service: "keda-add-ons-http-external-scaler".to_owned(),
+			scaler_port: 9090,
+			interceptor_labels: BTreeMap::from([
+				(
+					"app.kubernetes.io/component".to_owned(),
+					"interceptor".to_owned(),
+				),
+				(
+					"app.kubernetes.io/name".to_owned(),
+					"http-add-on".to_owned(),
+				),
+			]),
+		}),
 	}
 }
 
@@ -318,7 +335,9 @@ fn a_minimal_sleeping_app() {
 			"ServiceAccount",
 			"Deployment",
 			"Service",
-			"HTTPScaledObject",
+			"Service",
+			"InterceptorRoute",
+			"ScaledObject",
 			"Ingress",
 		]
 	);
@@ -395,7 +414,7 @@ fn the_refusals() {
 	let (spec, mut cluster, secrets) = minimal_sleeping_app();
 
 	// Sleep on a cluster without the HTTP add-on.
-	cluster.keda_http = false;
+	cluster.keda_http = None;
 	let error = manifests(&spec, &cluster, &secrets).expect_err("no add-on");
 	assert!(matches!(error, ManifestError::SleepWithoutScaler { ref process } if process == "app"));
 	assert!(error.to_string().contains("cannot sleep"), "{}", error);
@@ -518,7 +537,7 @@ fn every_spec_builds_the_same_manifests_the_same_way() {
 				sleep: false,
 			};
 			spec.routes[0].tls = Tls::Issued;
-			cluster.keda_http = false;
+			cluster.keda_http = None;
 			spec.policy.quota = Quota {
 				cpu_millis: 500,
 				memory_mib: 128,
@@ -653,7 +672,7 @@ fn the_sleeper_wakes_on_its_routes() {
 		.iter()
 		.find_map(|object| {
 			match object {
-				Object::HttpScaledObject(HttpScaledObject { spec: scaled, .. }) => Some(scaled),
+				Object::ScaledObject(ScaledObject { spec: scaled, .. }) => Some(scaled),
 				_ => None,
 			}
 		})
@@ -662,14 +681,10 @@ fn the_sleeper_wakes_on_its_routes() {
 	assert_eq!(keda.replicas_max, 1);
 	let trigger = &keda.triggers[0];
 	assert_eq!(
-		trigger.metadata.get("hosts").map(String::as_str),
-		Some("notes.leptoskit.app")
-	);
-	assert_eq!(trigger.metadata.get("port").map(String::as_str), Some("80"));
-	assert_eq!(
-		trigger.metadata.get("service").map(String::as_str),
+		trigger.metadata.get("interceptorRoute").map(String::as_str),
 		Some("app")
 	);
+	assert_eq!(trigger.kind, "external-push");
 }
 
 /// Where a `kubectl` is installed, the snapshots are real Kubernetes. Run
