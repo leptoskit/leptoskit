@@ -5721,11 +5721,17 @@ dependencies = [
 name = "leptoskit_aria"
 version = "0.3.0"
 dependencies = [
+ "js-sys",
+ "leptos",
  "leptoskit_native",
  "leptoskit_testing",
  "leptoskit_tui",
  "leptoskit_yoga",
  "reactive_graph",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "wasm-bindgen-test",
+ "web-sys",
 ]
 
 [[package]]

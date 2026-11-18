@@ -11,14 +11,19 @@ use leptoskit_aria::Dialog;
 use leptoskit_aria::DisclosureButton;
 use leptoskit_aria::DisclosurePanel;
 use leptoskit_aria::Field;
+use leptoskit_aria::Menu;
 use leptoskit_aria::RadioGroup;
 use leptoskit_aria::Tabs;
 use leptoskit_aria::ToggleButton;
 use leptoskit_native::Element;
+use leptoskit_native::HasPopup;
 use leptoskit_native::KeyPress;
+use leptoskit_native::NativeKind;
 use leptoskit_native::Orientation;
+use leptoskit_native::Placement;
 use leptoskit_native::Role;
 use leptoskit_native::Tristate;
+use leptoskit_native::components::Button;
 use leptoskit_native::components::Text;
 use leptoskit_native::components::TextInput;
 use leptoskit_native::components::View;
@@ -549,4 +554,166 @@ fn wiring_an_input_twice_keeps_one_of_each_description() {
 	// An error the field no longer shows leaves the description too.
 	let fixed = field.wire(failing.wire(TextInput()));
 	assert_eq!(fixed.props.aria().described_by, ["email-help"]);
+}
+
+#[test]
+fn a_modal_dialog_is_a_named_modal() {
+	let dialog = Dialog::new("discard", "Discard draft?").description("This cannot be undone.");
+	let tree = dialog
+		.modal(true)
+		.child(dialog.title_element(2))
+		.children(dialog.description_element());
+
+	assert_eq!(tree.kind, NativeKind::Modal);
+	assert_eq!(tree.props.id.as_deref(), Some("discard"));
+	assert_eq!(
+		tree.props.overlay.as_ref().map(|overlay| overlay.open),
+		Some(true)
+	);
+	assert_eq!(tree.props.aria().labelled_by, ["discard-title"]);
+	assert_eq!(tree.props.aria().described_by, ["discard-description"]);
+	assert!(tree.validate().is_ok());
+	assert_eq!(
+		dialog
+			.modal(false)
+			.props
+			.overlay
+			.map(|overlay| overlay.open),
+		Some(false)
+	);
+	assert!(
+		dialog.modal(true).validate().is_err(),
+		"a modal dialog must be named by its title"
+	);
+}
+
+/// What the account menu was asked to do.
+#[derive(Default)]
+struct Account {
+	open: bool,
+	chosen: Vec<&'static str>,
+}
+
+fn account_menu(account: &Arc<Mutex<Account>>) -> Element {
+	let open = account.lock().unwrap().open;
+	let choose = |name: &'static str| {
+		let account = Arc::clone(account);
+
+		move || account.lock().unwrap().chosen.push(name)
+	};
+	let toggled = Arc::clone(account);
+
+	View().child(
+		Menu::new("account", open)
+			.button(Button("Account"))
+			.item("Profile", choose("profile"))
+			.item("Sign out", choose("sign out"))
+			.placement(Placement::BelowEnd)
+			.on_toggle(move |open| toggled.lock().unwrap().open = open)
+			.into(),
+	)
+}
+
+#[test]
+fn a_menu_wires_its_button_to_its_list() -> Result<(), TestError> {
+	let account = Arc::new(Mutex::new(Account::default()));
+	let screen = {
+		let account = Arc::clone(&account);
+		move || account_menu(&account)
+	};
+
+	with_screen(screen, |tester| {
+		let button = tester.find(&Finder::aria_role(Role::Button, "Account"))?;
+		assert_eq!(button.props.id.as_deref(), Some("account-button"));
+		assert_eq!(button.props.aria().has_popup, Some(HasPopup::Menu));
+		assert_eq!(button.props.aria().expanded, Some(false));
+		assert_eq!(button.props.aria().controls, ["account-menu"]);
+		assert!(
+			tester.find(&Finder::text("Profile")).is_err(),
+			"a closed menu shows nothing"
+		);
+
+		tester.tap(&Finder::aria_role(Role::Button, "Account"))?;
+
+		let button = tester.find(&Finder::aria_role(Role::Button, "Account"))?;
+		assert_eq!(button.props.aria().expanded, Some(true));
+		let first = tester.find(&Finder::aria_role(Role::MenuItem, "Profile"))?;
+		assert_eq!(first.props.id.as_deref(), Some("account-item-0"));
+		// Items are reached with the arrow keys, not with Tab.
+		assert_eq!(first.props.aria().tab_index, Some(-1));
+
+		tester.tap(&Finder::aria_role(Role::MenuItem, "Sign out"))?;
+
+		assert!(tester.find(&Finder::text("Sign out")).is_err());
+		Ok(())
+	})?;
+
+	let account = account.lock().unwrap();
+	assert!(!account.open, "choosing an item closes the menu");
+	assert_eq!(account.chosen, ["sign out"]);
+	Ok(())
+}
+
+#[test]
+fn a_menu_list_is_a_popover_hanging_from_its_button() {
+	Owner::new().with(|| {
+		let state = ScreenState::new();
+		state.provide();
+		let tree = state.build(|| {
+			Element::from(
+				Menu::new("account", true)
+					.item("Profile", || ())
+					.item("Sign out", || ())
+					.placement(Placement::BelowEnd),
+			)
+		});
+		let list = &tree.children[1];
+		let overlay = list.props.overlay.as_ref().expect("the list is an overlay");
+
+		assert_eq!(list.kind, NativeKind::Popover);
+		assert_eq!(list.props.aria().role, Some(Role::Menu));
+		assert_eq!(list.props.aria().labelled_by, ["account-button"]);
+		assert_eq!(list.props.aria().orientation, Some(Orientation::Vertical));
+		assert_eq!(overlay.anchor.as_deref(), Some("account-button"));
+		assert_eq!(overlay.placement, Placement::BelowEnd);
+		assert_eq!(overlay.initial_focus.as_deref(), Some("account-item-0"));
+		assert!(View().child(tree).validate().is_ok());
+	});
+}
+
+#[test]
+fn arrows_in_a_menu_ask_for_focus_on_the_next_item() -> Result<(), TestError> {
+	let account = Arc::new(Mutex::new(Account {
+		open: true,
+		chosen: Vec::new(),
+	}));
+	let screen = {
+		let account = Arc::clone(&account);
+		move || account_menu(&account)
+	};
+
+	with_screen(screen, |tester| {
+		let second = Finder::aria_role(Role::MenuItem, "Sign out");
+		assert_eq!(tester.find(&second)?.props.focus_request, None);
+
+		tester.press_key(
+			&Finder::aria_role(Role::MenuItem, "Profile"),
+			KeyPress::new("ArrowDown"),
+		)?;
+
+		assert!(tester.find(&second)?.props.focus_request.is_some());
+
+		tester.press_key(&second, KeyPress::new("Tab"))?;
+
+		assert!(tester.find(&Finder::text("Sign out")).is_err());
+		Ok(())
+	})?;
+
+	let account = account.lock().unwrap();
+	assert!(!account.open, "Tab closes the menu");
+	assert!(
+		account.chosen.is_empty(),
+		"moving through a menu runs nothing"
+	);
+	Ok(())
 }

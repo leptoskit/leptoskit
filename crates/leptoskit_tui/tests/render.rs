@@ -303,6 +303,10 @@ fn a_focused_button_reverses() {
 fn focus_rings_underline_pressables() {
 	let tree = Pressable("Open").child(Text("Open"));
 	let mut surface = surface(&tree, 20, 2);
+
+	let unfocused = surface.backend().render(20, 2);
+	assert!(!unfocused.cell(0, 0).unwrap().attrs.underline());
+
 	tab(&mut surface);
 
 	let buffer = surface.backend().render(20, 2);

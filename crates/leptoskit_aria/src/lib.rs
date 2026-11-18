@@ -60,14 +60,17 @@
 //! [`Tabs`] and [`RadioGroup`] are one Tab stop each: the arrow keys, Home and
 //! End move inside them. That needs key presses, which the web and the
 //! terminal deliver; on the other backends every item stays reachable with
-//! Tab. The renderer has no focus containment yet, so a [`Dialog`] is not
-//! marked modal. The accessibility guide tracks that work.
+//! Tab. [`Menu`] is a button that opens a list of actions in a popover, and
+//! [`Dialog::modal`] is a dialog above the screen that keeps focus inside.
+//! The web and the terminal present both fully; the accessibility guide
+//! says what the other backends do.
 
 #![allow(non_snake_case)]
 
 mod dialog;
 mod disclosure;
 mod field;
+mod menu;
 mod radio_group;
 mod roving;
 mod tabs;
@@ -77,6 +80,7 @@ pub use dialog::Dialog;
 pub use disclosure::DisclosureButton;
 pub use disclosure::DisclosurePanel;
 pub use field::Field;
+pub use menu::Menu;
 pub use radio_group::RadioGroup;
 pub use tabs::Tabs;
 pub use toggle::ToggleButton;

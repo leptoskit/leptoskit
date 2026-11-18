@@ -716,6 +716,8 @@ in
         CHROMEDRIVER="$DEVENV_PROFILE/bin/chromedriver" \
           cargo test --target wasm32-unknown-unknown --package leptoskit_canvist --features web --test web
         CHROMEDRIVER="$DEVENV_PROFILE/bin/chromedriver" \
+          cargo test --target wasm32-unknown-unknown --package leptoskit_aria --test web
+        CHROMEDRIVER="$DEVENV_PROFILE/bin/chromedriver" \
           cargo test --target wasm32-unknown-unknown --package leptoskit_use --features local-storage --test web_storage --test web_storage_worker
         test:rive
         CHROMEDRIVER="$DEVENV_PROFILE/bin/chromedriver" \

@@ -174,8 +174,8 @@ pub struct Dispatch {
 pub(crate) fn handle_key(backend: &mut TuiBackend, key: Key) -> Vec<Dispatch> {
 	if !key.ctrl && !key.alt {
 		match key.code {
-			KeyCode::Tab => return move_focus(backend, 1),
-			KeyCode::BackTab => return move_focus(backend, -1),
+			KeyCode::Tab => return tab(backend, 1),
+			KeyCode::BackTab => return tab(backend, -1),
 			// Escape asks the overlay on top to close.
 			KeyCode::Escape => {
 				if let Some(&node) = backend.open_overlays().last() {
@@ -210,12 +210,35 @@ pub(crate) fn handle_key(backend: &mut TuiBackend, key: Key) -> Vec<Dispatch> {
 	}
 }
 
-/// Moves focus by `step` positions through the ring, wrapping at the ends.
-pub(crate) fn move_focus(backend: &mut TuiBackend, step: i32) -> Vec<Dispatch> {
+/// Tab or shift-tab: moves focus, unless that would carry it out of the
+/// popover on top, which closes instead. Closing puts focus back where it
+/// was before the popover opened.
+fn tab(backend: &mut TuiBackend, step: i32) -> Vec<Dispatch> {
+	let leaving = backend.focused().and_then(|focused| {
+		let top = *backend.open_overlays().last()?;
+		let popover = backend.node(top)?.kind == NativeKind::Popover;
+		let stays = next_focus(backend, step).is_some_and(|next| backend.within(next, top));
+
+		(popover && backend.within(focused, top) && !stays).then_some(top)
+	});
+
+	match leaving {
+		Some(node) => {
+			vec![Dispatch {
+				node,
+				event: NativeEvent::Dismiss,
+			}]
+		}
+		None => move_focus(backend, step),
+	}
+}
+
+/// Where focus lands `step` positions along the ring, wrapping at the ends.
+fn next_focus(backend: &TuiBackend, step: i32) -> Option<NodeId> {
 	let ring = backend.focusables();
 
 	if ring.is_empty() {
-		return backend.set_focus(None);
+		return None;
 	}
 
 	let next = match backend
@@ -233,7 +256,14 @@ pub(crate) fn move_focus(backend: &mut TuiBackend, step: i32) -> Vec<Dispatch> {
 		None => ring[ring.len() - 1],
 	};
 
-	backend.set_focus(Some(next))
+	Some(next)
+}
+
+/// Moves focus by `step` positions through the ring, wrapping at the ends.
+pub(crate) fn move_focus(backend: &mut TuiBackend, step: i32) -> Vec<Dispatch> {
+	let next = next_focus(backend, step);
+
+	backend.set_focus(next)
 }
 
 /// Enter or space activates a button or pressable.

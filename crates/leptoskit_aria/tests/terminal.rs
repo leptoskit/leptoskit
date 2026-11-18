@@ -2,9 +2,11 @@
 //! routes keys, keeps a focus ring, and carries out focus requests.
 
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 
+use leptoskit_aria::Menu;
 use leptoskit_aria::RadioGroup;
 use leptoskit_aria::Tabs;
 use leptoskit_native::Element;
@@ -177,4 +179,164 @@ fn arrows_choose_a_radio_card_and_focus_goes_with_it() {
 		frame.to_plain_lines()
 	);
 	assert_eq!(focused_row(&frame), Some(2));
+}
+
+/// What happened to the account menu.
+#[derive(Default)]
+struct Account {
+	open: bool,
+	chosen: Vec<&'static str>,
+}
+
+/// An account menu on row 0 with three actions, then a Save button.
+fn account_screen(account: &Arc<Mutex<Account>>) -> Element {
+	let open = account.lock().unwrap().open;
+	let choose = |name: &'static str| {
+		let account = Arc::clone(account);
+
+		move || account.lock().unwrap().chosen.push(name)
+	};
+	let toggled = Arc::clone(account);
+
+	Column()
+		.child(
+			Menu::new("account", open)
+				.button(Button("Account"))
+				.item("Profile", choose("profile"))
+				.item("Billing", choose("billing"))
+				.item("Sign out", choose("sign out"))
+				.on_toggle(move |open| toggled.lock().unwrap().open = open)
+				.into(),
+		)
+		.child(Text(""))
+		.child(Text(""))
+		.child(Text(""))
+		.child(Button("Save"))
+}
+
+/// The text of the control that draws reversed or underlined, as the
+/// focused button or pressable does.
+fn focused_text(frame: &leptoskit_tui::Buffer) -> Option<String> {
+	frame
+		.to_plain_lines()
+		.iter()
+		.enumerate()
+		.find_map(|(row, line)| {
+			let row = u16::try_from(row).ok()?;
+			let text = line
+				.chars()
+				.enumerate()
+				.filter(|&(column, _)| {
+					u16::try_from(column)
+						.ok()
+						.and_then(|column| frame.cell(column, row))
+						.is_some_and(|cell| cell.attrs.reverse() || cell.attrs.underline())
+				})
+				.map(|(_, character)| character)
+				.collect::<String>();
+
+			(!text.trim().is_empty()).then(|| text.trim().to_owned())
+		})
+}
+
+/// Runs keys against the account menu: whether it ends open, what was
+/// chosen, and what holds focus.
+fn account_session(events: Vec<SourceEvent>) -> (bool, Vec<&'static str>, String) {
+	let account = Arc::new(Mutex::new(Account::default()));
+	let frame = session(
+		{
+			let account = Arc::clone(&account);
+			move || account_screen(&account)
+		},
+		events,
+	);
+	let account = account.lock().unwrap();
+
+	(
+		account.open,
+		account.chosen.clone(),
+		focused_text(&frame).unwrap_or_default(),
+	)
+}
+
+#[test]
+fn opening_a_menu_moves_focus_to_its_first_item() {
+	let open = || vec![plain(KeyCode::Tab), plain(KeyCode::Enter)];
+
+	assert_eq!(
+		account_session(vec![plain(KeyCode::Tab)]),
+		(false, vec![], "[ Account ]".to_owned())
+	);
+	assert_eq!(
+		account_session(open()),
+		(true, vec![], "Profile".to_owned())
+	);
+}
+
+#[test]
+fn arrows_move_through_a_menu_without_choosing() {
+	let keys = |codes: &[KeyCode]| {
+		[KeyCode::Tab, KeyCode::Enter]
+			.iter()
+			.chain(codes)
+			.map(|&code| plain(code))
+			.collect::<Vec<_>>()
+	};
+
+	assert_eq!(
+		account_session(keys(&[KeyCode::Down])),
+		(true, vec![], "Billing".to_owned())
+	);
+	assert_eq!(
+		account_session(keys(&[KeyCode::Up])),
+		(true, vec![], "Sign out".to_owned()),
+		"the first item wraps to the last"
+	);
+	assert_eq!(
+		account_session(keys(&[KeyCode::End, KeyCode::Down])),
+		(true, vec![], "Profile".to_owned()),
+		"the last item wraps to the first"
+	);
+	assert_eq!(
+		account_session(keys(&[KeyCode::End, KeyCode::Home, KeyCode::Down])),
+		(true, vec![], "Billing".to_owned())
+	);
+}
+
+#[test]
+fn choosing_an_item_runs_it_and_closes_the_menu() {
+	assert_eq!(
+		account_session(vec![
+			plain(KeyCode::Tab),
+			plain(KeyCode::Enter),
+			plain(KeyCode::Down),
+			plain(KeyCode::Enter),
+		]),
+		(false, vec!["billing"], "[ Account ]".to_owned()),
+		"focus goes back to the button"
+	);
+}
+
+#[test]
+fn escape_and_tab_close_a_menu_without_choosing() {
+	for key in [KeyCode::Escape, KeyCode::Tab, KeyCode::BackTab] {
+		assert_eq!(
+			account_session(vec![
+				plain(KeyCode::Tab),
+				plain(KeyCode::Enter),
+				plain(KeyCode::Down),
+				plain(key),
+			]),
+			(false, vec![], "[ Account ]".to_owned()),
+			"{key:?} closes the menu and focus goes back to the button"
+		);
+	}
+}
+
+#[test]
+fn a_closed_menu_keeps_its_items_out_of_the_tab_order() {
+	assert_eq!(
+		account_session(vec![plain(KeyCode::Tab), plain(KeyCode::Tab)]),
+		(false, vec![], "[ Save ]".to_owned())
+	);
 }

@@ -119,7 +119,16 @@ impl Painter<'_> {
 				self.button(id, rect, fg, bg, attrs, focused);
 			}
 			NativeKind::Pressable => {
-				self.container(rect, node, dim, id, x, y, underline.or(Some(id)), false);
+				self.container(
+					rect,
+					node,
+					dim,
+					id,
+					x,
+					y,
+					underline.or(focused.then_some(id)),
+					false,
+				);
 			}
 			NativeKind::TextInput | NativeKind::PasswordInput => {
 				self.container(rect, node, dim, id, x, y, underline, false);

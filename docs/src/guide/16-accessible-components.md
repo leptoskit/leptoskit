@@ -11,7 +11,7 @@ Or enable `leptoskit`'s `aria` feature and import `leptoskit::aria::*`.
 
 ## The contract
 
-Components are plain functions, or small values like `Field`, `Tabs`, and `Dialog`, built from current state plus callbacks. A screen owns its state — signals, atomics, or otherwise — and rebuilds the tree when it changes; each component renders the state it is given. The parts of one widget are separate elements, so layout stays the app's choice, and compound parts share a caller-chosen id prefix: the button and panel of a disclosure both derive their ids from the same `"faq"` prefix.
+Components are plain functions, or small values like `Field`, `Tabs`, `Dialog`, and `Menu`, built from current state plus callbacks. A screen owns its state — signals, atomics, or otherwise — and rebuilds the tree when it changes; each component renders the state it is given. The parts of one widget are separate elements, so layout stays the app's choice, and compound parts share a caller-chosen id prefix: the button and panel of a disclosure both derive their ids from the same `"faq"` prefix.
 
 The renderer's validation enforces the wiring these components declare. A field whose input is labelled by an id no element carries, or a dialog without its title, is a tree that fails to commit. Wrong accessibility is a visible error, not a screen-reader-only surprise.
 
@@ -45,7 +45,8 @@ fn Faq(open: bool, toggle: impl Fn(bool) + Send + Sync + 'static) -> leptoskit_n
 | `Tabs`                                 | Tabs with selection, arrow keys, set position, and panel relationships.     |
 | `RadioGroup`                           | A choice of one among cards or rows, as one Tab stop with arrow keys.       |
 | `Field`                                | Label, help text, and error wiring for any input element.                   |
-| `Dialog`                               | A dialog container named by its title and described by its description.     |
+| `Dialog`                               | A dialog named by its title and described by its description.               |
+| `Menu`                                 | A button that opens a list of actions, with arrow keys and focus return.    |
 
 ### Disclosure
 
@@ -129,9 +130,77 @@ One `Field` names an input and carries its help text and error. Place the label,
 
 ### Dialog
 
-One `Dialog` carries a dialog's id, title, and optional description, and builds the container with `dialog.container(open)`, the title with `dialog.title_element(level)`, and the description with `dialog.description_element()`. The container is labelled by the title and, when a description is set, described by it, so the references cannot drift; validation rejects a container whose title element is missing. The dialog stays mounted while closed, so its references always resolve.
+A confirmation should stop the person until they answer it: nothing behind it can be pressed, Tab stays inside it, and a screen reader announces its title when it opens. `Dialog` names the dialog, and `dialog.modal(open)` puts it above the screen:
 
-The container is not marked `aria-modal`. A modal dialog promises that focus stays inside it, and focus containment — trapping and restoring focus — is still pending in the renderer, so the promise would hide the page from screen readers while keyboard focus still leaves. An app that contains focus itself can chain `.aria_modal(true)`. Until containment lands, pair a dialog with an assertive live region for its announcement.
+```rust
+#[component]
+fn Draft() -> impl IntoView {
+	let asking = remember(|| false);
+	let dialog = Dialog::new("discard", "Discard draft?").description("This cannot be undone.");
+
+	view! {
+		<View>
+			<Button on:press=move || asking.set(true)>"Discard"</Button>
+			{dialog
+				.modal(asking.get())
+				.on_dismiss(move || asking.set(false))
+				.initial_focus("keep")
+				.child(view! {
+					<View class="gap-3 rounded-xl bg-white p-6">
+						{dialog.title_element(2)}
+						{dialog.description_element()}
+						<Button id="keep" on:press=move || asking.set(false)>"Keep writing"</Button>
+						<Button on:press=discard>"Discard"</Button>
+					</View>
+				})}
+		</View>
+	}
+}
+```
+
+One `Dialog` carries the id, the title, and an optional description. `dialog.title_element(level)` is the heading and `dialog.description_element()` is the description, and the dialog is labelled by the first and described by the second, so the references cannot drift. Validation rejects a dialog whose title element is missing. The dialog stays in the tree while closed, so its references always resolve.
+
+`dialog.modal(open)` is a [`Modal`](07-shared-components.md#show-a-dialog-or-a-menu-above-the-screen), so everything on that page applies: `.on_dismiss(...)` hears Escape and a press outside, `.initial_focus(id)` names what takes focus, and focus goes back to where it was when the dialog closes. Put the safe answer first or name it with `initial_focus`, so Enter on a freshly opened dialog does not destroy anything.
+
+- **Web:** a `<dialog>` opened with `showModal()`. The browser makes the page behind it inert, keeps Tab inside, gives focus back, and tells assistive technology that the dialog is modal.
+- **Terminal:** drawn over the screen, with Tab kept inside and focus given back.
+- **macOS, iOS, Android, Windows and Linux (GTK):** drawn over the screen, but the screen behind still takes presses and Tab still leaves the dialog. Close it from its own buttons.
+
+`dialog.container(open)` is the older form: a dialog laid out in the page where you put it, shown or collapsed, with no top layer and no focus handling. Use it for a panel that is a dialog in name only, such as an inline confirmation inside a card. It is not marked `aria-modal`, because nothing keeps focus inside it.
+
+### Menu
+
+An account menu is a button that opens a short list of actions. The keyboard convention is strict: opening puts focus on the first action, the arrow keys move through the list, Escape closes it, and focus returns to the button. Getting any of that wrong leaves a keyboard user stranded inside the list or dropped at the top of the page.
+
+`Menu` takes the button, the actions, and whether it is open:
+
+```rust
+#[component]
+fn Account() -> impl IntoView {
+	let open = remember(|| false);
+	let menu = Menu::new("account", open.get())
+		.button(view! { <Button>"Account"</Button> })
+		.item("Profile", open_profile)
+		.item("Sign out", sign_out)
+		.placement(Placement::BelowEnd)
+		.on_toggle(move |next| open.set(next));
+
+	view! { <View class="items-end p-4">{Element::from(menu)}</View> }
+}
+```
+
+`.button(...)` is any control: a `Button`, or a `Pressable` around an avatar. The menu gives it the id `account-button`, tells assistive technology that it opens a menu and whether the menu is open, and toggles on a press. Each `.item(label, on_select)` is one action. Follow an item with `.content(...)` to show an icon beside the words or a second line; the label still names it. `.placement(...)` picks the side of the button the list opens on, and it opens below the button unless told otherwise.
+
+Your screen owns whether the menu is open. `on_toggle` is called with `true` when the button is pressed while closed, and with `false` when an action is chosen, when the button is pressed while open, and when the person dismisses the menu. Store the value and the next build shows it.
+
+Opening moves focus to the first action. Up and Down move between actions and wrap at the ends, and Home and End go to the first and last. Enter or Space runs the focused action. Choosing an action, Escape, Tab, or a press outside closes the menu, and focus goes back to the button. Moving through a menu never runs an action. The actions are out of the Tab order: Tab reaches the button, and the arrows reach the rest.
+
+The list is a [`Popover`](07-shared-components.md#show-a-dialog-or-a-menu-above-the-screen) with the `menu` role, and each action is a pressable with the `menuitem` role.
+
+- **Web and terminal:** as described.
+- **macOS, iOS, Android, Windows and Linux (GTK):** the list shows beside the button and a press on an action runs it and closes the list. The arrow keys, Escape and a press outside do nothing yet, so the button and the actions are how it closes.
+
+A menu is for actions. For a choice that stays chosen, such as a theme or a sort order, use a `RadioGroup`.
 
 ## Testing
 
@@ -143,4 +212,4 @@ The components are ordinary element trees, so the testing guide applies directly
 
 ## What comes next
 
-More widget families — menus, list boxes with selection, accordion (a disclosure group with exclusive opening), tooltips, and announcements outside a live region — follow the same pattern on top of the renderer's pending focus work: scopes, traps, and restoration, plus custom accessibility actions. Each one is behavior and semantics over the same shared tree, not a new platform surface.
+More widget families — list boxes with selection, accordion (a disclosure group with exclusive opening), tooltips, and announcements outside a live region — follow the same pattern. Each one is behavior and semantics over the same shared tree, not a new platform surface.
