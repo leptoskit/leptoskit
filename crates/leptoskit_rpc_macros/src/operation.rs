@@ -1096,11 +1096,11 @@ pub(crate) fn expand(
 			&options,
 		);
 
-		out.extend(gate_for_service(&args, build, items, || {
-			let mut stub = remote_stub(&krate, &struct_ident, &name, &variant, output, &service);
+		out.extend(gate_for_service(&args, build, items, |gate| {
+			let stub = remote_stub(&krate, &struct_ident, &name, kind, output, &service, gate);
 			let job = remote_job_stub(&krate, &struct_ident, &name, output, &service, &options);
-			stub.extend((kind == OperationKind::Job).then_some(job));
-			stub
+			let job = (kind == OperationKind::Job).then_some(job);
+			quote!(#stub #job)
 		})?);
 	} else {
 		out.extend(client_items(
@@ -1483,7 +1483,7 @@ fn stream_items(
 		};
 	};
 
-	gate_for_service(args, build, items, || {
+	gate_for_service(args, build, items, |_| {
 		quote! {
 			#[allow(deprecated)]
 			impl #krate::StreamOperation for #struct_ident {
@@ -1529,23 +1529,53 @@ fn service_const(service: Option<&LitStr>) -> TokenStream {
 /// either way, and the app's server never serves it. A crate that declares
 /// no `service` feature, such as an app calling a service, gets the stub
 /// alone, so check-cfg has no unknown feature to warn about.
+///
+/// An app crate that names a server feature in its manifest (see
+/// [`crate::manifest::server_feature`]) gets its own operations' items the
+/// same way, behind that feature. The `stub` is told which feature it stands
+/// in for: `Some` for an app crate's, `None` for a service's.
 fn gate_for_service(
 	args: &OperationArgs,
 	build: Build,
 	items: TokenStream,
-	stub: impl FnOnce() -> TokenStream,
+	stub: impl FnOnce(Option<&str>) -> TokenStream,
 ) -> syn::Result<TokenStream> {
 	if args.service.is_none() {
-		return Ok(items);
+		let feature = (build.server_feature)()
+			.map_err(|message| syn::Error::new(Span::call_site(), message))?;
+		let Some(feature) = feature else {
+			return Ok(items);
+		};
+
+		let mut gated = cfg_each(items, &quote!(feature = #feature))?;
+		gated.extend(cfg_each(
+			stub(Some(&feature)),
+			&quote!(not(feature = #feature)),
+		)?);
+		return Ok(gated);
 	}
 
 	if !(build.declares_service)() {
-		return Ok(stub());
+		return Ok(stub(None));
 	}
 
 	let mut gated = cfg_each(items, &quote!(feature = "service"))?;
-	gated.extend(cfg_each(stub(), &quote!(not(feature = "service")))?);
+	gated.extend(cfg_each(stub(None), &quote!(not(feature = "service")))?);
 	Ok(gated)
+}
+
+/// What running an app crate's operation answers in a build without the
+/// crate's server feature: nothing registers it there, so only a direct
+/// call to `Operation::run` reaches it.
+fn app_gated_error(krate: &Path, name: &LitStr, feature: &str) -> TokenStream {
+	let message = LitStr::new(
+		&format!(
+			"`{}` runs only where the crate that declares it is built with its `{feature}` feature",
+			name.value()
+		),
+		name.span(),
+	);
+	quote!(#krate::Error::server(#message))
 }
 
 /// Puts `#[cfg(#predicate)]` on each item in `items`.
@@ -1562,15 +1592,23 @@ fn cfg_each(items: TokenStream, predicate: &TokenStream) -> syn::Result<TokenStr
 
 /// A service's operation outside that service: its name and types, and a
 /// body that only says where it runs. The client sends it to the service,
-/// so the body never runs.
+/// so the body never runs. An app crate's operation built without the
+/// crate's server `feature` gets the same, saying which feature it needs.
 fn remote_stub(
 	krate: &Path,
 	struct_ident: &Ident,
 	name: &LitStr,
-	variant: &Ident,
+	kind: OperationKind,
 	output: &Type,
 	service: &TokenStream,
+	feature: Option<&str>,
 ) -> TokenStream {
+	let variant = kind.variant();
+	let error = feature.map_or_else(
+		|| quote!(#krate::server::remote_error::<Self>()),
+		|feature| app_gated_error(krate, name, feature),
+	);
+
 	quote! {
 		#[allow(deprecated)]
 		impl #krate::Operation for #struct_ident {
@@ -1585,9 +1623,7 @@ fn remote_stub(
 				_cx: &#krate::server::RemoteCx,
 			) -> impl ::core::future::Future<Output = #krate::Result<Self::Output>>
 			+ ::core::marker::Send {
-				::core::future::ready(::core::result::Result::Err(
-					#krate::server::remote_error::<Self>(),
-				))
+				::core::future::ready(::core::result::Result::Err(#error))
 			}
 		}
 	}

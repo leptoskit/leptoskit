@@ -15,6 +15,7 @@ fn build(server: bool) -> Build {
 	Build {
 		server,
 		declares_service: || true,
+		server_feature: || Ok(None),
 	}
 }
 
@@ -24,6 +25,18 @@ fn build_without_service(server: bool) -> Build {
 	Build {
 		server,
 		declares_service: || false,
+		server_feature: || Ok(None),
+	}
+}
+
+/// A build of an app crate that keeps its own operations behind its
+/// `server` feature, as `[package.metadata.leptoskit.rpc] server-feature`
+/// names it.
+fn build_with_server_feature(server: bool) -> Build {
+	Build {
+		server,
+		declares_service: || false,
+		server_feature: || Ok(Some("server".to_owned())),
 	}
 }
 
@@ -576,9 +589,11 @@ mod operations {
 	use quote::quote;
 
 	use super::build;
+	use super::build_with_server_feature;
 	use super::build_without_service;
 	use super::pretty;
 	use crate::expand as api;
+	use crate::expand_in as api_in;
 	use crate::operation::OperationKind;
 	use crate::operation::expand;
 
@@ -788,6 +803,132 @@ mod operations {
 		);
 		assert!(
 			published.contains(r#"#[rpc::query(service = "analytics")]"#),
+			"{published}"
+		);
+	}
+
+	#[test]
+	fn an_app_operation_keeps_its_body_behind_the_crates_server_feature() {
+		// A crate that names a server feature keeps its own operations'
+		// bodies and registrations behind it, so a build that links it for
+		// the client only, with `leptoskit_rpc/server` on for another
+		// crate's sake, neither compiles nor serves them.
+		let server = pretty(
+			expand(
+				OperationKind::Query,
+				TokenStream::new(),
+				messages(),
+				build_with_server_feature(true),
+			)
+			.expect("expands"),
+		);
+		assert!(
+			server.contains(
+				"#[cfg(feature = \"server\")]\n/// The latest messages in a \
+				 channel.\n#[allow(clippy::unused_async)]\npub async fn messages"
+			),
+			"{server}"
+		);
+		assert!(
+			server.contains("#[cfg(not(feature = \"server\"))]"),
+			"{server}"
+		);
+		assert!(!server.contains("remote_error"), "{server}");
+		insta::assert_snapshot!("app_query_behind_server_feature", server);
+
+		// Every registration is behind the feature.
+		let file: syn::File = syn::parse_str(&server).expect("valid Rust");
+		for item in &file.items {
+			let text = quote::ToTokens::to_token_stream(item).to_string();
+			if text.contains("inventory") {
+				assert!(text.starts_with("# [cfg (feature = \"server\")]"), "{text}");
+			}
+		}
+
+		// The client build has no `cfg` to add.
+		let client = pretty(
+			expand(
+				OperationKind::Query,
+				TokenStream::new(),
+				messages(),
+				build_with_server_feature(false),
+			)
+			.expect("expands"),
+		);
+		assert_eq!(client, query(TokenStream::new(), messages(), false));
+
+		// A service's operation still follows the `service` feature.
+		let service = pretty(
+			expand(
+				OperationKind::Query,
+				quote!(service = "analytics"),
+				messages(),
+				build_with_server_feature(true),
+			)
+			.expect("expands"),
+		);
+		assert!(!service.contains("feature = \"server\""), "{service}");
+	}
+
+	#[test]
+	fn a_server_feature_the_manifest_does_not_declare_is_an_error() {
+		let error = expand(
+			OperationKind::Query,
+			TokenStream::new(),
+			messages(),
+			super::Build {
+				server: true,
+				declares_service: || false,
+				server_feature: || Err("names `sever`".to_owned()),
+			},
+		)
+		.expect_err("an error");
+		assert!(error.to_string().contains("`sever`"), "{error}");
+	}
+
+	#[test]
+	fn api_describes_an_app_operation_only_behind_the_server_feature() {
+		let item = quote! {
+			#[rpc::query]
+			pub async fn summary(cx: &rpc::QueryCx, days: u32) -> rpc::Result<u32> {
+				Ok(days)
+			}
+		};
+		let gated = pretty(
+			api_in(TokenStream::new(), item.clone(), true, || {
+				Ok(Some("server".to_owned()))
+			})
+			.expect("expands"),
+		);
+		assert!(
+			gated.contains("#[cfg(feature = \"server\")]\n#[allow(deprecated)]\nconst _"),
+			"{gated}"
+		);
+
+		let ungated = pretty(api_in(TokenStream::new(), item, true, || Ok(None)).expect("expands"));
+		assert!(!ungated.contains("cfg(feature"), "{ungated}");
+	}
+
+	#[test]
+	fn api_keeps_an_operations_scopes() {
+		// A third party's access token reaches only routes that name a
+		// scope, so an operation's scopes must reach its description.
+		let published = pretty(
+			api(
+				quote!(scope = Scope::CloudRead, scope = "cloud:write"),
+				quote! {
+					#[rpc::query]
+					pub async fn summary(cx: &rpc::QueryCx) -> rpc::Result<u32> {
+						Ok(0)
+					}
+				},
+				true,
+			)
+			.expect("expands"),
+		);
+		let compact: String = published.split_whitespace().collect();
+		assert!(
+			compact.contains(r#"scopes:&[(Scope::CloudRead).as_str(),"cloud:write"]"#),
 			"{published}"
 		);
 	}
