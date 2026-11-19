@@ -310,10 +310,9 @@ impl Error {
 			Self::Forbidden(_) => 403,
 			Self::NotFound(_) => 404,
 			Self::Conflict(_) | Self::Contended => 409,
-			Self::TooMany(_) => 429,
+			Self::TooMany(_) | Self::RateLimited { .. } => 429,
 			Self::Server(_) | Self::Permanent(_) => 500,
 			Self::Retry(_) => 503,
-			Self::RateLimited { .. } => 429,
 			Self::Refused { status, .. } => *status,
 		}
 	}
