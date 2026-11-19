@@ -486,11 +486,14 @@ pub fn bar_list(head: (&str, &str), rows: &[Bar], empty: &str) -> Element {
 			);
 		list = list.child(match &row.href {
 			Some(href) => {
-				Pressable(format!("Filter by {}", row.label))
-					.href(href.clone())
-					.class("cursor-pointer rounded-lg hover:bg-[var(--admin-sunken)]")
-					.test_id("bar-row")
-					.child(content)
+				super::swap::link(
+					Pressable(format!("Filter by {}", row.label))
+						.href(href.clone())
+						.class("cursor-pointer rounded-lg hover:bg-[var(--admin-sunken)]")
+						.test_id("bar-row")
+						.child(content),
+					href.clone(),
+				)
 			}
 			None => content,
 		});

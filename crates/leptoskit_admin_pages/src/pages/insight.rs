@@ -1,4 +1,5 @@
-//! A builder: trends, funnels or retention, new or saved.
+//! A builder: trends, funnels or retention, new or saved. Its actions also
+//! add the web overview to a dashboard.
 //!
 //! Its controls change it in place ([`Swap`](crate::analytics::swap::Swap));
 //! Save and Add to dashboard ask through the confirm sheet.
@@ -65,6 +66,19 @@ impl Actions {
 			confirm,
 			notice,
 		}
+	}
+
+	/// `button`, which adds the web overview the page shows, with `params`,
+	/// to a dashboard.
+	pub(crate) fn add_web(self, button: Element, params: params::Params) -> Element {
+		self.shown.set_value(Shown {
+			kind: "web".to_owned(),
+			insight: None,
+			name: "Web overview".to_owned(),
+			params,
+		});
+
+		button.focus_on(self.add).on_press(move || self.add())
 	}
 
 	/// Asks for a name, then saves the insight and opens it.

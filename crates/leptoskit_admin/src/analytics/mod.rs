@@ -20,12 +20,7 @@ pub(crate) mod web;
 pub(crate) use client::Connection;
 pub(crate) use client::Facts;
 pub(crate) use client::Failure;
-use leptoskit::prelude::*;
-pub(crate) use leptoskit_admin_pages::analytics::Stat;
-pub(crate) use leptoskit_admin_pages::analytics::chip;
-pub(crate) use leptoskit_admin_pages::analytics::draw;
 pub(crate) use leptoskit_admin_pages::analytics::params;
-pub(crate) use leptoskit_admin_pages::analytics::stat;
 use leptoskit_admin_pages::model::Page;
 use leptoskit_admin_pages::model::analytics::Notice;
 use leptoskit_admin_pages::model::analytics::Why;
@@ -33,7 +28,6 @@ use params::Params;
 
 use crate::BASE;
 use crate::access::Preferences;
-use crate::components;
 use crate::shell::Screen;
 use crate::shell::Section;
 
@@ -62,18 +56,6 @@ pub(crate) struct Context<'a> {
 	pub params: &'a Params,
 	pub preferences: &'a Preferences,
 	pub facts: &'a Facts,
-}
-
-/// The page heading: title, a line under it, and actions on the right.
-pub(crate) fn header(title: &str, subtitle: &str, actions: Vec<Element>) -> Element {
-	components::header(title, subtitle, actions)
-}
-
-/// A note in the margin, if the person hasn't retired it.
-pub(crate) fn note(preferences: &Preferences, id: &str, text: &str) -> Option<Element> {
-	preferences
-		.note(id)
-		.then(|| components::margin_note(id, text.to_owned()))
 }
 
 /// The page for when the admin has no analytics service to read.

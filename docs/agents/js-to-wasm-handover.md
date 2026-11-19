@@ -348,6 +348,14 @@ The builders (Trends, Funnels, Retention, a saved insight) are `Page::Insight`, 
 - **Tests:** `pages_for_the_script` writes each trends variant's model as JSON and two `-workings.html` pages; `script.mjs` serves the JSON for the header, fakes the dashboards and insights endpoints, and checks the in-place change (marks, status, reveal, focus, Back), the breakdown colours, Save and Add to dashboard, and the phone stations. The trends, funnel and retention snapshots only gained the menus' roles and the station toggles' ▾.
 - **Next (5d):** dashboards (their cards and live refresh), Live with a G3 stream, the web overview and the actors page, Health's fleet charts, the sign-in page; then delete `admin.mjs` and the attribute rules in `shell_css`.
 
+### `feat/admin-web-overview`: admin conversion, part 5f (web overview)
+
+- **Model:** `model::analytics::Web`: the address, the `WebOverview` query and its result, the daily visitors' trend and what it answered, the pageviews and sessions series for the sparklines, whether the channels note shows, and the two drawers. The server (`analytics/web.rs`) runs the queries and still draws the visitors chart once for its drawer's `Drawn`; `pages/web.rs` draws the page.
+- **In place:** `Swap::path` knows the overview's address, so its chips and its table rows (`draw::bar_list` rows now go through `swap::link`) fetch the next model and swap it in, pushing the address. `Swap::go` takes a `Page::Web` whether chosen or a re-read; only a builder's change marks code lines.
+- **Add to dashboard:** `insight::Actions::add_web(button, params)` sends `kind: "web"` with the page's params, as the script did.
+- **Tests:** `pages_for_the_script` writes `web.html` and the last week's model; `script.mjs` checks the page hydrates without the script and a chip changes it in place.
+- **Next:** Health's fleet charts, the sign-in and refusal pages; then delete `admin.mjs`, the SSE route and the attribute rules in `shell_css`.
+
 ### `feat/admin-analytics-rest`: admin conversion, part 5e (dashboards, actors, notices)
 
 - **Models:** `model::analytics::{Dashboard, Card, Actors, Actor, Notice, Why}`. The server runs each card's saved insight (`library::dashboard`) and each actors query (`insights::actors`); `analytics::{not_configured, unreachable, listening}` now return `Page::Notice`. `pages/analytics.rs` draws all three, with the connect and first-event code that used to live in the server's `analytics/mod.rs`.
