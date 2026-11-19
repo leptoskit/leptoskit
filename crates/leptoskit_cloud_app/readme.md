@@ -6,7 +6,7 @@ Production binary (`leptoskit-cloud-control`) and hydrated web console for `Lept
 
 <!-- {/cloudAppSummary} -->
 
-It is not published. Build production images with `--features production` (which enables `ssr` + `postgres` together), or run locally in development mode (once installed beside `lk` or on `PATH`, `lk cloud control <command>` dispatches to it automatically):
+Install with `cargo binstall leptoskit_cloud_app` (or `cargo install leptoskit_cloud_app --features production --locked`). Build production images with `--features production` (which enables `ssr` + `postgres` together), or run locally in development mode (once installed beside `lk` or on `PATH`, `lk cloud control <command>` dispatches to it automatically):
 
 ```sh
 cargo run -p leptoskit_cloud_app --features server -- serve --dev

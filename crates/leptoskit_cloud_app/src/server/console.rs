@@ -30,10 +30,8 @@ pub const PKG_PATH: &str = "_leptoskit/pkg";
 /// The client library's name: the stem of `pkg/leptoskit_cloud_app.js`.
 pub const OUTPUT_NAME: &str = "leptoskit_cloud_app";
 
-const MONO: &[u8] =
-	include_bytes!("../../../../docs/src/assets/fonts/skribble/SkribbleMonoPlayful-Latin.woff2");
-const HAND: &[u8] =
-	include_bytes!("../../../../docs/src/assets/fonts/skribble/SkribbleNotoSketch-Latin.woff2");
+const MONO: &[u8] = include_bytes!("../../assets/fonts/SkribbleMonoPlayful-Latin.woff2");
+const HAND: &[u8] = include_bytes!("../../assets/fonts/SkribbleNotoSketch-Latin.woff2");
 
 /// The leptos options the console renders with. `site` is the directory the
 /// client build wrote, holding `pkg/`.
