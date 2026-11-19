@@ -26,6 +26,42 @@ protocol RemoteRegistrar {
     func register() async
 }
 
+/// What the device says about itself for push targeting, as `DEVICE`
+/// (method 9) answers it. A `nil` value is unknown.
+public struct DeviceDetails: Equatable, Sendable {
+    public var locale: String?
+    public var timeZone: String?
+    public var appVersion: String?
+
+    public init(locale: String?, timeZone: String?, appVersion: String?) {
+        self.locale = locale
+        self.timeZone = timeZone
+        self.appVersion = appVersion
+    }
+}
+
+/// Where the device's details come from. Production reads Foundation;
+/// tests substitute a fake.
+@MainActor
+protocol DeviceFacts {
+    func current() -> DeviceDetails
+}
+
+/// The OS's own answers: the first preferred language, the current time
+/// zone's identifier, and the app bundle's `CFBundleShortVersionString` —
+/// read fresh on every call, so a language change or an app update shows
+/// on the next read.
+@MainActor
+struct SystemDeviceFacts: DeviceFacts {
+    func current() -> DeviceDetails {
+        DeviceDetails(
+            locale: Locale.preferredLanguages.first,
+            timeZone: TimeZone.current.identifier,
+            appVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+        )
+    }
+}
+
 @MainActor
 private struct SystemRemoteRegistrar: RemoteRegistrar {
     func register() async {
@@ -171,14 +207,17 @@ private final class SystemNotificationService: NotificationService {
 @MainActor
 public final class NotificationsPlugin: NativePlugin {
     public let name = "notifications"
-    // The iOS and macOS hosts advertise the remote methods; the other hosts
-    // keep the local-only set. The dispatcher answers Unavailable for
-    // anything `methods` omits.
+    // The iOS and macOS hosts advertise the remote methods and the device
+    // details enrollment sends; the other hosts keep the local-only set.
+    // The dispatcher answers Unavailable for anything `methods` omits.
     #if os(iOS) || os(macOS)
-    public let methods: [UInt32] = [0, 1, 2, 3, 6, 7, 8]
+    public let methods: [UInt32] = [0, 1, 2, 3, 6, 7, 8, 9]
     #else
     public let methods: [UInt32] = [0, 1, 2, 3, 6]
     #endif
+    /// The longest device detail a `DEVICE` reply carries, in bytes,
+    /// matching the Rust contract's `MAX_DEVICE_DETAIL_BYTES`.
+    static let maxDeviceDetailBytes = 256
     /// How long `REMOTE_REGISTER` waits for the OS answer before replying
     /// with the unchanged snapshot, in nanoseconds. Apple answers
     /// registration quickly; the bound keeps a silent OS from hanging the
@@ -191,6 +230,7 @@ public final class NotificationsPlugin: NativePlugin {
 
     private let service: any NotificationService
     private let registrar: any RemoteRegistrar
+    private let device: any DeviceFacts
     private let remoteWaitLimitNanos: UInt64
     private var closed = false
     private var requesting = false
@@ -202,12 +242,21 @@ public final class NotificationsPlugin: NativePlugin {
     public init() {
         service = SystemNotificationService()
         registrar = SystemRemoteRegistrar()
+        device = SystemDeviceFacts()
         remoteWaitLimitNanos = Self.remoteWaitLimitNanos
     }
 
     init(service: any NotificationService) {
         self.service = service
         registrar = SystemRemoteRegistrar()
+        device = SystemDeviceFacts()
+        remoteWaitLimitNanos = Self.remoteWaitLimitNanos
+    }
+
+    init(service: any NotificationService, device: any DeviceFacts) {
+        self.service = service
+        registrar = SystemRemoteRegistrar()
+        self.device = device
         remoteWaitLimitNanos = Self.remoteWaitLimitNanos
     }
 
@@ -218,6 +267,7 @@ public final class NotificationsPlugin: NativePlugin {
     ) {
         self.service = service
         self.registrar = registrar
+        device = SystemDeviceFacts()
         self.remoteWaitLimitNanos = remoteWaitLimitNanos
     }
 
@@ -268,11 +318,43 @@ public final class NotificationsPlugin: NativePlugin {
             return try Self.encodeSnapshot(RemoteRegistration.current())
         case 8:
             return try await registerRemote(payload: payload)
+        // Method 9 is dispatched where `methods` advertises it: the iOS and
+        // macOS hosts, whose enrollment sends what it answers.
+        case 9:
+            guard payload.count == 0 else { throw PluginError.invalidArgument }
+            return Self.encodeDevice(device.current())
         default:
             throw PluginError.unavailable
         }
 
         return Data()
+    }
+
+    /// Encodes a `DEVICE` reply: three length-prefixed UTF-8 strings —
+    /// locale, time zone, app version — each empty when unknown. A value
+    /// past the contract's bound, or carrying a control character, is sent
+    /// as unknown rather than refused, so one odd detail never costs the
+    /// others.
+    static func encodeDevice(_ details: DeviceDetails) -> Data {
+        var data = Data()
+
+        for value in [details.locale, details.timeZone, details.appVersion] {
+            let bytes = Array((value.flatMap(shippable) ?? "").utf8)
+            var length = UInt32(bytes.count).littleEndian
+            withUnsafeBytes(of: &length) { data.append(contentsOf: $0) }
+            data.append(contentsOf: bytes)
+        }
+
+        return data
+    }
+
+    /// A detail the contract can carry, or `nil`.
+    private static func shippable(_ value: String) -> String? {
+        guard value.utf8.count <= maxDeviceDetailBytes,
+              !value.unicodeScalars.contains(where: { $0.value <= 31 || (127...159).contains($0.value) })
+        else { return nil }
+
+        return value
     }
 
     /// Asks the OS to register for remote notifications on the main actor,

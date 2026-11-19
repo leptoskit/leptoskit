@@ -47,6 +47,17 @@ pub const MAX_FCM_TOKEN_LEN: usize = 4_096;
 /// The longest Web Push subscription endpoint URL, in bytes.
 pub const MAX_WEB_ENDPOINT_LEN: usize = 2_048;
 
+/// The longest locale tag a device reports, in bytes: the 35 characters
+/// RFC 5646 asks every implementation to accept.
+pub const MAX_LOCALE_LEN: usize = 35;
+
+/// The longest time zone name a device reports, in bytes. IANA names are
+/// far shorter; the bound leaves room without guessing a ceiling.
+pub const MAX_TIME_ZONE_LEN: usize = 64;
+
+/// The longest app version a device reports, in bytes.
+pub const MAX_APP_VERSION_LEN: usize = 64;
+
 /// The most bytes a provider's answer is read. Every response is a
 /// bounded status object, and reading past this would let a strange
 /// answer grow the service's memory.
@@ -423,6 +434,245 @@ pub(crate) fn base64_url(text: &str) -> Option<Vec<u8>> {
 	})
 }
 
+/// What a device says about itself when it enrolls: the language it
+/// prefers, the time zone it is in, and the version of the app running on
+/// it. Every detail is optional — a browser knows no app version unless
+/// the app names one — and the clients fill them in on their own, so an app
+/// author writes no code for them. A send's condition reads them as
+/// `device.locale`, `device.language`, `device.time_zone`, and
+/// `device.app_version` (see [`crate::condition`]).
+///
+/// They belong to the endpoint, not the person: one person's phone and
+/// laptop can differ, and re-enrolling the same endpoint replaces what it
+/// said before. Only the endpoint's owner reads them back
+/// ([`EndpointSummary::device`]).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct DeviceDetails {
+	/// The preferred language, as a BCP 47 tag such as `en-GB` or
+	/// `zh-Hant-TW`: at most [`MAX_LOCALE_LEN`] bytes. Stored in canonical
+	/// case — `en_gb` becomes `en-GB` — by [`canonical_locale`].
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub locale: Option<String>,
+	/// The time zone, as an IANA name such as `Europe/London`: at most
+	/// [`MAX_TIME_ZONE_LEN`] bytes, checked for shape by
+	/// [`check_time_zone`].
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub time_zone: Option<String>,
+	/// The app's version, as free text such as `2.1.0`: at most
+	/// [`MAX_APP_VERSION_LEN`] bytes with no control characters.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub app_version: Option<String>,
+}
+
+impl DeviceDetails {
+	/// The details as the service stores them: blank details dropped,
+	/// the rest trimmed, and the locale in canonical case.
+	///
+	/// # Errors
+	///
+	/// A message naming the detail that fails its check: [`canonical_locale`],
+	/// [`check_time_zone`], or [`check_app_version`].
+	pub fn normalized(&self) -> Result<Self, String> {
+		Ok(Self {
+			locale: present(self.locale.as_deref())
+				.map(canonical_locale)
+				.transpose()?,
+			time_zone: present(self.time_zone.as_deref())
+				.map(|zone| check_time_zone(zone).map(|()| zone.to_owned()))
+				.transpose()?,
+			app_version: present(self.app_version.as_deref())
+				.map(|version| check_app_version(version).map(|()| version.to_owned()))
+				.transpose()?,
+		})
+	}
+
+	/// The details a client can send without its enrollment being refused:
+	/// each one [normalized](Self::normalized), and any that fails its check
+	/// dropped rather than sent. The enrollment clients run this on what the
+	/// platform reports, so an odd value from one device never costs it its
+	/// push.
+	#[must_use]
+	pub fn sanitized(&self) -> Self {
+		Self {
+			locale: present(self.locale.as_deref()).and_then(|tag| canonical_locale(tag).ok()),
+			time_zone: present(self.time_zone.as_deref())
+				.filter(|zone| check_time_zone(zone).is_ok())
+				.map(str::to_owned),
+			app_version: present(self.app_version.as_deref())
+				.filter(|version| check_app_version(version).is_ok())
+				.map(str::to_owned),
+		}
+	}
+
+	/// The locale's primary language subtag, lower case: `fr` for `fr-CA`.
+	/// What a condition's `device.language` reads.
+	#[must_use]
+	pub fn language(&self) -> Option<&str> {
+		self.locale.as_deref().and_then(language_of)
+	}
+
+	/// Whether the device said nothing about itself.
+	#[must_use]
+	pub fn is_empty(&self) -> bool {
+		self.locale.is_none() && self.time_zone.is_none() && self.app_version.is_none()
+	}
+}
+
+/// A detail with something in it, trimmed: blank is the same as absent.
+fn present(value: Option<&str>) -> Option<&str> {
+	value.map(str::trim).filter(|value| !value.is_empty())
+}
+
+/// The primary language subtag of a locale tag: what comes before the
+/// first `-` or `_`. Answered as written; a stored tag is already
+/// canonical, so it is lower case there.
+pub(crate) fn language_of(locale: &str) -> Option<&str> {
+	locale
+		.split(['-', '_'])
+		.next()
+		.filter(|language| !language.is_empty())
+}
+
+/// Checks a device's details before they're sent, so a client can drop a
+/// bad one and the service refuses it all the same. See
+/// [`DeviceDetails::normalized`].
+///
+/// # Errors
+///
+/// A message naming the detail that's wrong.
+pub fn check_device_details(details: &DeviceDetails) -> Result<(), String> {
+	details.normalized().map(|_| ())
+}
+
+/// A BCP 47 locale tag in canonical case: the language subtag lower case,
+/// a four-letter script subtag in title case, a two-letter region subtag
+/// upper case, and everything else lower case — and everything after a
+/// single-character extension subtag lower case too. `_` separators, which
+/// some platforms report, become `-`. So `EN_gb` is `en-GB`, and
+/// `zh-hant-tw` is `zh-Hant-TW`.
+///
+/// The check is of shape, not of the registry: subtags of 1 to 8 letters
+/// and digits, the first one 2 to 8 letters, at most [`MAX_LOCALE_LEN`]
+/// bytes in all.
+///
+/// # Errors
+///
+/// A message naming the rule the tag breaks.
+pub fn canonical_locale(tag: &str) -> Result<String, String> {
+	let tag = tag.trim();
+	let complaint = || {
+		format!(
+			"a device's locale is a BCP 47 tag such as `en-GB`: at most {MAX_LOCALE_LEN} bytes of \
+			 letter-and-digit subtags joined by `-`, starting with a language"
+		)
+	};
+
+	if tag.is_empty() || tag.len() > MAX_LOCALE_LEN {
+		return Err(complaint());
+	}
+
+	let mut canonical = String::with_capacity(tag.len());
+	let mut extension = false;
+
+	for (index, subtag) in tag.split(['-', '_']).enumerate() {
+		if subtag.is_empty()
+			|| subtag.len() > 8
+			|| !subtag.bytes().all(|byte| byte.is_ascii_alphanumeric())
+		{
+			return Err(complaint());
+		}
+
+		let letters = subtag.bytes().all(|byte| byte.is_ascii_alphabetic());
+
+		if index == 0 {
+			if subtag.len() < 2 || !letters {
+				return Err(complaint());
+			}
+
+			canonical.push_str(&subtag.to_ascii_lowercase());
+			continue;
+		}
+
+		canonical.push('-');
+		extension |= subtag.len() == 1;
+
+		match subtag.len() {
+			2 if letters && !extension => canonical.push_str(&subtag.to_ascii_uppercase()),
+			4 if letters && !extension => {
+				let lower = subtag.to_ascii_lowercase();
+				canonical.push_str(&lower[..1].to_ascii_uppercase());
+				canonical.push_str(&lower[1..]);
+			}
+			_ => canonical.push_str(&subtag.to_ascii_lowercase()),
+		}
+	}
+
+	Ok(canonical)
+}
+
+/// Checks a time zone name's shape: one or more `/`-separated parts, each
+/// starting with a letter and made of letters, digits, `_`, `-`, and `+`,
+/// at most [`MAX_TIME_ZONE_LEN`] bytes in all — `Europe/London`,
+/// `America/Argentina/Buenos_Aires`, `Etc/GMT+5`, `UTC`.
+///
+/// Only the shape: whether the name is in a time zone database is not
+/// checked, because a device's database can be newer than the server's,
+/// and an enrollment must never fail over a detail.
+///
+/// # Errors
+///
+/// A message naming the rule the name breaks.
+pub fn check_time_zone(name: &str) -> Result<(), String> {
+	let complaint = || {
+		format!(
+			"a device's time zone is an IANA name such as `Europe/London`: at most \
+			 {MAX_TIME_ZONE_LEN} bytes of `/`-separated parts that start with a letter"
+		)
+	};
+
+	if name.is_empty() || name.len() > MAX_TIME_ZONE_LEN {
+		return Err(complaint());
+	}
+
+	for part in name.split('/') {
+		let shaped = part
+			.bytes()
+			.next()
+			.is_some_and(|byte| byte.is_ascii_alphabetic())
+			&& part
+				.bytes()
+				.all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'+'));
+
+		if !shaped {
+			return Err(complaint());
+		}
+	}
+
+	Ok(())
+}
+
+/// Checks an app version: 1 to [`MAX_APP_VERSION_LEN`] bytes of text with
+/// no control characters. Free text on purpose — `2.1.0`, `2.1.0-beta.3`,
+/// `2024.11 (812)` — and a condition compares it as a version only when it
+/// reads as one (see [`crate::condition::compare_versions`]).
+///
+/// # Errors
+///
+/// A message naming the rule the version breaks.
+pub fn check_app_version(version: &str) -> Result<(), String> {
+	if version.trim().is_empty()
+		|| version.len() > MAX_APP_VERSION_LEN
+		|| version.chars().any(char::is_control)
+	{
+		return Err(format!(
+			"a device's app version is 1 to {MAX_APP_VERSION_LEN} bytes of text with no control \
+			 characters"
+		));
+	}
+
+	Ok(())
+}
+
 /// One enrolled endpoint: the opaque record of a device or browser the
 /// person's app pushed them to enroll. The credential is never in it.
 #[table(name = "push_endpoints", unique(fingerprint), index(person))]
@@ -455,6 +705,31 @@ pub struct PushEndpoint {
 	pub invalidated_at: Option<leptoskit_db::Timestamp>,
 	#[db(created_at)]
 	pub created_at: leptoskit_db::Timestamp,
+	/// The device's preferred locale, a canonical BCP 47 tag, as it last
+	/// enrolled: what a condition's `device.locale` and `device.language`
+	/// read. `None` when it said nothing.
+	#[db(max_len = 35)]
+	pub locale: Option<String>,
+	/// The device's IANA time zone name, as it last enrolled.
+	#[db(max_len = 64)]
+	pub time_zone: Option<String>,
+	/// The app's version on the device, as it last enrolled: what a
+	/// condition's `device.app_version` reads.
+	#[db(max_len = 64)]
+	pub app_version: Option<String>,
+}
+
+#[cfg(feature = "service")]
+impl PushEndpoint {
+	/// The details the device last enrolled with.
+	#[must_use]
+	pub(crate) fn device_details(&self) -> DeviceDetails {
+		DeviceDetails {
+			locale: self.locale.clone(),
+			time_zone: self.time_zone.clone(),
+			app_version: self.app_version.clone(),
+		}
+	}
 }
 
 /// One attempt's record, per notification and endpoint: the durable
@@ -677,8 +952,9 @@ pub struct DeliveryStatus {
 }
 
 /// One enrolled endpoint, as its owner sees it: the opaque id, the
-/// platform, when it was enrolled, and whether a provider's answer has
-/// since invalidated it. The credential is never here.
+/// platform, when it was enrolled, whether a provider's answer has since
+/// invalidated it, and what the device last said about itself. The
+/// credential is never here, and nobody but the owner reads this.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct EndpointSummary {
 	/// The endpoint's opaque id, for revocation.
@@ -691,6 +967,11 @@ pub struct EndpointSummary {
 	/// did: an invalidated endpoint stays listed — it explains itself —
 	/// but takes no further deliveries.
 	pub invalidated_at: Option<leptoskit_db::Timestamp>,
+	/// The locale, time zone, and app version the device last enrolled
+	/// with, as the service stored them. Empty when it said nothing — and
+	/// when the service predates device details.
+	#[serde(default)]
+	pub device: DeviceDetails,
 }
 
 /// Registers one push endpoint for the signed-in person: their app hands
@@ -701,6 +982,13 @@ pub struct EndpointSummary {
 /// enrollment makes no duplicate, and a Web Push subscription whose
 /// browser rotated its keys updates the stored credential in place: the
 /// endpoint and its queued deliveries stay.
+///
+/// `device` is what the device says about itself — its locale, time zone,
+/// and app version, each optional — and the enrollment clients fill it in
+/// on their own. A re-enrollment replaces what the endpoint said before;
+/// when only the details changed, the credential's generation stays and
+/// queued deliveries are untouched. An enrollment that names none, as
+/// every one did before details existed, stores none.
 ///
 /// A destination another **live** account holds is refused rather than
 /// reassigned: the device's previous account revokes it first (signing
@@ -715,23 +1003,26 @@ pub struct EndpointSummary {
 ///
 /// [`rpc::Error::Forbidden`] unless the app forwarded a signed-in person,
 /// [`rpc::Error::Invalid`] for a credential that fails
-/// [`check_credential`], a host the push-host policy won't push to, an
-/// endpoint past [`MAX_ENDPOINTS`], or a platform this server has no
-/// transport configured for, and [`rpc::Error::Conflict`] when another
-/// account holds the destination live.
+/// [`check_credential`], details that fail [`check_device_details`], a
+/// host the push-host policy won't push to, an endpoint past
+/// [`MAX_ENDPOINTS`], or a platform this server has no transport
+/// configured for, and [`rpc::Error::Conflict`] when another account
+/// holds the destination live.
 #[rpc::mutation(service = "notifications")]
 pub async fn register_push_endpoint(
 	cx: &rpc::MutationCx,
 	credential: PushCredential,
+	#[serde(default)] device: DeviceDetails,
 ) -> rpc::Result<EndpointSummary> {
 	let me = crate::service::me(cx.identity())?;
 	let push = crate::service::push::Push::of(cx)?;
-	crate::service::push::register(cx, push, me, &credential).await
+	crate::service::push::register(cx, push, me, &credential, &device).await
 }
 
 /// The signed-in person's enrolled endpoints, oldest first, one bounded
-/// page at a time: the opaque ids, platforms, enrollment times, and
-/// whether each has been invalidated. Invalidated endpoints are included
+/// page at a time: the opaque ids, platforms, enrollment times, whether
+/// each has been invalidated, and the details each device last reported
+/// ([`EndpointSummary::device`]). Invalidated endpoints are included
 /// — a device list that hides them can't explain them — and the page is
 /// bounded, so however many times a device churns the answer stays small.
 /// The credentials are never in the answer, and nobody else's endpoints
@@ -923,6 +1214,175 @@ mod tests {
 		.destination()
 		.unwrap();
 		assert_eq!(destination, ported, "the default port is nothing");
+	}
+
+	/// Locale tags fold to canonical case, `_` separators become `-`, and
+	/// anything that isn't a tag's shape is refused.
+	#[test]
+	fn locales_fold_to_canonical_case() {
+		use super::canonical_locale;
+
+		for (tag, canonical) in [
+			("en-GB", "en-GB"),
+			("EN_gb", "en-GB"),
+			("en-gb", "en-GB"),
+			("fr", "fr"),
+			("zh-hant-tw", "zh-Hant-TW"),
+			("ZH-HANS", "zh-Hans"),
+			("es-419", "es-419"),
+			("sr-Latn-RS", "sr-Latn-RS"),
+			("de-DE-1996", "de-DE-1996"),
+			("en-US-u-ca-gregory", "en-US-u-ca-gregory"),
+			("EN-us-X-PRIVATE", "en-US-x-private"),
+			("  pt-br  ", "pt-BR"),
+			("und", "und"),
+		] {
+			assert_eq!(canonical_locale(tag).as_deref(), Ok(canonical), "{tag:?}");
+		}
+
+		for bad in [
+			"",
+			"   ",
+			"e",
+			"x-private",
+			"1en",
+			"en--GB",
+			"en-",
+			"-en",
+			"en GB",
+			"en-GB!",
+			"en-abcdefghi",
+			"français",
+			&format!("en-{}", "a".repeat(40)),
+		] {
+			assert!(canonical_locale(bad).is_err(), "{bad:?} is not a tag");
+		}
+	}
+
+	/// Time zones are checked for shape only, and app versions are free
+	/// text with bounds.
+	#[test]
+	fn time_zones_and_app_versions_are_checked_for_shape() {
+		use super::MAX_APP_VERSION_LEN;
+		use super::MAX_TIME_ZONE_LEN;
+		use super::check_app_version;
+		use super::check_time_zone;
+
+		for zone in [
+			"Europe/London",
+			"America/Argentina/Buenos_Aires",
+			"America/Port-au-Prince",
+			"Etc/GMT+5",
+			"Etc/GMT-14",
+			"UTC",
+			"EST5EDT",
+			// The shape, not the database: a zone newer than the server's
+			// still enrolls.
+			"Mars/Olympus_Mons",
+		] {
+			assert_eq!(check_time_zone(zone), Ok(()), "{zone}");
+		}
+
+		for bad in [
+			"",
+			"/Europe/London",
+			"Europe/London/",
+			"Europe//London",
+			"Europe/../London",
+			"Europe/London ",
+			"1Europe/London",
+			"Europe/Lon\u{0}don",
+			&format!("Europe/{}", "L".repeat(MAX_TIME_ZONE_LEN)),
+		] {
+			assert!(check_time_zone(bad).is_err(), "{bad:?}");
+		}
+
+		for version in ["2.1.0", "2.1.0-beta.3", "2024.11 (812)", "nightly"] {
+			assert_eq!(check_app_version(version), Ok(()), "{version}");
+		}
+
+		for bad in [
+			"",
+			"  ",
+			"2.1\n",
+			"2.1\u{7f}",
+			&"9".repeat(MAX_APP_VERSION_LEN + 1),
+		] {
+			assert!(check_app_version(bad).is_err(), "{bad:?}");
+		}
+	}
+
+	/// The service stores details normalized and refuses a bad one by
+	/// name; a client's sanitized details drop a bad one instead, so an odd
+	/// device never loses its enrollment over one.
+	#[test]
+	fn details_normalize_for_the_service_and_sanitize_for_clients() {
+		use super::DeviceDetails;
+
+		let reported = DeviceDetails {
+			locale: Some(" en_gb ".into()),
+			time_zone: Some("Europe/London".into()),
+			app_version: Some(" 2.1.0 ".into()),
+		};
+		let stored = reported.normalized().unwrap();
+		assert_eq!(
+			stored,
+			DeviceDetails {
+				locale: Some("en-GB".into()),
+				time_zone: Some("Europe/London".into()),
+				app_version: Some("2.1.0".into()),
+			}
+		);
+		assert_eq!(stored.language(), Some("en"));
+		assert_eq!(reported.sanitized(), stored);
+
+		// Blank is absent.
+		let blank = DeviceDetails {
+			locale: Some(String::new()),
+			time_zone: Some("  ".into()),
+			app_version: None,
+		};
+		assert_eq!(blank.normalized(), Ok(DeviceDetails::default()));
+		assert!(blank.normalized().unwrap().is_empty());
+
+		// One bad detail refuses the whole enrollment on the service,
+		// naming it, and drops alone on a client.
+		let odd = DeviceDetails {
+			locale: Some("français".into()),
+			time_zone: Some("Europe/London".into()),
+			app_version: Some("2.1".into()),
+		};
+		let refusal = odd.normalized().unwrap_err();
+		assert!(refusal.contains("locale"), "{refusal}");
+		assert!(super::check_device_details(&odd).is_err());
+		assert_eq!(
+			odd.sanitized(),
+			DeviceDetails {
+				locale: None,
+				time_zone: Some("Europe/London".into()),
+				app_version: Some("2.1".into()),
+			}
+		);
+
+		// The wire form leaves absent details out, and an old request with
+		// none parses as none.
+		assert_eq!(
+			serde_json::to_value(&stored).unwrap(),
+			serde_json::json!({
+				"locale": "en-GB",
+				"time_zone": "Europe/London",
+				"app_version": "2.1.0",
+			})
+		);
+		assert_eq!(
+			serde_json::to_value(DeviceDetails::default()).unwrap(),
+			serde_json::json!({})
+		);
+		let old: super::RegisterPushEndpoint = serde_json::from_value(serde_json::json!({
+			"credential": { "apns": { "device_token": "a1b2c3d4".repeat(8) } }
+		}))
+		.unwrap();
+		assert_eq!(old.device, DeviceDetails::default());
 	}
 
 	/// Nothing secret prints: the credential types' `Debug` shows the

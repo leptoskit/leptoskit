@@ -54,6 +54,11 @@ pub const REMOTE_TOKEN: MethodId = MethodId(7);
 /// in the bound, so silence can never masquerade as a stale token. Other
 /// platforms report `Unavailable`.
 pub const REMOTE_REGISTER: MethodId = MethodId(8);
+/// iOS, macOS, and Android: empty payload; reads what the device says about
+/// itself for push targeting — its preferred locale, its current time zone,
+/// and the app's version — as a [`DeviceInfo`], without side effects. Other
+/// platforms, and hosts that predate it, report `Unavailable`.
+pub const DEVICE: MethodId = MethodId(9);
 /// Exported independently grantable operations.
 pub const METHODS: &[MethodId] = &[
 	PERMISSION,
@@ -65,6 +70,7 @@ pub const METHODS: &[MethodId] = &[
 	CANCEL_ALL,
 	REMOTE_TOKEN,
 	REMOTE_REGISTER,
+	DEVICE,
 ];
 
 /// The longest APNs device token, in hex characters. Apple's tokens are 64
@@ -87,6 +93,76 @@ pub const MAX_FCM_TOKEN_CHARS: usize = 4_096;
 /// The longest registration-failure reason, in bytes. Anything longer is
 /// truncated by the host before it reaches this contract.
 pub const MAX_REMOTE_FAILURE_BYTES: usize = 256;
+
+/// The longest device detail a [`DEVICE`] reply carries, in bytes. The
+/// notifications service bounds each detail tighter; this keeps a hostile
+/// answer out without guessing what the OS reports.
+pub const MAX_DEVICE_DETAIL_BYTES: usize = 256;
+
+/// What the device says about itself for push targeting, as the host read
+/// it from the OS: the preferred locale (Apple's first preferred language,
+/// Android's default locale tag), the current time zone's identifier, and
+/// the app's version (`CFBundleShortVersionString` on Apple, the package's
+/// version name on Android). Each is `None` when the OS reported nothing.
+///
+/// The wire form is three length-prefixed UTF-8 strings in that order,
+/// each at most [`MAX_DEVICE_DETAIL_BYTES`] and free of control
+/// characters; an empty string means unknown.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DeviceInfo {
+	/// The preferred locale, as the OS spells its tag.
+	pub locale: Option<String>,
+	/// The current time zone's identifier, an IANA name.
+	pub time_zone: Option<String>,
+	/// The app's version string.
+	pub app_version: Option<String>,
+}
+impl DeviceInfo {
+	/// Encodes a `DEVICE` reply.
+	pub fn encode(&self) -> Result<Bytes, Error> {
+		let mut output = Encoder::with_capacity(12 + 3 * MAX_DEVICE_DETAIL_BYTES);
+
+		for value in [&self.locale, &self.time_zone, &self.app_version] {
+			let text = value.as_deref().unwrap_or("");
+			validate_detail(text)?;
+			output.bytes(text.as_bytes())?;
+		}
+
+		Ok(output.finish())
+	}
+
+	/// Validates a complete `DEVICE` reply, including trailing bytes.
+	pub fn decode(payload: &[u8]) -> Result<Self, Error> {
+		if payload.len() > 12 + 3 * MAX_DEVICE_DETAIL_BYTES {
+			return Err(Error::InvalidArgument);
+		}
+
+		let mut input = Decoder::new(payload);
+		let mut detail = || -> Result<Option<String>, Error> {
+			let text = input.string()?;
+			validate_detail(text)?;
+			Ok((!text.is_empty()).then(|| text.to_owned()))
+		};
+		let info = Self {
+			locale: detail()?,
+			time_zone: detail()?,
+			app_version: detail()?,
+		};
+		input.finish()?;
+
+		Ok(info)
+	}
+}
+
+/// One device detail's bounds: at most [`MAX_DEVICE_DETAIL_BYTES`], no
+/// control characters.
+fn validate_detail(value: &str) -> Result<(), Error> {
+	if value.len() > MAX_DEVICE_DETAIL_BYTES || value.chars().any(char::is_control) {
+		Err(Error::InvalidArgument)
+	} else {
+		Ok(())
+	}
+}
 
 /// Current OS notification authorization, without guessing prompt history.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -886,6 +962,69 @@ mod tests {
 		] {
 			assert!(!debug.contains(&fcm_bytes), "{debug}");
 		}
+	}
+
+	/// A `DEVICE` reply carries three strings, an empty one meaning
+	/// unknown; anything past the bounds, with a control character, or
+	/// with trailing bytes is refused, never truncated.
+	#[test]
+	fn device_info_round_trips_and_rejects_broken_replies() {
+		let info = DeviceInfo {
+			locale: Some("zh-Hant-TW".into()),
+			time_zone: Some("Asia/Taipei".into()),
+			app_version: Some("2.1.0 (41)".into()),
+		};
+		let bytes = info.encode().unwrap();
+		assert_eq!(DeviceInfo::decode(&bytes), Ok(info.clone()));
+
+		// The wire is the three length-prefixed strings, in order.
+		let mut expected = Encoder::default();
+		for value in ["zh-Hant-TW", "Asia/Taipei", "2.1.0 (41)"] {
+			expected.bytes(value.as_bytes()).unwrap();
+		}
+		assert_eq!(bytes, expected.finish());
+
+		let unknown = DeviceInfo::default();
+		let empty = unknown.encode().unwrap();
+		assert_eq!(empty.len(), 12, "three empty strings");
+		assert_eq!(DeviceInfo::decode(&empty), Ok(unknown));
+
+		for length in 0..bytes.len() {
+			assert!(DeviceInfo::decode(&bytes[..length]).is_err(), "{length}");
+		}
+
+		let mut trailing = bytes.to_vec();
+		trailing.push(0);
+		assert!(DeviceInfo::decode(&trailing).is_err());
+
+		for bad in [
+			"x".repeat(MAX_DEVICE_DETAIL_BYTES + 1),
+			"en\u{7}GB".to_owned(),
+			"2.1\n".to_owned(),
+		] {
+			let mut reply = Encoder::default();
+			for value in [bad.as_str(), "", ""] {
+				reply.bytes(value.as_bytes()).unwrap();
+			}
+			assert_eq!(
+				DeviceInfo::decode(&reply.finish()),
+				Err(Error::InvalidArgument),
+				"{bad:?}"
+			);
+
+			let encoded = DeviceInfo {
+				app_version: Some(bad.clone()),
+				..DeviceInfo::default()
+			}
+			.encode();
+			assert_eq!(encoded, Err(Error::InvalidArgument), "{bad:?}");
+		}
+
+		assert_eq!(
+			DeviceInfo::decode(&[0; 13 + 3 * MAX_DEVICE_DETAIL_BYTES]),
+			Err(Error::InvalidArgument)
+		);
+		assert!(METHODS.contains(&DEVICE));
 	}
 
 	#[test]

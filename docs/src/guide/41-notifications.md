@@ -1,8 +1,8 @@
 # Notifications
 
-You want to tell someone something after they have left the screen: an invoice was paid, a ride is arriving, someone replied. The usual route hands your users and your sending patterns to a third-party push platform, and binds delivery to OS credentials you have to enrol for. leptoskit has a notifications **service** you add with one table in `leptoskit.toml`: a small program with its own database that runs beside your app's server, stores one durable notification per recipient, and serves each person their own inbox. Your server sends to explicit recipients, to a topic's subscribers, to the people a condition matches over topics and the attributes you set, or to everyone the service knows, and when you configure a push transport, the same send also wakes the devices its recipients enrolled — APNs, FCM, and Web Push, first-party, with your app's own credentials and no management vendor in between. Each send can be shaped — priority, an image, a sound, a badge, a click link, per-platform overrides, or a silent data message — and one call tests a spec on a real device before a campaign.
+You want to tell someone something after they have left the screen: an invoice was paid, a ride is arriving, someone replied. The usual route hands your users and your sending patterns to a third-party push platform, and binds delivery to OS credentials you have to enrol for. leptoskit has a notifications **service** you add with one table in `leptoskit.toml`: a small program with its own database that runs beside your app's server, stores one durable notification per recipient, and serves each person their own inbox. Your server sends to explicit recipients, to a topic's subscribers, to the people a condition matches over topics, the attributes you set, and the devices people enrolled — their platform, language, time zone, or app version — or to everyone the service knows, and when you configure a push transport, the same send also wakes the devices its recipients enrolled — APNs, FCM, and Web Push, first-party, with your app's own credentials and no management vendor in between. Each send can be shaped — priority, an image, a sound, a badge, a click link, per-platform overrides, or a silent data message — and one call tests a spec on a real device before a campaign.
 
-This page shows how to add it, send from your server, read the inbox on every platform, manage categories and schedules, and stand up push delivery. It also says plainly what it does not do yet: **client enrollment beyond the web, iOS, Android, and macOS**, push tap routing, device attributes (a person's platform, locale, or app version as a segment), and any claim that a provider's acceptance means a person saw a banner.
+This page shows how to add it, send from your server, read the inbox on every platform, manage categories and schedules, and stand up push delivery. It also says plainly what it does not do yet: **client enrollment beyond the web, iOS, Android, and macOS**, push tap routing, translated text and delivery in each person's local time, and any claim that a provider's acceptance means a person saw a banner.
 
 ## Add the service
 
@@ -205,7 +205,7 @@ let sent = call_as_app(leptoskit_notifications::Send {
 .await?;
 ```
 
-The grammar is `&&`, `||`, `!`, and parentheses over the predicates below, with `!` binding tightest, then `&&`, then `||`. At most five distinct topics, at most ten attribute predicates, nesting at most eight levels deep, and at most 1,024 bytes — FCM's bounds, checked on both sides, with errors that name the byte they gave up at.
+The grammar is `&&`, `||`, `!`, and parentheses over the predicates below — and the `device.` predicates in [Target devices](#target-devices) — with `!` binding tightest, then `&&`, then `||`. At most five distinct topics, at most ten attribute and device predicates together, nesting at most eight levels deep, and at most 1,024 bytes — FCM's bounds, checked on both sides, with errors that name the byte they gave up at.
 
 | Predicate                            | True when                                                   |
 | ------------------------------------ | ----------------------------------------------------------- |
@@ -218,7 +218,7 @@ The grammar is `&&`, `||`, `!`, and parentheses over the predicates below, with 
 
 An attribute the person doesn't have answers false to every predicate, `!=` and `in` included: nobody matches a segment merely for lacking the attribute. Numeric comparisons are numbers, not text — `user.version > '9'` is true for `10` — and a value that doesn't parse as a finite number answers false; `NaN` and `inf` are refused as literals at parse time. Values in quotes are at most 256 bytes with no whitespace inside, and keys are `a-z`, `0-9`, and `_`, up to 64 bytes — the same rules `set_person_attributes` enforces, so what you can send is what you can ask about.
 
-One shape is refused outright: a condition that already holds for a person with no topics and no attributes, like `!('a' in topics)`, is an "everyone" audience in disguise — the plain target below says that with a name, so the condition grammar makes you use it. Everything else anchors on something: a topic, or an attribute predicate such as `user.plan == 'pro'`. Condition sends fan out like topic sends: same batches, same snapshot-as-reached, same idempotency. Which index a condition's fanout walks follows from its anchor — a condition that cannot match without one of its topics walks the topic's subscribers, and one anchored only on attributes walks the person registry below.
+One shape is refused outright: a condition that already holds for a person with no topics, no attributes, and no device, like `!('a' in topics)`, is an "everyone" audience in disguise — the plain target below says that with a name, so the condition grammar makes you use it. Everything else anchors on something: a topic, or an attribute predicate such as `user.plan == 'pro'`. Condition sends fan out like topic sends: same batches, same snapshot-as-reached, same idempotency. Which index a condition's fanout walks follows from its anchor — a condition that cannot match without one of its topics walks the topic's subscribers, and one anchored only on attributes walks the person registry below.
 
 ## Describe people with attributes
 
@@ -663,9 +663,9 @@ if notifications.request_permission().await? != Permission::Granted {
 let enrollment = native::enroll().await?;
 ```
 
-At **launch**, once the person is signed in, call `native::reconcile(Some(&enrollment))` — with the enrollment you saved, and only with one: it is the record that this person opted in on this device. Reconciliation registers with APNs again — registration prompts nothing, Apple expects it every launch, and a device that never opted in is never registered, so a person who turned notifications off is not silently re-enabled. The answer is an explicit transition you persist:
+At **launch**, once the person is signed in, call `native::reconcile(Some(&enrollment))` — with the enrollment you saved, and only with one: it is the record that this person opted in on this device. Reconciliation registers with APNs again — registration prompts nothing, Apple expects it every launch, and a device that never opted in is never registered, so a person who turned notifications off is not silently re-enabled. It also reads the [device's details](#what-a-device-says-about-itself) again. The answer is an explicit transition you persist:
 
-- `Outcome::Kept` — the OS still issues the same token; the service answered the same endpoint id, and the refresh was one idempotent call. Keep what you saved.
+- `Outcome::Kept` — the OS still issues the same token. When the device's details are unchanged too, nothing is sent to the service at all; when they changed — an app update, a new language — the new details go in one idempotent call under the same endpoint id. Persist the enrollment it carries: it remembers what was sent, which is how the next launch knows whether anything changed. An enrollment saved by an older version of this module sends once, then settles.
 - `Outcome::Rotated { current, retired }` — the OS now issues a different token. The module verifies the previous handle against this person's endpoint list and retires it under its owner — a rotated token never leaks an orphan endpoint — so you persist `current` and drop `retired`. When the person is at the ten-endpoint bound, the quota refusal is answered by retiring the known-stale handle and re-registering once, so rotation at the quota still completes. A `retired` handle that turns out to be a **previous account's leftover** — the session switched without the old account signing out — is reported as `Retirement::Stale`: it is dropped, never operated under the new identity, and no credential moves.
 - `Outcome::Off` — you passed no previous enrollment, so nothing was registered and nothing asked; the cue to show the opt-in switch.
 
@@ -801,6 +801,8 @@ if browser::reconcile(&options).await?.is_none() {
 }
 ```
 
+Every enrollment also carries the browser's [details](#what-a-device-says-about-itself). A browser can't report your app's version, so name it on the options if you want to target web versions too — `browser::EnrollOptions::new(vapid_public_key).app_version(env!("CARGO_PKG_VERSION"))` — or leave it out and `device.app_version` stays empty for browsers.
+
 `enroll` checks availability first, waits for the **active** worker instead of racing its install, reuses the subscription the browser already holds (a second tap re-enrolls the same endpoint instead of prompting twice, and two racing calls converge on one subscription), and registers it under the person who is signed in — but only when that subscription was created for **your own VAPID key**: a subscription made for another sender's key can't receive your pushes, so claiming it would end in silent delivery failure, and it is refused (`KeyMismatch`) rather than replaced. When the receiver is registered under an explicit scope, name it in `EnrollOptions::worker_scope`: the match is exact — a worker registered for a broader scope never stands in for the one you asked for. It answers an opaque `Enrollment` — the endpoint's id — which you keep beside the person's session on the device.
 
 **Sign out by disabling.** While the person is still authenticated, `browser::disable(&enrollment).await?` revokes this person's service enrollment. It never unsubscribes the browser or changes OS permission. The subscription remains reusable: re-enabling can reuse it, but this service requires enrollment before sending. Until the previous account revokes, another account cannot enroll that destination.
@@ -810,6 +812,22 @@ Disable requires a successful authenticated revoke acknowledgement. Failures, in
 **When the browser changes the subscription on its own** — a rotated or replaced subscription, the `pushsubscriptionchange` event — the worker cannot reconcile anything: it deliberately holds no credentials, so it has no identity to enroll with. The supported reconciliation is the next authenticated app launch calling `reconcile` again; a stale handle's `disable` leaves the replaced subscription alone, and the replaced subscription's endpoint dies at its push service, whose answer invalidates the stale record on its next delivery. Churn is bounded by the ten-endpoint limit, and the person can revoke the dead ones from their own list.
 
 The receiver itself shows what the service pushed: the envelope's title and body under a tag built from the notification's id, so a repeat replaces rather than stacks; the send's `data` rides on the banner's own data, inert. A send's options reach it too — an image, a badge count (`navigator.setAppBadge` where the browser has it), a silent flag, and the web presentation set. The service never pushes a [data message](#silent-data-messages) to a browser; one flagged `lkdata` that arrived anyway would show nothing, leaving only the badge it asked to set. A push that is missing, oversized (past the service's 4 KiB record), malformed, or typed wrong still shows one truthful banner — "New notification", no invented text — under a stable tag, so a broken sender can never silently swallow a delivery. A click closes the banner, focuses an app window of this origin and opens the send's own link when it resolves to this origin — a path like `/invoice/42`, or an absolute URL of this origin — and otherwise brings it to your inbox route with the notification's id, or opens that route in a new window. A link anywhere else is refused at click time: payload content can never steer a click off the app's own origin. The worker holds no credentials and calls no server: nothing fetches, and **no read state changes until the authenticated app itself opens** and marks what it read.
+
+### What a device says about itself
+
+You want to reach "iPhones still on version 2.0" or "devices set to French", so the service needs to know those things about each device — not about each person, because one person's phone and laptop can differ. Every enrollment carries three details the device reports about itself, and your app writes no code for them:
+
+| Detail        | iOS and macOS                                 | Android                           | Web                                                        |
+| ------------- | --------------------------------------------- | --------------------------------- | ---------------------------------------------------------- |
+| `locale`      | the first of the person's preferred languages | the default locale's language tag | `navigator.language`                                       |
+| `time_zone`   | the current time zone's identifier            | the default time zone's id        | `Intl.DateTimeFormat().resolvedOptions().timeZone`         |
+| `app_version` | the app's `CFBundleShortVersionString`        | the package's version name        | only what you pass to `EnrollOptions::app_version`, if any |
+
+They are sent when the device enrolls and again whenever they change: on iOS, Android, and macOS the `native` module's launch `reconcile` reads them every launch and sends them only when they differ from what it last sent, so an app update or a language change reaches the service at the next launch and an unchanged launch costs nothing; on the web, `reconcile` and `enroll` send them each time. Windows and Linux have no enrollment yet, so they have no devices to describe.
+
+The service checks each detail's shape: the locale is a BCP 47 tag of at most 35 bytes, stored in canonical case (`en_gb` becomes `en-GB`); the time zone is an IANA-style name of at most 64 bytes — checked for shape only, not against a time zone database, because a device's database can be newer than the server's; the app version is free text of at most 64 bytes. A client drops a detail that fails its check rather than lose its enrollment over it, and a request that sends a bad one directly is refused with the detail named. Each re-enrollment replaces what the endpoint said before; a change to the details alone never rotates the endpoint's credential, so pushes already queued for it carry on untouched.
+
+Details belong to the endpoint and are read back only by its owner: `push_endpoints` answers each endpoint's `device` beside its platform, and nothing your server or anyone else reads — delivery status, test-send outcomes — carries them. The condition grammar reads them, below.
 
 ### What a send does
 
@@ -861,13 +879,70 @@ A Web Push subscription's endpoint is attacker-shaped material — anyone who ca
 
 Push reaches a device through its platform's service: iOS and macOS through APNs, Android through FCM, and the web through the browser's own push service (Web Push with VAPID) — the browser's client half is [this crate's `browser` module](#enroll-a-browser), and the native client half for iOS, Android, and macOS is [the `native` module](#enroll-an-ios-device). **Windows and Linux have no enrollment story in leptoskit yet**, and HarmonyOS and the watch surfaces are out of scope for push — their inbox is durable retrieval, as everywhere. Background delivery on Android also needs the app's own OS setup there (`google-services.json`, and `[native.android] push` checked).
 
+## Target devices
+
+Some messages are about a device, not a person: "please update" belongs on the phones still running the old version, and a French announcement on the devices set to French. Conditions read what each enrolled device [says about itself](#what-a-device-says-about-itself) with `device.` predicates, beside `user.` and topics:
+
+```rust
+let sent = call_as_app(leptoskit_notifications::Send {
+    idempotency_key: "update-to-2.1".into(),
+    spec: SendSpec {
+        category: "app".into(),
+        title: "Update available".into(),
+        body: "Version 2.1 fixes the sign-in bug. Update from the App Store.".into(),
+        data: None,
+        visible_at: None,
+        expires_at: None,
+        options: MessageOptions::default(),
+    },
+    target: SendTarget::Condition(
+        "device.platform == 'apns' && device.app_version < '2.1'".into(),
+    ),
+    validate_only: false,
+})
+.await?;
+```
+
+| Predicate            | Reads                                                                                                |
+| -------------------- | ---------------------------------------------------------------------------------------------------- |
+| `device.platform`    | the push service the device enrolled with: `'apns'` (iOS and macOS), `'fcm'` (Android), `'web_push'` |
+| `device.locale`      | the full language tag, such as `'en-GB'`, compared without regard to case                            |
+| `device.language`    | the tag's first part, lower case: `device.language == 'fr'` matches `fr-CA` and `fr-FR`              |
+| `device.app_version` | the app's version, compared as a version (below)                                                     |
+| `device.time_zone`   | the IANA name, such as `'Europe/London'`                                                             |
+
+Each takes the operators `user.` predicates take — `==`, `!=`, `in ['a', 'b']`, `has(device.<key>)`, and `<`, `<=`, `>`, `>=`. Any other key is refused when you send, naming the five there are, and so is a platform that isn't one of the three — `device.platform == 'ios'` would match nobody, so it never gets that far. Note that APNs serves both iPhones and Macs, so `'apns'` means both.
+
+**Versions compare as versions.** For `device.app_version`, every comparison — `<`, `<=`, `>`, `>=`, `==`, `!=`, and `in` — follows one rule:
+
+1. Everything from the first `-` or `+` is ignored, so `2.1.0-beta` and `2.1.0+812` read as `2.1.0`.
+2. The rest is split on `.`, and every part must be digits; otherwise it isn't a version. The empty string, `beta`, `v2.1`, and `2..1` aren't versions.
+3. The parts compare as whole numbers from left to right, and a missing part counts as 0: `2.10 > 2.9`, and `2.1 == 2.1.0`.
+
+When the device's version isn't a version by this rule, `<`, `<=`, `>`, and `>=` answer false, and `==`, `!=`, and `in` compare the text exactly — so a build named `nightly` still matches `device.app_version == 'nightly'`. The bound of `<`, `<=`, `>`, or `>=` must itself be a version, or the send is refused.
+
+**A device predicate is judged per device.** A send still addresses people — one inbox row each — so the service judges every person it walks once with no device at all, and once for each of their enrolled devices with that device's details (devices the provider has invalidated don't count). The person is in the audience when the condition holds with no device or on at least one device, and the push goes only to the devices it holds for. With no device, a `device.` predicate answers false, exactly as a `user.` predicate does for an attribute the person doesn't have — `!=` and `in` included.
+
+Take the update message above, and Alice, who has an iPhone on 2.0.4 and an Android phone on 2.2.0:
+
+- with no device, `device.platform == 'apns'` is false, so the condition is false;
+- on her iPhone, both halves hold;
+- on her Android phone, the platform doesn't match.
+
+Alice is in the audience, so she gets one inbox row — which her Android phone shows too, because the inbox is hers, not the device's — and exactly one push, to her iPhone. Bob, whose only device is an Android phone, isn't in the audience at all: no row, no push. A condition that never mentions `device.` works exactly as before: a matching person's every device gets the push.
+
+The rule cuts the other way for a negated predicate. `user.plan == 'pro' && !(device.platform == 'apns')` holds with no device for anyone on the pro plan, so every pro person gets the inbox row — including Dave, who has no devices, and Erin, whose only device is an iPhone. The push goes to the devices the condition holds for: Alice's Android phone, and neither Dave nor Erin gets one.
+
+A condition made only of device predicates walks the same person registry `SendTarget::Everyone` does, and one that names a topic it needs walks that topic's subscribers, as always. The devices are decided when the fanout writes a batch's rows, with each device's details as they stand then — for a scheduled send too, whose rows and pushes then wait for its time; a device that changes its details after that keeps the decision. `validate_only` counts the same per-device audience, and a refused key is refused there too.
+
 ## What it doesn't do yet
 
 - **Native client enrollment is iOS, Android, and macOS.** The service side of enrollment is done, the web client is this crate's `browser` module, and the native client — iOS's and macOS's APNs token and Android's FCM token alike — is the `native` module (all above). Push notification **tap routing** into a screen is later work, everywhere: a send's `link` is carried in every payload today, but opening it is each app's own code.
 - **No delivery receipts.** The service knows what it stored and what the provider accepted; it doesn't track who saw a banner. `accepted` is as far as status goes.
 - **No per-device state.** Read, dismissed, and cancelled state is per person, shared across their devices by design.
 - **No localization or recipient-local scheduling.** A send's title and body are the same for everyone it reaches, and a scheduled send fires on the service's clock, not each recipient's timezone.
-- **Person attributes are the app's own statements.** Segments read what your server set — plan, country, spend — and nothing about the device: platform, locale, app version, and timezone are not attributes yet, and there is no per-device targeting at all. Attributes are set in batches by the app's server only; a person cannot describe themselves into an audience.
+- **Person attributes are the app's own statements.** Segments read what your server set — plan, country, spend. Attributes are set in batches by the app's server only; a person cannot describe themselves into an audience.
+- **Device details are what the device reports.** The platform, locale, time zone, and app version are taken as each client sends them, checked for shape and never verified, and the time zone is not checked against a time zone database. There is no OS version or device model, `'apns'` doesn't tell an iPhone from a Mac, and a web app has a version only if you pass one. Windows and Linux devices can't enroll, so device conditions never reach them.
 
 The engineering notes in the repository describe the transport work that follows.
 

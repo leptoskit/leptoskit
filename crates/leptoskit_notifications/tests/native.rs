@@ -31,7 +31,7 @@ use leptoskit_notifications::MIGRATIONS;
 use leptoskit_notifications::SERVICE;
 use leptoskit_notifications::native;
 use leptoskit_notifications::native::EnrollError;
-use leptoskit_notifications::push::RegisterPushEndpoint;
+use leptoskit_notifications::push::DeviceDetails;
 use leptoskit_notifications::service::config;
 use leptoskit_notifications::service::push;
 use leptoskit_notifications::service::routes_with_push;
@@ -227,7 +227,8 @@ async fn enroll_as(
 	let credential = native::decide(snapshot)
 		.expect("the snapshot decides")
 		.expect("the fake host holds a token");
-	let request = serde_json::to_value(RegisterPushEndpoint { credential }).unwrap();
+	let request =
+		serde_json::to_value(native::request(credential, DeviceDetails::default())).unwrap();
 	post(
 		service,
 		"register_push_endpoint",
@@ -376,7 +377,8 @@ async fn anonymous_calls_enroll_nothing_and_refusals_decide_nothing() {
 	let credential = native::decide(&fake_host_token(&device_token(2)))
 		.unwrap()
 		.unwrap();
-	let request = serde_json::to_value(RegisterPushEndpoint { credential }).unwrap();
+	let request =
+		serde_json::to_value(native::request(credential, DeviceDetails::default())).unwrap();
 
 	let (status, _) = post(&service, "register_push_endpoint", request, None, None).await;
 	assert_eq!(status, 403, "no identity, no enrollment");

@@ -9,10 +9,11 @@
 //!   client, the RPC client's guest transport, the idempotency-key and
 //!   credential headers, and both wire codecs end to end.
 //! - **Played**: the OS boundary — the `notifications` plugin's methods 7 and 8
-//!   answer scripted APNs snapshots through the plugin's own codec — and the
-//!   service — the `http` plugin answers scripted JSON for the RPC routes the
-//!   client really addresses, with a destination-deduping, quota-refusing,
-//!   receipt-replaying stand-in. No real APNs, no real server, no device.
+//!   answer scripted APNs snapshots through the plugin's own codec, and method
+//!   9 the device details the OS reports — and the service — the `http` plugin
+//!   answers scripted JSON for the RPC routes the client really addresses, with
+//!   a destination-deduping, quota-refusing, receipt-replaying stand-in. No
+//!   real APNs, no real server, no device.
 //!
 //! Runs as `test:plugins:guest` does, from the wasm the script builds.
 
@@ -27,6 +28,7 @@ use leptoskit_bridge::PluginId;
 use leptoskit_native::EventOutcome;
 use leptoskit_native::HeadlessBackend;
 use leptoskit_plugin_http::protocol;
+use leptoskit_plugin_notifications::DeviceInfo;
 use leptoskit_plugin_notifications::DeviceToken;
 use leptoskit_plugin_notifications::FcmToken;
 use leptoskit_plugin_notifications::RemoteRegistration;
@@ -57,6 +59,24 @@ enum Answer {
 	Unconfirmed,
 }
 
+/// What the fake OS answers for one `DEVICE` read, in order; the last one
+/// repeats, and with none scripted the device reports nothing.
+/// `Unavailable` is a host that predates the method.
+#[derive(Clone)]
+enum Device {
+	Reports(DeviceInfo),
+	Unavailable,
+}
+
+/// The details a phone reports, with `app_version`.
+fn phone(app_version: &str) -> Device {
+	Device::Reports(DeviceInfo {
+		locale: Some("en_GB".into()),
+		time_zone: Some("Europe/London".into()),
+		app_version: Some(app_version.into()),
+	})
+}
+
 /// The fake service: what the RPC routes answer, and what crossed them.
 struct Service {
 	/// Destination dedupe: a token always answers the same endpoint id.
@@ -73,6 +93,9 @@ struct Service {
 	receipts: BTreeMap<String, Uuid>,
 	/// One line per RPC: `operation [detail…] auth=… key=…`.
 	log: Vec<String>,
+	/// The device details each `register_push_endpoint` call carried, in
+	/// order.
+	details: Vec<serde_json::Value>,
 }
 
 #[derive(Clone, Copy)]
@@ -92,6 +115,7 @@ impl Service {
 			revoke_fails: false,
 			receipts: BTreeMap::new(),
 			log: Vec::new(),
+			details: Vec::new(),
 		}
 	}
 
@@ -110,6 +134,7 @@ impl Service {
 				panic!("the guest sent no credential the service can parse: {body}");
 			};
 		let destination = destination.to_owned();
+		self.details.push(body["device"].clone());
 		match self.register.first().copied().unwrap_or(Refusal::Success) {
 			Refusal::Network => {
 				self.register.remove(0);
@@ -218,17 +243,35 @@ struct Run {
 }
 
 /// Runs the guest once for `scenario`, playing the OS and service scripts.
-fn run(wasm: &[u8], scenario: u32, os: Vec<Answer>, mut service: Service) -> Run {
+fn run(wasm: &[u8], scenario: u32, os: Vec<Answer>, service: Service) -> Run {
+	run_with(wasm, scenario, os, Vec::new(), service)
+}
+
+/// [`run`], with the device details the OS reports scripted too.
+fn run_with(
+	wasm: &[u8],
+	scenario: u32,
+	os: Vec<Answer>,
+	devices: Vec<Device>,
+	mut service: Service,
+) -> Run {
 	const REPORT: &str = "notifications-guest-report";
 	const ASK: MethodId = MethodId(0);
 	const PANICKED: MethodId = MethodId(1);
 	const STEP: MethodId = MethodId(2);
 	const REMOTE_TOKEN: MethodId = MethodId(7);
 	const REMOTE_REGISTER: MethodId = MethodId(8);
+	const DEVICE: MethodId = MethodId(9);
 
 	let mut host = WasmHost::<HeadlessBackend>::headless(wasm).expect("compile the guest");
 	let report = register(&mut host, REPORT, &[ASK, PANICKED, STEP]);
-	let notifications = register(&mut host, "notifications", &[REMOTE_TOKEN, REMOTE_REGISTER]);
+	let notifications = register(
+		&mut host,
+		"notifications",
+		&[REMOTE_TOKEN, REMOTE_REGISTER, DEVICE],
+	);
+	let mut devices = devices.into_iter();
+	let mut reported = Device::Reports(DeviceInfo::default());
 	let http = register(&mut host, "http", &[MethodId(0)]);
 	host.start(100.0, 100.0).expect("start the guest");
 
@@ -296,6 +339,15 @@ fn run(wasm: &[u8], scenario: u32, os: Vec<Answer>, mut service: Service) -> Run
 							.expect("the scenario scripts every registration");
 						latest = answer.clone();
 						Ok(answer)
+					}
+					DEVICE => {
+						if let Some(next) = devices.next() {
+							reported = next;
+						}
+						match &reported {
+							Device::Reports(info) => Ok(info.encode().expect("the plugin codec")),
+							Device::Unavailable => Err(Error::Unavailable),
+						}
 					}
 					m => panic!("unknown notifications method {}", m.0),
 				}
@@ -408,10 +460,11 @@ fn fcm_token(seed: u8) -> String {
 fn a_gesture_enrolls_and_a_cold_relaunch_keeps_the_same_endpoint() {
 	let first = token(0);
 	let service = Service::new();
-	let run = run(
+	let run = run_with(
 		&guest(),
 		0,
 		vec![Answer::Token(first.clone()), Answer::Token(first.clone())],
+		vec![phone("2.1.0")],
 		service,
 	);
 	let id = run.service.destinations[&first];
@@ -426,8 +479,17 @@ fn a_gesture_enrolls_and_a_cold_relaunch_keeps_the_same_endpoint() {
 			.iter()
 			.filter(|line| line.starts_with("register("))
 			.count(),
-		2,
-		"a same-token relaunch re-registers the destination idempotently"
+		1,
+		"a relaunch with the same token and the same details sends nothing"
+	);
+	assert_eq!(
+		run.service.details,
+		vec![serde_json::json!({
+			"locale": "en-GB",
+			"time_zone": "Europe/London",
+			"app_version": "2.1.0",
+		})],
+		"the enrollment carried the device's details, the locale in canonical case"
 	);
 	assert!(
 		!run.service
@@ -647,8 +709,13 @@ fn an_android_token_enrolls_and_relaunches_as_the_fcm_credential() {
 			.iter()
 			.filter(|line| line.starts_with("register("))
 			.count(),
-		2,
-		"a same-token relaunch re-registers the destination idempotently"
+		1,
+		"a relaunch with the same token and the same details sends nothing"
+	);
+	assert_eq!(
+		run.service.details,
+		vec![serde_json::json!({})],
+		"a device that reported nothing sends no details"
 	);
 	assert!(
 		!run.service
@@ -706,5 +773,88 @@ fn an_unconfigured_firebase_refuses_with_its_code_and_registers_nothing() {
 		run.service.log.is_empty(),
 		"nothing reached the service: {:?}",
 		run.service.log
+	);
+}
+
+/// An app update reaches the service at the next launch: the same token
+/// with a new app version sends the new details under the same endpoint,
+/// and the launch after that, with nothing changed, sends nothing.
+#[test]
+#[ignore = "run by test:plugins:guest, which compiles the wasm fixture"]
+fn changed_details_are_sent_once_under_the_same_endpoint() {
+	let first = token(9);
+	let run = run_with(
+		&guest(),
+		9,
+		vec![
+			Answer::Token(first.clone()),
+			Answer::Token(first.clone()),
+			Answer::Token(first.clone()),
+		],
+		vec![phone("2.1.0"), phone("2.2.0")],
+		Service::new(),
+	);
+	let id = run.service.destinations[&first];
+
+	assert_eq!(
+		run.steps,
+		vec![
+			format!("enroll=ok:{id}"),
+			format!("reconcile=ok:kept:{id}"),
+			format!("reconcile=ok:kept:{id}"),
+		]
+	);
+	let versions: Vec<_> = run
+		.service
+		.details
+		.iter()
+		.map(|details| details["app_version"].clone())
+		.collect();
+	assert_eq!(
+		versions,
+		vec![serde_json::json!("2.1.0"), serde_json::json!("2.2.0")],
+		"the enrollment and the update each sent once; the unchanged launch sent nothing"
+	);
+	assert!(
+		!run.service
+			.log
+			.iter()
+			.any(|line| line.starts_with("revoke(")),
+		"a details change retires nothing"
+	);
+}
+
+/// An enrollment the app saved before device details existed — no record
+/// of what it sent — sends once at the next launch, keeps its endpoint, and
+/// then sends nothing. A host that predates the device method enrolls with
+/// no details at all.
+#[test]
+#[ignore = "run by test:plugins:guest, which compiles the wasm fixture"]
+fn an_enrollment_saved_before_details_sends_once() {
+	let first = token(10);
+	let run = run_with(
+		&guest(),
+		10,
+		vec![Answer::Token(first.clone()), Answer::Token(first.clone())],
+		vec![Device::Unavailable],
+		Service::new(),
+	);
+	let id = run.service.destinations[&first];
+
+	assert_eq!(
+		id,
+		Uuid::from_u128(0x0E5A_0000_0000_0000_0000_0000_0000_0001)
+	);
+	assert_eq!(
+		run.steps,
+		vec![
+			format!("reconcile=ok:kept:{id}"),
+			format!("reconcile=ok:kept:{id}"),
+		]
+	);
+	assert_eq!(
+		run.service.details,
+		vec![serde_json::json!({})],
+		"one send, with no details from a host that predates the method"
 	);
 }

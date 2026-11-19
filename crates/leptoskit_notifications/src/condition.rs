@@ -26,24 +26,43 @@
 //! predicate, `!=` and `in` included, so nobody matches a predicate
 //! merely for lacking the attribute.
 //!
+//! A device predicate asks about one of the person's enrolled devices, with
+//! the same operators: `device.<key>` for one of [`DeviceKey`]'s keys —
+//! `device.platform` (one of [`PushPlatform::as_str`]'s names),
+//! `device.locale`, `device.language` (the locale's primary subtag, so
+//! `device.language == 'fr'` matches `fr-CA`), `device.app_version`, and
+//! `device.time_zone`. Locale and language compare without regard to
+//! case. `device.app_version` compares as a version under every
+//! comparison operator — see [`compare_versions`] for the rule. Any other
+//! key is a parse error that names the ones there are.
+//!
+//! A device predicate is judged per device: a send's audience is everyone
+//! the condition holds for with no device at all, or on at least one of
+//! their live endpoints, and the push goes only to the endpoints it holds
+//! for ([`Condition::matches_on`]). With no device, a device predicate
+//! answers exactly as an absent attribute does: false, `!=` and `in`
+//! included.
+//!
 //! One shape is refused outright: a condition that is already true when
-//! the person holds no topics and no attributes at all, such as
-//! `!('a' in topics)`. That is an "everyone" audience in disguise — the
+//! the person holds no topics, no attributes, and no device at all, such
+//! as `!('a' in topics)`. That is an "everyone" audience in disguise — the
 //! registry has a plain target for that ([`SendTarget::Everyone`]) — so
 //! [`Condition::parse`] checks the parsed tree with every membership
-//! false and every attribute absent, and refuses a condition that
-//! holds.
+//! false, every attribute absent, and no device, and refuses a condition
+//! that holds.
 //!
 //! The bounds follow FCM's: at most [`MAX_CONDITION_TOPICS`] distinct
-//! topics, at most [`MAX_CONDITION_ATTRIBUTES`] attribute predicates,
-//! nesting at most [`MAX_CONDITION_DEPTH`] levels deep, and at most
-//! [`MAX_CONDITION_LEN`] bytes of text. Topic names inside the quotes
-//! are topic names anywhere: 1 to
+//! topics, at most [`MAX_CONDITION_ATTRIBUTES`] attribute and device
+//! predicates together, nesting at most [`MAX_CONDITION_DEPTH`] levels
+//! deep, and at most [`MAX_CONDITION_LEN`] bytes of text. Topic names
+//! inside the quotes are topic names anywhere: 1 to
 //! [`MAX_TOPIC_LEN`](crate::MAX_TOPIC_LEN) bytes of the characters FCM
 //! accepts. Attribute keys are `[a-z0-9_]` — 1 to
 //! [`MAX_ATTRIBUTE_KEY_LEN`](crate::MAX_ATTRIBUTE_KEY_LEN) bytes — and
 //! values are 1 to
 //! [`MAX_ATTRIBUTE_VALUE_LEN`](crate::MAX_ATTRIBUTE_VALUE_LEN) bytes.
+//!
+//! [`PushPlatform::as_str`]: crate::push::PushPlatform::as_str
 
 /// The longest condition, in bytes.
 pub const MAX_CONDITION_LEN: usize = 1_024;
@@ -51,17 +70,19 @@ pub const MAX_CONDITION_LEN: usize = 1_024;
 /// The most distinct topics one condition may name, as FCM allows.
 pub const MAX_CONDITION_TOPICS: usize = 5;
 
-/// The most attribute predicates one condition may use.
+/// The most attribute and device predicates one condition may use,
+/// together.
 pub const MAX_CONDITION_ATTRIBUTES: usize = 10;
 
 /// How deeply a condition may nest: a membership is depth 1, and every
 /// `!`, `&&`, and `||` over it adds one.
 pub const MAX_CONDITION_DEPTH: usize = 8;
 
-/// A parsed condition: a boolean over the topics a person holds and the
-/// attributes the app set for them. Built by [`Condition::parse`],
-/// evaluated by [`Condition::matches`] and [`Condition::matches_over`]
-/// against the person the moment asks about.
+/// A parsed condition: a boolean over the topics a person holds, the
+/// attributes the app set for them, and one of their devices. Built by
+/// [`Condition::parse`], evaluated by [`Condition::matches`],
+/// [`Condition::matches_over`], and [`Condition::matches_on`] against the
+/// person the moment asks about.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Condition {
 	/// `'name' in topics`: true when the person holds the topic.
@@ -69,6 +90,10 @@ pub enum Condition {
 	/// `user.<key> …`: true when the attribute the app set answers the
 	/// test. False whenever the person holds no such attribute.
 	Attribute { key: String, test: Test },
+	/// `device.<key> …`: true when the device being judged reports a
+	/// value that answers the test. False with no device, and when the
+	/// device reported nothing for the key.
+	Device { key: DeviceKey, test: Test },
 	/// `left && right`.
 	And(Box<Condition>, Box<Condition>),
 	/// `left || right`.
@@ -77,7 +102,7 @@ pub enum Condition {
 	Not(Box<Condition>),
 }
 
-/// What an attribute predicate asks of the value the app set.
+/// What an attribute or device predicate asks of the value it reads.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Test {
 	/// `== 'value'`.
@@ -86,14 +111,19 @@ pub enum Test {
 	NotEquals(String),
 	/// `in ['a', 'b']`.
 	AnyOf(Vec<String>),
-	/// `has(user.<key>)`.
+	/// `has(user.<key>)` or `has(device.<key>)`.
 	Has,
 	/// A numeric comparison: true only when the held value parses as a
 	/// finite number. The literal was checked finite at parse time.
 	Numeric { op: NumericOp, bound: f64 },
+	/// A version comparison, `device.app_version`'s ordering: true only
+	/// when the held value reads as a version under [`compare_versions`]'s
+	/// rule. The literal was checked to read as one at parse time.
+	Version { op: NumericOp, bound: String },
 }
 
-/// The numeric operators an attribute predicate can compare with.
+/// The ordering operators a predicate can compare with: numerically for
+/// an attribute, as versions for `device.app_version`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NumericOp {
 	Less,
@@ -123,6 +153,9 @@ impl Test {
 					.filter(|number| number.is_finite())
 					.is_some_and(|number| op.holds(number, *bound))
 			}
+			Test::Version { op, bound } => {
+				compare_versions(value, bound).is_some_and(|ordering| op.orders(ordering))
+			}
 		}
 	}
 }
@@ -138,6 +171,214 @@ impl NumericOp {
 			NumericOp::GreaterEq => number >= bound,
 		}
 	}
+
+	/// Whether `held op bound` holds, given how the held value orders
+	/// against the bound.
+	#[must_use]
+	pub fn orders(self, ordering: std::cmp::Ordering) -> bool {
+		match self {
+			NumericOp::Less => ordering.is_lt(),
+			NumericOp::LessEq => ordering.is_le(),
+			NumericOp::Greater => ordering.is_gt(),
+			NumericOp::GreaterEq => ordering.is_ge(),
+		}
+	}
+}
+
+/// What a `device.` predicate can ask about. Each is something an
+/// enrolled endpoint reports about itself (see
+/// [`DeviceDetails`](crate::push::DeviceDetails)), or its platform.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DeviceKey {
+	/// `device.platform`: the push service the endpoint speaks to, as
+	/// [`PushPlatform::as_str`](crate::push::PushPlatform::as_str) names
+	/// it — `apns` (iOS and macOS), `fcm` (Android), or `web_push`.
+	Platform,
+	/// `device.locale`: the full BCP 47 tag, such as `en-GB`. Compared
+	/// without regard to case.
+	Locale,
+	/// `device.language`: the locale's primary subtag, lower case — `fr`
+	/// for `fr-CA`. Compared without regard to case.
+	Language,
+	/// `device.app_version`: compared as a version (see
+	/// [`compare_versions`]).
+	AppVersion,
+	/// `device.time_zone`: the IANA name, such as `Europe/London`.
+	TimeZone,
+}
+
+impl DeviceKey {
+	/// Every key a condition can name, in the order errors list them.
+	pub const ALL: [DeviceKey; 5] = [
+		DeviceKey::Platform,
+		DeviceKey::Locale,
+		DeviceKey::Language,
+		DeviceKey::AppVersion,
+		DeviceKey::TimeZone,
+	];
+
+	/// The key's name after `device.`.
+	#[must_use]
+	pub fn as_str(self) -> &'static str {
+		match self {
+			DeviceKey::Platform => "platform",
+			DeviceKey::Locale => "locale",
+			DeviceKey::Language => "language",
+			DeviceKey::AppVersion => "app_version",
+			DeviceKey::TimeZone => "time_zone",
+		}
+	}
+
+	/// The key a name after `device.` stands for, or `None` for anything
+	/// else.
+	#[must_use]
+	pub fn from_name(name: &str) -> Option<Self> {
+		Self::ALL.into_iter().find(|key| key.as_str() == name)
+	}
+
+	/// The value `device` reports for this key, or `None` when it reported
+	/// nothing.
+	#[must_use]
+	pub fn of<'a>(self, device: &Device<'a>) -> Option<&'a str> {
+		match self {
+			DeviceKey::Platform => Some(device.platform.as_str()),
+			DeviceKey::Locale => device.locale,
+			DeviceKey::Language => device.locale.and_then(crate::push::language_of),
+			DeviceKey::AppVersion => device.app_version,
+			DeviceKey::TimeZone => device.time_zone,
+		}
+	}
+
+	/// Whether `test` holds for what `device` reports, or for no device at
+	/// all: no device, and a device that reported nothing for the key,
+	/// answer false to every test, the way an absent attribute does.
+	fn holds(self, test: &Test, device: Option<&Device<'_>>) -> bool {
+		let Some(value) = device.and_then(|device| self.of(device)) else {
+			return false;
+		};
+
+		match (self, test) {
+			(_, Test::Has) => true,
+			(DeviceKey::AppVersion, Test::Equals(want)) => same_version(value, want),
+			(DeviceKey::AppVersion, Test::NotEquals(want)) => !same_version(value, want),
+			(DeviceKey::AppVersion, Test::AnyOf(wanted)) => {
+				wanted.iter().any(|want| same_version(value, want))
+			}
+			(DeviceKey::Locale | DeviceKey::Language, Test::Equals(want)) => {
+				value.eq_ignore_ascii_case(want)
+			}
+			(DeviceKey::Locale | DeviceKey::Language, Test::NotEquals(want)) => {
+				!value.eq_ignore_ascii_case(want)
+			}
+			(DeviceKey::Locale | DeviceKey::Language, Test::AnyOf(wanted)) => {
+				wanted.iter().any(|want| value.eq_ignore_ascii_case(want))
+			}
+			(_, test) => test.holds(Some(value)),
+		}
+	}
+}
+
+/// The `device.` keys, as a sentence's list: what an unknown key's error
+/// names.
+fn device_keys_listed() -> String {
+	let names: Vec<String> = DeviceKey::ALL
+		.iter()
+		.map(|key| format!("`device.{}`", key.as_str()))
+		.collect();
+	let (last, rest) = names.split_last().expect("there are keys");
+
+	format!("{}, and {last}", rest.join(", "))
+}
+
+/// One device, as a condition's `device.` predicates read it: its
+/// platform and what it reported about itself. Borrowed, so a stored
+/// endpoint can be judged without copying its details.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Device<'a> {
+	/// The push service the device's endpoint speaks to.
+	pub platform: crate::push::PushPlatform,
+	/// Its preferred locale, a BCP 47 tag, when it reported one.
+	pub locale: Option<&'a str>,
+	/// Its IANA time zone name, when it reported one.
+	pub time_zone: Option<&'a str>,
+	/// The app's version on it, when it reported one.
+	pub app_version: Option<&'a str>,
+}
+
+impl<'a> Device<'a> {
+	/// A device on `platform` that reported `details`.
+	#[must_use]
+	pub fn new(
+		platform: crate::push::PushPlatform,
+		details: &'a crate::push::DeviceDetails,
+	) -> Self {
+		Self {
+			platform,
+			locale: details.locale.as_deref(),
+			time_zone: details.time_zone.as_deref(),
+			app_version: details.app_version.as_deref(),
+		}
+	}
+}
+
+/// How two app versions order, or `None` when either doesn't read as a
+/// version. The rule, exactly:
+///
+/// 1. Everything from the first `-` or `+` onward is ignored: `2.1.0-beta` and
+///    `2.1.0+812` read as `2.1.0`.
+/// 2. What's left is split on `.`, and every part must be one or more ASCII
+///    digits — otherwise the text isn't a version. So the empty string, `beta`,
+///    `v2.1`, `2..1`, `2.1.`, and ` 2.1` aren't versions.
+/// 3. The parts compare as whole numbers, left to right, and a missing part
+///    counts as 0. So `2.10 > 2.9`, `2.1 == 2.1.0`, and `2.01 == 2.1`.
+///
+/// A condition's `device.app_version` uses this for `<`, `<=`, `>`, `>=`
+/// — which answer false when the held value isn't a version — and for
+/// `==`, `!=`, and `in`, which fall back to comparing the text exactly
+/// when either side isn't a version.
+#[must_use]
+pub fn compare_versions(left: &str, right: &str) -> Option<std::cmp::Ordering> {
+	let left = version_parts(left)?;
+	let right = version_parts(right)?;
+
+	for index in 0..left.len().max(right.len()) {
+		let one = left.get(index).copied().unwrap_or("");
+		let two = right.get(index).copied().unwrap_or("");
+		// Leading zeros are gone, so a longer run of digits is a larger
+		// number, and equal lengths order as their digits do — however
+		// many digits there are.
+		let ordering = one.len().cmp(&two.len()).then_with(|| one.cmp(two));
+
+		if ordering.is_ne() {
+			return Some(ordering);
+		}
+	}
+
+	Some(std::cmp::Ordering::Equal)
+}
+
+/// A version's numeric parts with their leading zeros dropped — `0`
+/// becomes the empty string, which is how a missing part reads too — or
+/// `None` when the text isn't a version.
+fn version_parts(text: &str) -> Option<Vec<&str>> {
+	let core = text.split(['-', '+']).next().unwrap_or("");
+
+	if core.is_empty() {
+		return None;
+	}
+
+	core.split('.')
+		.map(|part| {
+			(!part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
+				.then(|| part.trim_start_matches('0'))
+		})
+		.collect()
+}
+
+/// `==` for app versions: equal as versions when both read as one,
+/// otherwise equal as text.
+fn same_version(held: &str, want: &str) -> bool {
+	compare_versions(held, want).map_or(held == want, std::cmp::Ordering::is_eq)
 }
 
 /// Why a condition can't be used: what's wrong with it, and the byte
@@ -210,13 +451,14 @@ impl Condition {
 			});
 		}
 
-		// Anchored: a person with no topics and no attributes must not
-		// match, or the condition would be an everyone audience in
-		// disguise — the registry's own target says that plainly.
+		// Anchored: a person with no topics, no attributes, and no device
+		// must not match, or the condition would be an everyone audience
+		// in disguise — the registry's own target says that plainly.
 		if parsed.matches(|_| false) {
 			return Err(ConditionError {
 				message: "a condition must not match a person who holds no topics and no \
-				          attributes: name at least one topic or attribute it requires"
+				          attributes on no device: name at least one topic, attribute, or device \
+				          detail it requires"
 					.into(),
 				offset: 0,
 			});
@@ -244,10 +486,25 @@ impl Condition {
 		keys
 	}
 
+	/// Whether any predicate asks about a device. A condition that doesn't
+	/// is judged once per person, and every endpoint of a matching person
+	/// gets the push; one that does is judged per device as well.
+	#[must_use]
+	pub fn mentions_device(&self) -> bool {
+		match self {
+			Condition::Device { .. } => true,
+			Condition::Topic(_) | Condition::Attribute { .. } => false,
+			Condition::And(left, right) | Condition::Or(left, right) => {
+				left.mentions_device() || right.mentions_device()
+			}
+			Condition::Not(inner) => inner.mentions_device(),
+		}
+	}
+
 	/// Whether the condition holds for a person whose memberships `holds`
 	/// answers: called with the topic names the condition names, never
-	/// any other. The person is taken to hold no attributes at all, so
-	/// every attribute predicate answers false.
+	/// any other. The person is taken to hold no attributes at all, and
+	/// no device, so every attribute and device predicate answers false.
 	#[must_use]
 	pub fn matches(&self, holds: impl Fn(&str) -> bool) -> bool {
 		self.matches_over(holds, |_| None)
@@ -256,41 +513,65 @@ impl Condition {
 	/// Whether the condition holds for a person whose memberships `holds`
 	/// answers and whose attributes `attribute` answers: called with the
 	/// topic names and attribute keys the condition names, never any
-	/// other, with `None` for an attribute the person doesn't hold.
+	/// other, with `None` for an attribute the person doesn't hold. No
+	/// device is judged, so every device predicate answers false.
 	#[must_use]
 	pub fn matches_over<'k>(
 		&'k self,
 		holds: impl Fn(&str) -> bool,
 		attribute: impl Fn(&'k str) -> Option<&'k str>,
 	) -> bool {
-		self.matches_with(&holds, &attribute)
+		self.matches_on(holds, attribute, None)
 	}
 
-	/// [`Condition::matches_over`] over trait objects, so the recursion
+	/// [`Condition::matches_over`], judged on one of the person's devices:
+	/// `device` is what its `device.` predicates read, and `None` judges the
+	/// person with no device at all, where every device predicate answers
+	/// false — the way an absent attribute does.
+	///
+	/// A send asks this once with no device and once per live endpoint of
+	/// the person: they are in the audience when any of those holds, and
+	/// the push goes to the endpoints it holds for.
+	#[must_use]
+	pub fn matches_on<'k>(
+		&'k self,
+		holds: impl Fn(&str) -> bool,
+		attribute: impl Fn(&'k str) -> Option<&'k str>,
+		device: Option<Device<'_>>,
+	) -> bool {
+		self.matches_with(&holds, &attribute, device.as_ref())
+	}
+
+	/// [`Condition::matches_on`] over trait objects, so the recursion
 	/// doesn't build a fresh closure type per level.
 	fn matches_with<'k>(
 		&'k self,
 		holds: &dyn Fn(&str) -> bool,
 		attribute: &dyn Fn(&'k str) -> Option<&'k str>,
+		device: Option<&Device<'_>>,
 	) -> bool {
 		match self {
 			Condition::Topic(topic) => holds(topic),
 			Condition::Attribute { key, test } => test.holds(attribute(key)),
+			Condition::Device { key, test } => key.holds(test, device),
 			Condition::And(left, right) => {
-				left.matches_with(holds, attribute) && right.matches_with(holds, attribute)
+				left.matches_with(holds, attribute, device)
+					&& right.matches_with(holds, attribute, device)
 			}
 			Condition::Or(left, right) => {
-				left.matches_with(holds, attribute) || right.matches_with(holds, attribute)
+				left.matches_with(holds, attribute, device)
+					|| right.matches_with(holds, attribute, device)
 			}
-			Condition::Not(inner) => !inner.matches_with(holds, attribute),
+			Condition::Not(inner) => !inner.matches_with(holds, attribute, device),
 		}
 	}
 
 	/// Whether the condition is false for every person who holds none of
-	/// the topics it names, whatever attributes they hold. Only such a
-	/// condition can be walked over the topic index's subscribers alone;
-	/// anything else may match a person the index has never seen, so its
-	/// audience is the person registry.
+	/// the topics it names, whatever attributes and devices they hold. Only
+	/// such a condition can be walked over the topic index's subscribers
+	/// alone; anything else may match a person the index has never seen, so
+	/// its audience is the person registry — the one a condition of device
+	/// predicates alone walks, like everyone.
 	#[must_use]
 	pub fn topic_anchored(&self) -> bool {
 		matches!(self.sans_topics(), Tri::False)
@@ -304,10 +585,13 @@ impl Condition {
 	fn sans_topics(&self) -> Tri {
 		match self {
 			Condition::Topic(_) => Tri::False,
-			// An attribute predicate may hold whatever the person holds;
-			// `!false` would be true for every topic-less person, which
-			// is the disguise parse refuses — both stay unknown.
-			Condition::Attribute { .. } | Condition::Not(_) => Tri::Unknown,
+			// An attribute or device predicate may hold whatever the
+			// person holds; `!false` would be true for every topic-less
+			// person, which is the disguise parse refuses — all stay
+			// unknown.
+			Condition::Attribute { .. } | Condition::Device { .. } | Condition::Not(_) => {
+				Tri::Unknown
+			}
 			Condition::And(left, right) => {
 				match (left.sans_topics(), right.sans_topics()) {
 					(Tri::False, _) | (_, Tri::False) => Tri::False,
@@ -327,7 +611,7 @@ impl Condition {
 	/// adds a level.
 	fn depth(&self) -> usize {
 		match self {
-			Condition::Topic(_) | Condition::Attribute { .. } => 1,
+			Condition::Topic(_) | Condition::Attribute { .. } | Condition::Device { .. } => 1,
 			Condition::And(left, right) | Condition::Or(left, right) => {
 				left.depth().max(right.depth()) + 1
 			}
@@ -351,7 +635,7 @@ fn collect_topics<'a>(condition: &'a Condition, topics: &mut Vec<&'a str>) {
 				topics.push(topic.as_str());
 			}
 		}
-		Condition::Attribute { .. } => {}
+		Condition::Attribute { .. } | Condition::Device { .. } => {}
 		Condition::And(left, right) | Condition::Or(left, right) => {
 			collect_topics(left, topics);
 			collect_topics(right, topics);
@@ -364,7 +648,7 @@ fn collect_topics<'a>(condition: &'a Condition, topics: &mut Vec<&'a str>) {
 /// order.
 fn collect_keys<'a>(condition: &'a Condition, keys: &mut Vec<&'a str>) {
 	match condition {
-		Condition::Topic(_) => {}
+		Condition::Topic(_) | Condition::Device { .. } => {}
 		Condition::Attribute { key, .. } => {
 			if !keys.contains(&key.as_str()) {
 				keys.push(key.as_str());
@@ -473,9 +757,13 @@ impl Parser<'_> {
 			return self.attribute_predicate(start);
 		}
 
+		if self.eat_word(b"device") {
+			return self.device_predicate(start);
+		}
+
 		Err(ConditionError {
 			message: format!(
-				"expected a topic in quotes, `user.<key>`, or `has(user.<key>)`, found {}",
+				"expected a topic in quotes, `user.<key>`, `device.<key>`, or `has(…)`, found {}",
 				self.here()
 			),
 			offset: self.pos,
@@ -545,7 +833,7 @@ impl Parser<'_> {
 		Ok(Condition::Topic(name.to_owned()))
 	}
 
-	/// `has(user.<key>)`.
+	/// `has(user.<key>)` or `has(device.<key>)`.
 	fn has_predicate(&mut self, start: usize) -> Result<Condition, ConditionError> {
 		self.skip_whitespace();
 
@@ -558,24 +846,41 @@ impl Parser<'_> {
 
 		self.skip_whitespace();
 
-		if !self.eat_word(b"user") {
+		let device = if self.eat_word(b"user") {
+			false
+		} else if self.eat_word(b"device") {
+			true
+		} else {
 			return Err(ConditionError {
 				message: format!(
-					"expected `user.<key>` inside `has(…)`, found {}",
+					"expected `user.<key>` or `device.<key>` inside `has(…)`, found {}",
 					self.here()
+				),
+				offset: self.pos,
+			});
+		};
+
+		if !self.eat(b".") {
+			return Err(ConditionError {
+				message: format!(
+					"expected `.` after `{}`",
+					if device { "device" } else { "user" }
 				),
 				offset: self.pos,
 			});
 		}
 
-		if !self.eat(b".") {
-			return Err(ConditionError {
-				message: "expected `.` after `user`".into(),
-				offset: self.pos,
-			});
-		}
-
-		let key = self.attribute_key()?;
+		let predicate = if device {
+			Condition::Device {
+				key: self.device_key()?,
+				test: Test::Has,
+			}
+		} else {
+			Condition::Attribute {
+				key: self.attribute_key()?,
+				test: Test::Has,
+			}
+		};
 		self.skip_whitespace();
 
 		if !self.eat(b")") {
@@ -587,10 +892,116 @@ impl Parser<'_> {
 
 		self.count_predicate(start)?;
 
-		Ok(Condition::Attribute {
-			key,
-			test: Test::Has,
+		Ok(predicate)
+	}
+
+	/// `device.<key> == 'v'`, with every operator the grammar allows:
+	/// `device.app_version`'s orderings compare as versions, and
+	/// `device.platform`'s values must name a platform.
+	fn device_predicate(&mut self, start: usize) -> Result<Condition, ConditionError> {
+		if !self.eat(b".") {
+			return Err(ConditionError {
+				message: "expected `.` after `device`".into(),
+				offset: self.pos,
+			});
+		}
+
+		let key = self.device_key()?;
+		self.skip_whitespace();
+
+		let ordering = |parser: &mut Self, op: NumericOp| {
+			if key == DeviceKey::AppVersion {
+				parser.version(op)
+			} else {
+				parser.numeric(op)
+			}
+		};
+
+		let test = if self.eat(b"==") {
+			Test::Equals(self.device_value(key)?)
+		} else if self.eat(b"!=") {
+			Test::NotEquals(self.device_value(key)?)
+		} else if self.eat(b"<=") {
+			ordering(self, NumericOp::LessEq)?
+		} else if self.eat(b">=") {
+			ordering(self, NumericOp::GreaterEq)?
+		} else if self.eat(b"<") {
+			ordering(self, NumericOp::Less)?
+		} else if self.eat(b">") {
+			ordering(self, NumericOp::Greater)?
+		} else if self.eat_word(b"in") {
+			let values = self.values()?;
+
+			for (value, offset) in &values {
+				check_device_value(key, value, *offset)?;
+			}
+
+			Test::AnyOf(values.into_iter().map(|(value, _)| value).collect())
+		} else {
+			return Err(ConditionError {
+				message: "expected an operator after `device.<key>`: `==`, `!=`, `in`, `<`, `<=`, \
+				          `>`, or `>=`"
+					.into(),
+				offset: self.pos,
+			});
+		};
+
+		self.count_predicate(start)?;
+
+		Ok(Condition::Device { key, test })
+	}
+
+	/// The `<key>` of a `device.<key>` reference: one of [`DeviceKey`]'s
+	/// names, and nothing else.
+	fn device_key(&mut self) -> Result<DeviceKey, ConditionError> {
+		let start = self.pos;
+
+		while self
+			.peek()
+			.is_some_and(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+		{
+			self.pos += 1;
+		}
+
+		let name = std::str::from_utf8(&self.text[start..self.pos]).expect("the name is ASCII");
+
+		DeviceKey::from_name(name).ok_or_else(|| {
+			ConditionError {
+				message: format!(
+					"`device.{name}` isn't a device detail: a condition can ask about {}",
+					device_keys_listed()
+				),
+				offset: start,
+			}
 		})
+	}
+
+	/// A quoted value a `device.<key>` predicate compares with, checked
+	/// against the key: a platform must be one there is.
+	fn device_value(&mut self, key: DeviceKey) -> Result<String, ConditionError> {
+		let (value, offset) = self.value()?;
+		check_device_value(key, &value, offset)?;
+
+		Ok(value)
+	}
+
+	/// A version comparison's quoted literal, which must read as a version
+	/// under [`compare_versions`]'s rule: a bound that isn't one would make
+	/// the comparison false for everyone.
+	fn version(&mut self, op: NumericOp) -> Result<Test, ConditionError> {
+		let (literal, literal_start) = self.value()?;
+
+		if compare_versions(&literal, &literal).is_none() {
+			return Err(ConditionError {
+				message: format!(
+					"`device.app_version` compares with a version in quotes — dot-separated \
+					 numbers like '2.1.0' — and `{literal}` isn't one"
+				),
+				offset: literal_start,
+			});
+		}
+
+		Ok(Test::Version { op, bound: literal })
 	}
 
 	/// `user.<key> == 'v'`, with every operator the grammar allows.
@@ -750,6 +1161,13 @@ impl Parser<'_> {
 
 	/// `in ['a', 'b']`: one or more quoted values in brackets.
 	fn list(&mut self) -> Result<Test, ConditionError> {
+		Ok(Test::AnyOf(
+			self.values()?.into_iter().map(|(value, _)| value).collect(),
+		))
+	}
+
+	/// The bracketed values of an `in`, each with where it starts.
+	fn values(&mut self) -> Result<Vec<(String, usize)>, ConditionError> {
 		self.skip_whitespace();
 
 		if !self.eat(b"[") {
@@ -759,7 +1177,7 @@ impl Parser<'_> {
 			});
 		}
 
-		let mut values = vec![self.value()?.0];
+		let mut values = vec![self.value()?];
 
 		loop {
 			self.skip_whitespace();
@@ -776,10 +1194,10 @@ impl Parser<'_> {
 			}
 
 			self.skip_whitespace();
-			values.push(self.value()?.0);
+			values.push(self.value()?);
 		}
 
-		Ok(Test::AnyOf(values))
+		Ok(values)
 	}
 
 	/// Counts one more attribute predicate against the bound.
@@ -892,6 +1310,27 @@ impl Parser<'_> {
 	}
 }
 
+/// Checks a value a `device.<key>` predicate compares with for equality:
+/// `device.platform` takes only the names a platform has, because any
+/// other value would quietly match nobody.
+///
+/// # Errors
+///
+/// A [`ConditionError`] at `offset`, naming the platforms there are.
+fn check_device_value(key: DeviceKey, value: &str, offset: usize) -> Result<(), ConditionError> {
+	if key == DeviceKey::Platform && crate::push::PushPlatform::from_str_value(value).is_none() {
+		return Err(ConditionError {
+			message: format!(
+				"`device.platform` is one of 'apns' (iOS and macOS), 'fcm' (Android), or \
+				 'web_push', and `{value}` isn't one"
+			),
+			offset,
+		});
+	}
+
+	Ok(())
+}
+
 /// The readable name of the byte a stray token starts with.
 fn name_of(byte: u8) -> String {
 	match byte {
@@ -902,6 +1341,7 @@ fn name_of(byte: u8) -> String {
 		b'&' => "`&&`".to_owned(),
 		b'|' => "`||`".to_owned(),
 		b'u' => "an attribute".to_owned(),
+		b'd' => "a device predicate".to_owned(),
 		b'h' => "`has`".to_owned(),
 		other if other.is_ascii_whitespace() => "whitespace".to_owned(),
 		other => format!("`{}`", char::from(other)),
@@ -1360,6 +1800,350 @@ mod tests {
 
 		let over = format!("'{}' in topics", "a".repeat(129));
 		assert!(Condition::parse(&over).is_err(), "129 bytes don't");
+	}
+
+	/// A device on `platform` with the given details.
+	fn device(
+		platform: crate::push::PushPlatform,
+		details: &crate::push::DeviceDetails,
+	) -> super::Device<'_> {
+		super::Device::new(platform, details)
+	}
+
+	/// Details with every field set.
+	fn details(locale: &str, time_zone: &str, app_version: &str) -> crate::push::DeviceDetails {
+		crate::push::DeviceDetails {
+			locale: Some(locale.into()),
+			time_zone: Some(time_zone.into()),
+			app_version: Some(app_version.into()),
+		}
+	}
+
+	/// Whether `text` holds on `device`, for a person with no topics and no
+	/// attributes.
+	fn on(text: &str, device: Option<super::Device<'_>>) -> bool {
+		Condition::parse(text)
+			.unwrap_or_else(|error| panic!("{text}: {error}"))
+			.matches_on(holding(&[]), attrs(&[]), device)
+	}
+
+	/// Every device key, under every operator a `user.` predicate has.
+	#[test]
+	fn device_predicates_parse_and_evaluate_per_key_and_operator() {
+		use crate::push::PushPlatform;
+
+		let london = details("en-GB", "Europe/London", "2.1.0");
+		let quebec = details("fr-CA", "America/Toronto", "1.9");
+		let phone = device(PushPlatform::Apns, &london);
+		let android = device(PushPlatform::Fcm, &quebec);
+
+		for (text, on_phone, on_android) in [
+			// platform: ==, !=, in, has.
+			("device.platform == 'apns'", true, false),
+			("device.platform != 'apns'", false, true),
+			("device.platform in ['fcm', 'web_push']", false, true),
+			("has(device.platform)", true, true),
+			// locale: the full tag, without regard to case.
+			("device.locale == 'en-GB'", true, false),
+			("device.locale == 'en-gb'", true, false),
+			("device.locale != 'en-GB'", false, true),
+			("device.locale in ['fr-CA', 'fr-FR']", false, true),
+			("has(device.locale)", true, true),
+			// language: the primary subtag.
+			("device.language == 'fr'", false, true),
+			("device.language == 'FR'", false, true),
+			("device.language != 'fr'", true, false),
+			("device.language in ['en', 'de']", true, false),
+			("has(device.language)", true, true),
+			// time zone: the IANA name.
+			("device.time_zone == 'Europe/London'", true, false),
+			("device.time_zone != 'Europe/London'", false, true),
+			(
+				"device.time_zone in ['America/Toronto', 'America/Montreal']",
+				false,
+				true,
+			),
+			("has(device.time_zone)", true, true),
+			// app version: as versions.
+			("device.app_version == '2.1'", true, false),
+			("device.app_version != '2.1'", false, true),
+			("device.app_version in ['1.9.0', '3']", false, true),
+			("device.app_version < '2.1'", false, true),
+			("device.app_version <= '2.1'", true, true),
+			("device.app_version > '2.0.9'", true, false),
+			("device.app_version >= '1.9'", true, true),
+			("has(device.app_version)", true, true),
+		] {
+			assert_eq!(on(text, Some(phone)), on_phone, "{text} on the phone");
+			assert_eq!(on(text, Some(android)), on_android, "{text} on android");
+		}
+	}
+
+	/// With no device — and on a device that reported nothing for a key —
+	/// every device predicate answers the way an absent attribute does:
+	/// false, `!=` and `in` included.
+	#[test]
+	fn no_device_answers_like_an_absent_attribute() {
+		use crate::push::PushPlatform;
+
+		let silent = crate::push::DeviceDetails::default();
+		let browser = device(PushPlatform::WebPush, &silent);
+
+		for text in [
+			"device.platform == 'apns'",
+			"device.platform != 'apns'",
+			"device.platform in ['apns', 'fcm']",
+			"has(device.platform)",
+			"device.locale != 'en-GB'",
+			"device.language in ['en']",
+			"device.time_zone != 'UTC'",
+			"device.app_version != '1'",
+			"device.app_version < '9'",
+			"has(device.app_version)",
+		] {
+			assert!(!on(text, None), "{text} with no device");
+
+			let user = text.replace("device.", "user.");
+			if !text.contains("platform") {
+				// The same predicate over an absent attribute agrees.
+				assert!(
+					!Condition::parse(&user)
+						.unwrap()
+						.matches_over(holding(&[]), attrs(&[])),
+					"{user}"
+				);
+			}
+		}
+
+		// A browser that reported nothing still has its platform, and
+		// nothing else.
+		assert!(on("device.platform == 'web_push'", Some(browser)));
+		assert!(!on("has(device.locale)", Some(browser)));
+		assert!(!on("device.locale != 'en-GB'", Some(browser)));
+		assert!(!on("device.app_version != '1'", Some(browser)));
+
+		// `matches` and `matches_over` judge no device.
+		let parsed = Condition::parse("'a' in topics && !(device.platform == 'apns')").unwrap();
+		assert!(parsed.matches(holding(&["a"])));
+		assert!(parsed.matches_over(holding(&["a"]), attrs(&[])));
+	}
+
+	/// The version rule, at its edges: numeric parts, missing parts as 0,
+	/// suffixes from `-` or `+` ignored, and anything else not a version —
+	/// which makes an ordering false and an equality compare text.
+	#[test]
+	fn versions_compare_by_the_documented_rule() {
+		use std::cmp::Ordering;
+
+		use super::compare_versions;
+
+		for (left, right, ordering) in [
+			("2.10", "2.9", Some(Ordering::Greater)),
+			("2.9", "2.10", Some(Ordering::Less)),
+			("2.1", "2.1.0", Some(Ordering::Equal)),
+			("2.1.0.0", "2.1", Some(Ordering::Equal)),
+			("2.01", "2.1", Some(Ordering::Equal)),
+			("2.1.0-beta", "2.1.0", Some(Ordering::Equal)),
+			("2.1.0-beta", "2.1.1", Some(Ordering::Less)),
+			("2.1.0+812", "2.1", Some(Ordering::Equal)),
+			("2.1-rc.1+5", "2.1", Some(Ordering::Equal)),
+			("10", "9.99.99", Some(Ordering::Greater)),
+			("0", "0.0.0", Some(Ordering::Equal)),
+			(
+				"18446744073709551616.1",
+				"18446744073709551615.9",
+				Some(Ordering::Greater),
+			),
+			("", "1", None),
+			("1", "", None),
+			("beta", "1", None),
+			("v2.1", "2.1", None),
+			("2..1", "2.1", None),
+			("2.1.", "2.1", None),
+			(" 2.1", "2.1", None),
+			("2.1 ", "2.1", None),
+			("-beta", "1", None),
+			("+1", "1", None),
+			("2.x", "2", None),
+		] {
+			assert_eq!(
+				compare_versions(left, right),
+				ordering,
+				"{left:?} against {right:?}"
+			);
+		}
+
+		// Held values against a condition, every operator.
+		for (held, text, matches) in [
+			("2.10", "device.app_version > '2.9'", true),
+			("2.1.0", "device.app_version == '2.1'", true),
+			("2.1", "device.app_version == '2.1.0'", true),
+			("2.1.0-beta", "device.app_version == '2.1'", true),
+			("2.1.0-beta", "device.app_version < '2.1'", false),
+			("2.1.0-beta", "device.app_version >= '2.1'", true),
+			("2.0.9", "device.app_version < '2.1'", true),
+			("2.1", "device.app_version != '2.1.0'", false),
+			// Not versions: orderings are false both ways; equality
+			// compares the text.
+			("", "device.app_version < '9'", false),
+			("", "device.app_version >= '0'", false),
+			("garbage", "device.app_version < '9'", false),
+			("garbage", "device.app_version > '0'", false),
+			("garbage", "device.app_version == 'garbage'", true),
+			("garbage", "device.app_version != 'garbage'", false),
+			("garbage", "device.app_version != '2.1'", true),
+			("nightly", "device.app_version in ['2.1', 'nightly']", true),
+			("2.1.0", "device.app_version in ['2.0', '2.1']", true),
+		] {
+			let reported = crate::push::DeviceDetails {
+				app_version: Some(held.into()),
+				..crate::push::DeviceDetails::default()
+			};
+			assert_eq!(
+				on(
+					text,
+					Some(device(crate::push::PushPlatform::Fcm, &reported))
+				),
+				matches,
+				"{text} against {held:?}"
+			);
+		}
+
+		// An ordering's literal must be a version, the way a numeric
+		// comparison's must be a finite number.
+		for bad in [
+			"device.app_version < 'latest'",
+			"device.app_version >= ''",
+			"device.app_version > 'v2'",
+			"device.app_version <= '2..1'",
+		] {
+			let error = Condition::parse(bad).expect_err(bad);
+			assert!(error.message.contains("version"), "{bad}: {error}");
+			assert_eq!(error.offset, bad.find('\'').unwrap() + 1, "{bad}: {error}");
+		}
+
+		// Equality takes any text: app versions are free text.
+		Condition::parse("device.app_version == 'nightly'").expect("free text");
+	}
+
+	/// An unknown key is refused where it starts, with a message naming
+	/// every key there is; a platform must be one there is.
+	#[test]
+	fn unknown_device_keys_and_platforms_are_refused() {
+		for (text, offset) in [
+			("device.os == 'ios'", 7),
+			("device.Platform == 'apns'", 7),
+			("device. == 'x'", 7),
+			("has(device.model)", 11),
+			("'a' in topics && device.region == 'GB'", 24),
+		] {
+			let error = Condition::parse(text).expect_err(text);
+			assert_eq!(error.offset, offset, "{text}: {error}");
+			for key in super::DeviceKey::ALL {
+				assert!(
+					error
+						.message
+						.contains(&format!("`device.{}`", key.as_str())),
+					"{text}: the refusal names {}: {error}",
+					key.as_str()
+				);
+			}
+		}
+
+		for (text, offset) in [
+			("device.platform == 'ios'", 20),
+			("device.platform != 'android'", 20),
+			("device.platform in ['apns', 'web']", 29),
+		] {
+			let error = Condition::parse(text).expect_err(text);
+			assert_eq!(error.offset, offset, "{text}: {error}");
+			assert!(error.message.contains("'apns'"), "{text}: {error}");
+		}
+
+		// The other device errors carry offsets like the attribute ones.
+		for (text, offset) in [
+			("device", 6),
+			("device.", 7),
+			("device.locale", 13),
+			("device.locale ~ 'en'", 14),
+			("device.locale in 'en'", 17),
+			("has(device.locale", 17),
+			("has(device locale)", 10),
+			("devices.locale == 'en'", 0),
+		] {
+			let error = Condition::parse(text).expect_err(text);
+			assert_eq!(
+				error.offset, offset,
+				"{text:?}: the error points where the parser gave up: {error}"
+			);
+		}
+	}
+
+	/// Device predicates anchor a condition: with no device every one is
+	/// false, so a condition of device predicates alone is not an everyone
+	/// audience in disguise — but one that holds with no device is. It walks
+	/// the registry, like everyone, unless a topic anchors it.
+	#[test]
+	fn device_predicates_anchor_and_name_their_walk() {
+		let only_device = Condition::parse("device.platform == 'apns'").unwrap();
+		assert!(only_device.mentions_device());
+		assert!(!only_device.topic_anchored(), "walks the registry");
+
+		let mixed = Condition::parse("'news' in topics && device.language == 'fr'").unwrap();
+		assert!(mixed.mentions_device());
+		assert!(mixed.topic_anchored(), "the topic anchors it");
+
+		Condition::parse("user.plan == 'pro' && !(device.platform == 'apns')")
+			.expect("anchored by the attribute");
+		Condition::parse("device.app_version < '2.1' || 'a' in topics").expect("anchored");
+
+		for text in [
+			"!(device.platform == 'apns')",
+			"!has(device.locale)",
+			"device.platform == 'apns' || !('a' in topics)",
+		] {
+			let error = Condition::parse(text).expect_err(text);
+			assert!(error.message.contains("no device"), "{text}: {error}");
+		}
+
+		assert!(
+			!Condition::parse("user.plan == 'pro'")
+				.unwrap()
+				.mentions_device()
+		);
+		assert!(!Condition::parse("'a' in topics").unwrap().mentions_device());
+		assert!(
+			Condition::parse("'a' in topics && !(has(device.locale))")
+				.unwrap()
+				.mentions_device()
+		);
+
+		// Device predicates share the attribute bound.
+		let eleven = (1..=11)
+			.map(|n| {
+				if n % 2 == 0 {
+					format!("device.app_version != '{n}'")
+				} else {
+					format!("user.k{n} == 'v'")
+				}
+			})
+			.collect::<Vec<_>>();
+		let balanced = format!(
+			"(({} && {}) && ({} && {})) && (({} && {}) && ({} && {})) && {} && {} && {}",
+			eleven[0],
+			eleven[1],
+			eleven[2],
+			eleven[3],
+			eleven[4],
+			eleven[5],
+			eleven[6],
+			eleven[7],
+			eleven[8],
+			eleven[9],
+			eleven[10]
+		);
+		let error = Condition::parse(&balanced).expect_err("eleven predicates");
+		assert!(error.message.contains("at most 10"), "{error}");
 	}
 
 	/// The error prints as a sentence with its offset.

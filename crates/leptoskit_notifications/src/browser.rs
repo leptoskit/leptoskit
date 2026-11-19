@@ -45,6 +45,12 @@
 //!    long before the gesture: `subscribe` is the one call whose permission the
 //!    browser ties to the gesture, and a worker still installing when the
 //!    gesture arrives can eat the gesture's window.
+//!
+//!    Every enrollment carries the browser's details — `navigator.language` and
+//!    the `Intl` time zone — so a send can target devices with `device.`
+//!    conditions, with no code. A browser has no app version of its own: name
+//!    yours with [`EnrollOptions::app_version`] to make `device.app_version`
+//!    mean something on the web.
 //! 5. Keep the [`Enrollment`] endpoint id beside the person's session. Call
 //!    [`disable`] while still authenticated before signing out. It requires an
 //!    acknowledged server revoke and keeps the origin subscription and OS
@@ -277,6 +283,11 @@ pub struct EnrollOptions {
 	/// for, because [`EnrollError::Scope`] would be better than enrolling
 	/// against a worker the app didn't select.
 	pub worker_scope: Option<String>,
+	/// The app's version, as a condition's `device.app_version` reads it:
+	/// the one device detail a browser can't report on its own. `None`
+	/// sends none. The locale and time zone need nothing — enrollment reads
+	/// `navigator.language` and the browser's `Intl` time zone itself.
+	pub app_version: Option<String>,
 }
 
 impl EnrollOptions {
@@ -286,8 +297,37 @@ impl EnrollOptions {
 		Self {
 			vapid_public_key: vapid_public_key.into(),
 			worker_scope: None,
+			app_version: None,
 		}
 	}
+
+	/// The same options, sending `version` as the app's version — say
+	/// `env!("CARGO_PKG_VERSION")` — so a send can target this web app's
+	/// versions the way it targets a native app's.
+	#[must_use]
+	pub fn app_version(mut self, version: impl Into<String>) -> Self {
+		self.app_version = Some(version.into());
+		self
+	}
+}
+
+/// The details a browser enrollment sends, from what the browser reports —
+/// `navigator.language` and the `Intl` time zone — and the app's own
+/// version, [sanitized](crate::push::DeviceDetails::sanitized): a detail
+/// the service would refuse is dropped rather than costing the browser its
+/// enrollment.
+#[must_use]
+pub fn device_details(
+	language: Option<String>,
+	time_zone: Option<String>,
+	app_version: Option<String>,
+) -> crate::push::DeviceDetails {
+	crate::push::DeviceDetails {
+		locale: language,
+		time_zone,
+		app_version,
+	}
+	.sanitized()
 }
 
 /// Why enrollment didn't happen. Every variant is actionable, and none of
@@ -389,7 +429,7 @@ pub async fn enroll(options: &EnrollOptions) -> Result<Enrollment, EnrollError> 
 			}
 		};
 
-		register_subscription(&subscription).await
+		register_subscription(&subscription, options).await
 	}
 }
 
@@ -427,7 +467,7 @@ pub async fn reconcile(options: &EnrollOptions) -> Result<Option<Enrollment>, En
 		match held_subscription(options).await? {
 			(_, Held::Absent) => Ok(None),
 			(_, Held::Subscription(subscription)) => {
-				Ok(Some(register_subscription(&subscription).await?))
+				Ok(Some(register_subscription(&subscription, options).await?))
 			}
 		}
 	}
@@ -520,14 +560,15 @@ async fn held_subscription(options: &EnrollOptions) -> Result<(Registration, Hel
 	}
 }
 
-/// Registers one subscription as the signed-in person's, and answers the
-/// handle its disable needs.
+/// Registers one subscription as the signed-in person's, with the
+/// browser's details, and answers the handle its disable needs.
 ///
 /// The person is read from the app's forwarded identity by the service,
 /// never from anything this module holds.
 #[cfg(target_arch = "wasm32")]
 async fn register_subscription(
 	subscription: &leptoskit_service_worker::PushSubscription,
+	options: &EnrollOptions,
 ) -> Result<Enrollment, EnrollError> {
 	let summary = leptoskit_rpc::client::call(crate::push::RegisterPushEndpoint {
 		credential: crate::push::PushCredential::WebPush {
@@ -537,6 +578,11 @@ async fn register_subscription(
 				auth: subscription.keys.auth.clone(),
 			},
 		},
+		device: device_details(
+			navigator_language(),
+			intl_time_zone(),
+			options.app_version.clone(),
+		),
 	})
 	.await
 	.map_err(EnrollError::Enroll)?;
@@ -544,6 +590,29 @@ async fn register_subscription(
 	Ok(Enrollment {
 		endpoint: summary.id,
 	})
+}
+
+/// `navigator.language`: the browser's preferred language tag.
+#[cfg(target_arch = "wasm32")]
+fn navigator_language() -> Option<String> {
+	let navigator =
+		js_sys::Reflect::get(&js_sys::global(), &js_sys::JsString::from("navigator")).ok()?;
+
+	js_sys::Reflect::get(&navigator, &js_sys::JsString::from("language"))
+		.ok()?
+		.as_string()
+}
+
+/// `Intl.DateTimeFormat().resolvedOptions().timeZone`: the IANA name the
+/// browser resolves the local time zone to.
+#[cfg(target_arch = "wasm32")]
+fn intl_time_zone() -> Option<String> {
+	let resolved = js_sys::Intl::DateTimeFormat::new(&js_sys::Array::new(), &js_sys::Object::new())
+		.resolved_options();
+
+	js_sys::Reflect::get(&resolved, &js_sys::JsString::from("timeZone"))
+		.ok()?
+		.as_string()
 }
 
 /// The registration to enroll against, with its worker active. Subscribe
@@ -856,6 +925,46 @@ mod tests {
 		assert_eq!(
 			Availability::Unsupported.reason(),
 			"this browser has no service worker or Push API"
+		);
+	}
+
+	/// What the browser reports is sent sanitized: `navigator.language`
+	/// in canonical case, the `Intl` time zone, and the version the app
+	/// named — and a detail the service would refuse is dropped, never the
+	/// enrollment. A browser reports no version on its own.
+	#[test]
+	fn browser_details_are_sanitized_before_they_are_sent() {
+		use crate::push::DeviceDetails;
+
+		assert_eq!(
+			super::device_details(
+				Some("en-gb".into()),
+				Some("Europe/London".into()),
+				Some("2.1.0".into())
+			),
+			DeviceDetails {
+				locale: Some("en-GB".into()),
+				time_zone: Some("Europe/London".into()),
+				app_version: Some("2.1.0".into()),
+			}
+		);
+		assert_eq!(
+			super::device_details(Some("not a tag".into()), Some("UTC".into()), None),
+			DeviceDetails {
+				locale: None,
+				time_zone: Some("UTC".into()),
+				app_version: None,
+			}
+		);
+
+		let options = super::EnrollOptions::new("key");
+		assert_eq!(
+			options.app_version, None,
+			"no version unless the app names one"
+		);
+		assert_eq!(
+			options.app_version("2.1.0").app_version.as_deref(),
+			Some("2.1.0")
 		);
 	}
 

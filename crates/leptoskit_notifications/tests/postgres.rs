@@ -141,6 +141,8 @@ fn text(value: &leptoskit_db::Value) -> String {
 		leptoskit_db::Value::Text(text) => text.clone(),
 		leptoskit_db::Value::Bool(value) => value.to_string(),
 		leptoskit_db::Value::Int(int) => int.to_string(),
+		leptoskit_db::Value::Uuid(id) => id.to_string(),
+		leptoskit_db::Value::Null => "NULL".into(),
 		other => format!("{other:?}"),
 	}
 }
@@ -925,4 +927,280 @@ async fn a_test_send_holds_up_no_write_on_postgres() {
 	assert_eq!(status, 200, "{body}");
 	let outcomes: Value = serde_json::from_str(&body).unwrap();
 	assert_eq!(outcomes[0]["state"], "accepted", "{outcomes}");
+}
+
+/// The device-details migration on Postgres: down drops the three columns
+/// and keeps every endpoint, and up brings them back empty.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_device_details_migration_reverses_and_reapplies_on_postgres() {
+	use leptoskit_db::Connection as _;
+
+	let Some(postgres) = Postgres::start() else {
+		return;
+	};
+
+	let db = Db::connect(&postgres.database())
+		.await
+		.expect("the database opens");
+	db.migrate(POSTGRES_MIGRATIONS)
+		.await
+		.expect("migrations apply");
+	let last: &str = &POSTGRES_MIGRATIONS.last().expect("migrations").name;
+	assert!(last.ends_with("_device_details"), "{last}");
+
+	let columns = |db: Db| {
+		async move {
+			db.fetch(Statement {
+				sql: "SELECT column_name FROM information_schema.columns WHERE table_name = \
+				      'push_endpoints' AND column_name IN ('locale', 'time_zone', 'app_version') \
+				      ORDER BY column_name"
+					.into(),
+				args: Vec::new(),
+			})
+			.await
+			.expect("a read")
+			.iter()
+			.map(|row| text(&row[0]))
+			.collect::<Vec<_>>()
+		}
+	};
+	let endpoint = Uuid::from_u128(0xE0E0);
+	db.execute(Statement {
+		sql: format!(
+			"INSERT INTO push_endpoints (id, person, platform, credential, generation, \
+			 fingerprint, created_at, locale, time_zone, app_version) VALUES ('{endpoint}', \
+			 '{ALICE}', 'apns', 'secret', 1, '{}', now(), 'en-GB', 'Europe/London', '2.1.0')",
+			"e".repeat(64)
+		),
+		args: Vec::new(),
+	})
+	.await
+	.expect("an endpoint with details");
+	let up = columns(db.clone()).await;
+	println!("up: {up:?}");
+	assert_eq!(up, ["app_version", "locale", "time_zone"]);
+
+	let reverted = db
+		.rollback(POSTGRES_MIGRATIONS, 1)
+		.await
+		.expect("down applies");
+	println!("down: reverted {reverted:?}");
+	assert_eq!(reverted, [last]);
+	let down = columns(db.clone()).await;
+	println!("down: {down:?}");
+	assert!(down.is_empty(), "{down:?}");
+
+	let applied = db
+		.migrate(POSTGRES_MIGRATIONS)
+		.await
+		.expect("up applies again");
+	println!("up again: applied {applied:?}");
+	assert_eq!(applied, [last]);
+	assert_eq!(columns(db.clone()).await, up);
+
+	let row = db
+		.fetch(Statement {
+			sql: "SELECT credential, locale, time_zone, app_version FROM push_endpoints".into(),
+			args: Vec::new(),
+		})
+		.await
+		.expect("a read");
+	assert_eq!(
+		row[0].iter().map(text).collect::<Vec<_>>(),
+		["secret", "NULL", "NULL", "NULL"],
+		"the endpoint survived the reversal, its details empty until it re-enrolls"
+	);
+}
+
+/// A service over `db` with an APNs transport whose boundary answers
+/// nothing, so enrollment is accepted and no provider is ever reached.
+#[cfg(feature = "service")]
+async fn apns_service(db: Db) -> Service {
+	use leptoskit_notifications::service::config;
+	use leptoskit_notifications::service::push;
+	use leptoskit_notifications::service::transport::Boundary;
+	use leptoskit_notifications::service::transport::PushRuntime;
+	use leptoskit_notifications::service::transport::WireError;
+	use leptoskit_notifications::service::transport::WireRequest;
+	use leptoskit_notifications::service::transport::WireResponse;
+
+	struct DeadBoundary;
+
+	impl Boundary for DeadBoundary {
+		fn post(
+			&self,
+			_request: WireRequest,
+		) -> std::pin::Pin<Box<dyn Future<Output = Result<WireResponse, WireError>> + Send>>
+		{
+			Box::pin(async { Err(WireError::Unreachable) })
+		}
+	}
+
+	let key_p8 = {
+		let rng = ring::rand::SystemRandom::new();
+		let document = ring::signature::EcdsaKeyPair::generate_pkcs8(
+			&ring::signature::ECDSA_P256_SHA256_FIXED_SIGNING,
+			&rng,
+		)
+		.expect("a key");
+		format!(
+			"-----BEGIN PRIVATE KEY-----\n{}\n-----END PRIVATE KEY-----\n",
+			base64::Engine::encode(
+				&base64::engine::general_purpose::STANDARD,
+				document.as_ref()
+			)
+		)
+	};
+	let config = config::PushConfig {
+		apns: Some(config::ApnsConfig {
+			key_p8,
+			key_id: "KEY".into(),
+			team_id: "TEAM".into(),
+			topic: "dev.leptoskit.app".into(),
+			environment: config::ApnsEnvironment::Sandbox,
+		}),
+		fcm: None,
+		web: None,
+	};
+	let callers = ServiceCallers::new(Anonymous)
+		.caller(TOKEN, rpc::server::APP_CALLER)
+		.forwarded_identity(SERVICE, TOKEN);
+	let (router, live) = leptoskit_notifications::service::routes_with_push(
+		db.clone(),
+		Some(ORIGIN),
+		callers,
+		push::Push {
+			runtime: Some(std::sync::Arc::new(
+				PushRuntime::build_over(&config, std::sync::Arc::new(DeadBoundary))
+					.expect("the runtime builds"),
+			)),
+		},
+	);
+	live.start().await.expect("live starts");
+	let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+	let address = listener.local_addr().unwrap();
+	tokio::spawn(async move {
+		leptoskit_axum::axum::serve(listener, router).await.unwrap();
+	});
+
+	Service {
+		address,
+		db: db.clone(),
+		jobs: Some(
+			leptoskit_notifications::service::workers(db)
+				.poll(Duration::from_millis(50))
+				.start(),
+		),
+	}
+}
+
+/// On Postgres, a re-enrollment replaces an endpoint's details without
+/// advancing its credential generation, and a condition that asks about
+/// devices fans out to the matching person and enqueues a delivery for the
+/// matching endpoint alone.
+#[tokio::test(flavor = "multi_thread")]
+#[cfg(feature = "service")]
+async fn device_details_are_replaced_and_targeted_on_postgres() {
+	let Some(postgres) = Postgres::start() else {
+		return;
+	};
+
+	let db = Db::connect(&postgres.database())
+		.await
+		.expect("the database opens");
+	db.migrate(POSTGRES_MIGRATIONS)
+		.await
+		.expect("migrations apply");
+	let service = apns_service(db).await;
+
+	let enroll = |person: Uuid, token: String, device: Value| {
+		let service = &service;
+		async move {
+			let (status, body) = post(
+				service,
+				"register_push_endpoint",
+				json!({ "credential": { "apns": { "device_token": token } }, "device": device }),
+				Some(&signed_in(person)),
+			)
+			.await;
+			assert_eq!(status, 200, "{body}");
+			serde_json::from_str::<Value>(&body).unwrap()
+		}
+	};
+	let phone = enroll(
+		ALICE,
+		"1".repeat(64),
+		json!({ "locale": "en_gb", "time_zone": "Europe/London", "app_version": "2.0" }),
+	)
+	.await;
+	assert_eq!(phone["device"]["locale"], "en-GB");
+	let phone_id: Uuid = phone["id"].as_str().unwrap().parse().unwrap();
+	let updated = enroll(
+		ALICE,
+		"1".repeat(64),
+		json!({ "locale": "fr-FR", "time_zone": "Europe/Paris", "app_version": "2.0" }),
+	)
+	.await;
+	assert_eq!(updated["id"], phone["id"]);
+	let stored = rows(
+		&service,
+		&format!(
+			"SELECT generation, locale, time_zone FROM push_endpoints WHERE id = '{phone_id}'"
+		),
+	)
+	.await;
+	assert_eq!(
+		stored[0].iter().map(text).collect::<Vec<_>>(),
+		["1", "fr-FR", "Europe/Paris"],
+		"replaced, with no rotation"
+	);
+	enroll(
+		BOB,
+		"2".repeat(64),
+		json!({ "locale": "en-US", "app_version": "2.0" }),
+	)
+	.await;
+
+	let (status, body) = post(
+		&service,
+		"send",
+		json!({
+			"idempotency_key": "french-devices",
+			"spec": { "category": "updates", "title": "Bonjour" },
+			"target": { "condition": "device.language == 'fr'" },
+		}),
+		Some(TOKEN),
+	)
+	.await;
+	assert_eq!(status, 200, "{body}");
+
+	let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+	loop {
+		let (status, body) = post(
+			&service,
+			"send_status",
+			json!({ "idempotency_key": "french-devices" }),
+			Some(TOKEN),
+		)
+		.await;
+		assert_eq!(status, 200, "{body}");
+		let progress: Value = serde_json::from_str(&body).unwrap();
+
+		if progress["state"] == "complete" {
+			assert_eq!(progress["targeted"], 1, "{progress}");
+			break;
+		}
+
+		assert!(tokio::time::Instant::now() < deadline, "{progress}");
+		tokio::time::sleep(Duration::from_millis(50)).await;
+	}
+
+	let delivered = rows(
+		&service,
+		"SELECT person, endpoint FROM push_deliveries WHERE send_key = 'french-devices'",
+	)
+	.await;
+	assert_eq!(delivered.len(), 1, "{delivered:?}");
+	assert_eq!(text(&delivered[0][0]), ALICE.to_string());
+	assert_eq!(text(&delivered[0][1]), phone_id.to_string());
 }

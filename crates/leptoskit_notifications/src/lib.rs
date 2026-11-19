@@ -83,6 +83,7 @@ pub use options::SendPriority;
 pub use options::TextDirection;
 pub use options::WebOptions;
 pub use options::WebPushAction;
+pub use push::DeviceDetails;
 
 /// The service's name: the `[services.notifications]` table in the app's
 /// `leptoskit.toml` must use it, because every operation is addressed to it.
@@ -450,8 +451,12 @@ pub enum SendTarget {
 	Topic(String),
 	/// Everyone a [condition](condition) matches, written the way FCM
 	/// writes conditions: `'news.sports' in topics && 'alerts.local' in
-	/// topics`, or over the app's own attributes: `user.plan == 'pro' &&
-	/// !('beta' in topics)`.
+	/// topics`, over the app's own attributes: `user.plan == 'pro' &&
+	/// !('beta' in topics)`, or over the devices people enrolled:
+	/// `device.platform == 'apns' && device.app_version < '2.1'`. A
+	/// condition that asks about devices is judged per device: the person
+	/// is reached when it holds with no device or on one of their live
+	/// endpoints, and the push goes only to the endpoints it holds for.
 	Condition(String),
 	/// Every person the service knows: its [registry](AudienceMember) — the
 	/// people whose attributes the app set, who subscribed to a topic,
@@ -973,11 +978,20 @@ fn valid_text(value: &str) -> bool {
 /// enqueueing, and live inbox updates behave exactly as for a recipients
 /// send.
 ///
+/// A condition with `device.` predicates is judged once with no device and
+/// once per live endpoint of each person it walks — every endpoint of a
+/// batch read in one query. The person gets one inbox row when any of
+/// those holds, and the push goes only to the endpoints it holds for,
+/// judged with each endpoint's details as they stand when the deliveries
+/// are written — in the fanout's own transaction, even for a scheduled
+/// send, whose deliveries then wait for its time.
+///
 /// Which audience a fanout walks depends on the target: a topic's
 /// subscribers for a topic, the same for a condition that cannot match
 /// without one of its topics, and the service's [person
 /// registry](AudienceMember) for a condition that can — one anchored only on
-/// attributes, like `user.plan == 'pro'` — and for everyone. Everyone is
+/// attributes or devices, like `user.plan == 'pro'` or `device.platform ==
+/// 'fcm'` — and for everyone. Everyone is
 /// the loudest target: it reaches every registered person, so a send to
 /// it should be rare, deliberate, and `validate_only`'d first — and
 /// remember that people who opted out of the category are skipped

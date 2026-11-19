@@ -739,6 +739,9 @@ async fn enroll_directly(service: &Service, people: &[Uuid]) {
 			generation: 1,
 			fingerprint: format!("{n:064x}"),
 			invalidated_at: None,
+			locale: None,
+			time_zone: None,
+			app_version: None,
 		}
 		.insert(&tx)
 		.await

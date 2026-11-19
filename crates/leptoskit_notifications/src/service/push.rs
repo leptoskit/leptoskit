@@ -34,11 +34,15 @@ use sha2::Digest as _;
 use sha2::Sha256;
 use uuid::Uuid;
 
+use super::Facts;
 use super::Fanout;
 use super::unread_for;
+use crate::condition::Condition;
+use crate::condition::Device;
 use crate::push::DeliveryReason;
 use crate::push::DeliveryState;
 use crate::push::DeliveryStatus;
+use crate::push::DeviceDetails;
 use crate::push::EndpointSummary;
 use crate::push::NewPushDelivery;
 use crate::push::NewPushEndpoint;
@@ -97,18 +101,21 @@ fn fingerprint(platform: PushPlatform, destination: &str) -> String {
 }
 
 /// Registers one endpoint for `me`, over the credential their app
-/// presented. Idempotent for the same person and destination: a Web Push
-/// subscription whose browser rotated its keys updates the stored
-/// credential in place, keeping the endpoint, its owner, and its queued
-/// deliveries. Refused for a destination another account holds, even
-/// when invalidated, until its owner explicitly revokes it. Refused
-/// for a platform with no transport.
+/// presented and the details its device reported. Idempotent for the same
+/// person and destination: a Web Push subscription whose browser rotated
+/// its keys updates the stored credential in place, keeping the endpoint,
+/// its owner, and its queued deliveries. The details are replaced on every
+/// registration; a change to them alone is a plain update that leaves the
+/// credential's generation, and so every queued delivery, as it was.
+/// Refused for a destination another account holds, even when
+/// invalidated, until its owner explicitly revokes it. Refused for a
+/// platform with no transport.
 ///
 /// # Errors
 ///
-/// [`rpc::Error::Invalid`] for a credential that fails the shared
-/// checks, a host the push-host policy won't push to, a platform this
-/// server has no transport for, or enrollment past
+/// [`rpc::Error::Invalid`] for a credential or details that fail the
+/// shared checks, a host the push-host policy won't push to, a platform
+/// this server has no transport for, or enrollment past
 /// [`MAX_ENDPOINTS`](crate::push::MAX_ENDPOINTS); [`rpc::Error::Conflict`]
 /// when another account holds the destination;
 /// [`rpc::Error::Contended`] when the same destination enrolls twice at
@@ -118,8 +125,10 @@ pub(crate) async fn register(
 	push: &Push,
 	me: Uuid,
 	credential: &PushCredential,
+	device: &DeviceDetails,
 ) -> rpc::Result<EndpointSummary> {
 	crate::push::check_credential(credential).map_err(rpc::Error::invalid)?;
+	let device = device.normalized().map_err(rpc::Error::invalid)?;
 
 	let runtime = push.runtime.as_ref().ok_or_else(push_unconfigured)?;
 
@@ -171,6 +180,9 @@ pub(crate) async fn register(
 					.set(|endpoint| endpoint.generation, generation)
 					.set(|endpoint| endpoint.credential, canonical)
 					.set(|endpoint| endpoint.invalidated_at, None)
+					.set(|endpoint| endpoint.locale, device.locale.clone())
+					.set(|endpoint| endpoint.time_zone, device.time_zone.clone())
+					.set(|endpoint| endpoint.app_version, device.app_version.clone())
 					.run(cx.tx())
 					.await?;
 				// Pending work follows the owner's new credentials; terminal
@@ -187,6 +199,18 @@ pub(crate) async fn register(
 					.set(|row| row.next_attempt_at, Some(leptoskit_db::now()))
 					.run(cx.tx())
 					.await?;
+			} else if existing.device_details() != device {
+				// Only what the device says about itself changed — an app
+				// update, a new language, a move across time zones. The
+				// credential and its generation stay, so queued deliveries
+				// and in-flight attempts never notice.
+				PushEndpoint::update()
+					.filter(|endpoint| endpoint.id.eq(existing.id))
+					.set(|endpoint| endpoint.locale, device.locale.clone())
+					.set(|endpoint| endpoint.time_zone, device.time_zone.clone())
+					.set(|endpoint| endpoint.app_version, device.app_version.clone())
+					.run(cx.tx())
+					.await?;
 			}
 
 			// Enrolling a device is one of the acts that makes a person
@@ -198,6 +222,7 @@ pub(crate) async fn register(
 				platform,
 				created_at: existing.created_at,
 				invalidated_at: None,
+				device,
 			});
 		}
 
@@ -216,6 +241,9 @@ pub(crate) async fn register(
 		generation: 1,
 		fingerprint,
 		invalidated_at: None,
+		locale: device.locale.clone(),
+		time_zone: device.time_zone.clone(),
+		app_version: device.app_version.clone(),
 	}
 	.insert(cx.tx())
 	.await
@@ -240,6 +268,7 @@ pub(crate) async fn register(
 		platform,
 		created_at: leptoskit_db::now(),
 		invalidated_at: None,
+		device,
 	})
 }
 
@@ -315,6 +344,63 @@ fn summary(endpoint: &PushEndpoint) -> EndpointSummary {
 		platform: PushPlatform::from_str_value(&endpoint.platform).unwrap_or(PushPlatform::Apns),
 		created_at: endpoint.created_at,
 		invalidated_at: endpoint.invalidated_at,
+		device: endpoint.device_details(),
+	}
+}
+
+/// The endpoint as a condition's `device.` predicates read it: its
+/// platform and the details it last enrolled with, borrowed from the row.
+pub(crate) fn device_of(endpoint: &PushEndpoint) -> Device<'_> {
+	Device {
+		platform: PushPlatform::from_str_value(&endpoint.platform).unwrap_or(PushPlatform::Apns),
+		locale: endpoint.locale.as_deref(),
+		time_zone: endpoint.time_zone.as_deref(),
+		app_version: endpoint.app_version.as_deref(),
+	}
+}
+
+/// The live — not invalidated — endpoints of `people`, by person, in one
+/// read: what a fanout batch judges a device condition against and fans
+/// its deliveries out to.
+///
+/// # Errors
+///
+/// Whatever the read fails with.
+pub(crate) async fn live_endpoints(
+	db: &impl leptoskit_db::Read,
+	people: impl IntoIterator<Item = Uuid>,
+) -> rpc::Result<HashMap<Uuid, Vec<PushEndpoint>>> {
+	let endpoints = PushEndpoint::query()
+		.filter(|endpoint| endpoint.person.in_list(people) & endpoint.invalidated_at.is_null())
+		.all(db)
+		.await?;
+	let mut by_person: HashMap<Uuid, Vec<PushEndpoint>> = HashMap::new();
+
+	for endpoint in endpoints {
+		by_person.entry(endpoint.person).or_default().push(endpoint);
+	}
+
+	Ok(by_person)
+}
+
+/// Which of a person's endpoints a send's deliveries go to, when its
+/// condition asks about devices: the ones the condition holds for, judged
+/// with each endpoint's own platform and details — as they stand when the
+/// deliveries are written — and the person's topics and attributes as the
+/// batch read them. A send whose condition never mentions `device.` has
+/// no filter, and every live endpoint gets its delivery.
+pub(crate) struct DeviceFilter<'a> {
+	/// The send's condition, which mentions `device.`.
+	pub(crate) condition: &'a Condition,
+	/// What the batch read about its people.
+	pub(crate) facts: &'a Facts,
+}
+
+impl DeviceFilter<'_> {
+	/// Whether `endpoint`, one of `person`'s, gets a delivery.
+	fn admits(&self, person: Uuid, endpoint: &PushEndpoint) -> bool {
+		self.facts
+			.holds(self.condition, person, Some(device_of(endpoint)))
 	}
 }
 
@@ -434,7 +520,9 @@ pub(crate) async fn schedule(
 	spec: &crate::SendSpec,
 	fanout: &Fanout,
 ) -> rpc::Result<()> {
-	let enqueued = deliveries_in_tx(cx.tx(), send_key, fanout).await?;
+	// A recipients send has no condition: every live endpoint of every
+	// recipient gets its delivery.
+	let enqueued = deliveries_in_tx(cx.tx(), send_key, fanout, None).await?;
 
 	if enqueued > 0 {
 		cx.enqueue(PushSend {
@@ -451,7 +539,11 @@ pub(crate) async fn schedule(
 
 /// Writes the deliveries themselves, in whatever transaction the caller
 /// holds: the half of [`schedule`] a fanout job step reuses, so a batch's
-/// rows and its deliveries commit together.
+/// rows and its deliveries commit together. This is where a send's
+/// deliveries are decided, so a condition that asks about devices is
+/// applied here, through `filter`, against the endpoints as this
+/// transaction reads them: only the endpoints the condition holds for get
+/// one. With no filter, every live endpoint does.
 ///
 /// # Errors
 ///
@@ -460,6 +552,7 @@ pub(crate) async fn deliveries_in_tx(
 	tx: &leptoskit_db::Tx,
 	send_key: &str,
 	fanout: &Fanout,
+	filter: Option<&DeviceFilter<'_>>,
 ) -> rpc::Result<usize> {
 	if fanout.delivered_to.is_empty() {
 		return Ok(0);
@@ -470,27 +563,20 @@ pub(crate) async fn deliveries_in_tx(
 		.iter()
 		.map(|(person, _)| *person)
 		.collect();
-	let endpoints = PushEndpoint::query()
-		.filter(|endpoint| {
-			endpoint.person.in_list(people.iter().copied()) & endpoint.invalidated_at.is_null()
-		})
-		.all(tx)
-		.await?;
+	let by_person = live_endpoints(tx, people.iter().copied()).await?;
 
-	if endpoints.is_empty() {
+	if by_person.is_empty() {
 		return Ok(0);
-	}
-
-	let mut by_person: HashMap<Uuid, Vec<&PushEndpoint>> = HashMap::new();
-
-	for endpoint in &endpoints {
-		by_person.entry(endpoint.person).or_default().push(endpoint);
 	}
 
 	let mut enqueued = 0_usize;
 
 	for (person, notification) in &fanout.delivered_to {
 		for endpoint in by_person.get(person).into_iter().flatten() {
+			if filter.is_some_and(|filter| !filter.admits(*person, endpoint)) {
+				continue;
+			}
+
 			NewPushDelivery {
 				id: Uuid::now_v7(),
 				notification: *notification,

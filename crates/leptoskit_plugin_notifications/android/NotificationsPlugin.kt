@@ -22,6 +22,8 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.charset.CharacterCodingException
 import java.nio.charset.CodingErrorAction
+import java.util.Locale
+import java.util.TimeZone
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
@@ -216,12 +218,50 @@ internal object SystemFirebaseRegistrar : FirebaseRegistrar {
     }
 }
 
+/** What the device says about itself for push targeting, as `DEVICE`
+ * answers it. A `null` value is unknown. */
+internal data class DeviceDetails(
+    val locale: String?,
+    val timeZone: String?,
+    val appVersion: String?,
+)
+
+/** Where the device's details come from. Production reads the platform;
+ * tests substitute a fake. */
+internal fun interface DeviceFacts {
+    fun current(): DeviceDetails
+}
+
+/** The platform's own answers: the default locale's language tag, the
+ * default time zone's id, and the package's version name — read fresh on
+ * every call, so a language change or an app update shows on the next
+ * read. */
+internal class SystemDeviceFacts(
+    private val context: Context,
+) : DeviceFacts {
+    override fun current(): DeviceDetails =
+        DeviceDetails(
+            locale = Locale.getDefault().toLanguageTag(),
+            timeZone = TimeZone.getDefault().id,
+            appVersion = versionName(),
+        )
+
+    private fun versionName(): String? =
+        try {
+            @Suppress("DEPRECATION")
+            context.packageManager.getPackageInfo(context.packageName, 0).versionName
+        } catch (_: PackageManager.NameNotFoundException) {
+            null
+        }
+}
+
 /** Immediate notifications only. Posting never implicitly requests permission. */
 class NotificationsPlugin internal constructor(
     private val context: Context,
     smallIcon: Int?,
     private val registrar: FirebaseRegistrar,
     private val remoteWaitLimitMillis: Long,
+    private val device: DeviceFacts = SystemDeviceFacts(context),
 ) : NativePlugin {
     /** The constructor the generated app and ordinary registrations use: the
      * registration boundary is the real one, and the OS's own answer bound
@@ -235,7 +275,7 @@ class NotificationsPlugin internal constructor(
 
     override val name = "notifications"
     override val methods =
-        intArrayOf(STATE, REQUEST, SHOW, CANCEL, CHANNEL, DELETE, ACTIVE, REMOTE_TOKEN, REMOTE_REGISTER)
+        intArrayOf(STATE, REQUEST, SHOW, CANCEL, CHANNEL, DELETE, ACTIVE, REMOTE_TOKEN, REMOTE_REGISTER, DEVICE)
 
     companion object {
         /** The notification tag and channel prefix the plugin owns. */
@@ -281,6 +321,13 @@ class NotificationsPlugin internal constructor(
         /** Asks the OS to register and waits a bounded time for a new
          * answer. */
         const val REMOTE_REGISTER = 8
+
+        /** Reads what the device says about itself for push targeting. */
+        const val DEVICE = 9
+
+        /** The longest device detail a `DEVICE` reply carries, in bytes,
+         * matching the Rust contract's `MAX_DEVICE_DETAIL_BYTES`. */
+        internal const val MAX_DEVICE_DETAIL_BYTES = 256
 
         /** How long `REMOTE_REGISTER` waits for the OS answer before
          * replying with the unchanged snapshot, in milliseconds. Firebase
@@ -336,11 +383,43 @@ class NotificationsPlugin internal constructor(
             ACTIVE -> active(manager, payload)
             REMOTE_TOKEN -> return remoteToken(payload)
             REMOTE_REGISTER -> return registerRemote(payload)
+            DEVICE -> return deviceDetails(payload)
             else -> throw PluginException(PluginException.UNAVAILABLE)
         }
 
         return byteArrayOf()
     }
+
+    /** Answers what the device says about itself, without side effects. */
+    private fun deviceDetails(payload: ByteBuffer): ByteArray {
+        empty(payload)
+
+        return encodeDevice(device.current())
+    }
+
+    /** Encodes a `DEVICE` reply: three length-prefixed UTF-8 strings —
+     * locale, time zone, app version — each empty when unknown. A value
+     * past the contract's bound, or carrying a control character, is sent
+     * as unknown rather than refused, so one odd detail never costs the
+     * others. */
+    internal fun encodeDevice(details: DeviceDetails): ByteArray {
+        val data = ByteBuffer.allocate(12 + 3 * MAX_DEVICE_DETAIL_BYTES).order(ByteOrder.LITTLE_ENDIAN)
+
+        for (value in listOf(details.locale, details.timeZone, details.appVersion)) {
+            val bytes = shippable(value)?.toByteArray(Charsets.UTF_8) ?: byteArrayOf()
+
+            data.putInt(bytes.size)
+            data.put(bytes)
+        }
+
+        return data.array().copyOf(data.position())
+    }
+
+    /** A detail the contract can carry, or `null`. */
+    private fun shippable(value: String?): String? =
+        value?.takeIf {
+            it.toByteArray(Charsets.UTF_8).size <= MAX_DEVICE_DETAIL_BYTES && it.none(Char::isISOControl)
+        }
 
     /** Encodes the broker's latest answer: reading never asks and never
      * registers, so it is safe at launch. */

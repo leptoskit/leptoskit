@@ -1,7 +1,7 @@
 //! Compiled guest acceptance for the notifications native enrollment: the
 //! real `native` module — its real plugin guest transport, its real RPC
 //! client over the real HTTP plugin guest — run by the interpreter while
-//! the test plays the OS (`notifications` methods 7 and 8) and the service
+//! the test plays the OS (`notifications` methods 7, 8, and 9) and the service
 //! (`http`), scripted per scenario
 //! (`crates/leptoskit_wasm/tests/notifications_guest.rs`).
 //!
@@ -210,14 +210,15 @@ fn class(cause: &FnError) -> &'static str {
 async fn reconcile(previous: &str) {
 	let previous = Enrollment {
 		endpoint: previous.parse().unwrap(),
+		sent: None,
 	};
 	report_step("reconcile", &native::reconcile(Some(&previous)).await).await;
 }
 
 async fn run_scenario(scenario: u32) {
 	match scenario {
-		// A gesture enrolls; a cold relaunch with the same token keeps the
-		// same endpoint, idempotently.
+		// A gesture enrolls; a cold relaunch with the same token and the
+		// same device details keeps the same endpoint and sends nothing.
 		0 => {
 			let enrolled = native::enroll().await;
 			report_step("enroll", &enrolled).await;
@@ -251,6 +252,7 @@ async fn run_scenario(scenario: u32) {
 		7 => {
 			let enrollment = Enrollment {
 				endpoint: "77777777-7777-7777-8777-777777777777".parse().unwrap(),
+				sent: None,
 			};
 			report_unit("disable", &disable(&enrollment).await).await;
 			report_unit("disable", &disable(&enrollment).await).await;
@@ -260,6 +262,34 @@ async fn run_scenario(scenario: u32) {
 		// google-services.json — refuses with its stable code, and nothing
 		// reaches the service.
 		8 => report_step("enroll", &native::enroll().await).await,
+		// A gesture enrolls; the app updates, so the next launch sends the
+		// new details under the same endpoint, and the launch after that
+		// sends nothing.
+		9 => {
+			let enrolled = native::enroll().await;
+			report_step("enroll", &enrolled).await;
+			let enrollment = enrolled.expect("the gesture enrolls");
+			let updated = native::reconcile(Some(&enrollment)).await;
+			report_step("reconcile", &updated).await;
+			let Ok(Outcome::Kept(kept)) = updated else {
+				return;
+			};
+			report_step("reconcile", &native::reconcile(Some(&kept)).await).await;
+		}
+		// An enrollment saved before device details existed sends once,
+		// keeps its endpoint, and then sends nothing.
+		10 => {
+			let saved = Enrollment {
+				endpoint: "0e5a0000-0000-0000-0000-000000000001".parse().unwrap(),
+				sent: None,
+			};
+			let first = native::reconcile(Some(&saved)).await;
+			report_step("reconcile", &first).await;
+			let Ok(Outcome::Kept(kept)) = first else {
+				return;
+			};
+			report_step("reconcile", &native::reconcile(Some(&kept)).await).await;
+		}
 		other => report(PANICKED, format!("unknown scenario {other}").as_bytes()),
 	}
 }
