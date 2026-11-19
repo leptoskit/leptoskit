@@ -248,10 +248,10 @@ impl App {
 		#[cfg(target_os = "macos")]
 		let backend =
 			backend.with_text_measurer(Arc::new(leptoskit_appkit::AppKitTextMeasurer::new()));
-		// The macOS renderer shows a `Modal` as a sheet and a `Popover` as an
-		// `NSPopover`, so it is told the real kinds. Every other host still
-		// draws them in place, as a `View`.
-		#[cfg(target_os = "macos")]
+		// The macOS and iOS renderers present a `Modal` as a sheet and a
+		// `Popover` as a popover, so they are told the real kinds. Every
+		// other host still draws them in place, as a `View`.
+		#[cfg(any(target_os = "macos", target_os = "ios"))]
 		let backend = backend.presenting_overlays();
 		#[cfg(target_os = "ios")]
 		let backend =

@@ -27,6 +27,7 @@ final class PressView: UIView {
 final class MobileWidgetRenderer: NSObject, UIScrollViewDelegate, NativeRiveSink {
     static let pressIn: UInt32 = 8
     static let pressOut: UInt32 = 9
+    static let dismiss: UInt32 = 10
     let view: UIView
     private var widgets: [Int: UIView] = [:]
     var properties: [Int: WidgetProps] = [:]
@@ -98,6 +99,7 @@ final class MobileWidgetRenderer: NSObject, UIScrollViewDelegate, NativeRiveSink
         onRiveViewportChange = nil
 
         for widget in widgets.values {
+            (widget as? MobileOverlayView)?.hide()
             (widget as? UIImageView)?.image = nil
             (widget as? NativeScene3dView)?.close()
             (widget as? NativeVideoView)?.close()
@@ -164,7 +166,62 @@ final class MobileWidgetRenderer: NSObject, UIScrollViewDelegate, NativeRiveSink
             if focused { widgets[id]?.becomeFirstResponder() } else { widgets[id]?.resignFirstResponder() }
         }
 
+        presentOverlays()
         moveFocus()
+    }
+
+    /// Shows each open `Modal` and `Popover` and takes down each closed one, once the views they hold
+    /// and hang from are in place. An overlay needs a window: until the modal's place in the tree, or
+    /// the popover's anchor, is in one, it stays down.
+    private func presentOverlays() {
+        // Lowest id first, so an overlay inside another finds the outer one already on screen.
+        for id in widgets.keys.sorted() {
+            guard let overlay = widgets[id] as? MobileOverlayView, let state = properties[id]?.overlay
+            else { continue }
+            let anchor = state.open ? state.anchor.flatMap(named) : nil
+
+            if overlay.present(open: state.open, anchor: anchor, placement: state.placement),
+               let target = state.initialFocus.flatMap(named), !target.becomeFirstResponder() {
+                UIAccessibility.post(notification: .layoutChanged, argument: target)
+            }
+        }
+    }
+
+    /// The widget the app gave this `id`.
+    private func named(_ name: String) -> UIView? {
+        properties.first { $0.value.id == name }.flatMap { widgets[$0.key] }
+    }
+
+    /// A hidden place holder in the tree whose content UIKit presents as a sheet or a popover.
+    private func overlay(_ presentation: MobileOverlayView.Presentation, _ id: Int) -> MobileOverlayView {
+        let overlay = MobileOverlayView(presentation)
+        // The place holder is hidden, so this does not go through `event`, which drops what a hidden
+        // widget reports.
+        overlay.onDismiss = { [weak self] in
+            guard let self, self.open, !self.applying, self.widgets[id] != nil else { return }
+            self.onEvent?(id, Self.dismiss, "")
+        }
+        overlay.onWindowChange = { [weak self] in
+            guard let self, self.open, !self.applying else { return }
+            self.applying = true
+            defer { self.applying = false }
+            self.presentOverlays()
+        }
+
+        return overlay
+    }
+
+    /// Applies a widget's style to the view that shows it: an overlay's is what it presents, not its
+    /// place in the tree.
+    private func style(_ props: WidgetProps, on widget: UIView) throws {
+        guard let overlay = widget as? MobileOverlayView else {
+            try WidgetStyle.apply(props, to: widget)
+
+            return
+        }
+
+        try WidgetStyle.apply(props, to: overlay.content)
+        overlay.styled()
     }
 
     /// Carries out a one-shot focus request. A text field or text area takes
@@ -231,6 +288,8 @@ final class MobileWidgetRenderer: NSObject, UIScrollViewDelegate, NativeRiveSink
         case "camera", "Camera": widget = NativeCameraView()
         case "map", "Map": widget = NativeMapView()
         case "live_photo", "LivePhoto": widget = NativeLivePhotoView()
+        case "modal", "Modal": widget = overlay(.sheet, item.id)
+        case "popover", "Popover": widget = overlay(.popover, item.id)
         default: widget = try makeControl(item)
         }
         (widget as? NativeScene3dView)?.show(scene: item.props.scene3d)
@@ -245,7 +304,7 @@ final class MobileWidgetRenderer: NSObject, UIScrollViewDelegate, NativeRiveSink
         properties[item.id] = item.props
         radii[item.id] = item.props.cornerRadius
 
-        try WidgetStyle.apply(item.props, to: widget)
+        try style(item.props, on: widget)
         scrolls.receive(item.props.scrollOffset, for: item.id)
         motion.created(item.id, item.props)
     }
@@ -272,7 +331,7 @@ final class MobileWidgetRenderer: NSObject, UIScrollViewDelegate, NativeRiveSink
             motion.willChange(item.id, widget.layer, from: properties[item.id], to: item.props)
             properties[item.id] = item.props
             radii[item.id] = item.props.cornerRadius
-            try WidgetStyle.apply(item.props, to: widget)
+            try style(item.props, on: widget)
             scrolls.receive(item.props.scrollOffset, for: item.id)
 
             (widget as? NativeScene3dView)?.show(scene: item.props.scene3d)
@@ -284,8 +343,15 @@ final class MobileWidgetRenderer: NSObject, UIScrollViewDelegate, NativeRiveSink
 
         if let item = change.updateLayout, let widget = widgets[item.id] {
             motion.willChange(item.id, widget.layer, from: properties[item.id], to: properties[item.id])
-            WidgetStyle.place(widget, CGRect(x: item.offsetX, y: item.offsetY, width: item.width, height: item.height))
-            widget.layer.cornerRadius = WidgetStyle.fitRadius(radii[item.id] ?? 0, to: widget.bounds.size)
+
+            // UIKit places an overlay, so its frame says only how large it is.
+            if let overlay = widget as? MobileOverlayView {
+                overlay.resize(CGSize(width: item.width, height: item.height))
+            } else {
+                WidgetStyle.place(
+                    widget, CGRect(x: item.offsetX, y: item.offsetY, width: item.width, height: item.height))
+                widget.layer.cornerRadius = WidgetStyle.fitRadius(radii[item.id] ?? 0, to: widget.bounds.size)
+            }
         }
 
         applyTree(change)
@@ -297,7 +363,8 @@ final class MobileWidgetRenderer: NSObject, UIScrollViewDelegate, NativeRiveSink
             detach(child)
 
             let count = childCounts[edge.parent, default: 0]
-            parent.insertSubview(child, at: min(edge.index ?? count, count))
+            let container = (parent as? MobileOverlayView)?.content ?? parent
+            container.insertSubview(child, at: min(edge.index ?? count, count))
             childCounts[edge.parent] = count + 1
         }
 
@@ -336,7 +403,13 @@ final class MobileWidgetRenderer: NSObject, UIScrollViewDelegate, NativeRiveSink
             return
         }
 
-        guard let parent = child.superview else { return }
+        // An overlay off the tree has nothing to show over. One that is only moving shows again when
+        // the transaction ends.
+        (child as? MobileOverlayView)?.hide()
+
+        guard let container = child.superview else { return }
+        // An overlay's children sit in its content view, and count as the overlay's.
+        let parent = (container as? MobileOverlayContent)?.owner ?? container
 
         if widgets[parent.tag] === parent, let count = childCounts[parent.tag] {
             childCounts[parent.tag] = count - 1
@@ -348,7 +421,7 @@ final class MobileWidgetRenderer: NSObject, UIScrollViewDelegate, NativeRiveSink
             return
         }
 
-        parent.bringSubviewToFront(child)
+        container.bringSubviewToFront(child)
         child.isUserInteractionEnabled = false
         exits.keep(child, props)
     }

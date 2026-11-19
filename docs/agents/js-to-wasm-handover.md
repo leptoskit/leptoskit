@@ -122,7 +122,7 @@ The second part of G1: the two `leptoskit_aria` components the audit names.
 - **Native:** nothing has run and nothing native changed. A menu there is a popover drawn in place whose items press; keys and dismissal wait for the native presentations.
 - **Not tested:** real Escape and a real pointer press outside a menu in Chrome. The test hides the popover the way the browser does and checks that the menu hears it.
 
-### `feat/overlays-appkit`: stacked on `feat/aria-menu`
+### `feat/overlays-appkit` (#904): stacked on `feat/aria-menu`
 
 The third part of G1, for macOS: both renderers.
 
@@ -131,6 +131,18 @@ The third part of G1, for macOS: both renderers.
 - **Compiled here:** the Rust side, cross-linted for `aarch64-apple-darwin` with clippy. **Not compiled here:** any Swift. **Run here:** nothing, on either renderer.
 - **Tests that CI's macOS runners will be the first to run:** `crates/leptoskit_appkit/tests/overlays.rs` (real windows) and `controller-tests/MacOverlayTests.swift`. Expect to fix things there. The assertions most likely to need adjusting are the ones about AppKit's own behaviour: `attachedSheet` right after `beginSheet`, a popover showing from a window that was only ordered front, and which side a popover lands on.
 - **Known limits:** a popover is centred on its anchor (no start or end alignment). A sheet has no outside press. Arrow keys in a `Menu` still do nothing on macOS, because neither renderer delivers `on_key`. `AppKitBackend::snapshot_png` renders without a window, so an open overlay is not in a snapshot.
+
+### `feat/overlays-uikit`: stacked on `feat/overlays-appkit`
+
+The third part of G1, for iOS: both renderers.
+
+- **`leptoskit_uikit`** returns `true` from `presents_overlays`. `overlay.rs` holds `Presented`: an `OverlayController` (a `UIViewController` subclass) presented `.formSheet` for a `Modal` and `.popover` for a `Popover`, with a `PresentationDelegate`. The presenter is the view controller found along the responder chain from the modal's parent, or the popover's anchor, then whatever that one has already presented. A sheet's swipe reports `Dismiss` from `presentationControllerDidAttemptToDismiss:`; a press outside a popover reports it from `presentationControllerShouldDismiss:`; both answer `false`. Escape (a `UIKeyCommand`) and `accessibilityPerformEscape` report it too. `adaptivePresentationStyle…` answers `.none`, so a popover stays a popover on an iPhone. **This departs from the audit**, which says a popover "becomes a sheet on compact width": a menu as a full sheet covers the button it belongs to.
+- **`UIKitBackend::present_overlays`** is public because an overlay that is open before the view joins a window has nothing to present over. `SurfaceController` calls it from `viewDidAppear:`, and `mount` calls it too.
+- **The Swift iOS renderer** does the same with `MobileOverlayView` (`mobile/MobileOverlayView.swift`, in `Package.swift`'s exclude list and the CLI's `platform_sources::IOS`): a hidden place holder in the tree whose `content` is presented by a `MobileOverlayController`. Children are counted against the place holder, through `MobileOverlayContent.owner`. The place holder is hidden, so its dismiss event goes straight to `onEvent`: `event(_:_:)` drops what a hidden widget reports. The bridge records with `presenting_overlays()` on macOS and iOS.
+- **Animation:** presentations animate unless `UIView.areAnimationsEnabled` is off (or the Rust host has paused animations). Nothing waits for a transition to end, so opening and closing an overlay inside one transition is not handled: UIKit may refuse the second call, and the next transaction puts it right.
+- **Compiled here:** the Rust side, cross-linted for `aarch64-apple-ios` with clippy, the probe included. **Not compiled here:** any Swift. **Run here:** nothing.
+- **Tests that CI's iOS job will be the first to run:** `overlays` in `crates/leptoskit_uikit/examples/native_probe.rs` and `ios-controls/OverlayControls.swift`. Both switch animations off and expect a presentation, and a dismissal, to be in place when the call returns. If UIKit defers either even without animation, those assertions need `until`.
+- **Known limits:** a popover is centred on its anchor. On an iPhone the sheet is the full "large" height however little the modal holds (a custom detent needs iOS 16; the crate supports 15). Arrow keys in a `Menu` do nothing, because neither renderer delivers `on_key`.
 
 ### `feat/public-demo`: no pull request
 
