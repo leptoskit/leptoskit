@@ -72,6 +72,23 @@ pub use system_back::dispatch_system_back;
 pub use url::Href;
 pub use url::RouteUrl;
 
+/// Names what the person is looking at: the browser tab's title on the
+/// web.
+///
+/// Call it when the screen changes, such as from an effect that reads the
+/// current route. A server-rendered page writes its first title in its own
+/// `<title>`; this keeps it right as the person moves around without a
+/// page load.
+///
+/// Native windows keep the title they were opened with, and a phone shows
+/// none, so elsewhere this does nothing for now.
+pub fn set_title(title: &str) {
+	#[cfg(all(feature = "web", target_arch = "wasm32"))]
+	web::set_title(title);
+	#[cfg(not(all(feature = "web", target_arch = "wasm32")))]
+	let _ = title;
+}
+
 /// An app's routes: implemented by the `Route` enum that `leptoskit routes`
 /// generates.
 pub trait Routable: Sized {
