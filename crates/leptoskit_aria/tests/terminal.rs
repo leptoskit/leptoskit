@@ -1,0 +1,180 @@
+//! Roving focus through a real keyboard pipeline: the terminal backend
+//! routes keys, keeps a focus ring, and carries out focus requests.
+
+use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
+
+use leptoskit_aria::RadioGroup;
+use leptoskit_aria::Tabs;
+use leptoskit_native::Element;
+use leptoskit_native::NativeSurface;
+use leptoskit_native::components::Button;
+use leptoskit_native::components::Text;
+use leptoskit_native::components::helpers::Column;
+use leptoskit_native::remember::ScreenState;
+use leptoskit_tui::Exit;
+use leptoskit_tui::Key;
+use leptoskit_tui::KeyCode;
+use leptoskit_tui::SourceEvent;
+use leptoskit_tui::TuiBackend;
+use leptoskit_tui::TuiHost;
+use leptoskit_tui::TuiOptions;
+use leptoskit_tui::testing::Recorder;
+use leptoskit_tui::testing::Scripted;
+use reactive_graph::owner::Owner;
+
+fn plain(code: KeyCode) -> SourceEvent {
+	SourceEvent::Key(Key::plain(code))
+}
+
+/// The row whose bracketed label draws reversed, as the focused control
+/// does.
+fn focused_row(frame: &leptoskit_tui::Buffer) -> Option<usize> {
+	frame
+		.to_plain_lines()
+		.iter()
+		.enumerate()
+		.find_map(|(row, line)| {
+			let column = u16::try_from(line[..line.find('[')?].chars().count()).ok()?;
+			let reversed = frame
+				.cell(column, u16::try_from(row).ok()?)?
+				.attrs
+				.reverse();
+
+			reversed.then_some(row)
+		})
+}
+
+/// Runs a screen through scripted keys, keeping its remembered state across
+/// rebuilds as a running app does, and returns the last frame.
+fn session(
+	screen: impl Fn() -> Element + 'static,
+	events: Vec<SourceEvent>,
+) -> leptoskit_tui::Buffer {
+	Owner::new().with(|| {
+		let state = ScreenState::new();
+		state.provide();
+		let mut surface = NativeSurface::new(TuiBackend::new());
+		let mut app =
+			leptoskit_tui::testing::surface_app(&mut surface, move || state.build(&screen));
+		let mut source = Scripted::new(events);
+		let mut sink = Recorder::new(30, 8);
+		let exit = TuiHost::new(TuiOptions::default())
+			.run(&mut *app, &mut source, &mut sink)
+			.expect("the session runs");
+
+		assert_eq!(exit, Exit::SourceEnded);
+		sink.frames.last().expect("a frame was drawn").clone()
+	})
+}
+
+/// Three stacked tabs on rows 0 to 2, then a Save button on row 3.
+fn tabs_screen(selected: &Arc<AtomicUsize>) -> Element {
+	let tabs = Tabs::new("settings", 3, selected.load(Ordering::Relaxed))
+		.orientation(leptoskit_native::Orientation::Vertical);
+	let state = Arc::clone(selected);
+
+	Column()
+		.child(
+			tabs.list(move |index| state.store(index, Ordering::Relaxed))
+				.child(tabs.tab(0, "General"))
+				.child(tabs.tab(1, "Notifications"))
+				.child(tabs.tab(2, "Privacy")),
+		)
+		.child(Button("Save"))
+		.children((0..3).map(|index| tabs.panel(index).child(Text(format!("Panel {index}")))))
+}
+
+fn tabs_session(events: Vec<SourceEvent>) -> (usize, Option<usize>) {
+	let selected = Arc::new(AtomicUsize::new(0));
+	let frame = session(
+		{
+			let selected = Arc::clone(&selected);
+			move || tabs_screen(&selected)
+		},
+		events,
+	);
+
+	(selected.load(Ordering::Relaxed), focused_row(&frame))
+}
+
+#[test]
+fn an_arrow_selects_the_next_tab_and_focus_goes_with_it() {
+	let down = || plain(KeyCode::Down);
+
+	assert_eq!(tabs_session(vec![plain(KeyCode::Tab)]), (0, Some(0)));
+	assert_eq!(
+		tabs_session(vec![plain(KeyCode::Tab), down()]),
+		(1, Some(1))
+	);
+	assert_eq!(
+		tabs_session(vec![plain(KeyCode::Tab), down(), down(), down()]),
+		(0, Some(0)),
+		"the last tab wraps to the first"
+	);
+	assert_eq!(
+		tabs_session(vec![plain(KeyCode::Tab), plain(KeyCode::End)]),
+		(2, Some(2))
+	);
+}
+
+#[test]
+fn a_tab_set_is_one_tab_stop() {
+	let tab = || plain(KeyCode::Tab);
+
+	// One Tab enters the set, the next leaves it for the button below.
+	assert_eq!(tabs_session(vec![tab(), tab()]), (0, Some(3)));
+	// Coming back lands on the selected tab, not the first.
+	assert_eq!(
+		tabs_session(vec![
+			tab(),
+			plain(KeyCode::Down),
+			tab(),
+			plain(KeyCode::BackTab)
+		]),
+		(1, Some(1))
+	);
+}
+
+#[test]
+fn arrows_choose_a_radio_card_and_focus_goes_with_it() {
+	let chosen = Arc::new(AtomicUsize::new(usize::MAX));
+	let screen = {
+		let chosen = Arc::clone(&chosen);
+		move || {
+			let current = chosen.load(Ordering::Relaxed);
+			let state = Arc::clone(&chosen);
+
+			Column()
+				.child(
+					Element::from(
+						RadioGroup::new(
+							"persona",
+							["Ada", "Grace"],
+							(current != usize::MAX).then_some(current),
+						)
+						.option(0, Text("[Ada]"))
+						.option(1, Text("[Grace]"))
+						.on_change(move |index| state.store(index, Ordering::Relaxed)),
+					)
+					.aria_label("Persona"),
+				)
+				.child(Button("Save"))
+		}
+	};
+	let frame = session(
+		screen,
+		vec![plain(KeyCode::Tab), plain(KeyCode::Up), plain(KeyCode::Tab)],
+	);
+
+	// Up from an unanswered group enters at the last option; Tab then leaves
+	// the group in one step.
+	assert_eq!(chosen.load(Ordering::Relaxed), 1);
+	assert!(
+		frame.to_plain_lines()[2].contains("Save"),
+		"{:?}",
+		frame.to_plain_lines()
+	);
+	assert_eq!(focused_row(&frame), Some(2));
+}

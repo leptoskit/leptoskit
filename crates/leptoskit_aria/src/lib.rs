@@ -57,16 +57,19 @@
 //! assert_eq!(panel.props.aria().labelled_by, ["faq-button"]);
 //! ```
 //!
-//! The renderer has no key events or focus containment yet, so these
-//! components promise only what they can keep: every [`Tabs`] tab stays in
-//! the tab order instead of roving, and a [`Dialog`] is not marked modal. The
-//! accessibility guide tracks that work.
+//! [`Tabs`] and [`RadioGroup`] are one Tab stop each: the arrow keys, Home and
+//! End move inside them. That needs key presses, which the web and the
+//! terminal deliver; on the other backends every item stays reachable with
+//! Tab. The renderer has no focus containment yet, so a [`Dialog`] is not
+//! marked modal. The accessibility guide tracks that work.
 
 #![allow(non_snake_case)]
 
 mod dialog;
 mod disclosure;
 mod field;
+mod radio_group;
+mod roving;
 mod tabs;
 mod toggle;
 
@@ -74,5 +77,6 @@ pub use dialog::Dialog;
 pub use disclosure::DisclosureButton;
 pub use disclosure::DisclosurePanel;
 pub use field::Field;
+pub use radio_group::RadioGroup;
 pub use tabs::Tabs;
 pub use toggle::ToggleButton;

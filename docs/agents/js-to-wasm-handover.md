@@ -39,7 +39,7 @@ One pull request per item. Every backend is kept in step, with AppKit as the ref
 | 2  | `TextArea`                                                  | G12      | #877, open  |
 | 3  | Labels that focus their fields                              | G13      | #879, open  |
 | 4  | One-shot focus requests                                     | G2       | #887, open  |
-| 5  | Arrow-key navigation for tabs, radio groups and menus       | G5       | not started |
+| 5  | Arrow-key navigation for tabs, radio groups and menus       | G5       | PR open     |
 | 6  | `Modal` and `Popover`                                       | G1       | not started |
 | 7  | Scroll into view                                            | G4       | not started |
 | 8  | A clock hook                                                | G6       | not started |
@@ -86,6 +86,17 @@ On the web, a plain `Text` that is the one `aria_labelled_by` target of a field 
 - **Run on Linux:** native, web markup, terminal and GTK tests; a Chrome test for the web; host and Wasm clippy; AppKit, UIKit and Windows cross-linted (compiled, never run); ktlint.
 - **Not run:** AppKit, UIKit, Windows, `WidgetHost.kt`, and the Swift and Kotlin renderers. The Swift and Kotlin tests added here first run in CI.
 - **Left for later:** on AppKit, UIKit, Windows and Android the move happens while events are held back, so the widget hears no `Focus` event for it. `focused(true)` still does nothing on AppKit, Windows, GTK and Android; the audit hoped this change would fix that, and it does not.
+
+### `feat/roving-focus`: stacked on `feat/focus-requests`
+
+G5 for tabs and radio groups, in `leptoskit_aria` only. No backend changed.
+
+- `Tabs::list` now takes `on_select` and `Tabs::tab` no longer does, as the audit proposes; `.orientation()` picks the arrow axis. `RadioGroup::new(id, labels, selected).option(i, content).on_change(f)` becomes an element with `Element::from`. Both keep one Tab stop (`tab_index` 0 on the current item, -1 on the rest), take the arrow keys, Home and End in an `on_key` on the group, and move focus with a `FocusRequest` held by the current item. The shared key logic is `crates/leptoskit_aria/src/roving.rs`.
+- `WidgetTester::press_key` is new in `leptoskit_testing`.
+- **Run on Linux:** the `leptoskit_aria` tests, including `tests/terminal.rs`, which drives both components through the terminal backend's real key routing and focus ring; a Chrome test of the same pattern in `leptoskit_native`'s `web_browser.rs`.
+- **Native:** AppKit, UIKit, Android, GTK and Windows deliver no key presses yet (G7b) and ignore `tab_index`, so the arrows do nothing there and every item stays tabbable.
+- **Not done here: `Menu`.** The audit builds it on `Popover` (G1), so it goes in with change 6.
+- **A name to watch:** `leptoskit::aria::RadioGroup` and the prelude's `RadioGroup` (the native radio group name) collide under two glob imports. The docs say to import the aria one by name.
 
 ### `feat/public-demo`: no pull request
 

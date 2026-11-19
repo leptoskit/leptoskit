@@ -5723,7 +5723,9 @@ version = "0.3.0"
 dependencies = [
  "leptoskit_native",
  "leptoskit_testing",
+ "leptoskit_tui",
  "leptoskit_yoga",
+ "reactive_graph",
 ]
 
 [[package]]
