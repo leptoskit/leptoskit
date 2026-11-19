@@ -6115,6 +6115,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "leptoskit_cloud_worker"
+version = "0.0.0"
+dependencies = [
+ "chrono",
+ "clap",
+ "futures",
+ "hex",
+ "leptoskit_auth",
+ "leptoskit_axum",
+ "leptoskit_cloud",
+ "leptoskit_db",
+ "leptoskit_idp",
+ "leptoskit_rpc",
+ "reqwest 0.12.28",
+ "rustix",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "url",
+ "uuid",
+]
+
+[[package]]
 name = "leptoskit_codepush"
 version = "0.3.0"
 dependencies = [

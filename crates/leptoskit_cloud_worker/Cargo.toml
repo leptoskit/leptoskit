@@ -1,0 +1,49 @@
+[package]
+name = "leptoskit_cloud_worker"
+version = "0.0.0"
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+readme = "readme.md"
+repository.workspace = true
+rust-version.workspace = true
+description = "LeptosKit Cloud's worker: `leptoskit-cloud-worker` pairs with a control plane, claims jobs, and builds deployments."
+
+[[bin]]
+name = "leptoskit-cloud-worker"
+path = "src/main.rs"
+
+# The worker runs on Linux and macOS: it locks its state directory with
+# `flock` and ends a build by its process group. Elsewhere the program only
+# says so.
+[target.'cfg(unix)'.dependencies]
+clap = { workspace = true, features = ["derive", "env"] }
+hex = { workspace = true }
+# The worker protocol's types, and unpacking a source archive.
+leptoskit_cloud = { workspace = true, features = ["archive"] }
+leptoskit_rpc = { workspace = true, features = ["client"] }
+reqwest = { workspace = true, features = ["json", "rustls-tls", "stream"] }
+# The state directory's lock, and stopping a build's whole process group.
+rustix = { workspace = true, features = ["fs", "process"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+tempfile = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["fs", "io-util", "macros", "process", "rt-multi-thread", "signal", "sync", "time"] }
+url = { workspace = true }
+uuid = { workspace = true, features = ["serde"] }
+
+[target.'cfg(unix)'.dev-dependencies]
+chrono = { workspace = true }
+futures = { workspace = true }
+leptoskit_auth = { workspace = true }
+leptoskit_axum = { workspace = true }
+leptoskit_cloud = { workspace = true, features = ["archive", "server"] }
+leptoskit_db = { workspace = true, features = ["sqlite"] }
+leptoskit_idp = { workspace = true }
+tokio = { workspace = true, features = ["net"] }
+
+[lints]
+workspace = true
