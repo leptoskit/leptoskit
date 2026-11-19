@@ -15,15 +15,15 @@ Research date: 18 November 2026. Read-only on the repository.
 
 ### 1.0 Timeline
 
-| Date | Event | Source |
-|---|---|---|
-| May 2024 | "Serverpod 2.0 Dreamscape" announces Serverpod Cloud. | https://medium.com/serverpod/serverpod-2-0-dreamscape-introducing-serverpod-cloud-05b108c9aabf |
-| Jul–Oct 2024 | Private beta signup. Maintainer: "aiming for our first beta tester this autumn". | https://github.com/serverpod/serverpod/discussions/2444 |
-| Serverpod 3 release | Cloud still in private beta; hackathon with $20k+ prizes in cash and Cloud credits. | https://serverpod.dev/blog/serverpod-3-0 |
-| 8 Jun 2026 | Serverpod 4 tech preview. | https://serverpod.dev/blog/serverpod-4-preview |
-| **14 Sep 2026** | **Serverpod 4 released and Serverpod Cloud launched**: "Zero-configuration deployments of your backend, database, and Flutter web app." | https://serverpod.dev/blog/serverpod-4 |
-| 14–17 Nov 2026 | Docs PR adds an unlisted App publishing page. Merged 17 Nov. | https://github.com/serverpod/serverpod_docs/pull/922 |
-| ~18 Nov 2026 | `serverpod_cloud_cli` 1.4.0 on pub.dev, published about 13 hours before the page was captured. | https://pub.dev/packages/serverpod_cloud_cli |
+| Date                | Event                                                                                                                                   | Source                                                                                         |
+| ------------------- | --------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| May 2024            | "Serverpod 2.0 Dreamscape" announces Serverpod Cloud.                                                                                   | https://medium.com/serverpod/serverpod-2-0-dreamscape-introducing-serverpod-cloud-05b108c9aabf |
+| Jul–Oct 2024        | Private beta signup. Maintainer: "aiming for our first beta tester this autumn".                                                        | https://github.com/serverpod/serverpod/discussions/2444                                        |
+| Serverpod 3 release | Cloud still in private beta; hackathon with $20k+ prizes in cash and Cloud credits.                                                     | https://serverpod.dev/blog/serverpod-3-0                                                       |
+| 8 Jun 2026          | Serverpod 4 tech preview.                                                                                                               | https://serverpod.dev/blog/serverpod-4-preview                                                 |
+| **14 Sep 2026**     | **Serverpod 4 released and Serverpod Cloud launched**: "Zero-configuration deployments of your backend, database, and Flutter web app." | https://serverpod.dev/blog/serverpod-4                                                         |
+| 14–17 Nov 2026      | Docs PR adds an unlisted App publishing page. Merged 17 Nov.                                                                            | https://github.com/serverpod/serverpod_docs/pull/922                                           |
+| ~18 Nov 2026        | `serverpod_cloud_cli` 1.4.0 on pub.dev, published about 13 hours before the page was captured.                                          | https://pub.dev/packages/serverpod_cloud_cli                                                   |
 
 ### 1.1 Signup and first deploy, step by step
 
@@ -67,16 +67,19 @@ All steps from https://docs.serverpod.dev/cloud/getting-started/installation and
 
 ```yaml
 project:
-  projectId: "my-app"          # CLI-managed; change with `project link`
-  dartSdk: "^3.10.3"           # optional; else .tool-versions, else pubspec environment.sdk
-  app:                         # store publishing settings (see 1.4)
+  projectId: "my-app" # CLI-managed; change with `project link`
+  dartSdk: "^3.10.3" # optional; else .tool-versions, else pubspec environment.sdk
+  app: # store publishing settings (see 1.4)
     dir: "../my_app_flutter"
     flutterSdk: "3.50.0"
     identifiers: { ios: "com.x.y", android: "com.x.y" }
     dartDefineFromFile: [".env", ".env.production"]
   scripts:
-    pre_deploy: ["serverpod generate", "flutter build web"]   # non-zero exit aborts the deploy
-    post_deploy: "curl -X POST https://example.com/notify"    # failure does not stop the rollout
+    pre_deploy: [
+      "serverpod generate",
+      "flutter build web",
+    ] # non-zero exit aborts the deploy
+    post_deploy: "curl -X POST https://example.com/notify" # failure does not stop the rollout
 ```
 
 Per PR #922, the CLI also reads `project.app.xcodeVersion`, which the schema page does not list yet.
@@ -114,6 +117,7 @@ The top-level commands come from https://docs.serverpod.dev/cloud/reference/cli/
 - `me`, `settings`, `completion`, `version`, `help`: listed, purposes not documented.
 
 Cited pages:
+
 - https://docs.serverpod.dev/cloud/reference/cli/commands/project
 - https://docs.serverpod.dev/cloud/reference/cli/commands/status
 - https://docs.serverpod.dev/cloud/reference/cli/commands/launch
@@ -127,32 +131,32 @@ Cited pages:
 
 ### 1.3 How it works
 
-| Topic | Finding | Source (retrieved 2026-11-18) |
-|---|---|---|
-| Build location | **In the cloud.** The CLI zips and uploads the project, then "Cloud builds the container". The user needs no Dockerfile. Local `pre_deploy` hooks run first, so code generation and `flutter build web` happen locally. | https://docs.serverpod.dev/cloud/concepts/deployments |
-| Source upload | Yes, a zip. `--output deployment.zip --wet-run` saves it. `.scloudignore` excludes files. Dart workspace packages are included. | same, plus the app-publishing page |
-| Container runtime | Containers are implied ("builds the container"). Orchestrator, cloud provider and regions are **UNVERIFIED**. No public statement was found. A Redis guide suggests Upstash EU-CENTRAL-1 (Frankfurt), which is only a hint. | https://docs.serverpod.dev/cloud/guides/redis |
-| Zero downtime | "Switches traffic automatically to the latest successful deploy, keeping the previous one live if a build fails." Rolling or blue-green is not specified. | deployments page |
-| Rollback | **No rollback command documented.** Recovery means fixing code and running `deploy` again. The docs state: "The page doesn't describe a rollback command." | https://docs.serverpod.dev/cloud/guides/recover-from-a-failed-deploy |
-| Database | Managed **PostgreSQL 17**, TLS required, opt-in, one per project. Provider **UNVERIFIED**. Env vars injected: `SERVERPOD_DATABASE_HOST` / `PORT` / `NAME` / `USER` / `REQUIRE_SSL` and `SERVERPOD_PASSWORD_database`. | https://docs.serverpod.dev/cloud/concepts/database |
-| Migrations | Pending `migrations/` are applied on **every deploy**. A failure logs "Failed to apply database migrations" and the old version stays live. | same |
-| Backups | Manual snapshots (max 100) and one schedule per DB (daily/weekly/monthly, UTC hour, retention default and max 35 days). Restore replaces the live DB. Creating and restoring requires **Growth**. No point-in-time-to-the-second recovery is documented. | database-backups page |
-| Secrets | Three tiers: passwords, secrets, variables. | passwords page |
-| Domains / TLS | `*.serverpod.space` defaults. Custom domains via CNAME, or ANAME/ALIAS plus TXT at the apex. TLS auto-issued and renewed, usually within an hour. | custom-domains page |
-| Logs | `log` and `build log` in the CLI, plus Serverpod Insights, a log viewer that needs a DB. No documented default retention. A cleanup interval must be configured by env var. | logs page |
-| Scaling | Podlets with min/max. Starter always scale to zero. On Growth, min 0 enables scale to zero after about 5 min idle. Cold start usually 4–6 s, request held up to 30 s, then 504. Scale-up triggers beyond the minimum are not documented. | https://docs.serverpod.dev/cloud/concepts/scale-to-zero |
-| Future calls | Need Growth or Enterprise. Disabled on Starter. They run late when the project is idle. | scale-to-zero and recover pages |
-| Redis | **Not provided.** BYO, for example Upstash, configured through `password set redis` plus `SERVERPOD_REDIS_*` variables. | https://docs.serverpod.dev/cloud/guides/redis |
-| File storage | Per-project "storages", private and public, accessed through `session.storage`. Starter has 2, Growth up to 10. Over cap, access is cut off. | storage page |
-| CDN | In front of every web server, no separate charge. Caches only on `Cache-Control` opt-in. Purged on each deploy. | https://docs.serverpod.dev/cloud/concepts/cdn |
-| Flutter web | Served through a `FlutterRoute` on the framework web server. | cdn page |
-| Teams | `project user invite|list|revoke`. Starter is 1 user, Growth and Enterprise can invite a team. Roles and permissions are not documented. | project command page, pricing page |
-| CI | Action `serverpod/serverpod_cloud_deploy@v1`. Inputs: `token`, `working_directory`, `project_id`, `project_dir`, `project_config_file`. Token in `SERVERPOD_CLOUD_TOKEN`. | https://docs.serverpod.dev/cloud/guides/deploy-from-ci-with-github-actions |
-| Preview environments | **Not found** in docs or CLI. | n/a |
-| Git-push deploy | **Not found.** Deploys are CLI or CI only. | n/a |
-| Monitoring | `scloud top` and Insights. No metrics API or alerts documented. | top page |
-| Agent angle | Serverpod ships an MCP server, and PR #5902 adds a `report_serverpod_issue` tool so agents can file bugs against the CLI and Cloud. | https://github.com/serverpod/serverpod/pull/5902 |
-| Source of CLI | Closed-source repo `serverpod_cloud` publishes into `serverpod/serverpod_cloud_clients` (packages `ground_control_client`, `serverpod_cloud_cli`, `serverpod_cloud_shared`). The API is called Ground Control. External contributions are not accepted. | https://github.com/serverpod/serverpod_cloud_clients |
+| Topic                | Finding                                                                                                                                                                                                                                                  | Source (retrieved 2026-11-18)                                              |
+| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| Build location       | **In the cloud.** The CLI zips and uploads the project, then "Cloud builds the container". The user needs no Dockerfile. Local `pre_deploy` hooks run first, so code generation and `flutter build web` happen locally.                                  | https://docs.serverpod.dev/cloud/concepts/deployments                      |
+| Source upload        | Yes, a zip. `--output deployment.zip --wet-run` saves it. `.scloudignore` excludes files. Dart workspace packages are included.                                                                                                                          | same, plus the app-publishing page                                         |
+| Container runtime    | Containers are implied ("builds the container"). Orchestrator, cloud provider and regions are **UNVERIFIED**. No public statement was found. A Redis guide suggests Upstash EU-CENTRAL-1 (Frankfurt), which is only a hint.                              | https://docs.serverpod.dev/cloud/guides/redis                              |
+| Zero downtime        | "Switches traffic automatically to the latest successful deploy, keeping the previous one live if a build fails." Rolling or blue-green is not specified.                                                                                                | deployments page                                                           |
+| Rollback             | **No rollback command documented.** Recovery means fixing code and running `deploy` again. The docs state: "The page doesn't describe a rollback command."                                                                                               | https://docs.serverpod.dev/cloud/guides/recover-from-a-failed-deploy       |
+| Database             | Managed **PostgreSQL 17**, TLS required, opt-in, one per project. Provider **UNVERIFIED**. Env vars injected: `SERVERPOD_DATABASE_HOST` / `PORT` / `NAME` / `USER` / `REQUIRE_SSL` and `SERVERPOD_PASSWORD_database`.                                    | https://docs.serverpod.dev/cloud/concepts/database                         |
+| Migrations           | Pending `migrations/` are applied on **every deploy**. A failure logs "Failed to apply database migrations" and the old version stays live.                                                                                                              | same                                                                       |
+| Backups              | Manual snapshots (max 100) and one schedule per DB (daily/weekly/monthly, UTC hour, retention default and max 35 days). Restore replaces the live DB. Creating and restoring requires **Growth**. No point-in-time-to-the-second recovery is documented. | database-backups page                                                      |
+| Secrets              | Three tiers: passwords, secrets, variables.                                                                                                                                                                                                              | passwords page                                                             |
+| Domains / TLS        | `*.serverpod.space` defaults. Custom domains via CNAME, or ANAME/ALIAS plus TXT at the apex. TLS auto-issued and renewed, usually within an hour.                                                                                                        | custom-domains page                                                        |
+| Logs                 | `log` and `build log` in the CLI, plus Serverpod Insights, a log viewer that needs a DB. No documented default retention. A cleanup interval must be configured by env var.                                                                              | logs page                                                                  |
+| Scaling              | Podlets with min/max. Starter always scale to zero. On Growth, min 0 enables scale to zero after about 5 min idle. Cold start usually 4–6 s, request held up to 30 s, then 504. Scale-up triggers beyond the minimum are not documented.                 | https://docs.serverpod.dev/cloud/concepts/scale-to-zero                    |
+| Future calls         | Need Growth or Enterprise. Disabled on Starter. They run late when the project is idle.                                                                                                                                                                  | scale-to-zero and recover pages                                            |
+| Redis                | **Not provided.** BYO, for example Upstash, configured through `password set redis` plus `SERVERPOD_REDIS_*` variables.                                                                                                                                  | https://docs.serverpod.dev/cloud/guides/redis                              |
+| File storage         | Per-project "storages", private and public, accessed through `session.storage`. Starter has 2, Growth up to 10. Over cap, access is cut off.                                                                                                             | storage page                                                               |
+| CDN                  | In front of every web server, no separate charge. Caches only on `Cache-Control` opt-in. Purged on each deploy.                                                                                                                                          | https://docs.serverpod.dev/cloud/concepts/cdn                              |
+| Flutter web          | Served through a `FlutterRoute` on the framework web server.                                                                                                                                                                                             | cdn page                                                                   |
+| Teams                | `project user invite                                                                                                                                                                                                                                     | list                                                                       |
+| CI                   | Action `serverpod/serverpod_cloud_deploy@v1`. Inputs: `token`, `working_directory`, `project_id`, `project_dir`, `project_config_file`. Token in `SERVERPOD_CLOUD_TOKEN`.                                                                                | https://docs.serverpod.dev/cloud/guides/deploy-from-ci-with-github-actions |
+| Preview environments | **Not found** in docs or CLI.                                                                                                                                                                                                                            | n/a                                                                        |
+| Git-push deploy      | **Not found.** Deploys are CLI or CI only.                                                                                                                                                                                                               | n/a                                                                        |
+| Monitoring           | `scloud top` and Insights. No metrics API or alerts documented.                                                                                                                                                                                          | top page                                                                   |
+| Agent angle          | Serverpod ships an MCP server, and PR #5902 adds a `report_serverpod_issue` tool so agents can file bugs against the CLI and Cloud.                                                                                                                      | https://github.com/serverpod/serverpod/pull/5902                           |
+| Source of CLI        | Closed-source repo `serverpod_cloud` publishes into `serverpod/serverpod_cloud_clients` (packages `ground_control_client`, `serverpod_cloud_cli`, `serverpod_cloud_shared`). The API is called Ground Control. External contributions are not accepted.  | https://github.com/serverpod/serverpod_cloud_clients                       |
 
 ### 1.4 App-store publishing: what is real
 
@@ -201,30 +205,30 @@ Cited pages:
 
 From https://serverpod.dev/cloud (retrieved 2026-11-18). A search snippet suggested that page's index may be older than the live page, but the fetched content matched the launch-post figure of $5/month.
 
-| Plan | Price | Includes |
-|---|---|---|
-| Starter | **$5/mo** | $5 usage credits. 1 user. 1 small podlet, 1 small database. 2 storages. Serverpod subdomains. Scale to zero always on. Future calls disabled. Public forum support. Free trial (length not stated). Launch post: "free one-month trial, no credit card required". |
-| Growth | **$20/mo + usage** | Autoscaling. Team invites. 1 custom domain. Up to 10 storages. Future calls. Backups and restore. Public forum support. |
-| Enterprise | **$799/mo + usage** | 10 custom domains. Unlimited storages. Private prioritized support. |
+| Plan       | Price               | Includes                                                                                                                                                                                                                                                          |
+| ---------- | ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Starter    | **$5/mo**           | $5 usage credits. 1 user. 1 small podlet, 1 small database. 2 storages. Serverpod subdomains. Scale to zero always on. Future calls disabled. Public forum support. Free trial (length not stated). Launch post: "free one-month trial, no credit card required". |
+| Growth     | **$20/mo + usage**  | Autoscaling. Team invites. 1 custom domain. Up to 10 storages. Future calls. Backups and restore. Public forum support.                                                                                                                                           |
+| Enterprise | **$799/mo + usage** | 10 custom domains. Unlimited storages. Private prioritized support.                                                                                                                                                                                               |
 
 - **Podlets (compute), per hour.**
 
   | Size | Memory | Max requests/min | Price per hour |
-  |---|---|---|---|
-  | S | 256 MB | 5K | $0.026 |
-  | M | 512 MB | 15K | $0.040 |
-  | L | 1 GB | 35K | $0.081 |
-  | XL | 2 GB | 80K | $0.163 |
-  | XXL | 4 GB | 120K | $0.314 |
+  | ---- | ------ | ---------------- | -------------- |
+  | S    | 256 MB | 5K               | $0.026         |
+  | M    | 512 MB | 15K              | $0.040         |
+  | L    | 1 GB   | 35K              | $0.081         |
+  | XL   | 2 GB   | 80K              | $0.163         |
+  | XXL  | 4 GB   | 120K             | $0.314         |
 
 - **Database, per hour.**
 
-  | Size | Memory | Price per hour |
-  |---|---|---|
-  | S | 1 GB | $0.043 |
-  | M | 2 GB | $0.086 |
-  | L | 4 GB | $0.172 |
-  | L+ (auto) | 4–64 GB | $0.172–$2.752 |
+  | Size      | Memory  | Price per hour |
+  | --------- | ------- | -------------- |
+  | S         | 1 GB    | $0.043         |
+  | M         | 2 GB    | $0.086         |
+  | L         | 4 GB    | $0.172         |
+  | L+ (auto) | 4–64 GB | $0.172–$2.752  |
 
 - **Other usage.**
   - DB storage $0.56/GB-mo, backup storage $0.56/GB-mo, DB network $0.16/GB.
@@ -285,20 +289,21 @@ Evidence is thin because the product is two months old. I found no Reddit or Hac
 
 ### 2.2 Codemagic, Bitrise, fastlane, Shorebird, Capgo, Appflow
 
-| Tool | Signing and store upload | Pricing | Source |
-|---|---|---|---|
-| **Codemagic** | Upload or generate certificates and profiles once in the UI. Reference them in `codemagic.yaml` by `distribution_type` + `bundle_identifier`. ASC API key (App Manager role) under Team integrations. Publishing to TestFlight and Play via YAML. Limits: Apple allows 3 distribution certs, and a cert is downloadable once. | Free 500 macOS M2 min/mo. Pay-as-you-go Mac mini M2 $0.095/min, M4 $0.114/min, Linux $0.045/min. Fixed plans from $3,990/yr. Enterprise from $24,000/yr. | https://codemagic.io/pricing/ and https://docs.codemagic.io/yaml-code-signing/signing-ios/ |
-| **Bitrise** | Not fetched in detail. Release Management supports TestFlight and Google Play beta tracks. The Standard tier adds automated distribution and App Store submission. | Hobby free, Starter $89/mo annual ($99 monthly), Pro from $200/mo annual. Release Management Standard $250/app/mo annual. CodePush Basic free up to 100,000 MAU. | https://bitrise.io/pricing |
-| **fastlane** | `match` stores certs and profiles encrypted in a private git repo, GCS or S3. `readonly` on CI. Takes an ASC API key. `deliver`, `pilot`, `supply` (upload to App Store Connect and Play): UNVERIFIED here. | Free and open source. | https://docs.fastlane.tools/actions/match/ |
-| **Shorebird** (Flutter code push) | Patches signed. Own copy of Flutter. CLI pages: create, init, release, preview, patch, rollback. CI guides for GitHub, GitLab, Codemagic, fastlane. Login method not on the index page. Ships an MCP server and service accounts for CI. | Hobby $0 (5,000 patch installs/mo). Pro $20/mo (50,000, $1 per 2,500 extra). Business $400/mo (1M, OIDC keyless CI). | https://shorebird.dev/pricing and https://docs.shorebird.dev/ |
-| **Capgo** (Capacitor live updates) | Live updates, native builds, whole stack open source and self-hostable. | Solo $14/mo, Maker $39/mo, Team $99/mo, Enterprise from $249/mo. | https://capgo.app/pricing/ |
-| **Appflow** | Ionic is sunsetting it. All features end **31 Dec 2027**. New sales stopped Feb 2025. Auth Connect and Identity Vault also discontinued. Ionic's support page was updated 24 Sep 2026. | n/a | via https://capawesome.io/blog/migrating-from-ionic-appflow-to-capawesome-cloud/ (vendor source; the Ionic page itself was not opened) |
+| Tool                               | Signing and store upload                                                                                                                                                                                                                                                                                                      | Pricing                                                                                                                                                          | Source                                                                                                                                 |
+| ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| **Codemagic**                      | Upload or generate certificates and profiles once in the UI. Reference them in `codemagic.yaml` by `distribution_type` + `bundle_identifier`. ASC API key (App Manager role) under Team integrations. Publishing to TestFlight and Play via YAML. Limits: Apple allows 3 distribution certs, and a cert is downloadable once. | Free 500 macOS M2 min/mo. Pay-as-you-go Mac mini M2 $0.095/min, M4 $0.114/min, Linux $0.045/min. Fixed plans from $3,990/yr. Enterprise from $24,000/yr.         | https://codemagic.io/pricing/ and https://docs.codemagic.io/yaml-code-signing/signing-ios/                                             |
+| **Bitrise**                        | Not fetched in detail. Release Management supports TestFlight and Google Play beta tracks. The Standard tier adds automated distribution and App Store submission.                                                                                                                                                            | Hobby free, Starter $89/mo annual ($99 monthly), Pro from $200/mo annual. Release Management Standard $250/app/mo annual. CodePush Basic free up to 100,000 MAU. | https://bitrise.io/pricing                                                                                                             |
+| **fastlane**                       | `match` stores certs and profiles encrypted in a private git repo, GCS or S3. `readonly` on CI. Takes an ASC API key. `deliver`, `pilot`, `supply` (upload to App Store Connect and Play): UNVERIFIED here.                                                                                                                   | Free and open source.                                                                                                                                            | https://docs.fastlane.tools/actions/match/                                                                                             |
+| **Shorebird** (Flutter code push)  | Patches signed. Own copy of Flutter. CLI pages: create, init, release, preview, patch, rollback. CI guides for GitHub, GitLab, Codemagic, fastlane. Login method not on the index page. Ships an MCP server and service accounts for CI.                                                                                      | Hobby $0 (5,000 patch installs/mo). Pro $20/mo (50,000, $1 per 2,500 extra). Business $400/mo (1M, OIDC keyless CI).                                             | https://shorebird.dev/pricing and https://docs.shorebird.dev/                                                                          |
+| **Capgo** (Capacitor live updates) | Live updates, native builds, whole stack open source and self-hostable.                                                                                                                                                                                                                                                       | Solo $14/mo, Maker $39/mo, Team $99/mo, Enterprise from $249/mo.                                                                                                 | https://capgo.app/pricing/                                                                                                             |
+| **Appflow**                        | Ionic is sunsetting it. All features end **31 Dec 2027**. New sales stopped Feb 2025. Auth Connect and Identity Vault also discontinued. Ionic's support page was updated 24 Sep 2026.                                                                                                                                        | n/a                                                                                                                                                              | via https://capawesome.io/blog/migrating-from-ionic-appflow-to-capawesome-cloud/ (vendor source; the Ionic page itself was not opened) |
 
 **Copy:** the Codemagic and Expo pattern of "enter the Apple key once, reference it by name in config". From fastlane: `readonly` signing on CI. From Shorebird: signed patches, rollbacks and OIDC keyless CI.
 
 ### 2.3 Rust and general PaaS
 
 **Shuttle (Rust).** **The hosted service is shutting down.**
+
 - Shuttle's own page: Pro projects stop on **16 Jan 2026**. Community users had to migrate by the beginning of 2026. Growth customers got individual timelines. Subscription fees are no longer collected. https://docs.shuttle.dev/docs/shuttle-shutdown (retrieved 2026-11-18)
 - The last platform (Q4 2024) built on AWS CodeBuild and ran on ECS Fargate, with shared Postgres 16 on RDS. `shuttle deploy` packages the code and sends it to Shuttle to compile. Resources are added by function arguments and annotations. https://docs.shuttle.dev/platform-update/platform-update and https://www.shuttle.dev/
 - Pricing before shutdown (Mar 2025): Community free, Pro $20/mo + usage, Growth from $250/mo. https://www.shuttle.dev/blog/2025/03/19/pricing-update
@@ -306,28 +311,33 @@ Evidence is thin because the product is two months old. I found no Reddit or Hac
 - **Copy:** resources declared as code (database as a function argument).
 
 **Fly.io.** https://docs.fly.io/launch and https://docs.fly.io/launch/create
+
 - `fly launch` scans the source, generates `fly.toml` and a Dockerfile, prompts "Do you want to tweak these settings before proceeding?", then deploys unless `--no-deploy`. Later changes go out with `fly deploy`.
 - Billing is per second. A 256 MB shared-cpu-1x machine costs $2.19/30 days. New orgs get $1 trial credit for 7 days. A card is required afterwards. Managed Postgres is $38–$1,922/mo plus $0.28/GB. https://docs.fly.io/about/pricing
 - Spend limits: not documented on the page.
 - **Copy:** the launch summary prompt, with a single confirm step.
 
 **Railway.** `railway login` (`--browserless` for SSH), `railway init`/`link`, `railway up`, `railway status|logs|open`. `railway deploy --template postgres`. `railway config init|pull|plan|apply` (config as code in `.railway/railway.ts`). Tokens: `RAILWAY_TOKEN` and `RAILWAY_API_TOKEN`. https://docs.railway.com/guides/cli
+
 - Pricing: Trial $5 credit for 30 days, no card. Hobby $5/mo, Pro $20/mo per workspace. Usage about $20/vCPU-month and $10/GB-month. https://railway.com/pricing
 - No spend cap is described.
 - **Copy:** `config plan` and `config apply` (preview-then-apply).
 
 **Render.** `render.yaml` Blueprints declare services, databases and environment groups. Every push to the linked branch syncs. Dashboard edits are overwritten on the next sync. https://render.com/docs/infrastructure-as-code
+
 - Flat Pro $25/workspace and Scale $499 since 23 Apr 2026, with Hobby free. Starter instance $7/mo. Postgres entry price conflicting across sources (UNVERIFIED). https://render.com/changelog/updated-plans-for-render-workspaces
 - PR previews are listed as a feature. Details not retrieved.
 - **Copy:** one declarative file for the whole stack.
 
 **Vercel.** https://vercel.com/pricing
+
 - Hobby free (cannot buy more). Pro $20 with $20 credit.
 - **Spend management:** default on-demand budget $200, alerts by email, web and SMS, with an optional automatic project pause at 100%. This is the best spend-limit design found.
 - `vercel deploy --temporary` deploys without an account and expires unless claimed. That is the minimum-click flow.
 - Unlimited preview deployments on all plans.
 
 **Encore Cloud.** https://encore.dev/docs/platform/deploy/deploying and https://encore.dev/pricing
+
 - `encore app create`, then `git push encore` (or the connected GitHub) triggers build, provision and deploy.
 - Infrastructure is derived from the code. Deploy to a free hosted environment or connect **your own AWS or GCP**. Per-PR preview environments on Pro.
 - Pro: $49/member/mo, plus $99 per cloud environment/mo and $2.50 per resource per environment/mo. Cloud usage is billed directly by AWS or GCP with no markup. Free tier fair-use limits: 100k requests/day, 1 GB DB.
@@ -343,16 +353,16 @@ Evidence is thin because the product is two months old. I found no Reddit or Hac
 
 ### 2.4 Kubernetes-based PaaS
 
-| Product | Model | Pricing | Source |
-|---|---|---|---|
-| **Northflank** | Managed cloud or **BYOC**. BYOC cost to Northflank is only managed-node vCPU at $0.02083/vCPU-hour. The cloud provider bills the infrastructure. Free Sandbox includes one BYOC cluster (up to 12 vCPU / 48 GB). | Pay as you go from $0.01667/vCPU-hr. No seat fees. | https://northflank.com/pricing |
-| **Porter** | Deploys into **your** AWS, Azure or GCP account. Its control plane manages the cluster. "If you stop paying, your servers keep running." | $13/vCPU-mo and $6/GB RAM-mo, excluding cloud costs. | https://www.porter.run/pricing |
-| **Qovery** | Execution layer on top of your cluster (EKS, GKE, AKS, k3s, on-prem). Preview environments included on Free. | Free (1 cluster you run), Starter $299/mo, Growth $899/mo, Scale $2,999/mo. | https://www.qovery.com/pricing |
-| **Coolify** | Self-hosted, Docker-based. API, CLI and MCP interfaces. 300+ one-click services. | Free self-hosted. Cloud pricing UNVERIFIED. | https://coolify.io/docs/ |
-| **Dokploy** | Open-source, Docker and Traefik. Has a Cloud option and remote servers (not detailed). | UNVERIFIED | https://docs.dokploy.com/docs/core |
-| **Kubero** | Self-hosted PaaS layer on a cluster you bring (UI plus operator). Pipelines, review apps. | Free | https://bex.co/blog/2026/07/08/kubero-vs-cluster-api-paas (vendor with a competing product; treat framing with caution) |
-| **Cozystack** | CNCF Sandbox. VMs, managed Kubernetes, VPCs and managed services on bare metal through one Kubernetes API. Tenants are namespaces with RBAC. | Free, self-operated. | https://cozystack.io/blog/2026/06/cozystack-vs-openstack/ |
-| **Otomi, Knative products** | **UNVERIFIED.** Knative is described only as a serverless runtime with scale to zero. | n/a | n/a |
+| Product                     | Model                                                                                                                                                                                                            | Pricing                                                                     | Source                                                                                                                  |
+| --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| **Northflank**              | Managed cloud or **BYOC**. BYOC cost to Northflank is only managed-node vCPU at $0.02083/vCPU-hour. The cloud provider bills the infrastructure. Free Sandbox includes one BYOC cluster (up to 12 vCPU / 48 GB). | Pay as you go from $0.01667/vCPU-hr. No seat fees.                          | https://northflank.com/pricing                                                                                          |
+| **Porter**                  | Deploys into **your** AWS, Azure or GCP account. Its control plane manages the cluster. "If you stop paying, your servers keep running."                                                                         | $13/vCPU-mo and $6/GB RAM-mo, excluding cloud costs.                        | https://www.porter.run/pricing                                                                                          |
+| **Qovery**                  | Execution layer on top of your cluster (EKS, GKE, AKS, k3s, on-prem). Preview environments included on Free.                                                                                                     | Free (1 cluster you run), Starter $299/mo, Growth $899/mo, Scale $2,999/mo. | https://www.qovery.com/pricing                                                                                          |
+| **Coolify**                 | Self-hosted, Docker-based. API, CLI and MCP interfaces. 300+ one-click services.                                                                                                                                 | Free self-hosted. Cloud pricing UNVERIFIED.                                 | https://coolify.io/docs/                                                                                                |
+| **Dokploy**                 | Open-source, Docker and Traefik. Has a Cloud option and remote servers (not detailed).                                                                                                                           | UNVERIFIED                                                                  | https://docs.dokploy.com/docs/core                                                                                      |
+| **Kubero**                  | Self-hosted PaaS layer on a cluster you bring (UI plus operator). Pipelines, review apps.                                                                                                                        | Free                                                                        | https://bex.co/blog/2026/07/08/kubero-vs-cluster-api-paas (vendor with a competing product; treat framing with caution) |
+| **Cozystack**               | CNCF Sandbox. VMs, managed Kubernetes, VPCs and managed services on bare metal through one Kubernetes API. Tenants are namespaces with RBAC.                                                                     | Free, self-operated.                                                        | https://cozystack.io/blog/2026/06/cozystack-vs-openstack/                                                               |
+| **Otomi, Knative products** | **UNVERIFIED.** Knative is described only as a serverless runtime with scale to zero.                                                                                                                            | n/a                                                                         | n/a                                                                                                                     |
 
 **How they hide Kubernetes.** Users see apps, jobs, databases, domains and environments. The cluster itself is rarely shown, and Porter and Qovery operate it inside the user's own cloud account. **Copy:** the "managed control plane, your cloud account" model, and pricing that bills only for management, not for infrastructure, in BYOC mode.
 
@@ -364,33 +374,33 @@ Evidence is thin because the product is two months old. I found no Reddit or Hac
 
 Legend: **Y** = confirmed on a primary page above. **N** = confirmed absent or not documented in what I read. **P** = partial. **?** = not verified in this research (do not treat as no).
 
-| Capability | Serverpod Cloud | Expo EAS | Shuttle (shut down) | Fly | Railway | Render | Vercel | Encore |
-|---|---|---|---|---|---|---|---|---|
-| Signup methods | ? (browser sign-in) | ? | Y (Google, email) | ? | ? | ? | ? | ? |
-| CLI login via browser | Y | ? | Y (approve in console) | ? | Y (+ `--browserless`) | ? | ? | ? |
-| One-command first deploy | Y (`launch`) | P (`eas build`, then submit) | Y (`deploy`) | Y (`launch`) | P (`init`, `up`) | N (Git + dashboard) | Y (`vercel deploy`, anonymous `--temporary`) | P (`app create` + push) |
-| Cloud builds | Y | Y | Y | Y | ? | ? | ? | Y |
-| Git-push deploys | N | P (Workflows on GitHub events) | ? | P (GitHub Actions) | ? | Y | ? | Y |
-| Preview environments | N | ? | ? | P (GH Actions blueprint) | ? | Y (listed) | Y | Y (Pro) |
-| Custom domains | Y (Growth+) | ? | Y | Y | ? | ? | ? | Y (Pro) |
-| Secrets | Y | ? | Y | ? | ? | P (env groups) | ? | ? |
-| Managed Postgres | Y (PG17) | n/a | Y (shared PG16) | Y | Y (template) | Y | ? | Y (provisioned) |
-| Backups / PITR | P (snapshots; Growth) | n/a | ? | ? | ? | ? | ? | ? |
-| Logs | Y | P (build logs) | ? | ? | Y | ? | P (1h–1d retention) | ? |
-| Metrics | P (`top`, Insights) | ? | ? | ? | ? | ? | ? | Y (tracing) |
-| Rollbacks | **N** | P (Update rollback) | ? | ? | ? | ? | ? | ? |
-| Autoscaling | Y (Growth) | n/a | ? | P (autoscale docs) | ? | ? | Y | ? |
-| Scale to zero | Y | n/a | ? | Y (autostop) | ? | ? | Y | ? |
-| Regions | **? / not published** | n/a | ? | Y | ? | ? | Y | Y (your cloud) |
-| Teams / roles | P (invite; roles not documented) | Y | P (disabled) | Y | Y | Y | Y | Y |
-| Spend limits | **N** | ? | ? | **N documented** | **N documented** | ? | **Y (best)** | ? |
-| Bring-your-own-cloud | N | n/a | N | N | N | N | N | **Y** |
-| Multiple services / project | N (one server + web) | n/a | N | Y | Y | Y | Y | Y |
-| Cron / jobs | P (future calls; Growth) | P (Workflows cron) | ? | ? | ? | ? | ? | Y (cron, hourly on free) |
-| OTA updates | N | Y (Update) | N | N | N | N | N | N |
-| Store builds | P (hidden) | Y | N | N | N | N | N | N |
-| Store submission | P (hidden) | Y | N | N | N | N | N | N |
-| Per-store credential management | P (hidden, console) | Y | N | N | N | N | N | N |
+| Capability                      | Serverpod Cloud                  | Expo EAS                       | Shuttle (shut down)    | Fly                      | Railway               | Render              | Vercel                                       | Encore                   |
+| ------------------------------- | -------------------------------- | ------------------------------ | ---------------------- | ------------------------ | --------------------- | ------------------- | -------------------------------------------- | ------------------------ |
+| Signup methods                  | ? (browser sign-in)              | ?                              | Y (Google, email)      | ?                        | ?                     | ?                   | ?                                            | ?                        |
+| CLI login via browser           | Y                                | ?                              | Y (approve in console) | ?                        | Y (+ `--browserless`) | ?                   | ?                                            | ?                        |
+| One-command first deploy        | Y (`launch`)                     | P (`eas build`, then submit)   | Y (`deploy`)           | Y (`launch`)             | P (`init`, `up`)      | N (Git + dashboard) | Y (`vercel deploy`, anonymous `--temporary`) | P (`app create` + push)  |
+| Cloud builds                    | Y                                | Y                              | Y                      | Y                        | ?                     | ?                   | ?                                            | Y                        |
+| Git-push deploys                | N                                | P (Workflows on GitHub events) | ?                      | P (GitHub Actions)       | ?                     | Y                   | ?                                            | Y                        |
+| Preview environments            | N                                | ?                              | ?                      | P (GH Actions blueprint) | ?                     | Y (listed)          | Y                                            | Y (Pro)                  |
+| Custom domains                  | Y (Growth+)                      | ?                              | Y                      | Y                        | ?                     | ?                   | ?                                            | Y (Pro)                  |
+| Secrets                         | Y                                | ?                              | Y                      | ?                        | ?                     | P (env groups)      | ?                                            | ?                        |
+| Managed Postgres                | Y (PG17)                         | n/a                            | Y (shared PG16)        | Y                        | Y (template)          | Y                   | ?                                            | Y (provisioned)          |
+| Backups / PITR                  | P (snapshots; Growth)            | n/a                            | ?                      | ?                        | ?                     | ?                   | ?                                            | ?                        |
+| Logs                            | Y                                | P (build logs)                 | ?                      | ?                        | Y                     | ?                   | P (1h–1d retention)                          | ?                        |
+| Metrics                         | P (`top`, Insights)              | ?                              | ?                      | ?                        | ?                     | ?                   | ?                                            | Y (tracing)              |
+| Rollbacks                       | **N**                            | P (Update rollback)            | ?                      | ?                        | ?                     | ?                   | ?                                            | ?                        |
+| Autoscaling                     | Y (Growth)                       | n/a                            | ?                      | P (autoscale docs)       | ?                     | ?                   | Y                                            | ?                        |
+| Scale to zero                   | Y                                | n/a                            | ?                      | Y (autostop)             | ?                     | ?                   | Y                                            | ?                        |
+| Regions                         | **? / not published**            | n/a                            | ?                      | Y                        | ?                     | ?                   | Y                                            | Y (your cloud)           |
+| Teams / roles                   | P (invite; roles not documented) | Y                              | P (disabled)           | Y                        | Y                     | Y                   | Y                                            | Y                        |
+| Spend limits                    | **N**                            | ?                              | ?                      | **N documented**         | **N documented**      | ?                   | **Y (best)**                                 | ?                        |
+| Bring-your-own-cloud            | N                                | n/a                            | N                      | N                        | N                     | N                   | N                                            | **Y**                    |
+| Multiple services / project     | N (one server + web)             | n/a                            | N                      | Y                        | Y                     | Y                   | Y                                            | Y                        |
+| Cron / jobs                     | P (future calls; Growth)         | P (Workflows cron)             | ?                      | ?                        | ?                     | ?                   | ?                                            | Y (cron, hourly on free) |
+| OTA updates                     | N                                | Y (Update)                     | N                      | N                        | N                     | N                   | N                                            | N                        |
+| Store builds                    | P (hidden)                       | Y                              | N                      | N                        | N                     | N                   | N                                            | N                        |
+| Store submission                | P (hidden)                       | Y                              | N                      | N                        | N                     | N                   | N                                            | N                        |
+| Per-store credential management | P (hidden, console)              | Y                              | N                      | N                        | N                     | N                   | N                                            | N                        |
 
 Sources by column: Serverpod, Part 1; Expo, §2.1; Shuttle, §2.3; the rest, §2.3.
 
