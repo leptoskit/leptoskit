@@ -22,31 +22,21 @@ pub(crate) use client::Facts;
 pub(crate) use client::Failure;
 pub(crate) use leptoskit_admin_pages::analytics::params;
 use leptoskit_admin_pages::model::Page;
+use leptoskit_admin_pages::model::Section;
 use leptoskit_admin_pages::model::analytics::Notice;
 use leptoskit_admin_pages::model::analytics::Why;
 use params::Params;
 
 use crate::BASE;
 use crate::access::Preferences;
-use crate::shell::Screen;
-use crate::shell::Section;
 
-/// What an analytics page shows: a screen the admin draws, or a page the
-/// pages crate draws and the browser picks up.
-pub(crate) enum Shown {
-	Screen(Box<Screen>),
-	Page(Box<Page>),
-}
-
-impl From<Screen> for Shown {
-	fn from(screen: Screen) -> Self {
-		Self::Screen(Box::new(screen))
-	}
-}
+/// What an analytics page shows: a page the pages crate draws and the
+/// browser picks up.
+pub(crate) struct Shown(Box<Page>);
 
 impl From<Page> for Shown {
 	fn from(page: Page) -> Self {
-		Self::Page(Box::new(page))
+		Self(Box::new(page))
 	}
 }
 

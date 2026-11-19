@@ -8,6 +8,7 @@
 
 pub(crate) use leptoskit_admin_pages::analytics::insights::*;
 use leptoskit_admin_pages::model::Page;
+use leptoskit_admin_pages::model::Section;
 use leptoskit_admin_pages::model::analytics::Actor;
 use leptoskit_admin_pages::model::analytics::Actors;
 use leptoskit_admin_pages::model::insight::Insight;
@@ -33,7 +34,6 @@ use super::params::Params;
 use super::stations;
 use super::stations::Drawn;
 use crate::BASE;
-use crate::shell::Section;
 
 /// The latest event of `name`, for the Send station to weigh.
 pub(crate) async fn sample(connection: &Connection, name: Option<String>) -> Option<EventRow> {

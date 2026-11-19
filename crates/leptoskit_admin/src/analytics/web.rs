@@ -4,6 +4,7 @@
 //! runs its queries; the pages crate draws it.
 
 use leptoskit_admin_pages::model::Page;
+use leptoskit_admin_pages::model::Section;
 use leptoskit_admin_pages::model::analytics::Web;
 use leptoskit_analytics::query::Answer;
 use leptoskit_analytics::query::Math;
@@ -21,7 +22,6 @@ use super::params::Params;
 use super::stations;
 use super::stations::Drawn;
 use crate::BASE;
-use crate::shell::Section;
 
 const PATH: &str = "/analytics/overview";
 

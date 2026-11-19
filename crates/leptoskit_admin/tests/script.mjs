@@ -1,8 +1,7 @@
 // The admin's pages in a real browser, against pages the admin really
 // renders: `pages_for_the_script` in `tests/analytics.rs` writes them, this
-// serves them with `assets/admin.mjs`, the pages' Wasm client, and a live
-// stream the test feeds, and headless Chrome runs them over the DevTools
-// protocol.
+// serves them with the pages' Wasm client and a live connection the test
+// feeds, and headless Chrome runs them over the DevTools protocol.
 //
 //   deno test -A crates/leptoskit_admin/tests/script.mjs
 //
@@ -105,9 +104,8 @@ const TYPES = {
 	wasm: "application/wasm",
 };
 
-/** Serves the pages as the admin would, and a live stream to push into. */
+/** Serves the pages as the admin would, and a live connection to send into. */
 function serve(directory, clientDirectory) {
-	const streams = new Set();
 	// The admin's live connection: each `analytics_live` stream a page opened.
 	const live = new Set();
 	// Each page model a builder asked for, by address.
@@ -115,7 +113,6 @@ function serve(directory, clientDirectory) {
 	const posted = [];
 	// Whether the main site refuses to start a sign-in.
 	const oauth = { fails: false };
-	const encoder = new TextEncoder();
 	const page = (name) =>
 		Deno.readFile(`${directory}/${name}`).then((body) =>
 			new Response(body, { headers: { "content-type": "text/html" } })
@@ -125,13 +122,6 @@ function serve(directory, clientDirectory) {
 		async (request) => {
 			const url = new URL(request.url);
 			switch (url.pathname) {
-				case `${BASE}/assets/admin.mjs`:
-					return new Response(
-						await Deno.readFile(`${here}../assets/admin.mjs`),
-						{
-							headers: { "content-type": "text/javascript" },
-						},
-					);
 				case `${BASE}/analytics/trends`: {
 					const name = url.searchParams.get("by") === "session:channel"
 						? "trends-channels"
@@ -259,21 +249,6 @@ function serve(directory, clientDirectory) {
 					);
 				case `${BASE}/infra/projects/notes-production/changes`:
 					return page("changes.html");
-				case `${BASE}/api/analytics/live`: {
-					let held;
-					const body = new ReadableStream({
-						start(controller) {
-							held = controller;
-							streams.add(controller);
-						},
-						cancel() {
-							streams.delete(held);
-						},
-					});
-					return new Response(body, {
-						headers: { "content-type": "text/event-stream" },
-					});
-				}
 				case `${BASE}/api/analytics/dashboards`:
 					if (request.method === "GET") {
 						return Response.json({
@@ -342,7 +317,6 @@ function serve(directory, clientDirectory) {
 	);
 	return {
 		origin: `http://127.0.0.1:${server.addr.port}`,
-		connected: () => streams.size,
 		posted,
 		models,
 		oauth,
@@ -354,14 +328,7 @@ function serve(directory, clientDirectory) {
 				held.send({ type: "item", stream: held.stream, value });
 			}
 		},
-		push(kind, data) {
-			const message = encoder.encode(
-				`event: ${kind}\ndata: ${JSON.stringify(data)}\n\n`,
-			);
-			for (const stream of streams) stream.enqueue(message);
-		},
 		async close() {
-			for (const stream of streams) stream.close();
 			for (const held of live) held.socket.close();
 			await server.shutdown();
 		},
