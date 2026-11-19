@@ -1,0 +1,722 @@
+---
+source: crates/leptoskit_cloud_runtime/tests/manifests.rs
+expression: as_yaml(&objects)
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: leptoskit-cloud
+    leptoskit.cloud/deployment: '2'
+    leptoskit.cloud/environment: production
+    leptoskit.cloud/organization: acme
+    leptoskit.cloud/project: notes
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/warn: restricted
+  name: lk-0b64f478d99c825f63ac
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: leptoskit-cloud
+    leptoskit.cloud/deployment: '2'
+    leptoskit.cloud/environment: production
+    leptoskit.cloud/organization: acme
+    leptoskit.cloud/project: notes
+  name: quota
+  namespace: lk-0b64f478d99c825f63ac
+spec:
+  hard:
+    limits.cpu: 12000m
+    limits.memory: 4096Mi
+    pods: '12'
+    requests.cpu: 12000m
+    requests.memory: 4096Mi
+    requests.storage: 10Gi
+---
+apiVersion: v1
+kind: LimitRange
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: leptoskit-cloud
+    leptoskit.cloud/deployment: '2'
+    leptoskit.cloud/environment: production
+    leptoskit.cloud/organization: acme
+    leptoskit.cloud/project: notes
+  name: limits
+  namespace: lk-0b64f478d99c825f63ac
+spec:
+  limits:
+  - max:
+      cpu: 12000m
+      memory: 4096Mi
+    type: Container
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: leptoskit-cloud
+    leptoskit.cloud/deployment: '2'
+    leptoskit.cloud/environment: production
+    leptoskit.cloud/organization: acme
+    leptoskit.cloud/project: notes
+  name: default-deny
+  namespace: lk-0b64f478d99c825f63ac
+spec:
+  egress: []
+  ingress: []
+  podSelector: {}
+  policyTypes:
+  - Ingress
+  - Egress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: leptoskit-cloud
+    leptoskit.cloud/deployment: '2'
+    leptoskit.cloud/environment: production
+    leptoskit.cloud/organization: acme
+    leptoskit.cloud/project: notes
+  name: allow-same-namespace
+  namespace: lk-0b64f478d99c825f63ac
+spec:
+  egress:
+  - to:
+    - podSelector: {}
+  ingress:
+  - from:
+    - podSelector: {}
+  podSelector: {}
+  policyTypes:
+  - Ingress
+  - Egress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: leptoskit-cloud
+    app.kubernetes.io/name: app
+    leptoskit.cloud/deployment: '2'
+    leptoskit.cloud/environment: production
+    leptoskit.cloud/organization: acme
+    leptoskit.cloud/project: notes
+  name: allow-from-ingress-app
+  namespace: lk-0b64f478d99c825f63ac
+spec:
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: ingress-nginx
+    ports:
+    - port: 8080
+      protocol: TCP
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: app
+  policyTypes:
+  - Ingress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: leptoskit-cloud
+    app.kubernetes.io/name: search
+    leptoskit.cloud/deployment: '2'
+    leptoskit.cloud/environment: production
+    leptoskit.cloud/organization: acme
+    leptoskit.cloud/project: notes
+  name: allow-from-ingress-search
+  namespace: lk-0b64f478d99c825f63ac
+spec:
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: ingress-nginx
+    ports:
+    - port: 3110
+      protocol: TCP
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: search
+  policyTypes:
+  - Ingress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: leptoskit-cloud
+    leptoskit.cloud/deployment: '2'
+    leptoskit.cloud/environment: production
+    leptoskit.cloud/organization: acme
+    leptoskit.cloud/project: notes
+  name: allow-dns
+  namespace: lk-0b64f478d99c825f63ac
+spec:
+  egress:
+  - ports:
+    - port: 53
+      protocol: UDP
+    - port: 53
+      protocol: TCP
+    to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: kube-system
+  podSelector: {}
+  policyTypes:
+  - Egress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: leptoskit-cloud
+    leptoskit.cloud/deployment: '2'
+    leptoskit.cloud/environment: production
+    leptoskit.cloud/organization: acme
+    leptoskit.cloud/project: notes
+  name: allow-internet
+  namespace: lk-0b64f478d99c825f63ac
+spec:
+  egress:
+  - to:
+    - ipBlock:
+        cidr: 0.0.0.0/0
+        except:
+        - 10.0.0.0/8
+        - 169.254.0.0/16
+        - 192.168.0.0/16
+  podSelector: {}
+  policyTypes:
+  - Egress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: leptoskit-cloud
+    leptoskit.cloud/deployment: '2'
+    leptoskit.cloud/environment: production
+    leptoskit.cloud/organization: acme
+    leptoskit.cloud/project: notes
+  name: allow-database
+  namespace: lk-0b64f478d99c825f63ac
+spec:
+  egress:
+  - ports:
+    - port: 5432
+      protocol: TCP
+    to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: postgres-shared
+  podSelector: {}
+  policyTypes:
+  - Egress
+---
+apiVersion: v1
+kind: ServiceAccount
+automountServiceAccountToken: false
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: leptoskit-cloud
+    leptoskit.cloud/deployment: '2'
+    leptoskit.cloud/environment: production
+    leptoskit.cloud/organization: acme
+    leptoskit.cloud/project: notes
+  name: app
+  namespace: lk-0b64f478d99c825f63ac
+---
+apiVersion: v1
+kind: Secret
+data:
+  search-token: aHVudGVyMi10aGUtdmFsdWU=
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: leptoskit-cloud
+    leptoskit.cloud/deployment: '2'
+    leptoskit.cloud/environment: production
+    leptoskit.cloud/organization: acme
+    leptoskit.cloud/project: notes
+  name: search-secrets
+  namespace: lk-0b64f478d99c825f63ac
+type: Opaque
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: leptoskit-cloud
+    leptoskit.cloud/deployment: '2'
+    leptoskit.cloud/environment: production
+    leptoskit.cloud/organization: acme
+    leptoskit.cloud/project: notes
+  name: files-data
+  namespace: lk-0b64f478d99c825f63ac
+spec:
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: leptoskit-cloud
+    leptoskit.cloud/deployment: '2'
+    leptoskit.cloud/environment: production
+    leptoskit.cloud/organization: acme
+    leptoskit.cloud/project: notes
+  name: app
+  namespace: lk-0b64f478d99c825f63ac
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: app
+  strategy:
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/managed-by: leptoskit-cloud
+        app.kubernetes.io/name: app
+        leptoskit.cloud/deployment: '2'
+        leptoskit.cloud/environment: production
+        leptoskit.cloud/organization: acme
+        leptoskit.cloud/project: notes
+    spec:
+      automountServiceAccountToken: false
+      containers:
+      - command:
+        - /app/server
+        image: ghcr.io/acme/notes@sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8080
+            scheme: HTTP
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        name: app
+        ports:
+        - containerPort: 8080
+          protocol: TCP
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: 8080
+            scheme: HTTP
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        resources:
+          limits:
+            cpu: 1000m
+            memory: 256Mi
+          requests:
+            cpu: 250m
+            memory: 256Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+        volumeMounts:
+        - mountPath: /tmp
+          name: tmp
+      runtimeClassName: gvisor
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      serviceAccountName: app
+      terminationGracePeriodSeconds: 30
+      volumes:
+      - emptyDir: {}
+        name: tmp
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: leptoskit-cloud
+    leptoskit.cloud/deployment: '2'
+    leptoskit.cloud/environment: production
+    leptoskit.cloud/organization: acme
+    leptoskit.cloud/project: notes
+  name: search
+  namespace: lk-0b64f478d99c825f63ac
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: search
+  strategy:
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/managed-by: leptoskit-cloud
+        app.kubernetes.io/name: search
+        leptoskit.cloud/deployment: '2'
+        leptoskit.cloud/environment: production
+        leptoskit.cloud/organization: acme
+        leptoskit.cloud/project: notes
+    spec:
+      automountServiceAccountToken: false
+      containers:
+      - args:
+        - --port
+        - '3110'
+        command:
+        - /app/services/search
+        env:
+        - name: SEARCH_MODE
+          value: full
+        envFrom:
+        - secretRef:
+            name: search-secrets
+        image: ghcr.io/acme/search@sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 3110
+            scheme: HTTP
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        name: search
+        ports:
+        - containerPort: 3110
+          protocol: TCP
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: 3110
+            scheme: HTTP
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        resources:
+          limits:
+            cpu: 2000m
+            memory: 512Mi
+          requests:
+            cpu: 500m
+            memory: 512Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+        volumeMounts:
+        - mountPath: /tmp
+          name: tmp
+      runtimeClassName: gvisor
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      serviceAccountName: app
+      terminationGracePeriodSeconds: 30
+      volumes:
+      - emptyDir: {}
+        name: tmp
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: leptoskit-cloud
+    leptoskit.cloud/deployment: '2'
+    leptoskit.cloud/environment: production
+    leptoskit.cloud/organization: acme
+    leptoskit.cloud/project: notes
+  name: files
+  namespace: lk-0b64f478d99c825f63ac
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: files
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/managed-by: leptoskit-cloud
+        app.kubernetes.io/name: files
+        leptoskit.cloud/deployment: '2'
+        leptoskit.cloud/environment: production
+        leptoskit.cloud/organization: acme
+        leptoskit.cloud/project: notes
+    spec:
+      automountServiceAccountToken: false
+      containers:
+      - command:
+        - /app/services/files
+        image: ghcr.io/acme/files@sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 3111
+            scheme: HTTP
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        name: files
+        ports:
+        - containerPort: 3111
+          protocol: TCP
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: 3111
+            scheme: HTTP
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        resources:
+          limits:
+            cpu: 2000m
+            memory: 512Mi
+          requests:
+            cpu: 500m
+            memory: 512Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+        volumeMounts:
+        - mountPath: /tmp
+          name: tmp
+        - mountPath: /srv/files
+          name: data
+      runtimeClassName: gvisor
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      serviceAccountName: app
+      terminationGracePeriodSeconds: 30
+      volumes:
+      - emptyDir: {}
+        name: tmp
+      - name: data
+        persistentVolumeClaim:
+          claimName: files-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: leptoskit-cloud
+    leptoskit.cloud/deployment: '2'
+    leptoskit.cloud/environment: production
+    leptoskit.cloud/organization: acme
+    leptoskit.cloud/project: notes
+  name: app
+  namespace: lk-0b64f478d99c825f63ac
+spec:
+  ports:
+  - name: http
+    port: 80
+    protocol: TCP
+    targetPort: 8080
+  selector:
+    app.kubernetes.io/name: app
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: leptoskit-cloud
+    leptoskit.cloud/deployment: '2'
+    leptoskit.cloud/environment: production
+    leptoskit.cloud/organization: acme
+    leptoskit.cloud/project: notes
+  name: search
+  namespace: lk-0b64f478d99c825f63ac
+spec:
+  ports:
+  - name: http
+    port: 80
+    protocol: TCP
+    targetPort: 3110
+  selector:
+    app.kubernetes.io/name: search
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: leptoskit-cloud
+    leptoskit.cloud/deployment: '2'
+    leptoskit.cloud/environment: production
+    leptoskit.cloud/organization: acme
+    leptoskit.cloud/project: notes
+  name: files
+  namespace: lk-0b64f478d99c825f63ac
+spec:
+  ports:
+  - name: http
+    port: 80
+    protocol: TCP
+    targetPort: 3111
+  selector:
+    app.kubernetes.io/name: files
+  type: ClusterIP
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: leptoskit-cloud
+    leptoskit.cloud/deployment: '2'
+    leptoskit.cloud/environment: production
+    leptoskit.cloud/organization: acme
+    leptoskit.cloud/project: notes
+  name: app
+  namespace: lk-0b64f478d99c825f63ac
+spec:
+  maxReplicas: 5
+  metrics:
+  - resource:
+      name: cpu
+      target:
+        averageUtilization: 70
+        type: Utilization
+    type: Resource
+  minReplicas: 2
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: app
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: leptoskit-cloud
+    leptoskit.cloud/deployment: '2'
+    leptoskit.cloud/environment: production
+    leptoskit.cloud/organization: acme
+    leptoskit.cloud/project: notes
+  name: search
+  namespace: lk-0b64f478d99c825f63ac
+spec:
+  maxReplicas: 2
+  metrics:
+  - resource:
+      name: cpu
+      target:
+        averageUtilization: 70
+        type: Utilization
+    type: Resource
+  minReplicas: 1
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: search
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: leptoskit-cloud
+    leptoskit.cloud/deployment: '2'
+    leptoskit.cloud/environment: production
+    leptoskit.cloud/organization: acme
+    leptoskit.cloud/project: notes
+  name: app
+  namespace: lk-0b64f478d99c825f63ac
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: app
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: leptoskit-cloud
+    leptoskit.cloud/deployment: '2'
+    leptoskit.cloud/environment: production
+    leptoskit.cloud/organization: acme
+    leptoskit.cloud/project: notes
+  name: notes.acme.dev
+  namespace: lk-0b64f478d99c825f63ac
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: notes.acme.dev
+    http:
+      paths:
+      - backend:
+          service:
+            name: app
+            port:
+              number: 80
+        path: /docs
+        pathType: Prefix
+      - backend:
+          service:
+            name: app
+            port:
+              number: 80
+        path: /
+        pathType: Prefix
+  tls:
+  - hosts:
+    - notes.acme.dev
+    secretName: leptoskit-wildcard-tls
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  annotations:
+    cert-manager.io/cluster-issuer: leptoskit-ca
+  labels:
+    app.kubernetes.io/managed-by: leptoskit-cloud
+    leptoskit.cloud/deployment: '2'
+    leptoskit.cloud/environment: production
+    leptoskit.cloud/organization: acme
+    leptoskit.cloud/project: notes
+  name: search.acme.dev
+  namespace: lk-0b64f478d99c825f63ac
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: search.acme.dev
+    http:
+      paths:
+      - backend:
+          service:
+            name: search
+            port:
+              number: 80
+        path: /_leptoskit/services/search/
+        pathType: Prefix
+  tls:
+  - hosts:
+    - search.acme.dev
+    secretName: search.acme.dev-tls
