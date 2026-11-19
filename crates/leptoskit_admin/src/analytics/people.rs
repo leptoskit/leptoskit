@@ -3,6 +3,7 @@
 //! sessions, with export and delete behind a confirmation.
 
 use leptoskit_admin_pages::model::Page;
+use leptoskit_admin_pages::model::Section;
 use leptoskit_admin_pages::model::people::Event;
 use leptoskit_admin_pages::model::people::People;
 use leptoskit_admin_pages::model::people::Person;
@@ -17,7 +18,6 @@ use super::format;
 use super::params;
 use crate::BASE;
 use crate::components::Line;
-use crate::shell::Section;
 use crate::workings::Body;
 use crate::workings::Drawer;
 use crate::workings::Station;

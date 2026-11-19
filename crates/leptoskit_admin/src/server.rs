@@ -12,13 +12,13 @@ use axum::extract::Query;
 use axum::http::HeaderMap;
 use axum::http::StatusCode;
 use axum::http::header;
-use axum::response::Html;
 use axum::response::IntoResponse;
 use axum::response::Redirect;
 use axum::response::Response;
 use axum::routing::get;
 use axum::routing::post;
 use leptoskit_admin_pages::model::Page;
+use leptoskit_admin_pages::model::Viewer;
 use leptoskit_auth::SignedIn;
 use leptoskit_deploy_console::control::Action;
 use leptoskit_deploy_console::control::EnqueueError;
@@ -36,12 +36,8 @@ use crate::analytics;
 use crate::infra;
 use crate::infra::ProjectState;
 use crate::learn;
-use crate::shell;
-use crate::shell::Screen;
-use crate::shell::Viewer;
 use crate::signin;
 
-const SCRIPT: &str = include_str!("../assets/admin.mjs");
 const SKETCH: &[u8] = include_bytes!("../assets/fonts/SkribbleNotoSketch-Latin.woff2");
 const MONO: &[u8] = include_bytes!("../assets/fonts/SkribbleMonoPlayful-Latin.woff2");
 
@@ -63,7 +59,6 @@ pub(crate) fn router(admin: Admin) -> Router {
 		.route(&at("/learn"), get(learn_hub))
 		.route(&at("/learn/glossary"), get(glossary))
 		.route(&at("/learn/{track}/{lesson}"), get(lesson))
-		.route(&at("/assets/admin.mjs"), get(script))
 		.route(&at("/pkg/{file}"), get(client_file))
 		.route(&at("/assets/sketch.woff2"), get(|| async { font(SKETCH) }))
 		.route(&at("/assets/mono.woff2"), get(|| async { font(MONO) }))
@@ -99,10 +94,6 @@ pub(crate) fn no_store(mut response: Response) -> Response {
 		"no-store".parse().expect("a valid header"),
 	);
 	response
-}
-
-pub(crate) fn html(body: String) -> Response {
-	no_store(Html(body).into_response())
 }
 
 /// A signed-in admin, or the response that turns everyone else away.
@@ -228,17 +219,6 @@ pub(crate) async fn states(admin: &Admin) -> Result<Vec<ProjectState>, String> {
 pub(crate) async fn analytics_facts(admin: &Admin) -> Option<analytics::Facts> {
 	let connection = admin.inner().analytics.as_ref()?;
 	connection.facts().await.ok()
-}
-
-/// Renders a signed-in screen.
-pub(crate) fn render(
-	admin: &Admin,
-	gate: &Gate,
-	headers: &HeaderMap,
-	proof: &learn::Proof<'_>,
-	screen: Screen,
-) -> Response {
-	html(shell::page(&viewer(admin, gate, headers, proof), screen))
 }
 
 /// Who is looking at a signed-in screen, and how they like the admin.
@@ -744,17 +724,6 @@ async fn client_file(
 	headers: HeaderMap,
 ) -> Response {
 	admin.inner().client.serve(&file, &headers)
-}
-
-async fn script() -> Response {
-	(
-		[
-			(header::CONTENT_TYPE, "text/javascript; charset=utf-8"),
-			(header::CACHE_CONTROL, "no-cache"),
-		],
-		SCRIPT,
-	)
-		.into_response()
 }
 
 fn font(bytes: &'static [u8]) -> Response {

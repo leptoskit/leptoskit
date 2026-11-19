@@ -5,6 +5,7 @@
 //! `live_events` tail and adds each one at the top.
 
 use leptoskit_admin_pages::model::Page;
+use leptoskit_admin_pages::model::Section;
 use leptoskit_admin_pages::model::live::Arrival;
 use leptoskit_admin_pages::model::live::Live;
 use leptoskit_analytics::query::Answer;
@@ -17,7 +18,6 @@ use super::Context;
 use super::Shown;
 use super::stations;
 use super::stations::Drawn;
-use crate::shell::Section;
 
 /// The most events the page holds.
 const KEEP: u32 = 50;

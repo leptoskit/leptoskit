@@ -3,9 +3,6 @@
 //! the way every admin action does. Only then does the admin call the
 //! analytics service, as the app.
 
-use std::convert::Infallible;
-use std::time::Duration;
-
 use axum::Extension;
 use axum::Json;
 use axum::Router;
@@ -17,18 +14,14 @@ use axum::http::header;
 use axum::response::IntoResponse;
 use axum::response::Redirect;
 use axum::response::Response;
-use axum::response::sse::Event as SseEvent;
-use axum::response::sse::KeepAlive;
-use axum::response::sse::Sse;
 use axum::routing::get;
 use axum::routing::post;
-use futures::StreamExt as _;
+use leptoskit_admin_pages::model::Section;
 use leptoskit_analytics::query::Query;
 use leptoskit_analytics::service::tables::Tile;
 use leptoskit_auth::SignedIn;
 use serde::Deserialize;
 use serde_json::json;
-use tokio::sync::broadcast::error::RecvError;
 use uuid::Uuid;
 
 use super::Connection;
@@ -48,7 +41,6 @@ use crate::Admin;
 use crate::BASE;
 use crate::learn;
 use crate::server;
-use crate::shell::Section;
 
 pub(crate) fn router() -> Router {
 	let at = |path: &str| format!("{BASE}{path}");
@@ -76,7 +68,6 @@ pub(crate) fn router() -> Router {
 			&at("/api/analytics/people/{id}/delete"),
 			post(delete_person),
 		)
-		.route(&at("/api/analytics/live"), get(live_events))
 }
 
 /// A signed-in admin, their projects, and what the service holds.
@@ -130,14 +121,12 @@ async fn finish(
 		simulated: admin.inner().simulated_infrastructure,
 	};
 
-	match shown {
-		Shown::Screen(screen) => server::render(admin, &ready.gate, headers, &proof, *screen),
-		Shown::Page(page) if headers.contains_key(leptoskit_admin_pages::PAGE_HEADER) => {
-			server::no_store(Json(*page).into_response())
-		}
-		Shown::Page(page) => {
-			server::render_page(admin, &ready.gate, headers, &proof, *page, open).await
-		}
+	let Shown(page) = shown;
+
+	if headers.contains_key(leptoskit_admin_pages::PAGE_HEADER) {
+		server::no_store(Json(*page).into_response())
+	} else {
+		server::render_page(admin, &ready.gate, headers, &proof, *page, open).await
 	}
 }
 
@@ -739,85 +728,4 @@ async fn delete_person(
 		}
 		Err(failure) => unavailable(&failure),
 	}
-}
-
-#[derive(Debug, Deserialize)]
-struct LiveRequest {
-	/// Whether to send each event, or only the pulse.
-	#[serde(default)]
-	events: Option<String>,
-}
-
-/// Server-sent events: `pulse` once a second, and with `events=1`, each
-/// event as it arrives.
-async fn live_events(
-	Extension(admin): Extension<Admin>,
-	me: Option<SignedIn>,
-	UrlQuery(request): UrlQuery<LiveRequest>,
-) -> Response {
-	if let Err(response) = server::api_gate(&admin, me).await {
-		return response;
-	}
-
-	let connection = match connection(&admin) {
-		Ok(connection) => connection,
-		Err(response) => return response,
-	};
-	let typed: Vec<String> = connection
-		.facts()
-		.await
-		.map(|facts| {
-			facts
-				.definitions
-				.into_iter()
-				.filter(|definition| definition.fields.is_some())
-				.map(|definition| definition.name)
-				.collect()
-		})
-		.unwrap_or_default();
-	let hub = connection.live().clone();
-	let receiver = hub.subscribe();
-	let events = request.events.as_deref() == Some("1");
-	let mut tick = tokio::time::interval(Duration::from_secs(1));
-	tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-	let stream = futures::stream::unfold(
-		(hub, receiver, tick, typed),
-		move |(hub, mut receiver, mut tick, typed)| {
-			async move {
-				loop {
-					tokio::select! {
-						_ = tick.tick() => {
-							let event = SseEvent::default().event("pulse").json_data(hub.pulse()).unwrap_or_default();
-							return Some((event, (hub, receiver, tick, typed)));
-						}
-						item = receiver.recv(), if events => match item {
-							Ok(item) => {
-								let event = SseEvent::default()
-									.event("event")
-									.json_data(json!({
-										"seq": item.event.seq,
-										"name": item.event.name,
-										"distinct_id": item.event.distinct_id,
-										"timestamp": item.event.timestamp,
-										"properties": item.event.properties,
-										"typed": typed.contains(&item.event.name),
-									}))
-									.unwrap_or_default();
-								return Some((event, (hub, receiver, tick, typed)));
-							}
-							Err(RecvError::Lagged(_)) => {}
-							Err(RecvError::Closed) => return None,
-						},
-					}
-				}
-			}
-		},
-	)
-	.map(Ok::<_, Infallible>);
-
-	server::no_store(
-		Sse::new(stream)
-			.keep_alive(KeepAlive::default())
-			.into_response(),
-	)
 }

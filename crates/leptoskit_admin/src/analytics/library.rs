@@ -2,6 +2,7 @@
 //! a dashboard: each card's insight run, for the pages crate to draw.
 
 use leptoskit_admin_pages::model::Page;
+use leptoskit_admin_pages::model::Section;
 use leptoskit_admin_pages::model::analytics::Card;
 use leptoskit_admin_pages::model::analytics::Dashboard;
 use leptoskit_admin_pages::model::library::Item;
@@ -17,7 +18,6 @@ use super::Shown;
 use super::format;
 use super::insights::Kind;
 use crate::BASE;
-use crate::shell::Section;
 
 pub(crate) fn insight_href(id: Uuid) -> String {
 	format!("{BASE}/analytics/insights/{id}")
