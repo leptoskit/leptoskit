@@ -11716,7 +11716,7 @@ checksum = "33f4fe9184a62d842c9ef383018f3306d8ba224fd9d836f56d7288308847c256"
 [[package]]
 name = "skribble_core"
 version = "0.1.0"
-source = "git+https://github.com/openbudgetfun/skribble?rev=fc845c2a1a0ce1c157ac79134815ddfb67904415#fc845c2a1a0ce1c157ac79134815ddfb67904415"
+source = "git+https://github.com/openbudgetfun/skribble?rev=20af15049b3af35885dac03d546306b7a3e33c3a#20af15049b3af35885dac03d546306b7a3e33c3a"
 dependencies = [
  "skribble_rough",
 ]
@@ -11724,7 +11724,7 @@ dependencies = [
 [[package]]
 name = "skribble_rough"
 version = "0.1.0"
-source = "git+https://github.com/openbudgetfun/skribble?rev=fc845c2a1a0ce1c157ac79134815ddfb67904415#fc845c2a1a0ce1c157ac79134815ddfb67904415"
+source = "git+https://github.com/openbudgetfun/skribble?rev=20af15049b3af35885dac03d546306b7a3e33c3a#20af15049b3af35885dac03d546306b7a3e33c3a"
 
 [[package]]
 name = "slab"
