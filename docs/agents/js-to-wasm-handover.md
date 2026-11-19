@@ -42,7 +42,7 @@ One pull request per item. Every backend is kept in step, with AppKit as the ref
 | 5  | Arrow-key navigation for tabs, radio groups and menus       | G5       | #892, open  |
 | 6  | `Modal` and `Popover`                                       | G1       | #896, open  |
 | 7  | Scroll into view                                            | G4       | #913, open  |
-| 8  | A clock hook                                                | G6       | not started |
+| 8  | A clock hook                                                | G6       | #914, open  |
 | 9  | Typed refusals in the rpc client (status, code, retry time) | G8       | not started |
 | 10 | Streams without a database                                  | G3       | not started |
 | 11 | The ⌘ key on the web                                        | G7a      | not started |
@@ -190,7 +190,7 @@ G4. `Reveal`, `ScrollAlign` and `Element::reveal_on` in `leptoskit_native` (`rev
 - **Backends that now apply `scroll_offset`:** GTK (`scroll_to_offsets`, sets the adjustments after the batch, raising `upper` to the new extent first), Windows (`Widget::update_props` sets the scroll cell and the batch-end `refresh_scroll` clamps it), AppKit (`scrollToPoint` and `reflectScrolledClipView` after the documents are sized) and UIKit (`setContentOffset:animated:`). Each scrolls when the offset changes and not while it holds the same one. GTK, Windows and AppKit do not animate.
 - **Not done:** the terminal and HarmonyOS apply neither. Only the nearest scroll view moves, where the web scrolls every ancestor.
 
-### `feat/clock-hook`: stacked on `feat/scroll-into-view`
+### `feat/clock-hook` (#914): stacked on `feat/scroll-into-view`
 
 G6. `leptoskit_use::use_clock(interval)` returns a `Clock` that advances by itself. It is a loop over `leptoskit_query::try_sleep`, wrapped in `futures::future::abortable` and aborted from `on_cleanup`. The value is `now_ms()` minus the start, kept from going backwards, so it is measured and not counted.
 
