@@ -45,6 +45,61 @@ pub(crate) fn go(address: &str) {
 	let _ = address;
 }
 
+/// A key that makes a retried action count once.
+pub(crate) fn idempotency_key() -> String {
+	#[cfg(feature = "hydrate")]
+	{
+		web_sys::window()
+			.and_then(|window| window.crypto().ok())
+			.map(|crypto| crypto.random_uuid())
+			.unwrap_or_default()
+	}
+	#[cfg(not(feature = "hydrate"))]
+	String::new()
+}
+
+/// Posts `body` as JSON to `path` on this site: whether the answer was a
+/// success, and its JSON. `None` when nothing came back.
+#[cfg_attr(
+	not(feature = "hydrate"),
+	expect(clippy::unused_async, reason = "only a browser sends anything")
+)]
+pub(crate) async fn post_json(path: &str, body: &str) -> Option<(bool, serde_json::Value)> {
+	#[cfg(feature = "hydrate")]
+	{
+		use wasm_bindgen::JsCast as _;
+		use wasm_bindgen_futures::JsFuture;
+
+		let init = web_sys::RequestInit::new();
+		init.set_method("POST");
+		init.set_credentials(web_sys::RequestCredentials::SameOrigin);
+		init.set_body(&wasm_bindgen::JsValue::from_str(body));
+		let request = web_sys::Request::new_with_str_and_init(path, &init).ok()?;
+		request
+			.headers()
+			.set("content-type", "application/json")
+			.ok()?;
+		let response: web_sys::Response =
+			JsFuture::from(web_sys::window()?.fetch_with_request(&request))
+				.await
+				.ok()?
+				.dyn_into()
+				.ok()?;
+		let text = JsFuture::from(response.text().ok()?).await.ok()?;
+		let data = text
+			.as_string()
+			.and_then(|text| serde_json::from_str(&text).ok())
+			.unwrap_or(serde_json::Value::Null);
+
+		Some((response.ok(), data))
+	}
+	#[cfg(not(feature = "hydrate"))]
+	{
+		let _ = (path, body);
+		None
+	}
+}
+
 /// The HTML document a page renders into.
 ///
 /// The admin provides the page's [`Model`] as context for the request it is

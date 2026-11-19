@@ -694,8 +694,11 @@ impl Shell {
 				search_open().on_press(move || find.find()),
 			))
 			.children(
-				matches!(self.model.page, crate::model::Page::Project(_))
-					.then(|| self.confirm.view()),
+				matches!(
+					self.model.page,
+					crate::model::Page::Project(_) | crate::model::Page::Person(_)
+				)
+				.then(|| self.confirm.view()),
 			)
 	}
 

@@ -153,18 +153,7 @@ pub(crate) fn person_name(person: &PersonSummary) -> String {
 
 /// Two letters for an avatar.
 pub(crate) fn initials(name: &str) -> String {
-	let name = name.split('@').next().unwrap_or(name);
-	let mut letters: String = name
-		.split(['.', '_', '-', ' '])
-		.filter_map(|part| part.chars().next().filter(char::is_ascii_alphabetic))
-		.take(2)
-		.collect();
-
-	if letters.is_empty() {
-		letters.push('?');
-	}
-
-	letters.to_uppercase()
+	crate::components::initials(name)
 }
 
 /// A JSON value as a table cell shows it.

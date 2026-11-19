@@ -148,6 +148,10 @@ pub const BUTTON_QUIET: &str = "flex-row items-center gap-2 rounded-lg px-3 py-2
 pub const BUTTON_DANGER: &str = "flex-row items-center justify-center gap-2 rounded-lg border \
                                  border-[var(--admin-bad)] bg-[var(--admin-surface)] px-4 py-2 \
                                  text-sm font-semibold text-[var(--admin-bad)] cursor-pointer";
+/// The button that confirms what can't be undone: bad fill, white text.
+pub const BUTTON_DANGER_FILLED: &str = "flex-row items-center justify-center gap-2 rounded-lg \
+                                        border border-[var(--admin-bad)] bg-[var(--admin-bad)] \
+                                        px-4 py-2 text-sm font-semibold text-white cursor-pointer";
 
 /// The mint tab at rest: the machinery's door on every card.
 pub const MINT_TAB: &str = "flex-row items-center gap-1.5 rounded-full border \

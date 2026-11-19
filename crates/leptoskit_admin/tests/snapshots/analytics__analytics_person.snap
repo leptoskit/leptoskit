@@ -114,6 +114,7 @@ aside [drawer-aside] label="Workings"
           "Store"
           "`persons`, `person_distinct_ids`"
         button [station-toggle] label="Store station"
+          "▾"
         div [station-body]
           "A person is one row in"
           "persons"
@@ -142,6 +143,7 @@ aside [drawer-aside] label="Workings"
           "Ask"
           "the operations"
         button [station-toggle] label="Ask station"
+          "▾"
         div [station-body]
           "The page is four app-only operations on the analytics service, the same your server can call."
           div [code]

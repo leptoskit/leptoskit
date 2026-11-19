@@ -371,12 +371,26 @@ async fn hydrated_screen(
 	let Some(page) = page(&proof) else {
 		return not_found();
 	};
+
+	render_page(admin, &gate, headers, &proof, page, open).await
+}
+
+/// Renders `page` from the pages crate, with the drawer `open` names open
+/// when the page has it.
+pub(crate) async fn render_page(
+	admin: &Admin,
+	gate: &Gate,
+	headers: &HeaderMap,
+	proof: &learn::Proof<'_>,
+	page: Page,
+	open: Option<String>,
+) -> Response {
 	// Only a drawer the page has opens: the id goes back into the page.
 	let open = open
 		.or_else(|| opens_by_default(&page))
 		.filter(|open| page.drawers().iter().any(|drawer| drawer.id == *open));
 	let model = leptoskit_admin_pages::Model {
-		viewer: viewer(admin, &gate, headers, &proof),
+		viewer: viewer(admin, gate, headers, proof),
 		page,
 		open,
 	};

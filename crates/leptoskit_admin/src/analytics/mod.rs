@@ -33,6 +33,25 @@ use crate::shell::Screen;
 use crate::shell::Section;
 use crate::style;
 
+/// What an analytics page shows: a screen the admin draws, or a page the
+/// pages crate draws and the browser picks up.
+pub(crate) enum Shown {
+	Screen(Box<Screen>),
+	Page(Box<leptoskit_admin_pages::model::Page>),
+}
+
+impl From<Screen> for Shown {
+	fn from(screen: Screen) -> Self {
+		Self::Screen(Box::new(screen))
+	}
+}
+
+impl From<leptoskit_admin_pages::model::Page> for Shown {
+	fn from(page: leptoskit_admin_pages::model::Page) -> Self {
+		Self::Page(Box::new(page))
+	}
+}
+
 /// What every analytics page reads from.
 pub(crate) struct Context<'a> {
 	pub connection: &'a Connection,
@@ -66,21 +85,7 @@ lk admin serve --main-site https://notes.example";
 
 /// The page heading: title, a line under it, and actions on the right.
 pub(crate) fn header(title: &str, subtitle: &str, actions: Vec<Element>) -> Element {
-	View()
-		.class("flex-row flex-wrap items-start justify-between gap-4")
-		.child(
-			// Views don't shrink unless told: a floor of 16rem lets the
-			// title wrap, and pushes the actions underneath on a phone.
-			View()
-				.class("min-w-[16rem] flex-1 flex-col gap-1")
-				.child(Heading(1, title.to_owned()).class(style::PAGE_TITLE))
-				.child(Text(subtitle.to_owned()).class(style::SECONDARY)),
-		)
-		.child(
-			View()
-				.class("flex-row flex-wrap items-center gap-2")
-				.children(actions),
-		)
+	components::header(title, subtitle, actions)
 }
 
 /// A pill that links somewhere: `Last 30 days`, `Compare previous period`.
@@ -191,10 +196,7 @@ pub(crate) fn menu_item(label: &str, detail: Option<&str>, href: String) -> Elem
 
 /// The `struct` badge on an event with a Rust type.
 pub(crate) fn struct_badge() -> Element {
-	Text("struct").class(
-		"rounded-full border border-[var(--admin-mint)] px-1.5 text-[11px] font-semibold \
-		 leading-4 text-[var(--admin-mint-text)]",
-	)
+	components::struct_badge()
 }
 
 /// A stat tile: label, hero number, a sparkline, and the change.

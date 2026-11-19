@@ -787,6 +787,61 @@ pub fn empty_state(
 	body.child(Text(footnote.to_owned()).class(style::MUTED))
 }
 
+/// A page heading: the title, a line under it, and actions on the right.
+pub fn header(title: &str, subtitle: &str, actions: Vec<Element>) -> Element {
+	View()
+		.class("flex-row flex-wrap items-start justify-between gap-4")
+		.child(
+			// Views don't shrink unless told: a floor of 16rem lets the
+			// title wrap, and pushes the actions underneath on a phone.
+			View()
+				.class("min-w-[16rem] flex-1 flex-col gap-1")
+				.child(Heading(1, title.to_owned()).class(style::PAGE_TITLE))
+				.child(Text(subtitle.to_owned()).class(style::SECONDARY)),
+		)
+		.child(
+			View()
+				.class("flex-row flex-wrap items-center gap-2")
+				.children(actions),
+		)
+}
+
+/// The `struct` badge on an event a Rust type sends.
+pub fn struct_badge() -> Element {
+	Text("struct").class(
+		"rounded-full border border-[var(--admin-mint)] px-1.5 text-[11px] font-semibold \
+		 leading-4 text-[var(--admin-mint-text)]",
+	)
+}
+
+/// Two letters for an avatar: `AL` for `ada.lovelace@…`.
+#[must_use]
+pub fn initials(name: &str) -> String {
+	let name = name.split('@').next().unwrap_or(name);
+	let mut letters: String = name
+		.split(['.', '_', '-', ' '])
+		.filter_map(|part| part.chars().next().filter(char::is_ascii_alphabetic))
+		.take(2)
+		.collect();
+
+	if letters.is_empty() {
+		letters.push('?');
+	}
+
+	letters.to_uppercase()
+}
+
+/// A person's initials in a circle; `size` sets its box and type.
+pub fn avatar(name: &str, size: &str) -> Element {
+	Text(initials(name))
+		.class(
+			"shrink-0 rounded-full bg-[var(--admin-sunken)] text-center font-semibold \
+			 text-[var(--admin-ink)]",
+		)
+		.class(size)
+		.aria_hidden(true)
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;

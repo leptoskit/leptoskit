@@ -34,6 +34,7 @@ use uuid::Uuid;
 use super::Connection;
 use super::Context;
 use super::Facts;
+use super::Shown;
 use super::insights;
 use super::insights::Kind;
 use super::library;
@@ -47,7 +48,6 @@ use crate::Admin;
 use crate::BASE;
 use crate::learn;
 use crate::server;
-use crate::shell::Screen;
 use crate::shell::Section;
 
 pub(crate) fn router() -> Router {
@@ -113,7 +113,7 @@ async fn ready(
 	})
 }
 
-fn finish(admin: &Admin, ready: &Ready, headers: &HeaderMap, screen: Screen) -> Response {
+async fn finish(admin: &Admin, ready: &Ready, headers: &HeaderMap, shown: Shown) -> Response {
 	let proof = learn::Proof {
 		states: &ready.states,
 		now: server::now(),
@@ -121,7 +121,13 @@ fn finish(admin: &Admin, ready: &Ready, headers: &HeaderMap, screen: Screen) -> 
 		preferences: &ready.gate.preferences,
 		simulated: admin.inner().simulated_infrastructure,
 	};
-	server::render(admin, &ready.gate, headers, &proof, screen)
+
+	match shown {
+		Shown::Screen(screen) => server::render(admin, &ready.gate, headers, &proof, *screen),
+		Shown::Page(page) => {
+			server::render_page(admin, &ready.gate, headers, &proof, *page, None).await
+		}
+	}
 }
 
 /// Gates, connects, and renders what `$body` makes of a [`Context`] named
@@ -141,7 +147,7 @@ macro_rules! analytics_page {
 			Ok(ready) => ready,
 			Err(response) => return response,
 		};
-		let screen: Option<Screen> = match (&ready.connection, &ready.facts) {
+		let shown: Option<Shown> = match (&ready.connection, &ready.facts) {
 			(Some(connection), Some(Ok(facts))) => {
 				let $cx = Context {
 					connection,
@@ -149,14 +155,16 @@ macro_rules! analytics_page {
 					preferences: &ready.gate.preferences,
 					facts,
 				};
-				$body
+				($body).map(Shown::from)
 			}
-			(Some(_), Some(Err(failure))) => Some(super::unreachable($title, $section, failure)),
-			_ => Some(super::not_configured($title, $section)),
+			(Some(_), Some(Err(failure))) => {
+				Some(super::unreachable($title, $section, failure).into())
+			}
+			_ => Some(super::not_configured($title, $section).into()),
 		};
 
-		match screen {
-			Some(screen) => finish(&$admin, &ready, &$headers, screen),
+		match shown {
+			Some(shown) => finish(&$admin, &ready, &$headers, shown).await,
 			None => server::not_found(),
 		}
 	}};
