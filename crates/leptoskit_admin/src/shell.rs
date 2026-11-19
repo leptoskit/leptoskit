@@ -15,7 +15,6 @@ use leptoskit::native::Role;
 use leptoskit::prelude::*;
 pub(crate) use leptoskit_admin_pages::model::Section;
 pub(crate) use leptoskit_admin_pages::model::Viewer;
-pub(crate) use leptoskit_admin_pages::shell::mark;
 use leptoskit_admin_pages::shell::rail;
 use leptoskit_admin_pages::shell::tab_bar;
 

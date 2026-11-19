@@ -18,6 +18,7 @@ pub mod library;
 pub mod live;
 pub mod people;
 pub mod project;
+pub mod signin;
 
 /// Which environment the admin acts on, shown as the pill in the top bar.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -294,6 +295,8 @@ pub enum Page {
 	Actors(Box<analytics::Actors>),
 	/// What an analytics page says when it has nothing to read.
 	Notice(Box<analytics::Notice>),
+	/// Signing in, or being refused: the one page without the shell.
+	SignIn(Box<signin::SignIn>),
 }
 
 impl Page {
@@ -316,6 +319,12 @@ impl Page {
 			Self::Dashboard(dashboard) => &dashboard.name,
 			Self::Actors(actors) => &actors.title,
 			Self::Notice(notice) => &notice.title,
+			Self::SignIn(sign_in) => {
+				match sign_in.outcome {
+					signin::Outcome::Refused(_) => "Not an admin",
+					_ => "Sign in",
+				}
+			}
 		}
 	}
 
@@ -330,7 +339,8 @@ impl Page {
 			| Self::Library(_)
 			| Self::People(_)
 			| Self::Dashboard(_)
-			| Self::Notice(_) => &[],
+			| Self::Notice(_)
+			| Self::SignIn(_) => &[],
 			Self::Actors(actors) => std::slice::from_ref(&actors.drawer),
 			Self::Web(web) => &web.drawers,
 			Self::Person(person) => std::slice::from_ref(&person.drawer),
@@ -347,7 +357,8 @@ impl Page {
 		match self {
 			Self::Glossary => Section::Glossary,
 			Self::Learn(_) | Self::Lesson(_) => Section::Learn,
-			Self::Projects(_) => Section::Projects,
+			// Sign-in has no rail; Projects is where signing in leads.
+			Self::Projects(_) | Self::SignIn(_) => Section::Projects,
 			Self::Library(_) | Self::Dashboard(_) => Section::Library,
 			Self::People(_) | Self::Person(_) => Section::People,
 			Self::Insight(insight) => insight.kind.section(),
