@@ -528,7 +528,8 @@ private func deviceFields(_ data: Data) -> [String] {
         let length = Int(UInt32(bytes[offset]) | UInt32(bytes[offset + 1]) << 8 |
             UInt32(bytes[offset + 2]) << 16 | UInt32(bytes[offset + 3]) << 24)
         offset += 4
-        fields.append(String(decoding: bytes[offset..<(offset + length)], as: UTF8.self))
+        let field = bytes[offset..<(offset + length)]
+        fields.append(String(bytes: field, encoding: .utf8) ?? "")
         offset += length
     }
 

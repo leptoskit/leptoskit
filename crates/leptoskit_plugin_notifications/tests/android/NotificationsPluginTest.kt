@@ -209,8 +209,18 @@ class NotificationsPluginTest {
                     }
 
                     val details = strings(system.invoke(9, ByteBuffer.allocate(0)))
-                    assertEquals(java.util.Locale.getDefault().toLanguageTag(), details[0])
-                    assertEquals(java.util.TimeZone.getDefault().id, details[1])
+                    assertEquals(
+                        java.util.Locale
+                            .getDefault()
+                            .toLanguageTag(),
+                        details[0],
+                    )
+                    assertEquals(
+                        java.util.TimeZone
+                            .getDefault()
+                            .id,
+                        details[1],
+                    )
                     assertEquals(
                         context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "",
                         details[2],
