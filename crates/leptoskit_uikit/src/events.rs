@@ -21,6 +21,7 @@ use objc2::runtime::NSObject;
 use objc2::runtime::NSObjectProtocol;
 use objc2_core_foundation::CGPoint;
 use objc2_foundation::NSArray;
+use objc2_foundation::NSRange;
 use objc2_foundation::NSString;
 use objc2_ui_kit::UIButton;
 use objc2_ui_kit::UIControl;
@@ -290,6 +291,47 @@ define_class!(
 			}
 
 			false
+		}
+
+		/// Whether the field accepts replacing `range` with `replacement`.
+		/// A read-only field refuses every edit and stays selectable; a
+		/// `max_length` field refuses the edit that would pass its cap, the
+		/// way HTML's `maxlength` refuses characters past it.
+		#[allow(
+			deprecated,
+			reason = "the singular delegate method remains the one UIKit asks; the \
+					  ranges variant is for the newer multi-range API"
+		)]
+		#[unsafe(method(textField:shouldChangeCharactersInRange:replacementString:))]
+		fn should_change(
+			&self,
+			field: &UITextField,
+			range: NSRange,
+			replacement: &NSString,
+		) -> objc2::runtime::Bool {
+			let _keep_alive = self.retain();
+			let field = field.retain();
+			if !field.isEnabled() || !interactive(&field) {
+				return false.into();
+			}
+
+			let props = self.ivars().props.borrow();
+
+			if props.read_only == Some(true) {
+				return false.into();
+			}
+
+			let Some(max_length) = props.max_length else {
+				return true.into();
+			};
+
+			// Ranges and lengths count UTF-16 code units, as the field's own
+			// text does.
+			let replaced = field.text().map_or(0, |text| text.length());
+			let proposed =
+				replaced.saturating_sub(range.length).saturating_add(replacement.length());
+
+			(proposed <= max_length).into()
 		}
 	}
 

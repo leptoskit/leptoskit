@@ -413,7 +413,42 @@ view! {
 
 The web gets an `<input type="password" autocomplete="current-password">`. macOS and iOS set the field's content type, Android its autofill hint, and HarmonyOS its input type, which each system's password manager reads. Windows and Linux mask the field, but have no hint to pass on. Everywhere, a `PasswordInput` turns off autocorrection and suggestions.
 
-An unstyled text input keeps the platform's text-field border, and its height leaves room for it: 28 units at the default font size. Once it has its own background, border, or corner radius, as above, it is as tall as its text plus its padding. A height class such as `h-10` always wins.
+### Typed text-input hints
+
+A text field can ask its platform for the keyboard, capitalization, correction, and return key that fit what it holds, instead of hand-written JavaScript:
+
+```rust
+view! {
+    <View class="gap-3">
+        <TextInput
+            keyboard=Keyboard::Email
+            capitalize=Capitalize::None
+            autocorrect=false
+            max_length=64
+            submit_label=SubmitLabel::Send
+            aria_label="Email"
+        />
+        <TextInput
+            keyboard=Keyboard::Number
+            read_only=true
+            aria_label="Account number"
+        />
+    </View>
+}
+```
+
+`Keyboard` offers `Text`, `Email`, `Number`, `Decimal`, `Phone`, `Url`, and `Search`. `Capitalize` offers `None`, `Words`, `Sentences`, and `Characters`. `SubmitLabel` offers `Done`, `Go`, `Next`, `Search`, and `Send`. `read_only` refuses edits but keeps the field selectable and copyable, and is announced as `aria-readonly`.
+
+What each platform honours:
+
+- The web gets a matching `type` (`email`, `tel`, `url`, `search`), or an `inputmode` (`numeric`, `decimal`) where HTML has no type, plus `readonly`, `maxlength`, `autocapitalize`, `autocorrect`, `spellcheck`, and `enterkeyhint`.
+- iOS sets `keyboardType`, `autocapitalizationType`, `autocorrectionType`, `spellCheckingType`, and `returnKeyType`; a read-only field refuses edits through its delegate.
+- Android sets `inputType` variations and flags, `imeOptions`, `InputFilter.LengthFilter`, and clears the key listener for a read-only field.
+- GTK sets `input_purpose`, `set_editable`, `set_max_length`, and `InputHints` (capitalization and `NO_SPELLCHECK`).
+- macOS keeps the field editable or not, truncates in the delegate on `max_length`, and turns the field editor's correction and spell checking off when `autocorrect` is false.
+- Windows sends `EM_SETREADONLY` and `EM_LIMITTEXT`. Other hints are no-ops there.
+
+Text the application sets is never rewritten by capitalization or correction; they shape what the person types.
 
 Use typed handlers for boolean and numeric controls. Keep the accepted value in your application state, then rebuild the screen after a change:
 

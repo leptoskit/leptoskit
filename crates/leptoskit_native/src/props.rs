@@ -354,6 +354,36 @@ pub struct NativeProps {
 	/// through [`text_content`](Self::text_content).
 	#[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
 	pub autocomplete: Option<String>,
+	/// Which keyboard a `TextInput` asks its platform for, set by
+	/// [`Element::keyboard`](crate::Element::keyboard). Platforms without a
+	/// shaped keyboard leave the field as it is.
+	#[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
+	pub keyboard: Option<Keyboard>,
+	/// Whether a `TextInput` refuses edits but stays selectable and
+	/// copyable, set by [`Element::read_only`](crate::Element::read_only).
+	/// Also announced as `aria-readonly`.
+	#[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
+	pub read_only: Option<bool>,
+	/// The longest value a `TextInput` accepts, in characters, set by
+	/// [`Element::max_length`](crate::Element::max_length). Typing past it
+	/// inserts nothing, the way HTML's `maxlength` behaves.
+	#[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
+	pub max_length: Option<usize>,
+	/// How typing is capitalized in a `TextInput`, set by
+	/// [`Element::capitalize`](crate::Element::capitalize). The platforms'
+	/// keyboards apply it; text the app sets is never rewritten.
+	#[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
+	pub capitalize: Option<Capitalize>,
+	/// Whether a `TextInput` corrects spelling while typing, set by
+	/// [`Element::autocorrect`](crate::Element::autocorrect). `Some(false)`
+	/// turns off suggestions and spelling marks; unset or `Some(true)` keeps
+	/// the platform's default.
+	#[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
+	pub autocorrect: Option<bool>,
+	/// What a `TextInput`'s return key is named, set by
+	/// [`Element::submit_label`](crate::Element::submit_label).
+	#[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
+	pub submit_label: Option<SubmitLabel>,
 	/// The current value of `TextInput`.
 	#[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
 	pub value: Option<String>,
@@ -960,6 +990,97 @@ pub enum TextAlign {
 	Center,
 	/// Aligned to the trailing edge.
 	End,
+}
+
+/// Which keyboard a text field asks its platform for, set by
+/// [`Element::keyboard`](crate::Element::keyboard).
+///
+/// The platforms shape the keyboard differently: the web gets a matching
+/// `type` (and an `inputmode` where HTML has no type), iOS and Android pick
+/// a keyboard layout, and GTK hints at the field's purpose. A platform with
+/// no keyboard of its own, such as macOS, shows the ordinary field.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[cfg_attr(
+	feature = "serde",
+	derive(serde::Serialize, serde::Deserialize),
+	serde(rename_all = "snake_case")
+)]
+pub enum Keyboard {
+	/// The ordinary text keyboard.
+	#[default]
+	Text,
+	/// An email address: `@` and `.com` within reach.
+	Email,
+	/// Digits only.
+	Number,
+	/// Digits with a decimal separator.
+	Decimal,
+	/// A telephone number.
+	Phone,
+	/// A web address.
+	Url,
+	/// Searching, as inside one screen.
+	Search,
+}
+
+/// How typing is capitalized in a text field, set by
+/// [`Element::capitalize`](crate::Element::capitalize).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[cfg_attr(
+	feature = "serde",
+	derive(serde::Serialize, serde::Deserialize),
+	serde(rename_all = "snake_case")
+)]
+pub enum Capitalize {
+	/// No capitalization at all, such as for a username.
+	#[default]
+	None,
+	/// The first letter of every word.
+	Words,
+	/// The first letter of every sentence.
+	Sentences,
+	/// Every letter.
+	Characters,
+}
+
+/// What a field's return key is named, set by
+/// [`Element::submit_label`](crate::Element::submit_label).
+///
+/// The label is a hint, not a promise: platforms draw their own key. It only
+/// names the key; the field's [`Submit`](crate::NativeEvent::Submit) event
+/// fires the same way whatever it shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[cfg_attr(
+	feature = "serde",
+	derive(serde::Serialize, serde::Deserialize),
+	serde(rename_all = "snake_case")
+)]
+pub enum SubmitLabel {
+	/// The field's platform default, drawn as its return key.
+	#[default]
+	Done,
+	/// An action that moves on, such as opening a result.
+	Go,
+	/// Moving to the next field of a form.
+	Next,
+	/// Starting a search.
+	Search,
+	/// Sending what the field holds, such as a message.
+	Send,
+}
+
+impl SubmitLabel {
+	/// The `enterkeyhint` value HTML reads for this label.
+	#[must_use]
+	pub const fn wire_name(self) -> &'static str {
+		match self {
+			Self::Done => "done",
+			Self::Go => "go",
+			Self::Next => "next",
+			Self::Search => "search",
+			Self::Send => "send",
+		}
+	}
 }
 
 /// What a text field holds, as password managers and the platforms'

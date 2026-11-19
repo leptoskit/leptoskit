@@ -6,6 +6,9 @@ use std::sync::Arc;
 
 use leptoskit_yoga::Style;
 
+use crate::Capitalize;
+use crate::Keyboard;
+use crate::SubmitLabel;
 use crate::aria::Aria;
 use crate::aria::Current;
 use crate::aria::HasPopup;
@@ -1577,6 +1580,109 @@ impl Element {
 	#[must_use]
 	pub fn autocomplete(mut self, hint: impl Into<String>) -> Self {
 		self.props.autocomplete = Some(hint.into());
+		self
+	}
+
+	/// Which keyboard a `TextInput` asks its platform for: `Text` (the
+	/// default), `Email`, `Number`, `Decimal`, `Phone`, `Url`, or `Search`.
+	///
+	/// The web gets a matching `type` (`email`, `tel`, `url`, `search`) or,
+	/// where HTML has no type, an `inputmode` (`numeric`, `decimal`). iOS
+	/// and Android shape their keyboards; GTK hints at the field's purpose.
+	/// macOS has no touch keyboard, so the prop does nothing there.
+	///
+	/// ```
+	/// use leptoskit_native::Keyboard;
+	/// use leptoskit_native::components::TextInput;
+	///
+	/// let email = TextInput().keyboard(Keyboard::Email);
+	/// ```
+	#[must_use]
+	pub fn keyboard(mut self, keyboard: Keyboard) -> Self {
+		self.props.keyboard = Some(keyboard);
+		self
+	}
+
+	/// Whether a `TextInput` refuses edits but stays selectable and
+	/// copyable. Also announced as `aria-readonly`; an explicit
+	/// [`aria_read_only`](Self::aria_read_only) overrides it.
+	///
+	/// This is not [`enabled`](Self::enabled): a disabled field is grayed
+	/// out of the tab order entirely, while a read-only one keeps focus,
+	/// selection, and copy.
+	///
+	/// ```
+	/// use leptoskit_native::components::TextInput;
+	///
+	/// let frozen = TextInput().read_only(true);
+	/// ```
+	#[must_use]
+	pub fn read_only(mut self, read_only: bool) -> Self {
+		self.props.read_only = Some(read_only);
+		self
+	}
+
+	/// The longest value a `TextInput` accepts, in characters. Typing past
+	/// it inserts nothing, the way HTML's `maxlength` behaves; the platform
+	/// that cannot stop insertion truncates what it reports.
+	///
+	/// ```
+	/// use leptoskit_native::components::TextInput;
+	///
+	/// let short = TextInput().max_length(9);
+	/// ```
+	#[must_use]
+	pub fn max_length(mut self, max_length: usize) -> Self {
+		self.props.max_length = Some(max_length);
+		self
+	}
+
+	/// How typing is capitalized in a `TextInput`: `None`, `Words`,
+	/// `Sentences`, or `Characters`. The keyboards that support it apply the
+	/// rule to what the person types; text the application sets is never
+	/// rewritten.
+	///
+	/// ```
+	/// use leptoskit_native::Capitalize;
+	/// use leptoskit_native::components::TextInput;
+	///
+	/// let shouty = TextInput().capitalize(Capitalize::Characters);
+	/// ```
+	#[must_use]
+	pub fn capitalize(mut self, capitalize: Capitalize) -> Self {
+		self.props.capitalize = Some(capitalize);
+		self
+	}
+
+	/// Whether a `TextInput` corrects spelling while typing. `false` turns
+	/// off suggestions and spelling marks; leaving it unset (or `true`)
+	/// keeps the platform's default.
+	///
+	/// ```
+	/// use leptoskit_native::components::TextInput;
+	///
+	/// let literal = TextInput().autocorrect(false);
+	/// ```
+	#[must_use]
+	pub fn autocorrect(mut self, autocorrect: bool) -> Self {
+		self.props.autocorrect = Some(autocorrect);
+		self
+	}
+
+	/// What a `TextInput`'s return key is named: `Done` (the default),
+	/// `Go`, `Next`, `Search`, or `Send`. The platforms that draw a return
+	/// key name it; the web forwards it as `enterkeyhint`. A platform
+	/// without one, such as macOS, ignores it.
+	///
+	/// ```
+	/// use leptoskit_native::SubmitLabel;
+	/// use leptoskit_native::components::TextInput;
+	///
+	/// let search = TextInput().submit_label(SubmitLabel::Go);
+	/// ```
+	#[must_use]
+	pub fn submit_label(mut self, submit_label: SubmitLabel) -> Self {
+		self.props.submit_label = Some(submit_label);
 		self
 	}
 

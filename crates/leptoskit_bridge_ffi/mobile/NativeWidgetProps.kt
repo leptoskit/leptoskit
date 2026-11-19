@@ -6,9 +6,11 @@ import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.RectF
 import android.graphics.drawable.GradientDrawable
+import android.text.InputFilter
 import android.text.InputType
 import android.view.Gravity
 import android.view.View
+import android.view.inputmethod.EditorInfo
 import android.widget.Button
 import android.widget.CompoundButton
 import android.widget.EditText
@@ -34,6 +36,7 @@ internal class NativeWidgetProps(
 
     /** The text style each label last received. */
     private val textStyles = WeakHashMap<TextView, TextStyle>()
+    private val keyListeners = WeakHashMap<EditText, android.text.method.KeyListener?>()
 
     /**
      * Apply shared visual state before control-specific text and image state.
@@ -241,6 +244,68 @@ internal class NativeWidgetProps(
         if (widget.hint?.toString() != hint) widget.hint = hint
 
         if (widget is EditText) applyAutofill(widget, props)
+
+        // Keyboard shape, capitalization, correction and the return-key name.
+        if (widget is EditText) {
+            val secure = widget.inputType and InputType.TYPE_MASK_VARIATION == InputType.TYPE_TEXT_VARIATION_PASSWORD
+            if (!secure) {
+                val keyboard = props.rest?.optString("keyboard") ?: "text"
+                val capitalize = props.rest?.optString("capitalize") ?: "none"
+                val autocorrect = props.rest?.isNull("autocorrect") == true || props.rest?.optBoolean("autocorrect", true) == true
+                var inputType =
+                    when (keyboard) {
+                        "email" -> InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS
+                        "phone" -> InputType.TYPE_CLASS_PHONE
+                        "url" -> InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
+                        "number" -> InputType.TYPE_CLASS_NUMBER
+                        "decimal" -> InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
+                        else -> InputType.TYPE_CLASS_TEXT
+                    }
+                if (inputType and InputType.TYPE_MASK_CLASS == InputType.TYPE_CLASS_TEXT) {
+                    inputType = inputType or
+                        when (capitalize) {
+                            "words" -> InputType.TYPE_TEXT_FLAG_CAP_WORDS
+                            "sentences" -> InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+                            "characters" -> InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS
+                            else -> 0
+                        }
+                }
+                if (!autocorrect) inputType = inputType or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+                if (widget.inputType != inputType) widget.inputType = inputType
+            }
+
+            // A read-only field refuses edits but stays selectable.
+            val readOnly = props.rest?.optBoolean("read_only") == true
+            if (readOnly) {
+                if (keyListeners[widget] == null) keyListeners[widget] = widget.keyListener
+                widget.keyListener = null
+            } else if (widget.keyListener == null) {
+                widget.keyListener = keyListeners[widget]
+            }
+
+            // The longest value the field accepts.
+            val maxLength = if (props.rest?.has("max_length") == true) props.rest?.getInt("max_length") else null
+            if (maxLength == null) {
+                widget.filters = emptyArray()
+            } else if (widget.filters
+                    ?.filterIsInstance<InputFilter.LengthFilter>()
+                    ?.firstOrNull()
+                    ?.max != maxLength
+            ) {
+                widget.filters = arrayOf(InputFilter.LengthFilter(maxLength))
+            }
+
+            // What the return key is named.
+            val ime =
+                when (props.rest?.optString("submit_label") ?: "done") {
+                    "go" -> EditorInfo.IME_ACTION_GO
+                    "next" -> EditorInfo.IME_ACTION_NEXT
+                    "search" -> EditorInfo.IME_ACTION_SEARCH
+                    "send" -> EditorInfo.IME_ACTION_SEND
+                    else -> EditorInfo.IME_ACTION_DONE
+                }
+            if (widget.imeOptions != ime) widget.imeOptions = ime
+        }
 
         val weight = cssWeight(props.fontWeight)
         // A button centres its label unless the element aligns it, as web

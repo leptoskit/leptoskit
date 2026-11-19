@@ -60,18 +60,18 @@ Ding-inspired status pills live under `leptoskit::components::toast` (also re-ex
 
 ## Controls
 
-| Builder                             | Shared value and events                                      | AppKit widget                             | Web element                       |
-| ----------------------------------- | ------------------------------------------------------------ | ----------------------------------------- | --------------------------------- |
-| `Button(label)`                     | `.on_press(Fn())`                                            | `NSButton`                                | `button`                          |
-| `Pressable(label)`                  | Accessible label and decorative children. `.on_press(Fn())`. | Flipped `NSButton` with child hit routing | `button`                          |
-| `TextInput()`                       | `.value(...)`, `.on_change(Fn(&str))`                        | `NSTextField`                             | Text `input`                      |
-| `PasswordInput()`                   | The same single-line text contract, with masked display      | `NSSecureTextField`                       | Password `input`                  |
-| `Switch(checked)`                   | `.on_toggle(Fn(bool))`                                       | `NSSwitch`                                | Checkbox `input` with switch role |
-| `Checkbox(checked)`                 | `.on_toggle(Fn(bool))`                                       | Switch-type `NSButton`                    | Checkbox `input`                  |
-| `Radio(group, checked)`             | `.on_toggle(Fn(bool))` proposes selection                    | Radio-type `NSButton`                     | Radio `input`                     |
-| `Slider(state)`                     | `.on_value_change(Fn(f64))`                                  | `NSSlider`                                | Range `input`                     |
-| `LinearProgressIndicator(progress)` | Determinate fraction or indeterminate animation              | Bar `NSProgressIndicator`                 | `progress`                        |
-| `ActivityIndicator(running)`        | Running or stopped animation                                 | Spinning `NSProgressIndicator`            | Styled `span` with progress role  |
+| Builder                             | Shared value and events                                                                                                                                       | AppKit widget                             | Web element                       |
+| ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------- | --------------------------------- |
+| `Button(label)`                     | `.on_press(Fn())`                                                                                                                                             | `NSButton`                                | `button`                          |
+| `Pressable(label)`                  | Accessible label and decorative children. `.on_press(Fn())`.                                                                                                  | Flipped `NSButton` with child hit routing | `button`                          |
+| `TextInput()`                       | `.value(...)`, `.on_change(Fn(&str))`, `.keyboard(...)`, `.read_only(...)`, `.max_length(...)`, `.capitalize(...)`, `.autocorrect(...)`, `.submit_label(...)` | `NSTextField`                             | Text `input`                      |
+| `PasswordInput()`                   | The same single-line text contract, with masked display                                                                                                       | `NSSecureTextField`                       | Password `input`                  |
+| `Switch(checked)`                   | `.on_toggle(Fn(bool))`                                                                                                                                        | `NSSwitch`                                | Checkbox `input` with switch role |
+| `Checkbox(checked)`                 | `.on_toggle(Fn(bool))`                                                                                                                                        | Switch-type `NSButton`                    | Checkbox `input`                  |
+| `Radio(group, checked)`             | `.on_toggle(Fn(bool))` proposes selection                                                                                                                     | Radio-type `NSButton`                     | Radio `input`                     |
+| `Slider(state)`                     | `.on_value_change(Fn(f64))`                                                                                                                                   | `NSSlider`                                | Range `input`                     |
+| `LinearProgressIndicator(progress)` | Determinate fraction or indeterminate animation                                                                                                               | Bar `NSProgressIndicator`                 | `progress`                        |
+| `ActivityIndicator(running)`        | Running or stopped animation                                                                                                                                  | Spinning `NSProgressIndicator`            | Styled `span` with progress role  |
 
 Applications own control values. Handlers receive proposed values. Rebuilding the tree commits an accepted value. Both adapters restore the last committed value when the application rejects a proposal, including a proposal that triggers no rebuild.
 
@@ -81,7 +81,7 @@ Applications own control values. Handlers receive proposed values. Rebuilding th
 
 `Progress::Determinate(ProgressValue::new(fraction)?)` validates a finite fraction between zero and one. `Progress::Indeterminate` animates without a completion value. Hidden or stopped activity indicators do not animate. Browser animation respects reduced-motion preferences.
 
-Checkboxes support boolean state. Mixed state, vertical sliders, multiple slider thumbs, multiline text, text selection APIs, and input-purpose configuration are not implemented. Password display masking does not encrypt application state or wire data.
+Checkboxes support boolean state. Password display masking does not encrypt application state or wire data.
 
 `Pressable` provides activation, keyboard focus, an accessible name, and decorative child content. Pointer activation stays within its bounds. While it is held down, it shows its `active:` utilities, or dims without them, as `Button` does; [Style the pressed state](../guide/07-shared-components.md#style-the-pressed-state) explains when each platform starts and ends a press. Handlers don't receive press-in or press-out. A drag, pinch, long press, or fling is a [gesture](../guide/38-gestures.md) on the element, not a press. Its accessible label must contain a non-whitespace character. Its content cannot contain interactive widgets, event handlers, custom platform widgets, or scrolling descendants. `Button` also rejects nested controls and scrolling descendants. Other leaf controls cannot contain children. `Element::validate` and `NativeSurface::try_set_root` report invalid trees before replacing the committed UI.
 

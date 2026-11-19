@@ -95,6 +95,7 @@ mod macos {
 				"unstyled_fields_fit_their_rounded_bezel",
 				unstyled_fields_fit_their_rounded_bezel,
 			),
+			("typed_text_input_hints", typed_text_input_hints),
 			(
 				"focused_field_removal_does_not_emit_inside_commit",
 				focused_field_removal_does_not_emit_inside_commit,
@@ -864,6 +865,31 @@ mod macos {
 			)
 			.unwrap();
 		}
+	}
+
+	fn typed_text_input_hints() {
+		let surface = Rc::new(RefCell::new(mounted(
+			&TextInput().aria_label("Code").read_only(true).max_length(3),
+		)));
+		let id = surface.borrow().root().unwrap();
+		let field = native::<NSTextField>(&surface.borrow(), id);
+		assert!(!field.isEditable());
+		assert!(field.isSelectable());
+
+		// Truncation happens in the delegate when the field would exceed the
+		// cap.
+		let events = Rc::new(RefCell::new(Vec::new()));
+		surface.borrow().backend().set_event_listener({
+			let events = Rc::clone(&events);
+			move |_, event| events.borrow_mut().push(event.clone())
+		});
+		edit(&field, "hello");
+		assert_eq!(
+			*events.borrow(),
+			vec![NativeEvent::Change {
+				value: "hel".to_owned()
+			}]
+		);
 	}
 
 	fn edit(field: &NSTextField, value: &str) {

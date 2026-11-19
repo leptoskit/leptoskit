@@ -31,6 +31,7 @@ use objc2_app_kit::NSSlider;
 use objc2_app_kit::NSSwitch;
 use objc2_app_kit::NSTextField;
 use objc2_app_kit::NSTextFieldDelegate;
+use objc2_app_kit::NSTextView;
 use objc2_app_kit::NSView;
 use objc2_foundation::NSNotification;
 use objc2_foundation::NSRect;
@@ -347,6 +348,12 @@ pub(crate) struct ActionTargetIvars {
 	radio_group: RefCell<Option<RadioGroup>>,
 	slider: Cell<SliderState>,
 	value: RefCell<String>,
+	/// The longest value the field accepts, set by `max_length`; the field's
+	/// edits are truncated to it.
+	max_length: Cell<Option<usize>>,
+	/// Whether the field corrects spelling while typing, from `autocorrect`;
+	/// the field editor is set when editing begins.
+	autocorrect: Cell<bool>,
 }
 
 define_class!(
@@ -446,7 +453,20 @@ define_class!(
 			else {
 				return;
 			};
-			let value = field.stringValue().to_string();
+			let mut value = field.stringValue().to_string();
+
+			// The field accepts more characters than the app allows, so
+			// truncate to `max_length` before the proposal leaves. Platforms
+			// that can refuse the insertion instead report the same value as
+			// this one.
+			if let Some(max_length) = self.ivars().max_length.get() {
+				let truncated: String = value.chars().take(max_length).collect();
+
+				if truncated != value {
+					value = truncated;
+					field.setStringValue(&NSString::from_str(&value));
+				}
+			}
 
 			if field.isEnabled() && !field.isHiddenOrHasHiddenAncestor() {
 				self.emit(&NativeEvent::Change { value });
@@ -460,7 +480,22 @@ define_class!(
 		}
 
 		#[unsafe(method(controlTextDidBeginEditing:))]
-		fn control_text_did_begin_editing(&self, _notification: &NSNotification) {
+		fn control_text_did_begin_editing(&self, notification: &NSNotification) {
+			let _keep_alive = self.retain();
+			// The field editor is a text view, and it exists from here
+			// through end editing: this is where its correction and
+			// continuous spell checking follow `autocorrect`.
+			if !self.ivars().autocorrect.get()
+				&& let Some(editor) = notification
+					.object()
+					.and_then(|object| object.downcast::<NSTextField>().ok())
+					.and_then(|field| field.currentEditor())
+					.and_then(|editor| editor.downcast::<NSTextView>().ok())
+			{
+				editor.setAutomaticSpellingCorrectionEnabled(false);
+				editor.setContinuousSpellCheckingEnabled(false);
+			}
+
 			self.emit(&NativeEvent::Focus);
 		}
 
@@ -483,6 +518,8 @@ impl ActionTarget {
 			radio_group: RefCell::new(None),
 			slider: Cell::new(SliderState::default()),
 			value: RefCell::new(String::new()),
+			max_length: Cell::new(None),
+			autocorrect: Cell::new(true),
 		});
 		// SAFETY: `init` is `NSObject`'s designated initializer.
 		unsafe { msg_send![super(this), init] }
@@ -509,6 +546,10 @@ impl ActionTarget {
 				.cloned()
 				.unwrap_or_default(),
 		);
+		self.ivars().max_length.set(props.max_length);
+		self.ivars()
+			.autocorrect
+			.set(props.autocorrect.unwrap_or(true));
 	}
 
 	pub(crate) fn invalidate(&self) {

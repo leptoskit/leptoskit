@@ -18,12 +18,14 @@ use super::kind_code;
 use crate::Appearance;
 use crate::Aria;
 use crate::BorderWidths;
+use crate::Capitalize;
 use crate::Color;
 use crate::Current;
 use crate::Element;
 use crate::FontWeight;
 use crate::HasPopup;
 use crate::Invalid;
+use crate::Keyboard;
 use crate::LineHeight;
 use crate::Live;
 use crate::NativeKind;
@@ -34,6 +36,7 @@ use crate::ProgressValue;
 use crate::RadioGroup;
 use crate::Role;
 use crate::SliderState;
+use crate::SubmitLabel;
 use crate::Transform;
 use crate::Tristate;
 use crate::animation::Animation;
@@ -116,6 +119,12 @@ fn every_prop() -> NativeProps {
 		source: Some("nfts/degenApes_1.webp".into()),
 		placeholder: Some("Your name".into()),
 		autocomplete: Some("username webauthn".into()),
+		keyboard: Some(Keyboard::Email),
+		read_only: Some(true),
+		max_length: Some(9),
+		capitalize: Some(Capitalize::Characters),
+		autocorrect: Some(false),
+		submit_label: Some(SubmitLabel::Go),
 		value: Some("Ifiok".into()),
 		checked: Some(true),
 		radio_group: Some(RadioGroup::new("class").expect("a radio group")),

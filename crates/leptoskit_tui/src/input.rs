@@ -417,12 +417,29 @@ fn edit_field(backend: &mut TuiBackend, id: NodeId, key: Key) -> Vec<Dispatch> {
 		return Vec::new();
 	};
 
+	let props = backend
+		.node(id)
+		.map(|node| node.props.clone())
+		.unwrap_or_default();
+
+	// A read-only field refuses edits but stays selectable and copyable.
+	if props.read_only == Some(true) {
+		return Vec::new();
+	}
+
+	let max_length = props.max_length;
+
 	let mut chars: Vec<char> = draft.value.chars().collect();
 	let caret = draft.caret.min(chars.len());
 	let mut caret = caret;
 
 	let edited = match key.code {
 		KeyCode::Char(ch) if !key.ctrl && !key.alt => {
+			// Refuse the insertion past `max_length`, the way HTML's
+			// `maxlength` refuses characters past its cap.
+			if max_length.is_some_and(|max| chars.len() >= max) {
+				return Vec::new();
+			}
 			chars.insert(caret, ch);
 			caret += 1;
 			true

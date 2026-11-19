@@ -357,12 +357,30 @@ final class MacWidgetRenderer: NSObject, NSTextFieldDelegate, NativeRiveSink {
 
     func controlTextDidChange(_ notification: Notification) {
         if let field = notification.object as? NSTextField, let id = node(field) {
-            event(id, 1, field.stringValue)
+            var value = field.stringValue
+            // The field accepts more characters than the app allows, so
+            // truncate to `maxLength` before the proposal leaves.
+            if let max = properties[id]?.maxLength, value.count > max {
+                value = String(value.prefix(max))
+                field.stringValue = value
+            }
+
+            event(id, 1, value)
         }
     }
 
     func controlTextDidBeginEditing(_ notification: Notification) {
-        if let field = notification.object as? NSTextField, let id = node(field) { event(id, 3) }
+        if let field = notification.object as? NSTextField, let id = node(field) {
+            // The field editor exists from here through end editing; this is
+            // where its correction and continuous spell checking follow
+            // `autocorrect`.
+            if properties[id]?.autocorrect == false, let editor = field.currentEditor() as? NSTextView {
+                editor.isAutomaticSpellingCorrectionEnabled = false
+                editor.isContinuousSpellCheckingEnabled = false
+            }
+
+            event(id, 3)
+        }
     }
 
     func controlTextDidEndEditing(_ notification: Notification) {
@@ -510,7 +528,10 @@ enum MacWidgetStyle {
     }
 
     private static func applyField(_ props: WidgetProps, to field: NSTextField) {
-        let value = text(props, editable: field.isEditable)
+        // Every `NSTextField` here is an input; labels are `TextLabel`s. Read
+        // the value whether or not the field is read-only, since `isEditable`
+        // is turned off below for a read-only one.
+        let value = props.value ?? props.text ?? ""
 
         if field.stringValue != value { field.stringValue = value }
         field.placeholderString = props.placeholder
@@ -519,6 +540,9 @@ enum MacWidgetStyle {
         field.textColor = props.color.map(color) ?? .labelColor
         field.alignment = alignment(props.textAlign)
         field.isEnabled = props.enabled ?? true
+        // A read-only field refuses edits but stays selectable and copyable.
+        field.isEditable = props.readOnly != true
+        field.isSelectable = true
     }
 
     private static func contentType(_ content: TextContent?) -> NSTextContentType? {
@@ -529,12 +553,6 @@ enum MacWidgetStyle {
         case .newPassword: .newPassword
         case nil: nil
         }
-    }
-
-    private static func text(_ props: WidgetProps, editable: Bool) -> String {
-        guard editable else { return props.text ?? "" }
-
-        return props.value ?? props.text ?? ""
     }
 
     private static func color(_ rgba: UInt32) -> NSColor {
