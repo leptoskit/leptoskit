@@ -556,6 +556,13 @@ mod billing {
 	}
 
 	#[tokio::test]
+	async fn an_estimate_prices_a_table() {
+		if let Some((_postgres, app)) = app().await {
+			billing::an_estimate_prices_a_table(&app).await;
+		}
+	}
+
+	#[tokio::test]
 	async fn usage_is_counted_priced_and_capped() {
 		if let Some((_postgres, app)) = app().await {
 			billing::usage_is_counted_priced_and_capped(&app).await;
@@ -579,6 +586,41 @@ mod billing {
 
 /// Subscriptions and the provider's events (`support/subscriptions.rs`), on
 /// Postgres.
+mod limits {
+	use super::postgres;
+	use super::support;
+	use super::support::limits;
+	use super::support::subscriptions::Till;
+
+	async fn db() -> Option<(postgres::Postgres, leptoskit_db::Db)> {
+		let server = postgres::Postgres::start()?;
+		let db = leptoskit_db::Db::connect(&server.database())
+			.await
+			.expect("connect");
+		db.migrate(leptoskit_cloud::POSTGRES_MIGRATIONS)
+			.await
+			.expect("the Postgres migrations apply");
+		Some((server, db))
+	}
+
+	#[tokio::test]
+	async fn a_caller_who_asks_too_often_waits() {
+		if let Some((_postgres, db)) = db().await {
+			let app = support::app_with(db, limits::slow).await;
+			limits::a_caller_who_asks_too_often_waits(&app).await;
+		}
+	}
+
+	#[tokio::test]
+	async fn payment_pages_are_handed_out_slowly() {
+		if let Some((_postgres, db)) = db().await {
+			let till = Till::default();
+			let app = support::app_with(db, limits::two_pages(&till)).await;
+			limits::payment_pages_are_handed_out_slowly(&app, &till).await;
+		}
+	}
+}
+
 mod subscriptions {
 	use super::postgres;
 	use super::support;

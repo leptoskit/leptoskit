@@ -797,9 +797,19 @@ fn cost(
 		url: String::new(),
 		environments: BTreeMap::from([(slug, resolved)]),
 	};
-	let input = EstimateInput::from_cloud(&cloud, &Assumptions::default());
+	PreviewCost::Estimate(estimate(catalogue, plan, &cloud))
+}
+
+/// What a month of `cloud` is expected to cost on `plan`, with the
+/// assumptions every estimate makes.
+pub(crate) fn estimate(
+	catalogue: &crate::pricing::Catalogue,
+	plan: &crate::pricing::Plan,
+	cloud: &ResolvedCloud,
+) -> CostEstimate {
+	let input = EstimateInput::from_cloud(cloud, &Assumptions::default());
 	let estimate = crate::pricing::estimate(catalogue, plan, &input);
-	PreviewCost::Estimate(CostEstimate {
+	CostEstimate {
 		currency: estimate.currency.as_str().to_owned(),
 		plan: estimate.plan.as_str().to_owned(),
 		plan_price: estimate.plan_price,
@@ -820,7 +830,7 @@ fn cost(
 		included: estimate.included,
 		total: estimate.total,
 		assumptions: estimate.assumptions,
-	})
+	}
 }
 
 /// Fine print every release carries, after the plan's.

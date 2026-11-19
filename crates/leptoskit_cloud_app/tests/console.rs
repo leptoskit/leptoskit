@@ -128,6 +128,8 @@ impl Console {
 				registry: "registry.example.test/cloud".to_owned(),
 				catalogue: None,
 				payments: None,
+				rate_limits: leptoskit_cloud::server::RateLimits::default(),
+				client_ip_header: None,
 				shipping: ShippingSettings::default(),
 				dev: None,
 			},

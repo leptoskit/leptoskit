@@ -176,7 +176,7 @@ async fn start_checkout(cx: &rpc::MutationCx, args: StartCheckout) -> rpc::Resul
 		.ok_or_else(|| {
 			rpc::Error::not_found(format!(
 				"plan_not_found: this cloud has no `{}` plan",
-				args.plan
+				super::shown(&args.plan)
 			))
 		})?;
 	let price = config
@@ -201,6 +201,14 @@ async fn start_checkout(cx: &rpc::MutationCx, args: StartCheckout) -> rpc::Resul
 			"already_subscribed: `{}` has a subscription; change or cancel it with `portal`",
 			access.organization.slug
 		)));
+	}
+
+	// Counted before anything is asked of the provider or written down: a
+	// caller past the rate causes no call out and no audit row. The second
+	// pass of one checkout, which brings the customer just made, is the
+	// same page.
+	if args.made.is_none() {
+		pace(services, organization_id)?;
 	}
 
 	let made = args.made.filter(|customer| payments::is_id(customer));
@@ -254,6 +262,15 @@ async fn start_checkout(cx: &rpc::MutationCx, args: StartCheckout) -> rpc::Resul
 		customer,
 		price,
 	})
+}
+
+/// Counts one page asked of the provider for `organization`: each is a
+/// call out, made with the control plane's own key.
+fn pace(services: &Services, organization: Id<Organization>) -> rpc::Result<()> {
+	let shipping = services.shipping();
+	shipping
+		.throttle
+		.hit(&format!("pay:{organization}"), shipping.rates.payment_pages)
 }
 
 fn return_url(services: &Services, slug: &str, outcome: Option<&str>) -> String {
@@ -363,6 +380,7 @@ async fn open_portal(cx: &rpc::MutationCx, args: OpenPortal) -> rpc::Result<(Str
 				access.organization.slug
 			))
 		})?;
+	pace(services(cx.context())?, organization_id)?;
 	audit::record(
 		cx.tx(),
 		&Actor::from(&access.caller),

@@ -44,6 +44,11 @@ const LEASE: Duration = Duration::from_mins(1);
 /// How often a worker's `last_seen_at` is written.
 const LAST_SEEN_PRECISION: chrono::TimeDelta = chrono::TimeDelta::minutes(1);
 
+/// The address a caller's request came from, kept with their identity so
+/// what they send later over the same connection is counted against it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Origin(Option<std::net::IpAddr>);
+
 /// The longest description of a client the audit log keeps.
 const MAX_CLIENT_LEN: usize = 300;
 
@@ -288,103 +293,157 @@ impl CloudIdentify {
 	}
 }
 
+impl CloudIdentify {
+	/// Who `request` is from: a session, the CLI's token, a worker's key or
+	/// an API token, in that order, or nobody.
+	async fn who(&self, request: &http::request::Parts) -> rpc::Result<Identity> {
+		// 2. A third-party access token reached here only because
+		// `leptoskit_idp`'s layer verified it into a delegation. Only the
+		// CLI's counts; any other app's is nobody.
+		if let Some(delegation) = request
+			.extensions
+			.get::<CurrentSession>()
+			.and_then(|current| current.delegation.as_ref())
+		{
+			let Some(signed_in) = delegation
+				.signed_in
+				.clone()
+				.filter(|_| delegation.client_id == self.cli_client_id)
+			else {
+				return Ok(self.nobody());
+			};
+			let account = signed_in.account;
+			let context = self
+				.person(
+					leptoskit_auth::context(Some(signed_in)),
+					account,
+					Via::Cli,
+					ClientDescription::new("cli".to_owned()),
+				)
+				.await?;
+			return Ok(Identity::new(context).with_caller(format!("cli:{account}")));
+		}
+
+		// 1. A session, as `leptoskit_auth` resolves it: the layer's, or
+		// the request's own cookie or bearer.
+		let session = Identify::identify(&self.auth, request).await?;
+
+		if let Some(signed_in) = session.context.get::<SignedIn>().cloned() {
+			let agent = request
+				.headers
+				.get(http::header::USER_AGENT)
+				.and_then(|agent| agent.to_str().ok())
+				.unwrap_or("unknown");
+			let context = self
+				.person(
+					session.context,
+					signed_in.account,
+					Via::Web,
+					ClientDescription::new(format!("web: {agent}")),
+				)
+				.await?;
+			let identity = Identity::new(context);
+			return Ok(match session.caller {
+				Some(caller) => identity.with_caller(caller),
+				None => identity,
+			});
+		}
+
+		// 3. An API token.
+		let bearer = request
+			.headers
+			.get(http::header::AUTHORIZATION)
+			.and_then(|value| value.to_str().ok())
+			.and_then(|value| value.strip_prefix("Bearer "));
+
+		if let Some(worker) = match bearer {
+			Some(bearer) => self.worker(bearer.trim()).await?,
+			None => None,
+		} {
+			let client =
+				ClientDescription::new(format!("worker: {} (lkw_{})", worker.name, worker.prefix));
+			let caller = format!("worker:{}", worker.id);
+			let context = Context::new()
+				.with(worker)
+				.with(client)
+				.with(self.services.clone());
+			return Ok(Identity::new(context).with_caller(caller));
+		}
+
+		if let Some(token) = match bearer {
+			Some(bearer) => self.token(bearer.trim()).await?,
+			None => None,
+		} {
+			let client =
+				ClientDescription::new(format!("token: {} (lkc_{})", token.name, token.prefix));
+			let caller = format!("token:{}", token.id);
+			let context = Context::new()
+				.with(Caller::Token(token))
+				.with(client)
+				.with(self.services.clone());
+			return Ok(Identity::new(context).with_caller(caller));
+		}
+
+		Ok(self.nobody())
+	}
+
+	/// Counts one operation against `identity`: a person by their account,
+	/// a worker by its own ID, a token by its own ID and with its
+	/// organisation's other tokens, and nobody by the address their
+	/// request came from. A credential that is nobody's counts against the
+	/// address too, so guessing them is slowed.
+	///
+	/// # Errors
+	///
+	/// `TooMany` (`rate_limited`) once the caller has used up their rate.
+	fn count(&self, identity: &Identity) -> rpc::Result<()> {
+		let shipping = self.services.shipping();
+		let rates = shipping.rates;
+		let throttle = &shipping.throttle;
+
+		if let Some(worker) = identity.context.get::<WorkerCaller>() {
+			return throttle.hit(&format!("worker:{}", worker.id), rates.worker);
+		}
+
+		match identity.context.get::<Caller>() {
+			Some(Caller::Person { account, .. }) => {
+				throttle.hit(&format!("person:{account}"), rates.person)
+			}
+			Some(Caller::Token(token)) => {
+				throttle.hit(&format!("token:{}", token.id), rates.token)?;
+				throttle.hit(
+					&format!("tokens:{}", token.organization),
+					rates.organization_tokens,
+				)
+			}
+			None => {
+				let origin = identity.context.get::<Origin>().and_then(|origin| origin.0);
+				throttle.hit_address(origin, rates.anonymous)
+			}
+		}
+	}
+}
+
 impl Identify for CloudIdentify {
 	fn identify<'a>(
 		&'a self,
 		request: &'a http::request::Parts,
 	) -> Pin<Box<dyn Future<Output = rpc::Result<Identity>> + Send + 'a>> {
 		Box::pin(async move {
-			// 2. A third-party access token reached here only because
-			// `leptoskit_idp`'s layer verified it into a delegation. Only the
-			// CLI's counts; any other app's is nobody.
-			if let Some(delegation) = request
-				.extensions
-				.get::<CurrentSession>()
-				.and_then(|current| current.delegation.as_ref())
-			{
-				let Some(signed_in) = delegation
-					.signed_in
-					.clone()
-					.filter(|_| delegation.client_id == self.cli_client_id)
-				else {
-					return Ok(self.nobody());
-				};
-				let account = signed_in.account;
-				let context = self
-					.person(
-						leptoskit_auth::context(Some(signed_in)),
-						account,
-						Via::Cli,
-						ClientDescription::new("cli".to_owned()),
-					)
-					.await?;
-				return Ok(Identity::new(context).with_caller(format!("cli:{account}")));
-			}
-
-			// 1. A session, as `leptoskit_auth` resolves it: the layer's, or
-			// the request's own cookie or bearer.
-			let session = Identify::identify(&self.auth, request).await?;
-
-			if let Some(signed_in) = session.context.get::<SignedIn>().cloned() {
-				let agent = request
-					.headers
-					.get(http::header::USER_AGENT)
-					.and_then(|agent| agent.to_str().ok())
-					.unwrap_or("unknown");
-				let context = self
-					.person(
-						session.context,
-						signed_in.account,
-						Via::Web,
-						ClientDescription::new(format!("web: {agent}")),
-					)
-					.await?;
-				let identity = Identity::new(context);
-				return Ok(match session.caller {
-					Some(caller) => identity.with_caller(caller),
-					None => identity,
-				});
-			}
-
-			// 3. An API token.
-			let bearer = request
-				.headers
-				.get(http::header::AUTHORIZATION)
-				.and_then(|value| value.to_str().ok())
-				.and_then(|value| value.strip_prefix("Bearer "));
-
-			if let Some(worker) = match bearer {
-				Some(bearer) => self.worker(bearer.trim()).await?,
-				None => None,
-			} {
-				let client = ClientDescription::new(format!(
-					"worker: {} (lkw_{})",
-					worker.name, worker.prefix
-				));
-				let caller = format!("worker:{}", worker.id);
-				let context = Context::new()
-					.with(worker)
-					.with(client)
-					.with(self.services.clone());
-				return Ok(Identity::new(context).with_caller(caller));
-			}
-
-			if let Some(token) = match bearer {
-				Some(bearer) => self.token(bearer.trim()).await?,
-				None => None,
-			} {
-				let client =
-					ClientDescription::new(format!("token: {} (lkc_{})", token.name, token.prefix));
-				let caller = format!("token:{}", token.id);
-				let context = Context::new()
-					.with(Caller::Token(token))
-					.with(client)
-					.with(self.services.clone());
-				return Ok(Identity::new(context).with_caller(caller));
-			}
-
-			Ok(self.nobody())
+			let mut identity = self.who(request).await?;
+			let header = self.services.shipping().client_ip_header.as_deref();
+			identity.context = identity
+				.context
+				.with(Origin(super::throttle::address(request, header)));
+			self.count(&identity)?;
+			Ok(identity)
 		})
+	}
+
+	/// An operation sent over a live connection is counted as one sent
+	/// alone is.
+	fn admit(&self, identity: &Identity) -> rpc::Result<()> {
+		self.count(identity)
 	}
 
 	fn lease<'a>(

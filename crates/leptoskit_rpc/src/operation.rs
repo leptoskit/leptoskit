@@ -142,6 +142,8 @@ pub enum Error {
 	/// The request clashes with what is there: a taken name, a changed row:
 	/// `409`.
 	Conflict(String),
+	/// The caller asked too often: `429`. Asking again later can succeed.
+	TooMany(String),
 	/// Another transaction kept getting in the mutation's way, so it gave up
 	/// after its retries: `409`. Trying again later can succeed.
 	Contended,
@@ -183,6 +185,11 @@ impl Error {
 		Self::Conflict(message.into())
 	}
 
+	/// The caller asked too often.
+	pub fn too_many(message: impl Into<String>) -> Self {
+		Self::TooMany(message.into())
+	}
+
 	/// The server failed.
 	pub fn server(message: impl Into<String>) -> Self {
 		Self::Server(message.into())
@@ -213,6 +220,7 @@ impl Error {
 			Self::Forbidden(_) => 403,
 			Self::NotFound(_) => 404,
 			Self::Conflict(_) | Self::Contended => 409,
+			Self::TooMany(_) => 429,
 			Self::Server(_) | Self::Permanent(_) => 500,
 			Self::Retry(_) => 503,
 		}
@@ -227,6 +235,7 @@ impl Error {
 			| Self::Forbidden(message)
 			| Self::NotFound(message)
 			| Self::Conflict(message)
+			| Self::TooMany(message)
 			| Self::Server(message)
 			| Self::Retry(message)
 			| Self::Permanent(message) => message,

@@ -511,6 +511,17 @@ impl Session {
 		true
 	}
 
+	/// Why the connection's identity may not send one more operation now,
+	/// when [`Identify::admit`](crate::server::Identify::admit) says so.
+	fn admit(&self) -> Option<WireError> {
+		self.live
+			.inner
+			.identify
+			.admit(&self.identity)
+			.err()
+			.map(|error| WireError::new(&error))
+	}
+
 	/// Handles one frame. Returns whether the connection stays open.
 	async fn handle(&mut self, incoming: Incoming) -> bool {
 		// A frame that doesn't parse is answered too, so it pays like any
@@ -541,7 +552,12 @@ impl Session {
 			}
 			ClientFrame::Unknown => true,
 			ClientFrame::Ping => self.send(ServerFrame::Pong).await,
-			ClientFrame::Sub { id, query, args } => self.subscribe(id, query, args).await,
+			ClientFrame::Sub { id, query, args } => {
+				match self.admit() {
+					Some(error) => self.done(id, Err(error)).await,
+					None => self.subscribe(id, query, args).await,
+				}
+			}
 			ClientFrame::Unsub { id } => {
 				if let Some(pending) = &mut self.pending {
 					pending.remove(id);
@@ -571,19 +587,34 @@ impl Session {
 				name,
 				args,
 				key,
-			} => self.mutate(request, &name, args, key).await,
+			} => {
+				match self.admit() {
+					Some(error) => self.done(request, Err(error)).await,
+					None => self.mutate(request, &name, args, key).await,
+				}
+			}
 			ClientFrame::Act {
 				request,
 				name,
 				args,
-			} => self.act(request, &name, args).await,
+			} => {
+				match self.admit() {
+					Some(error) => self.done(request, Err(error)).await,
+					None => self.act(request, &name, args).await,
+				}
+			}
 			ClientFrame::Auth { token } => self.authenticate(token).await,
 			ClientFrame::Stream {
 				stream,
 				name,
 				args,
 				credits,
-			} => self.open_stream(stream, &name, args, credits).await,
+			} => {
+				match self.admit() {
+					Some(error) => self.send(EndReason::Failed(error).frame(stream)).await,
+					None => self.open_stream(stream, &name, args, credits).await,
+				}
+			}
 			ClientFrame::Credit { stream, n } => {
 				self.credit(stream, n);
 				true

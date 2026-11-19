@@ -250,7 +250,9 @@ impl AuthBuilder {
 
 	/// Reads the client's IP address from `header`, such as
 	/// `fly-client-ip`, which a proxy in front of the server sets. Only name a
-	/// header your proxy always overwrites: anyone can send one.
+	/// header your proxy always overwrites: anyone can send one. A request
+	/// without the header, or with one that isn't an address, is taken to
+	/// come from its connection's address.
 	pub fn client_ip_header(mut self, header: impl Into<String>) -> Self {
 		self.client_ip_header = Some(header.into().to_ascii_lowercase());
 		self

@@ -134,6 +134,9 @@ pub async fn a_backup_is_taken_and_listed(app: &App) {
 	assert_eq!(job["input"]["database"], database);
 	assert_eq!(job["input"]["backup"], backup["id"]);
 	assert_eq!(job["input"]["expires_at"], backup["expires_at"]);
+	// And how large a dump may be.
+	let cap: u64 = 20 * 1024 * 1024 * 1024;
+	assert_eq!(job["input"]["max_bytes"], cap);
 	assert_eq!(
 		job["input"]["environment"]["environment"]["slug"],
 		"production"
@@ -238,6 +241,37 @@ pub async fn a_backup_is_taken_and_listed(app: &App) {
 		list(&shop, "production").await["backups"][0]["state"],
 		"failed"
 	);
+	// Neither is a dump larger than a backup may be, whatever the worker
+	// did about being told so.
+	app.call("create_backup", place(&shop, "production"), shop.as_ana())
+		.await
+		.expect(200);
+	let job = shop.cluster.take().await;
+	shop.cluster
+		.finish(
+			&job,
+			json!({
+				"kind": "backup_database",
+				"result": "taken",
+				"location": location("vast"),
+				"bytes": cap + 1,
+			}),
+		)
+		.await
+		.expect(200);
+	let vast = list(&shop, "production").await["backups"][0].clone();
+	assert_eq!(vast["state"], "failed");
+	assert_eq!(vast["bytes"], Value::Null);
+	assert!(
+		vast["failure"]
+			.as_str()
+			.is_some_and(|failure| failure.contains("larger than a backup may be")),
+		"{vast}"
+	);
+	assert_eq!(
+		app.find_in_every_table(&location("vast")).await,
+		Vec::<String>::new()
+	);
 	// Neither is an address with a password in it, anywhere.
 	app.call("create_backup", place(&shop, "production"), shop.as_ana())
 		.await
@@ -279,7 +313,7 @@ pub async fn a_backup_is_taken_and_listed(app: &App) {
 		list(&shop, "production").await["backups"]
 			.as_array()
 			.map(Vec::len),
-		Some(13)
+		Some(14)
 	);
 
 	// Expired backups are forgotten, and make room.
@@ -294,7 +328,7 @@ pub async fn a_backup_is_taken_and_listed(app: &App) {
 		.expect("expire them");
 	assert_eq!(list(&shop, "production").await["backups"], json!([]));
 	let swept = shop.sweep().await;
-	assert_eq!(swept.backups, 13, "{swept:?}");
+	assert_eq!(swept.backups, 14, "{swept:?}");
 	back_up(&shop, "production", "after").await;
 }
 

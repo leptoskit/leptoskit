@@ -876,6 +876,24 @@ async fn the_client_address_comes_from_the_peer_or_a_trusted_header() {
 		.unwrap();
 	assert_eq!(events[0].ip.as_deref(), Some("203.0.113.5"));
 	assert_eq!(events[0].user_agent.as_deref(), Some("Firefox/131.0"));
+
+	// A request the proxy's header is missing from, or one whose header
+	// isn't an address, is taken to come from its connection.
+	for sent in [None, Some("not an address")] {
+		let mut request = Request::builder().uri("/where");
+
+		if let Some(sent) = sent {
+			request = request.header("fly-client-ip", sent);
+		}
+
+		let mut request = request.body(Body::empty()).unwrap();
+		request.extensions_mut().insert(ConnectInfo(peer));
+		assert_eq!(
+			text(proxied.send(request).await).await,
+			"Some(198.51.100.7)",
+			"{sent:?}"
+		);
+	}
 }
 
 /// Every `Set-Cookie` a response sends, as `name=value`.

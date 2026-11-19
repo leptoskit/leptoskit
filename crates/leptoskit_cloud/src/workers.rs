@@ -560,6 +560,11 @@ pub struct BackupDatabaseInput {
 	/// The backup's ID, which names it in `database_backups`.
 	pub backup: Uuid,
 	pub expires_at: Timestamp,
+	/// The most bytes the dump may be. The worker stops at it, keeps
+	/// nothing, and answers `failed`: a dump it says is larger is refused
+	/// anyway. `None` from a control plane that didn't say.
+	#[serde(default)]
+	pub max_bytes: Option<u64>,
 }
 
 /// A dump a worker took and keeps.
@@ -621,6 +626,11 @@ pub struct RestoreDatabaseInput {
 	pub location: String,
 	/// When the dump taken before the restore may be deleted.
 	pub safety_expires_at: Timestamp,
+	/// The most bytes the dump of what is replaced may be. Past it the
+	/// worker restores nothing and answers `failed`: a restore never goes
+	/// ahead without the dump that undoes it.
+	#[serde(default)]
+	pub max_bytes: Option<u64>,
 }
 
 /// How a restore ended.

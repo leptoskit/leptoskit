@@ -12,6 +12,7 @@
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::SystemTime;
@@ -1169,6 +1170,86 @@ async fn a_resume_catches_a_commit_that_lands_while_it_runs() {
 		})
 		.expect("the resumed value");
 	assert_eq!(value, json!(["before", "during"]));
+}
+
+/// Admits only so many operations over a connection.
+struct Paced(AtomicU32);
+
+impl rpc::server::Identify for Paced {
+	fn identify<'a>(
+		&'a self,
+		_request: &'a http::request::Parts,
+	) -> Pin<Box<dyn Future<Output = rpc::Result<Identity>> + Send + 'a>> {
+		Box::pin(std::future::ready(Ok(Identity::anonymous())))
+	}
+
+	fn admit(&self, _identity: &Identity) -> rpc::Result<()> {
+		self.0
+			.try_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
+				left.checked_sub(1)
+			})
+			.map(drop)
+			.map_err(|_| rpc::Error::too_many("slow down"))
+	}
+}
+
+/// Each operation sent over a connection is put to `Identify::admit`, and
+/// one it refuses is answered without closing the connection. Frames that
+/// start nothing aren't asked about.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_operation_the_identity_may_not_send_is_answered() {
+	let server = serve(
+		leptoskit_db::testing::sqlite().await,
+		Paced(AtomicU32::new(2)),
+	)
+	.await;
+	let mut socket = connect(&server, None).await;
+
+	for id in 1..=2 {
+		send(&mut socket, subscribe(id, "session_bodies")).await;
+		assert_eq!(answer(&mut socket, id).await.unwrap(), json!([]));
+	}
+
+	still_open(&mut socket).await;
+	send(&mut socket, ClientFrame::Unsub { id: 1 }).await;
+	send(&mut socket, subscribe(3, "session_bodies")).await;
+	let error = answer(&mut socket, 3).await.unwrap_err();
+	assert_eq!((error.status, error.message.as_str()), (429, "slow down"));
+	send(
+		&mut socket,
+		ClientFrame::Mutate {
+			request: 4,
+			name: "session_add".into(),
+			args: json!({}),
+			key: None,
+		},
+	)
+	.await;
+	assert_eq!(answer(&mut socket, 4).await.unwrap_err().status, 429);
+	send(
+		&mut socket,
+		ClientFrame::Act {
+			request: 5,
+			name: "anything".into(),
+			args: json!({}),
+		},
+	)
+	.await;
+	assert_eq!(answer(&mut socket, 5).await.unwrap_err().status, 429);
+	send(
+		&mut socket,
+		ClientFrame::Stream {
+			stream: 6,
+			name: "anything".into(),
+			args: json!({}),
+			credits: 1,
+		},
+	)
+	.await;
+	let ServerFrame::End { stream: 6, .. } = next(&mut socket).await else {
+		panic!("the stream ends");
+	};
+	still_open(&mut socket).await;
 }
 
 /// Only a query can be subscribed to.

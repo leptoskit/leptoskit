@@ -274,6 +274,27 @@ pub async fn usage(
 	crate::server::billing::usage(cx, &organization, period.as_deref()).await
 }
 
+/// What a month of `config`'s `[cloud]` table is expected to cost, before
+/// anything is deployed: every environment the table has, on `plan`, or on
+/// the plan `organization` is on without one. It is an estimate from what
+/// the table says and a few stated assumptions, never a bill.
+///
+/// # Errors
+///
+/// `Invalid` (`invalid_config`) for a table that doesn't resolve,
+/// `NotFound` (`plan_not_found`) for a plan this cloud doesn't have, and
+/// `Conflict` (`unpriced`) when this cloud has no prices.
+#[rpc::api(scope = crate::OAuthScope::Cloud, tag = "billing")]
+#[rpc::query]
+pub async fn estimate(
+	cx: &rpc::QueryCx,
+	organization: String,
+	config: crate::deployments::DeployConfig,
+	#[serde(default)] plan: Option<String>,
+) -> rpc::Result<crate::deployments::CostEstimate> {
+	crate::server::billing::estimate(cx, &organization, &config, plan.as_deref()).await
+}
+
 /// Sets the most a month's usage may cost `organization` beyond what its
 /// plan includes, in minor units; `None` goes back to the plan's own cap.
 /// Owners and billing members only, and never a token.
