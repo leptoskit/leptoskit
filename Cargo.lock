@@ -5909,6 +5909,8 @@ dependencies = [
  "canvist_headless",
  "canvist_layout",
  "js-sys",
+ "leptos",
+ "leptoskit_native",
  "unicode-segmentation",
  "wasm-bindgen",
  "wasm-bindgen-futures",

@@ -70,7 +70,7 @@ const DEFAULT_LABEL: &str = "Editor";
 
 thread_local! {
 	/// The host drawing each attached editor, by its handle's id.
-	static HOSTS: RefCell<HashMap<u64, Rc<Host>>> = RefCell::new(HashMap::new());
+	static HOSTS: RefCell<HashMap<u32, Rc<Host>>> = RefCell::new(HashMap::new());
 
 	/// Tells one attachment of a handle from the next.
 	static NEXT_SERIAL: Cell<u64> = const { Cell::new(1) };
@@ -171,9 +171,9 @@ pub(super) struct Host {
 /// Returns the attachment's serial.
 pub(super) fn attach(container: &HtmlElement, state: CanvistState) -> Result<u64, CanvistError> {
 	let session = state.session().ok_or(CanvistError::Disposed)?;
-	detach(state.id(), None);
+	detach(state.key(), None);
 	let host = Host::new(container, session)?;
-	HOSTS.with(|hosts| hosts.borrow_mut().insert(state.id(), Rc::clone(&host)));
+	HOSTS.with(|hosts| hosts.borrow_mut().insert(state.key(), Rc::clone(&host)));
 	host.start();
 
 	Ok(host.serial)
@@ -181,7 +181,7 @@ pub(super) fn attach(container: &HtmlElement, state: CanvistState) -> Result<u64
 
 /// Take the editor with `id` out of the page: any attachment, or only the
 /// one with `serial`.
-pub(super) fn detach(id: u64, serial: Option<u64>) {
+pub(super) fn detach(id: u32, serial: Option<u64>) {
 	let host = HOSTS.with(|hosts| {
 		let mut hosts = hosts.borrow_mut();
 		let current = hosts.get(&id)?.serial;
@@ -197,7 +197,7 @@ pub(super) fn detach(id: u64, serial: Option<u64>) {
 }
 
 /// Run `run` with the host of the editor with `id`, when it is attached.
-pub(super) fn with(id: u64, serial: Option<u64>, run: impl FnOnce(&Rc<Host>)) {
+pub(super) fn with(id: u32, serial: Option<u64>, run: impl FnOnce(&Rc<Host>)) {
 	// The registry is released before `run`, which may attach or detach.
 	let host = HOSTS.with(|hosts| hosts.borrow().get(&id).cloned());
 
@@ -223,10 +223,7 @@ impl Host {
 			.dyn_into::<HtmlTextAreaElement>()
 			.map_err(|_| unavailable("the page has no text field"))?;
 		let spacer = create("div", "")?;
-		let label = container
-			.get_attribute("aria-label")
-			.filter(|label| !label.trim().is_empty())
-			.unwrap_or_else(|| DEFAULT_LABEL.to_owned());
+		let label = label_of(container);
 		let mirror = Mirror::new(&document, &label);
 		let mut theme = ThemeReader::new(&document);
 		let first_theme = theme
@@ -317,6 +314,7 @@ impl Host {
 		self.observe_size();
 		self.watch_scale();
 		self.snap_to_device();
+		self.apply_name();
 		self.apply_options();
 		self.render();
 		// Not before first paint: a long document takes a moment to copy.
@@ -606,6 +604,32 @@ impl Host {
 		}
 
 		self.show_caret();
+	}
+
+	/// Name the text field and the hidden copy of the text after the
+	/// container: its `aria-label`, and the elements its `aria-labelledby`
+	/// points to, which win where both are set.
+	pub(super) fn apply_name(&self) {
+		let label = label_of(&self.container);
+		let _ = self.textarea.set_attribute("aria-label", &label);
+
+		if let Some(mirror) = &self.mirror {
+			let _ = mirror.element().set_attribute("aria-label", &label);
+		}
+
+		let labelled_by = self
+			.container
+			.get_attribute("aria-labelledby")
+			.filter(|ids| !ids.trim().is_empty());
+
+		match labelled_by {
+			Some(ids) => {
+				let _ = self.textarea.set_attribute("aria-labelledby", &ids);
+			}
+			None => {
+				let _ = self.textarea.remove_attribute("aria-labelledby");
+			}
+		}
 	}
 
 	/// Move keyboard focus to the editor without scrolling to it.
@@ -1004,6 +1028,14 @@ impl Host {
 			mirror.refresh(&self.document, &session::lock(&self.session).doc);
 		}
 	}
+}
+
+/// The name `container` gives its editor, or the default one.
+fn label_of(container: &HtmlElement) -> String {
+	container
+		.get_attribute("aria-label")
+		.filter(|label| !label.trim().is_empty())
+		.unwrap_or_else(|| DEFAULT_LABEL.to_owned())
 }
 
 /// Make `textarea` the editor's text field: named, announced as a

@@ -259,11 +259,17 @@ Twenty-three commits: the public demo service. One process serves one UTC day's 
 - **Not verified:** the Linux-only descriptor and lifecycle tests have never run (all work so far was on macOS). Nothing is deployed. systemd behaviour, the edge deployment, the admin hand-over in a real browser across a process restart, and the link from the website are all outstanding.
 - **Known gaps:** the admin's Live page sometimes needs a reload before a new event appears (about one run in four). The People page cannot find a demo visitor, because a visitor has no person row.
 
-### `feat/leptoskit-canvist-web`: no pull request, work in progress
+### The canvist editor stack: #857, #881, and `feat/canvist-editor-component`
 
-One commit marked `wip`. It adds `crates/leptoskit_canvist`, about 2,650 lines: `state.rs`, and under `web/` a measurer, a Canvas2D painter, input, theme and the attach point, plus `tests/native.rs` and `tests/web.rs`. It also touches the workspace `Cargo.toml`, `Cargo.lock`, `deny.toml` (canvist allowed as a git source) and `devenv.nix` (a `test:browser` line), and adds a changeset.
+Three layers, in the order [The canvist editor](#the-canvist-editor) sets. Merge them in this order; the third needs the first two.
 
-**Treat it as unreviewed and unbuilt.** The agent writing it was stopped mid-task. Nobody has confirmed that it compiles, that its tests pass, or that it follows the brief. `Cargo.lock` was carried across a rebase and may need regenerating. Review it against [The canvist editor](#the-canvist-editor) before building on it, and rewrite what falls short.
+- **#857, `feat/leptoskit-canvist-web`, on `main`.** `crates/leptoskit_canvist`: the `CanvistState` handle on every target, and the web host for plain paragraphs behind the `web` feature, all Rust through `web-sys`. The unbuilt `wip` commit this section used to warn about was reviewed against the brief and almost all rewritten. 19 native tests and 24 browser tests pass in headless Chrome. The example page is 259 KB gzipped with the `smallest` settings.
+- **#881, `feat/canvist-element-kind`, on `feat/text-area`.** `NativeKind::CanvistEditor` and `CanvistEditor(id)` in the core, following the host-owned surface pattern of `Scene3d`. The web renders an empty `<div data-lk-canvist-editor="id">`; every native backend holds an empty view, the terminal draws a dim block, and the watch refuses it. Nothing in core depends on canvist.
+- **`feat/canvist-editor-component`, on #881's branch with #857's two commits.** Joins them: asking a `CanvistState` for its `id()` starts a watcher in the page that puts the editor in the `CanvistEditor` element that names it, follows the element's placeholder, `read_only`, label, `focused` and classes, and takes the editor out when the element leaves. A server-rendered page gets its editor when it hydrates. Browser tests cover each of those.
+
+- **Run on Linux:** the tests and clippy each pull request lists, for the host and for `wasm32-unknown-unknown`, and the browser tests in headless Chrome.
+- **Not run anywhere:** Safari and Firefox, a real input method, a screen reader, and every native platform beyond compiling.
+- **Known gaps:** plain paragraphs only, plain-text clipboard, no `EditContext`, no server-rendered first paint, and no native editor. The ink example comes next, then the native hosts.
 
 ### `docs/js-to-wasm-handover`
 
@@ -285,6 +291,7 @@ The owner wants leptoskit to ship a built-in editor component powered by [canvis
 - **The app owns the editor through a handle,** not a value prop, because replacing the whole document on every keystroke breaks IME, selection and undo. canvist's own types stay out of the public API.
 - **On native, the editor lives in the host app,** not the Wasm guest. Platform text input needs synchronous answers on the UI thread.
 - **The first public example leads with ink drawing mixed into text,** not a toolbar of bold and italic.
+- **The `leptoskit` feature `canvist` waits for canvist to release.** Cargo refuses to publish a crate that depends on an unpublished one, even optionally, and `leptoskit_canvist` is `publish = false` while canvist is git-pinned. Until then an app depends on `leptoskit_canvist` itself, by git, and writes `CanvistEditor(note.id())` with the element `leptoskit` already has. When canvist is on crates.io: move the pins to versions, drop `publish = false`, add `canvist = ["dep:leptoskit_canvist"]` to `leptoskit` with a `leptoskit::canvist` re-export forwarded through `web`, and add the crate to the release group in `monochange.toml`. Decided 2026-11-18.
 
 Order: finish the web editor for plain paragraphs in `leptoskit_canvist`; add the core element kind on every platform after `TextArea` lands, since both change the same core files; then ink; then iOS and Android, macOS, GTK and Windows.
 
