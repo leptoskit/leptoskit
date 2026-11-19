@@ -44,7 +44,7 @@ One pull request per item. Every backend is kept in step, with AppKit as the ref
 | 7  | Scroll into view                                            | G4       | #913, open  |
 | 8  | A clock hook                                                | G6       | #914, open  |
 | 9  | Typed refusals in the rpc client (status, code, retry time) | G8       | #918, open  |
-| 10 | Streams without a database                                  | G3       | not started |
+| 10 | Streams without a database                                  | G3       | PRNUM, open |
 | 11 | The ⌘ key on the web                                        | G7a      | not started |
 | 12 | New-tab and download links                                  | G14, G15 | not started |
 
@@ -208,6 +208,16 @@ G8. `rpc::Error::rate_limited(wait)` (429) and `rpc::Error::refused(code, messag
 - **Run here:** `leptoskit_rpc` and `leptoskit_rpc_codegen` tests. **Not run:** the generated TypeScript, Dart, Go, and Python were not compiled or executed against a server here, only snapshotted.
 - **Limit to know for the demo:** only a rate limit carries a wait. The demo's "full, opens in N seconds" (503 with a countdown, DM-14) can't put its countdown in `Error::Refused`, which has no `retry_after` in the audit's API. Use `rate_limited` for it, return the countdown as data, or ask the owner for a wait on `Refused`.
 - **Old clients:** one built before this reads a refusal as `Other` with the raw body.
+
+### `feat/streams-without-db` (PRNUM): stacked on `feat/rpc-typed-refusals`
+
+G3. A `#[rpc::stream]` body can take `rpc::StreamCx` (the caller, no database), and `rpc::server::LiveStreams` serves streams on a server that has none. Feature `live-streams` on `leptoskit_rpc`, `rpc-live-streams` on `leptoskit`; `live` includes it.
+
+- **How it is built:** the socket and server-sent events adapters moved from `server/live/` to `server/transport/` and are generic over a small `Host` trait, which `Live` and `LiveStreams` both implement. The per-connection stream bookkeeping moved out of the live session into `StreamSet` in `server/stream.rs`, and both sessions use it. A session hands a stream a hidden `StreamOpen` (the caller, and the database when there is one); the code `#[rpc::stream]` generates turns it into `StreamCx` or `QueryCx`.
+- **Where it departs from the audit's wording:** the audit says `live-streams` "needs no `db`". It needs no driver and no connection, but it does turn on the crate's `db` feature, because `Identify` returns `leptoskit_db::Context`. And `Live::streams_only()` exists only where the build has `live`, since `Live` itself needs a driver; `LiveStreams::new()` is the name that always works.
+- **Run here:** `tests/live_streams.rs` with only `live-streams` on (no driver), over the WebSocket and over server-sent events, and again with every feature on, where it also opens both kinds of stream on the full `Live`. The existing SQLite live suites still pass after the refactor.
+- **Not run:** the Postgres suites (`initdb` won't run as root here), a browser or native client against `LiveStreams`, and `#[rpc::stream(resumable)]` on `LiveStreams` (the same `StreamSet` path as `Live`, which the SQLite suites cover).
+- **For the demo:** its three feeds become `#[rpc::stream]` bodies taking `StreamCx`, served by `LiveStreams` beside the demo's own routes. The bounded-window reconnect maps onto `resumable`.
 
 ### `feat/public-demo`: no pull request
 

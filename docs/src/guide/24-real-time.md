@@ -258,6 +258,62 @@ After a reconnect, the client opens it again with `cursor` set to the last item 
 
 Streams work over the WebSocket and over the server-sent events fallback in the browser, and over the WebSocket in native apps. `#[api]` publishes a stream to the spec as a `stream` operation: it appears in `/asyncapi.json`, describing one item, and not in `/openapi.json`, because there is nothing to call once over HTTP. Generated clients don't open streams yet.
 
+### Streams without a database
+
+Not every server has a database. A service that reports an operation's progress, tails a log, or relays what another system sends has something to stream and no rows to watch. The live server above reads the database's change log, so it can't start there, and until now neither could a stream.
+
+Two things remove the database from a stream. The body takes `rpc::StreamCx`, which holds who is calling and nothing else:
+
+```rust
+/// How far a deploy has got, a step at a time.
+#[rpc::stream]
+pub async fn deploy_progress(
+	cx: &rpc::StreamCx,
+	id: String,
+) -> rpc::Result<impl Stream<Item = Step>> {
+	let operator = cx.require::<Operator>()?;
+	Ok(deploys::watch(operator, id))
+}
+```
+
+And the server mounts `LiveStreams` in place of `Live`:
+
+```rust
+let streams = leptoskit::rpc::server::LiveStreams::new()
+	.identify(api_keys)
+	.origin("https://myapp.com");
+let app = Router::new().merge(streams.router());
+```
+
+A screen reads it exactly as before, and it does not know which kind of server answered:
+
+```rust
+let progress = use_stream(move || DeployProgress { id: id.get() });
+
+view! {
+	<Text>
+		{move || progress.items().get().last().map(|step| step.label.clone())}
+	</Text>
+}
+```
+
+`StreamCx` has `get::<T>()`, `require::<T>()`, `signed_in()`, and `identity()`, the same as a query's context without `db()`. `identify` takes the same `rpc::Identify` the other servers take, so an API-key check or `leptoskit_auth` decides who is calling.
+
+| What you have                | Feature (`leptoskit_rpc`, or through `leptoskit`) | Mount                | Streams it opens                    |
+| ---------------------------- | ------------------------------------------------- | -------------------- | ----------------------------------- |
+| A database, and live queries | `live` and a driver, or `rpc-live`                | `Live::new(db)`      | every stream                        |
+| No database                  | `live-streams`, or `rpc-live-streams`             | `LiveStreams::new()` | those taking `StreamCx`, or nothing |
+
+- A stream that takes `StreamCx` runs on both servers, so start with it and move to `QueryCx` only when the body reads the database.
+- A stream that takes no context argument runs on both too. `rpc::cx()` inside it works only where the server has a database.
+- A stream that takes `QueryCx` needs `Live`. In a build without a database driver it does not compile; opened on a `LiveStreams` in a build that has one, it ends as failed and says why.
+- `LiveStreams` serves the same three routes as `Live` (`GET /live`, `GET /live/events`, `POST /live/frames`) and the same limits apply to streams and frames. A query, a mutation, an action, or a channel sent to it is answered with a `501` that says the server serves streams only.
+- `Live::streams_only()` is another way to write `LiveStreams::new()`, where the build has `live`.
+- `LiveStreams` keeps an identity until it expires or the connection ends. `Live` also drops a connection when the rows its sign-in depends on change, such as a deleted session; without a change log there is nothing to notice that with, so give identities an expiry (`IdentityLease::expires_at`) where that matters.
+- The `live-streams` feature still compiles `leptoskit_db` for its `Context` type, which is what `Identify` returns. It pulls in no driver, opens no connection, and reads no database settings.
+
+This works over the WebSocket and the server-sent events fallback in the browser, and over the WebSocket in a native app, as every stream does.
+
 ## Signing in and out
 
 A screen that shows someone's private channels should show them the moment they sign in, and drop them the moment they sign out, without a reload. The live connection follows the sign-in: when `leptoskit_auth`'s client signs in, signs out, or renews a token (with its `rpc` feature on, which `lk generate auth` turns on), it tells the connection, and every live query, channel and stream reads as the new identity.
@@ -346,6 +402,7 @@ Query changes that arrive while a session is busy are combined into one pending 
 The database capture, the invalidation feed, and the policy check are described in [The database](22-database.md). The socket adds:
 
 - `Live::new(db).identify(auth).origin(…)`, serving `GET /live`, `GET /live/events` and `POST /live/frames` (`leptoskit_rpc`, feature `live`; `rpc-live` through the `leptoskit` crate).
+- `LiveStreams::new().identify(auth).origin(…)`, serving the same routes for streams alone, with no database (`leptoskit_rpc`, feature `live-streams`; `rpc-live-streams` through the `leptoskit` crate).
 - `rpc::use_live::<Query>(args)`, `rpc::use_live_paginated(args, page_size)`, `rpc::use_stream(args)`, `rpc::use_live_status()`, `rpc::use_live_mutation::<Mutation>()` and `rpc::use_live_action::<Action>()`, available with the `web` or `guest` feature. `use_mutation(mutation_scope::<Mutation>())` goes over the live connection too while it is open.
 - `Live::stats()`, for metrics: connections, subscriptions, re-runs, commits read, transitions sent and resumes.
 - `leptoskit_query`'s cache, unchanged, so every screen and devtools see the updates.

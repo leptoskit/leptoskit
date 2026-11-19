@@ -25,41 +25,40 @@ use axum::response::sse::Event;
 use axum::response::sse::Sse;
 use tokio::sync::mpsc;
 
+use super::CallerSlot;
+use super::Host;
 use super::INCOMING;
 use super::Incoming;
-use super::Live;
 use super::OUTGOING;
+use super::Opened;
 use super::Outbound;
-use super::session::CallerSlot;
-use super::session::Opened;
 use crate::live::ClientFrame;
 use crate::live::MAX_FRAME_BYTES;
 
 /// How a post finds its connection.
-pub(super) struct Handle {
+pub(crate) struct Handle {
 	frames: mpsc::Sender<Incoming>,
 	caller: CallerSlot,
 }
 
 /// `GET /live/events`: opens a session and streams its frames.
-pub(super) async fn events(State(live): State<Live>, request: axum::extract::Request) -> Response {
+pub(crate) async fn events<H: Host>(
+	State(live): State<H>,
+	request: axum::extract::Request,
+) -> Response {
 	let (parts, _body) = request.into_parts();
 
 	if !live.origin_ok(&parts.headers) {
 		return StatusCode::FORBIDDEN.into_response();
 	}
 
-	let identity = match live.inner.identify.identify(&parts).await {
+	let identity = match live.identifier().identify(&parts).await {
 		Ok(identity) => identity,
-		Err(error) => return crate::server::http::failure(&error),
+		Err(error) => return crate::server::failure(&error),
 	};
 
-	if crate::server::is_service(&identity) {
-		// A service reads the app's data by calling its operations, never
-		// by watching them.
-		return crate::server::http::failure(&crate::Error::forbidden(
-			"a service can't hold a live connection to the app: call its operations instead",
-		));
+	if let Some(error) = super::refuse_service(&identity) {
+		return crate::server::failure(&error);
 	}
 
 	let Some(secret) = secret() else {
@@ -128,7 +127,10 @@ pub(super) async fn events(State(live): State<Live>, request: axum::extract::Req
 
 /// `POST /live/frames?connection=<id>`: hands a JSON array of client frames
 /// to the connection's session. Their answers arrive on the stream.
-pub(super) async fn frames(State(live): State<Live>, request: axum::extract::Request) -> Response {
+pub(crate) async fn frames<H: Host>(
+	State(live): State<H>,
+	request: axum::extract::Request,
+) -> Response {
 	let (parts, body) = request.into_parts();
 
 	if !live.origin_ok(&parts.headers) {
@@ -163,17 +165,13 @@ pub(super) async fn frames(State(live): State<Live>, request: axum::extract::Req
 		}
 	};
 
-	let identity = match live.inner.identify.identify(&parts).await {
+	let identity = match live.identifier().identify(&parts).await {
 		Ok(identity) => identity,
-		Err(error) => return crate::server::http::failure(&error),
+		Err(error) => return crate::server::failure(&error),
 	};
 
-	if crate::server::is_service(&identity) {
-		// A service reads the app's data by calling its operations, never
-		// by watching them.
-		return crate::server::http::failure(&crate::Error::forbidden(
-			"a service can't hold a live connection to the app: call its operations instead",
-		));
+	if let Some(error) = super::refuse_service(&identity) {
+		return crate::server::failure(&error);
 	}
 
 	let (sender, bound) = {

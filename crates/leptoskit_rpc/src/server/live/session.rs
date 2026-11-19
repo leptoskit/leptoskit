@@ -15,7 +15,6 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
-use std::sync::Mutex;
 use std::sync::PoisonError;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -35,6 +34,7 @@ use super::Identity;
 use super::Incoming;
 use super::Invocation;
 use super::Live;
+use super::Opened;
 use super::Outbound;
 use super::hub::Batch;
 use super::hub::Changed;
@@ -44,14 +44,12 @@ use super::mailbox;
 use super::run_query;
 use crate::Kind;
 use crate::live::ClientFrame;
-use crate::live::EndReason;
 use crate::live::HEARTBEAT_SECONDS;
 use crate::live::MAX_ACTIONS;
 use crate::live::MAX_CHANNEL_KEY_BYTES;
 use crate::live::MAX_CHANNELS;
 use crate::live::MAX_FRAME_BYTES;
 use crate::live::MAX_PRESENCE_BYTES;
-use crate::live::MAX_STREAMS;
 use crate::live::MAX_SUBSCRIPTIONS;
 use crate::live::PresenceMember;
 use crate::live::Resume;
@@ -66,7 +64,7 @@ use crate::server::channel;
 use crate::server::registration_in;
 use crate::server::run::recording_commits;
 use crate::server::stream;
-use crate::server::stream::StreamSink;
+use crate::server::transport::CallerSlot;
 
 #[cfg(test)]
 mod completion_tests;
@@ -77,33 +75,6 @@ mod recovery_tests;
 /// How often a subscription's first run may find a round applied under it
 /// before it registers anyway and has the hub run it again.
 const REGISTER_ATTEMPTS: usize = 3;
-
-/// The most credits a stream may hold at once, however many the client
-/// grants.
-const MAX_CREDITS: usize = 1 << 20;
-
-/// Who may post frames to a connection: the caller its identity names,
-/// which changes when the connection authenticates.
-pub(super) type CallerSlot = Arc<Mutex<Option<String>>>;
-
-/// A connection a transport has opened, for [`Live::serve`].
-pub(super) struct Opened {
-	/// The connection's number, from [`Live::next_number`].
-	pub number: u32,
-	/// Its name in `welcome`.
-	pub connection: String,
-	/// Who opened it.
-	pub identity: Identity,
-	/// The client's frames.
-	pub frames: mpsc::Receiver<Incoming>,
-	/// Where the session writes.
-	pub out: mpsc::Sender<Outbound>,
-	/// A version the transport already knows the client reached, such as
-	/// server-sent events' `Last-Event-ID`.
-	pub resume_floor: Option<u64>,
-	/// Kept current with the identity's caller.
-	pub caller: CallerSlot,
-}
 
 struct Session {
 	live: Live,
@@ -124,10 +95,7 @@ struct Session {
 	applied: watch::Receiver<u64>,
 	subscriptions: HashMap<u32, Subscription>,
 	joined: HashMap<String, Joined>,
-	streams: HashMap<u32, Running>,
-	/// What running streams send, forwarded in order.
-	stream_frames: mpsc::Receiver<stream::Frame>,
-	stream_out: mpsc::Sender<stream::Frame>,
+	streams: stream::StreamSet,
 	/// The version of the last complete transition queued for transport.
 	last_sent: u64,
 	/// At most one unfinished transition; new batches coalesce into a later
@@ -183,19 +151,6 @@ struct Joined {
 }
 
 /// A stream the connection opened, and the room its client has left.
-struct Running {
-	generation: Arc<()>,
-	task: tokio::task::JoinHandle<()>,
-	credits: Arc<tokio::sync::Semaphore>,
-}
-
-// A cancelled or unwinding session must not detach a stream producer.
-impl Drop for Running {
-	fn drop(&mut self) {
-		self.task.abort();
-	}
-}
-
 /// A mutation or action that finished, and the commit it reached.
 struct Finished {
 	/// An action occupies its slot until the session handles its reply, not
@@ -214,13 +169,6 @@ struct Started {
 	/// The version the hub had applied when the value was registered: the
 	/// value includes every commit up to it.
 	at: u64,
-}
-
-impl Outbound {
-	pub(super) fn frame(frame: &ServerFrame, version: Option<u64>) -> Option<Self> {
-		let text = serde_json::to_string(frame).ok()?;
-		Some(Self::Frame { text, version })
-	}
 }
 
 impl Live {
@@ -255,7 +203,6 @@ impl Live {
 
 		let (events, batches) = mailbox::channel();
 		let (acts, finished) = mpsc::channel(MAX_ACTIONS);
-		let (stream_out, stream_frames) = mpsc::channel(super::OUTGOING);
 		self.hub().connect(number, events);
 		self.connections().insert(number, out.clone());
 		let version = self.hub().applied();
@@ -280,9 +227,7 @@ impl Live {
 			applied: self.hub().watch(),
 			subscriptions: HashMap::new(),
 			joined: HashMap::new(),
-			streams: HashMap::new(),
-			stream_frames,
-			stream_out,
+			streams: stream::StreamSet::new(super::OUTGOING),
 			last_sent: version,
 			pending: None,
 			pending_progress: tokio::time::Instant::now(),
@@ -314,9 +259,7 @@ impl Live {
 			session.send(ServerFrame::Reconnect { after_ms }).await;
 		}
 
-		for running in session.streams.values() {
-			running.task.abort();
-		}
+		session.streams.abort_all();
 
 		session.leave_all();
 		self.hub()
@@ -395,7 +338,7 @@ impl Session {
 					return Some(false);
 				}
 			}
-			Some(frame) = self.stream_frames.recv() => {
+			Some(frame) = self.streams.recv() => {
 				if !self.forward_stream(frame).await {
 					return Some(false);
 				}
@@ -616,14 +559,11 @@ impl Session {
 				}
 			}
 			ClientFrame::Credit { stream, n } => {
-				self.credit(stream, n);
+				self.streams.credit(stream, n);
 				true
 			}
 			ClientFrame::Cancel { stream } => {
-				if let Some(running) = self.streams.remove(&stream) {
-					running.task.abort();
-				}
-
+				self.streams.cancel(stream);
 				true
 			}
 		}
@@ -632,53 +572,14 @@ impl Session {
 	/// Opens a stream as the connection's identity, with room for
 	/// `credits` items.
 	async fn open_stream(&mut self, stream: u32, name: &str, args: Value, credits: u32) -> bool {
-		if let Some(previous) = self.streams.remove(&stream) {
-			previous.task.abort();
-		}
+		let cx = stream::StreamOpen::on(self.db.clone(), self.identity.clone());
+		let refused = self
+			.streams
+			.open(self.live.service_name(), stream, name, args, credits, cx);
 
-		let Some(registration) = stream::registration_in(self.live.service_name(), name) else {
-			let error = WireError::invalid(format!("no stream is named `{name}`"));
-
-			return self.send(EndReason::Failed(error).frame(stream)).await;
-		};
-
-		if self.streams.len() >= MAX_STREAMS {
-			let error =
-				WireError::invalid(format!("a connection may hold {MAX_STREAMS} streams open"));
-
-			return self.send(EndReason::Failed(error).frame(stream)).await;
-		}
-
-		let credits = Arc::new(tokio::sync::Semaphore::new(
-			usize::try_from(credits)
-				.unwrap_or(MAX_CREDITS)
-				.min(MAX_CREDITS),
-		));
-		let sink = StreamSink::new(stream, self.stream_out.clone(), Arc::clone(&credits));
-		let generation = Arc::clone(&sink.generation);
-		let cx = QueryCx::new(self.db.clone(), self.identity.clone());
-		let task = tokio::spawn(sink.supervise(registration.open, args, cx));
-		self.streams.insert(
-			stream,
-			Running {
-				generation,
-				task,
-				credits,
-			},
-		);
-		true
-	}
-
-	/// Gives a stream room for `n` more items.
-	fn credit(&self, stream: u32, n: u32) {
-		let Some(running) = self.streams.get(&stream) else {
-			return;
-		};
-		let room = MAX_CREDITS.saturating_sub(running.credits.available_permits());
-		let n = usize::try_from(n).unwrap_or(room).min(room);
-
-		if n > 0 {
-			running.credits.add_permits(n);
+		match refused {
+			Some(frame) => self.send(frame).await,
+			None => true,
 		}
 	}
 
@@ -686,24 +587,14 @@ impl Session {
 	/// produced, and tells the client each was interrupted: the connection
 	/// is going, or is about to read as somebody else.
 	async fn interrupt_streams(&mut self) -> bool {
-		for running in self.streams.values() {
-			running.task.abort();
-		}
-
-		for running in self.streams.values_mut() {
-			let _ = (&mut running.task).await;
-		}
-
-		while let Ok(frame) = self.stream_frames.try_recv() {
-			if !self.forward_stream(frame).await {
-				return false;
-			}
-		}
-
-		let interrupted: Vec<u32> = self.streams.drain().map(|(id, _)| id).collect();
-
-		for stream in interrupted {
-			if !self.send(EndReason::Interrupted.frame(stream)).await {
+		for text in self.streams.interrupt().await {
+			if !self
+				.deliver(Outbound::Frame {
+					text,
+					version: None,
+				})
+				.await
+			{
 				return false;
 			}
 		}
@@ -712,24 +603,16 @@ impl Session {
 	}
 
 	async fn forward_stream(&mut self, frame: stream::Frame) -> bool {
-		let Some(running) = self.streams.get(&frame.stream) else {
-			return true;
-		};
-
-		if !Arc::ptr_eq(&running.generation, &frame.generation) {
-			return true;
+		match self.streams.accept(frame) {
+			Some(text) => {
+				self.deliver(Outbound::Frame {
+					text,
+					version: None,
+				})
+				.await
+			}
+			None => true,
 		}
-
-		if frame.terminal
-			&& let Some(running) = self.streams.remove(&frame.stream)
-		{
-			running.task.abort();
-		}
-		self.deliver(Outbound::Frame {
-			text: frame.text,
-			version: None,
-		})
-		.await
 	}
 
 	fn over_limit(&self, id: u32) -> Option<WireError> {

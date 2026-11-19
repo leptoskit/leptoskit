@@ -36,11 +36,17 @@ impl ::leptoskit_rpc::StreamOperation for Answer {
     type Item = String;
     fn pump(
         self,
-        cx: ::leptoskit_rpc::QueryCx,
+        cx: ::leptoskit_rpc::server::StreamOpen,
         sink: ::leptoskit_rpc::server::StreamSink,
     ) -> impl ::core::future::Future<Output = ()> + ::core::marker::Send {
         async move {
-            let scope = ::std::sync::Arc::new(cx);
+            let scope = match cx.query_cx() {
+                ::core::result::Result::Ok(cx) => ::std::sync::Arc::new(cx),
+                ::core::result::Result::Err(error) => {
+                    sink.fail(&error);
+                    return;
+                }
+            };
             let cx: &::leptoskit_rpc::QueryCx = &scope;
             let Self { prompt } = self;
             ::leptoskit_rpc::__private::query_scope(

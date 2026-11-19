@@ -2,6 +2,7 @@
 //! fast as the client grants credits, so the server never reads ahead of
 //! what the client has room for.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::PoisonError;
@@ -17,12 +18,13 @@ use serde_json::Value;
 use tokio::sync::Semaphore;
 use tokio::sync::mpsc;
 
-use super::QueryCx;
+use super::Identity;
 use crate::Error;
 use crate::Result;
 use crate::StreamOperation;
 use crate::live::EndReason;
 use crate::live::MAX_FRAME_BYTES;
+use crate::live::MAX_STREAMS;
 use crate::live::ServerFrame;
 use crate::live::WireError;
 use crate::stream::Resumable;
@@ -45,7 +47,7 @@ pub struct StreamRegistration {
 }
 
 /// What a registration runs.
-pub type Open = fn(Value, QueryCx, StreamSink) -> BoxFuture<'static, ()>;
+pub type Open = fn(Value, StreamOpen, StreamSink) -> BoxFuture<'static, ()>;
 
 inventory::collect!(StreamRegistration);
 
@@ -69,7 +71,7 @@ pub fn registration_in(service: Option<&str>, name: &str) -> Option<&'static Str
 #[doc(hidden)]
 pub fn open<S: StreamOperation>(
 	args: Value,
-	cx: QueryCx,
+	cx: StreamOpen,
 	sink: StreamSink,
 ) -> BoxFuture<'static, ()> {
 	Box::pin(async move {
@@ -85,11 +87,136 @@ pub fn open<S: StreamOperation>(
 	})
 }
 
+/// What a `#[rpc::stream]` body receives when it reads nothing from the
+/// database: who is calling.
+///
+/// A stream that takes it runs on any live server, including
+/// [`LiveStreams`](super::LiveStreams), which has no database at all. A
+/// stream that reads the database as the caller takes
+/// [`QueryCx`](crate::QueryCx) instead.
+///
+/// ```ignore
+/// /// An import's progress, a step at a time.
+/// #[rpc::stream]
+/// pub async fn progress(cx: &rpc::StreamCx, id: String) -> rpc::Result<impl Stream<Item = Step>> {
+/// 	let me = cx.require::<SignedIn>()?;
+/// 	Ok(imports::watch(me.account, id))
+/// }
+/// ```
+#[derive(Clone, Debug)]
+pub struct StreamCx {
+	identity: Identity,
+}
+
+impl StreamCx {
+	/// A context for a stream opened by `identity`.
+	#[must_use]
+	pub fn new(identity: Identity) -> Self {
+		Self { identity }
+	}
+
+	/// Who is calling.
+	#[must_use]
+	pub fn identity(&self) -> &Identity {
+		&self.identity
+	}
+
+	/// What the server's [`Identify`](super::Identify) said about the
+	/// caller.
+	#[must_use]
+	pub fn context(&self) -> &leptoskit_db::Context {
+		&self.identity.context
+	}
+
+	/// The caller's global of type `G`, such as the signed-in person.
+	#[must_use]
+	pub fn get<G: 'static>(&self) -> Option<&G> {
+		self.identity.context.get()
+	}
+
+	/// The caller's global of type `G`, or [`Error::Unauthorized`] when
+	/// there is none: `cx.require::<SignedIn>()?` for a stream only
+	/// signed-in people may open.
+	///
+	/// # Errors
+	///
+	/// [`Error::Unauthorized`] when the caller has no `G`.
+	pub fn require<G: 'static>(&self) -> Result<&G> {
+		self.get()
+			.ok_or_else(|| Error::unauthorized("sign in to do this"))
+	}
+
+	/// Whether the caller is signed in: the request's context has an
+	/// [`Actor`](leptoskit_db::Actor), which `leptoskit_auth` adds for a
+	/// signed-in session.
+	#[must_use]
+	pub fn signed_in(&self) -> bool {
+		self.identity.context.actor().is_some()
+	}
+}
+
+/// What a live session hands a stream it opens: the caller, and the
+/// database when the server has one. The body's own context is made from
+/// it, by the code `#[rpc::stream]` generates.
+#[doc(hidden)]
+pub struct StreamOpen {
+	identity: Identity,
+	#[cfg(any(feature = "postgres", feature = "sqlite"))]
+	db: Option<leptoskit_db::Db>,
+}
+
+impl StreamOpen {
+	/// A stream opened by `identity` on a server without a database.
+	#[must_use]
+	pub fn new(identity: Identity) -> Self {
+		Self {
+			identity,
+			#[cfg(any(feature = "postgres", feature = "sqlite"))]
+			db: None,
+		}
+	}
+
+	/// A stream opened by `identity`, reading `db`, which should already
+	/// act for them.
+	#[cfg(any(feature = "postgres", feature = "sqlite"))]
+	#[must_use]
+	pub fn on(db: leptoskit_db::Db, identity: Identity) -> Self {
+		Self {
+			identity,
+			db: Some(db),
+		}
+	}
+
+	/// The context of a body that takes [`StreamCx`].
+	#[must_use]
+	pub fn stream_cx(&self) -> StreamCx {
+		StreamCx::new(self.identity.clone())
+	}
+
+	/// The context of a body that takes [`QueryCx`](crate::QueryCx), or
+	/// reads it through [`rpc::cx()`](crate::cx).
+	///
+	/// # Errors
+	///
+	/// When the server that opened the stream has no database.
+	#[cfg(any(feature = "postgres", feature = "sqlite"))]
+	pub fn query_cx(&self) -> Result<super::QueryCx> {
+		let Some(db) = &self.db else {
+			return Err(Error::server(
+				"this stream reads the database, and the live server it was opened on serves \
+				 streams only: serve it with `rpc::server::Live`, or take `rpc::StreamCx`",
+			));
+		};
+
+		Ok(super::QueryCx::new(db.clone(), self.identity.clone()))
+	}
+}
+
 /// Where a running stream sends its items: the connection's session, gated
 /// by the credits its client granted.
 #[derive(Debug)]
 #[cfg_attr(
-	not(feature = "live"),
+	not(feature = "live-streams"),
 	allow(dead_code, reason = "only live sessions consume queued frames")
 )]
 pub(crate) struct Frame {
@@ -119,7 +246,7 @@ pub type Encoded = Result<(Value, Option<Value>)>;
 
 impl StreamSink {
 	#[cfg_attr(
-		not(feature = "live"),
+		not(feature = "live-streams"),
 		allow(dead_code, reason = "only a live session opens streams")
 	)]
 	pub(crate) fn new(stream: u32, out: mpsc::Sender<Frame>, credits: Arc<Semaphore>) -> Self {
@@ -136,7 +263,7 @@ impl StreamSink {
 	/// Create this before running the operation and await it afterwards.
 	/// Waiting belongs to the tracked producer task, never a detached task.
 	#[cfg_attr(
-		not(feature = "live"),
+		not(feature = "live-streams"),
 		allow(dead_code, reason = "only a live session opens streams")
 	)]
 	pub(crate) fn completion(&self) -> BoxFuture<'static, ()> {
@@ -164,10 +291,10 @@ impl StreamSink {
 	/// Runs even manually registered producers under the same terminal
 	/// lifecycle.
 	#[cfg_attr(
-		not(feature = "live"),
+		not(feature = "live-streams"),
 		allow(dead_code, reason = "only live sessions supervise producers")
 	)]
-	pub(crate) async fn supervise(self, open: Open, args: Value, cx: QueryCx) {
+	pub(crate) async fn supervise(self, open: Open, args: Value, cx: StreamOpen) {
 		let completion = self.completion();
 		let failure = Arc::clone(&self.failure);
 		let pump = async move { open(args, cx, self).await };
@@ -303,6 +430,214 @@ impl StreamSink {
 		}
 
 		sent
+	}
+}
+
+/// The most credits a stream may hold at once, however many the client
+/// grants.
+const MAX_CREDITS: usize = 1 << 20;
+
+struct Running {
+	generation: Arc<()>,
+	task: tokio::task::JoinHandle<()>,
+	credits: Arc<Semaphore>,
+}
+
+// A cancelled or unwinding session must not detach a stream producer.
+impl Drop for Running {
+	fn drop(&mut self) {
+		self.task.abort();
+	}
+}
+
+/// The streams one connection holds open, for whichever session serves
+/// it.
+#[cfg_attr(
+	not(feature = "live-streams"),
+	allow(dead_code, reason = "only a live session opens streams")
+)]
+pub(crate) struct StreamSet {
+	running: HashMap<u32, Running>,
+	/// What running streams send, forwarded in order.
+	frames: mpsc::Receiver<Frame>,
+	out: mpsc::Sender<Frame>,
+}
+
+#[cfg_attr(
+	not(feature = "live-streams"),
+	allow(dead_code, reason = "only a live session opens streams")
+)]
+impl StreamSet {
+	/// No streams yet, with room for `capacity` frames the session hasn't
+	/// taken.
+	pub(crate) fn new(capacity: usize) -> Self {
+		let (out, frames) = mpsc::channel(capacity);
+
+		Self {
+			running: HashMap::new(),
+			frames,
+			out,
+		}
+	}
+
+	/// Opens the stream `name` that `service`'s live socket serves, with
+	/// room for `credits` items, replacing any stream the client already
+	/// numbered `stream`. Returns the frame that says why it didn't open.
+	pub(crate) fn open(
+		&mut self,
+		service: Option<&str>,
+		stream: u32,
+		name: &str,
+		args: Value,
+		credits: u32,
+		cx: StreamOpen,
+	) -> Option<ServerFrame> {
+		self.running.remove(&stream);
+
+		let Some(registration) = registration_in(service, name) else {
+			let error = WireError::invalid(format!("no stream is named `{name}`"));
+
+			return Some(EndReason::Failed(error).frame(stream));
+		};
+
+		if self.running.len() >= MAX_STREAMS {
+			let error =
+				WireError::invalid(format!("a connection may hold {MAX_STREAMS} streams open"));
+
+			return Some(EndReason::Failed(error).frame(stream));
+		}
+
+		let credits = Arc::new(Semaphore::new(
+			usize::try_from(credits)
+				.unwrap_or(MAX_CREDITS)
+				.min(MAX_CREDITS),
+		));
+		let sink = StreamSink::new(stream, self.out.clone(), Arc::clone(&credits));
+		let generation = Arc::clone(&sink.generation);
+		let task = tokio::spawn(sink.supervise(registration.open, args, cx));
+		self.running.insert(
+			stream,
+			Running {
+				generation,
+				task,
+				credits,
+			},
+		);
+
+		None
+	}
+
+	/// Gives a stream room for `n` more items.
+	pub(crate) fn credit(&self, stream: u32, n: u32) {
+		let Some(running) = self.running.get(&stream) else {
+			return;
+		};
+		let room = MAX_CREDITS.saturating_sub(running.credits.available_permits());
+		let n = usize::try_from(n).unwrap_or(room).min(room);
+
+		if n > 0 {
+			running.credits.add_permits(n);
+		}
+	}
+
+	/// Stops a stream the client no longer wants.
+	pub(crate) fn cancel(&mut self, stream: u32) {
+		self.running.remove(&stream);
+	}
+
+	/// The next frame a running stream produced.
+	pub(crate) async fn recv(&mut self) -> Option<Frame> {
+		self.frames.recv().await
+	}
+
+	/// The text to send for a frame a stream produced, unless the stream
+	/// was cancelled or replaced since. A stream's last frame closes it.
+	pub(crate) fn accept(&mut self, frame: Frame) -> Option<String> {
+		let running = self.running.get(&frame.stream)?;
+
+		if !Arc::ptr_eq(&running.generation, &frame.generation) {
+			return None;
+		}
+
+		if frame.terminal {
+			self.running.remove(&frame.stream);
+		}
+
+		Some(frame.text)
+	}
+
+	/// Stops every stream still running. Returns what to send: the frames
+	/// they had already produced, then an interrupted end for each that
+	/// hadn't finished.
+	pub(crate) async fn interrupt(&mut self) -> Vec<String> {
+		for running in self.running.values() {
+			running.task.abort();
+		}
+
+		for running in self.running.values_mut() {
+			let _ = (&mut running.task).await;
+		}
+
+		let mut texts = Vec::new();
+
+		while let Ok(frame) = self.frames.try_recv() {
+			texts.extend(self.accept(frame));
+		}
+
+		for (stream, _) in self.running.drain() {
+			texts.extend(serde_json::to_string(&EndReason::Interrupted.frame(stream)).ok());
+		}
+
+		texts
+	}
+
+	/// Stops every stream, saying nothing: the connection is gone.
+	pub(crate) fn abort_all(&mut self) {
+		self.running.clear();
+	}
+}
+
+/// What a session's own tests look at.
+#[cfg(test)]
+#[cfg_attr(
+	not(feature = "live"),
+	allow(dead_code, reason = "the live session's tests read these")
+)]
+impl StreamSet {
+	pub(crate) fn is_empty(&self) -> bool {
+		self.running.is_empty()
+	}
+
+	pub(crate) fn contains(&self, stream: u32) -> bool {
+		self.running.contains_key(&stream)
+	}
+
+	/// Whether any producer is still running.
+	pub(crate) fn producing(&self) -> bool {
+		self.running
+			.values()
+			.any(|running| !running.task.is_finished())
+	}
+
+	/// How many frames the session hasn't taken yet.
+	pub(crate) fn queued(&self) -> usize {
+		self.frames.len()
+	}
+
+	/// Holds `task` as the producer of `stream`, and returns the generation
+	/// its frames carry.
+	pub(crate) fn hold(&mut self, stream: u32, task: tokio::task::JoinHandle<()>) -> Arc<()> {
+		let generation = Arc::new(());
+		self.running.insert(
+			stream,
+			Running {
+				generation: Arc::clone(&generation),
+				task,
+				credits: Arc::new(Semaphore::new(1)),
+			},
+		);
+
+		generation
 	}
 }
 

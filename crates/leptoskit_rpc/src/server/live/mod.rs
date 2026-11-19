@@ -60,8 +60,6 @@ mod hub;
 mod mailbox;
 pub(crate) mod memory;
 mod session;
-mod socket;
-mod sse;
 
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -73,8 +71,6 @@ use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 
 use axum::Router;
-use axum::http::HeaderMap;
-use axum::http::header::ORIGIN;
 use axum::routing::get;
 use axum::routing::post;
 use leptoskit_db::Db;
@@ -88,30 +84,21 @@ use super::Identity;
 use super::Invocation;
 use super::ReadSink;
 use super::registration_in;
+use super::transport::FRAME_BURST;
+use super::transport::FRAMES_PER_SECOND;
+use super::transport::Host;
+pub(crate) use super::transport::INCOMING;
+pub(crate) use super::transport::Incoming;
+pub(crate) use super::transport::OUTGOING;
+pub(crate) use super::transport::Opened;
+pub(crate) use super::transport::Outbound;
+use super::transport::STALL;
+use super::transport::socket;
+use super::transport::sse;
 use crate::Kind;
 use crate::live::MAX_RESULT_BYTES;
 use crate::live::PresenceMember;
 use crate::live::WireError;
-
-/// How many frames may queue for a slow connection. An unfinished
-/// transition retains its remaining chunks; later changes coalesce into
-/// one current snapshot when transport capacity returns.
-const OUTGOING: usize = 32;
-
-/// How many frames one connection may send before the server serves it no
-/// further. Every frame runs against the database — a query, a mutation, a
-/// session lookup — so a client that cycles subscriptions at line rate is
-/// closed instead of fed.
-///
-/// The budget is a token bucket: [`FRAMES_PER_SECOND`] tokens return every
-/// second, and a connection starts with a burst of [`FRAME_BURST`] so a
-/// reconnecting client can re-subscribe to everything it had in one go.
-const FRAME_BURST: u64 = 512;
-const FRAMES_PER_SECOND: u64 = 256;
-
-/// How many client frames may wait for a busy session before the transport
-/// stops reading.
-const INCOMING: usize = 64;
 
 /// A live server: the database, how to tell who is calling, and the
 /// connections listening for changes.
@@ -134,10 +121,6 @@ struct Inner {
 	stall: std::time::Duration,
 	shared: Arc<Shared>,
 }
-
-/// How long a connection's client may leave a frame unread before the
-/// connection closes: the heartbeat's interval.
-const STALL: std::time::Duration = std::time::Duration::from_secs(crate::live::HEARTBEAT_SECONDS);
 
 /// What every copy of a [`Live`] shares, whatever its settings.
 struct Shared {
@@ -208,26 +191,16 @@ pub struct LiveStats {
 	pub relay_fills: u64,
 }
 
-/// What a session writes for its transport to send.
-#[derive(Clone, Debug)]
-pub(crate) enum Outbound {
-	/// A server frame as JSON, with the version a transition brings the
-	/// client to, which server-sent events carry as the event's `id`.
-	Frame { text: String, version: Option<u64> },
-	/// A keep-alive: a WebSocket ping, or an event stream comment.
-	Heartbeat,
-}
-
-/// What a transport hands its session.
-#[derive(Debug)]
-pub(crate) enum Incoming {
-	/// A client frame.
-	Frame(crate::live::ClientFrame),
-	/// Something that isn't one, answered with a `done` for request 0.
-	Invalid(WireError),
-}
-
 impl Live {
+	/// A live server for streams alone, with no database: see
+	/// [`LiveStreams`](super::LiveStreams). The same as
+	/// [`LiveStreams::new`](super::LiveStreams::new), which a build without
+	/// a database driver calls directly.
+	#[must_use]
+	pub fn streams_only() -> super::LiveStreams {
+		super::LiveStreams::new()
+	}
+
 	/// Live queries on `db`. Every caller is anonymous until
 	/// [`identify`](Self::identify) says otherwise.
 	pub fn new(db: Db) -> Self {
@@ -493,9 +466,9 @@ impl Live {
 	{
 		let base = &self.inner.live_path;
 		Router::new()
-			.route(base, get(socket::upgrade))
-			.route(&format!("{base}/events"), get(sse::events))
-			.route(&format!("{base}/frames"), post(sse::frames))
+			.route(base, get(socket::upgrade::<Self>))
+			.route(&format!("{base}/events"), get(sse::events::<Self>))
+			.route(&format!("{base}/frames"), post(sse::frames::<Self>))
 			.with_state(self.clone())
 	}
 
@@ -563,21 +536,31 @@ impl Live {
 			.lock()
 			.unwrap_or_else(PoisonError::into_inner)
 	}
+}
 
-	fn origin_ok(&self, headers: &HeaderMap) -> bool {
-		let Some(allowed) = &self.inner.origin else {
-			return true;
-		};
+impl Host for Live {
+	fn identifier(&self) -> &dyn Identify {
+		&*self.inner.identify
+	}
 
-		match headers.get(ORIGIN) {
-			// Native apps send no `Origin`; they authenticate with a token.
-			None => true,
-			Some(origin) => {
-				origin
-					.to_str()
-					.is_ok_and(|origin| origin.trim_end_matches('/') == allowed)
-			}
-		}
+	fn allowed_origin(&self) -> Option<&str> {
+		self.inner.origin.as_deref()
+	}
+
+	fn stall(&self) -> std::time::Duration {
+		self.inner.stall
+	}
+
+	fn next_number(&self) -> u32 {
+		Self::next_number(self)
+	}
+
+	fn event_streams(&self) -> MutexGuard<'_, HashMap<String, sse::Handle>> {
+		Self::event_streams(self)
+	}
+
+	fn serve(&self, opened: Opened) -> impl Future<Output = ()> + Send {
+		Self::serve(self, opened)
 	}
 }
 

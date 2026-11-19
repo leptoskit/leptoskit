@@ -48,11 +48,11 @@ pub trait StreamOperation: Serialize + DeserializeOwned + Clone + Send + Sync + 
 
 	/// Runs the body as the caller, and sends its items through `sink`
 	/// until it ends.
-	#[cfg(any(feature = "postgres", feature = "sqlite"))]
+	#[cfg(any(feature = "live-streams", feature = "postgres", feature = "sqlite"))]
 	#[doc(hidden)]
 	fn pump(
 		self,
-		cx: crate::QueryCx,
+		cx: crate::server::StreamOpen,
 		sink: crate::server::StreamSink,
 	) -> impl Future<Output = ()> + Send;
 }

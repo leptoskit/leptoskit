@@ -1,10 +1,15 @@
 //! Deterministic backpressure: a bounded session channel, without relying on
 //! a machine's TCP buffers filling at a particular speed.
 
+use std::sync::Mutex;
+
 use futures::FutureExt;
 use serde_json::json;
 
 use super::*;
+use crate::live::EndReason;
+use crate::server::stream::StreamOpen;
+use crate::server::stream::StreamSink;
 
 struct ReplacementCaller;
 
@@ -29,7 +34,6 @@ async fn session() -> (
 	let (input, incoming) = mpsc::channel(1);
 	let (events, batches) = mailbox::channel();
 	let (acts, finished) = mpsc::channel(super::super::OUTGOING);
-	let (stream_out, stream_frames) = mpsc::channel(super::super::OUTGOING);
 	live.hub().connect(1, events);
 
 	let applied = live.hub().watch();
@@ -50,9 +54,7 @@ async fn session() -> (
 		applied,
 		subscriptions: HashMap::new(),
 		joined: HashMap::new(),
-		streams: HashMap::new(),
-		stream_frames,
-		stream_out,
+		streams: stream::StreamSet::new(super::super::OUTGOING),
 		last_sent: 0,
 		pending: None,
 		pending_progress: tokio::time::Instant::now(),
@@ -395,7 +397,7 @@ async fn reauthentication_starts_a_fresh_pending_stall_budget() {
 
 fn generation_pump(
 	args: Value,
-	_: QueryCx,
+	_: StreamOpen,
 	sink: StreamSink,
 ) -> leptoskit_query::BoxFuture<'static, ()> {
 	Box::pin(async move {
@@ -419,11 +421,7 @@ inventory::submit! {
 
 async fn produced(session: &Session) {
 	tokio::time::timeout(Duration::from_secs(5), async {
-		while session
-			.streams
-			.values()
-			.any(|running| !running.task.is_finished())
-		{
+		while session.streams.producing() {
 			tokio::task::yield_now().await;
 		}
 	})
@@ -452,23 +450,23 @@ async fn reused_stream_id_discards_old_items_and_terminal_without_retiring_repla
 			.await
 	);
 	produced(&session).await;
-	assert_eq!(session.stream_frames.len(), 4);
+	assert_eq!(session.streams.queued(), 4);
 
 	for _ in 0..2 {
-		let frame = session.stream_frames.recv().await.unwrap();
+		let frame = session.streams.recv().await.unwrap();
 		assert!(session.forward_stream(frame).await);
 		assert!(
 			out.try_recv().is_err(),
 			"cancelled output never reaches transport"
 		);
 		assert!(
-			session.streams.contains_key(&7),
+			session.streams.contains(7),
 			"old end cannot retire replacement"
 		);
 	}
 
 	for terminal in [false, true] {
-		let frame = session.stream_frames.recv().await.unwrap();
+		let frame = session.streams.recv().await.unwrap();
 		assert_eq!(frame.terminal, terminal);
 		assert!(session.forward_stream(frame).await);
 		let Outbound::Frame { text, .. } = out.recv().await.unwrap() else {
@@ -497,8 +495,8 @@ async fn returned_failed_and_panicking_producers_keep_admission_until_terminal()
 				.await
 		);
 		produced(&session).await;
-		assert!(session.streams.contains_key(&7));
-		let frame = session.stream_frames.recv().await.unwrap();
+		assert!(session.streams.contains(7));
+		let frame = session.streams.recv().await.unwrap();
 		assert!(frame.terminal);
 		assert!(session.forward_stream(frame).await);
 
@@ -535,7 +533,10 @@ async fn interrupting_streams_with_a_stopped_reader_obeys_stall_timeout() {
 	);
 }
 
-async fn pending_producer() -> (Running, tokio::sync::oneshot::Receiver<()>) {
+async fn pending_producer() -> (
+	tokio::task::JoinHandle<()>,
+	tokio::sync::oneshot::Receiver<()>,
+) {
 	struct Dropped(Option<tokio::sync::oneshot::Sender<()>>);
 	impl Drop for Dropped {
 		fn drop(&mut self) {
@@ -552,22 +553,14 @@ async fn pending_producer() -> (Running, tokio::sync::oneshot::Receiver<()>) {
 		std::future::pending::<()>().await;
 	});
 	entered.await.unwrap();
-	(
-		Running {
-			generation: Arc::new(()),
-			task,
-			credits: Arc::new(tokio::sync::Semaphore::new(1)),
-		},
-		stopped,
-	)
+	(task, stopped)
 }
 
 #[tokio::test]
 async fn terminal_delivery_cancels_a_producer_that_keeps_running() {
 	let (mut session, mut out, _input, _incoming) = session().await;
 	let (running, stopped) = pending_producer().await;
-	let generation = Arc::clone(&running.generation);
-	session.streams.insert(7, running);
+	let generation = session.streams.hold(7, running);
 	let text = serde_json::to_string(&EndReason::Done.frame(7)).unwrap();
 	assert!(
 		session
@@ -592,7 +585,7 @@ async fn terminal_delivery_cancels_a_producer_that_keeps_running() {
 async fn dropping_a_session_cancels_its_pending_stream_producer() {
 	let (mut session, _out, _input, _incoming) = session().await;
 	let (running, stopped) = pending_producer().await;
-	session.streams.insert(7, running);
+	session.streams.hold(7, running);
 	drop(session);
 	tokio::time::timeout(Duration::from_secs(1), stopped)
 		.await

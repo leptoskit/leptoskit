@@ -37,16 +37,22 @@ pub(crate) mod live;
 pub mod receipts;
 #[cfg(feature = "relay")]
 pub mod relay;
+#[cfg(any(feature = "live-streams", feature = "postgres", feature = "sqlite"))]
+mod respond;
 mod roles;
 #[cfg(any(feature = "postgres", feature = "sqlite"))]
 mod run;
 #[cfg(feature = "db")]
 mod services;
-#[cfg(any(feature = "postgres", feature = "sqlite"))]
+#[cfg(any(feature = "live-streams", feature = "postgres", feature = "sqlite"))]
 pub mod stream;
+#[cfg(feature = "live-streams")]
+mod stream_live;
+#[cfg(feature = "live-streams")]
+pub(crate) mod transport;
 
 /// Normalizes a live mount for both HTTP-only and live server builds.
-#[cfg(any(feature = "live", feature = "postgres", feature = "sqlite"))]
+#[cfg(any(feature = "live-streams", feature = "postgres", feature = "sqlite"))]
 pub(crate) fn mount_path(path: &str) -> String {
 	let trimmed = path.trim_matches('/');
 	if trimmed.is_empty() {
@@ -115,6 +121,8 @@ pub use relay::RelayError;
 pub use relay::RelayPublisher;
 #[cfg(feature = "relay")]
 pub use relay::RelaySettings;
+#[cfg(feature = "live-streams")]
+pub(crate) use respond::failure;
 pub use roles::ROLE_ENV;
 pub use roles::Role;
 pub use roles::Roles;
@@ -146,16 +154,23 @@ pub use services::SERVICE_CALLER_PREFIX;
 pub use services::ServiceCallers;
 #[cfg(any(feature = "postgres", feature = "sqlite"))]
 pub(crate) use services::answer_service_token;
-#[cfg(feature = "live")]
+#[cfg(feature = "live-streams")]
 pub(crate) use services::is_service;
 #[cfg(feature = "db")]
 pub use services::service_identity_token;
-#[cfg(feature = "db")]
+#[cfg(any(feature = "postgres", feature = "sqlite"))]
 pub(crate) use services::service_identity_token_with;
-#[cfg(any(feature = "postgres", feature = "sqlite"))]
+#[cfg(any(feature = "live-streams", feature = "postgres", feature = "sqlite"))]
+pub use stream::StreamCx;
+#[cfg(any(feature = "live-streams", feature = "postgres", feature = "sqlite"))]
+#[doc(hidden)]
+pub use stream::StreamOpen;
+#[cfg(any(feature = "live-streams", feature = "postgres", feature = "sqlite"))]
 pub use stream::StreamRegistration;
-#[cfg(any(feature = "postgres", feature = "sqlite"))]
+#[cfg(any(feature = "live-streams", feature = "postgres", feature = "sqlite"))]
 pub use stream::StreamSink;
+#[cfg(feature = "live-streams")]
+pub use stream_live::LiveStreams;
 
 /// What an operation's body receives: [`QueryCx`], [`MutationCx`],
 /// [`ActionCx`], or [`JobCx`]. Sealed:

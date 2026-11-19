@@ -166,10 +166,14 @@ pub use server::JobsHandle;
 pub use server::Live;
 #[cfg(feature = "live")]
 pub use server::LiveStats;
+#[cfg(feature = "live-streams")]
+pub use server::LiveStreams;
 #[cfg(any(feature = "postgres", feature = "sqlite"))]
 pub use server::MutationCx;
 #[cfg(any(feature = "postgres", feature = "sqlite"))]
 pub use server::QueryCx;
+#[cfg(any(feature = "live-streams", feature = "postgres", feature = "sqlite"))]
+pub use server::StreamCx;
 #[cfg(any(feature = "postgres", feature = "sqlite"))]
 pub use server::call;
 #[cfg(any(feature = "postgres", feature = "sqlite"))]
@@ -277,15 +281,15 @@ pub mod __private {
 	pub use crate::server::jobs::fail_job;
 	#[cfg(any(feature = "postgres", feature = "sqlite"))]
 	pub use crate::server::jobs::run_job;
-	#[cfg(any(feature = "postgres", feature = "sqlite"))]
+	#[cfg(any(feature = "live-streams", feature = "postgres", feature = "sqlite"))]
 	pub use crate::server::stream::fallible as stream_fallible;
-	#[cfg(any(feature = "postgres", feature = "sqlite"))]
+	#[cfg(any(feature = "live-streams", feature = "postgres", feature = "sqlite"))]
 	pub use crate::server::stream::open as open_stream;
-	#[cfg(any(feature = "postgres", feature = "sqlite"))]
+	#[cfg(any(feature = "live-streams", feature = "postgres", feature = "sqlite"))]
 	pub use crate::server::stream::plain as stream_plain;
-	#[cfg(any(feature = "postgres", feature = "sqlite"))]
+	#[cfg(any(feature = "live-streams", feature = "postgres", feature = "sqlite"))]
 	pub use crate::server::stream::resumable as stream_resumable;
-	#[cfg(any(feature = "postgres", feature = "sqlite"))]
+	#[cfg(any(feature = "live-streams", feature = "postgres", feature = "sqlite"))]
 	pub use crate::server::stream::resumable_fallible as stream_resumable_fallible;
 	pub use crate::stream::assert_cursor;
 	pub use crate::stream::assert_stream_item;
@@ -302,6 +306,44 @@ pub mod __private {
 	) -> F::Output {
 		crate::server::enter_query(cx, future).await
 	}
+
+	/// Runs a stream that takes no context: inside the query context's
+	/// task where the server that opened it has a database, so the body can
+	/// read [`rpc::cx()`](crate::cx), and as it is where it has none.
+	#[cfg(any(feature = "live-streams", feature = "postgres", feature = "sqlite"))]
+	pub async fn stream_scope<F: Future<Output = ()>>(open: crate::server::StreamOpen, future: F) {
+		#[cfg(any(feature = "postgres", feature = "sqlite"))]
+		if let Ok(cx) = open.query_cx() {
+			return crate::server::enter_query(std::sync::Arc::new(cx), future).await;
+		}
+
+		#[cfg(not(any(feature = "postgres", feature = "sqlite")))]
+		let _ = open;
+
+		future.await;
+	}
+}
+
+/// Refuses a server build that declares a stream with nothing to serve it.
+#[cfg(any(feature = "live-streams", feature = "postgres", feature = "sqlite"))]
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __require_streams {
+	() => {};
+}
+
+/// Refuses a server build that declares a stream with nothing to serve it.
+#[cfg(not(any(feature = "live-streams", feature = "postgres", feature = "sqlite")))]
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __require_streams {
+	() => {
+		::core::compile_error!(
+			"a stream is served over the live socket: turn on leptoskit_rpc's `live-streams` \
+			 feature in the server build, or `live` with `postgres` or `sqlite` for a stream that \
+			 reads the database"
+		);
+	};
 }
 
 /// Refuses a server build that declares queries or mutations without a
@@ -362,14 +404,14 @@ macro_rules! __remote_job_run {
 /// The body a service's stream has outside that service: `pump`, which
 /// only fails with where the stream runs. Only that service's live socket
 /// serves it, so it never runs.
-#[cfg(any(feature = "postgres", feature = "sqlite"))]
+#[cfg(any(feature = "live-streams", feature = "postgres", feature = "sqlite"))]
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __remote_stream_pump {
 	() => {
 		fn pump(
 			self,
-			_cx: $crate::QueryCx,
+			_cx: $crate::server::StreamOpen,
 			sink: $crate::server::StreamSink,
 		) -> impl ::core::future::Future<Output = ()> + ::core::marker::Send {
 			async move {
@@ -382,8 +424,8 @@ macro_rules! __remote_stream_pump {
 	};
 }
 
-/// Without a database there is no `pump` to give.
-#[cfg(not(any(feature = "postgres", feature = "sqlite")))]
+/// Without anything to serve streams there is no `pump` to give.
+#[cfg(not(any(feature = "live-streams", feature = "postgres", feature = "sqlite")))]
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __remote_stream_pump {

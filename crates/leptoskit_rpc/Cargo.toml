@@ -157,7 +157,12 @@ devtools = ["dep:leptoskit_devtools_protocol"]
 # Serves live queries over a WebSocket at `/live`, and over server-sent events
 # at `/live/events` where a socket can't get through, on top of the database's
 # change feed. Pick a driver with `postgres` or `sqlite`.
-live = ["server", "db", "dep:futures", "dep:getrandom"]
+live = ["live-streams"]
+# Serves `#[rpc::stream]` over the same socket and events, without the live
+# queries: `LiveStreams` needs no database driver and no connection, so a
+# server that has no database can stream what it knows. A stream that takes
+# `StreamCx` runs on either; one that takes `QueryCx` needs `live`.
+live-streams = ["server", "db", "dep:futures", "dep:getrandom", "tokio/macros"]
 # The live relay over NATS JetStream, for several servers: one publishes the
 # change log to a stream, and every `Live` takes commits from it instead of
 # reading the database, with channel signals and presence crossing between
