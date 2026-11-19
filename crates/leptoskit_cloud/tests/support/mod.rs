@@ -16,6 +16,7 @@ pub mod domains;
 pub mod review;
 pub mod scenarios;
 pub mod shipping;
+pub mod subscriptions;
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -297,6 +298,7 @@ pub async fn app_with(db: Db, configure: impl FnOnce(&mut ControlConfig)) -> App
 		apps_domain: APPS_DOMAIN.to_owned(),
 		registry: REGISTRY.to_owned(),
 		catalogue: None,
+		payments: None,
 		shipping: test_settings(),
 		dev: None,
 	};

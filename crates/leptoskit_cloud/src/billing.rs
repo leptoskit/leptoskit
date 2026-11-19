@@ -19,6 +19,7 @@
 //!
 //! Nothing here charges anyone: payment arrives in a later slice.
 
+use leptoskit_db::Timestamp;
 use leptoskit_rpc as rpc;
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -151,6 +152,101 @@ pub struct SpendCap {
 	pub own: bool,
 }
 
+/// Where a subscription stands, in the payment provider's words.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SubscriptionStatus {
+	/// Its first payment hasn't gone through yet.
+	Incomplete,
+	/// Its first payment never went through, and it is over.
+	IncompleteExpired,
+	Trialing,
+	Active,
+	/// A payment failed, and the provider is trying again.
+	PastDue,
+	Canceled,
+	/// Payments failed until the provider stopped trying.
+	Unpaid,
+	Paused,
+	/// A status this build doesn't know.
+	Unknown,
+}
+
+impl SubscriptionStatus {
+	/// The status the provider writes as `text`.
+	#[must_use]
+	pub fn parse(text: &str) -> Self {
+		match text {
+			"incomplete" => Self::Incomplete,
+			"incomplete_expired" => Self::IncompleteExpired,
+			"trialing" => Self::Trialing,
+			"active" => Self::Active,
+			"past_due" => Self::PastDue,
+			"canceled" => Self::Canceled,
+			"unpaid" => Self::Unpaid,
+			"paused" => Self::Paused,
+			_ => Self::Unknown,
+		}
+	}
+
+	/// How the provider writes it.
+	#[must_use]
+	pub const fn code(self) -> &'static str {
+		match self {
+			Self::Incomplete => "incomplete",
+			Self::IncompleteExpired => "incomplete_expired",
+			Self::Trialing => "trialing",
+			Self::Active => "active",
+			Self::PastDue => "past_due",
+			Self::Canceled => "canceled",
+			Self::Unpaid => "unpaid",
+			Self::Paused => "paused",
+			Self::Unknown => "unknown",
+		}
+	}
+
+	/// Whether the organisation has the plan it subscribed to: while the
+	/// subscription runs, a failed payment being retried included.
+	#[must_use]
+	pub const fn keeps_plan(self) -> bool {
+		matches!(self, Self::Trialing | Self::Active | Self::PastDue)
+	}
+
+	/// Whether the subscription is over, so the organisation is back on
+	/// the plan everyone starts on.
+	#[must_use]
+	pub const fn is_over(self) -> bool {
+		matches!(
+			self,
+			Self::IncompleteExpired | Self::Canceled | Self::Unpaid | Self::Paused
+		)
+	}
+}
+
+/// An organisation's plan and the subscription that pays for it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct SubscriptionSummary {
+	/// The plan the organisation is on now.
+	pub plan: String,
+	/// Whether this cloud takes payment at all.
+	pub payments: bool,
+	/// The plans `checkout` can start a subscription to.
+	pub sold: Vec<String>,
+	/// The subscription's status, or `None` when there has never been one.
+	pub status: Option<SubscriptionStatus>,
+	/// When what the subscription has paid for ends.
+	pub period_end: Option<Timestamp>,
+	/// Whether the subscription ends then instead of renewing.
+	pub cancel_at_period_end: bool,
+}
+
+/// A page at the payment provider, to send the person to. It works once,
+/// and for a short while.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct BillingLink {
+	pub url: String,
+}
+
 /// The plans and prices this cloud offers.
 ///
 /// # Errors
@@ -195,4 +291,56 @@ pub async fn set_spend_cap(
 	cap: Option<u64>,
 ) -> rpc::Result<SpendCap> {
 	crate::server::billing::set_spend_cap(cx, &organization, cap).await
+}
+
+/// `organization`'s plan and the subscription that pays for it.
+///
+/// # Errors
+///
+/// `NotFound` (`organization_not_found`) for an organisation the caller
+/// isn't in.
+#[rpc::api(scope = crate::OAuthScope::Cloud, tag = "billing")]
+#[rpc::query]
+pub async fn subscription(
+	cx: &rpc::QueryCx,
+	organization: String,
+) -> rpc::Result<SubscriptionSummary> {
+	crate::server::subscriptions::subscription(cx, &organization).await
+}
+
+/// A page at the payment provider where `organization` subscribes to
+/// `plan`. The plan changes when the provider says the subscription has
+/// started, not when the page is left. Owners and billing members only,
+/// and never a token.
+///
+/// # Errors
+///
+/// `Conflict` (`payments_unavailable`) when this cloud takes no payment or
+/// the provider can't be reached, (`plan_not_sold`) for a plan with no
+/// price at the provider, and (`already_subscribed`) while a subscription
+/// runs, which `portal` changes; `NotFound` (`plan_not_found`) for a plan
+/// the catalogue doesn't have.
+#[rpc::api(scope = crate::OAuthScope::Cloud, tag = "billing")]
+#[rpc::action]
+pub async fn checkout(
+	cx: &rpc::ActionCx,
+	organization: String,
+	plan: String,
+) -> rpc::Result<BillingLink> {
+	crate::server::subscriptions::checkout(cx, organization, plan).await
+}
+
+/// A page at the payment provider where `organization` changes or cancels
+/// its subscription, changes how it pays, and reads its invoices. Owners
+/// and billing members only, and never a token.
+///
+/// # Errors
+///
+/// `Conflict` (`payments_unavailable`) when this cloud takes no payment or
+/// the provider can't be reached, and (`no_customer`) before the
+/// organisation has ever started a checkout.
+#[rpc::api(scope = crate::OAuthScope::Cloud, tag = "billing")]
+#[rpc::action]
+pub async fn portal(cx: &rpc::ActionCx, organization: String) -> rpc::Result<BillingLink> {
+	crate::server::subscriptions::portal(cx, organization).await
 }

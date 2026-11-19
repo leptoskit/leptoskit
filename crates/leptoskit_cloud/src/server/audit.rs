@@ -72,6 +72,33 @@ pub(crate) async fn record(
 	.map(|_| ())
 }
 
+/// Appends an entry for something the payment provider said happened to
+/// `organization`.
+///
+/// # Errors
+///
+/// When the write fails, which fails the change it records.
+pub(crate) async fn record_provider(
+	tx: &impl leptoskit_db::Connection,
+	action: &str,
+	organization: Id<Organization>,
+	target: Option<String>,
+) -> leptoskit_db::Result<()> {
+	NewAuditEvent {
+		actor: ActorKind::System,
+		account_id: None,
+		token_id: None,
+		action: action.to_owned(),
+		organization_id: Some(organization),
+		project_id: None,
+		target,
+		client: "payment-provider".to_owned(),
+	}
+	.insert(tx)
+	.await
+	.map(|_| ())
+}
+
 /// Appends an entry for the server's own command line.
 ///
 /// # Errors

@@ -25,6 +25,7 @@ use support::domains;
 use support::review;
 use support::shipping;
 use support::shipping::Shop;
+use support::subscriptions;
 use tokio_tungstenite::MaybeTlsStream;
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::Message;
@@ -565,4 +566,25 @@ async fn a_build_whose_lease_ran_out_is_counted() {
 	let db = leptoskit_db::testing::sqlite_migrated(leptoskit_cloud::MIGRATIONS).await;
 	let app = support::app_with(db, |config| config.catalogue = Some(billing::catalogue())).await;
 	billing::a_build_whose_lease_ran_out_is_counted(&app).await;
+}
+
+#[tokio::test]
+async fn a_plan_follows_the_providers_subscription() {
+	let till = subscriptions::Till::default();
+	let db = leptoskit_db::testing::sqlite_migrated(leptoskit_cloud::MIGRATIONS).await;
+	let app = support::app_with(db, subscriptions::taking_payment(&till)).await;
+	subscriptions::a_plan_follows_the_providers_subscription(&app, &till).await;
+}
+
+#[tokio::test]
+async fn a_missed_event_is_caught_up_with() {
+	let till = subscriptions::Till::default();
+	let db = leptoskit_db::testing::sqlite_migrated(leptoskit_cloud::MIGRATIONS).await;
+	let app = support::app_with(db, subscriptions::taking_payment(&till)).await;
+	subscriptions::a_missed_event_is_caught_up_with(&app, &till).await;
+}
+
+#[tokio::test]
+async fn without_payment_nothing_is_sold() {
+	subscriptions::without_payment_nothing_is_sold(&support::app().await).await;
 }

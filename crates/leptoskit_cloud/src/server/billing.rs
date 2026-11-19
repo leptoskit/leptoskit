@@ -305,6 +305,17 @@ pub(crate) async fn set_spend_cap(
 		)));
 	}
 
+	// Usage beyond what a plan includes isn't invoiced yet, so nobody
+	// raises their own cap past the one the plan came with.
+	if let (Some(cap), Some(most)) = (cap, plan.spend_cap)
+		&& cap > most
+	{
+		return Err(rpc::Error::forbidden(format!(
+			"cap_above_plan: the `{}` plan's own spend cap is the most its cap can be set to",
+			plan.id
+		)));
+	}
+
 	let stored = match cap {
 		Some(cap) => {
 			Some(i64::try_from(cap).map_err(|_| {
@@ -326,6 +337,11 @@ pub(crate) async fn set_spend_cap(
 		NewBillingAccount {
 			organization_id,
 			spend_cap: stored,
+			customer: None,
+			subscription: None,
+			status: None,
+			period_end: None,
+			cancel_at_period_end: None,
 		}
 		.insert(cx.tx())
 		.await?;
