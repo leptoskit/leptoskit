@@ -88,6 +88,14 @@ pub struct CommandBuilder {
 	arguments: Vec<String>,
 	/// Names of the worker's own variables the program is given too.
 	pass: Vec<String>,
+	/// Optional persistent cache directory shared across builds (not deleted
+	/// with the per-build workspace). Exposes `CARGO_HOME`, `SCCACHE_DIR`, and
+	/// `LEPTOSKIT_BUILD_CACHE_DIR` to the build command.
+	cache_dir: Option<PathBuf>,
+	/// Optional sandbox wrapper command prefix (e.g. `["bwrap",
+	/// "--unshare-pid", ...]`). When non-empty, `sandbox[0]` is spawned
+	/// with `sandbox[1..]`, followed by `program` and `arguments`.
+	sandbox: Vec<String>,
 	timeout: Duration,
 }
 
@@ -100,6 +108,8 @@ impl CommandBuilder {
 			program: program.into(),
 			arguments,
 			pass: Vec::new(),
+			cache_dir: None,
+			sandbox: Vec::new(),
 			timeout: Duration::from_hours(1),
 		}
 	}
@@ -109,6 +119,22 @@ impl CommandBuilder {
 	#[must_use]
 	pub fn pass(mut self, names: Vec<String>) -> Self {
 		self.pass = names;
+		self
+	}
+
+	/// Persists Cargo, `sccache`, and `BuildKit` caches under `dir` across
+	/// builds instead of discarding them with each ephemeral workspace.
+	#[must_use]
+	pub fn cache_dir(mut self, dir: impl Into<PathBuf>) -> Self {
+		self.cache_dir = Some(dir.into());
+		self
+	}
+
+	/// Wraps the build program with a sandbox runner prefix (such as `bwrap`
+	/// or a container runner). Empty disables wrapping.
+	#[must_use]
+	pub fn sandbox(mut self, wrapper: Vec<String>) -> Self {
+		self.sandbox = wrapper;
 		self
 	}
 
@@ -579,19 +605,45 @@ impl CommandBuilder {
 		else {
 			return failed("the worker couldn't prepare the build's directory");
 		};
+		let mut env = vec![
+			("LEPTOSKIT_BUILD_SOURCE".to_owned(), source.into()),
+			("LEPTOSKIT_BUILD_INPUT".to_owned(), request.into()),
+			("LEPTOSKIT_BUILD_OUTPUT".to_owned(), output.clone().into()),
+			("HOME".to_owned(), home.into()),
+			("TMPDIR".to_owned(), temporary.into()),
+		];
+		if let Some(cache_root) = &self.cache_dir {
+			let cargo_home = cache_root.join("cargo");
+			let sccache_dir = cache_root.join("sccache");
+			let buildkit_dir = cache_root.join("buildkit");
+			if tokio::fs::create_dir_all(&cargo_home).await.is_err()
+				|| tokio::fs::create_dir_all(&sccache_dir).await.is_err()
+				|| tokio::fs::create_dir_all(&buildkit_dir).await.is_err()
+			{
+				return failed("the worker couldn't prepare its persistent build cache directory");
+			}
+			env.push(("LEPTOSKIT_BUILD_CACHE_DIR".to_owned(), cache_root.into()));
+			env.push(("CARGO_HOME".to_owned(), cargo_home.into()));
+			env.push(("SCCACHE_DIR".to_owned(), sccache_dir.into()));
+		}
+
+		let (program, arguments): (PathBuf, Vec<String>) =
+			if let Some((head, rest)) = self.sandbox.split_first() {
+				let mut args = rest.to_vec();
+				args.push(self.program.to_string_lossy().into_owned());
+				args.extend(self.arguments.iter().cloned());
+				(PathBuf::from(head), args)
+			} else {
+				(self.program.clone(), self.arguments.clone())
+			};
+
 		let exit = Launch {
-			program: &self.program,
-			arguments: &self.arguments,
+			program: &program,
+			arguments: &arguments,
 			pass: &self.pass,
 			timeout: self.timeout,
 			source,
-			env: vec![
-				("LEPTOSKIT_BUILD_SOURCE".to_owned(), source.into()),
-				("LEPTOSKIT_BUILD_INPUT".to_owned(), request.into()),
-				("LEPTOSKIT_BUILD_OUTPUT".to_owned(), output.clone().into()),
-				("HOME".to_owned(), home.into()),
-				("TMPDIR".to_owned(), temporary.into()),
-			],
+			env,
 			log,
 			stop,
 			redact: std::sync::Arc::default(),
@@ -964,5 +1016,33 @@ mod tests {
 		};
 		assert_eq!(reason.len(), MAX_REASON);
 		assert!(!reason.contains(char::is_control));
+	}
+
+	#[tokio::test]
+	async fn cache_dir_exposes_persistent_cache_env_and_sandbox_wraps_command() {
+		let cache = tempfile::tempdir().expect("cache dir");
+		let cache_path = cache.path().to_path_buf();
+		let script = format!(
+			"test -d \"$CARGO_HOME\" && test -d \"$SCCACHE_DIR\" && test -d \
+			 \"$LEPTOSKIT_BUILD_CACHE_DIR\" && echo cached > \"$CARGO_HOME/marker\" && cat > \
+			 \"$LEPTOSKIT_BUILD_OUTPUT\" <<'JSON'\n{}\nJSON",
+			succeeded(REPOSITORY)
+		);
+		let (outcome, log, _directory) = build(
+			&script,
+			|builder| {
+				builder
+					.cache_dir(&cache_path)
+					.sandbox(vec!["/usr/bin/env".to_owned()])
+			},
+			Stop::never(),
+		)
+		.await;
+		assert!(
+			matches!(outcome, BuildOutcome::Succeeded(_)),
+			"{outcome:?} {log:?}"
+		);
+		assert!(cache_path.join("cargo/marker").is_file());
+		assert!(cache_path.join("buildkit").is_dir());
 	}
 }

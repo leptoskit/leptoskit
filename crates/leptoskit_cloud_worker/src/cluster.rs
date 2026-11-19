@@ -196,14 +196,23 @@ pub struct ClusterRole {
 	place: Arc<dyn Place>,
 	databases: Option<Arc<dyn Databases>>,
 	bounds: Bounds,
+	/// Environments observed on this cluster since the worker started, keyed
+	/// by environment ID, so periodic status and runtime-log reports keep
+	/// `environment_status`, `runtime_logs`, and compute metering current.
+	tracked: Arc<std::sync::Mutex<BTreeMap<uuid::Uuid, EnvironmentRef>>>,
+	/// Last reported log line timestamp (`at_millis`) per environment so
+	/// periodic scrapes only forward newly written lines.
+	last_log_millis: Arc<std::sync::Mutex<BTreeMap<uuid::Uuid, i64>>>,
 }
 
 impl std::fmt::Debug for ClusterRole {
 	fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		let tracked = self.tracked.lock().map_or(0, |guard| guard.len());
 		formatter
 			.debug_struct("ClusterRole")
 			.field("databases", &self.databases.is_some())
 			.field("bounds", &self.bounds)
+			.field("tracked_environments", &tracked)
 			.finish_non_exhaustive()
 	}
 }
@@ -217,6 +226,8 @@ impl ClusterRole {
 			place,
 			databases: None,
 			bounds: Bounds::default(),
+			tracked: Arc::default(),
+			last_log_millis: Arc::default(),
 		}
 	}
 
@@ -232,6 +243,130 @@ impl ClusterRole {
 	pub fn databases(mut self, databases: Arc<dyn Databases>) -> Self {
 		self.databases = Some(databases);
 		self
+	}
+
+	/// Records `environment` as active on this cluster for periodic status and
+	/// log reporting.
+	pub fn track(&self, environment: EnvironmentRef) {
+		if let Ok(mut guard) = self.tracked.lock() {
+			guard.insert(environment.environment.id, environment);
+		}
+	}
+
+	/// Stops tracking `environment_id` for periodic status and log reporting.
+	pub fn untrack(&self, environment_id: uuid::Uuid) {
+		if let Ok(mut guard) = self.tracked.lock() {
+			guard.remove(&environment_id);
+		}
+		if let Ok(mut guard) = self.last_log_millis.lock() {
+			guard.remove(&environment_id);
+		}
+	}
+
+	/// Snapshot of environments currently tracked for status reporting.
+	#[must_use]
+	pub fn tracked_environments(&self) -> Vec<EnvironmentRef> {
+		self.tracked
+			.lock()
+			.map(|guard| guard.values().cloned().collect())
+			.unwrap_or_default()
+	}
+
+	/// Scrapes `Runtime::status` and recent `Runtime::logs` for every tracked
+	/// environment and reports them to `control` via `report_status`.
+	///
+	/// Environments that the control plane reports as `environment_not_found`
+	/// are automatically untracked. Returns `(environment_id, result)` for
+	/// every report attempted.
+	pub async fn report_all(
+		&self,
+		control: &crate::client::Control,
+	) -> Vec<(
+		uuid::Uuid,
+		Result<leptoskit_cloud::workers::StatusReceived, crate::client::CallError>,
+	)> {
+		let environments = self.tracked_environments();
+		if environments.is_empty() {
+			return Vec::new();
+		}
+
+		let runtime = match self.place.runtime(SecretValues::default()).await {
+			Ok(runtime) => runtime,
+			Err(error) => {
+				eprintln!("leptoskit-cloud-worker: status scrape couldn't reach cluster: {error}");
+				return Vec::new();
+			}
+		};
+
+		let mut results = Vec::with_capacity(environments.len());
+		let limit = u32::try_from(leptoskit_cloud::workers::MAX_STATUS_LOG_LINES).unwrap_or(500);
+
+		for environment in environments {
+			let env_id = environment.environment.id;
+			let observed = match runtime.status(&environment).await {
+				Ok(observed) => observed,
+				Err(error) => {
+					eprintln!(
+						"leptoskit-cloud-worker: status scrape for environment {env_id} failed: \
+						 {error}"
+					);
+					continue;
+				}
+			};
+
+			let since = self
+				.last_log_millis
+				.lock()
+				.ok()
+				.and_then(|guard| guard.get(&env_id).copied());
+			let query = leptoskit_cloud_runtime::LogQuery {
+				process: None,
+				since_seconds: Some(if since.is_some() { 90 } else { 300 }),
+				limit: Some(limit),
+			};
+			let mut log_lines = match runtime.logs(&environment, &query).await {
+				Ok(lines) => lines,
+				Err(error) => {
+					eprintln!(
+						"leptoskit-cloud-worker: runtime log scrape for environment {env_id} \
+						 failed: {error}"
+					);
+					Vec::new()
+				}
+			};
+
+			if let Some(last_millis) = since {
+				log_lines.retain(|line| line.at_millis > last_millis);
+			}
+			if log_lines.len() > leptoskit_cloud::workers::MAX_STATUS_LOG_LINES {
+				let drop_count = log_lines.len() - leptoskit_cloud::workers::MAX_STATUS_LOG_LINES;
+				log_lines.drain(..drop_count);
+			}
+			let newest_millis = log_lines.iter().map(|line| line.at_millis).max();
+
+			let outcome = control.report_status(env_id, observed, log_lines).await;
+			match &outcome {
+				Ok(_) => {
+					if let Some(newest) = newest_millis
+						&& let Ok(mut guard) = self.last_log_millis.lock()
+					{
+						guard.insert(env_id, newest);
+					}
+				}
+				Err(error) if error.is("environment_not_found") => {
+					self.untrack(env_id);
+				}
+				Err(error) => {
+					eprintln!(
+						"leptoskit-cloud-worker: report_status for environment {env_id} failed: \
+						 {error}"
+					);
+				}
+			}
+			results.push((env_id, outcome));
+		}
+
+		results
 	}
 
 	/// Runs `assignment`, which isn't a build, to its outcome.
@@ -315,6 +450,7 @@ impl ClusterRole {
 
 		match runtime.apply(spec).await {
 			Ok(applied) => {
+				self.track(spec.environment.clone());
 				log.line(format!(
 					"worker: deployment #{} is ready: {}",
 					applied.deployment,
@@ -414,6 +550,7 @@ impl ClusterRole {
 			}
 		}
 
+		self.untrack(environment.environment.id);
 		log.line("worker: the environment is removed");
 		DestroyOutcome::Destroyed
 	}

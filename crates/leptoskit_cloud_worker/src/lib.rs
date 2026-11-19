@@ -45,6 +45,7 @@
 #![cfg(unix)]
 
 mod build;
+pub mod builder;
 mod client;
 pub mod cluster;
 mod command;

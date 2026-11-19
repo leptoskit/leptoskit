@@ -46,6 +46,13 @@ pub struct Postgres {
 	/// Certificates trusted besides the webpki roots, for a server with a
 	/// private authority.
 	authorities: Vec<CertificateDer<'static>>,
+	/// How many connections each environment's role may hold at once.
+	connection_limit: u32,
+	/// Whether to tolerate system databases (`postgres`, `template1`, etc.)
+	/// that the administrator role does not own (for example on external
+	/// managed Postgres providers without superuser access). Tenant
+	/// databases (`env_*`) are still strictly locked down.
+	allow_unowned_system_databases: bool,
 	/// Whether the server's other databases are closed to everyone yet:
 	/// once per worker is enough, and doing it again is harmless.
 	prepared: Arc<Mutex<bool>>,
@@ -57,6 +64,11 @@ impl std::fmt::Debug for Postgres {
 			.debug_struct("Postgres")
 			.field("tls", &self.tls)
 			.field("authorities", &self.authorities.len())
+			.field("connection_limit", &self.connection_limit)
+			.field(
+				"allow_unowned_system_databases",
+				&self.allow_unowned_system_databases,
+			)
 			.finish_non_exhaustive()
 	}
 }
@@ -100,8 +112,28 @@ impl Postgres {
 			config,
 			tls,
 			authorities: Vec::new(),
+			connection_limit: CONNECTION_LIMIT,
+			allow_unowned_system_databases: false,
 			prepared: Arc::default(),
 		})
+	}
+
+	/// Sets how many concurrent connections each environment's role may open
+	/// (at least 1; defaults to [`CONNECTION_LIMIT`]).
+	#[must_use]
+	pub fn connection_limit(mut self, limit: u32) -> Self {
+		self.connection_limit = limit.max(1);
+		self
+	}
+
+	/// Allows startup preparation to warn instead of failing when the
+	/// administrator role does not own pre-existing system databases such as
+	/// `postgres` or `template1`. Tenant databases remain strictly closed to
+	/// `PUBLIC`.
+	#[must_use]
+	pub fn allow_unowned_system_databases(mut self, allow: bool) -> Self {
+		self.allow_unowned_system_databases = allow;
+		self
 	}
 
 	/// Also trusts the certificates in `pem` for the server's: for a server
@@ -125,14 +157,12 @@ impl Postgres {
 	}
 
 	async fn connect(&self) -> Result<tokio_postgres::Client, String> {
-		let unreachable = |_| "the server couldn't be reached".to_owned();
-
 		let client = if self.tls {
 			let (client, connection) = self
 				.config
 				.connect(tls(&self.authorities)?)
 				.await
-				.map_err(unreachable)?;
+				.map_err(|error| describe_connect_error(&error, true))?;
 			tokio::spawn(connection);
 			client
 		} else {
@@ -140,7 +170,7 @@ impl Postgres {
 				.config
 				.connect(tokio_postgres::NoTls)
 				.await
-				.map_err(unreachable)?;
+				.map_err(|error| describe_connect_error(&error, false))?;
 			tokio::spawn(connection);
 			client
 		};
@@ -173,13 +203,26 @@ impl Postgres {
 			.map_err(|error| said(&error))?
 		{
 			let name: String = row.get(0);
-			client
+			let result = client
 				.batch_execute(&format!(
 					"REVOKE CONNECT, TEMPORARY ON DATABASE {} FROM PUBLIC",
 					escape_identifier(&name)
 				))
-				.await
-				.map_err(|error| said(&error))?;
+				.await;
+
+			if let Err(error) = result {
+				let insufficient_privilege =
+					error.code().is_some_and(|code| code.code() == "42501");
+				if self.allow_unowned_system_databases && insufficient_privilege {
+					eprintln!(
+						"leptoskit-cloud-worker: warning: administrator cannot revoke PUBLIC on \
+						 unowned database `{name}` (42501); continuing because \
+						 --postgres-allow-unowned-system-dbs is enabled"
+					);
+					continue;
+				}
+				return Err(said(&error));
+			}
 		}
 
 		let open: Vec<String> = client
@@ -191,11 +234,21 @@ impl Postgres {
 			.collect();
 
 		if !open.is_empty() {
-			return Err(format!(
-				"the server's {} database is still open to every role, and the administrator \
-				 couldn't close it",
-				open.join(", ")
-			));
+			if self.allow_unowned_system_databases {
+				eprintln!(
+					"leptoskit-cloud-worker: warning: system database(s) {} remain open to PUBLIC \
+					 because the administrator does not own them; enable superuser access (e.g. \
+					 CNPG enableSuperuserAccess: true) to harden them",
+					open.join(", ")
+				);
+			} else {
+				return Err(format!(
+					"the server's {} database is still open to every role, and the administrator \
+					 couldn't close it (grant superuser access, e.g. CNPG enableSuperuserAccess: \
+					 true, or pass --postgres-allow-unowned-system-dbs on managed Postgres)",
+					open.join(", ")
+				));
+			}
 		}
 
 		*prepared = true;
@@ -216,9 +269,10 @@ impl Postgres {
 		let verifier = escape_literal(&postgres_protocol::password::scram_sha_256(
 			password.as_bytes(),
 		));
+		let connection_limit = self.connection_limit;
 		let attributes = format!(
 			"LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS NOINHERIT \
-			 CONNECTION LIMIT {CONNECTION_LIMIT} VALID UNTIL 'infinity' PASSWORD {verifier}"
+			 CONNECTION LIMIT {connection_limit} VALID UNTIL 'infinity' PASSWORD {verifier}"
 		);
 
 		let has_role = client
@@ -421,6 +475,42 @@ fn said(error: &tokio_postgres::Error) -> String {
 	}
 }
 
+/// Classifies a Postgres connection error without ever printing connection
+/// URLs or passwords: separates TLS certificate/handshake failures, auth
+/// rejections, and network reachability failures.
+fn describe_connect_error(error: &tokio_postgres::Error, tls_enabled: bool) -> String {
+	if let Some(code) = error.code() {
+		return match code.code() {
+			"28P01" | "28000" => {
+				format!(
+					"the Postgres administrator failed authentication ({})",
+					code.code()
+				)
+			}
+			other => format!("the Postgres server rejected the connection ({other})"),
+		};
+	}
+
+	let lower = error.to_string().to_ascii_lowercase();
+	if tls_enabled
+		&& (lower.contains("tls")
+			|| lower.contains("certificate")
+			|| lower.contains("cert")
+			|| lower.contains("handshake")
+			|| lower.contains("invalid peer"))
+	{
+		return "TLS verification with the Postgres server failed (mount the cluster CA with \
+		        --postgres-ca / LEPTOSKIT_CLOUD_WORKER_POSTGRES_CA)"
+			.to_owned();
+	}
+
+	if lower.contains("timed out") || lower.contains("timeout") {
+		return "connecting to the Postgres server timed out".to_owned();
+	}
+
+	"the Postgres server couldn't be reached".to_owned()
+}
+
 /// TLS with the webpki roots and `authorities`.
 fn tls(
 	authorities: &[CertificateDer<'static>],
@@ -486,5 +576,18 @@ mod tests {
 		let postgres =
 			Postgres::new("postgres://admin:pw@db.internal/postgres").expect("an address");
 		assert!(postgres.trust(b"not a certificate").is_err());
+	}
+
+	#[test]
+	fn connection_limit_and_unowned_system_dbs_are_configurable() {
+		let postgres = Postgres::new("postgres://admin:pw@db.internal/postgres")
+			.expect("an address")
+			.connection_limit(0)
+			.allow_unowned_system_databases(true);
+		assert_eq!(postgres.connection_limit, 1);
+		assert!(postgres.allow_unowned_system_databases);
+
+		let postgres = postgres.connection_limit(40);
+		assert_eq!(postgres.connection_limit, 40);
 	}
 }

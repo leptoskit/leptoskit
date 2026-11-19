@@ -31,10 +31,13 @@ pub enum Command {
 	Pair(Pair),
 	/// Claims jobs and runs them, until it is told to stop. It finishes
 	/// the job in hand first; a second signal stops it at once.
-	Run(Run),
+	Run(Box<Run>),
 	/// Forgets a job that was started and never reported, after an
 	/// operator has reconciled it.
 	Forget(Forget),
+	/// Built-in OCI image builder used as the default `--build-command` when
+	/// no custom build program is specified.
+	BuildApp(crate::builder::BuildAppArgs),
 }
 
 #[derive(Debug, clap::Args)]
@@ -76,8 +79,8 @@ pub struct Run {
 	#[arg(long, env = "LEPTOSKIT_CLOUD_WORKER_WORKSPACE")]
 	pub workspace: Option<PathBuf>,
 	/// The program that builds: run once for each build, in the unpacked
-	/// source. The worker doesn't isolate it; see the readme. A build
-	/// worker needs one.
+	/// source. When omitted, defaults to this binary's built-in `build-app`
+	/// OCI builder subcommand.
 	#[arg(long, env = "LEPTOSKIT_CLOUD_WORKER_BUILD_COMMAND")]
 	pub build_command: Option<PathBuf>,
 	/// An argument for the build command. Repeat it for more.
@@ -87,6 +90,14 @@ pub struct Run {
 	/// command, which otherwise gets `PATH` and nothing else of them.
 	#[arg(long = "build-env")]
 	pub build_environment: Vec<String>,
+	/// Persistent cache directory shared across builds (`CARGO_HOME`,
+	/// `SCCACHE_DIR`, and `BuildKit` local cache). Not deleted between jobs.
+	#[arg(long, env = "LEPTOSKIT_CLOUD_WORKER_BUILD_CACHE_DIR")]
+	pub build_cache_dir: Option<PathBuf>,
+	/// Optional sandbox wrapper command prefix (repeatable, e.g.
+	/// `--build-sandbox bwrap --build-sandbox --unshare-pid`).
+	#[arg(long = "build-sandbox")]
+	pub build_sandbox: Vec<String>,
 	/// How long one build may run, in minutes.
 	#[arg(long, default_value_t = 60)]
 	pub build_timeout_minutes: u64,
@@ -113,6 +124,29 @@ pub struct Run {
 	/// account of the pod it runs in.
 	#[arg(long, env = "LEPTOSKIT_CLOUD_WORKER_KUBECONFIG")]
 	pub kubeconfig: Option<PathBuf>,
+	/// For a cluster's worker: path to a JSON file containing a serialized
+	/// `leptoskit_cloud_runtime::ClusterProfile` (for example mounted from
+	/// the platform's `cluster-profile` `ConfigMap`). Defaults to
+	/// `ClusterProfile::platform_defaults()` when omitted.
+	#[arg(long, env = "LEPTOSKIT_CLOUD_WORKER_PROFILE_JSON")]
+	pub profile_json: Option<PathBuf>,
+	/// Overrides `ClusterProfile.image_pull_secret` (for external registries).
+	#[arg(long, env = "LEPTOSKIT_CLOUD_WORKER_IMAGE_PULL_SECRET")]
+	pub image_pull_secret: Option<String>,
+	/// Overrides `ClusterProfile.cluster_issuer` (e.g. `apps-http01`).
+	#[arg(long, env = "LEPTOSKIT_CLOUD_WORKER_CLUSTER_ISSUER")]
+	pub cluster_issuer: Option<String>,
+	/// Overrides `ClusterProfile.edge_terminated_custom_domains` (true under
+	/// Cloudflare for `SaaS` / Tunnel edge TLS).
+	#[arg(long, env = "LEPTOSKIT_CLOUD_WORKER_EDGE_TERMINATED_CUSTOM_DOMAINS")]
+	pub edge_terminated_custom_domains: Option<bool>,
+	/// Additional egress CIDRs to block in tenant `NetworkPolicy` manifests.
+	#[arg(long = "blocked-egress-cidr")]
+	pub blocked_egress_cidrs: Vec<String>,
+	/// Overrides `ClusterProfile.tmp_size_limit_mib` (bounded `/tmp`
+	/// `emptyDir`).
+	#[arg(long, env = "LEPTOSKIT_CLOUD_WORKER_TMP_SIZE_LIMIT_MIB")]
+	pub tmp_size_limit_mib: Option<u32>,
 	/// For a cluster's worker: the shared Postgres server's administrator,
 	/// as `postgres://…`. Without it, a release that needs a managed
 	/// database fails. Give it in the environment: an argument is seen by
@@ -140,6 +174,21 @@ pub struct Run {
 		default_value_t = 5432
 	)]
 	pub postgres_port: u16,
+	/// Per-environment role `CONNECTION LIMIT` on the shared Postgres server.
+	#[arg(
+		long,
+		env = "LEPTOSKIT_CLOUD_WORKER_POSTGRES_CONNECTION_LIMIT",
+		default_value_t = crate::postgres::CONNECTION_LIMIT
+	)]
+	pub postgres_connection_limit: u32,
+	/// Warn instead of failing when the Postgres admin role does not own
+	/// system databases (`postgres`, `template1`) on managed Postgres.
+	#[arg(
+		long,
+		env = "LEPTOSKIT_CLOUD_WORKER_POSTGRES_ALLOW_UNOWNED_SYSTEM_DBS",
+		default_value_t = false
+	)]
+	pub postgres_allow_unowned_system_dbs: bool,
 	/// For a cluster's worker: the `RuntimeClass` every release must run
 	/// under, such as a sandboxed one. Without it a release may keep the
 	/// cluster's default.
@@ -149,6 +198,24 @@ pub struct Run {
 	/// ready, in minutes, a day at most.
 	#[arg(long, default_value_t = 10)]
 	pub rollout_timeout_minutes: u64,
+	/// Clears an unfinished cluster-job marker (`job.json` with no saved
+	/// outcome) on startup with a warning instead of exiting with
+	/// `Unreconciled`. Recommended in Kubernetes pods to avoid
+	/// `CrashLoopBackOff` after pod preemption or restarts.
+	#[arg(
+		long,
+		env = "LEPTOSKIT_CLOUD_WORKER_RECONCILE_ON_START",
+		default_value_t = false
+	)]
+	pub reconcile_on_start: bool,
+	/// Seconds between periodic `report_status` scrapes on a cluster worker.
+	/// Set to `0` to disable periodic status reporting.
+	#[arg(
+		long,
+		env = "LEPTOSKIT_CLOUD_WORKER_STATUS_INTERVAL_SECONDS",
+		default_value_t = 30
+	)]
+	pub status_interval_seconds: u64,
 }
 
 /// A value that is never printed, such as an address with a password in
@@ -201,6 +268,59 @@ pub enum CommandError {
 	Run(#[from] crate::run::RunError),
 	#[error("{0}")]
 	Usage(String),
+}
+
+/// Loads `ClusterProfile` from `--profile-json` when provided (falling back to
+/// `ClusterProfile::platform_defaults()`) and applies explicit CLI/env
+/// overrides on top.
+///
+/// # Errors
+///
+/// [`CommandError::Usage`] if the JSON file cannot be read or parsed.
+pub fn load_cluster_profile(
+	arguments: &Run,
+) -> Result<leptoskit_cloud_runtime::ClusterProfile, CommandError> {
+	let mut profile = match &arguments.profile_json {
+		Some(path) => {
+			let bytes = std::fs::read(path)
+				.map_err(|error| CommandError::Usage(format!("{}: {error}", path.display())))?;
+			serde_json::from_slice(&bytes).map_err(|error| {
+				CommandError::Usage(format!(
+					"invalid ClusterProfile JSON in {}: {error}",
+					path.display()
+				))
+			})?
+		}
+		None => leptoskit_cloud_runtime::ClusterProfile::platform_defaults(),
+	};
+
+	if let Some(secret) = &arguments.image_pull_secret {
+		profile.image_pull_secret = if secret.is_empty() {
+			None
+		} else {
+			Some(secret.clone())
+		};
+	}
+	if let Some(issuer) = &arguments.cluster_issuer {
+		profile.cluster_issuer = if issuer.is_empty() {
+			None
+		} else {
+			Some(issuer.clone())
+		};
+	}
+	if let Some(edge_terminated) = arguments.edge_terminated_custom_domains {
+		profile.edge_terminated_custom_domains = edge_terminated;
+	}
+	for cidr in &arguments.blocked_egress_cidrs {
+		if !profile.blocked_egress_cidrs.contains(cidr) {
+			profile.blocked_egress_cidrs.push(cidr.clone());
+		}
+	}
+	if let Some(limit) = arguments.tmp_size_limit_mib {
+		profile.tmp_size_limit_mib = limit.max(1);
+	}
+
+	Ok(profile)
 }
 
 async fn pair(arguments: Pair) -> Result<(), CommandError> {
@@ -259,20 +379,36 @@ async fn run(arguments: Run, shutdown: watch::Receiver<bool>) -> Result<(), Comm
 	)?;
 	let workspace = arguments
 		.workspace
+		.clone()
 		.unwrap_or_else(|| arguments.state.join("workspace"));
+	let mut settings = Settings::new(workspace);
+	settings.reconcile_on_start = arguments.reconcile_on_start;
+	settings.status_every = (arguments.status_interval_seconds > 0)
+		.then(|| Duration::from_secs(arguments.status_interval_seconds));
 
 	let worker = match identity.role {
 		WorkerRole::Build => {
-			let Some(program) = arguments.build_command else {
-				return Err(CommandError::Usage(
-					"a build worker needs --build-command".to_owned(),
-				));
+			let (program, args) = if let Some(program) = arguments.build_command {
+				(program, arguments.build_arguments)
+			} else {
+				let self_bin = std::env::current_exe().map_err(|error| {
+					CommandError::Usage(format!(
+						"couldn't locate current executable for built-in build-app: {error}"
+					))
+				})?;
+				let mut args = vec!["build-app".to_owned()];
+				args.extend(arguments.build_arguments);
+				(self_bin, args)
 			};
-			let builder = CommandBuilder::new(program, arguments.build_arguments)
+			let mut builder = CommandBuilder::new(program, args)
 				.pass(arguments.build_environment)
+				.sandbox(arguments.build_sandbox)
 				.timeout(Duration::from_secs(
 					arguments.build_timeout_minutes.saturating_mul(60),
 				));
+			if let Some(cache_dir) = arguments.build_cache_dir {
+				builder = builder.cache_dir(cache_dir);
+			}
 			// Offered publishes, it must be able to run them: one it can't
 			// would hold its organisation's credentials and then fail.
 			if arguments.publish_command.is_none()
@@ -288,7 +424,7 @@ async fn run(arguments: Run, shutdown: watch::Receiver<bool>) -> Result<(), Comm
 				));
 			}
 
-			let worker = Worker::new(control, state, builder, Settings::new(workspace))?;
+			let worker = Worker::new(control, state, builder, settings)?;
 
 			match arguments.publish_command {
 				Some(program) => {
@@ -306,7 +442,7 @@ async fn run(arguments: Run, shutdown: watch::Receiver<bool>) -> Result<(), Comm
 		WorkerRole::Cluster => {
 			let deadline =
 				Duration::from_secs(arguments.rollout_timeout_minutes.saturating_mul(60));
-			let profile = leptoskit_cloud_runtime::ClusterProfile::platform_defaults();
+			let profile = load_cluster_profile(&arguments)?;
 			let place = match arguments.kubeconfig {
 				Some(path) => Kubernetes::from_kubeconfig(path, profile, deadline),
 				None => Kubernetes::in_cluster(profile, deadline),
@@ -324,7 +460,9 @@ async fn run(arguments: Run, shutdown: watch::Receiver<bool>) -> Result<(), Comm
 					));
 				};
 				let mut postgres = Postgres::new(address.expose())
-					.map_err(|error| CommandError::Usage(error.to_string()))?;
+					.map_err(|error| CommandError::Usage(error.to_string()))?
+					.connection_limit(arguments.postgres_connection_limit)
+					.allow_unowned_system_databases(arguments.postgres_allow_unowned_system_dbs);
 
 				if let Some(path) = arguments.postgres_ca {
 					let pem = std::fs::read(&path).map_err(|error| {
@@ -351,7 +489,7 @@ async fn run(arguments: Run, shutdown: watch::Receiver<bool>) -> Result<(), Comm
 			// A cluster's worker is never given a build: this builder is
 			// never run.
 			let builder = CommandBuilder::new("false", Vec::new());
-			Worker::new(control, state, builder, Settings::new(workspace))?.with_cluster(cluster)
+			Worker::new(control, state, builder, settings)?.with_cluster(cluster)
 		}
 	};
 	eprintln!(
@@ -392,7 +530,53 @@ pub async fn execute(
 ) -> Result<(), CommandError> {
 	match command {
 		Command::Pair(arguments) => pair(arguments).await,
-		Command::Run(arguments) => run(arguments, shutdown).await,
+		Command::Run(arguments) => run(*arguments, shutdown).await,
 		Command::Forget(arguments) => forget(&arguments),
+		Command::BuildApp(arguments) => {
+			crate::builder::run(arguments)
+				.await
+				.map_err(CommandError::Usage)
+		}
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use clap::Parser as _;
+
+	use super::*;
+
+	#[test]
+	fn loads_cluster_profile_from_json_and_applies_overrides() {
+		let dir = tempfile::tempdir().expect("tempdir");
+		let path = dir.path().join("profile.json");
+		let mut base = leptoskit_cloud_runtime::ClusterProfile::platform_defaults();
+		base.image_pull_secret = Some("ghcr-pull".to_owned());
+		base.edge_terminated_custom_domains = true;
+		std::fs::write(&path, serde_json::to_vec(&base).expect("json")).expect("write");
+
+		let Command::Run(args) = Command::parse_from([
+			"leptoskit-cloud-worker",
+			"run",
+			"--state",
+			"/tmp/state",
+			"--profile-json",
+			path.to_str().expect("utf-8"),
+			"--blocked-egress-cidr",
+			"10.42.0.0/16",
+			"--tmp-size-limit-mib",
+			"256",
+		]) else {
+			panic!("expected Run");
+		};
+		let loaded = load_cluster_profile(&args).expect("loads");
+		assert_eq!(loaded.image_pull_secret.as_deref(), Some("ghcr-pull"));
+		assert!(loaded.edge_terminated_custom_domains);
+		assert!(
+			loaded
+				.blocked_egress_cidrs
+				.contains(&"10.42.0.0/16".to_owned())
+		);
+		assert_eq!(loaded.tmp_size_limit_mib, 256);
 	}
 }

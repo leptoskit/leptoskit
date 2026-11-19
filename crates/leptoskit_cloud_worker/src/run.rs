@@ -54,6 +54,9 @@ const CANCELLED: u8 = 1;
 /// The lease is gone: stop, and say nothing, for nobody is listening.
 const LOST: u8 = 2;
 
+/// Default interval between cluster status and runtime-log reports.
+pub const DEFAULT_STATUS_EVERY: Duration = Duration::from_secs(30);
+
 /// How a worker runs.
 #[derive(Clone, Debug)]
 pub struct Settings {
@@ -63,6 +66,15 @@ pub struct Settings {
 	pub workspace: PathBuf,
 	/// How often a lease is renewed. A third of the lease when unset.
 	pub renew_every: Option<Duration>,
+	/// When true, clears a stale unfinished cluster-job marker (`job.json`
+	/// with no `result.json`) on startup with a warning instead of exiting
+	/// with [`RunError::Unreconciled`]. Useful for Kubernetes deployments
+	/// where crashing on restart would enter `CrashLoopBackOff`.
+	pub reconcile_on_start: bool,
+	/// How often a cluster worker scrapes `Runtime::status` and
+	/// `Runtime::logs` for tracked environments and sends `report_status`.
+	/// `None` disables periodic reporting.
+	pub status_every: Option<Duration>,
 }
 
 impl Settings {
@@ -73,6 +85,8 @@ impl Settings {
 			wait_seconds: MAX_WAIT_SECONDS,
 			workspace: workspace.into(),
 			renew_every: None,
+			reconcile_on_start: false,
+			status_every: Some(DEFAULT_STATUS_EVERY),
 		}
 	}
 }
@@ -393,6 +407,15 @@ impl<B: Builder> Worker<B> {
 		}
 
 		if marker.kind != JobKind::BuildServer {
+			if self.settings.reconcile_on_start {
+				note(&format!(
+					"job {} ({:?}) was interrupted before reporting; clearing stale marker \
+					 because reconcile_on_start is enabled",
+					marker.job, marker.kind
+				));
+				return Ok(self.state.clear()?);
+			}
+
 			return Err(RunError::Unreconciled {
 				job: marker.job,
 				kind: marker.kind,
@@ -641,7 +664,18 @@ impl<B: Builder> Worker<B> {
 			}
 			Work::Cluster(cluster) => Ok(cluster.run(assignment, &log).await),
 		};
+		let is_cluster = matches!(work, Work::Cluster(_));
 		let outcome = match (fate.load(Ordering::SeqCst), done) {
+			// A cluster job (release/destroy/restore) may have already taken
+			// effect on the cluster, and the control plane accepts a late
+			// `finish` for it — never discard a completed cluster outcome just
+			// because the lease lapsed while waiting for rollout readiness.
+			(LOST, Ok(done)) if is_cluster => {
+				note(&format!(
+					"job {job}: lease lapsed before completion; still reporting cluster outcome"
+				));
+				Ok(done)
+			}
 			(LOST, _) => Err("its lease ran out".to_owned()),
 			// Only a build stops when its deployment is cancelled; a
 			// cluster's job runs to its end.
@@ -687,7 +721,7 @@ impl<B: Builder> Worker<B> {
 				Ok(_) => break Ended::Reported(outcome),
 				Err(error)
 					if error.is_transient()
-						&& fate.load(Ordering::SeqCst) != LOST
+						&& (is_cluster || fate.load(Ordering::SeqCst) != LOST)
 						&& tries < FINISH_TRIES =>
 				{
 					tokio::time::sleep(wait).await;
@@ -716,6 +750,21 @@ impl<B: Builder> Worker<B> {
 		Ok(ended)
 	}
 
+	/// Scrapes and reports runtime status and logs once for every tracked
+	/// environment (no-op for build workers). Returns how many reports
+	/// succeeded.
+	pub async fn report_status_once(&self) -> usize {
+		let Some(cluster) = &self.cluster else {
+			return 0;
+		};
+		cluster
+			.report_all(&self.control)
+			.await
+			.into_iter()
+			.filter(|(_, outcome)| outcome.is_ok())
+			.count()
+	}
+
 	/// Runs until `shutdown` says so, finishing the job in hand first.
 	///
 	/// # Errors
@@ -726,16 +775,55 @@ impl<B: Builder> Worker<B> {
 	pub async fn run(&self, mut shutdown: watch::Receiver<bool>) -> Result<(), RunError> {
 		let mut wait = Duration::from_secs(1);
 
-		loop {
+		// For cluster workers, periodically report observed pod status and
+		// recent runtime logs so `environment_status`, `runtime_logs`, and
+		// compute metering stay up to date.
+		let (status_trigger, mut status_rx) = watch::channel(0_u64);
+		let status_task = match (&self.cluster, self.settings.status_every) {
+			(Some(cluster), Some(interval)) if !interval.is_zero() => {
+				let cluster = cluster.clone();
+				let control = self.control.clone();
+				let mut stop = shutdown.clone();
+				Some(tokio::spawn(async move {
+					loop {
+						tokio::select! {
+							() = tokio::time::sleep(interval) => {}
+							changed = status_rx.changed() => {
+								if changed.is_err() {
+									break;
+								}
+							}
+							() = asked(&mut stop) => break,
+						}
+						if *stop.borrow() {
+							break;
+						}
+						let _ = cluster.report_all(&control).await;
+					}
+				}))
+			}
+			_ => None,
+		};
+
+		let mut triggers = 0_u64;
+		let result = loop {
 			if *shutdown.borrow() {
-				return Ok(());
+				break Ok(());
 			}
 
 			let pause = match self.step().await {
 				// A `claim` that doesn't wait would otherwise ask without rest.
 				Ok(Step::Idle) if self.settings.wait_seconds == 0 => Duration::from_secs(1),
-				Ok(Step::Idle | Step::Ran { .. }) => {
+				Ok(Step::Idle) => {
 					wait = Duration::from_secs(1);
+					continue;
+				}
+				Ok(Step::Ran { .. }) => {
+					wait = Duration::from_secs(1);
+					if self.cluster.is_some() {
+						triggers = triggers.wrapping_add(1);
+						let _ = status_trigger.send(triggers);
+					}
 					continue;
 				}
 				Ok(Step::Held) => HELD_WAIT,
@@ -745,13 +833,19 @@ impl<B: Builder> Worker<B> {
 					wait = (wait * 2).min(MAX_BACKOFF);
 					pause
 				}
-				Err(error) => return Err(error),
+				Err(error) => break Err(error),
 			};
 
 			tokio::select! {
 				() = tokio::time::sleep(pause) => {}
 				() = asked(&mut shutdown) => {}
 			}
+		};
+
+		if let Some(task) = status_task {
+			task.abort();
 		}
+
+		result
 	}
 }

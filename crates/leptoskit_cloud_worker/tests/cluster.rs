@@ -121,11 +121,10 @@ fn cluster_worker(
 		Some(Key::new(identity.key)),
 	)
 	.expect("a client");
-	let settings = Settings {
-		wait_seconds: 0,
-		workspace: directory.path().join("workspace"),
-		renew_every: Some(Duration::from_millis(200)),
-	};
+	let mut settings = Settings::new(directory.path().join("workspace"));
+	settings.wait_seconds = 0;
+	settings.renew_every = Some(Duration::from_millis(200));
+	settings.status_every = None;
 	Worker::new(
 		control,
 		state,
@@ -351,4 +350,111 @@ async fn a_deleted_environment_is_removed_from_the_cluster() {
 	assert_eq!(fake.applied(), Vec::<ReleaseSpec>::new());
 	let clusters = app.call("clusters", json!({}), shop.as_ops()).await;
 	assert_eq!(clusters.expect(200).json()[0]["environments"], 0);
+}
+
+/// After applying a release, calling `report_status_once` scrapes runtime
+/// status and recent logs and reports them to the control plane, populating
+/// `environment_status` and `runtime_logs`.
+#[tokio::test(flavor = "multi_thread")]
+async fn cluster_worker_reports_status_and_runtime_logs() {
+	let app = support::app().await;
+	let shop = Shop::open(&app).await;
+	let fake = Arc::new(Fake::new());
+	let directory = tempfile::tempdir().expect("a directory");
+	let worker = cluster_worker(
+		&shop,
+		Recorded {
+			fake: Arc::clone(&fake),
+			never_ready: false,
+		},
+		Bounds::default(),
+		&directory,
+	);
+
+	let digest = shop.upload(b"notes-status").await;
+	shop.deploy("production", &digest, json!({}))
+		.await
+		.expect(200);
+	let build = shop.build.take().await;
+	shop.build
+		.finish(&build, support::shipping::built(&build, b"image", &[]))
+		.await
+		.expect(200);
+	worker.step().await.expect("applies release");
+
+	assert_eq!(worker.report_status_once().await, 1);
+
+	let status = app
+		.call(
+			"environment_status",
+			json!({
+				"organization": shop.org,
+				"project": "notes",
+				"environment": "production",
+			}),
+			shop.as_ana(),
+		)
+		.await
+		.expect(200)
+		.json();
+	assert_eq!(status["processes"][0]["name"], "app");
+	assert_eq!(status["processes"][0]["state"]["state"], "ready");
+	assert!(status["reported_at"].is_string());
+}
+
+/// A cluster worker started with `reconcile_on_start` clears an unfinished
+/// `job.json` marker with a warning instead of entering `CrashLoopBackOff`.
+#[tokio::test(flavor = "multi_thread")]
+async fn reconcile_on_start_clears_stale_cluster_marker() {
+	let app = support::app().await;
+	let shop = Shop::open(&app).await;
+	let fake = Arc::new(Fake::new());
+	let directory = tempfile::tempdir().expect("a directory");
+
+	let identity = Identity {
+		origin: shop.app.origin.clone(),
+		rpc: "/rpc".to_owned(),
+		key: shop.cluster.key.clone(),
+		worker: shop.cluster.id.parse().expect("an ID"),
+		name: "eu-one-worker".to_owned(),
+		role: WorkerRole::Cluster,
+		capabilities: Vec::new(),
+	};
+	let state = State::open(&directory.path().join("state")).expect("opens");
+	state.pair(&identity).expect("pairs");
+	state
+		.start(&leptoskit_cloud_worker::Marker {
+			job: uuid::Uuid::from_u128(42),
+			attempt: 1,
+			kind: leptoskit_cloud::workers::JobKind::Release,
+		})
+		.expect("marks");
+
+	let control = Control::new(
+		&identity.origin,
+		&identity.rpc,
+		Some(Key::new(identity.key)),
+	)
+	.expect("client");
+	let mut settings = Settings::new(directory.path().join("workspace"));
+	settings.wait_seconds = 0;
+	settings.reconcile_on_start = true;
+	settings.status_every = None;
+	let worker = Worker::new(
+		control,
+		state,
+		CommandBuilder::new("false", Vec::new()),
+		settings,
+	)
+	.expect("worker")
+	.with_cluster(ClusterRole::new(Arc::new(Recorded {
+		fake,
+		never_ready: false,
+	})));
+
+	assert_eq!(
+		worker.step().await.expect("clears stale marker"),
+		Step::Idle
+	);
+	assert!(!directory.path().join("state/job.json").exists());
 }
