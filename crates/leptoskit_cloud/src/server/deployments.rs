@@ -198,7 +198,7 @@ fn summary(row: &Deployment, project: &str, environment: &str) -> DeploymentSumm
 
 /// `Conflict` (`deployment_in_flight`) while a deployment of `environment`
 /// is queued, building, migrating, or rolling out, naming it.
-async fn refuse_in_flight(
+pub(crate) async fn refuse_in_flight(
 	db: &impl leptoskit_db::Read,
 	environment: &Environment,
 ) -> rpc::Result<()> {
@@ -550,7 +550,7 @@ fn rollback_lines(target: &Deployment) -> Vec<Line> {
 }
 
 /// The organisation, project, and environment, by slug and ID.
-fn environment_ref(
+pub(crate) fn environment_ref(
 	organization: &Organization,
 	project: &Project,
 	environment: &Environment,
@@ -877,6 +877,7 @@ pub(crate) async fn deploy(
 	};
 	let signer = signer(cx.tx(), &access.caller, host).await?;
 	refuse_in_flight(cx.tx(), &environment).await?;
+	super::backups::refuse_restoring(cx.tx(), &environment).await?;
 	check_config(&config, &organization, &project)?;
 	let resolved = resolve(&config, &environment)?;
 	let (cluster, placement) =
@@ -1254,6 +1255,7 @@ pub(crate) async fn rollback(
 		.await?;
 	rollback_target(&target, placement.as_ref())?;
 	refuse_in_flight(cx.tx(), &environment).await?;
+	super::backups::refuse_restoring(cx.tx(), &environment).await?;
 	let (Some(placement), Some(build), Some(spec)) =
 		(placement, target.build.0.clone(), target.spec.0.clone())
 	else {
@@ -1694,11 +1696,15 @@ pub(crate) async fn before_removal(
 
 	if unsettled {
 		return Err(rpc::Error::conflict(format!(
-			"deployment_in_flight: `{}`'s cluster is still applying or removing a release, or an \
-			 operator hasn't reconciled one; wait for it before deleting the environment",
+			"deployment_in_flight: `{}`'s cluster is still applying or removing a release, or \
+			 backing up or restoring its database, or an operator hasn't reconciled one; wait for \
+			 it before deleting the environment",
 			environment.name
 		)));
 	}
+
+	// A backup or a restore nobody has taken isn't worth taking now.
+	super::backups::abandon_queued(tx, environment_id).await?;
 
 	let Some(placement) = Placement::query()
 		.filter(|placement| placement.environment_id.eq(environment_id))

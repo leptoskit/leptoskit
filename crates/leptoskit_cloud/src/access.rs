@@ -38,6 +38,10 @@
 //! the same way: uploading an archive, deploying, cancelling, and rolling
 //! back. Reading deployments, their events, and logs is `view_projects`.
 //!
+//! Taking a backup of an environment's database is `deploy` too. Putting
+//! one back replaces everything written since, so it needs what deleting
+//! the environment does: `delete_environment`.
+//!
 //! Configuration (`manage_config`) is setting and removing an environment's
 //! variables and secrets. Reading variables, and the names of secrets, is
 //! `view_projects`; nobody reads a secret's value, whatever their role.
@@ -470,6 +474,15 @@ pub const OPERATIONS: &[(&str, Requirement)] = &[
 		Requirement::Project(Permission::ManageConfig),
 	),
 	("database", Requirement::Project(Permission::ViewProjects)),
+	(
+		"database_backups",
+		Requirement::Project(Permission::ViewProjects),
+	),
+	("create_backup", Requirement::Project(Permission::Deploy)),
+	(
+		"restore_backup",
+		Requirement::Project(Permission::DeleteEnvironment),
+	),
 	("domains", Requirement::Project(Permission::ViewProjects)),
 	(
 		"attach_domain",

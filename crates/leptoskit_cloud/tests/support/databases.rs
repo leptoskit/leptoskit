@@ -16,7 +16,7 @@ use super::shipping::built;
 
 const HOST: &str = "postgres-rw.leptoskit-postgres.svc";
 
-fn place(shop: &Shop<'_>, environment: &str) -> Value {
+pub fn place(shop: &Shop<'_>, environment: &str) -> Value {
 	json!({ "organization": shop.org, "project": "notes", "environment": environment })
 }
 
@@ -34,7 +34,7 @@ fn facts(port: u16) -> Value {
 }
 
 /// Tells the control plane the shop's cluster has a Postgres server.
-async fn with_postgres(shop: &Shop<'_>, port: u16) {
+pub async fn with_postgres(shop: &Shop<'_>, port: u16) {
 	shop.app
 		.call(
 			"set_cluster_facts",
@@ -45,7 +45,7 @@ async fn with_postgres(shop: &Shop<'_>, port: u16) {
 		.expect(200);
 }
 
-async fn staging(shop: &Shop<'_>) {
+pub async fn staging(shop: &Shop<'_>) {
 	shop.app
 		.call(
 			"create_environment",
@@ -163,7 +163,10 @@ pub async fn a_postgres_app_gets_a_database(app: &App) {
 
 	let sheet = shop.on("deployment", "production", first).await;
 	assert!(
-		sheet.expect(200).text.contains("isn't backed up yet"),
+		sheet
+			.expect(200)
+			.text
+			.contains("isn't backed up on a schedule yet"),
 		"{}",
 		sheet.text
 	);

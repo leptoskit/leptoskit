@@ -176,6 +176,14 @@ pub enum JobKind {
 	/// Remove an environment from the cluster: for its cluster worker.
 	#[db(rename = "destroy_environment")]
 	DestroyEnvironment,
+	/// Take a backup of an environment's managed database: for its cluster
+	/// worker.
+	#[db(rename = "backup_database")]
+	BackupDatabase,
+	/// Put a backup back over an environment's managed database: for its
+	/// cluster worker.
+	#[db(rename = "restore_database")]
+	RestoreDatabase,
 }
 
 impl JobKind {
@@ -184,7 +192,10 @@ impl JobKind {
 	pub const fn role(self) -> WorkerRole {
 		match self {
 			Self::BuildServer => WorkerRole::Build,
-			Self::Release | Self::DestroyEnvironment => WorkerRole::Cluster,
+			Self::Release
+			| Self::DestroyEnvironment
+			| Self::BackupDatabase
+			| Self::RestoreDatabase => WorkerRole::Cluster,
 		}
 	}
 }
@@ -515,8 +526,9 @@ pub enum ReleaseOutcome {
 pub struct DestroyEnvironmentInput {
 	pub environment: RuntimeValue<EnvironmentRef>,
 	/// The environment's managed Postgres database, by its name and its
-	/// role's: both are dropped with the environment, if they exist. A
-	/// database named here may never have been made.
+	/// role's: both are dropped with the environment, if they exist, and
+	/// so is every backup the worker keeps of it. A database named here
+	/// may never have been made.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub database: Option<String>,
 }
@@ -529,6 +541,102 @@ pub enum DestroyOutcome {
 	Failed { reason: String },
 }
 
+/// `backup_database`'s input.
+///
+/// The worker dumps the database `database` on its cluster's Postgres
+/// server, with its own connection to that server, and keeps the dump
+/// where only it reads: the control plane never holds a backup's bytes,
+/// and no tenant is given an address for one. It answers where the dump is
+/// as a `location` only it understands.
+///
+/// The worker deletes the dump once `expires_at` has passed, and when the
+/// environment is removed. A backup whose `finish` is refused (`not_held`)
+/// is deleted too: the control plane gave up on it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct BackupDatabaseInput {
+	pub environment: RuntimeValue<EnvironmentRef>,
+	/// The database's name on the server.
+	pub database: String,
+	/// The backup's ID, which names it in `database_backups`.
+	pub backup: Uuid,
+	pub expires_at: Timestamp,
+}
+
+/// A dump a worker took and keeps.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct BackupTaken {
+	/// Where the worker keeps it, in the worker's own words: at most
+	/// [`MAX_BACKUP_LOCATION`] characters, none of them a control
+	/// character, and never a credential. It comes back as a restore's
+	/// `location`, and goes nowhere else.
+	pub location: String,
+	pub bytes: u64,
+}
+
+/// The longest a [`BackupTaken::location`] may be.
+pub const MAX_BACKUP_LOCATION: usize = 512;
+
+/// How a backup ended.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "result", rename_all = "snake_case")]
+pub enum BackupOutcome {
+	/// The dump is complete and kept.
+	Taken(BackupTaken),
+	/// No dump was kept.
+	Failed { reason: String },
+}
+
+/// `restore_database`'s input.
+///
+/// The worker puts the dump at `location` back as the database `database`,
+/// without ever leaving the environment on half of one:
+///
+/// 1. it takes a dump of the database as it is, to keep as the backup
+///    `before_restore` reports;
+/// 2. it restores `location` into a new database beside the old one, owned by
+///    the same role, with `CONNECT` revoked from `PUBLIC` as a
+///    [`DatabaseStep`]'s database has;
+/// 3. it stops the environment's processes, swaps the two databases' names, and
+///    starts the processes again, which apply any migration the dump is missing
+///    as they start;
+/// 4. when every process is ready it drops the old database and answers
+///    `Restored`. When one isn't, it swaps the names back, starts the processes
+///    on the old database, and answers `Failed`.
+///
+/// So `Failed` always means the database is as it was.
+///
+/// `location` is what a worker of this cluster once reported, and the
+/// control plane can't check it. Before restoring, the worker makes sure
+/// the dump there is one taken of `database`, from what it recorded with
+/// the dump when it took it, and fails the restore when it isn't: a
+/// location alone is never proof of whose data a dump holds.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct RestoreDatabaseInput {
+	pub environment: RuntimeValue<EnvironmentRef>,
+	/// The database's name on the server.
+	pub database: String,
+	/// The backup to put back, by its ID and by where its worker said it
+	/// keeps it.
+	pub backup: Uuid,
+	pub location: String,
+	/// When the dump taken before the restore may be deleted.
+	pub safety_expires_at: Timestamp,
+}
+
+/// How a restore ended.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "result", rename_all = "snake_case")]
+pub enum RestoreOutcome {
+	/// The environment runs on the backup's data. `before_restore` is the
+	/// dump of what it replaced.
+	Restored {
+		#[serde(default)]
+		before_restore: Option<BackupTaken>,
+	},
+	/// The database is as it was, and the environment runs on it.
+	Failed { reason: String },
+}
+
 /// What a job asks of its worker.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -536,6 +644,8 @@ pub enum JobInput {
 	BuildServer(BuildServerInput),
 	Release(Box<ReleaseInput>),
 	DestroyEnvironment(DestroyEnvironmentInput),
+	BackupDatabase(BackupDatabaseInput),
+	RestoreDatabase(RestoreDatabaseInput),
 }
 
 /// How a job ended, as its worker reports it with `finish`.
@@ -545,6 +655,8 @@ pub enum JobOutcome {
 	BuildServer(BuildOutcome),
 	Release(ReleaseOutcome),
 	DestroyEnvironment(DestroyOutcome),
+	BackupDatabase(BackupOutcome),
+	RestoreDatabase(RestoreOutcome),
 }
 
 impl JobOutcome {
@@ -555,6 +667,8 @@ impl JobOutcome {
 			Self::BuildServer(_) => JobKind::BuildServer,
 			Self::Release(_) => JobKind::Release,
 			Self::DestroyEnvironment(_) => JobKind::DestroyEnvironment,
+			Self::BackupDatabase(_) => JobKind::BackupDatabase,
+			Self::RestoreDatabase(_) => JobKind::RestoreDatabase,
 		}
 	}
 }

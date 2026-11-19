@@ -206,6 +206,10 @@ fn expected(caller: Caller, operation: &str, requirement: Requirement) -> Outcom
 		// The fixture's DNS holds no challenge record: a caller who may
 		// verify gets as far as finding that out.
 		_ if operation == "verify_domain" => Outcome::Refused(409, "domain_not_verified"),
+		// The fixture's staging has no database, and so no backup: a caller
+		// who may take or restore one gets as far as finding that out.
+		_ if operation == "create_backup" => Outcome::Refused(409, "no_database"),
+		_ if operation == "restore_backup" => Outcome::Refused(404, "backup_not_found"),
 		_ => Outcome::Answered(200),
 	}
 }
@@ -643,7 +647,8 @@ impl Fixture {
 					"number": 1,
 				})
 			}
-			"variables" | "secrets" | "domains" | "database" => {
+			"variables" | "secrets" | "domains" | "database" | "database_backups"
+			| "create_backup" => {
 				json!({ "organization": organization, "project": "web", "environment": "staging" })
 			}
 			// Whoever may unset may set, and set these just before.
@@ -690,6 +695,15 @@ impl Fixture {
 						"environment": { "organization": named, "project": named, "environment": named },
 						"processes": [],
 					},
+				})
+			}
+			"restore_backup" => {
+				json!({
+					"organization": organization,
+					"project": "web",
+					"environment": "staging",
+					"backup": nothing,
+					"confirm": "web/staging",
 				})
 			}
 			"register_cluster" => json!({ "name": "eu-two", "region": "eu-central" }),

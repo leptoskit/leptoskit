@@ -20,6 +20,7 @@
 pub mod account;
 mod audit;
 mod authorize;
+pub(crate) mod backups;
 pub(crate) mod config;
 mod control;
 pub(crate) mod databases;

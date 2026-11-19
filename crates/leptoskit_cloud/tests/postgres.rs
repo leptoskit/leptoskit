@@ -499,3 +499,37 @@ mod databases {
 		}
 	}
 }
+
+/// Backups and restores (`support/backups.rs`), on Postgres.
+mod backups {
+	use super::app;
+	use super::support::backups;
+
+	#[tokio::test]
+	async fn a_backup_is_taken_and_listed() {
+		if let Some((_postgres, app)) = app().await {
+			backups::a_backup_is_taken_and_listed(&app).await;
+		}
+	}
+
+	#[tokio::test]
+	async fn a_backup_is_restored() {
+		if let Some((_postgres, app)) = app().await {
+			backups::a_backup_is_restored(&app).await;
+		}
+	}
+
+	#[tokio::test]
+	async fn a_quiet_worker_fails_a_backup_and_leaves_a_restore_unknown() {
+		if let Some((_postgres, app)) = app().await {
+			backups::a_quiet_worker_fails_a_backup_and_leaves_a_restore_unknown(&app).await;
+		}
+	}
+
+	#[tokio::test]
+	async fn a_deleted_environment_takes_its_backups() {
+		if let Some((_postgres, app)) = app().await {
+			backups::a_deleted_environment_takes_its_backups(&app).await;
+		}
+	}
+}

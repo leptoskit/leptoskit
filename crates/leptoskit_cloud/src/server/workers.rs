@@ -44,6 +44,7 @@ use crate::tables::Placement;
 use crate::tables::StatusReport;
 use crate::tables::Worker;
 use crate::workers::Assignment;
+use crate::workers::BackupOutcome;
 use crate::workers::BuildOutcome;
 use crate::workers::DestroyOutcome;
 use crate::workers::Finished;
@@ -56,6 +57,7 @@ use crate::workers::MAX_WAIT_SECONDS;
 use crate::workers::PairedWorker;
 use crate::workers::ReleaseOutcome;
 use crate::workers::Renewed;
+use crate::workers::RestoreOutcome;
 use crate::workers::RuntimeValue;
 use crate::workers::StatusReceived;
 use crate::workers::WORKER_KEY_PREFIX;
@@ -317,7 +319,14 @@ async fn claim_job(cx: &rpc::MutationCx) -> rpc::Result<Option<Assignment>> {
 
 	let kinds: Vec<JobKind> = match row.role {
 		WorkerRole::Build => vec![JobKind::BuildServer],
-		WorkerRole::Cluster => vec![JobKind::Release, JobKind::DestroyEnvironment],
+		WorkerRole::Cluster => {
+			vec![
+				JobKind::Release,
+				JobKind::DestroyEnvironment,
+				JobKind::BackupDatabase,
+				JobKind::RestoreDatabase,
+			]
+		}
 	};
 	// A cluster worker takes one job per environment at a time, and none
 	// while one is unknown.
@@ -733,10 +742,14 @@ fn scrubbed(mut outcome: JobOutcome, secrets: &[String]) -> JobOutcome {
 		| JobOutcome::Release(
 			ReleaseOutcome::NotReady { reason, .. } | ReleaseOutcome::MigrationsFailed { reason },
 		)
-		| JobOutcome::DestroyEnvironment(DestroyOutcome::Failed { reason }) => reason,
+		| JobOutcome::DestroyEnvironment(DestroyOutcome::Failed { reason })
+		| JobOutcome::BackupDatabase(BackupOutcome::Failed { reason })
+		| JobOutcome::RestoreDatabase(RestoreOutcome::Failed { reason }) => reason,
 		JobOutcome::BuildServer(_)
 		| JobOutcome::Release(ReleaseOutcome::Applied)
-		| JobOutcome::DestroyEnvironment(DestroyOutcome::Destroyed) => return outcome,
+		| JobOutcome::DestroyEnvironment(DestroyOutcome::Destroyed)
+		| JobOutcome::BackupDatabase(BackupOutcome::Taken(_))
+		| JobOutcome::RestoreDatabase(RestoreOutcome::Restored { .. }) => return outcome,
 	};
 	*reason = logs::redact_lines(&[reason.as_str()], secrets).remove(0);
 	outcome
@@ -751,7 +764,7 @@ pub(crate) async fn finish(
 	let caller = worker(cx.context())?;
 	let services = services(cx.context())?;
 	// Before anything keeps it: the job's row, the sheet, an event.
-	let outcome = scrubbed(outcome, &services.shipping().redactions);
+	let outcome = super::backups::kept(scrubbed(outcome, &services.shipping().redactions));
 	let tx = cx.tx();
 	live_worker(tx, caller).await?;
 	let worker_id = caller.id;
@@ -807,9 +820,10 @@ pub(crate) async fn finish(
 		{
 			return Err(not_held(job));
 		}
-		// A release or removal reports what happened whenever it can, its
-		// lease run out or the sweeper having called it unknown: the
-		// cluster did it or not either way, and is never asked twice.
+		// A release, removal, or restore reports what happened whenever it
+		// can, its lease run out or the sweeper having called it unknown:
+		// the cluster did it or not either way, and is never asked twice.
+		// A backup the sweeper gave up on is abandoned, and stays failed.
 		JobState::Leased | JobState::Unknown => {}
 		JobState::Done => {
 			return Err(rpc::Error::conflict(format!(
@@ -844,6 +858,12 @@ pub(crate) async fn finish(
 			}
 		}
 		JobOutcome::DestroyEnvironment(DestroyOutcome::Failed { .. }) => {}
+		JobOutcome::BackupDatabase(outcome) => {
+			super::backups::backup_finished(tx, &row, outcome).await?;
+		}
+		JobOutcome::RestoreDatabase(outcome) => {
+			super::backups::restore_finished(tx, &row, outcome).await?;
+		}
 	}
 
 	let waker = services.clone();

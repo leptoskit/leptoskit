@@ -17,6 +17,7 @@ use leptoskit_rpc::live::ServerFrame;
 use leptoskit_rpc::live::Update;
 use serde_json::Value;
 use serde_json::json;
+use support::backups;
 use support::config;
 use support::databases;
 use support::domains;
@@ -521,4 +522,25 @@ async fn a_clusters_postgres_is_checked() {
 #[tokio::test]
 async fn a_failed_release_does_not_print_the_password() {
 	databases::a_failed_release_does_not_print_the_password(&support::app().await).await;
+}
+
+#[tokio::test]
+async fn a_backup_is_taken_and_listed() {
+	backups::a_backup_is_taken_and_listed(&support::app().await).await;
+}
+
+#[tokio::test]
+async fn a_backup_is_restored() {
+	backups::a_backup_is_restored(&support::app().await).await;
+}
+
+#[tokio::test]
+async fn a_quiet_worker_fails_a_backup_and_leaves_a_restore_unknown() {
+	backups::a_quiet_worker_fails_a_backup_and_leaves_a_restore_unknown(&support::app().await)
+		.await;
+}
+
+#[tokio::test]
+async fn a_deleted_environment_takes_its_backups() {
+	backups::a_deleted_environment_takes_its_backups(&support::app().await).await;
 }
