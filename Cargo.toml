@@ -191,7 +191,8 @@ serde_json = { version = "1", features = ["float_roundtrip"] }
 serde_path_to_error = "0.1"
 serde_qs = "1.1.3"
 sha2 = "0.10"
-skribble_rough = { git = "https://github.com/openbudgetfun/skribble", rev = "00845d0d2a1c07a126079453de342811ee1cff64" }
+skribble_core = { git = "https://github.com/openbudgetfun/skribble", rev = "20af15049b3af35885dac03d546306b7a3e33c3a" }
+skribble_rough = { git = "https://github.com/openbudgetfun/skribble", rev = "20af15049b3af35885dac03d546306b7a3e33c3a" }
 sqlite-vec = "0.1.9"
 subtle = "2"
 syn = "3"
@@ -395,6 +396,7 @@ leptoskit_rpc_codegen = { path = "crates/leptoskit_rpc_codegen", version = "0.3.
 leptoskit_rpc_macros = { path = "crates/leptoskit_rpc_macros", version = "0.3.0" }
 leptoskit_sensor = { path = "crates/leptoskit_sensor", version = "0.3.0" }
 leptoskit_service_worker = { path = "crates/leptoskit_service_worker", version = "0.3.0" }
+leptoskit_skribble = { path = "crates/leptoskit_skribble", version = "0.3.0" }
 leptoskit_table = { path = "crates/leptoskit_table", version = "0.3.0" }
 leptoskit_testing = { path = "crates/leptoskit_testing", version = "0.3.0" }
 leptoskit_testing_library = { path = "crates/leptoskit_testing_library", version = "0.3.0" }

@@ -1324,6 +1324,15 @@ depend on the individual sensor crate; this crate is the common floor.
 
 <!-- {/sensorSummary} -->
 
+<!-- {@skribbleSummary} -->
+
+It turns the drawings of [skribble](https://openbudgetfun.github.io/skribble/), a hand-drawn
+design system, into leptoskit components. `skribble_core` decides what to draw; this crate
+lays the ink out as `Vector` elements, so the same rough strokes render on the web and every
+native backend.
+
+<!-- {/skribbleSummary} -->
+
 <!-- {@tableSummary} -->
 
 It computes the model; the app renders rows with leptoskit components and keeps the same
