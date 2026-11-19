@@ -23,6 +23,8 @@
 //!   control plane's operations, as every client calls them.
 //! - [`config`], [`domains`], [`databases`]: an environment's variables and
 //!   secrets, its custom domains, and its managed Postgres database.
+//! - [`billing`]: the plans, what an organisation used this month and what it
+//!   costs, and its spend cap.
 //! - [`workers`]: the protocol build and cluster workers speak, its operations,
 //!   and the jobs' payloads.
 //! - [`release`]: how a deployment becomes the `ReleaseSpec` a cluster applies,
@@ -39,8 +41,7 @@
 //! operations' bodies exist only in that build: a crate that links this one
 //! for its client, such as the CLI, compiles none of them.
 //!
-//! Billing, database backups, and dedicated database instances arrive in
-//! later slices.
+//! Payment, and dedicated database instances, arrive in later slices.
 #![doc(
 	html_logo_url = "https://raw.githubusercontent.com/leptoskit/leptoskit/main/docs/src/assets/icon.svg"
 )]
@@ -51,6 +52,7 @@
 pub mod access;
 pub mod account;
 pub mod archive;
+pub mod billing;
 pub mod config;
 pub mod databases;
 pub mod deployment;

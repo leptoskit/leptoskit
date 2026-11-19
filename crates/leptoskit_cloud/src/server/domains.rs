@@ -248,6 +248,8 @@ pub(crate) async fn attach_domain(
 		return Ok(summary(&row, target.as_deref()));
 	}
 
+	super::billing::refuse_another_domain(cx.tx(), services.shipping(), &access.organization)
+		.await?;
 	let count = Domain::query()
 		.filter(|row| row.environment_id.eq(environment_id))
 		.count(cx.tx())

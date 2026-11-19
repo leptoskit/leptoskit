@@ -9,6 +9,7 @@
 )]
 
 pub mod backups;
+pub mod billing;
 pub mod config;
 pub mod databases;
 pub mod domains;

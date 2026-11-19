@@ -18,6 +18,8 @@
 //! | `delete_environment`  | project      |   ✓   |   ✓   |           |         |        | `admin`          |
 //! | `deploy`              | project      |   ✓   |   ✓   |     ✓     |         |        | `deploy`         |
 //! | `manage_config`       | project      |   ✓   |   ✓   |     ✓     |         |        | `manage`         |
+//! | `view_billing`        | organisation |   ✓   |   ✓   |           |    ✓    |        | `billing`        |
+//! | `manage_billing`      | organisation |   ✓   |       |           |    ✓    |        | never: a person  |
 //!
 //! A person, signed in themselves or through the CLI, has their role's
 //! permissions. A token has a permission when one of its scopes grants it
@@ -41,6 +43,10 @@
 //! Taking a backup of an environment's database is `deploy` too. Putting
 //! one back replaces everything written since, so it needs what deleting
 //! the environment does: `delete_environment`.
+//!
+//! Billing: `view_billing` reads what an organisation has used and what it
+//! costs. `manage_billing` changes what it may spend, which is its owners'
+//! and its billing members' to decide, and never a token's.
 //!
 //! Configuration (`manage_config`) is setting and removing an environment's
 //! variables and secrets. Reading variables, and the names of secrets, is
@@ -94,6 +100,8 @@ impl Role {
 		match permission {
 			Permission::ViewOrganization | Permission::ViewProjects => true,
 			Permission::ManageOwners => matches!(self, Self::Owner),
+			Permission::ViewBilling => matches!(self, Self::Owner | Self::Admin | Self::Billing),
+			Permission::ManageBilling => matches!(self, Self::Owner | Self::Billing),
 			Permission::ManageMembers
 			| Permission::ManageTokens
 			| Permission::DeleteProject
@@ -202,9 +210,11 @@ impl TokenScope {
 				matches!(self, Self::Admin)
 			}
 			Permission::Deploy => matches!(self, Self::Deploy),
-			Permission::ManageMembers | Permission::ManageOwners | Permission::ManageTokens => {
-				false
-			}
+			Permission::ViewBilling => matches!(self, Self::Billing),
+			Permission::ManageMembers
+			| Permission::ManageOwners
+			| Permission::ManageTokens
+			| Permission::ManageBilling => false,
 		}
 	}
 }
@@ -242,11 +252,16 @@ pub enum Permission {
 	/// Set and remove an environment's variables and secrets, and attach,
 	/// verify, and detach its domains.
 	ManageConfig,
+	/// See what the organisation has used, what it costs, and its spend
+	/// cap.
+	ViewBilling,
+	/// Change the organisation's spend cap.
+	ManageBilling,
 }
 
 impl Permission {
 	/// Every permission.
-	pub const ALL: [Self; 11] = [
+	pub const ALL: [Self; 13] = [
 		Self::ViewOrganization,
 		Self::ViewProjects,
 		Self::ManageMembers,
@@ -258,6 +273,8 @@ impl Permission {
 		Self::DeleteEnvironment,
 		Self::Deploy,
 		Self::ManageConfig,
+		Self::ViewBilling,
+		Self::ManageBilling,
 	];
 
 	/// The permission's name, as errors and the docs spell it.
@@ -275,6 +292,8 @@ impl Permission {
 			Self::DeleteEnvironment => "delete_environment",
 			Self::Deploy => "deploy",
 			Self::ManageConfig => "manage_config",
+			Self::ViewBilling => "view_billing",
+			Self::ManageBilling => "manage_billing",
 		}
 	}
 
@@ -289,7 +308,7 @@ impl Permission {
 	pub const fn requires_person(self) -> bool {
 		matches!(
 			self,
-			Self::ManageMembers | Self::ManageOwners | Self::ManageTokens
+			Self::ManageMembers | Self::ManageOwners | Self::ManageTokens | Self::ManageBilling
 		)
 	}
 
@@ -496,6 +515,12 @@ pub const OPERATIONS: &[(&str, Requirement)] = &[
 		"detach_domain",
 		Requirement::Project(Permission::ManageConfig),
 	),
+	("plans", Requirement::SignedIn),
+	("usage", Requirement::Organization(Permission::ViewBilling)),
+	(
+		"set_spend_cap",
+		Requirement::Organization(Permission::ManageBilling),
+	),
 	("pair", Requirement::Pairing),
 	("claim", Requirement::Worker),
 	("renew", Requirement::Worker),
@@ -629,7 +654,7 @@ mod tests {
 	}
 
 	#[test]
-	fn only_people_manage_members_and_tokens() {
+	fn only_people_manage_members_tokens_and_the_spend_cap() {
 		let person_only: Vec<Permission> = Permission::ALL
 			.into_iter()
 			.filter(|permission| permission.requires_person())
@@ -639,7 +664,8 @@ mod tests {
 			[
 				Permission::ManageMembers,
 				Permission::ManageOwners,
-				Permission::ManageTokens
+				Permission::ManageTokens,
+				Permission::ManageBilling
 			]
 		);
 

@@ -208,6 +208,9 @@ fn expected(caller: Caller, operation: &str, requirement: Requirement) -> Outcom
 		_ if operation == "verify_domain" => Outcome::Refused(409, "domain_not_verified"),
 		// The fixture's staging has no database, and so no backup: a caller
 		// who may take or restore one gets as far as finding that out.
+		// The matrix's control plane has no price catalogue: a caller who
+		// may set a cap gets as far as finding that out.
+		_ if operation == "set_spend_cap" => Outcome::Refused(409, "unpriced"),
 		_ if operation == "create_backup" => Outcome::Refused(409, "no_database"),
 		_ if operation == "restore_backup" => Outcome::Refused(404, "backup_not_found"),
 		_ => Outcome::Answered(200),
@@ -706,6 +709,9 @@ impl Fixture {
 					"confirm": "web/staging",
 				})
 			}
+			"plans" => json!({}),
+			"usage" => json!({ "organization": organization }),
+			"set_spend_cap" => json!({ "organization": organization, "cap": 100 }),
 			"register_cluster" => json!({ "name": "eu-two", "region": "eu-central" }),
 			"set_cluster_facts" => json!({ "name": "eu-one", "facts": { "wakes_sleeping": true } }),
 			"issue_pairing" => json!({ "role": "build" }),

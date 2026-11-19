@@ -4,7 +4,8 @@
 //! where environments are placed on them, workers and their pairing codes,
 //! jobs, log chunks, and what clusters report; variables, secrets and the
 //! keys they are sealed with, and the leases that say where a secret's
-//! value went; managed databases and the backups taken of them.
+//! value went; managed databases and the backups taken of them; what each
+//! organisation used each month, and its spend cap.
 //!
 //! Every key is a UUID v7, so rows order by creation. People are
 //! `Id<Account>`s from `leptoskit_auth`, stored without a foreign key: a
@@ -680,6 +681,50 @@ pub struct Database {
 	pub sealed_password: Vec<u8>,
 	/// Whether a release that uses it has been applied.
 	pub ready: bool,
+	#[db(created_at)]
+	pub created_at: Timestamp,
+	#[db(updated_at)]
+	pub updated_at: Timestamp,
+}
+
+/// How much of one meter an organisation's project used in one calendar
+/// month (UTC). Not a foreign key to anything: usage outlives the project
+/// it was for.
+#[table(
+	name = "usage_totals",
+	unique(organization_id, project_id, period, meter),
+	index(organization_id, period)
+)]
+pub struct UsageTotal {
+	pub id: Id<Self>,
+	#[db(no_foreign_key)]
+	pub organization_id: Id<Organization>,
+	/// The nil ID when the project was gone before the usage was counted.
+	#[db(no_foreign_key)]
+	pub project_id: Id<Project>,
+	/// The month, as `2026-11`.
+	#[db(min_len = 7, max_len = 7)]
+	pub period: String,
+	/// The meter's code, such as `build_minutes_linux`.
+	#[db(min_len = 1, max_len = 40)]
+	pub meter: String,
+	pub quantity: i64,
+	#[db(created_at)]
+	pub created_at: Timestamp,
+	#[db(updated_at)]
+	pub updated_at: Timestamp,
+}
+
+/// What an organisation has decided about its bill: so far, its own spend
+/// cap.
+#[table(name = "billing_accounts")]
+pub struct BillingAccount {
+	pub id: Id<Self>,
+	#[db(unique, on_delete = cascade)]
+	pub organization_id: Id<Organization>,
+	/// The most a month's usage may cost beyond what the plan includes, in
+	/// the catalogue's minor units, or `None` for the plan's own cap.
+	pub spend_cap: Option<i64>,
 	#[db(created_at)]
 	pub created_at: Timestamp,
 	#[db(updated_at)]

@@ -846,6 +846,7 @@ pub(crate) async fn finish(
 
 	match &outcome {
 		JobOutcome::BuildServer(outcome) => {
+			super::metering::build_finished(tx, &row).await?;
 			super::deployments::build_finished(tx, &row, outcome).await?;
 		}
 		JobOutcome::Release(outcome) => {
@@ -1057,6 +1058,15 @@ async fn report(cx: &rpc::MutationCx, args: ReportStatus) -> rpc::Result<Reporte
 		.first(tx)
 		.await?
 	{
+		super::metering::observed(
+			tx,
+			&project,
+			&environment,
+			existing.reported_at,
+			now,
+			&args.observed,
+		)
+		.await?;
 		existing.observed = Json(args.observed);
 		existing.cluster_id = placement.cluster_id;
 		existing.reported_at = now;

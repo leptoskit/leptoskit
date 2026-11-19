@@ -878,6 +878,7 @@ pub(crate) async fn deploy(
 	let signer = signer(cx.tx(), &access.caller, host).await?;
 	refuse_in_flight(cx.tx(), &environment).await?;
 	super::backups::refuse_restoring(cx.tx(), &environment).await?;
+	super::billing::refuse_over_cap(cx.tx(), shipping, &organization).await?;
 	check_config(&config, &organization, &project)?;
 	let resolved = resolve(&config, &environment)?;
 	let (cluster, placement) =

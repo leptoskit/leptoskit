@@ -201,5 +201,7 @@ fn describe(permission: Permission) -> &'static str {
 		Permission::DeleteEnvironment => "delete environments",
 		Permission::Deploy => "upload, deploy, cancel, or roll back",
 		Permission::ManageConfig => "set or remove variables and secrets",
+		Permission::ViewBilling => "see its usage and what it costs",
+		Permission::ManageBilling => "change its spend cap",
 	}
 }

@@ -533,3 +533,39 @@ mod backups {
 		}
 	}
 }
+
+/// Usage, the spend cap and plans' limits (`support/billing.rs`), on
+/// Postgres, with the tests' price catalogue.
+mod billing {
+	use super::postgres;
+	use super::support;
+	use super::support::App;
+	use super::support::billing;
+
+	async fn app() -> Option<(postgres::Postgres, App)> {
+		let server = postgres::Postgres::start()?;
+		let db = leptoskit_db::Db::connect(&server.database())
+			.await
+			.expect("connect");
+		db.migrate(leptoskit_cloud::POSTGRES_MIGRATIONS)
+			.await
+			.expect("the Postgres migrations apply");
+		let app =
+			support::app_with(db, |config| config.catalogue = Some(billing::catalogue())).await;
+		Some((server, app))
+	}
+
+	#[tokio::test]
+	async fn usage_is_counted_priced_and_capped() {
+		if let Some((_postgres, app)) = app().await {
+			billing::usage_is_counted_priced_and_capped(&app).await;
+		}
+	}
+
+	#[tokio::test]
+	async fn a_plans_limits_are_counted() {
+		if let Some((_postgres, app)) = app().await {
+			billing::a_plans_limits_are_counted(&app).await;
+		}
+	}
+}
