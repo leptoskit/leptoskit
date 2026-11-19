@@ -38,13 +38,23 @@ function notice(message) {
 
 // Workings ------------------------------------------------------------------
 
-function openDrawer(id) {
-	if (!byId(`drawer:${id}`)) {
+/** The control that opened the drawer, which gets focus back when it closes. */
+let invoker = null;
+
+const reducedMotion = () =>
+	matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+function openDrawer(id, from = null) {
+	const panel = byId(`drawer:${id}`);
+	if (!panel) {
 		return;
 	}
+	invoker = from instanceof HTMLElement && from !== document.body ? from : null;
 	root.setAttribute("data-admin-drawer", id);
 	history.replaceState(null, "", `#workings=${id}`);
-	byId("workings-close")?.focus({ preventScroll: true });
+	panel.querySelector('[data-testid="workings-close"]')?.focus({
+		preventScroll: true,
+	});
 }
 
 function closeDrawer() {
@@ -53,12 +63,64 @@ function closeDrawer() {
 	for (const line of all("[data-linked]")) {
 		line.removeAttribute("data-linked");
 	}
+	for (const status of all('[data-testid="drawer-changed"]')) {
+		status.textContent = "";
+	}
 	if (location.hash.startsWith("#workings=")) {
 		history.replaceState(null, "", location.pathname + location.search);
 	}
 	if (open) {
-		byId(`workings-tab:${open}`)?.focus({ preventScroll: true });
+		// The exact control that opened it; another card can share its id.
+		const back = invoker?.isConnected ? invoker : byId(`workings-tab:${open}`);
+		back?.focus({ preventScroll: true });
 	}
+	invoker = null;
+}
+
+/** Shows `tab` in every Ask station, keeping the tabs' state in step. */
+function selectAsk(tab) {
+	root.setAttribute("data-admin-ask", tab);
+	syncAsk();
+	if (tab === "sql") {
+		preference({ kind: "use_note", note: "ask-sql" });
+	}
+}
+
+function syncAsk() {
+	const tab = root.getAttribute("data-admin-ask") ?? "rust";
+	for (const button of all('[data-testid^="ask-tab:"]')) {
+		const on = button.getAttribute("data-testid") === `ask-tab:${tab}`;
+		button.setAttribute("aria-selected", String(on));
+		button.tabIndex = on ? 0 : -1;
+	}
+}
+
+/** Arrow keys, Home, and End move along a tab list, as tabs expect. */
+function moveAsk(current, key) {
+	const tabs = Array.from(
+		current.closest('[role="tablist"]')?.querySelectorAll('[role="tab"]') ??
+			[],
+	);
+	const index = tabs.indexOf(current);
+	if (index < 0) return false;
+	const next = {
+		ArrowRight: tabs[(index + 1) % tabs.length],
+		ArrowLeft: tabs[(index - 1 + tabs.length) % tabs.length],
+		Home: tabs[0],
+		End: tabs[tabs.length - 1],
+	}[key];
+	if (!next) return false;
+	selectAsk(next.getAttribute("data-testid").slice("ask-tab:".length));
+	next.focus();
+	return true;
+}
+
+/** Opens or closes a station; on phones stations start as headers. */
+function setStation(station, open) {
+	station.toggleAttribute("data-open", open);
+	station
+		.querySelector(':scope > [data-testid="station-toggle"]')
+		?.setAttribute("aria-expanded", String(open));
 }
 
 function setWorkingsMode(on) {
@@ -71,8 +133,8 @@ function setWorkingsMode(on) {
 	preference({ kind: "workings_mode", on });
 }
 
-function linkKey(key) {
-	openDrawer("plan");
+function linkKey(key, from) {
+	openDrawer("plan", from);
 	for (const line of all("[data-linked]")) {
 		line.removeAttribute("data-linked");
 	}
@@ -134,6 +196,7 @@ function prose(text) {
  * label }). It resolves to `false`, or to `{ value, choice }`.
  */
 function confirmSheet(title, explanation, options = {}) {
+	const opener = options.invoker ?? document.activeElement;
 	return new Promise((resolve) => {
 		const veil = document.createElement("div");
 		veil.setAttribute("data-testid", "confirm-sheet");
@@ -143,6 +206,7 @@ function confirmSheet(title, explanation, options = {}) {
 		card.setAttribute("role", "dialog");
 		card.setAttribute("aria-modal", "true");
 		card.setAttribute("aria-labelledby", "confirm-title");
+		card.setAttribute("aria-describedby", "confirm-description");
 		card.style.cssText =
 			"width:100%;max-width:440px;display:flex;flex-direction:column;gap:14px;padding:20px;border-radius:12px;border:1px solid var(--admin-line);background:var(--admin-surface);color:var(--admin-ink);font:14px/1.5 var(--admin-font-sans)";
 		const heading = document.createElement("h2");
@@ -150,6 +214,7 @@ function confirmSheet(title, explanation, options = {}) {
 		heading.textContent = title;
 		heading.style.cssText = "margin:0;font-size:17px;font-weight:600";
 		const body = document.createElement("p");
+		body.id = "confirm-description";
 		body.append(...prose(explanation));
 		body.style.cssText = "margin:0;color:var(--admin-ink-2)";
 		const row = document.createElement("div");
@@ -233,9 +298,18 @@ function confirmSheet(title, explanation, options = {}) {
 		check();
 		veil.append(card);
 		document.body.append(veil);
-		(field && !field.disabled ? field : go).focus();
+		const background = Array.from(document.body.children)
+			.filter((element) => element instanceof HTMLElement && element !== veil)
+			.map((element) => [element, element.inert]);
+		for (const [element] of background) element.inert = true;
+		(field && !field.disabled ? field : go.disabled ? cancel : go).focus();
 		const done = (answer) => {
+			if (!veil.isConnected) return;
 			veil.remove();
+			for (const [element, inert] of background) element.inert = inert;
+			if (opener instanceof HTMLElement && opener.isConnected) {
+				opener.focus({ preventScroll: true });
+			}
 			resolve(answer);
 		};
 		cancel.addEventListener("click", () => done(false));
@@ -254,8 +328,29 @@ function confirmSheet(title, explanation, options = {}) {
 			}
 		});
 		veil.addEventListener("keydown", (event) => {
+			// Dialog keys must not also trigger the page's Workings shortcuts.
+			event.stopPropagation();
 			if (event.key === "Escape") {
+				event.preventDefault();
 				done(false);
+				return;
+			}
+			if (event.key === "Tab") {
+				const stops = Array.from(card.querySelectorAll("button, input"))
+					.filter((element) =>
+						!element.disabled && element.tabIndex >= 0 &&
+						element.getClientRects().length &&
+						(element.type !== "radio" || element.checked)
+					);
+				const first = stops[0];
+				const last = stops.at(-1);
+				if (event.shiftKey && document.activeElement === first) {
+					event.preventDefault();
+					last?.focus();
+				} else if (!event.shiftKey && document.activeElement === last) {
+					event.preventDefault();
+					first?.focus();
+				}
 			}
 		});
 	});
@@ -306,7 +401,7 @@ async function runAction(button) {
 	}
 	const title = button.textContent.trim();
 	const explanation = button.getAttribute("aria-description") ?? "";
-	if (!(await confirmSheet(title, explanation))) {
+	if (!(await confirmSheet(title, explanation, { invoker: button }))) {
 		return;
 	}
 	button.setAttribute("aria-busy", "true");
@@ -424,10 +519,121 @@ function drawerCode(scope) {
 let swapping = false;
 
 /**
- * Fetches `href` and puts its page in place of this one, keeping the open
- * drawer open and washing the lines of code that changed.
+ * What finds an element again once a swap has replaced it: its region, its
+ * test id or tag, and its link and name.
  */
-async function swapTo(href, push) {
+function identify(element) {
+	if (!(element instanceof HTMLElement)) return null;
+	const region = element.closest(
+		'[data-testid="main"], [data-testid="drawer-aside"]',
+	);
+	if (!region) return null;
+	const id = element.getAttribute("data-testid");
+	return {
+		region: region.getAttribute("data-testid"),
+		selector: id
+			? `[data-testid="${CSS.escape(id)}"]`
+			: element.tagName.toLowerCase(),
+		href: element.getAttribute("href"),
+		label: element.getAttribute("aria-label") ?? element.textContent.trim(),
+	};
+}
+
+function locate(identity) {
+	if (!identity) return null;
+	return Array.from(
+		byId(identity.region)?.querySelectorAll(identity.selector) ?? [],
+	).find((element) =>
+		element.getAttribute("href") === identity.href &&
+		(element.getAttribute("aria-label") ?? element.textContent.trim()) ===
+			identity.label
+	) ?? null;
+}
+
+/** The open drawer's scroll position and opened stations, to keep. */
+function drawerPlace() {
+	const open = root.getAttribute("data-admin-drawer");
+	const panel = open ? byId(`drawer:${open}`) : null;
+	return {
+		panel: open && `drawer:${open}`,
+		scroll: panel?.querySelector('[data-testid="drawer-scroll"]')?.scrollTop ??
+			0,
+		stations: all(
+			'[data-testid^="drawer:"] [data-testid^="station:"][data-open]',
+		)
+			.map((station) =>
+				`${
+					station.closest('[data-testid^="drawer:"]').getAttribute(
+						"data-testid",
+					)
+				}|${station.getAttribute("data-testid")}`
+			),
+	};
+}
+
+function restoreDrawerPlace(place) {
+	for (const key of place.stations) {
+		const [drawer, station] = key.split("|");
+		const found = byId(drawer)?.querySelector(
+			`[data-testid="${CSS.escape(station)}"]`,
+		);
+		if (found) setStation(found, true);
+	}
+	const scroller = place.panel &&
+		byId(place.panel)?.querySelector('[data-testid="drawer-scroll"]');
+	if (scroller) scroller.scrollTop = place.scroll;
+}
+
+/**
+ * After someone changes the builder, brings the open drawer's first changed
+ * line into view, scrolling only the drawer, and says which station
+ * changed. Focus stays where it is.
+ */
+function revealChange() {
+	const open = root.getAttribute("data-admin-drawer");
+	const panel = open ? byId(`drawer:${open}`) : null;
+	if (!panel) return;
+	const changed = Array.from(panel.querySelectorAll("[data-changed]"));
+	if (!changed.length) return;
+	// A line in an Ask tab nobody is looking at can't be shown; its station
+	// still can.
+	const tab = root.getAttribute("data-admin-ask") ?? "rust";
+	const line = changed.find((candidate) => {
+		const tabPanel = candidate.closest('[data-testid^="ask-panel:"]');
+		return !tabPanel ||
+			tabPanel.getAttribute("data-testid") === `ask-panel:${tab}`;
+	});
+	const station = (line ?? changed[0]).closest('[data-testid^="station:"]');
+	if (!station) return;
+	setStation(station, true);
+	const name = station.querySelector('h3, [role="heading"]')?.textContent ??
+		"A station";
+	const text = line?.querySelector('[data-testid="code-text"]')?.textContent
+		.trim().replace(/[,;]$/, "") ?? "";
+	const status = panel.querySelector('[data-testid="drawer-changed"]');
+	if (status) {
+		status.textContent = text
+			? `${name} changed: ${text.length > 48 ? `${text.slice(0, 47)}…` : text}`
+			: `${name} changed`;
+	}
+	const scroller = panel.querySelector('[data-testid="drawer-scroll"]');
+	const target = line ?? station;
+	if (!scroller) return;
+	const box = target.getBoundingClientRect();
+	const view = scroller.getBoundingClientRect();
+	if (box.top >= view.top + 24 && box.bottom <= view.bottom - 24) return;
+	scroller.scrollTo({
+		top: Math.max(0, scroller.scrollTop + box.top - view.top - view.height / 3),
+		behavior: reducedMotion() ? "auto" : "smooth",
+	});
+}
+
+/**
+ * Fetches `href` and puts its page in place of this one, keeping the open
+ * drawer open where it was and washing the lines of code that changed.
+ * `reveal` is for a change someone made: the drawer then shows it.
+ */
+async function swapTo(href, push, reveal = false) {
 	if (swapping) return false;
 	swapping = true;
 	try {
@@ -447,16 +653,35 @@ async function swapTo(href, push) {
 			return true;
 		}
 		const before = drawerCode(document);
+		const focused = identify(document.activeElement);
+		const opener = identify(invoker);
+		const place = drawerPlace();
 		main.replaceChildren(...nextMain.childNodes);
 		const aside = byId("drawer-aside");
 		const nextAside = next.querySelector('[data-testid="drawer-aside"]');
 		if (aside && nextAside) {
 			aside.replaceChildren(...nextAside.childNodes);
 		}
-		const style = document.querySelector("head style");
-		const nextStyle = next.querySelector("head style");
-		if (style && nextStyle && style.textContent !== nextStyle.textContent) {
-			style.textContent = nextStyle.textContent;
+		syncAsk();
+		restoreDrawerPlace(place);
+		if (invoker && !invoker.isConnected) invoker = locate(opener);
+		locate(focused)?.focus({ preventScroll: true });
+		// The shell's CSS is in head; the renderer puts component CSS in body.
+		for (const selector of ["head > style", "body > style"]) {
+			const style = document.querySelector(selector);
+			const nextStyle = next.querySelector(selector);
+			if (style && nextStyle && style.textContent !== nextStyle.textContent) {
+				style.textContent = nextStyle.textContent;
+			}
+		}
+		const scope = next.querySelector("[data-lk-root]")?.getAttribute(
+			"data-lk-root",
+		);
+		if (scope) {
+			document.querySelector("[data-lk-root]")?.setAttribute(
+				"data-lk-root",
+				scope,
+			);
 		}
 		document.title = next.title;
 		for (const [drawer, blocks] of drawerCode(document)) {
@@ -476,12 +701,19 @@ async function swapTo(href, push) {
 						?.textContent;
 					if (text && text.trim() && !seen.has(text)) {
 						line.setAttribute("data-changed", "");
+						line.closest('[data-testid^="station:"]')?.setAttribute(
+							"data-changed-station",
+							"",
+						);
 					}
 				}
 			}
 		}
 		if (push) {
 			history.pushState(null, "", href + location.hash);
+		}
+		if (reveal) {
+			revealChange();
 		}
 		return true;
 	} catch {
@@ -583,8 +815,11 @@ function addLiveEvent(event) {
 	if (title) {
 		const name = title.firstElementChild;
 		if (name) name.textContent = event.name;
-		const badge = title.children[1];
-		if (badge && !event.typed) badge.remove();
+		// Every row has the badge; this event decides whether it shows, not
+		// the row it was copied from.
+		const badge = title.querySelector('[data-testid="struct-badge"]');
+		if (event.typed) badge?.removeAttribute("aria-hidden");
+		else badge?.setAttribute("aria-hidden", "true");
 	}
 	if (cells[2]) cells[2].textContent = event.properties?.$pathname ?? "";
 	if (cells[3]) cells[3].textContent = event.distinct_id;
@@ -688,7 +923,7 @@ async function saveInsight() {
 		insight
 			? "Saves what the builder shows now over this insight. Dashboards that hold it update."
 			: "Saves this insight to the library, where anyone with the admin can open it.",
-		{ input: { label: "Name", value: name } },
+		{ invoker: byId("save-insight"), input: { label: "Name", value: name } },
 	);
 	if (!answer) return;
 	const result = await post(`${BASE}/api/analytics/insights`, {
@@ -723,7 +958,11 @@ async function addToDashboard(button) {
 		`Adds “${button.getAttribute("aria-description") ?? name}” as a card${
 			insight ? "" : ", saving it to the library first"
 		}.`,
-		{ choices, input: { label: "New dashboard's name", value: "Product" } },
+		{
+			invoker: button,
+			choices,
+			input: { label: "New dashboard's name", value: "Product" },
+		},
 	);
 	if (!answer) return;
 	const result = await post(`${BASE}/api/analytics/dashboards`, {
@@ -748,6 +987,7 @@ async function exportPerson(button) {
 	const answer = await confirmSheet(
 		"Export",
 		"Downloads everything stored about this person as JSON: their properties, ids, events, and sessions. Handle it as personal data.",
+		{ invoker: button },
 	);
 	if (!answer) return;
 	const response = await fetch(`${BASE}/api/analytics/people/${id}/export`, {
@@ -773,6 +1013,7 @@ async function deletePerson(button) {
 		"Delete",
 		`Deletes this person, every id merged into them, and all their events and sessions, for good. Type \`${confirmation}\` to confirm.`,
 		{
+			invoker: button,
 			input: { label: "Type their name to confirm", placeholder: confirmation },
 			mustMatch: confirmation,
 			danger: true,
@@ -873,7 +1114,7 @@ document.addEventListener("click", async (event) => {
 	) {
 		event.preventDefault();
 		closeMenus();
-		await swapTo(link.href, true);
+		await swapTo(link.href, true, true);
 		return;
 	}
 	// A press outside an open menu closes it.
@@ -905,13 +1146,13 @@ document.addEventListener("click", async (event) => {
 		if (root.getAttribute("data-admin-drawer") === drawer) {
 			closeDrawer();
 		} else {
-			openDrawer(drawer);
+			openDrawer(drawer, target);
 		}
 		return;
 	}
 	if (id.startsWith("plan-row:")) {
 		event.preventDefault();
-		linkKey(id.slice("plan-row:".length));
+		linkKey(id.slice("plan-row:".length), target);
 		return;
 	}
 	if (id.startsWith("action:")) {
@@ -922,11 +1163,7 @@ document.addEventListener("click", async (event) => {
 		return;
 	}
 	if (id.startsWith("ask-tab:")) {
-		const tab = id.slice("ask-tab:".length);
-		root.setAttribute("data-admin-ask", tab);
-		if (tab === "sql") {
-			preference({ kind: "use_note", note: "ask-sql" });
-		}
+		selectAsk(id.slice("ask-tab:".length));
 		return;
 	}
 	if (id.startsWith("note-dismiss:")) {
@@ -937,6 +1174,11 @@ document.addEventListener("click", async (event) => {
 	}
 
 	switch (id) {
+		case "station-toggle": {
+			const station = target.closest('[data-testid^="station:"]');
+			if (station) setStation(station, !station.hasAttribute("data-open"));
+			break;
+		}
 		case "workings-close":
 			closeDrawer();
 			break;
@@ -1066,6 +1308,15 @@ document.addEventListener("keydown", (event) => {
 		byId("search")?.focus();
 		return;
 	}
+	if (
+		event.target instanceof HTMLElement &&
+		(event.target.getAttribute("data-testid") ?? "").startsWith("ask-tab:") &&
+		!event.metaKey && !event.ctrlKey && !event.altKey &&
+		moveAsk(event.target, event.key)
+	) {
+		event.preventDefault();
+		return;
+	}
 	if (event.key === "Escape") {
 		if (
 			document.querySelector(
@@ -1098,7 +1349,10 @@ document.addEventListener("keydown", (event) => {
 	const card = document.activeElement?.closest('[data-testid^="card:"]');
 	const first = card ?? document.querySelector('[data-testid^="card:"]');
 	if (first) {
-		openDrawer(first.getAttribute("data-testid").slice("card:".length));
+		openDrawer(
+			first.getAttribute("data-testid").slice("card:".length),
+			card ? document.activeElement : null,
+		);
 	}
 });
 

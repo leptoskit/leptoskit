@@ -86,6 +86,8 @@ let admin = Admin::builder("Notes")
 axum::serve(listener, admin.router()).await?;
 ```
 
+A page beside the admin, such as your site's sign-in, can wear the same colours: `leptoskit_admin::theme_css()` returns the admin's `--admin-*` custom properties for the light and dark appearances, and honours `data-lk-appearance` on the root element. Only those properties are public; the admin's component classes are not.
+
 `AnalyticsService::from_env()` reads `LEPTOSKIT_SERVICE_ANALYTICS_URL` and `LEPTOSKIT_SERVICE_ANALYTICS_TOKEN`, which `lk admin serve` also reads (`--analytics-url` overrides the address). `.roles(["admin", "ops"])` accepts other roles, `.environment(Environment::Staging)` labels a staging admin, and `.database(db)` uses a database you opened instead of `.data_dir`.
 
 ## Try it
@@ -98,7 +100,7 @@ cargo run -p admin_demo -- --seed        # and a month of analytics
 cargo run -p admin_demo -- --executor lk # the real `lk` commands
 ```
 
-Open `http://127.0.0.1:4801/_leptoskit/admin`. The main site at `http://localhost:4800` runs the real analytics service and sends typed events from its pages; `--seed` first sends 30 days of visits, sign-ups, notes, and checkouts through the same ingestion. The simulated executor contacts no cloud provider: it runs the real generator and compares the result with what it last "applied", and says it's a simulation in every operation. With `--executor lk`, plans run `lk infra plan` for real and fail without provider tokens, which the admin shows as it is.
+Open `http://127.0.0.1:4801/_leptoskit/admin`. The main site at `http://localhost:4800` runs the real analytics service and sends typed events from its pages; `--seed` first sends 30 days of visits, sign-ups, notes, and checkouts through the same ingestion. The simulated executor contacts no cloud provider: it runs the real generator and compares the result with what it last "applied", and says it's a simulation in every operation. With `--executor lk`, plans run `lk infra plan` for real and fail without provider tokens, which the admin shows as it is. The demo builds its admin with `.simulated_infrastructure(true)` unless the real commands run, so every screen says **Simulated**.
 
 ## Learn more
 

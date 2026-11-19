@@ -33,6 +33,8 @@ pub(crate) struct Viewer {
 	pub app_name: String,
 	/// Which environment this admin acts on.
 	pub environment: Environment,
+	/// Whether infrastructure actions run against a stand-in cloud.
+	pub simulated: bool,
 	/// The signed-in admin's email, or their name at the main site.
 	pub who: String,
 	/// Whether mint tabs show their sources.
@@ -332,12 +334,13 @@ fn top_bar(viewer: &Viewer, section: &Section) -> Element {
 	View()
 		.class(
 			"relative h-14 shrink-0 flex-row items-center gap-3 border-b \
-			 border-[var(--admin-line)] bg-[var(--admin-surface)] px-4 max-sm:gap-2 max-sm:px-3",
+			 border-[var(--admin-line)] bg-[var(--admin-surface)] px-4 max-sm:gap-1.5 max-sm:px-3",
 		)
 		.role(Role::Banner)
 		.test_id("top-bar")
 		.child(brand)
 		.child(components::env_pill(viewer.environment))
+		.children(viewer.simulated.then(components::simulated_word))
 		.children(switcher)
 		.child(search)
 		.child(View().class("flex-1"))
@@ -695,15 +698,24 @@ pub(crate) fn shell_css(drawers: &[Drawer]) -> String {
 		tokens = style::tokens_css()
 	);
 
-	// The analytics drawers: the Ask station's tabs, the lines a builder
-	// change washed, and the live tail's filter. A raw string, so rustfmt
-	// leaves its quotes alone.
+	// The drawers: the Ask station's tabs, the lines a builder change
+	// washed and the station it changed, stations collapsing to their
+	// headers on phones, and Copy's row staying put while code scrolls
+	// sideways. Then the live tail's filter and typed badge. A raw string,
+	// so rustfmt leaves its quotes alone.
 	css.push_str(
 		r#"[data-changed]{background:rgba(94,242,194,.22)!important;box-shadow:inset 3px 0 #5ef2c2}
+[data-changed-station]>[data-testid=station-dot]{background:#5ef2c2!important}
+[data-changed-station]>[data-testid=station-head]::after{content:"changed";align-self:center;padding:0 6px;border-radius:999px;background:#5ef2c2;color:#0f0b16;font-size:11px;font-weight:600;line-height:16px}
+[data-testid=code-head]{position:sticky;left:0}
+[data-testid=station-toggle]::after{content:"\25BE";position:absolute;right:6px;top:50%;transform:translateY(-50%);color:#9d93a8;font-size:14px;transition:transform .15s}
+[data-testid=station-toggle][aria-expanded=true]::after{transform:translateY(-50%) rotate(180deg)}
+@media (max-width:639px){[data-testid^="station:"]:not([data-open])>[data-testid=station-body]{display:none!important}}
 [data-testid^="ask-panel:"]{display:none!important}
 html:not([data-admin-ask]) [data-testid="ask-panel:rust"],html[data-admin-ask=rust] [data-testid="ask-panel:rust"],html[data-admin-ask=sql] [data-testid="ask-panel:sql"],html[data-admin-ask=http] [data-testid="ask-panel:http"]{display:flex!important}
-html:not([data-admin-ask]) [data-testid="ask-tab:rust"],html[data-admin-ask=rust] [data-testid="ask-tab:rust"],html[data-admin-ask=sql] [data-testid="ask-tab:sql"],html[data-admin-ask=http] [data-testid="ask-tab:http"]{border-color:#5ef2c2!important;color:#5ef2c2!important}
+[data-testid^="ask-tab:"][aria-selected=true]{border-color:#5ef2c2!important;color:#5ef2c2!important}
 [data-testid=live-event][data-filtered]{display:none!important}
+[data-testid=struct-badge][aria-hidden=true]{display:none!important}
 [data-testid=live-event] [data-testid=how-toggle]::before{display:none}
 [data-testid=menu-panel]{z-index:10;box-shadow:0 12px 32px -12px rgba(15,11,22,.28)}
 [data-testid=menu-toggle][aria-expanded=false]~[data-testid=menu-panel]{display:none!important}"#,

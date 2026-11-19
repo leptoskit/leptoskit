@@ -705,6 +705,8 @@ in
         # The runner's Chrome and this chromedriver disagree on the major
         # version. The json names a Chrome built for this chromedriver.
         export WASM_BINDGEN_TEST_WEBDRIVER_JSON="$(bash "$DEVENV_ROOT/setup/scripts/chrome_for_tests.sh")"
+        CHROME="$(jq -r '."goog:chromeOptions".binary' "$WASM_BINDGEN_TEST_WEBDRIVER_JSON")" \
+          deno test -A crates/leptoskit_admin/tests/script.mjs
         CHROMEDRIVER="$DEVENV_PROFILE/bin/chromedriver" \
           cargo test --target wasm32-unknown-unknown --package leptoskit_testing_library
         CHROMEDRIVER="$DEVENV_PROFILE/bin/chromedriver" \

@@ -142,677 +142,710 @@ aside [drawer-aside] label="Workings"
   div [drawer:trends] label="Workings: note_created, 5 Oct – 1 Nov · Trends insight · live"
     "Workings"
     "note_created, 5 Oct – 1 Nov · Trends insight · live"
+    div [drawer-changed] role=status
     button [workings-close] label="Close workings (W)"
       "Close"
-    div [station:emit]
-      "Emit"
-      "the event catalogue"
-      "note_created"
-      "is a Rust type in your app, so its properties are its fields and a misspelled one fails when it compiles. This is the shape the app last registered; the service doesn't record where in your code it's sent from."
-      div [code]
-        div [code-line]
-          "1"
-          span [code-text]
-            "#[derive(Event)]"
-        div [code-line]
-          "2"
-          span [code-text]
-            "struct"
-            "NoteCreated"
-            "{"
-        div [code-line]
-          "3"
-          span [code-text]
-            "words"
-            ":"
-            "u32"
-            ","
-        div [code-line]
-          "4"
-          span [code-text]
-            "shared"
-            ":"
-            "bool"
-            ","
-        div [code-line]
-          "5"
-          span [code-text]
-            "}"
-        button [copy] label="Copy as Rust"
-          "Copy"
-    div [station:send]
-      "Send"
-      "the latest note_created, re-encoded here"
-      "Typed events send no property names, so this one is 85 bytes instead of 208: 59.1% smaller. Measured as one event alone in a batch; a real batch shares its context and session between events, so it shrinks further."
-      div [code]
-        div [code-line]
-          "1"
-          span [code-text]
-            "typed"
-            ","
-            "positional"
-            "85"
-            "bytes"
-        div [code-line]
-          "2"
-          span [code-text]
-            "JSON"
-            ","
-            "named"
-            "208"
-            "bytes"
-        div [code-line]
-          "3"
-          span [code-text]
-        div [code-line]
-          "4"
-          span [code-text]
-            "//"
-            "values"
-            "in"
-            "field"
-            "order"
-            ":"
-            "180"
-            ","
-            "true"
-        button [copy] label="Copy as text"
-          "Copy"
-    div [station:store]
-      "Store"
-      "events on sqlite"
-      "Events land in"
-      "events"
-      "as they arrive; sessions and persons are kept up to date beside them as each batch is stored, so a query reads tables, never a queue. These are the ones this query read."
-      div [code]
-        div [code-line]
-          "1"
-          span [code-text]
-            "events"
-        div [code-line]
-          "2"
-          span [code-text]
-            "uuid"
-            "BLOB"
-        div [code-line]
-          "3"
-          span [code-text]
-            "name"
-            "TEXT"
-        div [code-line]
-          "4"
-          span [code-text]
-            "distinct_id"
-            "TEXT"
-        div [code-line]
-          "5"
-          span [code-text]
-            "person_id"
-            "BLOB"
-        div [code-line]
-          "6"
-          span [code-text]
-            "timestamp"
-            "TEXT"
-        div [code-line]
-          "7"
-          span [code-text]
-            "received_at"
-            "TEXT"
-        div [code-line]
-          "8"
-          span [code-text]
-            "session_id"
-            "BLOB"
-        div [code-line]
-          "9"
-          span [code-text]
-            "context_id"
-            "INTEGER"
-        div [code-line]
-          "10"
-          span [code-text]
-            "properties"
-            "TEXT"
-        div [code-line]
-          "11"
-          span [code-text]
-            "source"
-            "INTEGER"
-        button [copy] label="Copy as text"
-          "Copy"
-    div [station:ask]
-      "Ask"
-      "the query"
-      "Every insight is one value of the typed"
-      "Query"
-      "enum. The SQL is what it became. It ran 2 statements on sqlite in <n> ms. Change the builder and these lines change with it."
-      div role=tablist label="Ask as"
-        button [ask-tab:rust] role=tab
-          "Rust"
-        button [ask-tab:sql] role=tab
-          "SQL"
-        button [ask-tab:http] role=tab
-          "HTTP"
-      div [ask-panel:rust] role=tabpanel
-        div [code]
-          div [code-line]
-            "1"
-            span [code-text]
-              "use"
-              "leptoskit_analytics"
-              ":"
-              ":"
-              "query"
-              ":"
-              ":"
-              "*;"
-          div [code-line]
-            "2"
-            span [code-text]
-          div [code-line]
-            "3"
-            span [code-text]
-              "let"
-              "query"
-              "="
-              "Query"
-              ":"
-              ":"
-              "Trends(TrendsQuery"
-              "{"
-          div [code-line]
-            "4"
-            span [code-text]
-              "range"
-              ":"
-              "DateRange"
-              ":"
-              ":"
-              "between("
-              "\"2026-10-05T00:00:00Z\""
-              ","
-              "\"2026-11-02T00:00:00Z\""
-              ")"
-              ","
-          div [code-line]
-            "5"
-            span [code-text]
-              "interval"
-              ":"
-              "Interval"
-              ":"
-              ":"
-              "Week"
-              ","
-          div [code-line]
-            "6"
-            span [code-text]
-              "series"
-              ":"
-              "vec!"
-              "["
-          div [code-line]
-            "7"
-            span [code-text]
-              "\"note_created\""
-              ".into()"
-              ","
-          div [code-line]
-            "8"
-            span [code-text]
-              "]"
-              ","
-          div [code-line]
-            "9"
-            span [code-text]
-              "filters"
-              ":"
-              "Vec"
-              ":"
-              ":"
-              "new()"
-              ","
-          div [code-line]
-            "10"
-            span [code-text]
-              "math"
-              ":"
-              "Math"
-              ":"
-              ":"
-              "Total"
-              ","
-          div [code-line]
-            "11"
-            span [code-text]
-              "breakdown"
-              ":"
-              "None"
-              ","
-          div [code-line]
-            "12"
-            span [code-text]
-              "compare"
-              ":"
-              "true"
-              ","
-          div [code-line]
-            "13"
-            span [code-text]
-              "test_accounts"
-              ":"
-              "None"
-              ","
-          div [code-line]
-            "14"
-            span [code-text]
-              "}"
-              ");"
-          div [code-line]
-            "15"
-            span [code-text]
-          div [code-line]
-            "16"
-            span [code-text]
-              "//"
-              "From"
-              "the"
-              "app's"
-              "server"
-              ","
-              "as"
-              "the"
-              "app"
-              ":"
-          div [code-line]
-            "17"
-            span [code-text]
-              "let"
-              "answer"
-              "="
-              "rpc"
-              ":"
-              ":"
-              "client"
-              ":"
-              ":"
-              "call_as_app(Run"
-              "{"
-              "query"
-              "}"
-              ").await?;"
-          button [copy] label="Copy as Rust"
-            "Copy"
-      div [ask-panel:sql] role=tabpanel
-        div [code]
-          div [code-line]
-            "1"
-            span [code-text]
-              "--"
-              "trends"
-              ":"
-              "note_created"
-              "(sqlite)"
-          div [code-line]
-            "2"
-            span [code-text]
-              "SELECT"
-              "strftime('%Y-%m-%dT00"
-              ":"
-              "00"
-              ":"
-              "00'"
-              ","
-              "\"events\""
-              "."
-              "\"timestamp\""
-              ","
-              "?4"
-              ","
-              "'-6"
-              "days'"
-              ","
-              "'weekday"
-              "1')"
-              "AS"
-              "\"bucket\""
-              ","
-              "count(*)"
-              "AS"
-              "\"value\""
-          div [code-line]
-            "3"
-            span [code-text]
-              "FROM"
-              "\"events\""
-          div [code-line]
-            "4"
-            span [code-text]
-              "WHERE"
-              "\"events\""
-              "."
-              "\"timestamp\""
-              ">"
-              "="
-              "?1"
-          div [code-line]
-            "5"
-            span [code-text]
-              "AND"
-              "\"events\""
-              "."
-              "\"timestamp\""
-              "<"
-              "?2"
-          div [code-line]
-            "6"
-            span [code-text]
-              "AND"
-              "\"events\""
-              "."
-              "\"name\""
-              "="
-              "?3"
-          div [code-line]
-            "7"
-            span [code-text]
-              "GROUP"
-              "BY"
-              "\"bucket\""
-          div [code-line]
-            "8"
-            span [code-text]
-              "ORDER"
-              "BY"
-              "\"bucket\""
-          div [code-line]
-            "9"
-            span [code-text]
-              "LIMIT"
-              "20000"
-          div [code-line]
-            "10"
-            span [code-text]
-              "--"
-              "bound"
-              ":"
-              "\"2026-10-05T00:00:00.000Z\""
-              ","
-              "\"2026-11-02T00:00:00.000Z\""
-              ","
-              "\"note_created\""
-              ","
-              "\"+0 seconds\""
-          div [code-line]
-            "11"
-            span [code-text]
-          div [code-line]
-            "12"
-            span [code-text]
-              "--"
-              "trends"
-              "previous"
-              ":"
-              "note_created"
-              "(sqlite)"
-          div [code-line]
-            "13"
-            span [code-text]
-              "SELECT"
-              "strftime('%Y-%m-%dT00"
-              ":"
-              "00"
-              ":"
-              "00'"
-              ","
-              "\"events\""
-              "."
-              "\"timestamp\""
-              ","
-              "?4"
-              ","
-              "'-6"
-              "days'"
-              ","
-              "'weekday"
-              "1')"
-              "AS"
-              "\"bucket\""
-              ","
-              "count(*)"
-              "AS"
-              "\"value\""
-          div [code-line]
-            "14"
-            span [code-text]
-              "FROM"
-              "\"events\""
-          div [code-line]
-            "15"
-            span [code-text]
-              "WHERE"
-              "\"events\""
-              "."
-              "\"timestamp\""
-              ">"
-              "="
-              "?1"
-          div [code-line]
-            "16"
-            span [code-text]
-              "AND"
-              "\"events\""
-              "."
-              "\"timestamp\""
-              "<"
-              "?2"
-          div [code-line]
-            "17"
-            span [code-text]
-              "AND"
-              "\"events\""
-              "."
-              "\"name\""
-              "="
-              "?3"
-          div [code-line]
-            "18"
-            span [code-text]
-              "GROUP"
-              "BY"
-              "\"bucket\""
-          div [code-line]
-            "19"
-            span [code-text]
-              "ORDER"
-              "BY"
-              "\"bucket\""
-          div [code-line]
-            "20"
-            span [code-text]
-              "LIMIT"
-              "20000"
-          div [code-line]
-            "21"
-            span [code-text]
-              "--"
-              "bound"
-              ":"
-              "\"2026-09-07T00:00:00.000Z\""
-              ","
-              "\"2026-10-05T00:00:00.000Z\""
-              ","
-              "\"note_created\""
-              ","
-              "\"+0 seconds\""
-          button [copy] label="Copy as SQL"
-            "Copy"
-      div [ask-panel:http] role=tabpanel
-        div [code]
-          div [code-line]
-            "1"
-            span [code-text]
-              "curl"
-              "-X"
-              "POST"
-              "http"
-              ":"
-              "//127.0.0.1"
-              ":"
-              "<port>/_leptoskit/services/analytics/rpc/run"
-              "\\"
-          div [code-line]
-            "2"
-            span [code-text]
-              "-H"
-              "\"authorization: Bearer $LEPTOSKIT_SERVICE_ANALYTICS_TOKEN\""
-              "\\"
-          div [code-line]
-            "3"
-            span [code-text]
-              "-H"
-              "\"content-type: application/json\""
-              "\\"
-          div [code-line]
-            "4"
-            span [code-text]
-              "-d"
-              "@-"
-              "<<'JSON'"
-          div [code-line]
-            "5"
-            span [code-text]
-              "{"
-          div [code-line]
-            "6"
-            span [code-text]
-              "\"query\""
-              ":"
-              "{"
-          div [code-line]
-            "7"
-            span [code-text]
-              "\"compare\""
-              ":"
-              "true"
-              ","
-          div [code-line]
-            "8"
-            span [code-text]
-              "\"interval\""
-              ":"
-              "\"week\""
-              ","
-          div [code-line]
-            "9"
-            span [code-text]
-              "\"kind\""
-              ":"
-              "\"trends\""
-              ","
-          div [code-line]
-            "10"
-            span [code-text]
-              "\"math\""
-              ":"
-              "\"total\""
-              ","
-          div [code-line]
-            "11"
-            span [code-text]
-              "\"range\""
-              ":"
-              "{"
-          div [code-line]
-            "12"
-            span [code-text]
-              "\"from\""
-              ":"
-              "\"2026-10-05T00:00:00Z\""
-              ","
-          div [code-line]
-            "13"
-            span [code-text]
-              "\"to\""
-              ":"
-              "\"2026-11-02T00:00:00Z\""
-          div [code-line]
-            "14"
-            span [code-text]
-              "}"
-              ","
-          div [code-line]
-            "15"
-            span [code-text]
-              "\"series\""
-              ":"
-              "["
-          div [code-line]
-            "16"
-            span [code-text]
-              "{"
-          div [code-line]
-            "17"
-            span [code-text]
-              "\"event\""
-              ":"
-              "\"note_created\""
-          div [code-line]
-            "18"
-            span [code-text]
-              "}"
-          div [code-line]
-            "19"
-            span [code-text]
-              "]"
-          div [code-line]
-            "20"
-            span [code-text]
-              "}"
-          div [code-line]
-            "21"
-            span [code-text]
-              "}"
-          div [code-line]
-            "22"
-            span [code-text]
-              "JSON"
-          button [copy] label="Copy as shell"
-            "Copy"
-    div [station:draw]
-      "Draw"
-      "rows → chart"
-      "4 rows per line came back, one per week; 1 line drawn; the previous period had nothing in it, so there's no dashed line. The page re-reads it when new events arrive."
-      div [code]
-        div [code-line]
-          "1"
-          span [code-text]
-            "week"
-            "note_created"
-        div [code-line]
-          "2"
-          span [code-text]
-            "2026-10-05"
-            "3"
-        div [code-line]
-          "3"
-          span [code-text]
-            "2026-10-12"
-            "4"
-        div [code-line]
-          "4"
-          span [code-text]
-            "2026-10-19"
-            "3"
-        div [code-line]
-          "5"
-          span [code-text]
-            "2026-10-26"
-            "1"
-        button [copy] label="Copy as text"
-          "Copy"
-    button [copy-all]
-      "Copy all"
-    a label="Open the product analytics guide" href=https://leptoskit.dev/docs/guide/40-product-analytics.html
-      "Open docs"
+    div [drawer-scroll]
+      div [station:emit]
+        div [station-dot]
+        div [station-head]
+          "Emit"
+          "the event catalogue"
+        button [station-toggle] label="Emit station"
+        div [station-body]
+          "note_created"
+          "is a Rust type in your app, so its properties are its fields and a misspelled one fails when it compiles. This is the shape the app last registered; the service doesn't record where in your code it's sent from."
+          div [code]
+            div [code-head]
+              "Rust"
+              button [copy] label="Copy as Rust"
+                "Copy"
+            div [code-line]
+              "1"
+              span [code-text]
+                "#[derive(Event)]"
+            div [code-line]
+              "2"
+              span [code-text]
+                "struct"
+                "NoteCreated"
+                "{"
+            div [code-line]
+              "3"
+              span [code-text]
+                "words"
+                ":"
+                "u32"
+                ","
+            div [code-line]
+              "4"
+              span [code-text]
+                "shared"
+                ":"
+                "bool"
+                ","
+            div [code-line]
+              "5"
+              span [code-text]
+                "}"
+      div [station:send]
+        div [station-dot]
+        div [station-head]
+          "Send"
+          "the latest note_created, re-encoded here"
+        button [station-toggle] label="Send station"
+        div [station-body]
+          "Typed events send no property names, so this one is 85 bytes instead of 208: 59.1% smaller. Measured as one event alone in a batch; a real batch shares its context and session between events, so it shrinks further."
+          div [code]
+            div [code-head]
+              button [copy] label="Copy as text"
+                "Copy"
+            div [code-line]
+              "1"
+              span [code-text]
+                "typed"
+                ","
+                "positional"
+                "85"
+                "bytes"
+            div [code-line]
+              "2"
+              span [code-text]
+                "JSON"
+                ","
+                "named"
+                "208"
+                "bytes"
+            div [code-line]
+              "3"
+              span [code-text]
+            div [code-line]
+              "4"
+              span [code-text]
+                "//"
+                "values"
+                "in"
+                "field"
+                "order"
+                ":"
+                "180"
+                ","
+                "true"
+      div [station:store]
+        div [station-dot]
+        div [station-head]
+          "Store"
+          "events on sqlite"
+        button [station-toggle] label="Store station"
+        div [station-body]
+          "Events land in"
+          "events"
+          "as they arrive; sessions and persons are kept up to date beside them as each batch is stored, so a query reads tables, never a queue. These are the ones this query read."
+          div [code]
+            div [code-head]
+              button [copy] label="Copy as text"
+                "Copy"
+            div [code-line]
+              "1"
+              span [code-text]
+                "events"
+            div [code-line]
+              "2"
+              span [code-text]
+                "uuid"
+                "BLOB"
+            div [code-line]
+              "3"
+              span [code-text]
+                "name"
+                "TEXT"
+            div [code-line]
+              "4"
+              span [code-text]
+                "distinct_id"
+                "TEXT"
+            div [code-line]
+              "5"
+              span [code-text]
+                "person_id"
+                "BLOB"
+            div [code-line]
+              "6"
+              span [code-text]
+                "timestamp"
+                "TEXT"
+            div [code-line]
+              "7"
+              span [code-text]
+                "received_at"
+                "TEXT"
+            div [code-line]
+              "8"
+              span [code-text]
+                "session_id"
+                "BLOB"
+            div [code-line]
+              "9"
+              span [code-text]
+                "context_id"
+                "INTEGER"
+            div [code-line]
+              "10"
+              span [code-text]
+                "properties"
+                "TEXT"
+            div [code-line]
+              "11"
+              span [code-text]
+                "source"
+                "INTEGER"
+      div [station:ask]
+        div [station-dot]
+        div [station-head]
+          "Ask"
+          "the query"
+        button [station-toggle] label="Ask station"
+        div [station-body]
+          "Every insight is one value of the typed"
+          "Query"
+          "enum. The SQL is what it became. It ran 2 statements on sqlite in <n> ms. Change the builder and these lines change with it."
+          div role=tablist label="Ask as"
+            button [ask-tab:rust] role=tab
+              "Rust"
+            button [ask-tab:sql] role=tab
+              "SQL"
+            button [ask-tab:http] role=tab
+              "HTTP"
+          div [ask-panel:rust] role=tabpanel
+            div [code]
+              div [code-head]
+                "Rust"
+                button [copy] label="Copy as Rust"
+                  "Copy"
+              div [code-line]
+                "1"
+                span [code-text]
+                  "use"
+                  "leptoskit_analytics"
+                  ":"
+                  ":"
+                  "query"
+                  ":"
+                  ":"
+                  "*;"
+              div [code-line]
+                "2"
+                span [code-text]
+              div [code-line]
+                "3"
+                span [code-text]
+                  "let"
+                  "query"
+                  "="
+                  "Query"
+                  ":"
+                  ":"
+                  "Trends(TrendsQuery"
+                  "{"
+              div [code-line]
+                "4"
+                span [code-text]
+                  "range"
+                  ":"
+                  "DateRange"
+                  ":"
+                  ":"
+                  "between("
+                  "\"2026-10-05T00:00:00Z\""
+                  ","
+                  "\"2026-11-02T00:00:00Z\""
+                  ")"
+                  ","
+              div [code-line]
+                "5"
+                span [code-text]
+                  "interval"
+                  ":"
+                  "Interval"
+                  ":"
+                  ":"
+                  "Week"
+                  ","
+              div [code-line]
+                "6"
+                span [code-text]
+                  "series"
+                  ":"
+                  "vec!"
+                  "["
+              div [code-line]
+                "7"
+                span [code-text]
+                  "\"note_created\""
+                  ".into()"
+                  ","
+              div [code-line]
+                "8"
+                span [code-text]
+                  "]"
+                  ","
+              div [code-line]
+                "9"
+                span [code-text]
+                  "filters"
+                  ":"
+                  "Vec"
+                  ":"
+                  ":"
+                  "new()"
+                  ","
+              div [code-line]
+                "10"
+                span [code-text]
+                  "math"
+                  ":"
+                  "Math"
+                  ":"
+                  ":"
+                  "Total"
+                  ","
+              div [code-line]
+                "11"
+                span [code-text]
+                  "breakdown"
+                  ":"
+                  "None"
+                  ","
+              div [code-line]
+                "12"
+                span [code-text]
+                  "compare"
+                  ":"
+                  "true"
+                  ","
+              div [code-line]
+                "13"
+                span [code-text]
+                  "test_accounts"
+                  ":"
+                  "None"
+                  ","
+              div [code-line]
+                "14"
+                span [code-text]
+                  "}"
+                  ");"
+              div [code-line]
+                "15"
+                span [code-text]
+              div [code-line]
+                "16"
+                span [code-text]
+                  "//"
+                  "From"
+                  "the"
+                  "app's"
+                  "server"
+                  ","
+                  "as"
+                  "the"
+                  "app"
+                  ":"
+              div [code-line]
+                "17"
+                span [code-text]
+                  "let"
+                  "answer"
+                  "="
+                  "rpc"
+                  ":"
+                  ":"
+                  "client"
+                  ":"
+                  ":"
+                  "call_as_app(Run"
+                  "{"
+                  "query"
+                  "}"
+                  ").await?;"
+          div [ask-panel:sql] role=tabpanel
+            div [code]
+              div [code-head]
+                "SQL"
+                button [copy] label="Copy as SQL"
+                  "Copy"
+              div [code-line]
+                "1"
+                span [code-text]
+                  "--"
+                  "trends"
+                  ":"
+                  "note_created"
+                  "(sqlite)"
+              div [code-line]
+                "2"
+                span [code-text]
+                  "SELECT"
+                  "strftime('%Y-%m-%dT00"
+                  ":"
+                  "00"
+                  ":"
+                  "00'"
+                  ","
+                  "\"events\""
+                  "."
+                  "\"timestamp\""
+                  ","
+                  "?4"
+                  ","
+                  "'-6"
+                  "days'"
+                  ","
+                  "'weekday"
+                  "1')"
+                  "AS"
+                  "\"bucket\""
+                  ","
+                  "count(*)"
+                  "AS"
+                  "\"value\""
+              div [code-line]
+                "3"
+                span [code-text]
+                  "FROM"
+                  "\"events\""
+              div [code-line]
+                "4"
+                span [code-text]
+                  "WHERE"
+                  "\"events\""
+                  "."
+                  "\"timestamp\""
+                  ">"
+                  "="
+                  "?1"
+              div [code-line]
+                "5"
+                span [code-text]
+                  "AND"
+                  "\"events\""
+                  "."
+                  "\"timestamp\""
+                  "<"
+                  "?2"
+              div [code-line]
+                "6"
+                span [code-text]
+                  "AND"
+                  "\"events\""
+                  "."
+                  "\"name\""
+                  "="
+                  "?3"
+              div [code-line]
+                "7"
+                span [code-text]
+                  "GROUP"
+                  "BY"
+                  "\"bucket\""
+              div [code-line]
+                "8"
+                span [code-text]
+                  "ORDER"
+                  "BY"
+                  "\"bucket\""
+              div [code-line]
+                "9"
+                span [code-text]
+                  "LIMIT"
+                  "20000"
+              div [code-line]
+                "10"
+                span [code-text]
+                  "--"
+                  "bound"
+                  ":"
+                  "\"2026-10-05T00:00:00.000Z\""
+                  ","
+                  "\"2026-11-02T00:00:00.000Z\""
+                  ","
+                  "\"note_created\""
+                  ","
+                  "\"+0 seconds\""
+              div [code-line]
+                "11"
+                span [code-text]
+              div [code-line]
+                "12"
+                span [code-text]
+                  "--"
+                  "trends"
+                  "previous"
+                  ":"
+                  "note_created"
+                  "(sqlite)"
+              div [code-line]
+                "13"
+                span [code-text]
+                  "SELECT"
+                  "strftime('%Y-%m-%dT00"
+                  ":"
+                  "00"
+                  ":"
+                  "00'"
+                  ","
+                  "\"events\""
+                  "."
+                  "\"timestamp\""
+                  ","
+                  "?4"
+                  ","
+                  "'-6"
+                  "days'"
+                  ","
+                  "'weekday"
+                  "1')"
+                  "AS"
+                  "\"bucket\""
+                  ","
+                  "count(*)"
+                  "AS"
+                  "\"value\""
+              div [code-line]
+                "14"
+                span [code-text]
+                  "FROM"
+                  "\"events\""
+              div [code-line]
+                "15"
+                span [code-text]
+                  "WHERE"
+                  "\"events\""
+                  "."
+                  "\"timestamp\""
+                  ">"
+                  "="
+                  "?1"
+              div [code-line]
+                "16"
+                span [code-text]
+                  "AND"
+                  "\"events\""
+                  "."
+                  "\"timestamp\""
+                  "<"
+                  "?2"
+              div [code-line]
+                "17"
+                span [code-text]
+                  "AND"
+                  "\"events\""
+                  "."
+                  "\"name\""
+                  "="
+                  "?3"
+              div [code-line]
+                "18"
+                span [code-text]
+                  "GROUP"
+                  "BY"
+                  "\"bucket\""
+              div [code-line]
+                "19"
+                span [code-text]
+                  "ORDER"
+                  "BY"
+                  "\"bucket\""
+              div [code-line]
+                "20"
+                span [code-text]
+                  "LIMIT"
+                  "20000"
+              div [code-line]
+                "21"
+                span [code-text]
+                  "--"
+                  "bound"
+                  ":"
+                  "\"2026-09-07T00:00:00.000Z\""
+                  ","
+                  "\"2026-10-05T00:00:00.000Z\""
+                  ","
+                  "\"note_created\""
+                  ","
+                  "\"+0 seconds\""
+          div [ask-panel:http] role=tabpanel
+            div [code]
+              div [code-head]
+                "shell"
+                button [copy] label="Copy as shell"
+                  "Copy"
+              div [code-line]
+                "1"
+                span [code-text]
+                  "curl"
+                  "-X"
+                  "POST"
+                  "http"
+                  ":"
+                  "//127.0.0.1"
+                  ":"
+                  "<port>/_leptoskit/services/analytics/rpc/run"
+                  "\\"
+              div [code-line]
+                "2"
+                span [code-text]
+                  "-H"
+                  "\"authorization: Bearer $LEPTOSKIT_SERVICE_ANALYTICS_TOKEN\""
+                  "\\"
+              div [code-line]
+                "3"
+                span [code-text]
+                  "-H"
+                  "\"content-type: application/json\""
+                  "\\"
+              div [code-line]
+                "4"
+                span [code-text]
+                  "-d"
+                  "@-"
+                  "<<'JSON'"
+              div [code-line]
+                "5"
+                span [code-text]
+                  "{"
+              div [code-line]
+                "6"
+                span [code-text]
+                  "\"query\""
+                  ":"
+                  "{"
+              div [code-line]
+                "7"
+                span [code-text]
+                  "\"compare\""
+                  ":"
+                  "true"
+                  ","
+              div [code-line]
+                "8"
+                span [code-text]
+                  "\"interval\""
+                  ":"
+                  "\"week\""
+                  ","
+              div [code-line]
+                "9"
+                span [code-text]
+                  "\"kind\""
+                  ":"
+                  "\"trends\""
+                  ","
+              div [code-line]
+                "10"
+                span [code-text]
+                  "\"math\""
+                  ":"
+                  "\"total\""
+                  ","
+              div [code-line]
+                "11"
+                span [code-text]
+                  "\"range\""
+                  ":"
+                  "{"
+              div [code-line]
+                "12"
+                span [code-text]
+                  "\"from\""
+                  ":"
+                  "\"2026-10-05T00:00:00Z\""
+                  ","
+              div [code-line]
+                "13"
+                span [code-text]
+                  "\"to\""
+                  ":"
+                  "\"2026-11-02T00:00:00Z\""
+              div [code-line]
+                "14"
+                span [code-text]
+                  "}"
+                  ","
+              div [code-line]
+                "15"
+                span [code-text]
+                  "\"series\""
+                  ":"
+                  "["
+              div [code-line]
+                "16"
+                span [code-text]
+                  "{"
+              div [code-line]
+                "17"
+                span [code-text]
+                  "\"event\""
+                  ":"
+                  "\"note_created\""
+              div [code-line]
+                "18"
+                span [code-text]
+                  "}"
+              div [code-line]
+                "19"
+                span [code-text]
+                  "]"
+              div [code-line]
+                "20"
+                span [code-text]
+                  "}"
+              div [code-line]
+                "21"
+                span [code-text]
+                  "}"
+              div [code-line]
+                "22"
+                span [code-text]
+                  "JSON"
+      div [station:draw]
+        div [station-dot]
+        div [station-head]
+          "Draw"
+          "rows → chart"
+        button [station-toggle] label="Draw station"
+        div [station-body]
+          "4 rows per line came back, one per week; 1 line drawn; the previous period had nothing in it, so there's no dashed line. The page re-reads it when new events arrive."
+          div [code]
+            div [code-head]
+              button [copy] label="Copy as text"
+                "Copy"
+            div [code-line]
+              "1"
+              span [code-text]
+                "week"
+                "note_created"
+            div [code-line]
+              "2"
+              span [code-text]
+                "2026-10-05"
+                "3"
+            div [code-line]
+              "3"
+              span [code-text]
+                "2026-10-12"
+                "4"
+            div [code-line]
+              "4"
+              span [code-text]
+                "2026-10-19"
+                "3"
+            div [code-line]
+              "5"
+              span [code-text]
+                "2026-10-26"
+                "1"
+      button [copy-all]
+        "Copy all"
+      a label="Open the product analytics guide" href=https://leptoskit.dev/docs/guide/40-product-analytics.html
+        "Open docs"

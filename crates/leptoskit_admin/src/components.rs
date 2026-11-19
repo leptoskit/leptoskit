@@ -257,6 +257,21 @@ pub fn env_pill(environment: crate::Environment) -> Element {
 		.test_id("env-pill")
 }
 
+/// The outlined word beside the environment pill when infrastructure runs
+/// against a stand-in cloud: never filled, so it reads as a note
+/// about the pill rather than a second environment.
+pub fn simulated_word() -> Element {
+	Text("Simulated")
+		.class(
+			"rounded-full border border-[var(--admin-ink-3)] px-2.5 py-0.5 text-xs font-semibold \
+			 text-[var(--admin-ink-2)] max-sm:px-1.5 max-sm:text-[11px]",
+		)
+		.aria_description(
+			"Plans and applies run against a stand-in cloud; no provider is contacted.",
+		)
+		.test_id("simulated")
+}
+
 /// A horizontal meter: used in ink, a threshold tick at 80%, used and
 /// total as text. Past the threshold the text gains `!` and turns warn.
 pub fn meter(label: &str, used: f64, total: f64, used_text: &str) -> Element {
@@ -448,7 +463,28 @@ fn classify(word: &str) -> Color {
 /// per-line wash, and **Copy**. `copy_as` names what Copy gives, such as
 /// `TOML`.
 pub fn code_block(lines: &[Line], copy_as: &str) -> Element {
-	let mut block = View().class(style::CODE_BLOCK).test_id("code");
+	// Copy sits in its own row above the code, so it never covers a line's
+	// end at any width; the stylesheet pins the row while the code scrolls
+	// sideways.
+	let head = View()
+		.class("flex-row items-center justify-between gap-3 pb-1.5 pl-3 pr-1.5 -mt-1")
+		.test_id("code-head")
+		// The language, when it is one; plain text needs no label.
+		.child(
+			Text(if copy_as == "text" { "" } else { copy_as })
+				.class("font-[var(--admin-font-mono)] text-[11px] text-[#9d93a8]")
+				.aria_hidden(true),
+		)
+		.child(
+			Button("Copy")
+				.aria_label(format!("Copy as {copy_as}"))
+				.class(
+					"rounded-md border border-[#4a3f58] bg-[#1d1726] px-2 py-0.5 text-[11px] \
+					 font-semibold text-[#c9c0d0] cursor-pointer hover:text-white",
+				)
+				.test_id("copy"),
+		);
+	let mut block = View().class(style::CODE_BLOCK).test_id("code").child(head);
 
 	for (index, line) in lines.iter().enumerate() {
 		let wash = match line.mark {
@@ -492,15 +528,7 @@ pub fn code_block(lines: &[Line], copy_as: &str) -> Element {
 		block = block.child(row);
 	}
 
-	block.child(
-		Button("Copy")
-			.aria_label(format!("Copy as {copy_as}"))
-			.class(
-				"absolute right-1.5 top-1.5 rounded-md border border-[#4a3f58] bg-[#1d1726] px-2 \
-				 py-0.5 text-[11px] font-semibold text-[#c9c0d0] cursor-pointer hover:text-white",
-			)
-			.test_id("copy"),
-	)
+	block
 }
 
 /// A code block on paper, for code a page asks you to add.

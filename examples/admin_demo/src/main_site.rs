@@ -4,6 +4,7 @@
 use std::path::Path;
 use std::time::Duration;
 
+use admin_demo::analytics;
 use anyhow::Result;
 use axum::Extension;
 use axum::Json;
@@ -37,9 +38,9 @@ use leptoskit_idp::NewClientSpec;
 use leptoskit_idp::SigningAlgorithm;
 
 use crate::ADMIN;
+use crate::ANALYTICS_TOKEN;
 use crate::MAIN_SITE;
 use crate::PROJECT;
-use crate::analytics;
 
 /// The main site's people. Ada keeps the place.
 #[table(name = "users")]
@@ -119,11 +120,12 @@ pub async fn start(store: Store, data: &Path) -> Result<MainSite> {
 	let client_secret = secret.ok_or_else(|| anyhow::anyhow!("no client secret issued"))?;
 
 	// The analytics service, beside the site as `lk dev` runs it, and the
-	// site's own server sending typed events to it.
-	let service = analytics::start(data, MAIN_SITE).await?;
+	// site's own server sending typed events to it, signed with the token
+	// the demo invented for its own callers.
+	let service = analytics::start(data, MAIN_SITE, ANALYTICS_TOKEN).await?;
 	let events = Analytics::new(
 		MAIN_SITE,
-		Some(analytics::TOKEN.to_owned()),
+		Some(ANALYTICS_TOKEN.to_owned()),
 		AnalyticsConfig::default(),
 	);
 

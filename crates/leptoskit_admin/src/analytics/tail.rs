@@ -40,17 +40,20 @@ pub(crate) fn row(
 		.get("$pathname")
 		.map(format::value)
 		.unwrap_or_default();
-	let mut title = View()
+	// Every row carries the badge, hidden unless the event is typed, so the
+	// script sets it from each new event rather than from the row it copies.
+	let title = View()
 		.class("min-w-0 flex-1 flex-row items-center gap-1.5")
 		.child(
 			Text(name.to_owned())
 				.class(style::CODE)
 				.class("truncate font-semibold"),
+		)
+		.child(
+			super::struct_badge()
+				.aria_hidden(!typed)
+				.test_id("struct-badge"),
 		);
-
-	if typed {
-		title = title.child(super::struct_badge());
-	}
 
 	View()
 		.class("flex-col border-b border-[var(--admin-line)]")
@@ -118,6 +121,7 @@ pub(crate) async fn page(cx: &Context<'_>) -> Screen {
 		.aria_label("Events as they arrive")
 		.test_id("live-events");
 	let mut count = 0;
+	let mut sample = None;
 
 	match &answer {
 		Ok(Answer {
@@ -125,6 +129,7 @@ pub(crate) async fn page(cx: &Context<'_>) -> Screen {
 			..
 		}) => {
 			count = page.events.len();
+			sample = page.events.first();
 
 			for event in &page.events {
 				list = list.child(row(
@@ -207,7 +212,7 @@ pub(crate) async fn page(cx: &Context<'_>) -> Screen {
 		query: &query,
 		answer: answer.as_ref().ok(),
 		definitions: &cx.facts.definitions,
-		sample: None,
+		sample,
 		url: cx.connection.url(),
 		drawn: Drawn {
 			sentence: format!(

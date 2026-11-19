@@ -94,7 +94,13 @@ pub fn panel(drawer: &Drawer) -> Element {
 			View()
 				.class("min-w-0 flex-1 flex-col gap-0.5")
 				.child(Heading(2, "Workings").class("text-base font-semibold text-[#f4efe8]"))
-				.child(Text(drawer.title.clone()).class("text-xs text-[#9d93a8]")),
+				.child(Text(drawer.title.clone()).class("text-xs text-[#9d93a8]"))
+				// What a builder change just changed: the script fills it.
+				.child(
+					Status("")
+						.class("text-xs font-semibold text-[#5ef2c2]")
+						.test_id("drawer-changed"),
+				),
 		)
 		.child(
 			Button("Close")
@@ -114,7 +120,7 @@ pub fn panel(drawer: &Drawer) -> Element {
 	let mut rail = View().class("flex-col px-5 pb-6 pt-1.5");
 
 	for (index, station) in drawer.stations.iter().enumerate() {
-		rail = rail.child(station_view(station, index, count));
+		rail = rail.child(station_view(&drawer.id, station, index, count));
 	}
 
 	// The header stays put; the stations scroll beneath it.
@@ -126,6 +132,7 @@ pub fn panel(drawer: &Drawer) -> Element {
 		.child(
 			View()
 				.class("min-h-0 flex-1 flex-col overflow-scroll")
+				.test_id("drawer-scroll")
 				.child(rail)
 				.child(
 					View()
@@ -160,7 +167,7 @@ pub fn panel(drawer: &Drawer) -> Element {
 		)
 }
 
-fn station_view(station: &Station, index: usize, count: usize) -> Element {
+fn station_view(drawer: &str, station: &Station, index: usize, count: usize) -> Element {
 	// The rail runs from the first dot to the last.
 	let line = match (index, count) {
 		(_, 1) => None,
@@ -179,6 +186,14 @@ fn station_view(station: &Station, index: usize, count: usize) -> Element {
 		view = view.child(View().class(line).aria_hidden(true));
 	}
 
+	// On phones the drawer is a bottom sheet and stations collapse to their
+	// headers; this covers the header so the whole row opens its station.
+	let toggle = Button("")
+		.aria_label(format!("{} station", station.name))
+		.aria_expanded(false)
+		.class("absolute inset-x-0 top-2 h-9 rounded-lg cursor-pointer sm:hidden")
+		.test_id("station-toggle");
+
 	view = view
 		.child(
 			View()
@@ -186,16 +201,28 @@ fn station_view(station: &Station, index: usize, count: usize) -> Element {
 					"absolute left-0 top-[18px] h-3.5 w-3.5 rounded-full border-[3px] \
 					 border-[#5ef2c2] bg-[var(--admin-underside)]",
 				)
-				.aria_hidden(true),
+				.aria_hidden(true)
+				.test_id("station-dot"),
 		)
 		.child(
 			View()
-				.class("flex-row flex-wrap items-end gap-2")
+				.class("flex-row flex-wrap items-end gap-2 max-sm:pr-8")
+				.test_id("station-head")
 				.child(Heading(3, station.name).class("text-sm font-semibold text-[#f4efe8]"))
 				.child(Text(station.source.clone()).class("text-xs text-[#9d93a8]")),
 		)
+		.child(toggle);
+
+	let body = View()
+		.class("flex-col gap-2")
+		.test_id("station-body")
 		.child(components::prose(&station.why).class("text-[13px] leading-normal text-[#c9c0d0]"));
 
+	view.child(station_body(drawer, station, body))
+}
+
+/// A station's explanation and what it shows.
+fn station_body(drawer: &str, station: &Station, view: Element) -> Element {
 	match &station.body {
 		Body::Code(lines, copy_as) => view.child(components::code_block(lines, copy_as)),
 		Body::Checks(items) => {
@@ -232,15 +259,27 @@ fn station_view(station: &Station, index: usize, count: usize) -> Element {
 			view.child(list)
 		}
 		Body::Tabs(tabs) => {
+			// The first tab shows until someone picks another; the script
+			// keeps `aria-selected` and the roving tab stop in step.
 			let mut row = View()
 				.class("flex-row gap-1.5")
 				.role(leptoskit::native::Role::TabList)
 				.aria_label(format!("{} as", station.name));
+			let id = |part: &str, tab: &Tab| {
+				format!("{part}-{drawer}-{}", tab.name.to_lowercase()).replace(
+					|character: char| !character.is_ascii_alphanumeric() && character != '-',
+					"-",
+				)
+			};
 
-			for tab in tabs {
+			for (index, tab) in tabs.iter().enumerate() {
 				row = row.child(
 					Button(tab.name)
 						.role(leptoskit::native::Role::Tab)
+						.id(id("ask-tab", tab))
+						.aria_controls([id("ask-panel", tab)])
+						.aria_selected(index == 0)
+						.tab_index(if index == 0 { 0 } else { -1 })
 						.class(
 							"rounded-lg border border-[#4a3f58] px-3 py-1 text-[13px] \
 							 font-semibold text-[#c9c0d0] cursor-pointer hover:text-white",
@@ -256,6 +295,8 @@ fn station_view(station: &Station, index: usize, count: usize) -> Element {
 					View()
 						.class("flex-col")
 						.role(leptoskit::native::Role::TabPanel)
+						.id(id("ask-panel", tab))
+						.aria_labelled_by([id("ask-tab", tab)])
 						.test_id(format!("ask-panel:{}", tab.name.to_lowercase()))
 						.child(components::code_block(&tab.lines, tab.copy_as)),
 				);

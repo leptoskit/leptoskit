@@ -514,3 +514,185 @@ async fn preferences_follow_the_person() {
 		.await;
 	assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
+
+/// Finishes the oldest queued operation as the worker would.
+fn completed(world: &World) -> String {
+	let claimed = world
+		.store
+		.claim_project(Some("notes-production"))
+		.unwrap()
+		.unwrap();
+	world
+		.store
+		.finish(
+			&claimed.id,
+			&RunResult {
+				succeeded: true,
+				message: "Completed.".into(),
+				details: json!({ "code": "completed" }),
+			},
+		)
+		.unwrap();
+	claimed.id
+}
+
+/// The `aria-description` of the element with `test_id`.
+fn description_of(html: &str, test_id: &str) -> String {
+	let start = html
+		.find(&format!("data-testid=\"{test_id}\""))
+		.unwrap_or_else(|| panic!("no {test_id}"));
+	let tag_start = html[..start].rfind('<').unwrap();
+	let tag = &html[tag_start..start + html[start..].find('>').unwrap()];
+	let value = tag
+		.split("aria-description=\"")
+		.nth(1)
+		.unwrap_or_else(|| panic!("{test_id} has no description: {tag}"));
+	value[..value.find('"').unwrap()].to_owned()
+}
+
+#[tokio::test]
+async fn a_simulated_admin_says_so_and_a_real_one_never_does() {
+	for simulated in [true, false] {
+		let world = world_with_options(None, simulated).await;
+		let mut ada = world.ada().await;
+		let project = format!("{BASE}/infra/projects/notes-production");
+		let notice = "plans and applies run against a stand-in cloud; no provider is contacted.";
+
+		// Every screen, signed out or in, carries the word beside the pill.
+		let (_, sign_in) = page(&world, &mut Browser::default(), &format!("{BASE}/sign-in")).await;
+		let (_, overview) = page(&world, &mut ada, &format!("{project}/overview")).await;
+		let (_, health) = page(&world, &mut ada, &format!("{project}/health")).await;
+		let (_, learn) = page(&world, &mut ada, &format!("{BASE}/learn")).await;
+
+		for html in [&sign_in, &overview, &health, &learn] {
+			assert_eq!(
+				html.contains("data-testid=\"simulated\""),
+				simulated,
+				"simulated = {simulated}"
+			);
+		}
+
+		// Overview and Changes say what that means; Health doesn't repeat it.
+		assert_eq!(overview.contains(notice), simulated);
+		assert!(!health.contains("simulated-notice"));
+
+		let (_, changes) = page(&world, &mut ada, &format!("{project}/changes")).await;
+		assert_eq!(changes.contains(notice), simulated);
+		let plan = description_of(&changes, "action:plan");
+		assert_eq!(plan.starts_with("Simulated: compares"), simulated, "{plan}");
+		assert!(plan.contains("Planning changes nothing"), "{plan}");
+
+		// A finished plan: its Apply confirmation says where it applies.
+		let (_, body) = act(
+			&world,
+			&mut ada,
+			json!({ "kind": "plan", "idempotency_key": "plan" }),
+		)
+		.await;
+		let plan = body["operation"].as_str().unwrap().to_owned();
+		planned(
+			&world,
+			&json!([{ "address": "hcloud_server.web[1]", "actions": ["create"] }]),
+		);
+		let (_, changes) = page(&world, &mut ada, &format!("{project}/changes")).await;
+		let apply = description_of(&changes, &format!("action:apply:{plan}"));
+
+		if simulated {
+			assert!(
+				apply.starts_with("Simulated: applies exactly this plan to a stand-in cloud"),
+				"{apply}"
+			);
+			assert!(apply.contains("no provider is contacted"), "{apply}");
+			assert!(!apply.contains("change to real infrastructure"), "{apply}");
+		} else {
+			assert_eq!(
+				apply,
+				"Applies exactly this plan with `lk infra apply`. Apply refuses it if the \
+				 configuration, provider lock, or state changed since it was made. 1 change to \
+				 real infrastructure."
+			);
+		}
+
+		// Once it's applied, Learn's evidence doesn't claim real servers.
+		let (status, _) = act(
+			&world,
+			&mut ada,
+			json!({ "kind": "apply", "plan_id": plan, "idempotency_key": "apply" }),
+		)
+		.await;
+		assert!(status.is_success(), "{status}");
+		completed(&world);
+		let (_, learn) = page(&world, &mut ada, &format!("{BASE}/learn")).await;
+		assert!(
+			learn.contains(if simulated {
+				"You applied a plan on notes-production on the simulated cloud "
+			} else {
+				"You applied a plan on notes-production just now"
+			}),
+			"simulated = {simulated}: {learn}"
+		);
+	}
+}
+
+#[tokio::test]
+async fn simulation_is_clear_for_releases_health_and_backups() {
+	for simulated in [true, false] {
+		let world = world_with_options(None, simulated).await;
+		let mut ada = world.ada().await;
+		let project = format!("{BASE}/infra/projects/notes-production");
+
+		for version in ["v1", "v2"] {
+			let (status, _) = act(
+				&world,
+				&mut ada,
+				json!({ "kind": "deploy", "version": version, "idempotency_key": version }),
+			)
+			.await;
+			assert!(status.is_success(), "{status}");
+			completed(&world);
+		}
+
+		for (tab, action) in [
+			("overview", "status"),
+			("health", "status"),
+			("releases", "deploy"),
+			("releases", "first-release"),
+			("releases", "maintenance"),
+			("releases", "rollback:v1"),
+			("backups", "backup"),
+		] {
+			let (_, html) = page(&world, &mut ada, &format!("{project}/{tab}")).await;
+			let description = description_of(&html, &format!("action:{action}"));
+			assert_eq!(
+				description.starts_with("Simulated:"),
+				simulated,
+				"{description}"
+			);
+			assert_eq!(
+				description.contains("no provider is contacted"),
+				simulated,
+				"{description}"
+			);
+		}
+
+		for kind in ["rollback", "backup", "status"] {
+			let (status, _) = act(
+				&world,
+				&mut ada,
+				json!({ "kind": kind, "version": "v1", "idempotency_key": kind }),
+			)
+			.await;
+			assert!(status.is_success(), "{status}");
+			completed(&world);
+		}
+
+		let (_, html) = page(&world, &mut ada, &format!("{BASE}/learn")).await;
+		for evidence in [
+			"rolled back on the simulated cloud",
+			"A simulated backup verification completed",
+			"passed a simulated health check",
+		] {
+			assert_eq!(html.contains(evidence), simulated, "{evidence}");
+		}
+	}
+}

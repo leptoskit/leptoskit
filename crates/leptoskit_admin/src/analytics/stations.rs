@@ -52,7 +52,8 @@ pub(crate) struct Source<'a> {
 	pub query: &'a Query,
 	pub answer: Option<&'a Answer>,
 	pub definitions: &'a [EventDefinitionView],
-	/// The latest event of [`focus_event`], when one has arrived.
+	/// The latest fetched event of [`focus_event`], or any event when the
+	/// query has no event filter.
 	pub sample: Option<&'a EventRow>,
 	/// The service's origin, for the HTTP tab.
 	pub url: &'a str,
@@ -473,7 +474,9 @@ fn draw(drawn: Drawn) -> Station {
 
 /// A card's whole drawer.
 pub(crate) fn drawer(source: Source<'_>) -> Drawer {
-	let event = focus_event(source.query).unwrap_or_else(|| "$pageview".to_owned());
+	let event = focus_event(source.query)
+		.or_else(|| source.sample.map(|sample| sample.name.clone()))
+		.unwrap_or_else(|| "$pageview".to_owned());
 	let definition = source
 		.definitions
 		.iter()

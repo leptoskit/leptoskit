@@ -271,6 +271,14 @@ pub async fn world() -> World {
 
 /// Both sites, with the admin reading `analytics` when one is given.
 pub async fn world_with(analytics: Option<leptoskit_admin::AnalyticsService>) -> World {
+	world_with_options(analytics, false).await
+}
+
+/// Both sites, and whether the admin says its infrastructure is simulated.
+pub async fn world_with_options(
+	analytics: Option<leptoskit_admin::AnalyticsService>,
+	simulated: bool,
+) -> World {
 	let notes_db = Db::connect("sqlite::memory:").await.unwrap();
 	let admin_db = Db::connect("sqlite::memory:").await.unwrap();
 	leptoskit_db::testing::create_tables(&notes_db)
@@ -347,6 +355,7 @@ pub async fn world_with(analytics: Option<leptoskit_admin::AnalyticsService>) ->
 		.keys(Keys::single("admin", [7; 32]))
 		.database(admin_db.clone())
 		.control(service.clone())
+		.simulated_infrastructure(simulated)
 		.provider_http(InProcess(notes.clone()));
 
 	if let Some(analytics) = analytics {

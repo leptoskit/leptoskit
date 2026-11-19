@@ -64,7 +64,12 @@ fn heading(inner: &Inner) -> Element {
 			View()
 				.class("flex-row items-center gap-3")
 				.child(shell::mark(40.0))
-				.child(components::env_pill(inner.environment)),
+				.child(components::env_pill(inner.environment))
+				.children(
+					inner
+						.simulated_infrastructure
+						.then(components::simulated_word),
+				),
 		)
 		.child(
 			Heading(1, format!("{} admin", inner.app_name))

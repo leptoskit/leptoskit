@@ -14,6 +14,7 @@ version = "0.3.0"
 dependencies = [
  "anyhow",
  "axum",
+ "hex",
  "leptoskit_admin",
  "leptoskit_analytics",
  "leptoskit_apm",
@@ -28,7 +29,10 @@ dependencies = [
  "reqwest 0.12.28",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
  "tokio",
+ "tower",
 ]
 
 [[package]]
@@ -2249,6 +2253,41 @@ dependencies = [
 ]
 
 [[package]]
+name = "demo_service"
+version = "0.3.0"
+dependencies = [
+ "admin_demo",
+ "anyhow",
+ "axum",
+ "chrono",
+ "futures",
+ "getrandom 0.4.3",
+ "hex",
+ "insta",
+ "leptos",
+ "leptoskit",
+ "leptoskit_admin",
+ "leptoskit_analytics",
+ "leptoskit_auth",
+ "leptoskit_axum",
+ "leptoskit_db",
+ "leptoskit_deploy_console",
+ "leptoskit_idp",
+ "leptoskit_rpc",
+ "rusqlite",
+ "rustix",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "signal-hook",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "tower",
+ "url",
+]
+
+[[package]]
 name = "der"
 version = "0.7.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4045,6 +4084,9 @@ name = "hex"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "hkdf"

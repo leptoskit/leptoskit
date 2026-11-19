@@ -23,14 +23,14 @@
 //! the worker runs `lk infra plan` and friends for real, and without
 //! provider tokens those fail, which the admin shows as it is.
 
-mod analytics;
-mod executor;
 mod main_site;
 
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use admin_demo::analytics;
+use admin_demo::executor;
 use anyhow::Context as _;
 use anyhow::Result;
 use leptoskit_admin::Admin;
@@ -45,6 +45,11 @@ const MAIN_SITE: &str = "http://localhost:4800";
 /// Where the admin reaches the main site's analytics service: its private
 /// address, as a deployment's would be.
 const ANALYTICS: &str = "http://127.0.0.1:4800";
+/// The analytics service's token for the app's own callers: the main
+/// site's server and the admin. The demo invented it and nothing outside
+/// this process accepts it, so it lives here, with the rest of the demo's
+/// invented credentials.
+const ANALYTICS_TOKEN: &str = "admin-demo-analytics-app-token-not-a-secret-0123";
 const ADMIN: &str = "http://127.0.0.1:4801";
 const PROJECT: &str = "notes-production";
 /// The demo's own owner credential for the in-process control service.
@@ -121,7 +126,10 @@ async fn run(real: bool, seed: bool) -> Result<()> {
 		.keys(Keys::single("admin-demo", [7; 32]))
 		.data_dir(data.join("admin"))
 		.control(service.clone())
-		.analytics(AnalyticsService::new(ANALYTICS, analytics::TOKEN))
+		.analytics(AnalyticsService::new(ANALYTICS, ANALYTICS_TOKEN))
+		// The admin says "Simulated" everywhere unless the real `lk`
+		// commands run.
+		.simulated_infrastructure(!real)
 		.build()
 		.await?;
 
@@ -158,9 +166,11 @@ async fn run(real: bool, seed: bool) -> Result<()> {
 	// ingestion, so the admin shows it within seconds of starting.
 	tokio::spawn(async move {
 		let result = if seed {
-			analytics::seed(ANALYTICS).await.map(Some)
+			analytics::seed(ANALYTICS, ANALYTICS_TOKEN).await.map(Some)
 		} else {
-			analytics::register(ANALYTICS).await.map(|()| None)
+			analytics::register(ANALYTICS, ANALYTICS_TOKEN)
+				.await
+				.map(|()| None)
 		};
 
 		match result {

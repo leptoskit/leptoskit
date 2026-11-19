@@ -20,6 +20,7 @@ members = [
 	"examples/analytics/analytics_service",
 	"examples/auth_pages",
 	"examples/counter",
+	"examples/demo_service",
 	"examples/exact",
 	"examples/gallery",
 	"examples/gallery/verify",
@@ -193,6 +194,7 @@ serde_json = { version = "1", features = ["float_roundtrip"] }
 serde_path_to_error = "0.1"
 serde_qs = "1.1.3"
 sha2 = "0.10"
+signal-hook = "0.3.18"
 skribble_core = { git = "https://github.com/openbudgetfun/skribble", rev = "20af15049b3af35885dac03d546306b7a3e33c3a" }
 skribble_rough = { git = "https://github.com/openbudgetfun/skribble", rev = "20af15049b3af35885dac03d546306b7a3e33c3a" }
 sqlite-vec = "0.1.9"
