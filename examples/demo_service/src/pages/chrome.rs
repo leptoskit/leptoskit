@@ -85,7 +85,6 @@ pub(super) fn raised(button: Element, full: bool) -> Element {
 /// How serious a status message is.
 #[derive(Clone, Copy)]
 pub(super) enum Tone {
-	Info,
 	Good,
 	Warn,
 	Bad,
@@ -94,10 +93,6 @@ pub(super) enum Tone {
 impl Tone {
 	const fn classes(self) -> &'static str {
 		match self {
-			Self::Info => {
-				"border-[var(--admin-line-strong)] bg-[var(--admin-surface)] \
-				 text-[var(--admin-ink-2)]"
-			}
 			Self::Good => {
 				"border-[var(--admin-good)] bg-[var(--admin-sunken)] text-[var(--admin-good)]"
 			}
@@ -112,7 +107,6 @@ impl Tone {
 
 	const fn glyph(self) -> &'static str {
 		match self {
-			Self::Info => "•",
 			Self::Good => "✓",
 			Self::Warn => "!",
 			Self::Bad => "✕",

@@ -49,16 +49,16 @@ impl Default for Front {
 
 /// Why a choice did not go through, in the page's words.
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct Problem {
-	tone: Tone,
-	title: &'static str,
-	body: String,
+pub(crate) struct Problem {
+	pub(crate) tone: Tone,
+	pub(crate) title: &'static str,
+	pub(crate) body: String,
 	/// Whether choosing again cannot work today.
-	full: bool,
+	pub(crate) full: bool,
 }
 
 /// How long a refusal asks the visitor to wait, in words.
-fn wait_words(wait: Option<std::time::Duration>) -> String {
+pub(crate) fn wait_words(wait: Option<std::time::Duration>) -> String {
 	match wait.map(|wait| wait.as_secs().max(1)) {
 		None => "in a little while".to_owned(),
 		Some(seconds) if seconds < 90 => format!("in {seconds} s"),
@@ -67,7 +67,7 @@ fn wait_words(wait: Option<std::time::Duration>) -> String {
 }
 
 /// The words for a refused or failed choice.
-fn problem_of(error: &leptoskit::rpc::FnError, seconds_to_reset: i64) -> Problem {
+pub(crate) fn problem_of(error: &leptoskit::rpc::FnError, seconds_to_reset: i64) -> Problem {
 	use leptoskit::rpc::FnError;
 
 	match error {

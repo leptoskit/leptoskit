@@ -259,47 +259,21 @@ html[data-js][data-route="open"] [data-testid="route-workings"] {
 	color: var(--admin-ink);
 }
 
-/* ---------- Sign-in: which panes show ---------- */
-
-[data-testid="pane-choose"],
-[data-testid="pane-identity"],
-[data-testid="pane-send"],
-[data-testid="pane-code"],
-[data-testid="notice-alert"],
-[data-testid="notice-status"] {
-	display: none !important;
-}
-
-html[data-state="choose"] [data-testid="pane-choose"] {
-	display: flex !important;
-}
-
-html:not([data-state="choose"]) [data-testid="pane-identity"] {
-	display: flex !important;
-}
-
-html[data-state="ready"] [data-testid="pane-send"],
-html[data-state="lost"] [data-testid="pane-send"] {
-	display: flex !important;
-}
-
-html[data-state="sent"] [data-testid="pane-code"] {
-	display: flex !important;
-}
-
-[data-testid="notice-alert"][data-shown],
-[data-testid="notice-status"][data-shown] {
-	display: flex !important;
-}
-
-/* Without scripts nothing can be sent, so only the way back shows. */
-html:not([data-js]) [data-testid="pane-send"],
-html:not([data-js]) [data-testid="pane-code"] {
-	display: none !important;
-}
-
-[data-testid="email"] {
+[data-testid="email"],
+[data-testid="listening"],
+[data-testid="mail-gone"] {
 	border-style: dashed !important;
+}
+
+[data-testid="start-again"] {
+	text-decoration: underline;
+	text-decoration-color: var(--admin-line-strong);
+	text-underline-offset: 3px;
+}
+
+[data-testid="mail-code-old"] {
+	text-decoration: line-through;
+	text-decoration-color: #9d93a8;
 }
 
 [data-testid="code"] {
@@ -309,24 +283,6 @@ html:not([data-js]) [data-testid="pane-code"] {
 
 [data-testid="code"][aria-invalid="true"] {
 	border: 2px solid var(--admin-bad) !important;
-}
-
-/* The choice: a roving radio group. */
-[data-testid^="choose:"][aria-checked="true"] {
-	border-color: var(--admin-ink) !important;
-	box-shadow: inset 0 0 0 1px var(--admin-ink);
-}
-
-[data-testid="choice-radio-dot"] {
-	display: none !important;
-}
-
-[data-testid^="choose:"][aria-checked="true"] [data-testid="choice-radio"] {
-	border-color: var(--admin-ink) !important;
-}
-
-[data-testid^="choose:"][aria-checked="true"] [data-testid="choice-radio-dot"] {
-	display: block !important;
 }
 
 /* A disabled primary button is flat: no raised block, no ink. */
@@ -355,53 +311,6 @@ button[disabled][data-testid="resend"] {
 }
 
 /* ---------- The inbox: the page's underside ---------- */
-
-[data-testid="stations"] {
-	position: relative;
-}
-
-[data-testid="stations"]::before,
-[data-testid="stations"]::after {
-	content: "";
-	position: absolute;
-	left: 10%;
-	top: 7px;
-	height: 2px;
-}
-
-[data-testid="stations"]::before {
-	right: 10%;
-	background: #30283c;
-}
-
-[data-testid="stations"]::after {
-	width: var(--fill, 0%);
-	background: #5ef2c2;
-	transition: width 0.5s ease-out;
-}
-
-[data-testid^="station:"] {
-	position: relative;
-	z-index: 1;
-}
-
-[data-testid="station-dot"] {
-	transition: background 0.3s, border-color 0.3s, box-shadow 0.3s;
-}
-
-[data-testid^="station:"][data-done] {
-	color: #f4efe8 !important;
-}
-
-[data-testid^="station:"][data-done] [data-testid="station-dot"] {
-	background: #5ef2c2 !important;
-	border-color: #5ef2c2 !important;
-}
-
-[data-testid^="station:"][data-now] [data-testid="station-dot"] {
-	border-color: #5ef2c2 !important;
-	box-shadow: 0 0 0 4px rgba(94, 242, 194, 0.22);
-}
 
 [data-testid^="station:"][aria-selected="true"] {
 	color: #5ef2c2 !important;
@@ -524,6 +433,10 @@ button[disabled][data-testid="resend"] {
 	font-size: 14px;
 	line-height: 1.45;
 	color: #f4efe8;
+}
+
+[data-testid="mail-text"] {
+	white-space: pre-wrap;
 }
 
 .mail-text {

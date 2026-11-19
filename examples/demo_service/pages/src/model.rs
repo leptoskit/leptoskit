@@ -178,11 +178,55 @@ pub struct Door {
 	pub people: Vec<Person>,
 }
 
+/// Why the visitor is signing in, which the page says in one line.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Flow {
+	/// Straight from Notes.
+	Plain,
+	/// The admin sent a signed-out visitor to sign in.
+	Admin,
+	/// The admin asked Notes who is signing in, and someone already is.
+	Switch(Person),
+}
+
+/// What mail the server holds for the chosen person, without the mail. The
+/// page reads the messages themselves from the private inbox once it is
+/// open, so a page value never carries a code.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Mail {
+	/// How many messages the server still holds for the person.
+	pub held: usize,
+	/// When a code the person was sent can no longer be shown, in Unix
+	/// milliseconds: the process that held it has gone, or dropped it.
+	pub lost_at_ms: Option<i64>,
+}
+
+/// What sign-in is rendered from.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SignIn {
+	/// The day and the addresses.
+	pub context: Context,
+	/// The validated local path to end at.
+	pub return_to: String,
+	/// Why the visitor is here.
+	pub flow: Flow,
+	/// The person signing in, once chosen; `None` shows the choice.
+	pub identity: Option<Person>,
+	/// Who the choice starts on, when the visitor already leans one way.
+	pub preselect: Option<Persona>,
+	/// The pass was from an earlier day and has been cleared.
+	pub new_day: bool,
+	/// What mail the server holds for the person.
+	pub mail: Mail,
+}
+
 /// One page, with everything it is rendered from.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Page {
 	/// The front door.
 	Front(Door),
+	/// Sign-in, with the demo inbox.
+	SignIn(SignIn),
 }
 
 impl Page {
@@ -191,6 +235,7 @@ impl Page {
 	pub const fn title(&self) -> &'static str {
 		match self {
 			Self::Front(_) => "Notes: a leptoskit demo",
+			Self::SignIn(_) => "Sign in · Notes",
 		}
 	}
 
@@ -199,8 +244,52 @@ impl Page {
 	pub const fn context(&self) -> &Context {
 		match self {
 			Self::Front(door) => &door.context,
+			Self::SignIn(view) => &view.context,
 		}
 	}
+}
+
+/// `14:05`: the UTC hour and minute of a Unix time in milliseconds.
+#[must_use]
+pub fn utc_time(millis: i64) -> String {
+	let seconds = millis.div_euclid(1000).rem_euclid(86_400);
+
+	format!("{:02}:{:02}", seconds / 3600, (seconds % 3600) / 60)
+}
+
+/// `14:05:09`: the UTC time of day of a Unix time in milliseconds.
+#[must_use]
+pub fn utc_clock(millis: i64) -> String {
+	let seconds = millis.div_euclid(1000).rem_euclid(86_400);
+
+	format!(
+		"{:02}:{:02}:{:02}",
+		seconds / 3600,
+		(seconds % 3600) / 60,
+		seconds % 60
+	)
+}
+
+/// `0:29`: minutes and seconds, for a short wait.
+#[must_use]
+pub fn wait_clock(seconds: u64) -> String {
+	format!("{}:{:02}", seconds / 60, seconds % 60)
+}
+
+/// The sign-in code at the end of a message's subject, `XXXX-XXXX`.
+#[must_use]
+pub fn code_in(subject: &str) -> Option<&str> {
+	let subject = subject.trim_end();
+	let code = subject.get(subject.len().checked_sub(9)?..)?;
+	let (first, second) = code.split_once('-')?;
+	let plain = |part: &str| {
+		part.len() == 4
+			&& part
+				.bytes()
+				.all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit())
+	};
+
+	(plain(first) && plain(second)).then_some(code)
 }
 
 /// A value percent-encoded the way a form encodes a query value, for a
@@ -277,6 +366,28 @@ mod tests {
 			query_value("/oauth/authorize?client_id=a b&x=1"),
 			"%2Foauth%2Fauthorize%3Fclient_id%3Da+b%26x%3D1"
 		);
+	}
+
+	#[test]
+	fn times_are_worded_in_utc() {
+		// 2026-11-15T17:48:09Z.
+		assert_eq!(utc_time(1_794_764_889_000), "17:48");
+		assert_eq!(utc_clock(1_794_764_889_000), "17:48:09");
+		assert_eq!(wait_clock(29), "0:29");
+		assert_eq!(wait_clock(75), "1:15");
+	}
+
+	#[test]
+	fn a_code_is_read_from_the_end_of_a_subject() {
+		assert_eq!(
+			code_in("Your Notes sign-in code is AB12-CD34"),
+			Some("AB12-CD34")
+		);
+		assert_eq!(code_in("AB12-CD34 "), Some("AB12-CD34"));
+		assert_eq!(code_in("Your code is ab12-cd34"), None);
+		assert_eq!(code_in("AB12CD34"), None);
+		assert_eq!(code_in("é"), None);
+		assert_eq!(code_in(""), None);
 	}
 
 	#[test]

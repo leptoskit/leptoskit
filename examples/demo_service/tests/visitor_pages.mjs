@@ -81,9 +81,47 @@ async function capture(browser, name, caption, { looks = LOOKS } = {}) {
 	await browser.look(LOOKS[0]);
 }
 
-/** The data a page not yet hydrated hands its script. */
-const demoState = (browser) =>
-	browser.eval(`JSON.parse(document.getElementById("demo-state").textContent)`);
+/**
+ * Where sign-in ends: once a person is chosen the address carries it, and
+ * before that it is in the plain form a visitor without scripts posts.
+ */
+const returnTo = (browser) =>
+	browser.eval(
+		`(() => {
+			const plain = document.querySelector("noscript")?.textContent ?? "";
+			const field = new DOMParser()
+				.parseFromString(plain, "text/html")
+				.querySelector('[name="return_to"]');
+			return field ? field.value : new URLSearchParams(location.search).get("return_to");
+		})()`,
+	);
+
+/** Who sign-in is for, by first name, or null while the visitor chooses. */
+const signingInAs = (browser) =>
+	browser.eval(
+		`document.querySelector('[data-testid="who-name"]')?.textContent ?? null`,
+	);
+
+/** Sign-in with a person chosen and no code out. */
+const READY =
+	`!!document.querySelector('[data-testid="who-name"]') && !!document.querySelector('[data-testid="pane-send"]') && !document.querySelector('[data-testid="mail-gone"]')`;
+
+/** Sign-in after a code was sent that the server no longer holds. */
+const LOST =
+	`!!document.querySelector('[data-testid="mail-gone"]') && !!document.querySelector('[data-testid="pane-send"]')`;
+
+/**
+ * Waits for focus to reach the element with `id`. leptoskit moves focus once
+ * it has drawn the frame that asked for it, not in the same task as the
+ * press.
+ */
+const focusOn = (browser, id, description) =>
+	waitFor(
+		browser,
+		`document.activeElement?.dataset.testid === ${JSON.stringify(id)}`,
+		description,
+		5000,
+	);
 
 /** Chooses a persona on the front door with the mouse. */
 async function choose(browser, service, persona) {
@@ -113,10 +151,7 @@ async function sendAndSignIn(browser, expectPath) {
 		"the code in the inbox",
 	);
 	await browser.click("fill");
-	assert(
-		(await browser.focused()) === "verify",
-		"Fill in code moves focus to Sign in",
-	);
+	await focusOn(browser, "verify", "Fill in code moves focus to Sign in");
 	await browser.click("verify");
 	await waitFor(
 		browser,
@@ -247,7 +282,7 @@ Deno.test("the visitor pages", async (t) => {
 					"sign-in",
 				);
 				assert(
-					(await demoState(browser)).identity.persona === "ada",
+					(await signingInAs(browser)) === "Ada",
 					"the page signs in this browser's own Ada",
 				);
 				const email = await browser.eval(
@@ -277,10 +312,7 @@ Deno.test("the visitor pages", async (t) => {
 					`document.querySelector('[data-testid="fill"]')`,
 					"the code in the inbox",
 				);
-				assert(
-					(await browser.focused()) === "code",
-					"focus moves to the code field",
-				);
+				await focusOn(browser, "code", "focus moves to the code field");
 				assert(
 					(await browser.eval(
 						`document.querySelector('[data-testid="code"]').value`,
@@ -294,10 +326,7 @@ Deno.test("the visitor pages", async (t) => {
 					"Sign in, code in the demo inbox",
 				);
 				await browser.press("Enter");
-				assert(
-					(await browser.focused()) === "verify",
-					"Fill in code moves focus to Sign in",
-				);
+				await focusOn(browser, "verify", "Fill in code moves focus to Sign in");
 				const typed = await browser.eval(
 					`document.querySelector('[data-testid="code"]').value`,
 				);
@@ -369,7 +398,7 @@ Deno.test("the visitor pages", async (t) => {
 				await browser.clearCookies();
 				await choose(browser, service, "grace");
 				assert(
-					(await demoState(browser)).identity.persona === "grace",
+					(await signingInAs(browser)) === "Grace",
 					"Grace is chosen",
 				);
 				await sendAndSignIn(browser, "/notes");
@@ -405,19 +434,19 @@ Deno.test("the visitor pages", async (t) => {
 					"back on the site",
 				);
 				await waitFor(browser, `document.readyState === "complete"`, "loaded");
-				const state = await demoState(browser);
-				assert(
-					state.flow === "switch",
-					"the page knows the admin asked who is signing in",
+				await waitFor(
+					browser,
+					`document.documentElement.hasAttribute("data-hydrated")`,
+					"the page's client",
 				);
 				assert(
-					state.returnTo.startsWith("/oauth/authorize?"),
+					(await returnTo(browser)).startsWith("/oauth/authorize?"),
 					"the admin's request travels as the return target",
 				);
 				assert(await browser.visible("pane-choose"), "the choice shows");
 				assert(
 					(await browser.eval(
-						`document.querySelector('[data-testid="choose:ada"]').getAttribute("aria-checked")`,
+						`document.getElementById("choose-option-0").getAttribute("aria-checked")`,
 					)) === "true",
 					"Ada is preselected",
 				);
@@ -434,11 +463,11 @@ Deno.test("the visitor pages", async (t) => {
 				await browser.click("choose-go");
 				await waitFor(
 					browser,
-					`document.documentElement.dataset.state === "ready" && document.readyState === "complete"`,
+					`${READY} && document.documentElement.hasAttribute("data-hydrated")`,
 					"Ada ready",
 				);
 				assert(
-					(await demoState(browser)).identity.persona === "ada",
+					(await signingInAs(browser)) === "Ada",
 					"now signing in as Ada",
 				);
 				await browser.click("send");
@@ -484,7 +513,7 @@ Deno.test("the visitor pages", async (t) => {
 						}`,
 					);
 					assert(
-						(await demoState(browser)).returnTo === "/notes",
+						(await returnTo(browser)) === "/notes",
 						`${bad} falls back to /notes`,
 					);
 					await browser.go(
@@ -504,31 +533,31 @@ Deno.test("the visitor pages", async (t) => {
 					`${service.siteOrigin}/sign-in?return_to=${encodeURIComponent(kept)}`,
 				);
 				assert(
-					(await demoState(browser)).returnTo === kept,
+					(await returnTo(browser)) === kept,
 					"a legitimate authorize request is kept",
 				);
 				assert(
-					(await demoState(browser)).flow === "admin",
+					(await browser.text("flow-line")).includes("admin"),
 					"and the page says the admin sent them",
 				);
-				await browser.click("choose:grace");
+				await browser.page.click("#choose-option-1");
 				await browser.click("choose-go");
 				await waitFor(
 					browser,
-					`document.readyState === "complete" && location.pathname === "/sign-in" && document.documentElement.dataset.state === "ready"`,
+					`location.pathname === "/sign-in" && ${READY} && document.documentElement.hasAttribute("data-hydrated")`,
 					"ready",
 				);
 				assert(
-					(await demoState(browser)).returnTo === kept,
+					(await returnTo(browser)) === kept,
 					"the choice keeps it",
 				);
 				await browser.click("swap");
 				await waitFor(
 					browser,
-					`document.readyState === "complete" && document.querySelector('[data-testid="who-name"]')?.textContent === "Ada"`,
+					`document.documentElement.hasAttribute("data-hydrated") && document.querySelector('[data-testid="who-name"]')?.textContent === "Ada"`,
 					"swapped",
 				);
-				assert((await demoState(browser)).returnTo === kept, "a swap keeps it");
+				assert((await returnTo(browser)) === kept, "a swap keeps it");
 				assert(
 					(await browser.text("flow-line")).includes(
 						"straight back to the Notes admin",
@@ -560,7 +589,7 @@ Deno.test("the visitor pages", async (t) => {
 				await browser.click("verify");
 				await waitFor(
 					browser,
-					`document.querySelector('[data-testid="notice-alert"][data-shown]')`,
+					`document.querySelector('[data-testid="notice-alert"]')`,
 					"the alert",
 				);
 				assert(
@@ -614,23 +643,15 @@ Deno.test("the visitor pages", async (t) => {
 				assert(stops === 1, `one tab stop, not ${stops}`);
 				await browser.tabTo("station:send");
 				await browser.press("ArrowRight");
-				assert(
-					(await browser.focused()) === "station:mail",
-					"the right arrow moves on",
-				);
+				await focusOn(browser, "station:mail", "the right arrow moves on");
 				await browser.press("End");
-				assert(
-					(await browser.focused()) === "station:session",
-					"End goes to the last",
-				);
+				await focusOn(browser, "station:session", "End goes to the last");
 				await browser.press("ArrowRight");
-				assert((await browser.focused()) === "station:send", "the arrows wrap");
+				await focusOn(browser, "station:send", "the arrows wrap");
 				await browser.press("ArrowLeft");
+				await focusOn(browser, "station:session", "and back");
 				await browser.press("Home");
-				assert(
-					(await browser.focused()) === "station:send",
-					"Home goes to the first",
-				);
+				await focusOn(browser, "station:send", "Home goes to the first");
 				assert(
 					(await browser.text("explain-sig")).startsWith(
 						"POST /auth/email/send",
@@ -652,19 +673,14 @@ Deno.test("the visitor pages", async (t) => {
 					"the code",
 				);
 				const old = await browser.eval(
-					`document.querySelector('[data-testid="fill"]').dataset.code`,
+					`document.querySelector('[data-testid="mail-code"]').textContent`,
 				);
 				await service.restart();
 				await browser.go(`${service.siteOrigin}/sign-in?as=ada`);
 				await waitFor(
 					browser,
-					`document.documentElement.dataset.state === "lost"`,
-					"the lost state",
-				);
-				await waitFor(
-					browser,
-					`document.querySelector('.mail.gone')`,
-					"the tombstone",
+					LOST,
+					"the lost state, with its tombstone",
 				);
 				assert(!(await browser.visible("fill")), "no stale code is offered");
 				assert(
@@ -687,7 +703,7 @@ Deno.test("the visitor pages", async (t) => {
 				await browser.click("send");
 				await waitFor(
 					browser,
-					`document.documentElement.dataset.state === "sent" && document.querySelector('[data-testid="fill"]')`,
+					`document.querySelector('[data-testid="code"]') && document.querySelector('[data-testid="fill"]')`,
 					"a fresh code",
 				);
 				await browser.click("fill");
@@ -711,7 +727,7 @@ Deno.test("the visitor pages", async (t) => {
 				await choose(browser, service, "grace");
 				const paused = browser.page.once("Fetch.requestPaused");
 				await browser.page.send("Fetch.enable", {
-					patterns: [{ urlPattern: "*/demo/inbox", requestStage: "Request" }],
+					patterns: [{ urlPattern: "*/rpc/inbox*", requestStage: "Request" }],
 				});
 				let timeout;
 				try {
@@ -732,7 +748,7 @@ Deno.test("the visitor pages", async (t) => {
 					});
 					await waitFor(
 						browser,
-						`document.documentElement.dataset.state === "lost"`,
+						LOST,
 						"lost mail after sending",
 					);
 					assert(
@@ -766,7 +782,7 @@ Deno.test("the visitor pages", async (t) => {
 				await browser.click("send");
 				await waitFor(
 					browser,
-					`document.querySelector('[data-testid="notice-alert"][data-shown]')`,
+					`document.querySelector('[data-testid="notice-alert"]')`,
 					"the notice",
 				);
 				assert(
@@ -774,7 +790,7 @@ Deno.test("the visitor pages", async (t) => {
 					"it says the pass is gone",
 				);
 				assert(
-					await browser.eval(`!!document.querySelector('.msg-link')`),
+					await browser.visible("start-again"),
 					"and offers a way to start again",
 				);
 				await capture(
@@ -866,7 +882,7 @@ Deno.test("the visitor pages", async (t) => {
 					"redirect to sign-in",
 				);
 				assert(
-					(await demoState(browser)).returnTo === "/notes",
+					(await returnTo(browser)) === "/notes",
 					"and back to Notes after",
 				);
 			},

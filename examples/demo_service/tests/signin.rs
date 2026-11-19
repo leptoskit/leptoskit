@@ -1661,13 +1661,10 @@ async fn a_new_day_clears_the_pass_and_refuses_old_sessions() -> Result<()> {
 	Ok(())
 }
 
-/// The data a page not yet hydrated hands its script: the JSON in
-/// `#demo-state`.
-fn page_state(html: &str) -> Value {
-	let marker = "id=\"demo-state\">";
-	let start = html.find(marker).expect("the page carries its state") + marker.len();
-	let end = start + html[start..].find("</script>").expect("the state closes");
-	serde_json::from_str(&html[start..end]).expect("the state is JSON")
+/// Whether a page draws the element with a test id. The stylesheet names
+/// test ids too, in selectors, so the id alone proves nothing.
+fn shows(html: &str, test_id: &str) -> bool {
+	html.contains(&format!(" data-testid=\"{test_id}\""))
 }
 
 /// Whether a response is HTML that no cache may keep.
@@ -1747,7 +1744,10 @@ async fn the_front_door_and_sign_in_render_what_the_pass_says() -> Result<()> {
 		!html.contains("</script><script>alert"),
 		"the target stays inside its JSON"
 	);
-	assert_eq!(page_state(&html)["returnTo"], nasty);
+	assert!(
+		html.contains("name=\"return_to\" value=\"/oauth/authorize?x=&lt;/script&gt;"),
+		"the plain form carries the target, escaped"
+	);
 
 	// Minting leads to a sign-in for this browser's own Ada.
 	let minted = mint(&mut ada, &built.router, "ada").await;
@@ -1756,13 +1756,18 @@ async fn the_front_door_and_sign_in_render_what_the_pass_says() -> Result<()> {
 	let page = ada.get(&built.router, SITE_ORIGIN, &target).await;
 	assert!(is_private_html(&page));
 	let html = text_body(page).await;
-	let state = page_state(&html);
-	assert_eq!(state["identity"]["persona"], "ada");
-	assert_eq!(state["flow"], "plain");
-	assert_eq!(state["mail"]["held"], 0);
-	assert!(html.contains("data-state=\"ready\""), "nothing sent yet");
-	let address = state["identity"]["email"].as_str().expect("an address");
-	assert!(html.contains(address), "the visitor's own address shows");
+	assert!(shows(&html, "who-name"), "Ada is chosen");
+	assert!(!shows(&html, "flow-line"), "a plain sign-in");
+	assert!(
+		shows(&html, "pane-send") && !shows(&html, "code"),
+		"nothing sent yet"
+	);
+	let address = inbox(&mut ada, &built.router).await["people"][0]["email"]
+		.as_str()
+		.expect("an address")
+		.to_owned();
+	assert!(address.starts_with("ada-"), "{address}");
+	assert!(html.contains(&address), "the visitor's own address shows");
 	assert!(
 		!html.contains("sign-in code"),
 		"no code or subject is ever in the page"
@@ -1776,20 +1781,11 @@ async fn the_front_door_and_sign_in_render_what_the_pass_says() -> Result<()> {
 			.await,
 	)
 	.await;
-	assert_eq!(
-		page_state(&theirs)["identity"],
-		Value::Null,
+	assert!(
+		shows(&theirs, "pane-choose") && !shows(&theirs, "who-name"),
 		"Ada's pass owns no Grace, so she is asked to choose"
 	);
-	assert!(theirs.contains("data-state=\"choose\""));
-	assert!(
-		!theirs.contains(
-			&state["identity"]["email"]
-				.as_str()
-				.expect("addr")
-				.replace("ada", "grace")
-		)
-	);
+	assert!(!theirs.contains(&address.replace("ada", "grace")));
 
 	// The fonts the pages ask for are served from the site.
 	let font = ada
@@ -1867,13 +1863,8 @@ async fn notes_welcomes_the_signed_in_account_and_sends_others_to_sign_in() -> R
 		.await;
 	assert_eq!(oauth.status(), StatusCode::OK);
 	let html = text_body(oauth).await;
-	let state = page_state(&html);
-	assert_eq!(state["flow"], "switch");
-	assert!(
-		html.contains("data-state=\"choose\""),
-		"the visitor picks again"
-	);
-	assert_eq!(state["preselect"], "ada");
+	assert!(shows(&html, "flow-line"), "the page says the admin asked");
+	assert!(shows(&html, "pane-choose"), "the visitor picks again");
 
 	// Signing out leaves the pass, so the front door welcomes them back.
 	let out = visitor
@@ -1911,7 +1902,7 @@ async fn stale_passes_and_lost_mail_are_named_without_leaking_codes() -> Result<
 	);
 	let html = text_body(door).await;
 	assert!(html.contains("A new demo day started at 00:00 UTC."));
-	assert!(html.contains("data-testid=\"notice-new-day\""));
+	assert!(shows(&html, "notice-new-day"));
 
 	let mut ada = Browser::default();
 	mint(&mut ada, &built.router, "ada").await;
@@ -1929,8 +1920,10 @@ async fn stale_passes_and_lost_mail_are_named_without_leaking_codes() -> Result<
 
 	// The sending process still holds it: the page says how many, not what.
 	let here = text_body(ada.get(&built.router, SITE_ORIGIN, "/sign-in?as=ada").await).await;
-	assert_eq!(page_state(&here)["mail"]["held"], 1);
-	assert!(here.contains("data-state=\"sent\""));
+	assert!(
+		shows(&here, "code") && !shows(&here, "mail-gone"),
+		"the page is waiting for the code"
+	);
 	assert!(!here.contains(&code), "the code never rides in the page");
 
 	// Another process does not: the page names the code lost, and still
@@ -1944,10 +1937,10 @@ async fn stale_passes_and_lost_mail_are_named_without_leaking_codes() -> Result<
 		.or_default()
 		.insert("demo-pass".to_owned(), pass);
 	let lost = text_body(again.get(&reopened, SITE_ORIGIN, "/sign-in?as=ada").await).await;
-	let data = page_state(&lost);
-	assert!(lost.contains("data-state=\"lost\""));
-	assert!(data["mail"]["lostAtMs"].is_i64(), "the loss has a time");
-	assert_eq!(data["mail"]["held"], 0);
+	assert!(
+		shows(&lost, "mail-gone") && shows(&lost, "pane-send"),
+		"the page names the code lost and offers a new one"
+	);
 	assert!(!lost.contains(&code));
 	Ok(())
 }

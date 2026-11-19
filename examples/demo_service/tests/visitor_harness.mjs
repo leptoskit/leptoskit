@@ -419,6 +419,6 @@ export class Browser {
 /** The code in the newest message of the demo inbox, read from the page. */
 export function inboxCode(browser) {
 	return browser.eval(
-		`document.querySelector('[data-action="fill"]')?.dataset.code ?? null`,
+		`document.querySelector('[data-testid="mail-code"]')?.textContent ?? null`,
 	);
 }

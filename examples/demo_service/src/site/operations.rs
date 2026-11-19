@@ -47,11 +47,14 @@ use leptoskit_rpc as rpc;
 use super::MintRefusal;
 use super::Parts;
 use super::Shared;
+use crate::inbox::DemoInbox;
 use crate::return_to;
+use crate::visitors::PassState;
 use crate::visitors::Persona;
+use crate::visitors::carried_cookie;
 
 /// The operations this site answers, by the path each is called at.
-const SERVED: [&str; 1] = ["/rpc/mint"];
+const SERVED: [&str; 2] = ["/rpc/mint", "/rpc/inbox"];
 
 /// The cookies an operation asks the response to set. An operation has no
 /// response of its own, so it leaves them here and [`set_cookies`] adds
@@ -121,6 +124,71 @@ impl Backend for RequestBackend {
 					Err(rpc::Error::server("server"))
 				}
 			}
+		})
+	}
+
+	fn inbox(&self, persona: model::Persona) -> BoxFuture<'_, rpc::Result<ops::Mailbox>> {
+		Box::pin(async move {
+			let persona = match persona {
+				model::Persona::Ada => Persona::Ada,
+				model::Persona::Grace => Persona::Grace,
+			};
+			let visitors = &self.shared.visitors;
+			let failed = |error: anyhow::Error| {
+				eprintln!("the demo site's request failed: {error:#}");
+				rpc::Error::server("server")
+			};
+			let pass = match visitors.resolve(&self.headers).await.map_err(failed)? {
+				PassState::Valid(pass) => pass,
+				gone => {
+					// A cookie that names no pass here goes with the refusal,
+					// so a stale browser stops carrying it around.
+					if carried_cookie(&self.headers, visitors.cookie().name).is_some() {
+						self.cookies.push(visitors.cookie().clear());
+					}
+
+					return Err(if matches!(gone, PassState::EarlierDay) {
+						rpc::Error::refused(
+							ops::NEW_DAY,
+							"this browser's pass is from an earlier day",
+						)
+					} else {
+						rpc::Error::refused(ops::NO_PASS, "this browser has no pass for today")
+					});
+				}
+			};
+			let people = visitors.people(&pass).await.map_err(failed)?;
+			let Some(person) = people.into_iter().find(|person| person.persona == persona) else {
+				// The pass never minted this person, so there is no mail.
+				return Ok(ops::Mailbox::default());
+			};
+			let retained = self.shared.inbox.messages_for(person.email.as_inner());
+			let lost_at_ms = DemoInbox::unavailable(
+				person.persona,
+				person.last_receipt_id.as_deref(),
+				person.last_receipt_at,
+				&retained,
+			)
+			.and(person.last_receipt_at)
+			.map(|at| at.timestamp_millis());
+			let mut letters = retained
+				.iter()
+				.map(|stored| {
+					ops::Letter {
+						to: person.email.as_inner().to_owned(),
+						subject: stored.subject.clone(),
+						text: stored.text.clone(),
+						receipt: stored.receipt.clone(),
+						sent_at_ms: stored.sent_at.timestamp_millis(),
+					}
+				})
+				.collect::<Vec<_>>();
+			letters.sort_by_key(|letter| letter.sent_at_ms);
+
+			Ok(ops::Mailbox {
+				letters,
+				lost_at_ms,
+			})
 		})
 	}
 

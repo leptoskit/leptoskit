@@ -83,19 +83,21 @@ A signed-in visitor writes private notes, and each one sends one real analytics 
 
 The pages are moving from server-drawn markup with `assets/demo.js` to hydrated leptoskit, one page at a time. A converted page lives in `examples/demo_service/pages` (the `demo_pages` crate), which is both sides: the service links it with `ssr` and renders the page from it, and `leptoskit build --release --platform web` compiles the same crate to Wasm with `hydrate`. The browser attaches that client to the server's markup, so a page works before the client arrives and behaves once it has.
 
-- **Converted:** the front door, with the band, its countdown, and the new-day dialog. It loads no `demo.js`.
-- **Not yet:** sign-in and Notes. They still carry `demo.js`, which is deleted when Notes is converted.
+- **Converted:** the front door, with the band, its countdown, and the new-day dialog; and sign-in, with the person's choice, the emailed code, and the demo inbox with its five stations. Neither loads `demo.js`.
+- **Not yet:** Notes. It still carries `demo.js`, which is deleted when Notes is converted.
 
 What a hydrated page does goes through leptoskit's typed operations, declared in `pages/src/ops.rs`. The operations hold no logic: each calls a port (`ops::Backend`) the service implements per request in `src/site/operations.rs`, so the stores, transactions and limits are the ones the plain routes use.
 
 - `POST /rpc/mint` mints the visitor's pass. It is the same code path as the form post `POST /demo/pass`, which stays for a visitor without scripts (the page carries it in `<noscript>`). The cookie is set by a small layer around the operation, because an operation's answer has no headers. A full demo is refused with the code `full`; the per-address limit is leptoskit's `rate_limited` with its wait.
 - `generation` is a resumable stream on the site's live connection (`/live`). It names the generation's day once and then stays open; the client reconnects after a reset, hears another day, and opens the dialog. It has its own cap of 1,000 watchers. `/demo/generation` (server-sent events) stays for the pages not yet converted.
+- `inbox` is a query: this pass's mail for one of its people, oldest first, with when a code this process no longer holds was sent. Sign-in reads it after a send and when the visitor asks. A pass that is gone or from an earlier day is refused with `no_pass` or `new_day`, and a stale cookie is cleared. The page value itself only says how many messages the server holds, never a code.
+- Sending and checking the code use leptoskit's Auth client (`leptoskit::auth::client::send_code` and `verify_code`) against Auth's real routes. The pass gate in front of `/auth/email/send` answers in Auth's error shape (`error` and `message`), so the client names `not_your_identity` instead of a failure it could not read.
 - Only the operations listed in `SERVED` in `src/site/operations.rs` are reachable. Anything else under `/rpc/` is `404`, whatever else is linked into the binary.
 - Idempotency receipts for these operations live in a private in-memory SQLite database, so the generation's schema and format are unchanged.
 
 `GET /pkg/{file}` serves the client from memory in the smallest encoding the browser accepts, with `Cache-Control: no-cache`: the file names carry no hash, so a browser revalidates and a release is never served stale. The service reads the client before it binds and never again, so the markup a process renders and the client it hands out always come from the same start.
 
-Without scripts the front door still mints through its form, and the band's panel and the route's drawer stay open (`@media (scripting: none)` in `assets/demo.css`).
+Without scripts the front door still mints through its form, and so does sign-in while nobody is chosen; with a person chosen it says the code needs scripts, and the band's panel and the route's drawer stay open (`@media (scripting: none)` in `assets/demo.css`).
 
 ### Proving the pages in a browser
 

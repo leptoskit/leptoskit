@@ -15,6 +15,7 @@ mod chrome;
 mod front;
 pub mod model;
 pub mod ops;
+mod sign_in;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -27,6 +28,7 @@ use leptoskit::prelude::Element;
 
 use crate::model::Context;
 use crate::model::Page;
+pub use crate::sign_in::noscript as noscript_sign_in;
 
 /// What every page keeps while it is open: the clock it counts down on, and
 /// the pieces of the chrome that open and close.
@@ -185,6 +187,8 @@ pub fn App() -> impl IntoView {
 		use_context::<Page>().expect("the route provides the page it is rendering")
 	})
 	.into_inner();
+	// Sign-in's requests to Auth are mutations, which keep their state here.
+	leptoskit::query::QueryClient::new().provide();
 	let shell = Shell::new(page.context().clone());
 	watch_generation(&shell);
 	let build = screen_of(&shell, page);
@@ -194,13 +198,19 @@ pub fn App() -> impl IntoView {
 
 /// The function that builds the page's tree, with the page's own state made
 /// once beside it.
-fn screen_of(shell: &Shell, page: Page) -> impl Fn() -> Element + Send + Sync + 'static {
+fn screen_of(shell: &Shell, page: Page) -> Box<dyn Fn() -> Element + Send + Sync> {
 	let shell = shell.clone();
 
 	match page {
 		Page::Front(door) => {
 			let front = front::Front::new();
-			move || front::page(&shell, &door, front)
+			Box::new(move || front::page(&shell, &door, front))
+		}
+		Page::SignIn(view) => {
+			let view = Arc::new(view);
+			let state = sign_in::State::new(&shell, &view);
+			sign_in::open(&shell, &view, &state);
+			Box::new(move || sign_in::page(&shell, &view, &state))
 		}
 	}
 }
