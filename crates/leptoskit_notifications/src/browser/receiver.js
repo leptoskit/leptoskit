@@ -134,7 +134,7 @@
 		return {
 			title: title ?? FALLBACK_TITLE,
 			body: title === null ? "" : body,
-			tag: tag(payload.lkn),
+			tag: tag(typeof payload.lktag === "string" ? payload.lktag : payload.lkn),
 			id,
 			lk: plainObject(payload.lk),
 			data: payload.lkdata === true,
@@ -146,10 +146,11 @@
 		};
 	}
 
-	// The stable tag: the notification's id when it is a plain short
-	// string, the fallback otherwise. Two pushes for one notification
-	// carry the same tag, so wherever the platform coalesces, a repeat
-	// replaces.
+	// The stable tag: the collapse key the send chose (`lktag`) when
+	// the push carries one, the notification's id otherwise, each only
+	// when it is a plain short string, and the fallback when not. Two
+	// pushes under one tag replace each other wherever the platform
+	// coalesces.
 	function tag(lkn) {
 		return typeof lkn === "string" && PLAIN_TEXT.test(lkn) ? lkn : FALLBACK_TAG;
 	}

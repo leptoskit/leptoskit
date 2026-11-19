@@ -296,15 +296,17 @@ fn headers(message: &Message) -> Vec<(String, String)> {
 		),
 		("apns-priority".to_owned(), priority.to_owned()),
 		("apns-id".to_owned(), message.id.to_string()),
-		// The stable collapse id: a repeat replaces, not stacks.
-		("apns-collapse-id".to_owned(), message.id.to_string()),
+		// The stable collapse id: a repeat replaces, not stacks. The
+		// send's own key when it chose one, the notification's id
+		// otherwise.
+		(
+			"apns-collapse-id".to_owned(),
+			message.collapse_key().into_owned(),
+		),
 	];
 
-	if let Some(expires_at) = message.expires_at {
-		headers.push((
-			"apns-expiration".to_owned(),
-			expires_at.timestamp().max(0).to_string(),
-		));
+	if let Some(expiration) = message.apns_expiration() {
+		headers.push(("apns-expiration".to_owned(), expiration.to_string()));
 	}
 
 	headers

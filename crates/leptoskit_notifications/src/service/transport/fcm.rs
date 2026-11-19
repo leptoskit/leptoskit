@@ -439,7 +439,7 @@ pub(crate) fn shape(credential: &str, message: &Message, now: leptoskit_db::Time
 fn trim_platform_and_image(
 	message: &mut serde_json::Value,
 	_credential: &str,
-	_original: &Message,
+	original: &Message,
 	_now: leptoskit_db::Timestamp,
 ) {
 	if let Some(root) = message
@@ -457,6 +457,11 @@ fn trim_platform_and_image(
 		{
 			for key in ["channel_id", "color", "icon", "tag", "sticky"] {
 				notification.remove(key);
+			}
+
+			// The tag a collapse key stands for stays with the key.
+			if let Some(tag) = collapse_tag(original) {
+				notification.insert("tag".to_owned(), serde_json::json!(tag));
 			}
 		}
 
@@ -713,7 +718,7 @@ fn fcm_data_map(message: &Message, include: Include) -> serde_json::Map<String, 
 /// show it in the tray.
 fn fcm_android(message: &Message, include: Include, ttl: Option<i64>) -> serde_json::Value {
 	let mut android = serde_json::json!({
-		"collapse_key": message.id.to_string(),
+		"collapse_key": message.collapse_key(),
 	});
 
 	if let Some(ttl) = ttl
@@ -738,14 +743,32 @@ fn fcm_android(message: &Message, include: Include, ttl: Option<i64>) -> serde_j
 		None => {}
 	}
 
-	if include != Include::All || message.options.is_data() {
+	if message.options.is_data() {
+		return android;
+	}
+
+	if include != Include::All {
+		// The tag a collapse key stands for is intent, like the key: it
+		// stays when the decoration around it goes.
+		if let Some(tag) = collapse_tag(message) {
+			android["notification"] = serde_json::json!({ "tag": tag });
+		}
+
 		return android;
 	}
 
 	let mut notification = serde_json::Map::new();
 
+	if let Some(tag) = collapse_tag(message) {
+		notification.insert("tag".to_owned(), serde_json::json!(tag));
+	}
+
 	if let Some(android_options) = message.options.android.as_ref() {
-		if let Some(channel) = android_options.channel_id.as_deref() {
+		if let Some(channel) = android_options.raw_channel_id.as_deref() {
+			// A channel the app made itself, before the plugin: named as
+			// the device holds it.
+			notification.insert("channel_id".to_owned(), serde_json::json!(channel));
+		} else if let Some(channel) = android_options.channel_id.as_deref() {
 			notification.insert(
 				"channel_id".to_owned(),
 				serde_json::json!(android_channel(channel)),
@@ -792,6 +815,21 @@ fn fcm_android(message: &Message, include: Include, ttl: Option<i64>) -> serde_j
 	android
 }
 
+/// The Android tag a send's collapse key stands for, when the send names
+/// no tag of its own. FCM's `collapse_key` replaces only a message a
+/// device has not been handed yet; the tag is what replaces a banner
+/// already in the tray.
+fn collapse_tag(message: &Message) -> Option<&str> {
+	message
+		.options
+		.android
+		.as_ref()
+		.and_then(|android| android.tag.as_deref())
+		.is_none()
+		.then_some(message.options.collapse_key.as_deref())
+		.flatten()
+}
+
 /// The prefix the local-notifications plugin gives every Android channel it
 /// creates: `configure_channel` with the id `inbox` makes the channel
 /// `leptoskit.notifications.inbox`.
@@ -825,7 +863,7 @@ fn fcm_apns(message: &Message, include: Include, ttl: Option<i64>) -> serde_json
 
 	headers.insert(
 		"apns-collapse-id".to_owned(),
-		serde_json::Value::String(message.id.to_string()),
+		serde_json::Value::String(message.collapse_key().into_owned()),
 	);
 
 	// A data send's iOS half is a background push, as a direct APNs send
@@ -847,12 +885,7 @@ fn fcm_apns(message: &Message, include: Include, ttl: Option<i64>) -> serde_json
 	if ttl.is_some() {
 		headers.insert(
 			"apns-expiration".to_owned(),
-			serde_json::Value::String(
-				message
-					.expires_at
-					.map_or(0, |expires_at| expires_at.timestamp().max(0))
-					.to_string(),
-			),
+			serde_json::Value::String(message.apns_expiration().unwrap_or(0).to_string()),
 		);
 	}
 

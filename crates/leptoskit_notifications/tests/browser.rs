@@ -721,6 +721,40 @@ async fn a_missing_title_still_shows_a_truthful_banner() {
 	remove_fakes();
 }
 
+/// A push whose send chose a collapse key is shown under that key, so a
+/// later push with the same key replaces the banner; the click still
+/// carries the notification's own id. A key that isn't plain short text
+/// is ignored for the id.
+#[wasm_bindgen_test]
+async fn a_collapse_key_is_the_banners_tag() {
+	install_fakes();
+	install_script();
+
+	let id = "0198a3c2-1111-7222-8333-444455556666";
+	let envelope = format!(r#"{{"title":"2 : 1","body":"b","lkn":"{id}","lktag":"match-7"}}"#);
+	deliver(&envelope, Some(envelope.len() as u32)).await;
+	let odd = format!(r#"{{"title":"2 : 1","body":"b","lkn":"{id}","lktag":7}}"#);
+	deliver(&odd, Some(odd.len() as u32)).await;
+
+	let records = shown();
+	assert_eq!(records.len(), 2);
+	assert_eq!(
+		option(&shown_options(&records[0]), "tag")
+			.as_string()
+			.expect("a tag"),
+		"match-7"
+	);
+	assert_eq!(
+		option(&shown_options(&records[1]), "tag")
+			.as_string()
+			.expect("a tag"),
+		id,
+		"a key that is not text falls back to the id"
+	);
+
+	remove_fakes();
+}
+
 #[wasm_bindgen_test]
 async fn broken_envelopes_still_show_one_banner_under_the_fallback_tag() {
 	install_fakes();

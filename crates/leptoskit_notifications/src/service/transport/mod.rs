@@ -506,8 +506,9 @@ pub(crate) trait Transport: Send + Sync {
 /// [options]: crate::MessageOptions
 #[derive(Clone, Debug)]
 pub struct Message {
-	/// The notification's id: the collapse id at APNs, the collapse key
-	/// at FCM, the topic at Web Push.
+	/// The notification's id — and, unless the send chose a collapse
+	/// key, the collapse id at APNs, the collapse key at FCM, and the
+	/// topic at Web Push.
 	pub id: Uuid,
 	/// The notification's title, as the send named it.
 	pub title: String,
@@ -515,8 +516,10 @@ pub struct Message {
 	pub body: String,
 	/// The send's `data`, a JSON object's text.
 	pub data: String,
-	/// When the notification stops being visible: the providers' expiry,
-	/// so a late push doesn't wake someone for something already gone.
+	/// When the providers stop holding the push ([`push_expiry`]): the
+	/// notification's own expiry, or the end of the send's push lifetime
+	/// when that is earlier, so a late push doesn't wake someone for
+	/// something already gone.
 	pub expires_at: Option<Timestamp>,
 	/// How this send shapes the push: a silent data message, priority,
 	/// an image, a sound, a link, and the per-platform blocks. Empty is
@@ -526,6 +529,53 @@ pub struct Message {
 	/// number the transports put in the payload. `None` touches no
 	/// badge.
 	pub badge: Option<u32>,
+}
+
+impl Message {
+	/// What the providers collapse this push by: the key the send chose
+	/// ([`MessageOptions::collapse_key`]), or the notification's own id,
+	/// so that only repeats of one notification replace each other.
+	///
+	/// [`MessageOptions::collapse_key`]: crate::MessageOptions::collapse_key
+	pub(crate) fn collapse_key(&self) -> std::borrow::Cow<'_, str> {
+		self.options.collapse_key.as_deref().map_or_else(
+			|| std::borrow::Cow::Owned(self.id.to_string()),
+			std::borrow::Cow::Borrowed,
+		)
+	}
+
+	/// The `apns-expiration` value, when the push has an end: the second
+	/// it ends at, or `0` — Apple's "attempt once and do not store" — for
+	/// a send whose push lifetime is zero.
+	pub(crate) fn apns_expiration(&self) -> Option<i64> {
+		if self.options.push_ttl == Some(0) {
+			return Some(0);
+		}
+
+		self.expires_at
+			.map(|expires_at| expires_at.timestamp().max(0))
+	}
+}
+
+/// When the providers stop holding a push: the earlier of the
+/// notification's own expiry and the end of the send's push lifetime
+/// ([`MessageOptions::push_ttl`]), which is counted from the moment the
+/// notification becomes visible. `None` when the send named neither.
+///
+/// [`MessageOptions::push_ttl`]: crate::MessageOptions::push_ttl
+pub(crate) fn push_expiry(
+	visible_at: Timestamp,
+	expires_at: Option<Timestamp>,
+	push_ttl: Option<u32>,
+) -> Option<Timestamp> {
+	let lifetime = push_ttl.and_then(|seconds| {
+		visible_at.checked_add_signed(chrono::Duration::seconds(i64::from(seconds)))
+	});
+
+	match (expires_at, lifetime) {
+		(Some(expires_at), Some(lifetime)) => Some(expires_at.min(lifetime)),
+		(expires_at, lifetime) => expires_at.or(lifetime),
+	}
 }
 
 /// The process's push transports, as the operator configured them. A
