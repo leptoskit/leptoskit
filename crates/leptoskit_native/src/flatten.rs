@@ -110,6 +110,7 @@ pub fn is_layout_only(kind: NativeKind, props: &NativeProps) -> bool {
 		focused,
 		focus_request,
 		scroll_offset,
+		overlay,
 		// Motion is web-only: native hosts show the resting pose, so it
 		// never needs a native view, and adding motion leaves the native
 		// tree as it was.
@@ -159,6 +160,7 @@ pub fn is_layout_only(kind: NativeKind, props: &NativeProps) -> bool {
 		&& focused.is_none()
 		&& focus_request.is_none()
 		&& scroll_offset.is_none()
+		&& overlay.is_none()
 		&& extra.is_empty()
 		&& aria_only_hides(aria.as_deref())
 }

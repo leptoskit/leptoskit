@@ -42,6 +42,7 @@ use crate::element::HandlerEntry;
 mod controls;
 mod labels;
 mod motion;
+mod overlay;
 #[cfg(feature = "rive")]
 mod rive;
 mod semantics;
@@ -141,6 +142,7 @@ pub fn render(element: Element) -> AnyView {
 		scroll_after_render();
 	}
 
+	overlay::sync_after_render();
 	lift_splash_after_render();
 
 	// Tachys does not hydrate raw-text children of <style>. Keep the sheet in
@@ -897,6 +899,30 @@ fn live_photo_element(session: Option<u32>, attrs: impl Attribute + 'static) -> 
 		.into_any()
 }
 
+/// The canvas a Rive animation draws on.
+#[cfg_attr(
+	not(feature = "rive"),
+	expect(
+		unused_variables,
+		clippy::needless_pass_by_value,
+		reason = "nothing renders without the rive feature"
+	)
+)]
+fn rive_canvas(props: NativeProps, attrs: impl Attribute + 'static) -> AnyView {
+	#[cfg(feature = "rive")]
+	{
+		html::canvas()
+			.add_any_attr(attrs)
+			.add_any_attr(rive::Binding {
+				content: *props.rive.expect("validated Rive content"),
+				running: props.running == Some(true),
+			})
+			.into_any()
+	}
+	#[cfg(not(feature = "rive"))]
+	panic!("enable leptoskit_native's rive feature before rendering a Rive element")
+}
+
 fn typed_element(parts: NodeParts, attrs: impl Attribute + 'static) -> AnyView {
 	let NodeParts {
 		kind,
@@ -980,20 +1006,7 @@ fn typed_element(parts: NodeParts, attrs: impl Attribute + 'static) -> AnyView {
 				.add_any_attr(attrs)
 				.into_any()
 		}
-		NativeKind::Rive => {
-			#[cfg(feature = "rive")]
-			{
-				html::canvas()
-					.add_any_attr(attrs)
-					.add_any_attr(rive::Binding {
-						content: *props.rive.expect("validated Rive content"),
-						running: props.running == Some(true),
-					})
-					.into_any()
-			}
-			#[cfg(not(feature = "rive"))]
-			panic!("enable leptoskit_native's rive feature before rendering a Rive element")
-		}
+		NativeKind::Rive => rive_canvas(props, attrs),
 		NativeKind::Scene3d => scene3d_canvas(props.scene3d, attrs),
 		NativeKind::Video => video_element(props.video, attrs),
 		NativeKind::Camera => camera_element(props.camera, attrs),
@@ -1045,6 +1058,9 @@ fn typed_element(parts: NodeParts, attrs: impl Attribute + 'static) -> AnyView {
 				.child(vector::svg(props.drawing.as_ref()))
 				.add_any_attr(attrs)
 				.into_any()
+		}
+		NativeKind::Modal | NativeKind::Popover => {
+			overlay::element(kind, props.overlay, children, &chain, attrs)
 		}
 		NativeKind::Custom(name) => {
 			panic!(

@@ -44,6 +44,16 @@ pub(crate) fn paint(backend: &TuiBackend, width: u16, height: u16) -> Buffer {
 	};
 
 	painter.walk(root, 0.0, 0.0, Attributes::EMPTY, None);
+
+	// Open modals and popovers paint last, over everything, at their own
+	// viewport frames and free of their ancestors' clips.
+	for overlay in backend.open_overlays() {
+		if let Some(node) = backend.node(overlay) {
+			painter.clip = Rect::new(0, 0, width, height);
+			painter.walk(overlay, node.frame.x, node.frame.y, Attributes::EMPTY, None);
+		}
+	}
+
 	buffer
 }
 
@@ -94,7 +104,7 @@ impl Painter<'_> {
 		}
 
 		match node.kind {
-			NativeKind::View | NativeKind::Custom(_) => {
+			NativeKind::View | NativeKind::Modal | NativeKind::Popover | NativeKind::Custom(_) => {
 				self.container(rect, node, dim, id, x, y, underline, false);
 			}
 			NativeKind::ScrollView => {
@@ -232,6 +242,11 @@ impl Painter<'_> {
 			let Some(node) = self.backend.node(child) else {
 				continue;
 			};
+
+			if node.is_open_overlay() {
+				continue;
+			}
+
 			self.walk(child, x + node.frame.x, y + node.frame.y, dim, underline);
 		}
 	}
@@ -251,6 +266,11 @@ impl Painter<'_> {
 			let Some(node) = self.backend.node(child) else {
 				continue;
 			};
+
+			if node.is_open_overlay() {
+				continue;
+			}
+
 			self.walk(
 				child,
 				x + node.frame.x - offset_x,

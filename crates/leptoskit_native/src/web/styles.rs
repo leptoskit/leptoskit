@@ -465,6 +465,24 @@ pub(super) fn control(selector: &str, kind: NativeKind, styles_active: bool) -> 
 				 visible;pointer-events:none;}}"
 			)
 		}
+		// A modal covers the viewport whatever its classes say, and the
+		// browser's own dialog box (its size, margins, and frame) is gone.
+		// A closed one shows nothing, though `display` is set for all.
+		NativeKind::Modal => {
+			format!(
+				"{selector}{{position:fixed!important;inset:0!important;width:100%!important;				 \
+				 height:100%!important;max-width:none!important;max-height:none!important;margin:				 \
+				 0!important;}}{selector}:not([open]){{display:none!important;}}"
+			)
+		}
+		// A popover is placed from its anchor's rectangle, in viewport
+		// coordinates.
+		NativeKind::Popover => {
+			format!(
+				"{selector}{{position:fixed!important;inset:auto;margin:0!important;				 \
+				 }}{selector}:not(:popover-open){{display:none!important;}}"
+			)
+		}
 		NativeKind::Switch => {
 			format!(
 				":where({selector}:checked){{background-color:var(--lk-switch-active,#2563eb);\

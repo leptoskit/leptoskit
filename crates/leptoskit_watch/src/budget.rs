@@ -159,6 +159,8 @@ fn refuse_kind(kind: NativeKind) -> Result<(), WatchError> {
 		NativeKind::Checkbox => Err(WatchError::UnsupportedKind("Checkbox")),
 		NativeKind::Radio => Err(WatchError::UnsupportedKind("Radio")),
 		NativeKind::Slider => Err(WatchError::UnsupportedKind("Slider")),
+		NativeKind::Modal => Err(WatchError::UnsupportedKind("Modal")),
+		NativeKind::Popover => Err(WatchError::UnsupportedKind("Popover")),
 		NativeKind::Rive => Err(WatchError::UnsupportedKind("Rive")),
 		NativeKind::Scene3d => Err(WatchError::UnsupportedKind("Scene3d")),
 		NativeKind::Video => Err(WatchError::UnsupportedKind("Video")),

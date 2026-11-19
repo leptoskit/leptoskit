@@ -176,6 +176,15 @@ pub(crate) fn handle_key(backend: &mut TuiBackend, key: Key) -> Vec<Dispatch> {
 		match key.code {
 			KeyCode::Tab => return move_focus(backend, 1),
 			KeyCode::BackTab => return move_focus(backend, -1),
+			// Escape asks the overlay on top to close.
+			KeyCode::Escape => {
+				if let Some(&node) = backend.open_overlays().last() {
+					return vec![Dispatch {
+						node,
+						event: NativeEvent::Dismiss,
+					}];
+				}
+			}
 			_ => {}
 		}
 	}
@@ -567,10 +576,67 @@ pub(crate) fn handle_mouse(backend: &mut TuiBackend, mouse: Mouse) -> Vec<Dispat
 	let x = f32::from(mouse.col()) * CELL_WIDTH + CELL_WIDTH / 2.0;
 	let y = f32::from(mouse.row()) * CELL_HEIGHT + CELL_HEIGHT / 2.0;
 
-	let Some(hit) = backend.hit_test(x, y) else {
-		return Vec::new();
+	let hit = backend.hit_test(x, y);
+	let mut events = Vec::new();
+
+	if matches!(mouse, Mouse::Click { .. }) {
+		match press_outside(backend, hit) {
+			Some((node, true)) => {
+				return vec![Dispatch {
+					node,
+					event: NativeEvent::Dismiss,
+				}];
+			}
+			Some((node, false)) => {
+				events.push(Dispatch {
+					node,
+					event: NativeEvent::Dismiss,
+				});
+			}
+			None => {}
+		}
+	}
+
+	let Some(hit) = hit else {
+		return events;
 	};
 
+	events.extend(route_mouse(backend, mouse, hit, x, y));
+	events
+}
+
+/// The overlay a click asks to close, and whether the click ends there.
+///
+/// A click on a modal's own backdrop goes no further. A click outside the
+/// popover on top closes it and still reaches what was clicked, except on
+/// the popover's anchor: the control that opened it decides for itself.
+fn press_outside(backend: &TuiBackend, hit: Option<NodeId>) -> Option<(NodeId, bool)> {
+	let top = *backend.open_overlays().last()?;
+	let node = backend.node(top)?;
+
+	if node.kind == NativeKind::Modal {
+		return (hit == Some(top)).then_some((top, true));
+	}
+
+	let inside = |ancestor: NodeId| hit.is_some_and(|hit| backend.within(hit, ancestor));
+	let on_anchor = node
+		.props
+		.overlay
+		.as_ref()
+		.and_then(|overlay| overlay.anchor.as_deref())
+		.and_then(|anchor| backend.node_with_id(anchor))
+		.is_some_and(inside);
+
+	(!inside(top) && !on_anchor).then_some((top, false))
+}
+
+fn route_mouse(
+	backend: &mut TuiBackend,
+	mouse: Mouse,
+	hit: NodeId,
+	x: f32,
+	y: f32,
+) -> Vec<Dispatch> {
 	match mouse {
 		Mouse::ScrollUp { .. } | Mouse::ScrollDown { .. } => {
 			let direction = if matches!(mouse, Mouse::ScrollUp { .. }) {

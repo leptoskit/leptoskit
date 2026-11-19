@@ -50,11 +50,13 @@ fn file(node: &Node, id: NodeId, positive: &mut Vec<(i32, NodeId)>, rest: &mut V
 /// subtree is skipped. Widgets with a positive `tab_index` come first, in
 /// ascending order; everything else follows in document order; a negative
 /// `tab_index` removes a widget from the order — the HTML rules, which the
-/// web renderer follows too.
+/// web renderer follows too. While a modal is open the order holds only
+/// what is inside it.
 pub(crate) fn focusables(backend: &TuiBackend) -> Vec<NodeId> {
 	let mut positive: Vec<(i32, NodeId)> = Vec::new();
 	let mut rest: Vec<NodeId> = Vec::new();
-	let Some(root) = backend.root() else {
+	// An open modal keeps focus to itself: the ring is what it holds.
+	let Some(root) = backend.top_modal().or_else(|| backend.root()) else {
 		return Vec::new();
 	};
 

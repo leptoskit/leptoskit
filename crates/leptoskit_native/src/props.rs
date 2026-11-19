@@ -71,6 +71,12 @@ pub enum NativeKind {
 	LivePhoto,
 	/// A multi-line editable field, where Enter adds a new line.
 	TextArea,
+	/// Content above the screen that blocks it until dismissed; see
+	/// [`Modal`](crate::components::Modal).
+	Modal,
+	/// Content above the screen that hangs from another element; see
+	/// [`Popover`](crate::components::Popover).
+	Popover,
 	/// A platform-defined widget referenced by registered name.
 	Custom(&'static str),
 }
@@ -112,6 +118,8 @@ impl NativeKind {
 			Self::Map => "map",
 			Self::LivePhoto => "live_photo",
 			Self::TextArea => "text_area",
+			Self::Modal => "modal",
+			Self::Popover => "popover",
 			Self::Custom(name) => name,
 		}
 	}
@@ -156,6 +164,8 @@ impl<'de> serde::de::Visitor<'de> for NativeKindVisitor {
 			"scroll_view" | "ScrollView" => Ok(NativeKind::ScrollView),
 			"text_input" | "TextInput" => Ok(NativeKind::TextInput),
 			"text_area" | "TextArea" => Ok(NativeKind::TextArea),
+			"modal" | "Modal" => Ok(NativeKind::Modal),
+			"popover" | "Popover" => Ok(NativeKind::Popover),
 			"button" | "Button" => Ok(NativeKind::Button),
 			"switch" | "Switch" => Ok(NativeKind::Switch),
 			"checkbox" | "Checkbox" => Ok(NativeKind::Checkbox),
@@ -535,6 +545,10 @@ pub struct NativeProps {
 	/// scrolling alone while it stays the same.
 	#[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
 	pub scroll_offset: Option<ScrollOffset>,
+	/// Whether a `Modal` or `Popover` is showing, and where; see
+	/// [`Overlay`](crate::Overlay).
+	#[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
+	pub overlay: Option<crate::Overlay>,
 	/// How the element moves, set by
 	/// [`Element::motion`](crate::Element::motion),
 	/// [`Element::timeline`](crate::Element::timeline), and
@@ -1224,6 +1238,10 @@ pub enum NativeEvent {
 	Focus,
 	/// The widget lost focus.
 	Blur,
+	/// The person asked to close an open `Modal` or `Popover`: Escape, a
+	/// press outside it, Android's Back, or a swipe down on an iOS sheet.
+	/// The overlay stays open until the app rebuilds it closed.
+	Dismiss,
 	/// A scrollable view scrolled.
 	Scroll {
 		/// The horizontal scroll offset.

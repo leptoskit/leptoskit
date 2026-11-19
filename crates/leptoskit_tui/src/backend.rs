@@ -29,6 +29,20 @@ pub struct Node {
 	pub frame: Frame,
 }
 
+impl Node {
+	/// Whether this is a modal or popover that is showing. Its frame is
+	/// then in viewport coordinates, not relative to the parent.
+	#[must_use]
+	pub fn is_open_overlay(&self) -> bool {
+		self.props.hidden != Some(true)
+			&& self
+				.props
+				.overlay
+				.as_ref()
+				.is_some_and(|overlay| overlay.open)
+	}
+}
+
 /// A committed frame, relative to the parent.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct Frame {
@@ -98,6 +112,9 @@ pub struct TuiBackend {
 	animating: bool,
 	/// Events raised outside input handling, waiting for the host.
 	pending: Vec<Dispatch>,
+	/// The modals and popovers on screen, with what had focus before each
+	/// opened, so closing one gives focus back.
+	overlays: Vec<(NodeId, Option<NodeId>)>,
 }
 
 impl TuiBackend {
@@ -143,10 +160,13 @@ impl TuiBackend {
 
 	/// A node's frame in viewport coordinates, following scroll offsets the
 	/// way hit testing and painting do.
+	///
+	/// An open modal or popover's own frame is already in viewport
+	/// coordinates, so the walk up stops there.
 	pub fn absolute_frame(&self, id: NodeId) -> Option<Frame> {
 		let node = self.node(id)?;
 		let mut frame = node.frame;
-		let mut parent = node.parent;
+		let mut parent = node.parent.filter(|_| !node.is_open_overlay());
 
 		while let Some(id) = parent {
 			let node = self.node(id)?;
@@ -158,10 +178,130 @@ impl TuiBackend {
 				frame.y -= scroll.y;
 			}
 
-			parent = node.parent;
+			parent = node.parent.filter(|_| !node.is_open_overlay());
 		}
 
 		Some(frame)
+	}
+
+	/// The modals and popovers on screen, in document order: the last one
+	/// is on top.
+	pub fn open_overlays(&self) -> Vec<NodeId> {
+		let mut open = Vec::new();
+		let mut pending = self.root.into_iter().collect::<Vec<_>>();
+
+		while let Some(id) = pending.pop() {
+			let Some(node) = self.node(id) else {
+				continue;
+			};
+
+			if node.props.hidden == Some(true) {
+				continue;
+			}
+
+			if node.is_open_overlay() {
+				open.push(id);
+			}
+
+			pending.extend(node.children.iter().rev());
+		}
+
+		open
+	}
+
+	/// The open modal on top, which keeps focus and input to itself.
+	pub(crate) fn top_modal(&self) -> Option<NodeId> {
+		self.open_overlays().into_iter().rfind(|&id| {
+			self.node(id)
+				.is_some_and(|node| node.kind == NativeKind::Modal)
+		})
+	}
+
+	/// Whether `id` is `ancestor` or inside it.
+	pub(crate) fn within(&self, id: NodeId, ancestor: NodeId) -> bool {
+		let mut current = Some(id);
+
+		while let Some(id) = current {
+			if id == ancestor {
+				return true;
+			}
+
+			current = self.parent(id);
+		}
+
+		false
+	}
+
+	/// The node whose element has this `id`.
+	pub(crate) fn node_with_id(&self, wanted: &str) -> Option<NodeId> {
+		let mut pending = self.root.into_iter().collect::<Vec<_>>();
+
+		while let Some(id) = pending.pop() {
+			let node = self.node(id)?;
+
+			if node.props.id.as_deref() == Some(wanted) {
+				return Some(id);
+			}
+
+			pending.extend(node.children.iter().rev());
+		}
+
+		None
+	}
+
+	/// Moves focus into each overlay that opened in the last commit and
+	/// back out of each one that closed. An opening overlay's
+	/// `initial_focus` takes focus, or else the first focusable widget
+	/// inside it.
+	fn follow_overlays(&mut self) {
+		let open = self.open_overlays();
+		let mut restore = None;
+
+		self.overlays.retain(|&(id, previous)| {
+			let stays = open.contains(&id);
+
+			if !stays && restore.is_none() {
+				// Several can close at once: the outermost one remembers
+				// where focus was before any of them.
+				restore = Some(previous);
+			}
+
+			stays
+		});
+
+		if let Some(previous) = restore {
+			let ring = self.focusables();
+			let events = self.set_focus(previous.filter(|id| ring.contains(id)));
+			self.pending.extend(events);
+		}
+
+		for id in open {
+			if self.overlays.iter().any(|&(known, _)| known == id) {
+				continue;
+			}
+
+			self.overlays.push((id, self.focus));
+
+			let ring = self.focusables();
+			let named = self
+				.node(id)
+				.and_then(|node| node.props.overlay.as_ref())
+				.and_then(|overlay| overlay.initial_focus.as_deref())
+				.and_then(|wanted| self.node_with_id(wanted))
+				.filter(|target| ring.contains(target));
+			let target =
+				named.or_else(|| ring.iter().copied().find(|&target| self.within(target, id)));
+			let modal = self
+				.node(id)
+				.is_some_and(|node| node.kind == NativeKind::Modal);
+
+			// A modal with nothing to focus still takes focus away from
+			// what is behind it.
+			if target.is_some() || modal {
+				let events = self.set_focus(target);
+				self.pending.extend(events);
+			}
+		}
 	}
 
 	/// A text field's draft, when it has one.
@@ -256,9 +396,21 @@ impl TuiBackend {
 	/// the shared hit-test rules: hidden and zero-size nodes never hit, a
 	/// `Pressable`'s children are decorative, and clipped subtrees stop at
 	/// their clip.
+	///
+	/// Open modals and popovers are above everything else, the last one on
+	/// top, and a modal covers the viewport.
 	pub fn hit_test(&self, x: f32, y: f32) -> Option<NodeId> {
 		let root = self.root?;
 		let mut best = None;
+
+		for overlay in self.open_overlays().into_iter().rev() {
+			self.hit_walk(overlay, x, y, &mut best);
+
+			if best.is_some() {
+				return best;
+			}
+		}
+
 		self.hit_walk(root, x, y, &mut best);
 		best
 	}
@@ -291,7 +443,10 @@ impl TuiBackend {
 		}
 
 		for &child in &node.children {
-			self.hit_walk(child, x, y, best);
+			// An open overlay is asked on its own, before the tree it is in.
+			if !self.node(child).is_some_and(Node::is_open_overlay) {
+				self.hit_walk(child, x, y, best);
+			}
 		}
 	}
 
@@ -448,10 +603,16 @@ impl TuiBackend {
 }
 
 impl NativeBackend for TuiBackend {
+	fn presents_overlays(&self) -> bool {
+		true
+	}
+
 	fn apply(&mut self, mutations: &leptoskit_native::MutationList) {
 		for mutation in mutations.mutations() {
 			self.apply_one(mutation);
 		}
+
+		self.follow_overlays();
 
 		// A one-shot request moves focus once. A widget holding focus with
 		// `focused(true)` still takes it back, as it does after any commit.

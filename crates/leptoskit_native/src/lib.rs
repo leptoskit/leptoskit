@@ -46,6 +46,7 @@ pub mod splash;
 
 mod hash;
 pub mod motion;
+pub mod overlay;
 pub mod props;
 pub mod reactive;
 pub mod remember;
@@ -106,6 +107,8 @@ pub use motion::Pose;
 pub use motion::Spring;
 pub use motion::ViewPhase;
 pub use motion::ViewRange;
+pub use overlay::Overlay;
+pub use overlay::Placement;
 pub use props::ApproxTextMeasurer;
 pub use props::BorderWidths;
 pub use props::Capitalize;

@@ -127,6 +127,7 @@ fn widget_and_event_codes_remain_append_only() {
 		EventKind::Toggle,
 		EventKind::ValueChange,
 		EventKind::Key,
+		EventKind::Dismiss,
 	]
 	.into_iter()
 	.enumerate()

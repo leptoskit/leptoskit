@@ -544,6 +544,7 @@ pub mod prelude {
 	pub use leptoskit_native::NativeKind;
 	pub use leptoskit_native::NativeProps;
 	pub use leptoskit_native::NativeSurface;
+	pub use leptoskit_native::Placement;
 	pub use leptoskit_native::components::*;
 	pub use leptoskit_native::motion::Easing;
 	pub use leptoskit_native::motion::Inset;

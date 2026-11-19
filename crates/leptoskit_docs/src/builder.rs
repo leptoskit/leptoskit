@@ -492,6 +492,7 @@ impl Converter<'_> {
 				(vec![value], children)
 			}
 			Start::Radio => (radio_arguments(&mut attributes, tag)?, children),
+			Start::Popover => (popover_arguments(&mut attributes, tag)?, children),
 		};
 
 		let mut links = attribute_links(attributes);
@@ -1230,6 +1231,8 @@ enum Start {
 	},
 	/// `Radio(group, checked)`.
 	Radio,
+	/// `Popover(anchor, open)`.
+	Popover,
 }
 
 /// The builder function behind a built-in tag, and how it takes its
@@ -1253,6 +1256,8 @@ fn builtin(name: &str) -> Option<Start> {
 		"Rive" => attribute("rive_playback", None),
 		"Scene3d" => attribute("scene", None),
 		"Radio" => Start::Radio,
+		"Modal" => attribute("open", Some("false")),
+		"Popover" => Start::Popover,
 
 		_ => return None,
 	})
@@ -1504,6 +1509,22 @@ fn radio_arguments(
 	};
 
 	Ok(vec![single_argument(group)?, checked])
+}
+
+/// `Popover()`'s arguments: the `id` of its anchor, then whether it is open.
+fn popover_arguments(
+	attributes: &mut Vec<Attribute>,
+	tag: Span,
+) -> Result<Vec<Piece>, Unconvertible> {
+	let anchor = take_attribute(attributes, "anchor")
+		.ok_or_else(|| unconvertible(tag, "`Popover()` needs `anchor=…` to call it with"))?;
+
+	let open = match take_attribute(attributes, "open") {
+		Some(attribute) => single_argument(attribute)?,
+		None => code("false"),
+	};
+
+	Ok(vec![single_argument(anchor)?, open])
 }
 
 /// The argument a page-defined component's parameter takes: its prop's
@@ -2916,6 +2937,14 @@ fn turntable() -> Element {
 				"Radio(group, true)",
 			),
 			("<ActivityIndicator />", "ActivityIndicator(true)"),
+			(
+				"<Modal open=confirming on:dismiss=close />",
+				"Modal(confirming).on_dismiss(close)",
+			),
+			(
+				r#"<Popover anchor="me" open=shown placement=Placement::BelowEnd />"#,
+				r#"Popover("me", shown).placement(Placement::BelowEnd)"#,
+			),
 			(
 				r#"<Pressable accessibility_label="Open" />"#,
 				r#"Pressable("Open")"#,

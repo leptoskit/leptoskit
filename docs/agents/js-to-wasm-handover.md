@@ -39,8 +39,8 @@ One pull request per item. Every backend is kept in step, with AppKit as the ref
 | 2  | `TextArea`                                                  | G12      | #877, open  |
 | 3  | Labels that focus their fields                              | G13      | #879, open  |
 | 4  | One-shot focus requests                                     | G2       | #887, open  |
-| 5  | Arrow-key navigation for tabs, radio groups and menus       | G5       | PR open     |
-| 6  | `Modal` and `Popover`                                       | G1       | not started |
+| 5  | Arrow-key navigation for tabs, radio groups and menus       | G5       | #892, open  |
+| 6  | `Modal` and `Popover`                                       | G1       | in progress |
 | 7  | Scroll into view                                            | G4       | not started |
 | 8  | A clock hook                                                | G6       | not started |
 | 9  | Typed refusals in the rpc client (status, code, retry time) | G8       | not started |
@@ -97,6 +97,19 @@ G5 for tabs and radio groups, in `leptoskit_aria` only. No backend changed.
 - **Native:** AppKit, UIKit, Android, GTK and Windows deliver no key presses yet (G7b) and ignore `tab_index`, so the arrows do nothing there and every item stays tabbable.
 - **Not done here: `Menu`.** The audit builds it on `Popover` (G1), so it goes in with change 6.
 - **A name to watch:** `leptoskit::aria::RadioGroup` and the prelude's `RadioGroup` (the native radio group name) collide under two glob imports. The docs say to import the aria one by name.
+
+### `feat/overlays`: stacked on `feat/roving-focus`
+
+The first part of G1: the API, the shared surface, the web and the terminal. The native presentations and `leptoskit_aria`'s `Dialog::modal()` and `Menu` follow as their own pull requests on top.
+
+- `Modal(open)` and `Popover(anchor, open)` are `NativeKind::Modal` and `NativeKind::Popover`, with `NativeProps::overlay` (`Overlay { open, anchor, placement, initial_focus }`) and `NativeEvent::Dismiss`. `Element::on_dismiss`, `initial_focus`, `placement`, and `open` and `anchor` for the `view!` tags. Validation refuses an anchor or `initial_focus` id that is not in the tree. A dismissal does not bubble.
+- **The surface** takes an overlay out of its parent's layout in `Element::resolved` (closed: `display: none`; open: absolute, a modal sized to the viewport), places it in `surface/layout.rs` (a modal at the viewport origin, a popover beside its anchor with `Placement::position`, after everything else has a position), and hit-tests open overlays first.
+- **`NativeBackend::presents_overlays`** decides what a backend is told. `true` (the terminal, and `HeadlessBackend::new().presenting_overlays()`): the real kind, and frames in viewport coordinates. `false` (every other backend, and the recording backend the Swift and Kotlin hosts read): a `View` with a parent-relative frame that lands in the same place. So a native backend needs no code to show an overlay, and each one switches to `true` in the pull request that gives it a real sheet, popover or window.
+- **Web:** `web/overlay.rs`. `<dialog data-lk-modal>` and `<div popover="auto" data-lk-popover>`; a microtask after each render calls `showModal()`, `close()`, `showPopover()` and `hidePopover()` to match, places popovers, and moves focus. `cancel`, a click on the dialog itself, and a `toggle` the app did not ask for become `Dismiss`. A popover's anchor button is made its `popoverTargetElement` with the `hide` action, so a press on it is not a light dismiss followed by the app reopening it.
+- **Terminal:** overlays paint last, the focus ring is the top modal's content, Escape and outside clicks dispatch `Dismiss`, and `TuiBackend::follow_overlays` moves focus in on open and back on close.
+- **Run on Linux:** `leptoskit_native`'s `tests/overlay.rs` and the markup test in `tests/web.rs`; two Chrome tests in `tests/web_browser.rs`; `leptoskit_tui`'s `tests/overlays.rs` through the real host loop.
+- **Native:** nothing has run. AppKit, UIKit, GTK, Windows, Android and the Swift and Kotlin renderers only receive a `View`, so the change to them is the two new match arms. Nothing there asks to dismiss an overlay, moves focus into it, or lifts it out of a clipping parent.
+- **Not tested:** hydrating a server-rendered `<dialog open>` into a modal. The code path is the same `sync` the Chrome tests run, but no test starts from server markup.
 
 ### `feat/public-demo`: no pull request
 

@@ -90,6 +90,15 @@ Native toolkit controls retain their platform appearance and keyboard behavior. 
 
 AppKit inherits the system appearance until the host calls `NativeSurface::set_dark_mode`. A host with a fixed light theme should call `set_dark_mode(false)` before mounting. Later calls update existing controls and the appearance used by newly created controls. Native controls own their internal content layout; use a styled `View` around an input for portable outer padding, as the component studio does.
 
+## Overlays
+
+| Builder                 | What it shows                                                                                                                                          | Web element                         |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------- |
+| `Modal(open)`           | Content above the screen that blocks it while open. `.on_dismiss(Fn())`, `.initial_focus(id)`. Covers the viewport and centres what it holds           | `dialog`, opened with `showModal()` |
+| `Popover(anchor, open)` | Content hanging from the element with the `id` `anchor`. `.placement(Placement)`, `.on_dismiss(Fn())`, `.initial_focus(id)`. As large as what it holds | An element with `popover="auto"`    |
+
+Applications own whether an overlay is open. `on_dismiss` is a request to close, from Escape or a press outside, and the overlay closes when the next tree says so. The web and the terminal present overlays fully. The native backends draw them in place for now; [Show a dialog or a menu above the screen](../guide/07-shared-components.md#show-a-dialog-or-a-menu-above-the-screen) lists what is missing there.
+
 ## Vector drawings
 
 Icons, hand-drawn underlines, and chart lines are shapes, not pictures, and a file-based `Image` can't draw them on native platforms. `Vector(view_box)` draws SVG-style paths directly, as native shapes on macOS, iOS, Android, Linux, and Windows, and as inline SVG on the web:

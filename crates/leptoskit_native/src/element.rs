@@ -176,6 +176,8 @@ pub enum NativeEventSlot {
 	Scroll,
 	/// [`NativeEvent::Key`].
 	Key,
+	/// A request to close an open overlay.
+	Dismiss,
 }
 
 impl NativeEventSlot {
@@ -192,6 +194,7 @@ impl NativeEventSlot {
 				| (Self::Toggle, NativeEvent::Toggle { .. })
 				| (Self::ValueChange, NativeEvent::ValueChange { .. })
 				| (Self::Key, NativeEvent::Key(_))
+				| (Self::Dismiss, NativeEvent::Dismiss)
 		)
 	}
 }
@@ -499,6 +502,20 @@ impl Element {
 			return Err(ControlTreeError::InvalidAriaLevel);
 		}
 
+		if let Some(overlay) = &self.props.overlay {
+			for (attribute, id) in [
+				("the popover's anchor", &overlay.anchor),
+				("initial_focus", &overlay.initial_focus),
+			] {
+				if let Some(id) = id.as_ref().filter(|id| !ids.contains(id.as_str())) {
+					return Err(ControlTreeError::UnknownIdReference {
+						attribute,
+						id: id.clone(),
+					});
+				}
+			}
+		}
+
 		for (attribute, references) in [
 			("aria-labelledby", &aria.labelled_by),
 			("aria-describedby", &aria.described_by),
@@ -767,6 +784,34 @@ impl Element {
 		Self::new(NativeKind::TextArea)
 	}
 
+	/// A `Modal` element: content above the screen that blocks it while
+	/// `open`.
+	#[track_caller]
+	pub fn modal(open: bool) -> Self {
+		let mut element = Self::new(NativeKind::Modal);
+		// A modal fills the screen, and what it holds sits in the middle.
+		element.style.align_items = leptoskit_yoga::Align::Center;
+		element.style.justify_content = leptoskit_yoga::JustifyContent::Center;
+		element.props.overlay = Some(crate::Overlay {
+			open,
+			..crate::Overlay::default()
+		});
+		element
+	}
+
+	/// A `Popover` element: content above the screen while `open`, hanging
+	/// from the element whose `id` is `anchor`.
+	#[track_caller]
+	pub fn popover(anchor: impl Into<String>, open: bool) -> Self {
+		let mut element = Self::new(NativeKind::Popover);
+		element.props.overlay = Some(crate::Overlay {
+			open,
+			anchor: Some(anchor.into()),
+			..crate::Overlay::default()
+		});
+		element
+	}
+
 	/// A `Button` element with the given label.
 	#[track_caller]
 	pub fn button(label: impl Into<String>) -> Self {
@@ -988,7 +1033,32 @@ impl Element {
 			drawing.resolve_current_color(element.props.color.unwrap_or(Color::rgba(0, 0, 0, 255)));
 		}
 
+		element.settle_overlay(context.viewport);
+
 		Self::settle(element, self, parent, pressed)
+	}
+
+	/// Takes an overlay out of its parent's layout. A closed one takes no
+	/// space and shows nothing. An open modal covers the viewport and an
+	/// open popover is as large as what it holds; the surface then places
+	/// both in viewport coordinates.
+	fn settle_overlay(&mut self, viewport: leptoskit_yoga::Size<f32>) {
+		let Some(overlay) = &self.props.overlay else {
+			return;
+		};
+
+		if !overlay.open {
+			self.style.display = leptoskit_yoga::Display::None;
+
+			return;
+		}
+
+		self.style.position = leptoskit_yoga::PositionType::Absolute;
+
+		if self.kind == NativeKind::Modal {
+			self.style.width = leptoskit_yoga::Dimension::Points(viewport.width.max(0.0));
+			self.style.height = leptoskit_yoga::Dimension::Points(viewport.height.max(0.0));
+		}
 	}
 
 	/// Whether resolving a child under `next` could differ from resolving it
@@ -2083,6 +2153,59 @@ impl Element {
 			handler();
 			crate::props::EventOutcome::Handled
 		})
+	}
+
+	/// Handles a request to close a `Modal` or `Popover`: Escape, a press
+	/// outside it, Android's Back, or a swipe down on an iOS sheet.
+	///
+	/// The overlay does not close itself. Set the state it is built from,
+	/// and the next build closes it; leave the state alone to refuse, as
+	/// while a form inside is saving. An overlay with no handler cannot be
+	/// dismissed this way, only by something inside it.
+	#[must_use]
+	pub fn on_dismiss(self, handler: impl Fn() + Send + Sync + 'static) -> Self {
+		self.on(NativeEventSlot::Dismiss, move |event| {
+			match event {
+				NativeEvent::Dismiss => {
+					handler();
+					crate::EventOutcome::Handled
+				}
+				_ => crate::EventOutcome::Unhandled,
+			}
+		})
+	}
+
+	/// Sets whether a `Modal` or `Popover` is showing, as the `open`
+	/// attribute of their `view!` tags does: `<Modal open=confirming>`.
+	#[must_use]
+	pub fn open(mut self, open: bool) -> Self {
+		self.props.overlay.get_or_insert_default().open = open;
+		self
+	}
+
+	/// Names the element a `Popover` hangs from, by `id`, as the `anchor`
+	/// attribute of its `view!` tag does: `<Popover anchor="me" open=shown>`.
+	#[must_use]
+	pub fn anchor(mut self, id: impl Into<String>) -> Self {
+		self.props.overlay.get_or_insert_default().anchor = Some(id.into());
+		self
+	}
+
+	/// Names the element inside a `Modal` or `Popover` that takes focus
+	/// when it opens, by `id`. Without one, the first focusable element
+	/// inside does. Pick the safe choice in a confirmation: "Keep it", not
+	/// "Delete".
+	#[must_use]
+	pub fn initial_focus(mut self, id: impl Into<String>) -> Self {
+		self.props.overlay.get_or_insert_default().initial_focus = Some(id.into());
+		self
+	}
+
+	/// Sets which side of its anchor a `Popover` opens on.
+	#[must_use]
+	pub fn placement(mut self, placement: crate::Placement) -> Self {
+		self.props.overlay.get_or_insert_default().placement = placement;
+		self
 	}
 
 	/// Handles key presses while focus is inside this element, before the

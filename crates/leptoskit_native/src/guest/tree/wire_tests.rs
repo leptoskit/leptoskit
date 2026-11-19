@@ -215,6 +215,12 @@ fn every_prop() -> NativeProps {
 		direction: Some(leptoskit_yoga::Direction::Rtl),
 		focused: Some(true),
 		focus_request: Some(11),
+		overlay: Some(crate::Overlay {
+			open: true,
+			anchor: Some("me".into()),
+			placement: crate::Placement::BelowEnd,
+			initial_focus: Some("first".into()),
+		}),
 		scroll_offset: Some(ScrollOffset::new(0.0, 640.5).animated()),
 		// Never sent: the guest runs motion itself.
 		motion: None,
@@ -462,7 +468,9 @@ fn every_kind_has_the_code_both_sides_read() {
 			| NativeKind::Video
 			| NativeKind::Camera
 			| NativeKind::Map
-			| NativeKind::LivePhoto => {}
+			| NativeKind::LivePhoto
+			| NativeKind::Modal
+			| NativeKind::Popover => {}
 			NativeKind::Custom(name) => panic!("custom widget `{name}` has a code"),
 		}
 	}
