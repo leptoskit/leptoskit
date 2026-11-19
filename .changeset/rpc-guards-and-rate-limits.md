@@ -1,6 +1,7 @@
 ---
 "leptoskit_rpc": minor
 "leptoskit_rpc_macros": minor
+"leptoskit_cli": minor
 ---
 
 # Rate limits, timeouts, and guards for public operations
@@ -23,5 +24,7 @@ let rpc = Server::new(db)
 - A call past its timeout is answered `504` with the code `timed_out` (`rpc::server::TIMED_OUT`); arguments over the size limit are answered `413` with `too_large` (`rpc::server::TOO_LARGE`) instead of a `400`. `Server::timeout` and `Server::max_body` set the defaults; the body limit is still 2 MiB unless changed.
 - `Server::guard(impl Guard)` runs an app's own check before every call. A `Guard` sees a `Call`: the operation's name and kind, the identity, the client's address, and whether it came over HTTP or a live connection. `Live` and `LiveStreams` take the same `guard`, `rate_limit`, and `client_ip_header`, and `Server::live()` passes its server's on.
 - The HTTP routes now identify the caller and run the guards before reading the request body, so a refused caller costs no more than their headers. Calls the server makes in process while it renders a page are not checked again.
+
+Rate limiting is opt-in for existing apps. New database and sign-in projects from `leptoskit new` start with `Server::new(db).rate_limit(RateLimit::new())` in the backend's `operations`.
 
 `Registration` has a new `limits` field: code that builds one by hand adds `limits: OperationLimits::NONE`.

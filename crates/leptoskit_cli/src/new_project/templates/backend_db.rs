@@ -7,6 +7,7 @@
 //! `leptos_routes`.
 
 use leptoskit::db::Db;
+use leptoskit::rpc::server::RateLimit;
 use leptoskit::rpc::server::Server;
 use leptoskit::server::axum;
 
@@ -19,8 +20,16 @@ pub mod rpc;
 /// The app's queries and mutations, run on `db`. Every caller is anonymous
 /// until [`Server::identify`] says who they are; [`Server::live`] serves the
 /// same operations over the live socket.
+///
+/// Each caller may make 120 calls a minute from an address nobody is signed
+/// in from, or 600 once signed in, over HTTP and the live socket together;
+/// past that they are answered `429` with how long to wait. Tune it with
+/// `RateLimit::new().anonymous(…)` and `.signed_in(…)`, and narrow one
+/// operation with `#[rpc::mutation(rate_limit = 5 / 1h)]`. Behind a proxy,
+/// add `.client_ip_header("…")` with the header it sets, so callers are
+/// counted by their own address rather than the proxy's.
 pub fn operations(db: Db) -> Server {
-	Server::new(db)
+	Server::new(db).rate_limit(RateLimit::new())
 }
 
 /// Installs `POST /api/<name>` for every query and mutation in
