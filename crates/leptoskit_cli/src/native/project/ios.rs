@@ -1416,12 +1416,14 @@ mod tests {
 		let sources = app_sources(&bridge);
 
 		// Build the plugin package (and, through it, the bridge) for the
-		// simulator: the module the conditional import names.
+		// simulator: the module the conditional import names. Its target, not
+		// its product: `--product` cannot name an automatic library, and
+		// SwiftPM then builds the package's default targets instead.
 		let plugin_build = root.join("plugin-build");
 		swift(&[
 			"build".into(),
 			package_flag(&packages.join("leptoskit_plugin_notifications")),
-			"--product=LeptosKitNotifications".into(),
+			"--target=LeptosKitNotifications".into(),
 			triple(),
 			format!("--sdk={}", sdk.display()),
 			format!("--build-path={}", plugin_build.display()),
@@ -1456,9 +1458,12 @@ mod tests {
 		swift(&[
 			"build".into(),
 			package_flag(&packages.join("leptoskit_bridge_ffi")),
-			// The package's macOS controller target does not exist for iOS;
-			// the product's closure is the part the app target consumes.
-			"--product=LeptosKitBridge".into(),
+			// The package's macOS controller target does not build for iOS;
+			// the bridge target's closure is the part the app target consumes.
+			// `--product` cannot select the automatic library of the same name:
+			// SwiftPM warns, builds every default target, controllers
+			// included, and fails.
+			"--target=LeptosKitBridge".into(),
 			triple(),
 			format!("--sdk={}", sdk.display()),
 			format!("--build-path={}", bridge_build.display()),
@@ -1510,10 +1515,13 @@ mod tests {
 			.args(arguments)
 			.output()
 			.expect("swift runs");
+		// The compiler's diagnostics go to stdout under `swift build`; stderr
+		// carries only SwiftPM's own warnings.
 		assert!(
 			output.status.success(),
-			"swift {} failed:\n{}",
+			"swift {} failed:\nstdout:\n{}\nstderr:\n{}",
 			arguments.join(" "),
+			String::from_utf8_lossy(&output.stdout),
 			String::from_utf8_lossy(&output.stderr)
 		);
 	}

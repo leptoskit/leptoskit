@@ -1475,6 +1475,18 @@ jobs:
           cargo run --locked -p leptoskit_cli --example native_plugin_suite -- \
             --cli target/debug/leptoskit --destination "$RUNNER_TEMP/mobile-app" --target android-x86_64
 
+      # The app above is push-off, as NotificationsPluginTest requires. This
+      # one turns [native.android] push on with a fake google-services.json,
+      # so the Firebase messaging service generation writes is compiled, and
+      # NotificationsPushTest runs against it.
+      - name: prepare push-enabled Android application
+        shell: bash
+        run: |
+          set -euo pipefail
+          export ANDROID_NDK_HOME="${ANDROID_HOME}/ndk/${NDK_VERSION}"
+          cargo run --locked -p leptoskit_cli --example native_plugin_suite -- \
+            --cli target/debug/leptoskit --destination "$RUNNER_TEMP/push-app" --target android-x86_64 --push
+
       - name: prepare universal Android application
         shell: bash
         run: |
@@ -1528,6 +1540,7 @@ jobs:
             adb -s emulator-5554 exec-out screencap -p > "$GITHUB_WORKSPACE/examples/file_routes/field-android.png"
             test -s "$GITHUB_WORKSPACE/examples/file_routes/field-android.png"
             cd "$RUNNER_TEMP/mobile-app/android" && ./gradlew --no-daemon connectedDebugAndroidTest
+            cd "$RUNNER_TEMP/push-app/android" && ./gradlew --no-daemon connectedDebugAndroidTest
             cd "$RUNNER_TEMP/universal-android/android" && ./gradlew --no-daemon connectedDebugAndroidTest
             cd "$GITHUB_WORKSPACE" && CARGO_TARGET_DIR="$RUNNER_TEMP/mobile-app/target" ANDROID_NDK_HOME="$ANDROID_HOME/ndk/$NDK_VERSION" target/debug/examples/mobile_codepush --platform android --device emulator-5554 --android-target android-x86_64 --sdk-path "$GITHUB_WORKSPACE" --cli "$GITHUB_WORKSPACE/target/debug/leptoskit" --output "$RUNNER_TEMP/mobile-codepush-android"
 
@@ -1561,6 +1574,8 @@ jobs:
             target/leptoskit-tests
             ${{ runner.temp }}/mobile-app/android/app/build/reports/androidTests
             ${{ runner.temp }}/mobile-app/android/app/build/outputs/androidTest-results
+            ${{ runner.temp }}/push-app/android/app/build/reports/androidTests
+            ${{ runner.temp }}/push-app/android/app/build/outputs/androidTest-results
             ${{ runner.temp }}/universal-android/android/app/build/reports/androidTests
             ${{ runner.temp }}/universal-android/android/app/build/outputs/androidTest-results
             ${{ runner.temp }}/mobile-codepush-android/*.log
