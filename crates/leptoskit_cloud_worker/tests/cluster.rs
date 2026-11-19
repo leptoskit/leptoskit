@@ -40,6 +40,7 @@ use leptoskit_cloud_worker::Settings;
 use leptoskit_cloud_worker::State;
 use leptoskit_cloud_worker::Step;
 use leptoskit_cloud_worker::Worker;
+use leptoskit_cloud_worker::cluster::Bounds;
 use leptoskit_cloud_worker::cluster::ClusterRole;
 use leptoskit_cloud_worker::cluster::Pending;
 use leptoskit_cloud_worker::cluster::Place;
@@ -100,6 +101,7 @@ impl Place for Recorded {
 fn cluster_worker(
 	shop: &Shop<'_>,
 	place: Recorded,
+	bounds: Bounds,
 	directory: &tempfile::TempDir,
 ) -> Worker<CommandBuilder> {
 	let identity = Identity {
@@ -130,7 +132,7 @@ fn cluster_worker(
 		settings,
 	)
 	.expect("a worker")
-	.with_cluster(ClusterRole::new(Arc::new(place)))
+	.with_cluster(ClusterRole::new(Arc::new(place)).bounds(bounds))
 }
 
 fn reported(step: &Step) -> &JobOutcome {
@@ -157,6 +159,7 @@ async fn a_release_is_applied_and_goes_live() {
 			fake: Arc::clone(&fake),
 			never_ready: false,
 		},
+		Bounds::default(),
 		&directory,
 	);
 
@@ -206,6 +209,7 @@ async fn a_release_that_never_becomes_ready_fails() {
 			fake: Arc::new(Fake::new()),
 			never_ready: true,
 		},
+		Bounds::default(),
 		&directory,
 	);
 	let digest = shop.upload(b"notes").await;
@@ -236,6 +240,57 @@ async fn a_release_that_never_becomes_ready_fails() {
 	);
 }
 
+/// A release outside the bounds the operator set is refused before the
+/// cluster is touched, whatever the control plane sent.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_release_outside_the_operators_bounds_is_refused() {
+	let app = support::app().await;
+	let shop = Shop::open(&app).await;
+	let fake = Arc::new(Fake::new());
+	let directory = tempfile::tempdir().expect("a directory");
+	let worker = cluster_worker(
+		&shop,
+		Recorded {
+			fake: Arc::clone(&fake),
+			never_ready: false,
+		},
+		Bounds {
+			runtime_class: Some("kata".to_owned()),
+			database: None,
+		},
+		&directory,
+	);
+	let digest = shop.upload(b"notes").await;
+	let number = shop
+		.deploy("production", &digest, json!({}))
+		.await
+		.expect(200)
+		.json()["number"]
+		.as_u64()
+		.expect("a number");
+	let build = shop.build.take().await;
+	shop.build
+		.finish(&build, support::shipping::built(&build, b"image", &[]))
+		.await
+		.expect(200);
+
+	let step = worker.step().await.expect("a step");
+	assert_eq!(
+		reported(&step),
+		&JobOutcome::Release(ReleaseOutcome::NotReady {
+			process: "app".to_owned(),
+			reason: "the release is refused: its processes don't run under the `kata` runtime \
+			         class this cluster requires"
+				.to_owned(),
+		})
+	);
+	assert_eq!(
+		shop.state("production", number).await,
+		json!({ "state": "failed", "stage": "rolling_out", "blocker": "not_ready" })
+	);
+	assert_eq!(fake.calls(), Vec::<Call>::new());
+}
+
 /// Deleting an environment that ran removes it from the cluster.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_deleted_environment_is_removed_from_the_cluster() {
@@ -249,6 +304,7 @@ async fn a_deleted_environment_is_removed_from_the_cluster() {
 			fake: Arc::clone(&fake),
 			never_ready: false,
 		},
+		Bounds::default(),
 		&directory,
 	);
 	app.call(

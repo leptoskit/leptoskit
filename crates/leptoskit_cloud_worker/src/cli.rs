@@ -5,10 +5,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use leptoskit_cloud::workers::WorkerRole;
+use leptoskit_cloud_runtime::DatabaseAccess;
 use tokio::sync::watch;
 
 use crate::client::Control;
 use crate::client::Key;
+use crate::cluster::Bounds;
 use crate::cluster::ClusterRole;
 use crate::cluster::Kubernetes;
 use crate::command::CommandBuilder;
@@ -101,12 +103,64 @@ pub struct Run {
 		env = "LEPTOSKIT_CLOUD_WORKER_POSTGRES_URL",
 		hide_env_values = true
 	)]
-	pub postgres_url: Option<String>,
+	pub postgres_url: Option<Hidden>,
+	/// For a cluster's worker: a PEM file of certificates to trust for the
+	/// Postgres server's, besides the webpki roots, when a private
+	/// authority signed it.
+	#[arg(long, env = "LEPTOSKIT_CLOUD_WORKER_POSTGRES_CA")]
+	pub postgres_ca: Option<PathBuf>,
+	/// For a cluster's worker: the namespace the Postgres server runs in,
+	/// the only one a release's processes may reach a database in. Needed
+	/// with `--postgres-url`.
+	#[arg(long, env = "LEPTOSKIT_CLOUD_WORKER_POSTGRES_NAMESPACE")]
+	pub postgres_namespace: Option<String>,
+	/// For a cluster's worker: the Postgres server's port.
+	#[arg(
+		long,
+		env = "LEPTOSKIT_CLOUD_WORKER_POSTGRES_PORT",
+		default_value_t = 5432
+	)]
+	pub postgres_port: u16,
+	/// For a cluster's worker: the `RuntimeClass` every release must run
+	/// under, such as a sandboxed one. Without it a release may keep the
+	/// cluster's default.
+	#[arg(long, env = "LEPTOSKIT_CLOUD_WORKER_RUNTIME_CLASS")]
+	pub runtime_class: Option<String>,
 	/// For a cluster's worker: how long a release may take to become
-	/// ready, in minutes.
+	/// ready, in minutes, a day at most.
 	#[arg(long, default_value_t = 10)]
 	pub rollout_timeout_minutes: u64,
 }
+
+/// A value that is never printed, such as an address with a password in
+/// it.
+#[derive(Clone)]
+pub struct Hidden(String);
+
+impl Hidden {
+	/// The value itself.
+	#[must_use]
+	pub fn expose(&self) -> &str {
+		&self.0
+	}
+}
+
+impl std::fmt::Debug for Hidden {
+	fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		formatter.write_str("[hidden]")
+	}
+}
+
+impl std::str::FromStr for Hidden {
+	type Err = std::convert::Infallible;
+
+	fn from_str(value: &str) -> Result<Self, Self::Err> {
+		Ok(Self(value.to_owned()))
+	}
+}
+
+/// The longest a rollout may be given, in minutes: a day.
+const MOST_ROLLOUT_MINUTES: u64 = 24 * 60;
 
 #[derive(Debug, clap::Args)]
 pub struct Forget {
@@ -163,6 +217,12 @@ async fn run(arguments: Run, shutdown: watch::Receiver<bool>) -> Result<(), Comm
 		));
 	}
 
+	if arguments.rollout_timeout_minutes > MOST_ROLLOUT_MINUTES {
+		return Err(CommandError::Usage(format!(
+			"a rollout may take {MOST_ROLLOUT_MINUTES} minutes at most"
+		)));
+	}
+
 	let state = State::open(&arguments.state)?;
 	let identity = state.identity()?;
 	let control = Control::new(
@@ -196,12 +256,41 @@ async fn run(arguments: Run, shutdown: watch::Receiver<bool>) -> Result<(), Comm
 				Some(path) => Kubernetes::from_kubeconfig(path, profile, deadline),
 				None => Kubernetes::in_cluster(profile, deadline),
 			};
-			let mut cluster = ClusterRole::new(Arc::new(place));
+			let mut bounds = Bounds {
+				runtime_class: arguments.runtime_class,
+				database: None,
+			};
+			let mut databases = None;
 
 			if let Some(address) = arguments.postgres_url {
-				let postgres = Postgres::new(&address)
+				let Some(namespace) = arguments.postgres_namespace else {
+					return Err(CommandError::Usage(
+						"a database server needs --postgres-namespace".to_owned(),
+					));
+				};
+				let mut postgres = Postgres::new(address.expose())
 					.map_err(|error| CommandError::Usage(error.to_string()))?;
-				cluster = cluster.databases(Arc::new(postgres));
+
+				if let Some(path) = arguments.postgres_ca {
+					let pem = std::fs::read(&path).map_err(|error| {
+						CommandError::Usage(format!("{}: {error}", path.display()))
+					})?;
+					postgres = postgres
+						.trust(&pem)
+						.map_err(|error| CommandError::Usage(error.to_string()))?;
+				}
+
+				bounds.database = Some(DatabaseAccess {
+					namespace,
+					port: arguments.postgres_port,
+				});
+				databases = Some(Arc::new(postgres));
+			}
+
+			let mut cluster = ClusterRole::new(Arc::new(place)).bounds(bounds);
+
+			if let Some(postgres) = databases {
+				cluster = cluster.databases(postgres);
 			}
 
 			// A cluster's worker is never given a build: this builder is

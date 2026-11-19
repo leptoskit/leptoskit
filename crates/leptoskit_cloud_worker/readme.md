@@ -85,16 +85,28 @@ A worker paired for a cluster applies that cluster's releases and removes its en
 
 ```sh
 LEPTOSKIT_CLOUD_WORKER_POSTGRES_URL=postgres://admin:…@postgres.internal/postgres \
+LEPTOSKIT_CLOUD_WORKER_POSTGRES_NAMESPACE=postgres \
+LEPTOSKIT_CLOUD_WORKER_RUNTIME_CLASS=gvisor \
 	leptoskit-cloud-worker run --state /var/lib/leptoskit-cloud-worker
 ```
 
-| Option                      | Variable                              | What it sets                                                                                           |
-| --------------------------- | ------------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| `--kubeconfig`              | `LEPTOSKIT_CLOUD_WORKER_KUBECONFIG`   | A kubeconfig file to reach the cluster with. The pod's service account when not set.                   |
-| `--postgres-url`            | `LEPTOSKIT_CLOUD_WORKER_POSTGRES_URL` | The shared Postgres server's administrator. Without it, a release that needs a managed database fails. |
-| `--rollout-timeout-minutes` |                                       | How long a release may take to become ready. 10 when not set.                                          |
+| Option                      | Variable                                    | What it sets                                                                                           |
+| --------------------------- | ------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| `--kubeconfig`              | `LEPTOSKIT_CLOUD_WORKER_KUBECONFIG`         | A kubeconfig file to reach the cluster with. The pod's service account when not set.                   |
+| `--postgres-url`            | `LEPTOSKIT_CLOUD_WORKER_POSTGRES_URL`       | The shared Postgres server's administrator. Without it, a release that needs a managed database fails. |
+| `--postgres-namespace`      | `LEPTOSKIT_CLOUD_WORKER_POSTGRES_NAMESPACE` | The namespace the Postgres server runs in. Needed with `--postgres-url`.                               |
+| `--postgres-port`           | `LEPTOSKIT_CLOUD_WORKER_POSTGRES_PORT`      | The Postgres server's port. 5432 when not set.                                                         |
+| `--postgres-ca`             | `LEPTOSKIT_CLOUD_WORKER_POSTGRES_CA`        | A PEM file of certificates to trust for the Postgres server's, besides the webpki roots.               |
+| `--runtime-class`           | `LEPTOSKIT_CLOUD_WORKER_RUNTIME_CLASS`      | The `RuntimeClass` every release must run under. Without it a release may keep the cluster's default.  |
+| `--rollout-timeout-minutes` |                                             | How long a release may take to become ready, a day at most. 10 when not set.                           |
 
-Before a release that has a managed database, the worker makes sure of its role and database on the shared server: a login role that is nothing more (no superuser, database or role creation, replication or row-security bypass, member of no other role, 20 connections at most), whose password is the one leased with the release, and a database it owns, made from `template0`, that no one else may connect to. `template1` and `postgres` are closed to everyone the administrator didn't let in. The worker only touches names that are an environment's (`env_` and 32 hex digits), whatever the control plane says. Removing an environment removes its processes from the cluster, then drops its database and role. `sslmode=disable` in the administrator's address connects without TLS; anything else needs a certificate the webpki roots trust.
+The worker trusts the control plane only so far. A release whose pods wouldn't run under `--runtime-class`, or that opens its network to any database server but the one `--postgres-namespace` and `--postgres-port` name, is refused before anything is applied. A database it is told to make or drop must be the one named for the job's own environment (`env_` and the environment's ID in hex).
+
+Before a release that has a managed database, the worker makes sure of its role and database on the shared server: a login role that is nothing more (no superuser, database or role creation, replication or row-security bypass, no settings of its own, a member of no role and with no members, 20 connections at most), whose password is the one leased with the release, sent only as a SCRAM verifier, and a database it owns, made from `template0`, that no one else may connect to. A database of that name that another role owns is never adopted. Every other database on the server that takes connections, `template1` and `postgres` among them, is closed to `PUBLIC`: roles of the operator's that need one must be let in by name. Each of these is checked afterwards, and a step the administrator couldn't make (a managed server where it doesn't own `template1`, say) fails the release. Removing an environment removes its processes from the cluster, then drops its database and role.
+
+`sslmode=disable` in the administrator's address connects without TLS, for a server on the same machine only. Any other mode, or none, requires TLS, with no fallback to plain text, and a certificate that the webpki roots or `--postgres-ca` vouch for.
+
+The shared server has no disk quota per environment, and 20 connections for each environment can use up its `max_connections`. Every environment's role can see the names of the others' databases and roles, and who is connected. Keep the administrator's `pg_hba.conf` entry to the worker's address: every environment's pods can reach the server.
 
 A release whose processes never become ready, or that the cluster refuses, is reported as not ready; the previous release keeps serving. A failed migration shows as the new server never becoming ready: the worker doesn't tell the two apart. Dedicated database sizes (`s`, `m`, `l`) aren't run yet, and a release that asks for one fails. A backup or a restore is answered as failed, which leaves the database as it was.
 

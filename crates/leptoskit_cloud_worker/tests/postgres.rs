@@ -46,6 +46,10 @@ async fn a_database_is_made_kept_to_its_role_and_dropped() {
 	};
 	let (address, admin) = administrator(&server).await;
 	let postgres = Postgres::new(&address).expect("an address");
+	admin
+		.batch_execute("CREATE DATABASE monitoring")
+		.await
+		.expect("another database");
 
 	postgres
 		.ensure(&step(NAME), "first-password")
@@ -109,6 +113,32 @@ async fn a_database_is_made_kept_to_its_role_and_dropped() {
 		.unwrap_or(false);
 	assert!(!public, "PUBLIC may not connect");
 
+	// Every other database that takes connections is closed to PUBLIC too.
+	let open: Vec<String> = admin
+		.query(
+			"SELECT datname FROM pg_database AS d WHERE datallowconn AND (datacl IS NULL OR \
+			 EXISTS (SELECT 1 FROM aclexplode(d.datacl) AS acl WHERE acl.grantee = 0)) ORDER BY \
+			 datname",
+			&[],
+		)
+		.await
+		.expect("asks")
+		.iter()
+		.map(|row| row.get(0))
+		.collect();
+	assert_eq!(open, Vec::<String>::new());
+
+	// The password was sent as a verifier, never as itself.
+	let password: String = admin
+		.query_one(
+			"SELECT rolpassword FROM pg_authid WHERE rolname = $1",
+			&[&NAME],
+		)
+		.await
+		.expect("the password")
+		.get(0);
+	assert!(password.starts_with("SCRAM-SHA-256$"), "{password}");
+
 	postgres.remove(NAME).await.expect("dropped");
 	postgres
 		.remove(NAME)
@@ -160,4 +190,83 @@ async fn only_an_environments_names_are_touched() {
 		.expect("asks")
 		.get(0);
 	assert!(superuser);
+}
+
+#[tokio::test]
+async fn a_role_found_there_is_made_plain_again() {
+	let Some(server) = server::Postgres::start() else {
+		return;
+	};
+	let (address, admin) = administrator(&server).await;
+	let postgres = Postgres::new(&address).expect("an address");
+	let quoted = format!("\"{NAME}\"");
+	admin
+		.batch_execute(&format!(
+			"CREATE ROLE {quoted} LOGIN VALID UNTIL '2000-01-01'; CREATE ROLE helper; CREATE ROLE \
+			 elevated; GRANT elevated TO {quoted}; GRANT {quoted} TO helper; ALTER ROLE {quoted} \
+			 SET search_path = 'elsewhere'; ALTER ROLE {quoted} IN DATABASE postgres SET work_mem \
+			 = '1MB'"
+		))
+		.await
+		.expect("a role with extras");
+
+	postgres
+		.ensure(&step(NAME), "password")
+		.await
+		.expect("made");
+
+	let memberships: i64 = admin
+		.query_one(
+			"SELECT count(*) FROM pg_auth_members WHERE member = (SELECT oid FROM pg_roles WHERE \
+			 rolname = $1) OR roleid = (SELECT oid FROM pg_roles WHERE rolname = $1)",
+			&[&NAME],
+		)
+		.await
+		.expect("asks")
+		.get(0);
+	assert_eq!(memberships, 0);
+	let settings: i64 = admin
+		.query_one(
+			"SELECT count(*) FROM pg_db_role_setting WHERE setrole = (SELECT oid FROM pg_roles \
+			 WHERE rolname = $1)",
+			&[&NAME],
+		)
+		.await
+		.expect("asks")
+		.get(0);
+	assert_eq!(settings, 0);
+	let forever: bool = admin
+		.query_one(
+			"SELECT rolvaliduntil = 'infinity' FROM pg_roles WHERE rolname = $1",
+			&[&NAME],
+		)
+		.await
+		.expect("asks")
+		.get(0);
+	assert!(forever);
+}
+
+#[tokio::test]
+async fn a_database_someone_else_owns_is_never_adopted() {
+	let Some(server) = server::Postgres::start() else {
+		return;
+	};
+	let (address, admin) = administrator(&server).await;
+	let postgres = Postgres::new(&address).expect("an address");
+	admin
+		.batch_execute(&format!("CREATE DATABASE \"{NAME}\""))
+		.await
+		.expect("a database of the administrator's");
+
+	assert_eq!(
+		postgres.ensure(&step(NAME), "password").await,
+		Err("its database is there already, owned by another role".to_owned())
+	);
+
+	let mut other = step(NAME);
+	other.role = "env_ffffffffffffffffffffffffffffffff".to_owned();
+	assert_eq!(
+		postgres.ensure(&other, "password").await,
+		Err("its role isn't named as its database is".to_owned())
+	);
 }
