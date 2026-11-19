@@ -101,7 +101,12 @@ fn text_scroll_blur_and_key_events_deliver_exact_payloads_to_the_guest() {
 		(
 			NativeEvent::Key(leptoskit_native::KeyPress::new("p").ctrl()),
 			EventKind::Key,
-			r#"{"key":"p","ctrl":true,"alt":false,"shift":false}"#,
+			r#"{"key":"p","ctrl":true,"alt":false,"shift":false,"meta":false}"#,
+		),
+		(
+			NativeEvent::Key(leptoskit_native::KeyPress::new("Enter").meta()),
+			EventKind::Key,
+			r#"{"key":"Enter","ctrl":false,"alt":false,"shift":false,"meta":true}"#,
 		),
 	] {
 		let guest = control_guest(TEXT_INPUT, r#"{"placeholder":"Name"}"#, kind, payload);

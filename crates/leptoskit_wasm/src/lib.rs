@@ -35,8 +35,10 @@
 //!   for change, submit, scroll, toggle, value-change, and key events, and are
 //!   `0` otherwise. Toggle payloads are `{"checked":true}`; value-change
 //!   payloads are `{"value":0.5}`, with a JSON boolean and number respectively;
-//!   key payloads are `{"key":"p","ctrl":true,"alt":false,"shift":false}`. A
-//!   module that predates key events answers them `0`, unhandled;
+//!   key payloads are
+//!   `{"key":"p","ctrl":true,"alt":false,"shift":false,"meta":false}`, where a
+//!   host that predates `meta` leaves it out and the module reads it as
+//!   `false`. A module that predates key events answers them `0`, unhandled;
 //! - `leptoskit_alloc(len) -> ptr` — *optional*, but required to receive
 //!   payload events: without it those dispatches fail with
 //!   [`WasmError::MissingExport`]. It returns a non-zero pointer to `len`

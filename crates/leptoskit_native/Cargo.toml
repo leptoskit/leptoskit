@@ -29,7 +29,7 @@ serde = { workspace = true, optional = true, features = ["derive"] }
 serde_json = { workspace = true, optional = true }
 sha2 = { workspace = true, optional = true }
 wasm-bindgen = { workspace = true, optional = true }
-web-sys = { workspace = true, optional = true, features = ["AddEventListenerOptions", "CssStyleDeclaration", "Document", "DomRect", "Element", "HtmlButtonElement", "HtmlDialogElement", "HtmlElement", "HtmlInputElement", "HtmlTextAreaElement", "KeyboardEvent", "MediaQueryList", "NodeList", "ScrollBehavior", "ScrollIntoViewOptions", "ScrollLogicalPosition", "ScrollToOptions", "Window"] }
+web-sys = { workspace = true, optional = true, features = ["AddEventListenerOptions", "CssStyleDeclaration", "Document", "DomRect", "Element", "HtmlButtonElement", "HtmlDialogElement", "HtmlElement", "HtmlInputElement", "HtmlTextAreaElement", "KeyboardEvent", "MediaQueryList", "Navigator", "NodeList", "ScrollBehavior", "ScrollIntoViewOptions", "ScrollLogicalPosition", "ScrollToOptions", "Window"] }
 
 [dev-dependencies]
 # Without default features: divan's `wrap_help` turns on clap's help

@@ -70,6 +70,8 @@ pub fn key_press(key: Key) -> Option<leptoskit_native::KeyPress> {
 		ctrl: key.ctrl,
 		alt: key.alt,
 		shift,
+		// A terminal is never told about the command key.
+		meta: false,
 	})
 }
 

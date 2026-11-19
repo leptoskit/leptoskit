@@ -1271,8 +1271,13 @@ pub enum NativeEvent {
 /// `"Escape"`, `"Tab"`, `"Backspace"`, `"Delete"`, `"ArrowUp"`,
 /// `"ArrowDown"`, `"ArrowLeft"`, `"ArrowRight"`, `"Home"`, `"End"`,
 /// `"PageUp"`, and `"PageDown"`.
+///
+/// A shortcut that should follow the platform asks [`KeyPress::is_primary`]:
+/// ⌘ on Apple platforms and control everywhere else.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+// One flag for each modifier key, as the platforms report them.
+#[allow(clippy::struct_excessive_bools)]
 pub struct KeyPress {
 	/// The key's name.
 	pub key: String,
@@ -1282,6 +1287,10 @@ pub struct KeyPress {
 	pub alt: bool,
 	/// Whether shift was held.
 	pub shift: bool,
+	/// Whether the command key (⌘) was held, or the Windows key on a
+	/// keyboard that has one.
+	#[cfg_attr(feature = "serde", serde(default))]
+	pub meta: bool,
 }
 
 impl KeyPress {
@@ -1293,6 +1302,7 @@ impl KeyPress {
 			ctrl: false,
 			alt: false,
 			shift: false,
+			meta: false,
 		}
 	}
 
@@ -1317,15 +1327,77 @@ impl KeyPress {
 		self
 	}
 
-	/// Whether this is `key` with exactly the given modifiers held. Letters
-	/// compare without case, so ctrl+shift+p matches `"p"`.
+	/// The same key with the command key (⌘) held.
+	#[must_use]
+	pub fn meta(mut self) -> Self {
+		self.meta = true;
+		self
+	}
+
+	/// Whether this is `key` with exactly the given modifiers held, and
+	/// without the command key. Letters compare without case, so
+	/// ctrl+shift+p matches `"p"`.
 	#[must_use]
 	pub fn is(&self, key: &str, ctrl: bool, alt: bool, shift: bool) -> bool {
 		self.key.eq_ignore_ascii_case(key)
 			&& self.ctrl == ctrl
 			&& self.alt == alt
 			&& self.shift == shift
+			&& !self.meta
 	}
+
+	/// Whether the platform's shortcut modifier was held, and the other one
+	/// was not: ⌘ on a Mac, an iPhone or an iPad, and control everywhere
+	/// else. On the web this follows the device the browser runs on.
+	///
+	/// ```
+	/// use leptoskit_native::KeyPress;
+	///
+	/// fn saves(key: &KeyPress) -> bool {
+	/// 	key.is_primary() && key.key == "Enter"
+	/// }
+	///
+	/// // Neither alone, nor with both modifiers held.
+	/// assert!(!saves(&KeyPress::new("Enter")));
+	/// assert!(!saves(&KeyPress::new("Enter").ctrl().meta()));
+	/// ```
+	///
+	/// A terminal never hears ⌘, so a terminal app checks
+	/// [`ctrl`](KeyPress::ctrl) instead.
+	#[must_use]
+	pub fn is_primary(&self) -> bool {
+		if primary_is_command() {
+			self.meta && !self.ctrl
+		} else {
+			self.ctrl && !self.meta
+		}
+	}
+}
+
+/// Whether shortcuts on this device use ⌘ rather than control.
+#[cfg(all(target_arch = "wasm32", feature = "web"))]
+fn primary_is_command() -> bool {
+	thread_local! {
+		static APPLE: bool = web_sys::window()
+			.and_then(|window| window.navigator().platform().ok())
+			.is_some_and(|platform| is_apple_platform(&platform));
+	}
+
+	APPLE.with(|apple| *apple)
+}
+
+/// Whether shortcuts on this device use ⌘ rather than control.
+#[cfg(not(all(target_arch = "wasm32", feature = "web")))]
+const fn primary_is_command() -> bool {
+	cfg!(target_vendor = "apple")
+}
+
+/// Whether a browser's `navigator.platform` names an Apple device.
+#[cfg(any(test, all(target_arch = "wasm32", feature = "web")))]
+fn is_apple_platform(platform: &str) -> bool {
+	["Mac", "iPhone", "iPad", "iPod"]
+		.iter()
+		.any(|name| platform.starts_with(name))
 }
 
 /// Whether an event was handled during dispatch.
@@ -1463,3 +1535,31 @@ fn measure_line(text: &str, cell: Size<f32>, max_width: Option<f32>) -> Size<f32
 
 /// A shared, cloneable text measurer.
 pub type SharedTextMeasurer = Arc<dyn TextMeasurer>;
+
+#[cfg(test)]
+mod tests {
+	use super::KeyPress;
+	use super::is_apple_platform;
+
+	#[test]
+	fn apple_devices_are_told_from_the_browsers_platform_name() {
+		for apple in ["MacIntel", "MacPPC", "iPhone", "iPad", "iPod touch"] {
+			assert!(is_apple_platform(apple), "{apple}");
+		}
+
+		for other in ["Win32", "Linux x86_64", "Linux armv81", "Android", ""] {
+			assert!(!is_apple_platform(other), "{other}");
+		}
+	}
+
+	#[test]
+	fn the_primary_modifier_is_command_on_apple_and_control_elsewhere() {
+		let command = KeyPress::new("k").meta();
+		let control = KeyPress::new("k").ctrl();
+
+		assert_eq!(command.is_primary(), cfg!(target_vendor = "apple"));
+		assert_eq!(control.is_primary(), !cfg!(target_vendor = "apple"));
+		assert!(!KeyPress::new("k").is_primary());
+		assert!(!KeyPress::new("k").ctrl().meta().is_primary());
+	}
+}
