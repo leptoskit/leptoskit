@@ -284,6 +284,9 @@ impl WindowsWindow {
 		let root = self.state.root.borrow().upgrade();
 
 		if let Some(root) = root {
+			// An overlay that was already open had no visible window to
+			// show above.
+			root.show_overlays();
 			root.repaint_layers();
 		}
 	}
@@ -300,7 +303,11 @@ impl WindowsWindow {
 
 			while PeekMessageW(&raw mut message, None, 0, 0, PM_REMOVE).as_bool() {
 				if message.message != WM_QUIT
-					&& !IsDialogMessageW(self.hwnd, &raw const message).as_bool()
+					&& !IsDialogMessageW(
+						crate::overlay::dialog_for(message.hwnd, self.hwnd),
+						&raw const message,
+					)
+					.as_bool()
 				{
 					let _ = TranslateMessage(&raw const message);
 					DispatchMessageW(&raw const message);
@@ -332,7 +339,10 @@ impl WindowsWindow {
 					return Ok(());
 				}
 
-				if !IsDialogMessageW(self.hwnd, &raw const message).as_bool() {
+				// Tab and Escape inside an overlay belong to its own window.
+				let dialog = crate::overlay::dialog_for(message.hwnd, self.hwnd);
+
+				if !IsDialogMessageW(dialog, &raw const message).as_bool() {
 					let _ = TranslateMessage(&raw const message);
 					DispatchMessageW(&raw const message);
 				}
