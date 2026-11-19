@@ -46,7 +46,33 @@ impl<B: NativeBackend> NativeSurface<B> {
 			current = self.shadows[id.index()].parent;
 		}
 
+		// A press nothing took follows the link it landed on, as a browser
+		// would.
+		if matches!(*event, NativeEvent::Press)
+			&& self.pressed_link(target).is_some_and(crate::links::open)
+		{
+			return EventOutcome::Handled;
+		}
+
 		EventOutcome::Unhandled
+	}
+
+	/// The link a press at `target` is on: the nearest pressable around it
+	/// that has one.
+	fn pressed_link(&self, target: NodeId) -> Option<&str> {
+		let mut current = Some(target);
+
+		while let Some(id) = current {
+			let shadow = &self.shadows[id.index()];
+
+			if shadow.kind == NativeKind::Pressable {
+				return shadow.props.href();
+			}
+
+			current = shadow.parent;
+		}
+
+		None
 	}
 
 	fn normalized_event<'a>(

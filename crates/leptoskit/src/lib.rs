@@ -539,6 +539,7 @@ pub mod prelude {
 	pub use leptoskit_native::Gesture;
 	pub use leptoskit_native::GestureEvent;
 	pub use leptoskit_native::GestureState;
+	pub use leptoskit_native::LinkTarget;
 	pub use leptoskit_native::NativeEvent;
 	pub use leptoskit_native::NativeEventSlot;
 	pub use leptoskit_native::NativeKind;

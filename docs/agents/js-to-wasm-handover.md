@@ -33,20 +33,20 @@ Do not reopen these. If one turns out to be unworkable, stop and ask.
 
 One pull request per item. Every backend is kept in step, with AppKit as the reference. The gap numbers refer to [js-to-wasm-audit.md](js-to-wasm-audit.md), which has the proposed API and the per-backend table for each.
 
-| #  | Change                                                      | Gap      | State       |
-| -- | ----------------------------------------------------------- | -------- | ----------- |
-| 1  | Text input hints                                            | G9       | #852, open  |
-| 2  | `TextArea`                                                  | G12      | #877, open  |
-| 3  | Labels that focus their fields                              | G13      | #879, open  |
-| 4  | One-shot focus requests                                     | G2       | #887, open  |
-| 5  | Arrow-key navigation for tabs, radio groups and menus       | G5       | #892, open  |
-| 6  | `Modal` and `Popover`                                       | G1       | #896, open  |
-| 7  | Scroll into view                                            | G4       | #913, open  |
-| 8  | A clock hook                                                | G6       | #914, open  |
-| 9  | Typed refusals in the rpc client (status, code, retry time) | G8       | #918, open  |
-| 10 | Streams without a database                                  | G3       | #923, open  |
-| 11 | The ⌘ key on the web                                        | G7a      | #924, open  |
-| 12 | New-tab and download links                                  | G14, G15 | not started |
+| #  | Change                                                      | Gap      | State      |
+| -- | ----------------------------------------------------------- | -------- | ---------- |
+| 1  | Text input hints                                            | G9       | #852, open |
+| 2  | `TextArea`                                                  | G12      | #877, open |
+| 3  | Labels that focus their fields                              | G13      | #879, open |
+| 4  | One-shot focus requests                                     | G2       | #887, open |
+| 5  | Arrow-key navigation for tabs, radio groups and menus       | G5       | #892, open |
+| 6  | `Modal` and `Popover`                                       | G1       | #896, open |
+| 7  | Scroll into view                                            | G4       | #913, open |
+| 8  | A clock hook                                                | G6       | #914, open |
+| 9  | Typed refusals in the rpc client (status, code, retry time) | G8       | #918, open |
+| 10 | Streams without a database                                  | G3       | #923, open |
+| 11 | The ⌘ key on the web                                        | G7a      | #924, open |
+| 12 | New-tab and download links                                  | G14, G15 | #925, open |
 
 After those: convert the demo (3–4 pull requests), then app shortcuts with native key delivery (G7b), `prompt=login` on provider sign-in (G16) and document titles (G10), then convert the admin page by page (5–7 pull requests).
 
@@ -228,6 +228,16 @@ G7a. `KeyPress` has a `meta` field and `KeyPress::meta()`, and `KeyPress::is_pri
 - **Run here:** the `leptoskit_native` unit, contract and Chrome tests (a ⌘ key is heard and prevented when handled, left alone when not, and the primary modifier follows the device), `leptoskit_aria`, `leptoskit_tui` and `leptoskit_wasm` tests.
 - **Not run:** Safari or any browser on a Mac, so ⌘ as the primary modifier is only covered by the unit test of the platform names.
 - **For G7b:** the native backends still deliver no `on_key`. When they do, each must fill `meta` (⌘ on AppKit and UIKit, the Windows key on Win32, Super on GTK, Meta on Android). A Wasm guest in a native host is built for `wasm32` without `web`, so `is_primary` there asks for Ctrl even on a Mac or an iPhone; G7b needs to settle that, probably by having the host say which modifier is primary. The terminal can never see ⌘, so `is_primary` is never true in a terminal on a Mac.
+
+### `feat/link-targets` (#925): stacked on `feat/key-meta`
+
+G14 and G15. `Pressable().href(url).target(LinkTarget::NewTab)` and `.download("name.json")`. The web renders `target="_blank" rel="noopener noreferrer"` with an "Opens in a new tab" `aria-description`, and `<a href download>`. Both are stored in `NativeProps::extra` beside `href`, so no element hash changes for trees that don't use them.
+
+- **Native link opening:** the new `links` feature on `leptoskit_native` (and `leptoskit`) adds an optional dependency on `leptoskit_plugin_linking`. A `Press` that no handler took, on or inside a `Pressable` with an absolute `href`, is opened: `NativeSurface::dispatch_event` calls the plugin's `desktop::open` on its own thread (macOS, Windows, Linux, and so the terminal), and the guest runtime's `dispatch` asks the host's `linking` plugin. No backend or renderer changed, because every one of them already raises `Press` on a pressable. The code is `crates/leptoskit_native/src/links.rs`.
+- **Where it departs from the audit:** the audit doesn't say how native opening is switched on; a Cargo feature was the smallest way that keeps `url` and `open` out of apps that don't want them. And there is no framework-level native download: a download link opens like any other link and the browser saves the file. The audit's own recipe (HTTP plugin, then `save_file` or the share sheet) is documented for files behind a sign-in, as app code.
+- **Run here:** `leptoskit_native` tests with `web,serde,guest,links`, the Chrome suite (attributes, and a handled press on a new-tab link is prevented), and by hand the ignored test `a_press_on_an_outside_link_opens_it`, which returns `Handled` on Linux; no browser exists here, so nothing visibly opened.
+- **Not run:** a real link opening on macOS, Windows, a Linux desktop, iOS or Android. An app built in-process for iOS or Android (not a guest) has no Rust implementation in the linking plugin, so a press there still does nothing.
+- **For the conversions:** the demo's "Open the admin" becomes a `NewTab` link, and the admin's export confirmation becomes a `download` link, with no script.
 
 ### `feat/public-demo`: no pull request
 

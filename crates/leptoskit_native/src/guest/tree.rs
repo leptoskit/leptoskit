@@ -489,6 +489,24 @@ impl Tree {
 		id
 	}
 
+	/// The link a press at `id` is on: the nearest pressable around it that
+	/// has one.
+	pub(super) fn pressed_link(&self, id: i64) -> Option<String> {
+		let mut current = Some(id);
+
+		while let Some(id) = current {
+			let node = self.nodes.get(&id)?;
+
+			if node.element.kind == NativeKind::Pressable {
+				return node.element.props.href().map(str::to_owned);
+			}
+
+			current = node.parent;
+		}
+
+		None
+	}
+
 	/// Snapshots callbacks so application handlers may request another render.
 	pub(super) fn handlers(
 		&self,

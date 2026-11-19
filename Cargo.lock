@@ -6589,6 +6589,7 @@ dependencies = [
  "leptoskit_animation",
  "leptoskit_devtools_protocol",
  "leptoskit_log",
+ "leptoskit_plugin_linking",
  "leptoskit_rive",
  "leptoskit_yoga",
  "reactive_graph",

@@ -614,6 +614,61 @@ Native platforms load images from local files only: a path or a `file://` URL, p
 
 For supported utility families and their limits, use the [CSS coverage reference](../reference/css-coverage.md). For a complete shared-screen example, see [code reuse across platforms](../platforms/code-reuse.md).
 
+## Link to another site or a file
+
+A link to your admin, your status page or an exported file leaves the screen the person is on. Two things usually go wrong: the link replaces the page they were working in, or a "download" opens the file in the tab instead of saving it. A `Pressable` with an `href` handles both.
+
+```rust
+use leptoskit::prelude::*;
+
+let links = view! {
+	<View class="gap-3">
+		<Pressable
+			accessibility_label="Open the admin"
+			href="https://admin.example.com/"
+			target={LinkTarget::NewTab}
+		>
+			<Text>"Open the admin ↗"</Text>
+		</Pressable>
+		<Pressable
+			accessibility_label="Export this person"
+			href="/people/7/export"
+			download="person-7.json"
+		>
+			<Text>"Export"</Text>
+		</Pressable>
+	</View>
+};
+```
+
+- `target={LinkTarget::NewTab}` opens the link in a new tab and leaves the page as it is.
+- `download="person-7.json"` saves what the link points at as a file with that name, instead of opening it. The name is one file name, not a path: a name with a `/` or a `\` in it is ignored, and the link opens as usual.
+
+A link with an `on:press` handler is yours: the handler runs and nothing is opened, so a link inside the app can change the route without loading a page. Leave the handler off a link that should simply go somewhere.
+
+How each platform treats them:
+
+- **Browser:** a link is an `<a href>`. A new-tab link is `target="_blank" rel="noopener noreferrer"`, so the page it opens can't reach back into yours and isn't told where the person came from, and screen readers add "Opens in a new tab" after the link's name. A download link is `<a href download="…">`. Browsers only use your file name for a file from your own site; for another site they use the name that server sends, so keep sending `Content-Disposition: attachment` from your server too.
+- **macOS, Windows and Linux (GTK), and the terminal:** with the `links` feature on, pressing a link to another site, a `mailto:` address or a `tel:` or `sms:` number opens it in the person's browser, mail or phone app. `target` changes nothing, since the link always opens outside your app. A download link opens the same way, and the browser saves the file.
+- **iOS and Android:** the same, in the generated apps, once `links` is on and `linking` is in `native.plugins`. Without the plugin a press does nothing.
+- A link to a place inside your app (`/notes/42`) is never opened for you on a native platform. Use a [route link](10-file-routes.md), which navigates.
+
+Turn the feature on in `Cargo.toml`, and for a phone app add the plugin to `leptoskit.toml`:
+
+```toml
+# Cargo.toml
+leptoskit = { version = "0.3", features = ["links"] }
+leptoskit_plugin_linking = "0.3"
+```
+
+```toml
+# leptoskit.toml
+[native]
+plugins = ["linking"]
+```
+
+A file behind a sign-in can't be fetched by the person's browser from a native app, because the browser doesn't have your app's session. There, fetch it with the [HTTP plugin](../platforms/plugin-inventory.md) from an `on:press` handler, then hand the bytes to the dialog plugin's `save_file` on a desktop or to the share sheet on a phone.
+
 ## Show a dialog or a menu above the screen
 
 A confirmation, a "new item" form and an account menu all sit above the rest of the screen. They close on Escape or a press outside, focus goes into them when they open, and it goes back where it was when they close. A `View` styled with `absolute` gives you none of that, and whatever comes later in the tree is drawn over it.

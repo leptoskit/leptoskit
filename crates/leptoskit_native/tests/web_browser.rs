@@ -1866,6 +1866,74 @@ async fn command_keys_reach_handlers_and_the_rest_stay_the_browsers() {
 }
 
 #[wasm_bindgen_test]
+async fn links_open_in_a_new_tab_or_save_a_file_when_asked() {
+	use leptoskit_native::LinkTarget;
+
+	let parent = container();
+	let presses = Arc::new(AtomicUsize::new(0));
+	let mount = mount_to(parent.clone(), {
+		let presses = Arc::clone(&presses);
+		move || {
+			let presses = Arc::clone(&presses);
+			render(
+				View().children([
+					Pressable("Open the admin")
+						.id("admin")
+						.href("https://admin.example.com/")
+						.target(LinkTarget::NewTab)
+						.on_press(move || {
+							presses.fetch_add(1, Ordering::SeqCst);
+						})
+						.child(Text("Open the admin")),
+					Pressable("Export")
+						.id("export")
+						.href("/people/7/export")
+						.download("person-7.json")
+						.child(Text("Export")),
+				]),
+			)
+		}
+	});
+	tick().await;
+
+	let admin: web_sys::HtmlElement = find(&parent, "#admin");
+	assert_eq!(admin.tag_name(), "A");
+	assert_eq!(admin.get_attribute("target").as_deref(), Some("_blank"));
+	assert_eq!(
+		admin.get_attribute("rel").as_deref(),
+		Some("noopener noreferrer")
+	);
+	assert_eq!(
+		admin.get_attribute("aria-description").as_deref(),
+		Some("Opens in a new tab")
+	);
+	// A press the app handles stays in the app: no tab is opened.
+	let click = web_sys::MouseEvent::new_with_mouse_event_init_dict("click", &{
+		let options = web_sys::MouseEventInit::new();
+		options.set_bubbles(true);
+		options.set_cancelable(true);
+		options
+	})
+	.unwrap();
+	assert!(
+		!admin.dispatch_event(&click).unwrap(),
+		"the click is prevented"
+	);
+	assert_eq!(presses.load(Ordering::SeqCst), 1);
+
+	let export: web_sys::HtmlElement = find(&parent, "#export");
+	assert_eq!(
+		export.get_attribute("download").as_deref(),
+		Some("person-7.json")
+	);
+	assert_eq!(export.get_attribute("target"), None);
+	assert_eq!(export.get_attribute("rel"), None);
+
+	drop(mount);
+	parent.remove();
+}
+
+#[wasm_bindgen_test]
 async fn a_focus_request_moves_focus_once_and_lets_the_person_move_on() {
 	use leptoskit_native::FocusRequest;
 	use leptoskit_native::components::TextInput;

@@ -56,7 +56,7 @@ Some limits apply to every native platform:
 - `Image` loads [`asset://` pictures](../guide/36-assets.md) bundled from your `assets/` folder and local files, not URLs. iOS also accepts `resource://` names and Android `android.resource://` URIs.
 - [Rive](../guide/20-rive.md) supports vector scenes. Native text, images, layout, scripts, audio, view models, and some draw features are rejected. HarmonyOS uses an application-supplied reduced-motion preference and still needs device playback validation.
 - Shadows, transforms, gradients, custom fonts, and letter spacing aren't supported yet, and Windows draws text at the font's own line height. The [CSS coverage reference](../reference/css-coverage.md) lists what is.
-- Links (`href`) only work on the web.
+- A link (`href`) is followed by the browser on the web. A native app opens a link to another site, an email address or a phone number outside itself once you turn on the `links` feature; see [links to other places](../guide/07-shared-components.md#link-to-another-site-or-a-file). Without it, a link is a plain pressable there.
 - A scroll view's [`scroll_offset`](../guide/17-virtualized-lists.md#programmatic-scrolling) and a [`Reveal`](../guide/07-shared-components.md#scroll-an-element-into-view) move it on the web and in the generated macOS, iOS, Android, Windows, and Linux apps. Windows and Linux jump where the others animate. HarmonyOS and the terminal don't scroll from code yet.
 - The generated macOS, Windows, and Linux apps don't check for code push updates yet; only the iOS and Android apps do. Ship a new build to update a desktop app.
 

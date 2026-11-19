@@ -45,6 +45,7 @@ pub mod gesture;
 pub mod splash;
 
 mod hash;
+mod links;
 pub mod motion;
 pub mod overlay;
 pub mod props;
@@ -119,6 +120,7 @@ pub use props::FontWeight;
 pub use props::KeyPress;
 pub use props::Keyboard;
 pub use props::LineHeight;
+pub use props::LinkTarget;
 pub use props::NativeEvent;
 pub use props::NativeKind;
 pub use props::NativeProps;

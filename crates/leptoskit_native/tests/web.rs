@@ -688,6 +688,88 @@ fn pressables_with_an_href_render_as_links_and_disabled_links_lose_their_target(
 }
 
 #[test]
+fn a_new_tab_link_is_isolated_and_announced() {
+	use leptoskit_native::LinkTarget;
+
+	let html = render(
+		Pressable("Open the admin")
+			.href("https://admin.example.com/")
+			.target(LinkTarget::NewTab)
+			.child(Text("Open the admin")),
+	)
+	.to_html();
+	assert!(html.contains("target=\"_blank\""), "{html}");
+	assert!(html.contains("rel=\"noopener noreferrer\""), "{html}");
+	assert!(
+		html.contains("aria-description=\"Opens in a new tab\""),
+		"{html}"
+	);
+
+	// The app's own description is kept, and the hint follows it.
+	let html = render(
+		Pressable("Status")
+			.href("https://status.example.com/")
+			.target(LinkTarget::NewTab)
+			.with_props(|props| {
+				props.aria_mut().description = Some("Live service status.".to_owned());
+			})
+			.child(Text("Status")),
+	)
+	.to_html();
+	assert!(
+		html.contains("aria-description=\"Live service status. Opens in a new tab\""),
+		"{html}"
+	);
+
+	// An ordinary link, a disabled one, and a button say nothing of tabs.
+	let html = render(
+		View().children([
+			Pressable("Here").href("/here").child(Text("Here")),
+			Pressable("Closed")
+				.href("https://example.com/")
+				.target(LinkTarget::NewTab)
+				.enabled(false)
+				.child(Text("Closed")),
+			Pressable("Button")
+				.target(LinkTarget::NewTab)
+				.child(Text("Button")),
+		]),
+	)
+	.to_html();
+	assert!(!html.contains("target="), "{html}");
+	assert!(!html.contains("rel="), "{html}");
+	assert!(html.contains("<button"), "{html}");
+}
+
+#[test]
+fn a_download_link_names_its_file() {
+	let html = render(
+		View().children([
+			Pressable("Export")
+				.href("/people/7/export")
+				.download("person-7.json")
+				.child(Text("Export")),
+			Pressable("Unsafe")
+				.href("/unsafe")
+				.download("../etc/passwd")
+				.child(Text("Unsafe")),
+			Pressable("Closed")
+				.href("/closed")
+				.download("closed.json")
+				.enabled(false)
+				.child(Text("Closed")),
+		]),
+	)
+	.to_html();
+	assert!(
+		html.contains("href=\"/people/7/export\"") && html.contains("download=\"person-7.json\""),
+		"{html}"
+	);
+	assert_eq!(html.matches("download=").count(), 1, "{html}");
+	assert!(html.contains("href=\"/unsafe\""), "{html}");
+}
+
+#[test]
 fn styled_runs_render_as_inline_spans_in_a_block() {
 	let element = Text("").spans([
 		leptoskit_native::TextSpan::new("let ").italic(),

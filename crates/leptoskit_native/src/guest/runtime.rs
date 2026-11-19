@@ -284,8 +284,20 @@ pub fn dispatch(node: i64, kind: i32, pointer: i32, length: i32) -> i32 {
 	};
 	// Effects the handler started run before the settle, so a list it changed
 	// is patched once rather than once per write.
-	let outcome = reactive_graph::effect::batch(|| invoke(&event, &handlers));
+	let mut outcome = reactive_graph::effect::batch(|| invoke(&event, &handlers));
 	sync(true);
+
+	// A press nothing took follows the link it landed on, as a browser
+	// would.
+	if outcome == EventOutcome::Unhandled && matches!(event, crate::NativeEvent::Press) {
+		let link =
+			APPLICATION.with_borrow(|application| application.as_ref()?.tree.pressed_link(node));
+
+		if link.is_some_and(|link| crate::links::open(&link)) {
+			outcome = EventOutcome::Handled;
+		}
+	}
+
 	i32::from(outcome == EventOutcome::Handled)
 }
 
