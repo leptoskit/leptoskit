@@ -1,0 +1,22 @@
+#:schema https://leptoskit.dev/schemas/leptoskit.v0.schema.json
+
+schema_version = 0
+
+# The browser half of the admin's pages. `leptoskit build --release
+# --platform web` here writes `dist/pkg/`, which the admin serves from the
+# directory its `client_dir` names. The admin itself is a server, built by
+# cargo as `leptoskit_admin`; it renders these pages and never builds for
+# Wasm.
+[app]
+name = "leptoskit_admin_pages"
+render = "csr"
+
+[build]
+client_package = "leptoskit_admin_pages"
+# The admin is the backend, built on its own.
+backend = false
+# The client hydrates what the admin rendered.
+features = ["hydrate"]
+
+[bundle]
+optimize = "smallest"

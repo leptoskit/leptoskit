@@ -1,12 +1,15 @@
-// The admin's script in a real browser, against pages the admin really
+// The admin's pages in a real browser, against pages the admin really
 // renders: `pages_for_the_script` in `tests/analytics.rs` writes them, this
-// serves them with `assets/admin.mjs` and a live stream the test feeds, and
-// headless Chrome runs them over the DevTools protocol.
+// serves them with `assets/admin.mjs`, the pages' Wasm client, and a live
+// stream the test feeds, and headless Chrome runs them over the DevTools
+// protocol.
 //
 //   deno test -A crates/leptoskit_admin/tests/script.mjs
 //
 // It runs that Rust test itself unless `LEPTOSKIT_ADMIN_PAGES` already
-// names a directory of pages. `CHROME` names the browser executable.
+// names a directory of pages, and builds the client with `leptoskit build`
+// unless `LEPTOSKIT_ADMIN_CLIENT` names a build's output directory.
+// `CHROME` names the browser executable.
 
 import {
 	assert,
@@ -56,9 +59,56 @@ async function writePages() {
 	return directory;
 }
 
+let built = null;
+
+/** The pages' Wasm client: a build's output directory, built once. */
+function client() {
+	const given = Deno.env.get("LEPTOSKIT_ADMIN_CLIENT");
+	if (given) return Promise.resolve(given);
+	built ??= buildClient();
+	return built;
+}
+
+async function buildClient() {
+	const directory = await Deno.makeTempDir({ prefix: "admin-client-" });
+	globalThis.addEventListener("unload", () => {
+		Deno.removeSync(directory, { recursive: true });
+	});
+	const { success, stderr } = await new Deno.Command("cargo", {
+		args: [
+			"run",
+			"--quiet",
+			"--package",
+			"leptoskit_cli",
+			"--bin",
+			"leptoskit",
+			"--",
+			"build",
+			"--platform",
+			"web",
+			"--out",
+			directory,
+		],
+		cwd: `${here}../../leptoskit_admin_pages`,
+		stdout: "null",
+		stderr: "piped",
+	}).output();
+	assert(
+		success,
+		`the pages' client wasn't built:\n${new TextDecoder().decode(stderr)}`,
+	);
+	return directory;
+}
+
+const TYPES = {
+	js: "text/javascript",
+	wasm: "application/wasm",
+};
+
 /** Serves the pages as the admin would, and a live stream to push into. */
-function serve(directory) {
+function serve(directory, clientDirectory) {
 	const streams = new Set();
+	const posted = [];
 	const encoder = new TextEncoder();
 	const page = (name) =>
 		Deno.readFile(`${directory}/${name}`).then((body) =>
@@ -90,6 +140,15 @@ function serve(directory) {
 					);
 				case `${BASE}/analytics/live`:
 					return page("live.html");
+				case `${BASE}/learn/glossary`:
+					return page("glossary.html");
+				case `${BASE}/sign-in`:
+					return new Response("<!doctype html><title>Sign in</title>", {
+						headers: { "content-type": "text/html" },
+					});
+				case "/auth/sign-out":
+					posted.push({ path: url.pathname, body: await request.text() });
+					return Response.json({});
 				case `${BASE}/infra/projects/notes-production/overview`:
 					return page("overview.html");
 				case `${BASE}/infra/projects/notes-production/changes`:
@@ -110,15 +169,27 @@ function serve(directory) {
 					});
 				}
 				case `${BASE}/api/preferences`:
+					posted.push({ path: url.pathname, body: await request.json() });
 					return Response.json({});
-				default:
+				default: {
+					const file = url.pathname.startsWith(`${BASE}/pkg/`)
+						? url.pathname.slice(`${BASE}/pkg/`.length)
+						: null;
+					if (file && /^[\w.-]+$/.test(file) && TYPES[file.split(".").pop()]) {
+						return new Response(
+							await Deno.readFile(`${clientDirectory}/pkg/${file}`),
+							{ headers: { "content-type": TYPES[file.split(".").pop()] } },
+						);
+					}
 					return new Response("Not found", { status: 404 });
+				}
 			}
 		},
 	);
 	return {
 		origin: `http://127.0.0.1:${server.addr.port}`,
 		connected: () => streams.size,
+		posted,
 		push(kind, data) {
 			const message = encoder.encode(
 				`event: ${kind}\ndata: ${JSON.stringify(data)}\n\n`,
@@ -134,8 +205,8 @@ function serve(directory) {
 
 /** One browser for every test, opened on demand. */
 async function withBrowser(run) {
-	const directory = await pages();
-	const site = serve(directory);
+	const [directory, clientDirectory] = await Promise.all([pages(), client()]);
+	const site = serve(directory, clientDirectory);
 	const profile = await Deno.makeTempDir({ prefix: "admin-chrome-" });
 	const chrome = await launch(profile);
 	const page = await Page.connect(chrome.endpoint);
@@ -167,6 +238,7 @@ async function open(page, url, { width = 1280, height = 900 } = {}) {
 }
 
 const KEYS = {
+	k: 75,
 	Tab: 9,
 	ArrowRight: 39,
 	ArrowLeft: 37,
@@ -177,17 +249,21 @@ const KEYS = {
 	w: 87,
 };
 
-async function press(page, key, { shift = false } = {}) {
+async function press(page, key, { shift = false, ctrl = false } = {}) {
 	const common = {
 		key,
-		modifiers: shift ? 8 : 0,
+		modifiers: (shift ? 8 : 0) | (ctrl ? 2 : 0),
 		code: key.length === 1 ? `Key${key.toUpperCase()}` : key,
 		windowsVirtualKeyCode: KEYS[key],
 	};
 	await page.send("Input.dispatchKeyEvent", {
 		type: "keyDown",
 		...common,
-		...(key === "Enter" ? { text: "\r" } : key === "w" ? { text: "w" } : {}),
+		...(key === "Enter"
+			? { text: "\r" }
+			: key === "w" && !ctrl
+			? { text: shift ? "W" : "w" }
+			: {}),
 	});
 	await page.send("Input.dispatchKeyEvent", { type: "keyUp", ...common });
 }
@@ -589,5 +665,110 @@ Deno.test("on a phone, stations are headers you open, and Copy covers no code", 
 			station.name === "station:send"
 		);
 		assert(after.open, "a station someone opened stays open across the swap");
+	});
+});
+
+Deno.test("Glossary is the pages' own Rust: theme, Workings mode, search, and the account menu", async () => {
+	await withBrowser(async (page, site) => {
+		// A panic in the pages' Wasm surfaces as an uncaught exception.
+		const thrown = [];
+		page.on("Runtime.exceptionThrown", (event) => {
+			thrown.push(
+				event.exceptionDetails?.exception?.description ??
+					event.exceptionDetails?.text,
+			);
+		});
+		await open(page, `${site.origin}${BASE}/learn/glossary`);
+		await page.until(
+			"() => document.documentElement.hasAttribute('data-hydrated')",
+			"the page hydrates",
+		);
+		assert(
+			await page.evaluate(
+				"!document.querySelector('script[src$=\"admin.mjs\"]')",
+			),
+			"the page loads no hand-written script",
+		);
+
+		// The theme flips what the page shows and remembers it.
+		const appearance = () =>
+			page.evaluate(
+				"document.documentElement.getAttribute('data-lk-appearance')",
+			);
+		const before = await appearance();
+		await page.click('[data-testid="theme"]');
+		const after = await appearance();
+		assert(
+			(after === "dark" || after === "light") && after !== before,
+			`the theme flips: ${before} to ${after}`,
+		);
+		assert(
+			await page.evaluate(`document.cookie.includes("admin_theme=${after}")`),
+			"the choice is kept in a cookie the server reads",
+		);
+
+		// Shift+W flips Workings mode and saves it.
+		const wasOn = await page.evaluate(
+			`document.querySelector('[data-testid="workings-mode"]').getAttribute("aria-pressed") === "true"`,
+		);
+		await press(page, "w", { shift: true });
+		await page.until(
+			`() => document.querySelector('[data-testid="workings-mode"]').getAttribute("aria-pressed") === "${!wasOn}"`,
+			"Shift+W flips Workings mode",
+		);
+		for (let tries = 0; !site.posted.length && tries < 100; tries++) {
+			await new Promise((resolve) => setTimeout(resolve, 20));
+		}
+		assert(
+			JSON.stringify(site.posted[0]) ===
+				JSON.stringify({
+					path: `${BASE}/api/preferences`,
+					body: { kind: "workings_mode", on: !wasOn },
+				}),
+			`the mode is saved: ${JSON.stringify(site.posted)}`,
+		);
+
+		// Ctrl+K finds a screen from anywhere; Enter goes to the first match.
+		await press(page, "k", { ctrl: true });
+		await page.until(
+			"() => document.activeElement?.getAttribute('data-testid') === 'search'",
+			"Ctrl+K moves focus to search",
+		);
+		await page.send("Input.insertText", { text: "trend" });
+		await page.until(
+			`() => Array.from(document.querySelectorAll('[data-testid="search-results"] [role="option"]')).map((option) => option.textContent.trim()).join() === "Trends"`,
+			"search shows what matches",
+		);
+		const navigated = page.once("Page.loadEventFired");
+		await press(page, "Enter");
+		await navigated;
+		assert(
+			await page.evaluate("location.pathname") === `${BASE}/analytics/trends`,
+			"Enter opens the first match",
+		);
+
+		// The account menu signs out at the main site, then goes to sign-in.
+		await open(page, `${site.origin}${BASE}/learn/glossary`);
+		await page.until(
+			"() => document.documentElement.hasAttribute('data-hydrated')",
+			"the page hydrates again",
+		);
+		await page.click('[data-testid="avatar"]');
+		await page.until(
+			`() => document.querySelector('[data-testid="avatar-menu"]')?.matches(':popover-open')`,
+			"the account menu opens",
+		);
+		const left = page.once("Page.loadEventFired");
+		await page.click('[data-testid="sign-out"]');
+		await left;
+		assert(
+			site.posted.some((post) => post.path === "/auth/sign-out"),
+			"the main site is told",
+		);
+		assert(
+			await page.evaluate("location.pathname") === `${BASE}/sign-in`,
+			"and the admin's sign-in page opens",
+		);
+		assert(thrown.length === 0, `nothing threw: ${thrown.join("\n")}`);
 	});
 });

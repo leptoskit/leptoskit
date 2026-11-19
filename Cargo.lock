@@ -5610,13 +5610,16 @@ dependencies = [
 name = "leptoskit_admin"
 version = "0.3.0"
 dependencies = [
+ "any_spawner",
  "axum",
  "chrono",
  "futures",
  "http-body-util",
  "insta",
  "leptos",
+ "leptos_axum",
  "leptoskit",
+ "leptoskit_admin_pages",
  "leptoskit_analytics",
  "leptoskit_auth",
  "leptoskit_axum",
@@ -5635,6 +5638,20 @@ dependencies = [
  "tower",
  "url",
  "uuid",
+]
+
+[[package]]
+name = "leptoskit_admin_pages"
+version = "0.3.0"
+dependencies = [
+ "any_spawner",
+ "console_error_panic_hook",
+ "leptos",
+ "leptoskit",
+ "serde",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
 ]
 
 [[package]]

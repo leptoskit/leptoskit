@@ -109,6 +109,15 @@ axum::serve(listener, admin.router()).await?;
 
 `service` is the deployment service's `control::Service`. Start its worker as `lk console serve` does, or operations wait in the queue. Add `.analytics(AnalyticsService::new(url, token))` (or `AnalyticsService::from_env()`, which reads the two variables above) to connect analytics.
 
+The admin's pages are moving from a hand-written script to Rust compiled to Wasm, a page at a time. The pages that have moved need their browser half, built once from a checkout of leptoskit:
+
+```sh
+cd crates/leptoskit_admin_pages
+leptoskit build --release --platform web --out /var/lib/notes-admin/client
+```
+
+Pass that directory to `lk admin serve --client-dir` (or set `LEPTOSKIT_ADMIN_CLIENT_DIR`), or to the library with `.client_dir("/var/lib/notes-admin/client")`. Without it, those pages render and stay as the server drew them: links work, but the theme switch, the account menu and search don't. So far that is the Glossary.
+
 ## Try it on your machine
 
 The `admin_demo` example runs a site and its admin side by side, with two people: Ada, who is an admin, and Grace, who isn't. From a checkout of leptoskit:
