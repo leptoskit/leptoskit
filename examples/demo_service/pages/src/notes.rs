@@ -503,7 +503,7 @@ fn account_menu(page: &Page) -> Element {
 
 /// The element in `slot`, leaving an empty view there until it is put back.
 fn taken(slot: &mut Element) -> Element {
-	std::mem::replace(slot, View())
+	std::mem::replace(slot, view! { <View /> })
 }
 
 /// A link to the admin, which opens beside this page so both stay in view.

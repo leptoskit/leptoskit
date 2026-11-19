@@ -1273,6 +1273,16 @@ fn stations(state: &State) -> Vec<Element> {
 		}));
 	let panels = STATIONS.iter().enumerate().map(|(index, (_, sig, text))| {
 		let shown = index == selected;
+		let sig_id = if shown {
+			"explain-sig".to_owned()
+		} else {
+			format!("explain-sig:{index}")
+		};
+		let text_id = if shown {
+			"explain-text".to_owned()
+		} else {
+			format!("explain-text:{index}")
+		};
 		tabs.panel(index)
 			.aria_live(Live::Polite)
 			.class("flex-col gap-1 rounded-[10px] border border-[#30283c] bg-[#0b0811] px-3 py-2.5")
@@ -1281,24 +1291,16 @@ fn stations(state: &State) -> Vec<Element> {
 			} else {
 				format!("station-panel:{index}")
 			})
-			.child(
-				Text(*sig)
-					.class("font-[var(--admin-font-mono)] text-xs text-[#5ef2c2]")
-					.test_id(if shown {
-						"explain-sig".to_owned()
-					} else {
-						format!("explain-sig:{index}")
-					}),
-			)
-			.child(
-				Text(*text)
-					.class("text-[13px] leading-normal text-[#c9c0d0]")
-					.test_id(if shown {
-						"explain-text".to_owned()
-					} else {
-						format!("explain-text:{index}")
-					}),
-			)
+			.child(view! {
+				<Text class="font-[var(--admin-font-mono)] text-xs text-[#5ef2c2]" test_id=sig_id>
+					{(*sig).to_owned()}
+				</Text>
+			})
+			.child(view! {
+				<Text class="text-[13px] leading-normal text-[#c9c0d0]" test_id=text_id>
+					{(*text).to_owned()}
+				</Text>
+			})
 	});
 
 	std::iter::once(rail(progress))
