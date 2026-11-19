@@ -597,7 +597,7 @@ Deltas:
 
 ### Risks to watch in both
 
-- **Re-rendering cost.** Each `render` re-emits its stylesheet. Rebuilding a whole screen once a second (the countdown and the pulse) is wasteful, so bind fast-changing values with `text_from`, `For` and `Show` regions (`reactive.rs:1-16`).
+- **Re-rendering cost.** Each `render` re-emits its stylesheet. Rebuilding a whole screen once a second (the countdown and the pulse) is wasteful, so bind fast-changing values with `text_from`, `For` and `Show` regions (`reactive.rs:1-16`). Correction (Notes conversion): that holds for native guests only. On the web a `text_from` binding is read with tracking (`reactive.rs::read_binding`), so the screen still rebuilds; see the handover's `fix/web-semantic-rebuild` notes.
 - **Validation panics.** `web::render` panics on an invalid tree (`web/mod.rs:106-108`), so hydrated pages need the same validation tests the SSR pages have.
 - **Clock-dependent text.** Anything derived from time (the countdown) must render identically on the server and on the first client pass, so compute it from the server's `now_ms`, not the browser clock.
 - **Islands.** The islands render mode could cut the demo's bundle, but I did not verify that leptoskit `web::render` works inside `#[island]`.

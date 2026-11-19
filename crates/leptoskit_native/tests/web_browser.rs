@@ -525,6 +525,157 @@ async fn reactive_controls_preserve_focus_and_deliver_native_events() {
 }
 
 #[wasm_bindgen_test]
+async fn a_rebuild_keeps_landmarks_headings_and_the_focus_inside_them() {
+	use leptoskit_native::components::Heading;
+	use leptoskit_native::components::TextInput;
+
+	let parent = container();
+	let revision = ArcRwSignal::new(0);
+	let mount = mount_to(parent.clone(), {
+		let revision = revision.clone();
+		move || {
+			move || {
+				let count = revision.get();
+				render(
+					View().role(Role::Main).test_id("main").children([
+						Heading(2, format!("Revision {count}")).test_id("title"),
+						View()
+							.role(Role::Article)
+							.test_id("article")
+							.child(TextInput().aria_label("Code").test_id("code")),
+					]),
+				)
+			}
+		}
+	});
+	tick().await;
+	let main: web_sys::HtmlElement = find(&parent, "[data-testid=main]");
+	let title: web_sys::HtmlElement = find(&parent, "[data-testid=title]");
+	let article: web_sys::HtmlElement = find(&parent, "[data-testid=article]");
+	let code: web_sys::HtmlElement = find(&parent, "[data-testid=code]");
+	assert_eq!(main.tag_name(), "MAIN");
+	assert_eq!(title.tag_name(), "H2");
+	assert_eq!(article.tag_name(), "ARTICLE");
+	code.focus().expect("focus the field");
+
+	revision.set(1);
+	tick().await;
+	for (before, id) in [
+		(&main, "main"),
+		(&title, "title"),
+		(&article, "article"),
+		(&code, "code"),
+	] {
+		let after: web_sys::HtmlElement = find(&parent, &format!("[data-testid={id}]"));
+		assert!(after.is_same_node(Some(before)), "the rebuild keeps {id}");
+	}
+	assert_eq!(title.text_content().as_deref(), Some("Revision 1"));
+	assert_eq!(
+		document().active_element().as_ref(),
+		Some(code.as_ref()),
+		"the field keeps focus"
+	);
+
+	drop(mount);
+	parent.remove();
+}
+
+#[wasm_bindgen_test]
+async fn a_rebuild_changes_only_the_attributes_that_changed_and_keeps_focus() {
+	use leptoskit_native::components::Heading;
+
+	let parent = container();
+	let revision = ArcRwSignal::new(0);
+	let mount = mount_to(parent.clone(), {
+		let revision = revision.clone();
+		move || {
+			move || {
+				let count = revision.get();
+				let title = Heading(2, format!("Revision {count}"))
+					.test_id("title")
+					.id("title")
+					.tab_index(-1);
+				let title = if count == 0 {
+					title.aria_described_by(["first"])
+				} else {
+					title
+				};
+				render(
+					View()
+						.role(Role::Dialog)
+						.children([title, Text("First").id("first")]),
+				)
+			}
+		}
+	});
+	tick().await;
+	let title: web_sys::HtmlElement = find(&parent, "[data-testid=title]");
+	assert_eq!(
+		title.get_attribute("aria-describedby").as_deref(),
+		Some("first")
+	);
+	title.focus().expect("focus the heading");
+	assert_eq!(document().active_element().as_ref(), Some(title.as_ref()));
+
+	// Record every attribute the rebuild touches: one that is set again to
+	// the value it had would blink out of the DOM and back.
+	let touched = std::rc::Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
+	let observer = {
+		let touched = std::rc::Rc::clone(&touched);
+		let callback = wasm_bindgen::closure::Closure::<dyn FnMut(js_sys::Array)>::new(
+			move |records: js_sys::Array| {
+				for record in records.iter() {
+					let record: web_sys::MutationRecord = record.unchecked_into();
+					if let Some(name) = record.attribute_name() {
+						touched.borrow_mut().push(name);
+					}
+				}
+			},
+		);
+		let observer =
+			web_sys::MutationObserver::new(callback.as_ref().unchecked_ref()).expect("observer");
+		callback.forget();
+		let options = web_sys::MutationObserverInit::new();
+		options.set_attributes(true);
+		observer
+			.observe_with_options(&title, &options)
+			.expect("observe");
+		observer
+	};
+
+	revision.set(1);
+	tick().await;
+	for record in observer.take_records().iter() {
+		let record: web_sys::MutationRecord = record.unchecked_into();
+		if let Some(name) = record.attribute_name() {
+			touched.borrow_mut().push(name);
+		}
+	}
+	observer.disconnect();
+
+	let after: web_sys::HtmlElement = find(&parent, "[data-testid=title]");
+	assert!(
+		after.is_same_node(Some(&title)),
+		"the rebuild keeps the heading"
+	);
+	assert_eq!(title.get_attribute("aria-describedby"), None);
+	assert_eq!(title.get_attribute("tabindex").as_deref(), Some("-1"));
+	assert_eq!(
+		document().active_element().as_ref(),
+		Some(title.as_ref()),
+		"the heading keeps focus"
+	);
+	assert_eq!(
+		*touched.borrow(),
+		["aria-describedby"],
+		"only the gone attribute changes"
+	);
+
+	drop(mount);
+	parent.remove();
+}
+
+#[wasm_bindgen_test]
 async fn handled_events_stop_bubbling_and_disabled_buttons_do_not_press() {
 	let parent = container();
 	let outer = Arc::new(AtomicUsize::new(0));
@@ -2229,6 +2380,74 @@ async fn a_modal_opens_in_the_top_layer_and_gives_focus_back() {
 	next_frame().await;
 	assert_eq!(dismissals.load(Ordering::Relaxed), 2);
 	assert!(!matches(&dialog, ":modal"));
+
+	drop(mount);
+	parent.remove();
+}
+
+#[wasm_bindgen_test]
+async fn tab_wraps_inside_an_open_modal() {
+	use leptoskit_native::components::Button;
+	use leptoskit_native::components::Heading;
+	use leptoskit_native::components::Modal;
+
+	let parent = container();
+	let mount = mount_to(parent.clone(), || {
+		|| {
+			render(
+				Modal(true)
+					.aria_label("A new day")
+					.initial_focus("title")
+					.child(
+						View()
+							.class("w-40 h-20")
+							.child(Heading(2, "A new day").id("title").tab_index(-1))
+							.child(Button("Start again").id("start"))
+							.child(Button("Keep looking").id("keep")),
+					),
+			)
+		}
+	});
+	tick().await;
+	next_frame().await;
+
+	let by_id = |id: &str| -> web_sys::HtmlElement {
+		document()
+			.get_element_by_id(id)
+			.unwrap_or_else(|| panic!("an element with the id {id}"))
+			.unchecked_into()
+	};
+	// Presses Tab on the focused element; true when the browser may move
+	// focus itself.
+	let tab = |shift: bool| {
+		let options = web_sys::KeyboardEventInit::new();
+		options.set_key("Tab");
+		options.set_shift_key(shift);
+		options.set_bubbles(true);
+		options.set_cancelable(true);
+		let event =
+			web_sys::KeyboardEvent::new_with_keyboard_event_init_dict("keydown", &options).unwrap();
+		document()
+			.active_element()
+			.expect("something has focus")
+			.dispatch_event(&event)
+			.unwrap()
+	};
+	let focused = || document().active_element();
+
+	assert_eq!(
+		focused(),
+		Some(by_id("title").into()),
+		"the title takes focus"
+	);
+	assert!(!tab(true), "Shift+Tab from the title wraps");
+	assert_eq!(focused(), Some(by_id("keep").into()));
+	assert!(!tab(false), "Tab from the last control wraps");
+	assert_eq!(focused(), Some(by_id("start").into()));
+	assert!(tab(false), "Tab between controls is the browser's");
+	assert_eq!(focused(), Some(by_id("start").into()));
+	assert!(!tab(true), "Shift+Tab from the first control wraps");
+	assert_eq!(focused(), Some(by_id("keep").into()));
 
 	drop(mount);
 	parent.remove();
