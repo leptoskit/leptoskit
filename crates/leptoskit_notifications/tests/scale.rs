@@ -906,6 +906,158 @@ async fn the_composers_reads_use_their_indexes(db: &Db) {
 	assert_eq!(opted, vec![vec![Value::Int(34)]]);
 }
 
+/// The campaign lists and counts read through their indexes: a page of
+/// campaigns newest first, a page of one state, a campaign's events in
+/// order, the count of drafts behind the cap, and the count of one
+/// campaign's tests. 3,000 campaigns, a tenth of them drafts, each with
+/// two events. The typed queries are mirrored here as SQL.
+async fn the_campaign_lists_use_their_indexes(db: &Db) {
+	let dialect = db.dialect();
+	let sql = Sql(dialect);
+	let base = Utc::now() - Duration::hours(2);
+	let stamp = sql.timestamp(&base.to_rfc3339_opts(chrono::SecondsFormat::Millis, true));
+	let campaign = |n: u128| {
+		id_at(
+			base + Duration::milliseconds(i64::try_from(n).unwrap()),
+			90_000 + n,
+		)
+	};
+	let mut campaigns = Vec::new();
+	let mut events = Vec::new();
+
+	for n in 0..3_000_u128 {
+		let state = match n % 10 {
+			0 => "draft",
+			1 => "archived",
+			_ => "launched",
+		};
+		campaigns.push(format!(
+			"({}, 1, '{state}', 'campaign {n}', '{{}}', 'seed', 'seed', {stamp}, {stamp})",
+			sql.uuid(campaign(n)),
+		));
+
+		for (m, kind) in ["created", "tested"].into_iter().enumerate() {
+			events.push(format!(
+				"({}, {}, '{kind}', 'seed', 1, {stamp})",
+				sql.uuid(id_at(
+					base + Duration::milliseconds(i64::try_from(n).unwrap()),
+					100_000 + 2 * n + u128::try_from(m).unwrap()
+				)),
+				sql.uuid(campaign(n)),
+			));
+		}
+	}
+
+	insert(
+		db,
+		"campaigns",
+		"id, revision, state, name, spec, created_by, updated_by, created_at, updated_at",
+		&campaigns,
+	)
+	.await;
+	insert(
+		db,
+		"campaign_events",
+		"id, campaign, kind, by, revision, created_at",
+		&events,
+	)
+	.await;
+	run(db, "ANALYZE").await;
+
+	let text = |text: &str| Value::Text(text.to_owned());
+	let one = Value::Uuid(campaign(1_234));
+	let primary = match dialect {
+		Dialect::Sqlite => "sqlite_autoindex_campaigns_1",
+		Dialect::Postgres => "campaigns_pkey",
+	};
+	let cases = [
+		(
+			"a page of campaigns",
+			Statement::new(
+				numbered(
+					dialect,
+					"SELECT id FROM campaigns ORDER BY id DESC LIMIT {}",
+				),
+				vec![Value::Int(51)],
+			),
+			primary,
+			51,
+		),
+		(
+			"a page of the drafts",
+			Statement::new(
+				numbered(
+					dialect,
+					"SELECT id FROM campaigns WHERE state = {} ORDER BY id DESC LIMIT {}",
+				),
+				vec![text("draft"), Value::Int(51)],
+			),
+			"campaigns_state_id_idx",
+			51,
+		),
+		(
+			"the count of drafts",
+			Statement::new(
+				numbered(dialect, "SELECT count(*) FROM campaigns WHERE state = {}"),
+				vec![text("draft")],
+			),
+			"campaigns_state_id_idx",
+			1,
+		),
+		(
+			"a campaign's events",
+			Statement::new(
+				numbered(
+					dialect,
+					"SELECT id FROM campaign_events WHERE campaign = {} ORDER BY id ASC LIMIT {}",
+				),
+				vec![one.clone(), Value::Int(101)],
+			),
+			"campaign_events_campaign_id_idx",
+			2,
+		),
+		(
+			"the count of a campaign's tests",
+			Statement::new(
+				numbered(
+					dialect,
+					"SELECT count(*) FROM campaign_events WHERE campaign = {} AND kind = {}",
+				),
+				vec![one, text("tested")],
+			),
+			"campaign_events_campaign_id_idx",
+			1,
+		),
+	];
+
+	for (what, statement, index, rows) in cases {
+		let plan = explain(db, &statement).await;
+
+		assert!(
+			plan.contains(index),
+			"{what} should read through {index}:\n{plan}"
+		);
+
+		for step in ["TEMP B-TREE", "Seq Scan", "Sort"] {
+			assert!(
+				!plan.contains(step),
+				"{what} should come out of {index} with no `{step}` step:\n{plan}"
+			);
+		}
+
+		assert_eq!(
+			db.fetch(statement).await.expect("the read runs").len(),
+			rows,
+			"{what}"
+		);
+	}
+
+	assert_eq!(
+		count(db, "SELECT count(*) FROM campaigns WHERE state = 'draft'").await,
+		300
+	);
+}
+
 /// A walk over two topics reads each topic's subscribers on its own, in
 /// person order straight from `(topic, person)`: one statement per topic,
 /// none of them sorting or de-duplicating.
@@ -1611,6 +1763,11 @@ async fn sqlite_the_composers_reads_use_their_indexes() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn sqlite_the_campaign_lists_use_their_indexes() {
+	the_campaign_lists_use_their_indexes(&on_sqlite().await).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn sqlite_a_walk_over_several_topics_reads_each_in_index_order() {
 	a_walk_over_several_topics_reads_each_in_index_order(&on_sqlite().await).await;
 }
@@ -1707,6 +1864,15 @@ mod on_postgres {
 		};
 
 		the_composers_reads_use_their_indexes(&connect(&postgres).await).await;
+	}
+
+	#[tokio::test(flavor = "multi_thread")]
+	async fn postgres_the_campaign_lists_use_their_indexes() {
+		let Some(postgres) = Postgres::start() else {
+			return;
+		};
+
+		the_campaign_lists_use_their_indexes(&connect(&postgres).await).await;
 	}
 
 	#[tokio::test(flavor = "multi_thread")]

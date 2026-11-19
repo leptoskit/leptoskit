@@ -95,6 +95,10 @@ required-features = ["service"]
 # overview, topics, attributes, categories, the audience estimate, and a
 # person's endpoints for the app.
 [[test]]
+name = "campaigns"
+required-features = ["service"]
+
+[[test]]
 name = "catalogue"
 required-features = ["service"]
 

@@ -1602,3 +1602,1115 @@ pub async fn only_the_app_reads_the_catalogue(service: &Service) {
 		assert_eq!(status, 200, "{operation}: {body}");
 	}
 }
+
+// ── Campaigns ─────────────────────────────────────────────────────────
+
+/// Who acts in these checks, as the app's server would name them.
+const ADA: &str = "ada@example.test";
+const GRACE: &str = "grace@example.test";
+
+/// The count `sql` answers.
+async fn counted(db: &Db, sql: String) -> i64 {
+	match run(db, sql).await[0][0] {
+		leptoskit_db::Value::Int(count) => count,
+		ref other => panic!("a count, not {other:?}"),
+	}
+}
+
+/// A draft that can be launched as it is: a message and two recipients.
+fn ready(name: &str, recipients: &[Uuid]) -> Value {
+	json!({
+		"name": name,
+		"spec": { "category": "news", "title": name, "body": "It is here." },
+		"target": { "recipients": recipients },
+	})
+}
+
+async fn create(service: &Service, draft: Value, by: &str) -> Value {
+	app(
+		service,
+		"create_campaign",
+		json!({ "draft": draft, "by": by }),
+	)
+	.await
+}
+
+/// The campaign's id, as the next call takes it.
+fn id_of(campaign: &Value) -> &str {
+	campaign["id"].as_str().expect("a campaign has an id")
+}
+
+/// Launches `id` at `revision`, and answers the status with the body.
+async fn launch(service: &Service, id: &str, revision: u64, by: &str) -> (u16, Value) {
+	let (status, body) = call(
+		service,
+		"launch_campaign",
+		json!({ "id": id, "revision": revision, "by": by }),
+		As::App,
+	)
+	.await;
+
+	(
+		status,
+		serde_json::from_str(&body).unwrap_or(Value::String(body)),
+	)
+}
+
+/// The kinds of the campaign's events, oldest first.
+async fn event_kinds(service: &Service, id: &str) -> Vec<String> {
+	let (events, _) = every(service, "campaign_events", json!({ "id": id }), 100).await;
+
+	field(&events, "kind")
+		.into_iter()
+		.map(str::to_owned)
+		.collect()
+}
+
+/// An RFC 3339 instant `hours` from now.
+fn hours_from_now(hours: i64) -> String {
+	(chrono::Utc::now() + chrono::Duration::hours(hours))
+		.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+}
+
+/// A draft saves with nothing but a name; every save names the revision
+/// it was made from and is refused when the campaign has moved on; a
+/// draft's bounds are refused by name; and the list shows it.
+#[expect(
+	clippy::cognitive_complexity,
+	reason = "one draft, saved by two people in turn"
+)]
+pub async fn a_draft_is_saved_incomplete_and_revised(service: &Service) {
+	// No title, no category, no audience: it is a draft.
+	let saved = create(service, json!({ "name": "Spring sale" }), ADA).await;
+	let id = id_of(&saved).to_owned();
+	assert_eq!(saved["revision"], 1);
+	assert_eq!(saved["state"], "draft");
+	assert_eq!(saved["created_by"], ADA);
+	assert_eq!(saved["updated_by"], ADA);
+	assert!(saved["draft"].get("target").is_none(), "{saved}");
+	assert!(saved.get("send_key").is_none(), "{saved}");
+
+	let read = app(service, "campaign", json!({ "id": id })).await;
+	assert_eq!(read, saved);
+
+	// Grace fills it in, from revision 1.
+	let filled = json!({
+		"name": "Spring sale",
+		"spec": { "category": "offers", "title": "Half price", "body": "Today only." },
+		"target": { "condition": "user.plan == 'pro'" },
+		"note": "Check the wording with legal.",
+	});
+	let second = app(
+		service,
+		"update_campaign",
+		json!({ "id": id, "revision": 1, "draft": filled, "by": GRACE }),
+	)
+	.await;
+	assert_eq!(second["revision"], 2);
+	assert_eq!(second["created_by"], ADA);
+	assert_eq!(second["updated_by"], GRACE);
+	assert_eq!(second["draft"]["spec"]["title"], "Half price");
+	assert_eq!(
+		second["draft"]["target"],
+		json!({ "condition": "user.plan == 'pro'" })
+	);
+	assert_eq!(second["draft"]["note"], "Check the wording with legal.");
+
+	// Ada, still looking at revision 1, saves over it and is refused.
+	let (status, body) = call(
+		service,
+		"update_campaign",
+		json!({ "id": id, "revision": 1, "draft": { "name": "Ada's version" }, "by": ADA }),
+		As::App,
+	)
+	.await;
+	assert_eq!(status, 409, "{body}");
+	assert!(body.contains("revision 2"), "{body}");
+	let unchanged = app(service, "campaign", json!({ "id": id })).await;
+	assert_eq!(unchanged, second, "a refused save changes nothing");
+
+	// An unknown campaign is not found.
+	let (status, body) = call(
+		service,
+		"update_campaign",
+		json!({ "id": Uuid::nil(), "revision": 1, "draft": { "name": "x" }, "by": ADA }),
+		As::App,
+	)
+	.await;
+	assert_eq!(status, 404, "{body}");
+	let (status, body) = call(service, "campaign", json!({ "id": Uuid::nil() }), As::App).await;
+	assert_eq!(status, 404, "{body}");
+
+	// Bounds are refused by name, and nothing is saved.
+	for (draft, by, names) in [
+		(json!({ "name": " " }), ADA, "name"),
+		(json!({ "name": "n".repeat(121) }), ADA, "name"),
+		(
+			json!({ "name": "x", "note": "n".repeat(1_001) }),
+			ADA,
+			"note",
+		),
+		(
+			json!({ "name": "x", "spec": { "category": "news", "title": "t", "body": "b".repeat(9_000) } }),
+			ADA,
+			"message",
+		),
+		(json!({ "name": "x" }), "", "`by`"),
+		(json!({ "name": "x" }), "a\nb", "`by`"),
+	] {
+		let (status, body) = call(
+			service,
+			"create_campaign",
+			json!({ "draft": draft, "by": by }),
+			As::App,
+		)
+		.await;
+		assert_eq!(status, 400, "{names}: {body}");
+		assert!(body.contains(names), "{names}: {body}");
+	}
+
+	assert_eq!(
+		counted(&service.db, "SELECT count(*) FROM campaigns".to_owned()).await,
+		1
+	);
+
+	// The list shows it, and a state filter keeps or drops it.
+	let (listed, _) = every(service, "campaigns", json!({}), 10).await;
+	assert_eq!(listed.len(), 1, "{listed:?}");
+	assert_eq!(listed[0]["id"], id.as_str());
+	assert_eq!(listed[0]["name"], "Spring sale");
+	assert_eq!(listed[0]["title"], "Half price");
+	assert_eq!(listed[0]["category"], "offers");
+	assert_eq!(listed[0]["revision"], 2);
+	assert_eq!(
+		listed[0]["target"],
+		json!({ "kind": "condition", "text": "user.plan == 'pro'", "recipients": 0 })
+	);
+	assert!(
+		listed[0].get("draft").is_none(),
+		"a list row is not the whole draft"
+	);
+
+	let (drafts, _) = every(
+		service,
+		"campaigns",
+		json!({ "filter": { "state": "draft" } }),
+		10,
+	)
+	.await;
+	assert_eq!(drafts.len(), 1);
+	let (launched, _) = every(
+		service,
+		"campaigns",
+		json!({ "filter": { "state": "launched" } }),
+		10,
+	)
+	.await;
+	assert_eq!(launched, Vec::<Value>::new());
+
+	// Saving is not an event: the campaign says who saved it last.
+	assert_eq!(event_kinds(service, &id).await, ["created"]);
+}
+
+/// A launch makes the send `send` would, once: launched again it answers
+/// the same send as a duplicate, and nothing is written twice. A launched
+/// campaign can no longer be changed.
+#[expect(
+	clippy::cognitive_complexity,
+	reason = "one launch, pressed three times"
+)]
+pub async fn a_launch_makes_one_send_however_often_it_is_pressed(service: &Service) {
+	let people = [person(701), person(702)];
+	let saved = create(service, ready("It ships", &people), ADA).await;
+	let id = id_of(&saved).to_owned();
+	let key = format!("campaign:{id}:r1");
+
+	// A launch from a revision the campaign is not at is refused.
+	let (status, body) = launch(service, &id, 2, GRACE).await;
+	assert_eq!(status, 409, "{body}");
+
+	let (status, first) = launch(service, &id, 1, GRACE).await;
+	assert_eq!(status, 200, "{first}");
+	assert_eq!(first["send"]["duplicate"], false);
+	assert_eq!(first["send"]["delivered"], 2);
+	assert_eq!(first["send"]["state"], "complete");
+	assert_eq!(first["campaign"]["state"], "launched");
+	assert_eq!(first["campaign"]["send_key"], key.as_str());
+	assert_eq!(first["campaign"]["launched_by"], GRACE);
+	assert_eq!(first["campaign"]["revision"], 1);
+	assert!(first["campaign"]["launched_at"].is_string(), "{first}");
+
+	// Pressed again, by anyone: the same send, marked a duplicate.
+	for by in [GRACE, ADA] {
+		let (status, again) = launch(service, &id, 1, by).await;
+		assert_eq!(status, 200, "{again}");
+		assert_eq!(again["send"]["duplicate"], true);
+		assert_eq!(again["send"]["delivered"], 2);
+		assert_eq!(
+			again["campaign"]["launched_by"], GRACE,
+			"the first launch stands"
+		);
+		assert_eq!(
+			again["campaign"]["launched_at"],
+			first["campaign"]["launched_at"]
+		);
+	}
+
+	assert_eq!(
+		counted(
+			&service.db,
+			format!("SELECT count(*) FROM sends WHERE idempotency_key = '{key}'")
+		)
+		.await,
+		1
+	);
+	assert_eq!(
+		counted(
+			&service.db,
+			format!("SELECT count(*) FROM notifications WHERE send_key = '{key}'")
+		)
+		.await,
+		2
+	);
+	assert_eq!(event_kinds(service, &id).await, ["created", "launched"]);
+
+	// The send is an ordinary send: it is listed, and it has a report.
+	let (sends, _) = every(service, "list_sends", json!({}), 10).await;
+	assert!(field(&sends, "key").contains(&key.as_str()), "{sends:?}");
+	let report = app(service, "send_report", json!({ "idempotency_key": key })).await;
+	assert_eq!(report["spec"]["title"], "It ships");
+	assert_eq!(report["inbox"]["rows"], 2);
+
+	// Once retention has deleted the send's record, pressing launch again
+	// must not make the send a second time.
+	run(
+		&service.db,
+		format!("DELETE FROM notifications WHERE send_key = '{key}'"),
+	)
+	.await;
+	run(
+		&service.db,
+		format!("DELETE FROM sends WHERE idempotency_key = '{key}'"),
+	)
+	.await;
+	let (status, body) = launch(service, &id, 1, ADA).await;
+	assert_eq!(status, 409, "{body}");
+	assert!(body.to_string().contains("deleted"), "{body}");
+	assert_eq!(
+		counted(&service.db, "SELECT count(*) FROM sends".to_owned()).await,
+		0,
+		"no second send"
+	);
+
+	// What was launched can't be rewritten.
+	let (status, body) = call(
+		service,
+		"update_campaign",
+		json!({ "id": id, "revision": 1, "draft": { "name": "Changed" }, "by": ADA }),
+		As::App,
+	)
+	.await;
+	assert_eq!(status, 409, "{body}");
+	assert!(body.contains("launched"), "{body}");
+}
+
+/// A launch checks everything a send checks, and that there is an
+/// audience; an everyone audience needs the caller to say it is a
+/// broadcast. A refused launch leaves a draft and no send.
+pub async fn a_launch_checks_what_a_send_checks(service: &Service) {
+	let registered = person(711);
+	app(
+		service,
+		"set_person_attributes",
+		json!({ "persons": [registered], "set": { "plan": "pro" }, "remove": [] }),
+	)
+	.await;
+
+	for (draft, status, says) in [
+		// No audience.
+		(
+			json!({ "name": "Nobody", "spec": { "category": "news", "title": "Hello" } }),
+			400,
+			"who this campaign is for",
+		),
+		// No title.
+		(
+			json!({
+				"name": "Untitled",
+				"spec": { "category": "news", "title": "" },
+				"target": { "topic": "news.all" },
+			}),
+			400,
+			"title",
+		),
+		// A condition that doesn't parse.
+		(
+			json!({
+				"name": "Half a condition",
+				"spec": { "category": "news", "title": "Hello" },
+				"target": { "condition": "user.plan ==" },
+			}),
+			400,
+			"",
+		),
+		// Everyone, without saying so.
+		(
+			json!({
+				"name": "To all",
+				"spec": { "category": "news", "title": "Hello" },
+				"target": "everyone",
+			}),
+			403,
+			"broadcast",
+		),
+	] {
+		let saved = create(service, draft.clone(), ADA).await;
+		let id = id_of(&saved).to_owned();
+		let (answered, body) = launch(service, &id, 1, ADA).await;
+		assert_eq!(answered, status, "{draft}: {body}");
+		assert!(body.to_string().contains(says), "{draft}: {body}");
+
+		let still = app(service, "campaign", json!({ "id": id })).await;
+		assert_eq!(
+			still["state"], "draft",
+			"a refused launch leaves a draft: {still}"
+		);
+		assert!(still.get("send_key").is_none(), "{still}");
+		assert_eq!(event_kinds(service, &id).await, ["created"]);
+	}
+
+	assert_eq!(
+		counted(&service.db, "SELECT count(*) FROM sends".to_owned()).await,
+		0,
+		"no refused launch made a send"
+	);
+
+	// Everyone, said out loud.
+	let all = create(
+		service,
+		json!({
+			"name": "To all",
+			"spec": { "category": "news", "title": "Hello" },
+			"target": "everyone",
+		}),
+		ADA,
+	)
+	.await;
+	let id = id_of(&all).to_owned();
+	let (status, body) = call(
+		service,
+		"launch_campaign",
+		json!({ "id": id, "revision": 1, "by": ADA, "broadcast": true }),
+		As::App,
+	)
+	.await;
+	assert_eq!(status, 200, "{body}");
+	let launched: Value = serde_json::from_str(&body).unwrap();
+	assert_eq!(launched["send"]["state"], "fanning_out");
+	let (events, _) = every(service, "campaign_events", json!({ "id": id }), 10).await;
+	assert_eq!(events[1]["kind"], "launched");
+	assert!(
+		events[1]["detail"].as_str().unwrap().contains("broadcast"),
+		"{events:?}"
+	);
+}
+
+/// A draft scheduled for a time that has passed is refused at launch —
+/// `send` would treat it as now — and stays a draft; given a time ahead
+/// it launches, and its rows wait for that time.
+pub async fn a_past_schedule_is_refused_and_a_future_one_is_kept(service: &Service) {
+	let people = [person(721), person(722)];
+	let mut draft = ready("Tuesday's news", &people);
+	draft["spec"]["visible_at"] = json!("2020-01-07T09:00:00Z");
+	let saved = create(service, draft.clone(), ADA).await;
+	let id = id_of(&saved).to_owned();
+
+	let (status, body) = launch(service, &id, 1, ADA).await;
+	assert_eq!(status, 400, "{body}");
+	assert!(body.to_string().contains("has passed"), "{body}");
+	assert_eq!(
+		app(service, "campaign", json!({ "id": id })).await["state"],
+		"draft"
+	);
+	assert_eq!(
+		counted(&service.db, "SELECT count(*) FROM notifications".to_owned()).await,
+		0,
+		"nothing went out"
+	);
+
+	// A new time, an hour ahead.
+	let later = hours_from_now(1);
+	draft["spec"]["visible_at"] = json!(later);
+	app(
+		service,
+		"update_campaign",
+		json!({ "id": id, "revision": 1, "draft": draft, "by": ADA }),
+	)
+	.await;
+	let (status, launched) = launch(service, &id, 2, ADA).await;
+	assert_eq!(status, 200, "{launched}");
+	assert_eq!(launched["send"]["delivered"], 2);
+
+	// The rows are written and wait: nobody's inbox shows one yet.
+	let key = launched["campaign"]["send_key"]
+		.as_str()
+		.unwrap()
+		.to_owned();
+	assert_eq!(key, format!("campaign:{id}:r2"));
+	assert_eq!(
+		counted(
+			&service.db,
+			format!("SELECT count(*) FROM notifications WHERE send_key = '{key}'")
+		)
+		.await,
+		2
+	);
+	let inbox = as_person(
+		service,
+		people[0],
+		"inbox",
+		json!({ "page": { "limit": 10 } }),
+	)
+	.await;
+	assert_eq!(inbox["items"], json!([]), "not due yet");
+}
+
+/// A scheduled campaign is cancelled before it is due, once, and answers
+/// the same when asked again; a campaign people have already seen is
+/// refused and stays launched; a draft has nothing to cancel.
+#[expect(
+	clippy::cognitive_complexity,
+	reason = "three campaigns, each at a different point of its life"
+)]
+pub async fn a_cancel_stops_a_scheduled_campaign_and_not_a_seen_one(service: &Service) {
+	let people = [person(731), person(732)];
+
+	// Scheduled an hour ahead, then cancelled.
+	let mut draft = ready("Later", &people);
+	draft["spec"]["visible_at"] = json!(hours_from_now(1));
+	let saved = create(service, draft, ADA).await;
+	let id = id_of(&saved).to_owned();
+	let (status, launched) = launch(service, &id, 1, ADA).await;
+	assert_eq!(status, 200, "{launched}");
+	let key = launched["campaign"]["send_key"]
+		.as_str()
+		.unwrap()
+		.to_owned();
+
+	let cancelled = app(service, "cancel_campaign", json!({ "id": id, "by": GRACE })).await;
+	assert_eq!(cancelled["state"], "cancelled");
+	assert_eq!(cancelled["cancelled_by"], GRACE);
+	assert_eq!(cancelled["launched_by"], ADA);
+	assert_eq!(
+		counted(
+			&service.db,
+			format!(
+				"SELECT count(*) FROM notifications WHERE send_key = '{key}' AND cancelled_at IS \
+				 NOT NULL"
+			)
+		)
+		.await,
+		2,
+		"both rows are stopped"
+	);
+
+	// Asked again, by someone else: the same answer, and one event.
+	let again = app(service, "cancel_campaign", json!({ "id": id, "by": ADA })).await;
+	assert_eq!(again, cancelled);
+	assert_eq!(
+		event_kinds(service, &id).await,
+		["created", "launched", "cancelled"]
+	);
+	let (events, _) = every(service, "campaign_events", json!({ "id": id }), 10).await;
+	assert_eq!(events[2]["by"], GRACE);
+	assert_eq!(events[2]["detail"], "2 rows stopped");
+
+	// A cancelled campaign is not launched again.
+	let (status, body) = launch(service, &id, 1, ADA).await;
+	assert_eq!(status, 409, "{body}");
+
+	// Sent now, and so already in people's inboxes: past cancelling.
+	let seen = create(service, ready("Now", &people), ADA).await;
+	let seen_id = id_of(&seen).to_owned();
+	let (status, body) = launch(service, &seen_id, 1, ADA).await;
+	assert_eq!(status, 200, "{body}");
+	let (status, body) = call(
+		service,
+		"cancel_campaign",
+		json!({ "id": seen_id, "by": GRACE }),
+		As::App,
+	)
+	.await;
+	assert_eq!(status, 409, "{body}");
+	let still = app(service, "campaign", json!({ "id": seen_id })).await;
+	assert_eq!(still["state"], "launched", "{still}");
+	assert!(still.get("cancelled_by").is_none(), "{still}");
+	assert_eq!(
+		event_kinds(service, &seen_id).await,
+		["created", "launched"]
+	);
+
+	// A draft was never sent.
+	let draft = create(service, ready("Unsent", &people), ADA).await;
+	let (status, body) = call(
+		service,
+		"cancel_campaign",
+		json!({ "id": id_of(&draft), "by": GRACE }),
+		As::App,
+	)
+	.await;
+	assert_eq!(status, 409, "{body}");
+	assert!(body.contains("never launched"), "{body}");
+}
+
+/// A copy is a new draft at revision 1 with the message and the audience
+/// and without the schedule, of a campaign or of a send anyone made; a
+/// recipients send's copy has no audience, because the service keeps no
+/// list of who a send named.
+#[expect(
+	clippy::cognitive_complexity,
+	reason = "a copy of a campaign and of each kind of send"
+)]
+pub async fn a_duplicate_is_a_new_draft_without_the_schedule(service: &Service) {
+	let people = [person(741), person(742)];
+	let mut draft = ready("March newsletter", &people);
+	draft["spec"]["visible_at"] = json!(hours_from_now(1));
+	draft["spec"]["expires_at"] = json!(hours_from_now(48));
+	draft["spec"]["label"] = json!("newsletter");
+	draft["spec"]["options"] = json!({ "link": "/news/march" });
+	draft["note"] = json!("Goes out on the first.");
+	let original = create(service, draft, ADA).await;
+	let id = id_of(&original).to_owned();
+	let (status, body) = launch(service, &id, 1, ADA).await;
+	assert_eq!(status, 200, "{body}");
+
+	let copy = app(
+		service,
+		"duplicate_campaign",
+		json!({ "id": id, "by": GRACE }),
+	)
+	.await;
+	assert_ne!(copy["id"], original["id"]);
+	assert_eq!(copy["state"], "draft");
+	assert_eq!(copy["revision"], 1);
+	assert_eq!(copy["created_by"], GRACE);
+	assert_eq!(copy["draft"]["name"], "Copy of March newsletter");
+	assert_eq!(copy["draft"]["note"], "Goes out on the first.");
+	assert_eq!(copy["draft"]["spec"]["title"], "March newsletter");
+	assert_eq!(copy["draft"]["spec"]["label"], "newsletter");
+	assert_eq!(copy["draft"]["spec"]["options"]["link"], "/news/march");
+	assert_eq!(copy["draft"]["target"], json!({ "recipients": people }));
+	assert!(copy["draft"]["spec"]["visible_at"].is_null(), "{copy}");
+	assert!(copy["draft"]["spec"]["expires_at"].is_null(), "{copy}");
+	assert!(copy.get("send_key").is_none(), "{copy}");
+	assert!(copy.get("launched_at").is_none(), "{copy}");
+
+	let (events, _) = every(
+		service,
+		"campaign_events",
+		json!({ "id": id_of(&copy) }),
+		10,
+	)
+	.await;
+	assert_eq!(events.len(), 1);
+	assert_eq!(events[0]["kind"], "created");
+	assert_eq!(events[0]["detail"], format!("a copy of campaign {id}"));
+
+	// The original is as it was.
+	assert_eq!(
+		app(service, "campaign", json!({ "id": id })).await["state"],
+		"launched"
+	);
+
+	// A send the app's server made, to a topic, scheduled.
+	let mut scheduled = news("Server-made");
+	scheduled["visible_at"] = json!(hours_from_now(2));
+	send(
+		service,
+		"server-topic",
+		scheduled,
+		json!({ "topic": "news.all" }),
+	)
+	.await;
+	let from_send = app(
+		service,
+		"duplicate_send",
+		json!({ "idempotency_key": "server-topic", "by": ADA }),
+	)
+	.await;
+	assert_eq!(from_send["state"], "draft");
+	assert_eq!(from_send["draft"]["name"], "Copy of Server-made");
+	assert_eq!(from_send["draft"]["spec"]["title"], "Server-made");
+	assert_eq!(from_send["draft"]["target"], json!({ "topic": "news.all" }));
+	assert!(
+		from_send["draft"]["spec"]["visible_at"].is_null(),
+		"{from_send}"
+	);
+
+	// A recipients send: the message, and no audience.
+	send(
+		service,
+		"server-recipients",
+		news("To a few"),
+		json!({ "recipients": people }),
+	)
+	.await;
+	let few = app(
+		service,
+		"duplicate_send",
+		json!({ "idempotency_key": "server-recipients", "by": ADA }),
+	)
+	.await;
+	assert_eq!(few["draft"]["spec"]["title"], "To a few");
+	assert!(few["draft"].get("target").is_none(), "{few}");
+
+	// An unknown campaign or send is not found.
+	let (status, body) = call(
+		service,
+		"duplicate_campaign",
+		json!({ "id": Uuid::nil(), "by": ADA }),
+		As::App,
+	)
+	.await;
+	assert_eq!(status, 404, "{body}");
+	let (status, body) = call(
+		service,
+		"duplicate_send",
+		json!({ "idempotency_key": "never-sent", "by": ADA }),
+		As::App,
+	)
+	.await;
+	assert_eq!(status, 404, "{body}");
+}
+
+/// A test pushes the draft's message to one person's device now, whatever
+/// its schedule, and writes no inbox row and no delivery record; it
+/// records an event that says how the push ended and does not name the
+/// person. The campaign stays the draft it was.
+#[expect(
+	clippy::cognitive_complexity,
+	reason = "one test followed to the provider, the tables, and the record"
+)]
+pub async fn a_test_writes_no_inbox_row_and_records_an_event(service: &Service) {
+	let tester = person(751);
+	let endpoint = enroll(service, tester, "7e57", json!({})).await;
+	let mut draft = ready("Try me", &[person(752)]);
+	draft["spec"]["visible_at"] = json!(hours_from_now(3));
+	let saved = create(service, draft, ADA).await;
+	let id = id_of(&saved).to_owned();
+
+	let outcomes = app(
+		service,
+		"test_campaign",
+		json!({ "id": id, "person": tester, "by": GRACE }),
+	)
+	.await;
+	assert_eq!(
+		outcomes,
+		json!([{
+			"endpoint": endpoint,
+			"platform": "apns",
+			"state": "accepted",
+			"reason": null,
+		}])
+	);
+
+	for table in ["notifications", "push_deliveries", "sends"] {
+		assert_eq!(
+			counted(&service.db, format!("SELECT count(*) FROM {table}")).await,
+			0,
+			"a test writes nothing to `{table}`"
+		);
+	}
+
+	let (events, _) = every(service, "campaign_events", json!({ "id": id }), 10).await;
+	assert_eq!(events.len(), 2, "{events:?}");
+	assert_eq!(events[1]["kind"], "tested");
+	assert_eq!(events[1]["by"], GRACE);
+	assert_eq!(events[1]["revision"], 1);
+	assert_eq!(events[1]["detail"], "apns accepted");
+	let recorded = serde_json::to_string(&events).unwrap();
+	assert!(
+		!recorded.contains(&tester.to_string()) && !recorded.contains(&endpoint.to_string()),
+		"an event names neither the person nor the device: {recorded}"
+	);
+
+	let after = app(service, "campaign", json!({ "id": id })).await;
+	assert_eq!(after, saved, "a test changes nothing about the campaign");
+
+	// A person with no device: nothing to push to, and that is recorded.
+	let nobody = app(
+		service,
+		"test_campaign",
+		json!({ "id": id, "person": person(753), "by": GRACE }),
+	)
+	.await;
+	assert_eq!(nobody, json!([]));
+	let (events, _) = every(service, "campaign_events", json!({ "id": id }), 10).await;
+	assert_eq!(events[2]["detail"], "no device to push to");
+
+	// An unknown campaign is not found, and a draft that can't be sent
+	// can't be tested.
+	let (status, body) = call(
+		service,
+		"test_campaign",
+		json!({ "id": Uuid::nil(), "person": tester, "by": GRACE }),
+		As::App,
+	)
+	.await;
+	assert_eq!(status, 404, "{body}");
+	let untitled = create(service, json!({ "name": "Untitled" }), ADA).await;
+	let (status, body) = call(
+		service,
+		"test_campaign",
+		json!({ "id": id_of(&untitled), "person": tester, "by": GRACE }),
+		As::App,
+	)
+	.await;
+	assert_eq!(status, 400, "{body}");
+}
+
+/// An archived campaign can be read and copied and nothing else; asked
+/// again, archiving answers the same; a stale revision is refused.
+pub async fn an_archived_campaign_is_put_away(service: &Service) {
+	let people = [person(761)];
+	let saved = create(service, ready("Old idea", &people), ADA).await;
+	let id = id_of(&saved).to_owned();
+
+	let (status, body) = call(
+		service,
+		"archive_campaign",
+		json!({ "id": id, "revision": 7, "by": GRACE }),
+		As::App,
+	)
+	.await;
+	assert_eq!(status, 409, "{body}");
+
+	let archived = app(
+		service,
+		"archive_campaign",
+		json!({ "id": id, "revision": 1, "by": GRACE }),
+	)
+	.await;
+	assert_eq!(archived["state"], "archived");
+	assert_eq!(archived["updated_by"], GRACE);
+	let again = app(
+		service,
+		"archive_campaign",
+		json!({ "id": id, "revision": 1, "by": ADA }),
+	)
+	.await;
+	assert_eq!(again, archived);
+	assert_eq!(event_kinds(service, &id).await, ["created", "archived"]);
+
+	for (operation, args) in [
+		(
+			"update_campaign",
+			json!({ "id": id, "revision": 1, "draft": { "name": "Back" }, "by": ADA }),
+		),
+		(
+			"launch_campaign",
+			json!({ "id": id, "revision": 1, "by": ADA }),
+		),
+		("cancel_campaign", json!({ "id": id, "by": ADA })),
+	] {
+		let (status, body) = call(service, operation, args, As::App).await;
+		assert_eq!(status, 409, "{operation}: {body}");
+		assert!(body.contains("archived"), "{operation}: {body}");
+	}
+
+	let copy = app(
+		service,
+		"duplicate_campaign",
+		json!({ "id": id, "by": ADA }),
+	)
+	.await;
+	assert_eq!(copy["state"], "draft");
+
+	let (archived, _) = every(
+		service,
+		"campaigns",
+		json!({ "filter": { "state": "archived" } }),
+		10,
+	)
+	.await;
+	assert_eq!(field(&archived, "name"), ["Old idea"]);
+}
+
+/// Only the app's server reads or writes a campaign: a signed-in person
+/// and an anonymous caller are refused on every operation.
+pub async fn only_the_app_touches_campaigns(service: &Service) {
+	let alice = person(771);
+	let saved = create(service, ready("Private", &[alice]), ADA).await;
+	let id = id_of(&saved).to_owned();
+	send(
+		service,
+		"a-send",
+		news("A send"),
+		json!({ "topic": "news.all" }),
+	)
+	.await;
+
+	for (operation, args) in [
+		(
+			"create_campaign",
+			json!({ "draft": { "name": "Mine" }, "by": "me" }),
+		),
+		(
+			"update_campaign",
+			json!({ "id": id, "revision": 1, "draft": { "name": "Mine" }, "by": "me" }),
+		),
+		("campaign", json!({ "id": id })),
+		("campaigns", json!({ "page": { "limit": 5 } })),
+		("duplicate_campaign", json!({ "id": id, "by": "me" })),
+		(
+			"duplicate_send",
+			json!({ "idempotency_key": "a-send", "by": "me" }),
+		),
+		(
+			"archive_campaign",
+			json!({ "id": id, "revision": 1, "by": "me" }),
+		),
+		(
+			"launch_campaign",
+			json!({ "id": id, "revision": 1, "by": "me" }),
+		),
+		("cancel_campaign", json!({ "id": id, "by": "me" })),
+		(
+			"test_campaign",
+			json!({ "id": id, "person": alice, "by": "me" }),
+		),
+		(
+			"campaign_events",
+			json!({ "id": id, "page": { "limit": 5 } }),
+		),
+	] {
+		for caller in [As::Nobody, As::Person(alice)] {
+			let (status, body) = call(service, operation, args.clone(), caller).await;
+			assert_eq!(status, 403, "{operation}: {body}");
+		}
+	}
+
+	// Nothing a refused caller asked for happened.
+	let after = app(service, "campaign", json!({ "id": id })).await;
+	assert_eq!(after, saved);
+	assert_eq!(
+		counted(&service.db, "SELECT count(*) FROM campaigns".to_owned()).await,
+		1
+	);
+	assert_eq!(event_kinds(service, &id).await, ["created"]);
+}
+
+/// What a caller can grow is capped and refused by name: the number of
+/// drafts, the tests one campaign records, and the size of a page.
+pub async fn campaigns_are_bounded(service: &Service) {
+	let sql = Sql(service.db.dialect());
+	let now = sql.timestamp(&chrono::Utc::now().to_rfc3339());
+	let saved = create(service, ready("The one", &[person(781)]), ADA).await;
+	let id = id_of(&saved).to_owned();
+	let id_literal = sql.uuid(id.parse().unwrap());
+
+	// 999 more drafts, written directly: the thousandth is the last.
+	let rows: Vec<String> = (0..999)
+		.map(|n| {
+			format!(
+				"({}, 1, 'draft', 'draft {n}', '{{\"category\":\"\",\"title\":\"\"}}', 'seed', \
+				 'seed', {now}, {now})",
+				sql.new_id()
+			)
+		})
+		.collect();
+
+	for chunk in rows.chunks(250) {
+		run(
+			&service.db,
+			format!(
+				"INSERT INTO campaigns (id, revision, state, name, spec, created_by, updated_by, \
+				 created_at, updated_at) VALUES {}",
+				chunk.join(", ")
+			),
+		)
+		.await;
+	}
+
+	let (status, body) = call(
+		service,
+		"create_campaign",
+		json!({ "draft": { "name": "One too many" }, "by": ADA }),
+		As::App,
+	)
+	.await;
+	assert_eq!(status, 400, "{body}");
+	assert!(body.contains("1000 draft campaigns"), "{body}");
+	let (status, body) = call(
+		service,
+		"duplicate_campaign",
+		json!({ "id": id, "by": ADA }),
+		As::App,
+	)
+	.await;
+	assert_eq!(status, 400, "{body}");
+
+	// A page of the list holds at most 50, however many are asked for,
+	// and the whole list is every campaign once.
+	let asked = page(service, "campaigns", json!({}), json!({ "limit": 500 })).await;
+	assert_eq!(asked["items"].as_array().unwrap().len(), 50);
+	assert_eq!(asked["has_more"], true);
+	let (all, pages) = every(service, "campaigns", json!({}), 50).await;
+	assert_eq!(all.len(), 1_000);
+	assert_eq!(pages, 20);
+	let mut ids = field(&all, "id");
+	ids.sort_unstable();
+	ids.dedup();
+	assert_eq!(ids.len(), 1_000, "each campaign once");
+
+	// A hundred recorded tests is as many as one campaign keeps.
+	let events: Vec<String> = (0..100)
+		.map(|_| {
+			format!(
+				"({}, {id_literal}, 'tested', 'seed', 1, {now})",
+				sql.new_id()
+			)
+		})
+		.collect();
+	run(
+		&service.db,
+		format!(
+			"INSERT INTO campaign_events (id, campaign, kind, by, revision, created_at) VALUES {}",
+			events.join(", ")
+		),
+	)
+	.await;
+	let (status, body) = call(
+		service,
+		"test_campaign",
+		json!({ "id": id, "person": person(781), "by": ADA }),
+		As::App,
+	)
+	.await;
+	assert_eq!(status, 400, "{body}");
+	assert!(body.contains("100 tests"), "{body}");
+
+	// A page of events holds at most 100.
+	let asked = page(
+		service,
+		"campaign_events",
+		json!({ "id": id }),
+		json!({ "limit": 5_000 }),
+	)
+	.await;
+	assert_eq!(asked["items"].as_array().unwrap().len(), 100);
+	assert_eq!(asked["has_more"], true);
+}
+
+/// Eight launches of the same revision at once make one send: every one
+/// of them succeeds, exactly one is not a duplicate, and one send, one
+/// set of rows, and one launch event are stored.
+pub async fn racing_launches_make_one_send(service: &Service) {
+	let people: Vec<Uuid> = (791..796).map(person).collect();
+	let saved = create(service, ready("All at once", &people), ADA).await;
+	let id = id_of(&saved).to_owned();
+
+	let answers = futures::future::join_all((0..8).map(|n| {
+		let id = id.clone();
+
+		async move { launch(service, &id, 1, &format!("presser-{n}")).await }
+	}))
+	.await;
+
+	let mut made = 0;
+
+	for (status, body) in &answers {
+		assert_eq!(*status, 200, "{body}");
+		assert_eq!(body["send"]["delivered"], 5, "{body}");
+		assert_eq!(body["campaign"]["state"], "launched");
+
+		if body["send"]["duplicate"] == false {
+			made += 1;
+		}
+	}
+
+	assert_eq!(made, 1, "exactly one launch made the send: {answers:?}");
+
+	let key = format!("campaign:{id}:r1");
+	assert_eq!(
+		counted(
+			&service.db,
+			format!("SELECT count(*) FROM sends WHERE idempotency_key = '{key}'")
+		)
+		.await,
+		1
+	);
+	assert_eq!(
+		counted(
+			&service.db,
+			format!("SELECT count(*) FROM notifications WHERE send_key = '{key}'")
+		)
+		.await,
+		5
+	);
+	assert_eq!(event_kinds(service, &id).await, ["created", "launched"]);
+
+	// Everyone was told the same launcher.
+	let by = answers[0].1["campaign"]["launched_by"].clone();
+	assert!(
+		answers
+			.iter()
+			.all(|(_, body)| body["campaign"]["launched_by"] == by),
+		"{answers:?}"
+	);
+}
+
+/// Eight saves made from the same revision at once: one is kept, seven
+/// are refused as conflicts, and the campaign is one revision on, holding
+/// the winner's draft whole.
+pub async fn racing_saves_keep_one(service: &Service) {
+	let saved = create(service, json!({ "name": "Shared draft" }), ADA).await;
+	let id = id_of(&saved).to_owned();
+
+	let answers = futures::future::join_all((0..8).map(|n| {
+		let id = id.clone();
+
+		async move {
+			call(
+				service,
+				"update_campaign",
+				json!({
+					"id": id,
+					"revision": 1,
+					"draft": {
+						"name": format!("Version {n}"),
+						"spec": { "category": "news", "title": format!("Title {n}") },
+						"note": format!("Note {n}"),
+					},
+					"by": format!("editor-{n}"),
+				}),
+				As::App,
+			)
+			.await
+		}
+	}))
+	.await;
+
+	let kept: Vec<&(u16, String)> = answers
+		.iter()
+		.filter(|(status, _)| *status == 200)
+		.collect();
+	let refused = answers.iter().filter(|(status, _)| *status == 409).count();
+	assert_eq!(kept.len(), 1, "{answers:?}");
+	assert_eq!(refused, 7, "{answers:?}");
+
+	let winner: Value = serde_json::from_str(&kept[0].1).unwrap();
+	let now = app(service, "campaign", json!({ "id": id })).await;
+	assert_eq!(now, winner);
+	assert_eq!(now["revision"], 2);
+	let n = now["draft"]["name"]
+		.as_str()
+		.unwrap()
+		.strip_prefix("Version ")
+		.unwrap()
+		.to_owned();
+	assert_eq!(now["draft"]["spec"]["title"], format!("Title {n}"));
+	assert_eq!(now["draft"]["note"], format!("Note {n}"));
+	assert_eq!(now["updated_by"], format!("editor-{n}"));
+}

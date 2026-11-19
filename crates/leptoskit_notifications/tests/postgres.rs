@@ -1714,3 +1714,141 @@ async fn sends_from_before_the_history_are_not_listed_on_postgres() {
 	)
 	.await;
 }
+
+/// A draft saves incomplete and is revised under its revision on Postgres too.
+#[tokio::test(flavor = "multi_thread")]
+#[cfg(feature = "service")]
+async fn a_draft_is_saved_incomplete_and_revised_on_postgres() {
+	let Some(postgres) = Postgres::start() else {
+		return;
+	};
+	composer::a_draft_is_saved_incomplete_and_revised(&composer_service(&postgres, false).await)
+		.await;
+}
+
+/// A launch makes one send however often it is pressed on Postgres too.
+#[tokio::test(flavor = "multi_thread")]
+#[cfg(feature = "service")]
+async fn a_launch_makes_one_send_however_often_it_is_pressed_on_postgres() {
+	let Some(postgres) = Postgres::start() else {
+		return;
+	};
+	composer::a_launch_makes_one_send_however_often_it_is_pressed(
+		&composer_service(&postgres, false).await,
+	)
+	.await;
+}
+
+/// A launch checks what a send checks on Postgres too.
+#[tokio::test(flavor = "multi_thread")]
+#[cfg(feature = "service")]
+async fn a_launch_checks_what_a_send_checks_on_postgres() {
+	let Some(postgres) = Postgres::start() else {
+		return;
+	};
+	composer::a_launch_checks_what_a_send_checks(&composer_service(&postgres, false).await).await;
+}
+
+/// A past schedule is refused and a future one is kept on Postgres too.
+#[tokio::test(flavor = "multi_thread")]
+#[cfg(feature = "service")]
+async fn a_past_schedule_is_refused_and_a_future_one_is_kept_on_postgres() {
+	let Some(postgres) = Postgres::start() else {
+		return;
+	};
+	composer::a_past_schedule_is_refused_and_a_future_one_is_kept(
+		&composer_service(&postgres, false).await,
+	)
+	.await;
+}
+
+/// A cancel stops a scheduled campaign and not a seen one on Postgres too.
+#[tokio::test(flavor = "multi_thread")]
+#[cfg(feature = "service")]
+async fn a_cancel_stops_a_scheduled_campaign_and_not_a_seen_one_on_postgres() {
+	let Some(postgres) = Postgres::start() else {
+		return;
+	};
+	composer::a_cancel_stops_a_scheduled_campaign_and_not_a_seen_one(
+		&composer_service(&postgres, false).await,
+	)
+	.await;
+}
+
+/// A duplicate is a new draft without the schedule on Postgres too.
+#[tokio::test(flavor = "multi_thread")]
+#[cfg(feature = "service")]
+async fn a_duplicate_is_a_new_draft_without_the_schedule_on_postgres() {
+	let Some(postgres) = Postgres::start() else {
+		return;
+	};
+	composer::a_duplicate_is_a_new_draft_without_the_schedule(
+		&composer_service(&postgres, false).await,
+	)
+	.await;
+}
+
+/// A test writes no inbox row and records an event on Postgres too.
+#[tokio::test(flavor = "multi_thread")]
+#[cfg(feature = "service")]
+async fn a_test_writes_no_inbox_row_and_records_an_event_on_postgres() {
+	let Some(postgres) = Postgres::start() else {
+		return;
+	};
+	composer::a_test_writes_no_inbox_row_and_records_an_event(
+		&composer_service(&postgres, false).await,
+	)
+	.await;
+}
+
+/// An archived campaign is put away on Postgres too.
+#[tokio::test(flavor = "multi_thread")]
+#[cfg(feature = "service")]
+async fn an_archived_campaign_is_put_away_on_postgres() {
+	let Some(postgres) = Postgres::start() else {
+		return;
+	};
+	composer::an_archived_campaign_is_put_away(&composer_service(&postgres, false).await).await;
+}
+
+/// Only the app touches campaigns on Postgres too.
+#[tokio::test(flavor = "multi_thread")]
+#[cfg(feature = "service")]
+async fn only_the_app_touches_campaigns_on_postgres() {
+	let Some(postgres) = Postgres::start() else {
+		return;
+	};
+	composer::only_the_app_touches_campaigns(&composer_service(&postgres, false).await).await;
+}
+
+/// Campaigns are bounded on Postgres too.
+#[tokio::test(flavor = "multi_thread")]
+#[cfg(feature = "service")]
+async fn campaigns_are_bounded_on_postgres() {
+	let Some(postgres) = Postgres::start() else {
+		return;
+	};
+	composer::campaigns_are_bounded(&composer_service(&postgres, false).await).await;
+}
+
+/// Eight launches of one revision at once make one send on Postgres, where
+/// the losers' claims wait on the winner's row and then find it launched.
+#[tokio::test(flavor = "multi_thread")]
+#[cfg(feature = "service")]
+async fn racing_launches_make_one_send_on_postgres() {
+	let Some(postgres) = Postgres::start() else {
+		return;
+	};
+	composer::racing_launches_make_one_send(&composer_service(&postgres, false).await).await;
+}
+
+/// Eight saves from one revision at once keep one on Postgres, where each
+/// loser's update waits on the winner's row and then matches nothing.
+#[tokio::test(flavor = "multi_thread")]
+#[cfg(feature = "service")]
+async fn racing_saves_keep_one_on_postgres() {
+	let Some(postgres) = Postgres::start() else {
+		return;
+	};
+	composer::racing_saves_keep_one(&composer_service(&postgres, false).await).await;
+}

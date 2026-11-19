@@ -371,6 +371,86 @@ Treat this target with the respect a big lever deserves. It fans out in the same
 
 Everyone is not a condition, and it can't be narrowed: `SendTarget::Everyone` is the whole registry, every time. When you want most people, say which ones — a condition over attributes — because a send to everyone is a promise to every person in it.
 
+## Write a campaign before you send it
+
+`send` is one call from your code: the message and the audience go in and the send is made. A person writing a notification on a screen doesn't work that way. They write half of it and go to lunch. They try it on their own phone. Someone else fixes the wording. They pick a time. Then they press send, sometimes twice. A campaign is where that work lives until it becomes a send:
+
+```rust
+use leptoskit_notifications::campaign::{
+    CampaignDraft, CreateCampaign, LaunchCampaign, TestCampaign, UpdateCampaign,
+};
+
+// Save a draft. Only the name is needed.
+let saved = call_as_app(CreateCampaign {
+    draft: CampaignDraft { name: "Spring sale".into(), ..CampaignDraft::default() },
+    by: admin_name.clone(),
+})
+.await?;
+
+// Fill it in. The revision says which version this change was made from.
+let saved = call_as_app(UpdateCampaign {
+    id: saved.id,
+    revision: saved.revision,
+    draft: CampaignDraft {
+        name: "Spring sale".into(),
+        spec: SendSpec {
+            category: "offers".into(),
+            title: "Half price".into(),
+            body: "Today only.".into(),
+            ..SendSpec::default()
+        },
+        target: Some(SendTarget::Condition("user.plan == 'pro'".into())),
+        note: Some("Check the wording with legal.".into()),
+    },
+    by: admin_name.clone(),
+})
+.await?;
+
+// Try it on one person's devices. No inbox row is written.
+call_as_app(TestCampaign { id: saved.id, person: my_account, endpoint: None, by: admin_name.clone() })
+    .await?;
+
+// Send it.
+let launched = call_as_app(LaunchCampaign {
+    id: saved.id,
+    revision: saved.revision,
+    by: admin_name,
+    broadcast: false,
+})
+.await?;
+```
+
+Every call takes `by`, the name of the person acting. Your server fills it in from its own session; never take it from a browser. The service stores it and answers it back, and does not check it.
+
+What a campaign does that a bare send doesn't:
+
+- **A draft can be unfinished.** A draft with no title, no audience, or half a condition saves. Only its size is checked. Everything `send` checks is checked when you launch.
+- **Two people can't overwrite each other.** Each save names the `revision` it started from. If someone else saved in between, the save is refused with a conflict and the draft is left as it was. Read it again and redo the change.
+- **A launch happens once.** Launching the same revision twice makes one send. The second call answers the first send, with `send.duplicate` set to `true`. A double press or a retry after a timeout is safe.
+- **A stale schedule is refused.** `send` treats a time that has passed as "now". A draft scheduled for Tuesday morning and launched on Thursday would go out at once, so `launch_campaign` refuses a `visible_at` that has passed. Pick a new time, or clear the schedule to send now.
+- **Sending to everyone has to be said out loud.** A draft whose target is `SendTarget::Everyone` is refused unless you pass `broadcast: true`. The service cannot know who your admins are. The flag is your server saying it has checked that this person may send to everyone, and the launch's event records it.
+- **There is a record of who did what.** `campaign_events` lists a campaign's events, oldest first: created, tested, launched, cancelled, archived, each with who and when. Saving a draft is not an event; the campaign's own `updated_by` says who saved it last.
+
+The other calls:
+
+| Call                 | What it does                                                                                                                                                                              |
+| -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `campaign`           | reads one campaign, whole                                                                                                                                                                 |
+| `campaigns`          | lists campaigns newest first, 50 to a page, as short entries; `CampaignFilter` keeps one state                                                                                            |
+| `duplicate_campaign` | saves a copy as a new draft: same message, audience, and note, and **no schedule**                                                                                                        |
+| `duplicate_send`     | saves a new draft from any send that was made, yours or your server's. A recipients send's copy has no audience, because the service does not keep the list of people a send named        |
+| `cancel_campaign`    | cancels a launched campaign's send by [the rules of `cancel`](#cancel-a-scheduled-send): before it is due it stops, once people have seen it it is refused                                |
+| `archive_campaign`   | puts a campaign away. It can still be read and copied. Archiving cancels nothing: cancel a scheduled campaign first if that is what you mean                                              |
+| `test_campaign`      | pushes the draft to one person's devices now, like [`send_test`](#test-on-a-device), ignoring the schedule. It writes no inbox row, and its event says how the push ended, not who got it |
+
+A campaign is in one of four states: `draft`, `launched`, `cancelled`, or `archived`. Whether a launched campaign is still scheduled, sending, or sent is the state of its send: the campaign's `send_key` is the key to pass to [`send_report`](#see-what-a-send-came-to) or `send_status`. The send is an ordinary send and appears in [`list_sends`](#browse-the-sends-you-made).
+
+Limits, each refused by name: a name of 1 to 120 bytes, a note of at most 1,000, `by` of 1 to 128, a message and audience no larger than a send's, 1,000 drafts at a time, and 100 recorded tests per campaign.
+
+Campaigns are not deleted by [retention](#how-long-things-are-kept). A draft is someone's saved work, and the service will not remove it on a timer. If a draft lists recipients, those ids stay in it until you change or archive it, and [`forget_person`](#erase-a-person) does not edit drafts: remove a person you have erased from any draft that names them.
+
+Only your app's server can call any of these.
+
 ## Know your audience before you send
 
 Picking an audience blind is how a message meant for a hundred people goes to a hundred thousand. Before a send, a person composing it needs to see what there is to choose from and about how many people a choice would reach. The audience catalogue answers both, to your app's server only:
@@ -1536,6 +1616,7 @@ A few rules hold whatever you set:
 - **Nothing in use is deleted.** A notification with a push still waiting to go out stays, and so does that push. A send that is still working through its audience keeps every row it has written. A scheduled notification is never too old before its time has come, and one you cancelled ahead of its time is kept until that time is `ENDED_DAYS` in the past.
 - **A push record never outlives its notification.** When a notification goes, its push records go with it, whatever their age.
 - **A person's inbox simply gets shorter.** Deleted rows leave the inbox and the unread count the same way a dismissed one does. Nothing on an open screen breaks.
+- **Campaigns are kept.** A [campaign](#write-a-campaign-before-you-send-it) and its events are not deleted on a timer. Once a launched campaign's send record has been deleted, the campaign can still be read and copied, and launching it again is refused instead of sending twice.
 - **The send list is the send records.** A send is in [`list_sends`](#browse-the-sends-you-made) for as long as its record is kept, and a report's push counts and reads by hour are counted over the rows still stored.
 - **A send's report counts what is left.** The read, opened, and dismissed counts in a [send's report](#see-what-a-send-came-to) are counted over the rows still stored, so they shrink as rows are deleted. What the send delivered is kept on the send's own record and does not change.
 
@@ -1571,7 +1652,7 @@ A new version of the service can change its tables, and it makes those changes w
 | `send_history` (the send list and the audience catalogue)         | builds two small indexes over send records and one each over attributes, category preferences, and devices; writes wait, reads go on | the same five builds; writes to those tables wait, reads go on. You can build them ahead with no waiting, as below         |
 | `scale_indexes` (indexes for the unread count and the push queue) | builds one index over every notification and two over every push record; writes wait, reads go on                                    | the same three builds; writes to those two tables wait, reads go on. You can build them ahead with no waiting, as below    |
 
-The other changes add empty tables or empty columns and take no measurable time at any size. That includes `endpoint_seen`, which adds one empty column recording when each device was last heard from.
+The other changes add empty tables or empty columns and take no measurable time at any size. That includes `campaigns`, which adds two empty tables, and `endpoint_seen`, which adds one empty column recording when each device was last heard from.
 
 On Postgres you can take the wait out of `scale_indexes` and `send_history` by building their indexes yourself before you upgrade, while the old version is still running. Build each with `CREATE INDEX CONCURRENTLY`, under exactly the name and columns the migration file uses, and check that each one finished valid. The migration then finds them and only has a moment's work left. Each migration file's own comment has the details.
 

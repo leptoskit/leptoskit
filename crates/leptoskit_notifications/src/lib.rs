@@ -58,6 +58,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 
+pub mod campaign;
 pub mod catalogue;
 pub mod condition;
 pub mod history;
