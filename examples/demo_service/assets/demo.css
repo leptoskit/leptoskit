@@ -1,7 +1,7 @@
 /* The public demo's own rules: only what the class compiler cannot say.
    Colours are the admin's `--admin-*` tokens (leptoskit_admin::theme_css);
-   layout and type are the pages' Tailwind classes. State arrives as
-   attributes on the root element, as in the admin. */
+   layout and type are the pages' Tailwind classes. Each rule names its
+   element by test id, and state by the ARIA attribute the page sets. */
 
 *,
 *::before,
@@ -47,7 +47,6 @@ input::placeholder {
 }
 
 /* The polite region a screen reader hears and nobody sees. */
-.sr-only,
 [data-testid="announcer"] {
 	position: absolute;
 	width: 1px;
@@ -81,7 +80,7 @@ input::placeholder {
 [data-testid^="welcome-back:"],
 [data-testid="swap"],
 [data-testid="peek"],
-.msg-link {
+[data-testid="note-sign-in"] {
 	text-decoration: underline;
 	text-decoration-color: var(--admin-line-strong);
 	text-underline-offset: 3px;
@@ -117,23 +116,8 @@ a[data-testid$="admin"]:hover {
 	transform: rotate(180deg);
 }
 
-[data-testid="band-reset"][data-late] {
-	color: #e3b341 !important;
-	font-weight: 650;
-}
-
 [data-testid="band-late"]:empty {
 	display: none !important;
-}
-
-/* Scripts on: the panel opens on request. Scripts off: it stays open, so
-   what is real is never hidden from anyone. */
-html[data-js] [data-testid="band-panel"] {
-	display: none !important;
-}
-
-html[data-js][data-band="open"] [data-testid="band-panel"] {
-	display: flex !important;
 }
 
 /* A hydrated page closes the panel and the front door's drawer with a class.
@@ -144,16 +128,6 @@ html[data-js][data-band="open"] [data-testid="band-panel"] {
 	[data-testid="route-workings"] {
 		display: flex !important;
 	}
-}
-
-/* ---------- The front door ---------- */
-
-html[data-js] [data-testid="route-workings"] {
-	display: none !important;
-}
-
-html[data-js][data-route="open"] [data-testid="route-workings"] {
-	display: flex !important;
 }
 
 [data-testid="route-toggle"][aria-expanded="true"] {
@@ -176,65 +150,6 @@ html[data-js][data-route="open"] [data-testid="route-workings"] {
 		content: "↓";
 		font-size: 18px;
 	}
-}
-
-.msg {
-	display: flex;
-	align-items: flex-start;
-	gap: 10px;
-	border: 1px solid;
-	border-radius: 10px;
-	padding: 10px 12px;
-	background: var(--admin-sunken);
-}
-
-.msg-warn {
-	border-color: var(--admin-warn);
-	color: var(--admin-warn);
-}
-
-.msg-bad {
-	border-color: var(--admin-bad);
-	color: var(--admin-bad);
-}
-
-.msg-glyph {
-	flex: none;
-	width: 16px;
-	text-align: center;
-	font-weight: 800;
-	font-size: 14px;
-}
-
-.msg-copy {
-	display: flex;
-	flex-direction: column;
-	gap: 4px;
-	min-width: 0;
-}
-
-.msg-title,
-.msg-body {
-	margin: 0;
-	font-size: 14px;
-	line-height: 1.5;
-}
-
-.msg-title {
-	font-weight: 650;
-	color: var(--admin-ink);
-}
-
-.msg-body {
-	color: var(--admin-ink-2);
-}
-
-.msg-link {
-	align-self: flex-start;
-	margin-top: 2px;
-	font-size: 14px;
-	font-weight: 650;
-	color: var(--admin-ink-2);
 }
 
 /* No scripts: the choice is a plain form post. */
@@ -316,10 +231,6 @@ button[disabled][data-testid="resend"] {
 	color: #5ef2c2 !important;
 }
 
-[data-testid="listening"] {
-	border-style: dashed !important;
-}
-
 [data-testid="pulse"] {
 	animation: pulse 1.6s ease-in-out infinite;
 }
@@ -337,168 +248,11 @@ button[disabled][data-testid="resend"] {
 	}
 }
 
-/* Mail, built by the script from the inbox's JSON. */
-.listening {
-	display: flex;
-	align-items: center;
-	gap: 10px;
-	border: 1px dashed #4a3f58;
-	border-radius: 10px;
-	padding: 16px 14px;
-	color: #c9c0d0;
-	font-size: 13.5px;
-	line-height: 1.5;
-}
-
-.pulse {
-	flex: none;
-	width: 9px;
-	height: 9px;
-	border-radius: 999px;
-	background: #5ef2c2;
-	animation: pulse 1.6s ease-in-out infinite;
-}
-
-.mail {
-	display: flex;
-	flex-direction: column;
-	gap: 10px;
-	padding: 14px;
-	border: 1px solid #30283c;
-	border-radius: 12px;
-	background: #0b0811;
-	color: #c9c0d0;
-}
-
-.mail.arrived {
-	animation: wash 1.2s ease-out;
-}
-
-@keyframes wash {
-	from {
-		background: rgba(94, 242, 194, 0.22);
-		border-color: #5ef2c2;
-	}
-
-	to {
-		background: #0b0811;
-		border-color: #30283c;
-	}
-}
-
-.mail.gone {
-	border-style: dashed;
-	background: transparent;
-}
-
-.mail.old {
-	opacity: 0.6;
-}
-
-.mail.old .mail-code {
-	font-size: 18px;
-	text-decoration: line-through;
-	text-decoration-color: #9d93a8;
-}
-
-.mail-meta {
-	display: grid;
-	grid-template-columns: auto minmax(0, 1fr);
-	gap: 2px 10px;
-	margin: 0;
-	font-size: 12.5px;
-	color: #9d93a8;
-}
-
-.mail-meta dd {
-	margin: 0;
-	color: #c9c0d0;
-	overflow-wrap: anywhere;
-}
-
-.mail-meta dd.mono,
-.mono {
-	font-family: var(--admin-font-mono);
-	font-size: 12px;
-}
-
-.mail-subject,
-.mail-text,
-.mail-note {
-	margin: 0;
-}
-
-.mail-subject {
-	font-weight: 650;
-	font-size: 14px;
-	line-height: 1.45;
-	color: #f4efe8;
-}
-
 [data-testid="mail-text"] {
 	white-space: pre-wrap;
 }
 
-.mail-text {
-	white-space: pre-wrap;
-	font-size: 13px;
-	line-height: 1.5;
-}
-
-.mail-note {
-	font-size: 12.5px;
-	color: #9d93a8;
-}
-
-.mail-code-row {
-	display: flex;
-	flex-wrap: wrap;
-	align-items: center;
-	justify-content: space-between;
-	gap: 12px;
-	padding-top: 10px;
-	border-top: 1px solid #30283c;
-}
-
-.mail-code {
-	font-family: var(--admin-font-mono);
-	font-size: 26px;
-	letter-spacing: 0.1em;
-	color: #f4efe8;
-}
-
-.mail-actions {
-	display: flex;
-}
-
-.btn-paper {
-	min-height: 44px;
-	padding: 8px 16px;
-	border: 1px solid #f4efe8;
-	border-radius: 8px;
-	background: #f4efe8;
-	color: #16111f;
-	font: inherit;
-	font-size: 14px;
-	font-weight: 650;
-	cursor: pointer;
-}
-
-.btn-paper:active {
-	transform: translate(2px, 2px);
-}
-
 /* ---------- The notebook ---------- */
-
-/* Without scripts nothing can be saved, so the form gives way to a note;
-   with them, the note is gone. */
-html:not([data-js]) [data-testid="note-form"] {
-	display: none !important;
-}
-
-html[data-js] [data-testid="note-needs-js"] {
-	display: none !important;
-}
 
 textarea[data-testid="note-text"] {
 	display: block;
@@ -513,35 +267,13 @@ textarea[data-testid="note-text"]:disabled {
 	opacity: 0.6;
 }
 
-textarea[data-testid="note-text"][aria-invalid="true"] {
-	border: 2px solid var(--admin-bad) !important;
-}
-
 [data-testid="note-error"]:empty {
 	display: none;
-}
-
-[data-testid="note-chars"][data-over] {
-	color: var(--admin-bad) !important;
-	font-weight: 700;
 }
 
 [data-testid="note-save"]:disabled {
 	opacity: 0.65;
 	cursor: default;
-}
-
-/* What a save came to shows only when the script says so. */
-[data-testid="note-alert"],
-[data-testid="note-saved"],
-[data-testid="note-unconfirmed"] {
-	display: none !important;
-}
-
-[data-testid="note-alert"][data-shown],
-[data-testid="note-saved"][data-shown],
-[data-testid="note-unconfirmed"][data-shown] {
-	display: flex !important;
 }
 
 /* The actor is the exact value to look for in the admin: one click selects it. */
@@ -550,35 +282,15 @@ textarea[data-testid="note-text"][aria-invalid="true"] {
 	overflow-wrap: anywhere;
 }
 
-.note {
-	border: 1px solid var(--admin-line);
-	border-radius: 10px;
-	background: var(--admin-surface);
-	padding: 10px 12px;
-}
-
-.note-text,
-.note-when {
-	margin: 0;
-}
-
 /* A note is the visitor's own text: keep their line breaks, and let long
    words wrap rather than widen the page. */
-.note-text {
+[data-testid="note-body"] {
 	white-space: pre-wrap;
 	overflow-wrap: anywhere;
-	font-size: 15px;
-	line-height: 1.55;
-	color: var(--admin-ink);
 }
 
-.note-when {
-	margin-top: 4px;
-	font: 12px/1.4 var(--admin-font-mono);
-	color: var(--admin-ink-3);
-}
-
-.note[data-new] {
+/* The note this page just saved comes in with a little motion. */
+#note-new {
 	animation: note-in 0.4s ease-out;
 }
 
@@ -592,42 +304,12 @@ textarea[data-testid="note-text"][aria-invalid="true"] {
 /* ---------- The account menu ---------- */
 
 [data-testid="menu-panel"] {
-	display: none !important;
-	z-index: 30;
 	width: min(300px, calc(100vw - 32px)) !important;
 	box-shadow: 0 12px 32px -12px rgba(15, 11, 22, 0.28);
 }
 
-[data-testid="menu-toggle"][aria-expanded="true"] ~ [data-testid="menu-panel"] {
-	display: flex !important;
-}
-
-[data-testid="menu-wrap"] {
-	z-index: 30;
-}
-
-/* ---------- The new-day dialog ---------- */
-
-[data-testid="reset-scrim"] {
-	display: none !important;
-}
-
-html[data-reset] [data-testid="reset-scrim"] {
-	display: flex !important;
-	position: fixed;
-	inset: 0;
-	z-index: 100;
-	overflow-y: auto;
-	background: rgba(15, 11, 22, 0.6);
-	align-items: center;
-}
-
-html[data-reset] [data-testid="reset-dialog"] {
-	margin-bottom: auto;
-}
-
-/* A message the script could not put anywhere else. */
-.toast {
+/* A message the page could put nowhere else, over the bottom of the page. */
+[data-testid="toast"] {
 	position: fixed;
 	left: 16px;
 	right: 16px;
@@ -635,24 +317,6 @@ html[data-reset] [data-testid="reset-dialog"] {
 	z-index: 90;
 	max-width: 420px;
 	margin: 0 auto;
-	padding: 12px 14px;
-	border: 1px solid var(--admin-bad);
-	border-radius: 10px;
-	background: var(--admin-surface);
-	color: var(--admin-ink);
-	font-size: 14px;
-}
-
-/* ---------- Small screens ---------- */
-
-@media (max-width: 420px) {
-	.mail-code {
-		font-size: 22px;
-	}
-
-	.mail {
-		padding: 12px;
-	}
 }
 
 @media (prefers-reduced-motion: reduce) {

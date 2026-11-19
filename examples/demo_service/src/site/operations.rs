@@ -7,7 +7,9 @@
 //! builds for the request. The rules behind them are the site's own and
 //! live where they always have: [`super::mint`] is the one mint behind both
 //! the form post and the page's request, with the same same-origin check,
-//! the same caps, and the same pass cookie.
+//! the same caps, and the same pass cookie; the notebook's operations pass
+//! the same ownership gate as `/demo/notes`, so the session's own account
+//! is the only one a page can read or write.
 //!
 //! Two things are particular to this site:
 //!
@@ -42,19 +44,26 @@ use demo_pages::ops::Port;
 use futures::StreamExt as _;
 use futures::future::BoxFuture;
 use futures::stream::BoxStream;
+use leptoskit_auth::CurrentSession;
+use leptoskit_auth::SignedIn;
 use leptoskit_rpc as rpc;
 
 use super::MintRefusal;
+use super::Owner;
 use super::Parts;
 use super::Shared;
 use crate::inbox::DemoInbox;
+use crate::notes;
+use crate::notes::CreateError;
+use crate::notes::NoteText;
+use crate::notes::TextError;
 use crate::return_to;
 use crate::visitors::PassState;
 use crate::visitors::Persona;
 use crate::visitors::carried_cookie;
 
 /// The operations this site answers, by the path each is called at.
-const SERVED: [&str; 2] = ["/rpc/mint", "/rpc/inbox"];
+const SERVED: [&str; 4] = ["/rpc/mint", "/rpc/inbox", "/rpc/notes", "/rpc/save_note"];
 
 /// The cookies an operation asks the response to set. An operation has no
 /// response of its own, so it leaves them here and [`set_cookies`] adds
@@ -79,8 +88,54 @@ impl Cookies {
 struct RequestBackend {
 	shared: Arc<Parts>,
 	headers: HeaderMap,
+	/// Who the request's session is signed in as, if anyone.
+	session: Option<SignedIn>,
 	peer: Option<SocketAddr>,
 	cookies: Cookies,
+}
+
+impl RequestBackend {
+	/// The person this request's notebook belongs to: the pass's person
+	/// whose account the session is signed in as. Anything else is a `401`
+	/// that names only what kind of visit it was.
+	async fn owner(&self) -> rpc::Result<Owner> {
+		match super::resolve_owner(&self.shared, &self.headers, self.session.as_ref()).await {
+			Ok(Ok(owner)) => Ok(owner),
+			Ok(Err(refusal)) => {
+				if let Some(cookie) = refusal.clear {
+					self.cookies.push(cookie);
+				}
+
+				let (code, message) = match refusal.pass {
+					"new_day" => (ops::NEW_DAY, "this browser's pass is from an earlier day"),
+					"absent" => (ops::NO_PASS, "this browser has no pass for today"),
+					_ => (ops::SIGNED_OUT, "sign in to read and write notes"),
+				};
+
+				Err(rpc::Error::Refused {
+					code: code.to_owned(),
+					message: message.to_owned(),
+					status: 401,
+				})
+			}
+			Err(error) => Err(failed(&error)),
+		}
+	}
+}
+
+/// A failure of the site's own, logged here and named to nobody.
+fn failed(error: &anyhow::Error) -> rpc::Error {
+	eprintln!("the demo site's request failed: {error:#}");
+	rpc::Error::server("server")
+}
+
+/// A note as a page shows it.
+fn note_of(note: &notes::DemoNote) -> ops::Note {
+	ops::Note {
+		id: note.id.to_string(),
+		text: note.text.clone(),
+		created_at: note.created_at.timestamp_millis(),
+	}
 }
 
 impl Backend for RequestBackend {
@@ -192,6 +247,75 @@ impl Backend for RequestBackend {
 		})
 	}
 
+	fn notes(&self) -> BoxFuture<'_, rpc::Result<ops::Notebook>> {
+		Box::pin(async move {
+			let owner = self.owner().await?;
+			let notes = self
+				.shared
+				.notes
+				.list(&owner.who)
+				.await
+				.map_err(|error| failed(&error))?;
+
+			Ok(ops::Notebook {
+				notes: notes.iter().map(note_of).collect(),
+				limit: notes::MAX_NOTES,
+				max_chars: notes::MAX_CHARS,
+				actor: crate::activity::actor(owner.person),
+			})
+		})
+	}
+
+	fn save_note(&self, text: String) -> BoxFuture<'_, rpc::Result<ops::Saved>> {
+		Box::pin(async move {
+			// The same order as the JSON route: where the request came from,
+			// then whose visit it is, then the text, then the notebook.
+			if !super::same_origin(&self.headers, &self.shared.origin) {
+				return Err(rpc::Error::forbidden("cross_origin"));
+			}
+
+			let owner = self.owner().await?;
+			let text = NoteText::parse(&text).map_err(|error| {
+				let (code, message) = match error {
+					TextError::Empty => (ops::EMPTY_NOTE, "write something first"),
+					TextError::TooLong => (ops::NOTE_TOO_LONG, "that note is over the limit"),
+				};
+				rpc::Error::Refused {
+					code: code.to_owned(),
+					message: message.to_owned(),
+					status: 422,
+				}
+			})?;
+			let note = match self.shared.notes.create(&owner.who, &text).await {
+				Ok(note) => note,
+				Err(CreateError::Full) => {
+					return Err(rpc::Error::refused(
+						ops::NOTES_FULL,
+						"this notebook holds all the notes a day allows",
+					));
+				}
+				Err(CreateError::Database(error)) => return Err(failed(&error)),
+			};
+
+			// The note is committed. Its event is sent once, and the answer
+			// says whether analytics confirmed it: nothing sends it again.
+			let actor = crate::activity::actor(owner.person);
+			let words = crate::activity::words(text.as_str());
+			let delivery = self
+				.shared
+				.analytics
+				.note_created(&actor, owner.persona, words)
+				.await;
+
+			Ok(ops::Saved {
+				note: note_of(&note),
+				words,
+				analytics: delivery.as_str().to_owned(),
+				actor,
+			})
+		})
+	}
+
 	fn generation(&self) -> rpc::Result<BoxStream<'static, ops::Day>> {
 		let Ok(permit) = Arc::clone(&self.shared.watchers).try_acquire_owned() else {
 			return Err(rpc::Error::rate_limited(Duration::from_secs(5)));
@@ -223,6 +347,10 @@ impl rpc::server::Identify for Callers {
 		let backend = RequestBackend {
 			shared: Arc::clone(&self.0.0),
 			headers: request.headers.clone(),
+			session: request
+				.extensions
+				.get::<CurrentSession>()
+				.and_then(|current| current.signed_in.clone()),
 			peer: super::peer(request),
 			cookies: request
 				.extensions

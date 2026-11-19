@@ -425,6 +425,152 @@ impl Harness {
 	}
 }
 
+// ─── The page's operations ───────────────────────────────────────────
+
+/// What an operation answered: the status, and its JSON answer or, for a
+/// refusal, the code it named.
+async fn operation(
+	browser: &mut Browser,
+	router: &Router,
+	name: &str,
+	origin: Option<&str>,
+	arguments: &Value,
+) -> (StatusCode, Value) {
+	let response = browser
+		.post_raw(
+			router,
+			&format!("/rpc/{name}"),
+			origin,
+			"application/json",
+			arguments.to_string(),
+		)
+		.await;
+	assert_no_store(&response);
+	let status = response.status();
+	let bytes = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+		.await
+		.expect("an answer");
+	let text = String::from_utf8(bytes.to_vec()).expect("text");
+	let body = match text.split_once('|') {
+		// A refusal is `Refused|{"code": …}` on the wire.
+		Some(("Refused", refusal)) => {
+			serde_json::from_str::<Value>(refusal).expect("a refusal")["code"].clone()
+		}
+		Some((kind, message)) if !status.is_success() => json!(format!("{kind}: {message}")),
+		_ => serde_json::from_str(&text).expect("a JSON answer"),
+	};
+	(status, body)
+}
+
+/// The notebook the page reads and writes through `notes` and `save_note`
+/// is the one behind `/demo/notes`, behind the same gate: the session's own
+/// account, from a same-origin page, and nothing a call sends can name
+/// another.
+#[tokio::test]
+async fn the_pages_operations_answer_only_for_the_sessions_own_account() -> Result<()> {
+	let harness = Harness::real().await;
+	let site = &harness.site;
+	let page = Some(SITE_ORIGIN);
+
+	// No pass, then a pass with no session: refused by what kind of visit
+	// it is, before anything is read.
+	let mut stranger = Browser::default();
+	assert_eq!(
+		operation(&mut stranger, site, "notes", page, &json!({})).await,
+		(StatusCode::UNAUTHORIZED, json!("no_pass"))
+	);
+	let minted = stranger
+		.post_raw(
+			site,
+			"/demo/pass",
+			page,
+			"application/x-www-form-urlencoded",
+			"persona=ada".to_owned(),
+		)
+		.await;
+	assert_eq!(minted.status(), StatusCode::SEE_OTHER);
+	assert_eq!(
+		operation(
+			&mut stranger,
+			site,
+			"save_note",
+			page,
+			&json!({ "text": "hi" })
+		)
+		.await,
+		(StatusCode::UNAUTHORIZED, json!("signed_out"))
+	);
+
+	let (mut ada, mut grace) = (Browser::default(), Browser::default());
+	sign_in(&mut ada, site, "ada").await;
+	sign_in(&mut grace, site, "grace").await;
+
+	// Another site's page cannot save, and the refusal saves nothing. The
+	// session layer's own same-site check may answer before the operation's.
+	let forged = ada
+		.post_raw(
+			site,
+			"/rpc/save_note",
+			Some("https://evil.example"),
+			"application/json",
+			json!({ "text": "forged" }).to_string(),
+		)
+		.await;
+	assert_eq!(forged.status(), StatusCode::FORBIDDEN);
+	assert!(harness.stored().await.is_empty(), "nothing was saved");
+
+	let (status, saved) = operation(
+		&mut ada,
+		site,
+		"save_note",
+		page,
+		&json!({ "text": "  from the page  " }),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK, "{saved}");
+	assert_eq!(saved["note"]["text"], "from the page", "trimmed, as stored");
+	assert_eq!(saved["analytics"], "confirmed", "{saved}");
+	assert_eq!(saved["words"], 3);
+
+	// The text's rules, and the notebook's, are named by code.
+	assert_eq!(
+		operation(
+			&mut ada,
+			site,
+			"save_note",
+			page,
+			&json!({ "text": " \n " })
+		)
+		.await,
+		(StatusCode::UNPROCESSABLE_ENTITY, json!("empty_note"))
+	);
+	assert_eq!(
+		operation(
+			&mut ada,
+			site,
+			"save_note",
+			page,
+			&json!({ "text": "x".repeat(281) })
+		)
+		.await,
+		(StatusCode::UNPROCESSABLE_ENTITY, json!("note_too_long"))
+	);
+
+	// The same notebook either way, and only Ada's.
+	let (status, notebook) = operation(&mut ada, site, "notes", page, &json!({})).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(notebook["notes"][0]["text"], "from the page");
+	assert_eq!(notebook["notes"].as_array().map(Vec::len), Some(1));
+	assert_eq!(notebook["limit"], 20);
+	assert_eq!(notebook["max_chars"], 280);
+	assert_eq!(notebook["actor"], saved["actor"]);
+	assert_eq!(ada.list(site).await["notes"], notebook["notes"]);
+	let (_, hers) = operation(&mut grace, site, "notes", page, &json!({})).await;
+	assert_eq!(hers["notes"], json!([]), "Grace never reads Ada's note");
+	assert_eq!(harness.stored().await.len(), 1, "only the one real save");
+	Ok(())
+}
+
 // ─── Ownership ───────────────────────────────────────────────────────
 
 /// Two signed-in browsers each write and read only their own notes, the

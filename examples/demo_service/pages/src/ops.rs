@@ -27,6 +27,58 @@ pub const NO_PASS: &str = "no_pass";
 /// The refusal code for a browser whose pass is from an earlier day.
 pub const NEW_DAY: &str = "new_day";
 
+/// The refusal code for a visit that is not signed in as one of this
+/// browser's people: the account was signed out, or never was.
+pub const SIGNED_OUT: &str = "signed_out";
+
+/// The refusal code for a notebook that already holds all the notes a day
+/// allows.
+pub const NOTES_FULL: &str = "notes_full";
+
+/// The refusal code for a note with nothing in it but space.
+pub const EMPTY_NOTE: &str = "empty_note";
+
+/// The refusal code for a note longer than a day allows.
+pub const NOTE_TOO_LONG: &str = "note_too_long";
+
+/// One saved note.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct Note {
+	/// Its id.
+	pub id: String,
+	/// What the person wrote, exactly. Always shown as text.
+	pub text: String,
+	/// When it was saved, in Unix milliseconds.
+	pub created_at: i64,
+}
+
+/// The signed-in person's notebook.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct Notebook {
+	/// Their notes, newest first.
+	pub notes: Vec<Note>,
+	/// The most notes a notebook holds today.
+	pub limit: usize,
+	/// The most characters one note holds.
+	pub max_chars: usize,
+	/// The pseudonymous actor their events carry in analytics.
+	pub actor: String,
+}
+
+/// A saved note, and what became of its event.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct Saved {
+	/// The note, as it was stored.
+	pub note: Note,
+	/// How many words its `note_created` event counted.
+	pub words: u32,
+	/// `confirmed` when the analytics service took the event, otherwise
+	/// `unconfirmed`. The note is saved either way, and nothing resends it.
+	pub analytics: String,
+	/// The actor the event carried.
+	pub actor: String,
+}
+
 /// One message in the demo inbox.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct Letter {
@@ -100,6 +152,27 @@ pub async fn inbox(cx: &rpc::QueryCx, persona: Persona) -> rpc::Result<Mailbox> 
 	cx.require::<Port>()?.0.inbox(persona).await
 }
 
+/// The signed-in person's notebook.
+///
+/// The account is the session's and the pass must have minted it; nothing
+/// in the call can name another. Refused with [`SIGNED_OUT`], [`NO_PASS`]
+/// or [`NEW_DAY`] when the visit is not that.
+#[rpc::query(crate = "leptoskit::rpc")]
+pub async fn notes(cx: &rpc::QueryCx) -> rpc::Result<Notebook> {
+	cx.require::<Port>()?.0.notes().await
+}
+
+/// Saves one private note for the signed-in person and sends its
+/// `note_created` event once.
+///
+/// Refused like [`notes`] for a visit that is not signed in, and with
+/// [`EMPTY_NOTE`], [`NOTE_TOO_LONG`] or [`NOTES_FULL`] for a note the
+/// notebook cannot take. A refusal saves nothing and sends nothing.
+#[rpc::mutation(crate = "leptoskit::rpc")]
+pub async fn save_note(cx: &rpc::MutationCx, text: String) -> rpc::Result<Saved> {
+	cx.require::<Port>()?.0.save_note(text).await
+}
+
 /// The day the server is serving, sent once each time the stream opens.
 ///
 /// A page compares it with the day it was made for. The stream stays open
@@ -127,6 +200,12 @@ pub trait Backend: Send + Sync + 'static {
 
 	/// The mail held for this request's pass and `persona`.
 	fn inbox(&self, persona: Persona) -> futures::future::BoxFuture<'_, rpc::Result<Mailbox>>;
+
+	/// The notebook of the person this request is signed in as.
+	fn notes(&self) -> futures::future::BoxFuture<'_, rpc::Result<Notebook>>;
+
+	/// Saves `text` in that notebook.
+	fn save_note(&self, text: String) -> futures::future::BoxFuture<'_, rpc::Result<Saved>>;
 
 	/// The serving generation's day, then silence for as long as the
 	/// generation serves.
