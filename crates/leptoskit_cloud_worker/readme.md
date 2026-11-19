@@ -2,7 +2,7 @@
 
 `leptoskit-cloud-worker` is LeptosKit Cloud's worker. It pairs with a control plane, asks it for jobs, runs one at a time under a lease, sends the job's log, and reports how it ended.
 
-This crate holds the loop every role shares and the `build` role. The `cluster` role, native builds and store publishing aren't built yet.
+This crate holds the loop every role shares, the `build` role and the `cluster` role. Native builds and store publishing aren't built yet, and a cluster's worker doesn't take backups yet.
 
 ## Pairing
 
@@ -78,6 +78,25 @@ What the command prints, on either stream, is the build's log. It writes one of 
 A command that exits with a failure and writes nothing fails the build with its exit status. When the command ends, when its deployment is cancelled, and when it runs past its time, the worker stops it and whatever it started in its own process group (`TERM`, then `KILL` ten seconds later). A worker stopped at once by a second signal kills it on its way out. A process that leaves the group, by `setsid` or because a daemon such as Docker's started it, is not stopped: a command that starts one must stop it when it is asked to end.
 
 **The worker doesn't isolate the build.** The command runs as the worker's own user, so it can read the worker's key and reach the network. A process it leaves running can reach the next build's files and output, and every variable named with `--build-env` reaches every build: never name a credential there that one organisation must not use on another's behalf, such as one registry login for every tenant. Lines in a build's log that start `worker:` may be the build's own. To build other people's code, the command has to do the work inside a sandbox of its own, a virtual machine or a container that is thrown away afterwards and is given only the source directory. No such command ships with this crate.
+
+## A cluster's worker
+
+A worker paired for a cluster applies that cluster's releases and removes its environments. It reaches Kubernetes with the service account of the pod it runs in, or with `--kubeconfig` while developing, and describes the cluster with the platform's defaults (`ClusterProfile::platform_defaults`: Traefik in `kube-system` and KEDA's HTTP add-on in `keda`).
+
+```sh
+LEPTOSKIT_CLOUD_WORKER_POSTGRES_URL=postgres://admin:…@postgres.internal/postgres \
+	leptoskit-cloud-worker run --state /var/lib/leptoskit-cloud-worker
+```
+
+| Option                      | Variable                              | What it sets                                                                                           |
+| --------------------------- | ------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| `--kubeconfig`              | `LEPTOSKIT_CLOUD_WORKER_KUBECONFIG`   | A kubeconfig file to reach the cluster with. The pod's service account when not set.                   |
+| `--postgres-url`            | `LEPTOSKIT_CLOUD_WORKER_POSTGRES_URL` | The shared Postgres server's administrator. Without it, a release that needs a managed database fails. |
+| `--rollout-timeout-minutes` |                                       | How long a release may take to become ready. 10 when not set.                                          |
+
+Before a release that has a managed database, the worker makes sure of its role and database on the shared server: a login role that is nothing more (no superuser, database or role creation, replication or row-security bypass, member of no other role, 20 connections at most), whose password is the one leased with the release, and a database it owns, made from `template0`, that no one else may connect to. `template1` and `postgres` are closed to everyone the administrator didn't let in. The worker only touches names that are an environment's (`env_` and 32 hex digits), whatever the control plane says. Removing an environment removes its processes from the cluster, then drops its database and role. `sslmode=disable` in the administrator's address connects without TLS; anything else needs a certificate the webpki roots trust.
+
+A release whose processes never become ready, or that the cluster refuses, is reported as not ready; the previous release keeps serving. A failed migration shows as the new server never becoming ready: the worker doesn't tell the two apart. Dedicated database sizes (`s`, `m`, `l`) aren't run yet, and a release that asks for one fails. A backup or a restore is answered as failed, which leaves the database as it was.
 
 ## Crashes
 
