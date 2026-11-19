@@ -37,7 +37,13 @@ pub(crate) fn previews(
 		title: text.title.to_owned(),
 		body: text.body.to_owned(),
 		data: spec.data.clone().unwrap_or_else(|| "{}".to_owned()),
-		expires_at: spec.expires_at,
+		// The push lifetime counts from when the notification becomes
+		// visible: the schedule the spec names, or now.
+		expires_at: transport::push_expiry(
+			spec.visible_at.unwrap_or(now).max(now),
+			spec.expires_at,
+			text.options.push_ttl,
+		),
 		badge: match text.options.badge {
 			Some(BadgeSetting::Unread) => Some(sample.unread.unwrap_or(1)),
 			Some(BadgeSetting::Set(set)) => Some(set),

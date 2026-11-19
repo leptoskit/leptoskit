@@ -527,7 +527,16 @@ pub(crate) fn shape(message: &Message, now: leptoskit_db::Timestamp) -> Shaped {
 		// The stable tag: a repeat replaces, not stacks, wherever the
 		// service coalesces — best-effort, like every provider's. A topic
 		// is 32 base64url characters, exactly a UUID without its dashes.
-		("topic".to_owned(), message.id.simple().to_string()),
+		// A collapse key the send chose is held to the same alphabet and
+		// length by its own check.
+		(
+			"topic".to_owned(),
+			message
+				.options
+				.collapse_key
+				.clone()
+				.unwrap_or_else(|| message.id.simple().to_string()),
+		),
 		("content-encoding".to_owned(), "aes128gcm".to_owned()),
 		(
 			"content-type".to_owned(),
@@ -571,6 +580,14 @@ fn envelope(message: &Message, include: Include) -> Vec<u8> {
 		"body": message.body,
 		"lkn": message.id.to_string(),
 	});
+
+	// The tag the worker shows the banner under, when the send chose a
+	// collapse key: at most 32 characters, and what makes a later push
+	// replace a banner already shown, so it stays in the smallest
+	// envelope too.
+	if let Some(key) = message.options.collapse_key.as_deref() {
+		payload["lktag"] = serde_json::json!(key);
+	}
 
 	if include != Include::Minimal
 		&& let Some(object) = serde_json::from_str::<serde_json::Value>(&message.data)

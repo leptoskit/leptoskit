@@ -5804,6 +5804,21 @@ fn preview_cases() -> Vec<PreviewCase> {
 			locale: Some("fr-CA"),
 			trimmed: [NONE, NONE, NONE],
 		},
+		// A collapse key of the app's own and a Firebase-era channel.
+		PreviewCase {
+			name: "collapse-key-and-raw-channel",
+			spec: json!({
+				"category": "scores",
+				"title": "2 : 1",
+				"body": "Full time.",
+				"options": {
+					"collapse_key": "match-7",
+					"android": { "raw_channel_id": "scores" },
+				},
+			}),
+			locale: None,
+			trimmed: [NONE, NONE, NONE],
+		},
 		PreviewCase {
 			name: "expiring",
 			spec: spec_expiring(),
@@ -6239,4 +6254,372 @@ async fn only_the_app_previews_and_a_bad_spec_is_refused() {
 	)
 	.await;
 	assert_eq!(status, 400, "{body}");
+}
+
+/// One number read from the database.
+async fn count(service: &Service, sql: &str) -> i64 {
+	let rows = service
+		.db
+		.fetch(Statement {
+			sql: sql.into(),
+			args: Vec::new(),
+		})
+		.await
+		.expect("a read");
+
+	match rows.first().and_then(|row| row.first()) {
+		Some(leptoskit_db::Value::Int(count)) => *count,
+		other => panic!("a count, not {other:?}"),
+	}
+}
+
+/// The first request to `host` that `pick` accepts.
+fn request_where(mock: &Mock, host: &str, pick: impl Fn(&Seen) -> bool) -> Seen {
+	mock.requests_to(host)
+		.into_iter()
+		.find(|seen| pick(seen))
+		.unwrap_or_else(|| panic!("a request to {host}"))
+}
+
+/// A send that names a collapse key of its own carries it wherever a
+/// provider collapses: `apns-collapse-id` at Apple, the `collapse_key`
+/// and — so a banner already shown is replaced too — the notification's
+/// `tag` at FCM, and the `topic` header and the worker's tag on the web.
+/// The notification's own id stays the id everywhere else, an explicit
+/// Android tag wins over the derived one, and a key no provider would
+/// take is refused by name.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_app_chosen_collapse_key_rides_every_provider() {
+	let mock = Mock::new();
+	let mut service = service(&mock, &all_transports()).await;
+	mock.scripted(passing_exchange());
+	service.resume();
+
+	let apns_token = device_token(61);
+	let web_endpoint = format!("https://{WEB_HOST}/push/collapse-key-1");
+	let (receiver, web, auth_secret, public) = web_subscription(&web_endpoint);
+
+	for credential in [
+		apns_credential(&apns_token),
+		fcm_credential("fcm-collapse-1"),
+		web,
+	] {
+		let (status, body) = enroll(&service, ALICE, credential).await;
+		assert_eq!(status, 200, "{body}");
+	}
+
+	let mut spec = spec();
+	spec["options"] = json!({ "collapse_key": "score-update" });
+	let (status, body) = send(&service, "collapse-1", spec.clone(), &[ALICE]).await;
+	assert_eq!(status, 200, "{body}");
+	assert_eq!(settled(&service, "collapse-1").await.len(), 3);
+
+	let apns = request_where(&mock, APNS_HOST, |seen| seen.url.ends_with(&apns_token));
+	assert_eq!(apns.header("apns-collapse-id"), Some("score-update"));
+	let id = apns.header("apns-id").expect("an id").to_owned();
+	Uuid::parse_str(&id).expect("the request id is still the notification's id");
+	assert_eq!(apns.json()["lkn"], id.as_str());
+
+	let fcm = request_where(&mock, FCM_HOST, |seen| {
+		seen.json()["message"]["token"] == "fcm-collapse-1"
+	})
+	.json();
+	let message = &fcm["message"];
+	assert_eq!(message["android"]["collapse_key"], "score-update");
+	assert_eq!(
+		message["android"]["notification"]["tag"], "score-update",
+		"a shown banner is replaced by its tag: {message}"
+	);
+	assert_eq!(
+		message["apns"]["headers"]["apns-collapse-id"],
+		"score-update"
+	);
+	assert_eq!(message["data"]["lkn"], id.as_str());
+
+	let web = request_where(&mock, WEB_HOST, |seen| seen.url == web_endpoint);
+	assert_eq!(web.header("topic"), Some("score-update"));
+	let point = URL_SAFE_NO_PAD.decode(&public).unwrap();
+	let envelope: Value =
+		serde_json::from_slice(&open_aes128gcm(&web.body, receiver, &point, &auth_secret)).unwrap();
+	assert_eq!(envelope["lktag"], "score-update", "{envelope}");
+	assert_eq!(envelope["lkn"], id.as_str());
+
+	// An Android tag the send names itself is the tag.
+	spec["options"] = json!({
+		"collapse_key": "score-update",
+		"android": { "tag": "match-7" },
+	});
+	let (status, body) = send(&service, "collapse-2", spec.clone(), &[ALICE]).await;
+	assert_eq!(status, 200, "{body}");
+	assert_eq!(settled(&service, "collapse-2").await.len(), 3);
+	let tagged = mock
+		.requests_to(FCM_HOST)
+		.into_iter()
+		.map(|seen| seen.json())
+		.find(|body| body["message"]["android"]["notification"]["tag"] == "match-7")
+		.expect("the second FCM push");
+	assert_eq!(tagged["message"]["android"]["collapse_key"], "score-update");
+
+	// A data message collapses too, and shows nothing to tag.
+	let (status, body) = send(
+		&service,
+		"collapse-3",
+		json!({
+			"category": "news",
+			"title": "sync",
+			"data": json!({ "k": "v" }).to_string(),
+			"options": { "kind": "data", "collapse_key": "sync" },
+		}),
+		&[ALICE],
+	)
+	.await;
+	assert_eq!(status, 200, "{body}");
+	settled(&service, "collapse-3").await;
+	let silent = mock
+		.requests_to(FCM_HOST)
+		.into_iter()
+		.map(|seen| seen.json())
+		.find(|body| body["message"]["android"]["collapse_key"] == "sync")
+		.expect("the data push");
+	assert!(
+		silent["message"]["android"].get("notification").is_none(),
+		"{silent}"
+	);
+
+	for (key, why) in [
+		(json!(""), "empty"),
+		(json!("x".repeat(33)), "past the web's 32 characters"),
+		(json!("score update"), "a space"),
+		(json!("score/update"), "not URL-safe"),
+	] {
+		spec["options"] = json!({ "collapse_key": key });
+		let (status, body) = send(&service, "collapse-bad", spec.clone(), &[ALICE]).await;
+		assert_eq!(status, 400, "{why}: {body}");
+		assert!(body.contains("options.collapse_key"), "{why}: {body}");
+	}
+}
+
+/// `options.push_ttl` is how long a provider may hold the push, counted
+/// from when the notification becomes visible, and is not the inbox
+/// item's expiry: the providers are told the lifetime, the inbox row
+/// keeps no expiry, and when both are set the providers get the earlier.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_push_lifetime_is_not_the_inbox_expiry() {
+	let mock = Mock::new();
+	let mut service = service(&mock, &all_transports()).await;
+	mock.scripted(passing_exchange());
+	service.resume();
+
+	let apns_token = device_token(62);
+	let web_endpoint = format!("https://{WEB_HOST}/push/lifetime-1");
+
+	for credential in [
+		apns_credential(&apns_token),
+		fcm_credential("fcm-lifetime-1"),
+		web_credential(&web_endpoint),
+	] {
+		let (status, body) = enroll(&service, ALICE, credential).await;
+		assert_eq!(status, 200, "{body}");
+	}
+
+	let seconds = |text: Option<&str>| -> i64 {
+		text.and_then(|text| text.trim_end_matches('s').parse().ok())
+			.unwrap_or_else(|| panic!("a number of seconds, not {text:?}"))
+	};
+
+	// Five minutes at the providers, forever in the inbox.
+	let before = chrono::Utc::now().timestamp();
+	let mut spec = spec();
+	spec["options"] = json!({ "push_ttl": 300 });
+	let (status, body) = send(&service, "lifetime-1", spec.clone(), &[ALICE]).await;
+	assert_eq!(status, 200, "{body}");
+	assert_eq!(settled(&service, "lifetime-1").await.len(), 3);
+	let after = chrono::Utc::now().timestamp();
+
+	let apns = request_where(&mock, APNS_HOST, |seen| seen.url.ends_with(&apns_token));
+	let until = seconds(apns.header("apns-expiration"));
+	assert!(
+		(before + 299..=after + 301).contains(&until),
+		"APNs holds it five minutes: {until} against {before}..{after}"
+	);
+
+	let fcm = request_where(&mock, FCM_HOST, |seen| {
+		seen.json()["message"]["token"] == "fcm-lifetime-1"
+	})
+	.json();
+	let ttl = seconds(fcm["message"]["android"]["ttl"].as_str());
+	assert!(
+		(240..=300).contains(&ttl),
+		"FCM holds it five minutes: {fcm}"
+	);
+	let until = seconds(fcm["message"]["apns"]["headers"]["apns-expiration"].as_str());
+	assert!((before + 299..=after + 301).contains(&until), "{fcm}");
+
+	let web = request_where(&mock, WEB_HOST, |seen| seen.url == web_endpoint);
+	let ttl = seconds(web.header("ttl"));
+	assert!((240..=300).contains(&ttl), "the web holds it five minutes");
+
+	assert_eq!(
+		count(
+			&service,
+			"SELECT COUNT(*) FROM notifications WHERE expires_at IS NULL"
+		)
+		.await,
+		1,
+		"the inbox item has no expiry"
+	);
+
+	// With an inbox expiry too, the providers are told the earlier.
+	spec["expires_at"] = json!((chrono::Utc::now() + chrono::Duration::hours(2)).to_rfc3339());
+	spec["options"] = json!({ "push_ttl": 60 });
+	let (status, body) = send(&service, "lifetime-2", spec.clone(), &[ALICE]).await;
+	assert_eq!(status, 200, "{body}");
+	assert_eq!(settled(&service, "lifetime-2").await.len(), 3);
+	let ttl = mock
+		.requests_to(WEB_HOST)
+		.iter()
+		.map(|seen| seconds(seen.header("ttl")))
+		.min()
+		.unwrap();
+	assert!((1..=60).contains(&ttl), "the shorter lifetime wins: {ttl}");
+
+	// Zero is "now or never": each provider's own spelling of it.
+	spec.as_object_mut().unwrap().remove("expires_at");
+	spec["options"] = json!({ "push_ttl": 0 });
+	let (status, body) = send(&service, "lifetime-3", spec.clone(), &[ALICE]).await;
+	assert_eq!(status, 200, "{body}");
+	assert_eq!(
+		settled(&service, "lifetime-3").await,
+		vec![("accepted".to_owned(), None); 3],
+		"a zero lifetime is still attempted once"
+	);
+	assert!(
+		mock.requests_to(APNS_HOST)
+			.iter()
+			.any(|seen| seen.header("apns-expiration") == Some("0")),
+		"APNs is told not to store it"
+	);
+	assert!(mock.requests_to(FCM_HOST).iter().any(|seen| {
+		seen.json()["message"]["android"]["ttl"] == "0s"
+			&& seen.json()["message"]["apns"]["headers"]["apns-expiration"] == "0"
+	}));
+	assert!(
+		mock.requests_to(WEB_HOST)
+			.iter()
+			.any(|seen| seen.header("ttl") == Some("0"))
+	);
+
+	// The lifetime has a named ceiling.
+	spec["options"] = json!({ "push_ttl": 2_419_201 });
+	let (status, body) = send(&service, "lifetime-bad", spec, &[ALICE]).await;
+	assert_eq!(status, 400, "{body}");
+	assert!(body.contains("options.push_ttl"), "{body}");
+}
+
+/// A lifetime that ran out before the attempt ends the delivery as
+/// `expired` with nothing posted, while the inbox item stays.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_lapsed_push_lifetime_ends_the_delivery_and_keeps_the_inbox_item() {
+	let mock = Mock::new();
+	let mut service = service(&mock, &all_transports()).await;
+	let (status, body) = enroll(&service, ALICE, apns_credential(&device_token(64))).await;
+	assert_eq!(status, 200, "{body}");
+
+	let mut spec = spec();
+	spec["options"] = json!({ "push_ttl": 1 });
+	let (status, body) = send(&service, "lapsed", spec, &[ALICE]).await;
+	assert_eq!(status, 200, "{body}");
+
+	// The workers were busy for longer than the push was worth.
+	tokio::time::sleep(Duration::from_millis(2_100)).await;
+	service.resume();
+
+	assert_eq!(
+		settled(&service, "lapsed").await,
+		vec![("skipped".to_owned(), Some("expired".to_owned()))]
+	);
+	assert!(mock.requests_to(APNS_HOST).is_empty(), "nothing was posted");
+	assert_eq!(
+		count(
+			&service,
+			"SELECT COUNT(*) FROM notifications WHERE expires_at IS NULL AND cancelled_at IS NULL"
+		)
+		.await,
+		1,
+		"the inbox still has the item"
+	);
+}
+
+/// A zero lifetime is one attempt: a provider that answers "try again"
+/// is not tried again.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_zero_lifetime_is_never_retried() {
+	let mock = Mock::new();
+	let mut service = service(&mock, &all_transports()).await;
+	mock.scripted(|request, _| {
+		if request.url.contains(APNS_HOST) {
+			Scripted::Reply(503, Vec::new(), String::new())
+		} else {
+			Scripted::Default
+		}
+	});
+	let (status, body) = enroll(&service, ALICE, apns_credential(&device_token(63))).await;
+	assert_eq!(status, 200, "{body}");
+	service.resume();
+
+	let mut spec = spec();
+	spec["options"] = json!({ "push_ttl": 0 });
+	let (status, body) = send(&service, "once", spec, &[ALICE]).await;
+	assert_eq!(status, 200, "{body}");
+	assert_eq!(
+		settled_rewinding(&service, "once").await,
+		vec![("rejected".to_owned(), Some("expired".to_owned()))],
+		"ended after its attempt, as a push whose expiry passes between retries is"
+	);
+	assert_eq!(
+		mock.requests_to(APNS_HOST).len(),
+		1,
+		"one attempt and no more"
+	);
+}
+
+/// `android.raw_channel_id` names a channel exactly as the device holds
+/// it — one an earlier, Firebase-era build of the app created — where
+/// `android.channel_id` names one the plugin made, under its prefix. A
+/// send names one or the other.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_raw_android_channel_id_is_sent_as_given() {
+	let mock = Mock::new();
+	let mut service = service(&mock, &all_transports()).await;
+	mock.scripted(passing_exchange());
+	let (status, body) = enroll(&service, ALICE, fcm_credential("fcm-raw-channel")).await;
+	assert_eq!(status, 200, "{body}");
+	service.resume();
+
+	let mut spec = spec();
+	spec["options"] = json!({ "android": { "raw_channel_id": "orders" } });
+	let (status, body) = send(&service, "raw-channel", spec.clone(), &[ALICE]).await;
+	assert_eq!(status, 200, "{body}");
+	assert_eq!(
+		settled(&service, "raw-channel").await,
+		vec![("accepted".to_owned(), None)]
+	);
+	let fcm = request_where(&mock, FCM_HOST, |seen| {
+		seen.json()["message"]["token"] == "fcm-raw-channel"
+	})
+	.json();
+	assert_eq!(
+		fcm["message"]["android"]["notification"]["channel_id"], "orders",
+		"no prefix: {fcm}"
+	);
+
+	spec["options"] = json!({ "android": { "raw_channel_id": "orders", "channel_id": "inbox" } });
+	let (status, body) = send(&service, "raw-channel-both", spec.clone(), &[ALICE]).await;
+	assert_eq!(status, 400, "{body}");
+	assert!(body.contains("options.android.raw_channel_id"), "{body}");
+
+	spec["options"] = json!({ "android": { "raw_channel_id": "x".repeat(65) } });
+	let (status, body) = send(&service, "raw-channel-long", spec, &[ALICE]).await;
+	assert_eq!(status, 400, "{body}");
+	assert!(body.contains("options.android.raw_channel_id"), "{body}");
 }

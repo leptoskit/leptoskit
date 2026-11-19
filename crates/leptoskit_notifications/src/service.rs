@@ -2694,7 +2694,12 @@ pub(crate) async fn send_test(
 		title: text.title.to_owned(),
 		body: text.body.to_owned(),
 		data: spec.data.clone().unwrap_or_else(|| "{}".to_owned()),
-		expires_at: spec.expires_at,
+		// A test is pushed now, so its push lifetime counts from now.
+		expires_at: transport::push_expiry(
+			leptoskit_db::now(),
+			spec.expires_at,
+			text.options.push_ttl,
+		),
 		options: text.options.into_owned(),
 		badge,
 	};

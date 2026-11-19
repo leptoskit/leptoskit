@@ -51,6 +51,7 @@ use crate::push::PushDelivery;
 use crate::push::PushEndpoint;
 use crate::push::PushPlatform;
 use crate::push::PushSend;
+use crate::service::transport;
 use crate::service::transport::Message;
 use crate::service::transport::Outcome;
 use crate::service::transport::PushRuntime;
@@ -1273,14 +1274,35 @@ async fn attempt(
 		});
 	}
 
-	if let Err(reason) = delivery_deadline(notification.visible_at, notification.expires_at)
-		.and_then(|deadline| {
-			if deadline <= now {
-				Err(DeliveryReason::HorizonExceeded)
-			} else {
-				Ok(deadline)
-			}
-		}) {
+	// The push's own lifetime, when the send set one: the providers hold
+	// it no longer than this, and neither does the queue. A zero lifetime
+	// is "now or never" at the providers and one attempt here, whenever
+	// the queue reaches it; it is never retried.
+	let push_ttl = push_ttl_of(&notification);
+	let push_expiry =
+		transport::push_expiry(notification.visible_at, notification.expires_at, push_ttl);
+	let only_attempt = push_ttl == Some(0) && delivery.attempts == 0;
+
+	if !only_attempt && push_expiry.is_some_and(|push_expiry| push_expiry <= now) {
+		return Ok(Outcome::Ended {
+			reason: DeliveryReason::Expired,
+			invalidate: false,
+		});
+	}
+
+	let window = if only_attempt {
+		notification.expires_at
+	} else {
+		push_expiry
+	};
+
+	if let Err(reason) = delivery_deadline(notification.visible_at, window).and_then(|deadline| {
+		if deadline <= now {
+			Err(DeliveryReason::HorizonExceeded)
+		} else {
+			Ok(deadline)
+		}
+	}) {
 		return Ok(Outcome::Ended {
 			reason,
 			invalidate: false,
@@ -1353,12 +1375,23 @@ async fn attempt(
 		title: notification.title.clone(),
 		body: notification.body.clone(),
 		data: notification.data.clone(),
-		expires_at: notification.expires_at,
+		expires_at: push_expiry,
 		options,
 		badge,
 	};
 
 	Ok(transport.attempt(&endpoint.credential, &message).await)
+}
+
+/// The push lifetime the notification's send set, read from the options
+/// its row stores. Options this build cannot read name none here; the
+/// attempt itself stalls on them.
+fn push_ttl_of(notification: &crate::Notification) -> Option<u32> {
+	notification
+		.options
+		.as_deref()
+		.and_then(|stored| serde_json::from_str::<crate::MessageOptions>(stored).ok())
+		.and_then(|options| options.push_ttl)
 }
 
 /// The delivery state an ended reason counts as: the notification's own
@@ -1482,7 +1515,16 @@ async fn apply_outcome(
 			let plan = if attempts >= i64::from(crate::push::MAX_DELIVERY_ATTEMPTS) {
 				Err(DeliveryReason::AttemptsExhausted)
 			} else {
-				retry_time(now, notification.visible_at, notification.expires_at, delay)
+				retry_time(
+					now,
+					notification.visible_at,
+					transport::push_expiry(
+						notification.visible_at,
+						notification.expires_at,
+						push_ttl_of(&notification),
+					),
+					delay,
+				)
 			};
 			let (state, reason, next, finished) = match plan {
 				Ok(at) => {

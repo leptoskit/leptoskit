@@ -101,18 +101,20 @@ The checks the service runs are public functions of the crate, so a form can run
 
 **Options**
 
-| What                                | Limit                                           |
-| ----------------------------------- | ----------------------------------------------- |
-| `image`, `link`, `web.icon`         | 1,024 bytes                                     |
-| `sound` name                        | 1 to 64 bytes of letters, digits, `-`, `_`, `.` |
-| `android.channel_id`                | 64 bytes                                        |
-| `android.icon`                      | 512 bytes                                       |
-| `android.tag`                       | 256 bytes                                       |
-| `apple.subtitle`                    | 200 bytes                                       |
-| `apple.thread_id`, `apple.category` | 64 bytes each                                   |
-| `apple.relevance_score`             | 0 to 1                                          |
-| `web.actions`                       | 2 actions; id 64 bytes, title 100 bytes         |
-| `web.lang`                          | 35 bytes                                        |
+| What                                           | Limit                                                          |
+| ---------------------------------------------- | -------------------------------------------------------------- |
+| `image`, `link`, `web.icon`                    | 1,024 bytes                                                    |
+| `sound` name                                   | 1 to 64 bytes of letters, digits, `-`, `_`, `.`                |
+| `collapse_key`                                 | 1 to 32 letters, digits, `-`, `_` (`MAX_COLLAPSE_KEY_LEN`)     |
+| `push_ttl`                                     | 0 to 2,419,200 seconds, which is 28 days (`MAX_PUSH_TTL_SECS`) |
+| `android.channel_id`, `android.raw_channel_id` | 64 bytes each; one or the other                                |
+| `android.icon`                                 | 512 bytes                                                      |
+| `android.tag`                                  | 256 bytes                                                      |
+| `apple.subtitle`                               | 200 bytes                                                      |
+| `apple.thread_id`, `apple.category`            | 64 bytes each                                                  |
+| `apple.relevance_score`                        | 0 to 1                                                         |
+| `web.actions`                                  | 2 actions; id 64 bytes, title 100 bytes                        |
+| `web.lang`                                     | 35 bytes                                                       |
 
 **Audiences**
 

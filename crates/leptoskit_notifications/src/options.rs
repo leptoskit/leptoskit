@@ -26,6 +26,15 @@ pub const MAX_SOUND_LEN: usize = 64;
 /// The longest Android channel id, in bytes.
 pub const MAX_CHANNEL_ID_LEN: usize = 64;
 
+/// The longest collapse key, in characters: the ceiling Web Push sets for
+/// its `Topic` header (RFC 8030), the tightest of the three providers'.
+pub const MAX_COLLAPSE_KEY_LEN: usize = 32;
+
+/// The longest push lifetime, in seconds: 28 days, the longest FCM holds
+/// a message and the longest this service asks a browser's push service
+/// to.
+pub const MAX_PUSH_TTL_SECS: u32 = 28 * 24 * 3_600;
+
 /// The longest Android notification icon, in bytes: a resource name or a
 /// URL.
 pub const MAX_ANDROID_ICON_LEN: usize = 512;
@@ -232,12 +241,22 @@ pub struct AndroidOptions {
 	/// (`leptoskit.notifications.`). A channel the device doesn't have
 	/// falls back to the app's default push channel.
 	pub channel_id: Option<String>,
+	/// A notification channel named exactly as the device holds it, with
+	/// no prefix added: for a channel an earlier build of the app created
+	/// itself — under Firebase, say — and that people have already
+	/// adjusted in their system settings. At most
+	/// [`MAX_CHANNEL_ID_LEN`] bytes. A send names this or
+	/// [`channel_id`](Self::channel_id), never both.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub raw_channel_id: Option<String>,
 	/// The accent color, `#RRGGBB` exactly.
 	pub color: Option<String>,
 	/// The small icon's resource name or URL. Unset uses the app's own.
 	pub icon: Option<String>,
 	/// Groups notifications on the device: the same tag replaces, a new
-	/// one stacks. Independent of the send's own collapse id.
+	/// one stacks. Unset, a send with a
+	/// [`collapse_key`](MessageOptions::collapse_key) is tagged with that
+	/// key, so a banner already shown is replaced too.
 	pub tag: Option<String>,
 	/// Keeps the notification on screen when the person dismisses the
 	/// shade, the way an ongoing call does.
@@ -319,6 +338,26 @@ pub struct MessageOptions {
 	/// routing reads it from the payload.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub link: Option<String>,
+	/// A collapse key of the app's own: a later push with the same key
+	/// replaces an earlier one that a device has not been handed yet, and
+	/// — where the platform allows — the banner it is still showing.
+	/// It is APNs' `apns-collapse-id`, FCM's `collapse_key` (and the
+	/// Android notification's tag, unless the send names one), and Web
+	/// Push's `Topic`. 1 to [`MAX_COLLAPSE_KEY_LEN`] characters of
+	/// letters, digits, `-`, and `_`. Unset, every notification collapses
+	/// only with repeats of itself, by its own id. The inbox is not
+	/// collapsed: each send keeps its own item.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub collapse_key: Option<String>,
+	/// How long, in seconds, a provider may hold the push for a device it
+	/// cannot reach, counted from the moment the notification becomes
+	/// visible; at most [`MAX_PUSH_TTL_SECS`]. It is separate from the
+	/// send's `expires_at`, which also removes the inbox item: when both
+	/// are set the push stops at the earlier. `0` is "now or never" — one
+	/// attempt, which no provider stores. Unset, the push lives as long
+	/// as `expires_at` says, or as long as each provider keeps one.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub push_ttl: Option<u32>,
 	/// Android-only presentation.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub android: Option<AndroidOptions>,
@@ -342,6 +381,8 @@ impl MessageOptions {
 			&& self.sound.is_none()
 			&& self.badge.is_none()
 			&& self.link.is_none()
+			&& self.collapse_key.is_none()
+			&& self.push_ttl.is_none()
 			&& self.android.is_none()
 			&& self.apple.is_none()
 			&& self.web.is_none()
@@ -412,7 +453,22 @@ pub fn check_options(options: &MessageOptions) -> Result<(), String> {
 		));
 	}
 
+	check_delivery(options)?;
+
 	if let Some(android) = options.android.as_ref() {
+		if android.channel_id.is_some() && android.raw_channel_id.is_some() {
+			return Err(
+				"options.android.raw_channel_id and options.android.channel_id name the same \
+				 thing: set one of them"
+					.into(),
+			);
+		}
+
+		check_printable(
+			android.raw_channel_id.as_deref(),
+			MAX_CHANNEL_ID_LEN,
+			"options.android.raw_channel_id",
+		)?;
 		check_printable(
 			android.channel_id.as_deref(),
 			MAX_CHANNEL_ID_LEN,
@@ -505,6 +561,38 @@ pub fn check_options(options: &MessageOptions) -> Result<(), String> {
 		return Err(format!(
 			"options are at most {MAX_OPTIONS_LEN} bytes once stored as JSON: drop or shorten \
 			 some of them"
+		));
+	}
+
+	Ok(())
+}
+
+/// The options that steer delivery and not presentation: the collapse
+/// key and the push lifetime.
+///
+/// # Errors
+///
+/// A message naming the field.
+fn check_delivery(options: &MessageOptions) -> Result<(), String> {
+	if let Some(key) = options.collapse_key.as_deref()
+		&& (key.is_empty()
+			|| key.len() > MAX_COLLAPSE_KEY_LEN
+			|| !key
+				.bytes()
+				.all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_')))
+	{
+		return Err(format!(
+			"options.collapse_key is 1 to {MAX_COLLAPSE_KEY_LEN} characters of letters, digits, \
+			 `-`, and `_`"
+		));
+	}
+
+	if options
+		.push_ttl
+		.is_some_and(|seconds| seconds > MAX_PUSH_TTL_SECS)
+	{
+		return Err(format!(
+			"options.push_ttl is at most {MAX_PUSH_TTL_SECS} seconds, which is 28 days"
 		));
 	}
 
@@ -680,6 +768,7 @@ mod tests {
 				icon: Some("ic_income".into()),
 				tag: Some("billing".into()),
 				sticky: Some(true),
+				..AndroidOptions::default()
 			}),
 			apple: Some(AppleOptions {
 				subtitle: Some("Invoice #42".into()),
@@ -801,6 +890,39 @@ mod tests {
 			),
 			(
 				MessageOptions {
+					collapse_key: Some("x".repeat(33)),
+					..MessageOptions::default()
+				},
+				"options.collapse_key is 1 to 32 characters of letters, digits, `-`, and `_`",
+			),
+			(
+				MessageOptions {
+					collapse_key: Some("score update".into()),
+					..MessageOptions::default()
+				},
+				"options.collapse_key",
+			),
+			(
+				MessageOptions {
+					push_ttl: Some(super::MAX_PUSH_TTL_SECS + 1),
+					..MessageOptions::default()
+				},
+				"options.push_ttl is at most 2419200 seconds",
+			),
+			(
+				MessageOptions {
+					android: Some(AndroidOptions {
+						channel_id: Some("inbox".into()),
+						raw_channel_id: Some("orders".into()),
+						..AndroidOptions::default()
+					}),
+					..MessageOptions::default()
+				},
+				"options.android.raw_channel_id and options.android.channel_id name the same \
+				 thing: set one of them",
+			),
+			(
+				MessageOptions {
 					web: Some(WebOptions {
 						lang: Some("de_AT".into()),
 						..WebOptions::default()
@@ -845,6 +967,48 @@ mod tests {
 		assert!(
 			set.get("kind").is_none(),
 			"the default kind never serializes: {set}"
+		);
+
+		// The delivery options and the raw channel serialize only when
+		// set, so a send from before them stores and hashes as it did.
+		assert_eq!(
+			set["android"],
+			serde_json::json!({
+				"channel_id": "inbox",
+				"color": "#10b981",
+				"icon": "ic_income",
+				"tag": "billing",
+				"sticky": true,
+			})
+		);
+		let delivery = MessageOptions {
+			collapse_key: Some("score-update".into()),
+			push_ttl: Some(0),
+			android: Some(AndroidOptions {
+				raw_channel_id: Some("orders".into()),
+				..AndroidOptions::default()
+			}),
+			..MessageOptions::default()
+		};
+		assert!(!delivery.is_empty());
+		assert!(check_options(&delivery).is_ok());
+		let stored = serde_json::to_value(&delivery).unwrap();
+		assert_eq!(stored["collapse_key"], "score-update");
+		assert_eq!(stored["push_ttl"], 0);
+		assert_eq!(stored["android"]["raw_channel_id"], "orders");
+		assert_eq!(
+			serde_json::from_value::<MessageOptions>(stored).unwrap(),
+			delivery
+		);
+		// A data message may collapse and may name a lifetime.
+		assert!(
+			check_options(&MessageOptions {
+				kind: MessageKind::Data,
+				collapse_key: Some("sync".into()),
+				push_ttl: Some(60),
+				..MessageOptions::default()
+			})
+			.is_ok()
 		);
 
 		// And it round trips.

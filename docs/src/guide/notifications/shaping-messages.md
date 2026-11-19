@@ -36,25 +36,42 @@ let sent = call_as_app(leptoskit_notifications::Send {
 
 Options are part of the send's intent: the same idempotency key with different options is a conflict, exactly as a changed body would be. Each platform takes the options it understands:
 
-| Option          | APNs (iOS, macOS)                                                  | FCM (Android)                                        | Web Push                                                                               |
-| --------------- | ------------------------------------------------------------------ | ---------------------------------------------------- | -------------------------------------------------------------------------------------- |
-| `kind: "data"`  | background push, `content-available` alone, no banner              | data-only message, no notification block             | not sent: skipped as `platform_unsupported` (see below)                                |
-| `priority`      | `apns-priority` 10 or 5                                            | `android.priority` high or normal                    | `Urgency` header                                                                       |
-| `image`         | not shown unless you add your own Notification Service Extension   | shown in the notification                            | shown in the notification                                                              |
-| `sound`         | `aps.sound`, the named file                                        | `android.notification.sound`                         | `silent: true` on the notification (browsers play no sound by default)                 |
-| `badge`         | `aps.badge`; on a data send, `lkbadge` in the payload              | `notification_count`; on a data send, `lkbadge`      | the receiver calls `navigator.setAppBadge`                                             |
-| `link`          | carried in the payload for your app to route                       | carried in the data map                              | the receiver opens it on click (your origin only)                                      |
-| `android { … }` | —                                                                  | channel, color, icon, tag, sticky                    | —                                                                                      |
-| `apple { … }`   | subtitle, thread-id, category, interruption-level, relevance-score | mirrored into the APNs block FCM serves for iOS apps | —                                                                                      |
-| `web { … }`     | —                                                                  | —                                                    | icon, badge shape, up to two actions buttons, require-interaction, direction, language |
+| Option          | APNs (iOS, macOS)                                                  | FCM (Android)                                                                   | Web Push                                                                               |
+| --------------- | ------------------------------------------------------------------ | ------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| `kind: "data"`  | background push, `content-available` alone, no banner              | data-only message, no notification block                                        | not sent: skipped as `platform_unsupported` (see below)                                |
+| `priority`      | `apns-priority` 10 or 5                                            | `android.priority` high or normal                                               | `Urgency` header                                                                       |
+| `image`         | not shown unless you add your own Notification Service Extension   | shown in the notification                                                       | shown in the notification                                                              |
+| `sound`         | `aps.sound`, the named file                                        | `android.notification.sound`                                                    | `silent: true` on the notification (browsers play no sound by default)                 |
+| `badge`         | `aps.badge`; on a data send, `lkbadge` in the payload              | `notification_count`; on a data send, `lkbadge`                                 | the receiver calls `navigator.setAppBadge`                                             |
+| `link`          | carried in the payload for your app to route                       | carried in the data map                                                         | the receiver opens it on click (your origin only)                                      |
+| `collapse_key`  | `apns-collapse-id`                                                 | `android.collapse_key`, and the notification's tag unless you set `android.tag` | `Topic` header, and the banner's tag                                                   |
+| `push_ttl`      | `apns-expiration`                                                  | `android.ttl`                                                                   | `TTL` header                                                                           |
+| `android { … }` | —                                                                  | channel (or a raw channel id), color, icon, tag, sticky                         | —                                                                                      |
+| `apple { … }`   | subtitle, thread-id, category, interruption-level, relevance-score | mirrored into the APNs block FCM serves for iOS apps                            | —                                                                                      |
+| `web { … }`     | —                                                                  | —                                                                               | icon, badge shape, up to two actions buttons, require-interaction, direction, language |
 
 The per-platform blocks only shape that platform: `android.channel_id` names an Android channel, `apple.interruption_level` is what Focus modes read, and `web.actions` become `showNotification` action buttons — a click on one opens the same page a click on the banner does, with the button's id added to the address as `lka`. Everything is checked on both sides with errors that name the field — a color must be `#RRGGBB`, an image or link at most 1,024 bytes of `https` URL (or, for a link, a path starting with `/`), a sound name 1–64 bytes of letters, digits, `-`, `_`, and `.`. A data send shows nothing, so the options that only shape what is shown — `image`, `sound`, `link`, and the `android`, `apple`, and `web` blocks — are refused on one; its `priority` and `badge` are accepted.
 
 **Android channels.** `android.channel_id` is the id you gave the [local-notifications plugin](inbox.md#composing-with-local-notifications) when your app configured the channel: an app that calls `configure_channel` with `inbox` receives a send whose `android.channel_id` is `"inbox"` in that channel. The plugin keeps every channel it creates under its own `leptoskit.notifications.` prefix on the device, and the service adds that prefix for you; a channel your own Kotlin creates is reachable only if its id starts with the same prefix. A push that names no channel, or names one the device doesn't have, is posted through your app's **default** channel instead. A push-enabled app has that channel from its first launch, listed as "Notifications" in the system's settings until your app configures the channel `default` with its own name and importance.
 
+**A channel from before leptoskit.** An app that moved here from Firebase already has channels on people's phones under ids of its own, such as `orders`, and people have set their sound and importance. `android.raw_channel_id` names such a channel exactly as the device holds it, with no prefix added. Set it instead of `channel_id`; a send that sets both is refused. The service cannot tell whether the channel exists: your app still has to create it at launch as it always did, and a push naming a channel the device doesn't have goes through the default channel.
+
+```rust
+use leptoskit_notifications::AndroidOptions;
+use leptoskit_notifications::MessageOptions;
+
+let options = MessageOptions {
+    android: Some(AndroidOptions {
+        raw_channel_id: Some("orders".into()),
+        ..AndroidOptions::default()
+    }),
+    ..MessageOptions::default()
+};
+```
+
 **Apple permissions and entitlements.** On iOS and macOS a push's badge and sound take effect only where the person allowed them. `request_permission` asks for alerts, badges, and sounds in one question. The system asks once: someone who answered in an earlier build of your app, which asked for alerts only, may have badges and sounds switched off until they change that in Settings. `apple.interruption_level: "time-sensitive"` needs Apple's Time Sensitive Notifications capability, which leptoskit doesn't add to the app yet; Apple documents that without it the system treats the push as an ordinary (`active`) one, so it won't break through a Focus.
 
-**When the payload is too big.** Every provider caps the message, and options count toward it: APNs takes 4 KiB of encoded JSON, FCM 4 KiB of the keys and values a device receives (the notification, the data, and the Android options, not the request around them), and a Web Push service must take a 4 KiB encrypted record. The longest title and body a send allows fit on every provider unless their text needs heavy JSON escaping, such as a body of quotation marks. When a send doesn't fit, the service drops the optional extras in the same fixed order on every provider before giving up on anything you'd miss: the per-platform blocks and the image first, then the sound, badge, and link, then the send's `data`, down to an id-only envelope that still shows the title and body and still collapses by the notification's id. A data message keeps its silent shape in the fallback. If even the id-only envelope doesn't fit, the delivery ends as `rejected` with the reason `oversized`, without a request.
+**When the payload is too big.** Every provider caps the message, and options count toward it: APNs takes 4 KiB of encoded JSON, FCM 4 KiB of the keys and values a device receives (the notification, the data, and the Android options, not the request around them), and a Web Push service must take a 4 KiB encrypted record. The longest title and body a send allows fit on every provider unless their text needs heavy JSON escaping, such as a body of quotation marks. When a send doesn't fit, the service drops the optional extras in the same fixed order on every provider before giving up on anything you'd miss: the per-platform blocks and the image first, then the sound, badge, and link, then the send's `data`, down to an id-only envelope that still shows the title and body and still collapses by the notification's id, or by your `collapse_key`. A data message keeps its silent shape in the fallback. If even the id-only envelope doesn't fit, the delivery ends as `rejected` with the reason `oversized`, without a request.
 
 **What a push carries.** Besides the title and body, every push carries a small envelope your app can read. [Receiving on the device](receiving.md) hands it to you already parsed, so you need these names only when you write host code of your own:
 
@@ -70,6 +87,34 @@ The per-platform blocks only shape that platform: `android.channel_id` names an 
 On FCM your `data` object's keys sit directly in the data map beside the envelope's, and every value is text.
 
 **The image on iOS and macOS.** APNs cannot show a remote image by itself. The service sets `mutable-content` and puts the address in `lkimg`, which is what a Notification Service Extension needs to download and attach it. leptoskit does not generate that extension, so until you add one to your Xcode project the push arrives with its text and no picture.
+
+### Replace an earlier push, and let a push go stale
+
+A live score changes every few minutes. Sending each change as a new notification leaves a phone that was in a tunnel with six banners, five of them wrong. Two options fix that, and neither touches the inbox.
+
+```rust
+use leptoskit_notifications::MessageOptions;
+
+let options = MessageOptions {
+    // The same key on a later send replaces this push.
+    collapse_key: Some(format!("match-{match_id}")),
+    // The providers drop it if the device stays unreachable for ten minutes.
+    push_ttl: Some(600),
+    ..MessageOptions::default()
+};
+```
+
+**`collapse_key`** is a name you choose, 1 to 32 letters, digits, `-`, and `_`. A later push with the same key replaces an earlier one that a device has not received yet. It also replaces the banner already on screen on iOS and macOS, on Android (the service sends the key as the notification's tag unless you set `android.tag` yourself), and in browsers (the receiver shows the banner under the key). Without a key, a push collapses only with repeats of the same notification. Three things to know:
+
+- The key is per app, not per person or per send. Use the same key only for pushes that should replace each other.
+- FCM keeps at most four different collapse keys waiting for one offline device. With more, it keeps four and does not say which.
+- The inbox is not collapsed. Each send still writes its own item. If only the latest should stay there too, [cancel](sending.md#cancel-a-scheduled-send) the earlier send.
+
+**`push_ttl`** is how many seconds a provider may keep the push for a device it cannot reach, counted from the moment the notification becomes visible. The longest is 2,419,200 seconds (28 days). It is separate from `expires_at`, which removes the item from the inbox: a push worth ten minutes can belong to an inbox item that stays for a week. When a send sets both, the push stops at the earlier one. The service's own retries stop at the same moment, and a delivery that was still waiting then ends with the reason [`expired`](troubleshooting.md#reason-codes). Retries never go on for more than 24 hours, whatever the lifetime.
+
+`push_ttl: Some(0)` means now or never: the service makes one attempt and asks the provider not to store the push at all. It is not retried, even when the provider asks for a retry.
+
+Both options work on a [data message](#silent-data-messages) too. On Android, a push that arrives while your app is open is shown by the app, not the system, and that banner is not replaced by its key.
 
 ### Silent data messages
 
