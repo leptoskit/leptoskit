@@ -125,13 +125,13 @@ public final class AppUsagePlugin: NativePlugin {
         let center = NotificationCenter.default
         let transitions = [
             (UIApplication.protectedDataWillBecomeUnavailableNotification, Wire.locked),
-            (UIApplication.protectedDataDidBecomeAvailableNotification, Wire.unlocked),
+            (UIApplication.protectedDataDidBecomeAvailableNotification, Wire.unlocked)
         ]
         #elseif os(macOS)
         let center: NotificationCenter = DistributedNotificationCenter.default()
         let transitions = [
             (Notification.Name("com.apple.screenIsLocked"), Wire.locked),
-            (Notification.Name("com.apple.screenIsUnlocked"), Wire.unlocked),
+            (Notification.Name("com.apple.screenIsUnlocked"), Wire.unlocked)
         ]
         #else
         let center = NotificationCenter.default
