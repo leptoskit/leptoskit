@@ -256,6 +256,13 @@ Found while converting sign-in: on the web every screen rebuild replaced each la
 
 - **Run here:** `leptoskit_auth` unit tests for the parameter, a router test that `POST /auth/oauth/start` with `"prompt": "login"` puts `prompt=login` on the URL, clippy for `leptoskit_auth` with every feature, and the CLI's auth page template tests. The Postgres tests can't run here (the container is root).
 - **For the admin:** "Switch account" is `sign_in_with_provider()` with `prompt: Some(Prompt::Login)`, replacing `admin.mjs`'s edit of the returned URL.
+### `feat/document-title`: G10
+
+`leptoskit_router::set_title(&str)` sets `document.title` in a browser (the router's `web` feature on Wasm) and does nothing elsewhere. Fragments are left out, as the audit recommends: the admin moves `#workings=` to a query parameter.
+
+- **Run here:** `tests/web_title.rs` in headless Chrome (new, added to `test:browser`), and clippy for `leptoskit_router` on the host and on Wasm with `web`.
+- **Not done:** native window titles. AppKit, GTK and Windows set a title only when the window opens, and nothing carries a later one from the app to the host. That needs a backend hook and a bridge message for guests. Nothing in the admin needs it.
+- **For the admin:** AD-24's title on a builder swap is `set_title` in the effect that follows the route; the server's shell writes the first `<title>`.
 
 ### `feat/public-demo`: pull request #856 (draft)
 

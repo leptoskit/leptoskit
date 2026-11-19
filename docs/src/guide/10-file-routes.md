@@ -305,6 +305,23 @@ To serve the app under a sub-path, such as `/app/` on a shared domain, name it w
 
 The router then matches the part of the path after it, so `/app/notes/42` is the `Note` route, and every link it renders and every history entry it adds starts with `/app/`. Load your own files with relative URLs, such as `pkg/app.js`, so they resolve against the base too. Without a `<base>`, the app is at the root of its site. This only applies in a browser: native apps have no URL.
 
+### The tab's title
+
+Name the screen with `leptoskit_router::set_title`, from an effect that reads the current route, so the browser tab and its history entries say where the person is:
+
+```rust
+Effect::new(move |_| {
+	let title = match navigation.current() {
+		Route::Notes => "Notes",
+		Route::You => "You",
+		_ => "Notes",
+	};
+	leptoskit_router::set_title(title);
+});
+```
+
+A server-rendered page writes its first title in its own `<title>`, and `set_title` keeps it right after that. Native windows keep the title they were opened with for now, and phones show none.
+
 ## Generating `routes.rs`
 
 `leptoskit dev`, `leptoskit build` and `leptoskit native` regenerate `routes.rs` before they compile, and write it only when the routes changed. After adding a route outside those commands, run the router plugin's command:

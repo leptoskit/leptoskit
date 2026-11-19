@@ -41,5 +41,9 @@ ssr = ["dep:leptos", "dep:leptos_axum", "dep:leptos_router"]
 [dev-dependencies]
 leptoskit_yoga = { workspace = true }
 
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-test = { workspace = true }
+web-sys = { workspace = true, features = ["Document", "Window"] }
+
 [lints]
 workspace = true

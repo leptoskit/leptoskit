@@ -181,3 +181,10 @@ impl Drop for Browser {
 		}
 	}
 }
+
+/// Sets the document's title, when there is a document.
+pub(crate) fn set_title(title: &str) {
+	if let Some(document) = web_sys::window().and_then(|window| window.document()) {
+		document.set_title(title);
+	}
+}
