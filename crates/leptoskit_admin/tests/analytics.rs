@@ -741,9 +741,12 @@ async fn export_and_delete_need_a_confirmation_and_the_role() {
 	let person = attribute_of(&html, "person-row", "href");
 	let id = person.rsplit('/').next().unwrap().to_owned();
 	let (_, html) = page(&world, &mut ada, &person).await;
-	let guard = attribute_of(&html, "person-delete", "aria-description");
-	let (_, confirmation) = guard.split_once('|').unwrap();
-	assert_eq!(confirmation, "member-03@notes.example");
+	// Deleting asks for their name as the page shows it.
+	let confirmation = "member-03@notes.example";
+	assert!(
+		html.contains(&format!("<title>{confirmation} · ")),
+		"the page is theirs"
+	);
 
 	// Export: everything stored about them, as a download.
 	let response = ada
@@ -892,6 +895,15 @@ async fn pages_for_the_script() {
 		)
 		.unwrap();
 
+	// A person, for People and their page.
+	let (_, html) = page(
+		&world,
+		&mut ada,
+		&format!("{BASE}/analytics/people?search=member-01"),
+	)
+	.await;
+	let person = attribute_of(&html, "person-row", "href");
+
 	let project = format!("{BASE}/infra/projects/notes-production");
 	for (file, path) in [
 		(
@@ -913,6 +925,9 @@ async fn pages_for_the_script() {
 			),
 		),
 		("live.html", format!("{BASE}/analytics/live")),
+		("library.html", format!("{BASE}/analytics/library")),
+		("people.html", format!("{BASE}/analytics/people")),
+		("person.html", person),
 		("glossary.html", format!("{BASE}/learn/glossary")),
 		("learn.html", format!("{BASE}/learn")),
 		("overview.html", format!("{project}/overview")),

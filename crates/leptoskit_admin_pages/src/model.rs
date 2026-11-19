@@ -12,6 +12,8 @@ use serde::Serialize;
 use crate::components::Tone;
 use crate::workings::Drawer;
 
+pub mod library;
+pub mod people;
 pub mod project;
 
 /// Which environment the admin acts on, shown as the pill in the top bar.
@@ -261,6 +263,12 @@ pub enum Page {
 	Operation(Box<Operation>),
 	/// One tab of one project.
 	Project(Box<project::Project>),
+	/// Saved insights and dashboards.
+	Library(library::Library),
+	/// Everyone the events came from.
+	People(people::People),
+	/// One person.
+	Person(Box<people::Person>),
 }
 
 impl Page {
@@ -274,6 +282,9 @@ impl Page {
 			Self::Projects(_) => "Projects",
 			Self::Operation(operation) => &operation.title,
 			Self::Project(project) => &project.title,
+			Self::Library(_) => "Library",
+			Self::People(_) => "People",
+			Self::Person(person) => &person.name,
 		}
 	}
 
@@ -281,7 +292,13 @@ impl Page {
 	#[must_use]
 	pub fn drawers(&self) -> &[Drawer] {
 		match self {
-			Self::Glossary | Self::Learn(_) | Self::Lesson(_) | Self::Projects(_) => &[],
+			Self::Glossary
+			| Self::Learn(_)
+			| Self::Lesson(_)
+			| Self::Projects(_)
+			| Self::Library(_)
+			| Self::People(_) => &[],
+			Self::Person(person) => std::slice::from_ref(&person.drawer),
 			Self::Operation(operation) => std::slice::from_ref(&operation.drawer),
 			Self::Project(project) => &project.drawers,
 		}
@@ -294,6 +311,8 @@ impl Page {
 			Self::Glossary => Section::Glossary,
 			Self::Learn(_) | Self::Lesson(_) => Section::Learn,
 			Self::Projects(_) => Section::Projects,
+			Self::Library(_) => Section::Library,
+			Self::People(_) | Self::Person(_) => Section::People,
 			Self::Operation(operation) => Section::ProjectOperations(operation.project.clone()),
 			Self::Project(project) => {
 				match project.tab {

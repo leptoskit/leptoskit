@@ -303,7 +303,7 @@ Workings drawers, Projects and the Operation page moved.
 - **Not tested:** the live stream end to end in a browser (the script's pages are static). The layout rules for an open drawer at extra-large widths (collapsed rail labels, one-column grid) are not reproduced yet.
 - **Next:** see part 4.
 
-### `feat/admin-project-tabs`: admin conversion, part 4
+### `feat/admin-project-tabs`: admin conversion, part 4 (merged, #952)
 
 A project's Overview, Changes, Releases, Operations, Backups and Config tabs moved. `leptoskit_admin/src/infra/pages.rs` builds `model::project::Project` (each tab's data, its actions as `Action { kind, label, request, explain }`, its drawers), and `leptoskit_admin_pages/src/pages/project.rs` draws it. Health stays server-drawn with `admin.mjs` until its fleet charts move with the analytics pages.
 
@@ -313,6 +313,16 @@ A project's Overview, Changes, Releases, Operations, Backups and Config tabs mov
 - **W** opens the drawer of the card that holds focus and gives focus back to what had it; this reads `document.activeElement` through `web-sys` (`workings::browser`), because leptoskit has no way to ask what has focus. Margin notes' Got it hides the note and saves the dismissal.
 - **Tests:** `script.mjs` serves `overview.html`, `overview-release.html` (`?workings=release`), `changes.html` and `releases.html`. The confirm test now checks `:modal` instead of `inert` on the root, and a new test types a version, confirms Deploy and checks the request. `tests/admin.rs` reads an open drawer and Workings mode from the drawer's class and the switch's `aria-pressed`, not root attributes.
 - **Next:** Health with the analytics builder, Live, People and the dialogs, and last delete `admin.mjs` and the attribute rules in `shell_css`.
+
+### `feat/admin-analytics-pages`: admin conversion, part 5a
+
+The analytics Library, People and a person's page moved. `leptoskit_admin/src/analytics/{library,people}.rs` build `model::library::Library`, `model::people::People` and `model::people::Person`; `leptoskit_admin_pages/src/pages/{library,people}.rs` draw them. An analytics route's body now returns `analytics::Shown`, a server `Screen` or a pages-crate `Page`, so the not-connected and unreachable states stay server-drawn while a page with data hydrates; `server::render_page` renders a `Page` after the gate.
+
+- **The confirm sheet** takes `Ask::new(title, explanation)` with `.typed(label, expected)` (a field, test id `confirm-input`, that takes focus; the button stays disabled and Enter does nothing until the text matches), `.danger()` (a filled bad button) and `.download(href, file_name)` (the button is a `Pressable().href().download()` link: the browser downloads the server's attachment, and the sheet closes a frame later). `yes` gets what was typed. Choices (the add-to-dashboard radios) come with the builder.
+- **People:** the fields are signals; Filter or Enter in a field leaves for the list's address built from them. **Person:** Export and Delete use the sheet; Delete POSTs `{confirm}` and follows the answer's `href`, or puts its message in the notice. Their `aria-description`s now describe the buttons instead of carrying the id and name for the script.
+- **Shared:** `components::header`, `struct_badge`, `initials` and `avatar` moved to the pages crate, and the server's analytics helpers call them. `post_json` and `idempotency_key` moved to the crate root.
+- **Tests:** `script.mjs` serves `library.html`, `people.html` and `person.html`, fakes the export and delete endpoints, and checks search by Enter, the export download link and fetch, focus return, and the typed-name delete. `analytics_person` was re-reviewed.
+- **Next:** dashboards and the builders (trends, funnels, retention, saved insights) with save and add-to-dashboard, then Live, Health, the sign-in page, and last delete `admin.mjs` and the attribute rules in `shell_css`.
 
 ### `feat/public-demo`: pull request #856 (merged)
 

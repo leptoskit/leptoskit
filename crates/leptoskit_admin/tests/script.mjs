@@ -140,6 +140,10 @@ function serve(directory, clientDirectory) {
 					);
 				case `${BASE}/analytics/live`:
 					return page("live.html");
+				case `${BASE}/analytics/library`:
+					return page("library.html");
+				case `${BASE}/analytics/people`:
+					return page("people.html");
 				case `${BASE}/learn/glossary`:
 					return page("glossary.html");
 				case `${BASE}/learn`:
@@ -188,6 +192,26 @@ function serve(directory, clientDirectory) {
 					posted.push({ path: url.pathname, body: await request.json() });
 					return Response.json({});
 				default: {
+					if (url.pathname.startsWith(`${BASE}/api/analytics/people/`)) {
+						if (url.pathname.endsWith("/export")) {
+							posted.push({ path: url.pathname, body: null });
+							return new Response('{"person":{}}', {
+								headers: {
+									"content-type": "application/json",
+									"content-disposition": 'attachment; filename="person.json"',
+								},
+							});
+						}
+						posted.push({ path: url.pathname, body: await request.json() });
+						return Response.json({
+							events: 1,
+							sessions: 1,
+							href: `${BASE}/analytics/people`,
+						});
+					}
+					if (url.pathname.startsWith(`${BASE}/analytics/people/`)) {
+						return page("person.html");
+					}
 					if (url.pathname.startsWith(`${BASE}/infra/operations/`)) {
 						return page(
 							url.searchParams.get("workings") === "operation"
@@ -1036,5 +1060,118 @@ Deno.test("Workings drawers are the pages' own Rust: open, close, focus, W, and 
 		);
 		assert(await shown("drawer:operation"), "?workings= opens the drawer");
 		assert(thrown.length === 0, `nothing threw: ${thrown.join("\n")}`);
+	});
+});
+
+Deno.test("People and a person are the pages' own Rust: search, export, and a delete that asks for their name", async () => {
+	await withBrowser(async (page, site) => {
+		const hydrated = (what) =>
+			page.until(
+				"() => document.documentElement.hasAttribute('data-hydrated')",
+				what,
+			);
+		const sheetOpen = () =>
+			page.evaluate(
+				`document.querySelector('[data-testid="confirm-sheet"]')?.matches(':modal') === true`,
+			);
+		await open(page, `${site.origin}${BASE}/analytics/people`);
+		await hydrated("People hydrates");
+		assert(
+			await page.evaluate(
+				"!document.querySelector('script[src$=\"admin.mjs\"]')",
+			),
+			"the page loads no hand-written script",
+		);
+
+		// Enter in a field searches by what the fields hold.
+		await page.click('[data-testid="people-search"]');
+		await page.send("Input.insertText", { text: "member 01" });
+		let navigated = page.once("Page.loadEventFired");
+		await press(page, "Enter");
+		await navigated;
+		assert(
+			await page.evaluate("location.search") === "?search=member%2001",
+			`the search is in the address: ${await page.evaluate("location.search")}`,
+		);
+
+		await open(page, `${site.origin}${BASE}/analytics/people/someone`);
+		await hydrated("the person hydrates");
+		const name = await page.evaluate("document.querySelector('h1').textContent");
+
+		// Export is a download the browser makes once the person agrees.
+		const downloads = await Deno.makeTempDir({ prefix: "admin-downloads-" });
+		await page.send("Page.setDownloadBehavior", {
+			behavior: "allow",
+			downloadPath: downloads,
+		});
+		await page.click('[data-testid="person-export"]');
+		await page.until(
+			`() => document.querySelector('[data-testid="confirm-sheet"]')?.matches(':modal')`,
+			"Export asks first",
+		);
+		const link = await page.evaluate(`(() => {
+			const yes = document.querySelector('[data-testid="confirm-yes"]');
+			return { tag: yes.tagName, download: yes.getAttribute("download"), href: yes.getAttribute("href") };
+		})()`);
+		assert(
+			link.tag === "A" && link.download?.startsWith("person-") &&
+				link.href.endsWith("/export"),
+			`the confirmation is a download link: ${JSON.stringify(link)}`,
+		);
+		await page.click('[data-testid="confirm-yes"]');
+		for (
+			let tries = 0;
+			!site.posted.some((entry) => entry.path.endsWith("/export")) && tries < 100;
+			tries++
+		) {
+			await new Promise((resolve) => setTimeout(resolve, 50));
+		}
+		assert(
+			site.posted.some((entry) => entry.path.endsWith("/export")),
+			"the browser fetched the export",
+		);
+		await page.until(
+			`() => !document.querySelector('[data-testid="confirm-sheet"]')?.matches(':modal')`,
+			"the sheet closes after the download",
+		);
+		await page.until(
+			`() => document.activeElement?.getAttribute("data-testid") === "person-export"`,
+			"focus goes back to Export",
+		);
+		await Deno.remove(downloads, { recursive: true });
+
+		// Delete waits for their name, typed exactly.
+		await page.click('[data-testid="person-delete"]');
+		await page.until(
+			`() => document.activeElement?.getAttribute("data-testid") === "confirm-input"`,
+			"the name field takes focus",
+		);
+		const disabled = () =>
+			page.evaluate(
+				`document.querySelector('[data-testid="confirm-yes"]').disabled`,
+			);
+		assert(await disabled(), "Delete waits for the name");
+		const half = Math.floor(name.length / 2);
+		await page.send("Input.insertText", { text: name.slice(0, half) });
+		assert(await disabled(), "half the name isn't enough");
+		await press(page, "Enter");
+		assert(await sheetOpen(), "Enter does nothing until the name matches");
+		await page.send("Input.insertText", { text: name.slice(half) });
+		await page.until(
+			`() => !document.querySelector('[data-testid="confirm-yes"]').disabled`,
+			"the whole name enables Delete",
+		);
+		navigated = page.once("Page.loadEventFired");
+		await press(page, "Enter");
+		await navigated;
+		const sent = site.posted.find((entry) => entry.path.endsWith("/delete"));
+		assert(
+			sent?.body.confirm === name,
+			`the request: ${JSON.stringify(sent)}`,
+		);
+		assert(
+			await page.evaluate("location.pathname") === `${BASE}/analytics/people`,
+			"a deleted person leaves for the list",
+		);
 	});
 });

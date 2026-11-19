@@ -3,6 +3,8 @@
 mod glossary;
 mod infra;
 mod learn;
+mod library;
+mod people;
 mod project;
 
 use leptoskit::prelude::Element;
@@ -42,6 +44,24 @@ pub(crate) fn screen_of(shell: &Shell) -> Box<dyn Fn() -> Element + Send + Sync>
 				shell.frame(project::page(project, Some(actions)))
 			})
 		}
+		Page::People(people) => {
+			let search = people::Search::new(people);
+			Box::new(move || {
+				let Page::People(people) = &shell.model.page else {
+					return shell.frame(content(&shell.model.page));
+				};
+				shell.frame(people::list(people, Some(search)))
+			})
+		}
+		Page::Person(person) => {
+			let actions = people::Actions::new(person, shell.confirm, shell.notice);
+			Box::new(move || {
+				let Page::Person(person) = &shell.model.page else {
+					return shell.frame(content(&shell.model.page));
+				};
+				shell.frame(people::person(person, Some(actions)))
+			})
+		}
 		_ => Box::new(move || shell.frame(content(&shell.model.page))),
 	}
 }
@@ -58,5 +78,8 @@ pub fn content(page: &Page) -> Element {
 		Page::Projects(cards) => infra::projects(cards),
 		Page::Operation(operation) => infra::operation(operation, None),
 		Page::Project(project) => project::page(project, None),
+		Page::Library(library) => library::page(library),
+		Page::People(people) => people::list(people, None),
+		Page::Person(person) => people::person(person, None),
 	}
 }

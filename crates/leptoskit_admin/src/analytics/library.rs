@@ -2,6 +2,9 @@
 //! a dashboard's grid of insight cards that re-read as events arrive.
 
 use leptoskit::prelude::*;
+use leptoskit_admin_pages::model::Page;
+use leptoskit_admin_pages::model::library::Item;
+use leptoskit_admin_pages::model::library::Library;
 use leptoskit_analytics::query::Answer;
 use leptoskit_analytics::query::Query;
 use leptoskit_analytics::query::QueryResult;
@@ -11,12 +14,12 @@ use uuid::Uuid;
 
 use super::Context;
 use super::Failure;
+use super::Shown;
 use super::format;
 use super::insights;
 use super::insights::Kind;
 use crate::BASE;
 use crate::components;
-use crate::components::Kind as ButtonKind;
 use crate::components::Tone;
 use crate::shell::Screen;
 use crate::shell::Section;
@@ -46,134 +49,57 @@ fn when(text: &str) -> String {
 	format::instant(text).map_or_else(String::new, |at| format::ago(&at, &now))
 }
 
-fn item(title: &str, detail: String, href: String, test_id: &str) -> Element {
-	Pressable(title.to_owned())
-		.href(href)
-		.class("cursor-pointer rounded-lg hover:bg-[var(--admin-sunken)]")
-		.test_id(test_id.to_owned())
-		.child(
-			View()
-				.class(
-					"flex-row items-center gap-3 border-b border-[var(--admin-line)] px-3 py-2.5",
-				)
-				.child(
-					View()
-						.class("min-w-0 flex-1 flex-col gap-0.5")
-						.child(
-							Text(title.to_owned())
-								.class("truncate text-sm font-semibold text-[var(--admin-ink)]"),
-						)
-						.child(Text(detail).class(style::LABEL)),
-				)
-				.child(Text("→").class("text-sm text-[var(--admin-ink-3)]")),
-		)
-}
-
 /// The library, on its insights or dashboards tab.
-pub(crate) async fn page(cx: &Context<'_>) -> Screen {
+pub(crate) async fn page(cx: &Context<'_>) -> Shown {
 	let dashboards_tab = cx.params.get("tab").is_some_and(|tab| tab == "dashboards");
 	let (insights, dashboards) = tokio::join!(cx.connection.insights(), cx.connection.dashboards());
 	let (insights, dashboards) = match (insights, dashboards) {
 		(Ok(insights), Ok(dashboards)) => (insights, dashboards),
 		(Err(failure), _) | (_, Err(failure)) => {
-			return super::unreachable("Library", Section::Library, &failure);
+			return super::unreachable("Library", Section::Library, &failure).into();
 		}
 	};
-	let tabs = components::tabs(
-		&[
-			(
-				"Insights".to_owned(),
-				format!("{BASE}/analytics/library"),
-				Some(insights.len().to_string()),
-			),
-			(
-				"Dashboards".to_owned(),
-				format!("{BASE}/analytics/library?tab=dashboards"),
-				Some(dashboards.len().to_string()),
-			),
-		],
-		usize::from(dashboards_tab),
-	);
-	let mut list = View().class("flex-col").test_id("library");
-
-	if dashboards_tab {
-		for dashboard in &dashboards {
-			list = list.child(item(
-				&dashboard.name,
-				format!(
-					"{} card{} · updated {}",
-					dashboard.tiles.len(),
-					if dashboard.tiles.len() == 1 { "" } else { "s" },
-					when(&dashboard.updated_at)
-				),
-				dashboard_href(dashboard.id),
-				"library-dashboard",
-			));
-		}
-
-		if dashboards.is_empty() {
-			list = list.child(
-				Text("No dashboards yet. Open any insight and press Add to dashboard.")
-					.class(style::MUTED)
-					.class("px-3 py-2"),
-			);
-		}
+	let items = if dashboards_tab {
+		dashboards
+			.iter()
+			.map(|dashboard| {
+				Item {
+					title: dashboard.name.clone(),
+					detail: format!(
+						"{} card{} · updated {}",
+						dashboard.tiles.len(),
+						if dashboard.tiles.len() == 1 { "" } else { "s" },
+						when(&dashboard.updated_at)
+					),
+					href: dashboard_href(dashboard.id),
+				}
+			})
+			.collect()
 	} else {
-		for insight in &insights {
-			list = list.child(item(
-				&insight.name,
-				format!(
-					"{} · by {} · updated {}",
-					kind_label(&insight.query),
-					insight.created_by,
-					when(&insight.updated_at)
-				),
-				insight_href(insight.id),
-				"library-insight",
-			));
-		}
+		insights
+			.iter()
+			.map(|insight| {
+				Item {
+					title: insight.name.clone(),
+					detail: format!(
+						"{} · by {} · updated {}",
+						kind_label(&insight.query),
+						insight.created_by,
+						when(&insight.updated_at)
+					),
+					href: insight_href(insight.id),
+				}
+			})
+			.collect()
+	};
 
-		if insights.is_empty() {
-			list = list.child(
-				Text(
-					"Nothing saved yet. Build a trend, a funnel, or a retention grid, then press \
-					 Save.",
-				)
-				.class(style::MUTED)
-				.class("px-3 py-2"),
-			);
-		}
-	}
-
-	let actions = vec![
-		components::link_button(
-			ButtonKind::Secondary,
-			"New trend",
-			format!("{BASE}/analytics/trends"),
-		),
-		components::link_button(
-			ButtonKind::Secondary,
-			"New funnel",
-			format!("{BASE}/analytics/funnels"),
-		),
-	];
-	let content = View()
-		.class("flex-col gap-5")
-		.child(super::header(
-			"Library",
-			"saved insights and the dashboards they sit on",
-			actions,
-		))
-		.child(tabs)
-		.child(View().class(style::CARD).child(list));
-
-	Screen {
-		title: "Library".to_owned(),
-		section: Section::Library,
-		content,
-		drawers: Vec::new(),
-		open: None,
-	}
+	Page::Library(Library {
+		dashboards_tab,
+		insights: insights.len(),
+		dashboards: dashboards.len(),
+		items,
+	})
+	.into()
 }
 
 /// One dashboard card: its insight, run and drawn small.
