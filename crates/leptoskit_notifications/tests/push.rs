@@ -742,6 +742,7 @@ async fn enroll_directly(service: &Service, people: &[Uuid]) {
 			locale: None,
 			time_zone: None,
 			app_version: None,
+			seen_at: None,
 		}
 		.insert(&tx)
 		.await

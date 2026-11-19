@@ -12,6 +12,7 @@
 //! forge.
 
 pub mod config;
+pub(crate) mod local;
 pub mod push;
 pub mod retention;
 pub mod transport;
@@ -119,6 +120,9 @@ pub(crate) struct TestTargets {
 	person: Uuid,
 	endpoint: Option<Uuid>,
 	unread: bool,
+	/// Whether the spec carries variants, so the person's locale is
+	/// wanted.
+	locale: bool,
 }
 
 /// What [`TestTargets`] reads.
@@ -126,6 +130,8 @@ pub(crate) struct TestTargets {
 pub(crate) struct Targets {
 	endpoints: Vec<(Uuid, String, String)>,
 	unread: Option<u64>,
+	/// The locale the person reads variants in, when one is known.
+	locale: Option<String>,
 }
 
 impl rpc::Operation for TestTargets {
@@ -157,12 +163,19 @@ impl rpc::Operation for TestTargets {
 			None
 		};
 
+		let locale = if self.locale {
+			local::locale_for(cx.db(), self.person).await?
+		} else {
+			None
+		};
+
 		Ok(Targets {
 			endpoints: endpoints
 				.into_iter()
 				.map(|endpoint| (endpoint.id, endpoint.platform, endpoint.credential))
 				.collect(),
 			unread,
+			locale,
 		})
 	}
 }
@@ -459,13 +472,30 @@ pub(crate) fn progress_of(send: &AppSend) -> crate::SendProgress {
 pub(crate) struct Fanout {
 	pub delivered: u32,
 	pub skipped_opted_out: u32,
-	/// One pair per inbox row the fanout wrote: the recipient and their
-	/// notification's id.
-	pub delivered_to: Vec<(Uuid, Uuid)>,
+	/// One entry per inbox row the fanout wrote: the recipient, their
+	/// notification's id, and — for a row of a local-time send whose time
+	/// is still ahead — the instant it waits for. `None` is a row visible
+	/// as it is written, and every row of a send with one schedule for
+	/// everyone, which the send's own jobs carry.
+	pub delivered_to: Vec<(Uuid, Uuid, Option<leptoskit_db::Timestamp>)>,
+}
+
+impl Fanout {
+	/// The distinct instants the fanout's waiting rows wait for, in
+	/// order: as many as the time zones its people span, never as many as
+	/// its people.
+	pub(crate) fn instants(&self) -> std::collections::BTreeSet<leptoskit_db::Timestamp> {
+		self.delivered_to
+			.iter()
+			.filter_map(|(_, _, waits_until)| *waits_until)
+			.collect()
+	}
 }
 
 /// Writes one durable inbox row per recipient who hasn't opted out of the
-/// category, and counts the rest.
+/// category, and counts the rest. Each row is written as `resolved` says
+/// for its person: in the text of the variant they read, visible at the
+/// send's instant or at their own local time's arrival.
 ///
 /// # Errors
 ///
@@ -475,14 +505,13 @@ pub(crate) async fn fanout(
 	send_key: &str,
 	spec: &crate::SendSpec,
 	recipients: &std::collections::BTreeSet<Uuid>,
+	resolved: &local::Resolved,
 ) -> rpc::Result<Fanout> {
-	let now = leptoskit_db::now();
-	// An earlier time is now: the row says when it really became visible,
-	// so the inbox and the push's delivery window agree on it.
-	let visible_at = spec
-		.visible_at
-		.map_or(now, |visible_at| visible_at.max(now));
 	let data = spec.data.as_deref().unwrap_or("{}");
+	// The text each variant in play writes, built once however many
+	// people read it.
+	let mut texts: std::collections::HashMap<Option<&str>, RowText> =
+		std::collections::HashMap::new();
 	let opted_out: std::collections::BTreeSet<Uuid> = Preference::query()
 		.filter(|preference| {
 			preference.category.eq(&spec.category)
@@ -507,30 +536,58 @@ pub(crate) async fn fanout(
 			continue;
 		}
 
+		let text = texts
+			.entry(resolved.variant(*person))
+			.or_insert_with_key(|variant| RowText::of(spec, *variant));
 		let id = Uuid::now_v7();
 		NewNotification {
 			id,
 			send_key: send_key.to_owned(),
 			person: *person,
 			category: spec.category.clone(),
-			title: spec.title.clone(),
-			body: spec.body.clone(),
+			title: text.title.clone(),
+			body: text.body.clone(),
 			data: data.to_owned(),
-			visible_at,
+			visible_at: resolved.visible_at(*person),
 			expires_at: spec.expires_at,
 			cancelled_at: None,
 			read_at: None,
 			dismissed_at: None,
 			kind: kind_of(spec),
-			options: options_of(spec),
+			options: text.options.clone(),
 		}
 		.insert(tx)
 		.await?;
 		fanout.delivered += 1;
-		fanout.delivered_to.push((*person, id));
+		fanout
+			.delivered_to
+			.push((*person, id, resolved.waits_until(*person)));
 	}
 
 	Ok(fanout)
+}
+
+/// What a row stores of a send's text, under one variant.
+struct RowText {
+	title: String,
+	body: String,
+	/// The options as the variant shaped them, as stored JSON; `None`
+	/// when the send carried none.
+	options: Option<String>,
+}
+
+impl RowText {
+	/// The text `spec` writes under the variant `key` names, or its own
+	/// for `None`.
+	fn of(spec: &crate::SendSpec, key: Option<&str>) -> Self {
+		let text = spec.localized(key);
+
+		Self {
+			title: text.title.to_owned(),
+			body: text.body.to_owned(),
+			options: options_of(&text.options),
+		}
+	}
 }
 
 /// The row kind a spec writes: `data` for a silent send, `notification`
@@ -545,12 +602,12 @@ fn kind_of(spec: &crate::SendSpec) -> String {
 	.to_owned()
 }
 
-/// The options a spec stores on each row — its kind, its presentation,
+/// The options a row stores — the send's kind, its presentation,
 /// everything the push engine reads per delivery — or `None` when the
 /// send carried none.
-fn options_of(spec: &crate::SendSpec) -> Option<String> {
-	(!spec.options.is_empty())
-		.then(|| serde_json::to_string(&spec.options).expect("the options are plain JSON"))
+fn options_of(options: &crate::MessageOptions) -> Option<String> {
+	(!options.is_empty())
+		.then(|| serde_json::to_string(options).expect("the options are plain JSON"))
 }
 
 /// [`rpc::paginate`], with a pinned page — one whose arguments name the
@@ -676,6 +733,13 @@ pub(crate) async fn follow_wake(db: &impl leptoskit_db::Read, person: Uuid) -> r
 /// exists exactly when the send lands, and its idempotency key keeps a
 /// raced or retried enqueue from doubling it.
 ///
+/// A local-time send has no one moment of visibility. `fanout` is the
+/// rows a recipients send just wrote: the people whose time has passed
+/// are woken in this transaction, and every distinct instant still ahead
+/// gets a [`wake_local`](crate::wake_local) of its own. A
+/// local-time send whose fanout runs as a job passes `None`: each of its
+/// batches wakes its own people, and only the expiry is the send's.
+///
 /// # Errors
 ///
 /// Whatever an enqueue fails with.
@@ -683,13 +747,43 @@ pub(crate) async fn schedule_wakes(
 	cx: &rpc::MutationCx,
 	send_key: &str,
 	spec: &crate::SendSpec,
+	fanout: Option<&Fanout>,
 ) -> rpc::Result<()> {
 	let now = leptoskit_db::now();
 	let mut wakes = Vec::with_capacity(2);
-	let becomes_visible = spec
-		.visible_at
-		.map_or(now, |visible_at| visible_at.max(now));
-	wakes.push(("visible", becomes_visible));
+
+	if spec.local_time.is_none() {
+		let becomes_visible = spec
+			.visible_at
+			.map_or(now, |visible_at| visible_at.max(now));
+		wakes.push(("visible", becomes_visible));
+	} else if let Some(fanout) = fanout {
+		// The people whose time has already passed see their rows as
+		// this transaction commits, the way a fanout batch's do.
+		wake_people(
+			cx.tx(),
+			fanout
+				.delivered_to
+				.iter()
+				.filter(|(_, _, waits_until)| waits_until.is_none())
+				.map(|(person, ..)| *person),
+		)
+		.await?;
+
+		if let Some(through) = fanout.delivered_to.iter().map(|(person, ..)| *person).max() {
+			for at in fanout.instants() {
+				cx.enqueue(crate::WakeLocal {
+					send_key: send_key.to_owned(),
+					after: None,
+					through,
+					at,
+				})
+				.at(at)
+				.key(job_key("wake", send_key, format!("at:{}", at.timestamp())))
+				.await?;
+			}
+		}
+	}
 
 	if let Some(expires_at) = spec.expires_at {
 		wakes.push(("expires", expires_at));
@@ -747,41 +841,70 @@ pub(crate) async fn wake(db: &Db, send_key: &str) -> rpc::Result<()> {
 }
 
 /// Wakes the people of one fanout batch, the body of
-/// [`wake_batch`](crate::wake_batch): those with a row of the send whose
-/// person is in `(after, through]` — at most one batch of them.
+/// [`wake_batch`](crate::wake_batch) and
+/// [`wake_local`](crate::wake_local): those with a row of the send whose
+/// person is in `(after, through]` — and, with `at`, whose row becomes
+/// visible in the second `at` begins, the one instant of a local-time
+/// send this wake is for. A recipients send's range is the whole send,
+/// at most [`crate::MAX_RECIPIENTS`] rows, so it is read a page at a time.
 ///
 /// # Errors
 ///
-/// Whatever the read or the writes fail with.
+/// Whatever a read or a write fails with.
 pub(crate) async fn wake_range(
 	db: &Db,
 	send_key: &str,
 	after: Option<Uuid>,
 	through: Uuid,
+	at: Option<leptoskit_db::Timestamp>,
 ) -> rpc::Result<()> {
-	let page = Notification::query()
-		.filter(|notification| {
-			let mut condition =
-				notification.send_key.eq(send_key.to_owned()) & notification.person.lte(through);
-			if let Some(after) = after {
-				condition = condition & notification.person.gt(after);
-			}
-			condition
-		})
-		.order_by(|notification| notification.person.asc())
-		.limit(u64::try_from(crate::FANOUT_BATCH).unwrap_or(u64::MAX))
-		.all(db)
-		.await?;
+	let mut cursor = after;
 
-	if page.is_empty() {
-		return Ok(());
+	loop {
+		let page = Notification::query()
+			.filter(|notification| {
+				let mut condition = notification.send_key.eq(send_key.to_owned())
+					& notification.person.lte(through);
+				if let Some(cursor) = cursor {
+					condition = condition & notification.person.gt(cursor);
+				}
+				condition
+			})
+			.order_by(|notification| notification.person.asc())
+			.limit(u64::try_from(crate::FANOUT_BATCH).unwrap_or(u64::MAX))
+			.all(db)
+			.await?;
+
+		let Some(last) = page.last() else {
+			return Ok(());
+		};
+
+		cursor = Some(last.person);
+		let full = page.len() >= crate::FANOUT_BATCH;
+		// A local time's arrival is a whole second, written on the row as
+		// it was computed: the rows of this instant are the ones inside
+		// it.
+		let due: Vec<Uuid> = page
+			.iter()
+			.filter(|notification| {
+				at.is_none_or(|at| {
+					notification.visible_at >= at
+						&& notification.visible_at < at + chrono::Duration::seconds(1)
+				})
+			})
+			.map(|notification| notification.person)
+			.collect();
+
+		if !due.is_empty() {
+			let tx = db.begin().await?;
+			wake_people(&tx, due.into_iter()).await?;
+			tx.commit().await?;
+		}
+
+		if !full {
+			return Ok(());
+		}
 	}
-
-	let tx = db.begin().await?;
-	wake_people(&tx, page.iter().map(|notification| notification.person)).await?;
-	tx.commit().await?;
-
-	Ok(())
 }
 
 /// Writes `people`'s wake rows in `tx`: the clock event that re-runs their
@@ -1287,9 +1410,12 @@ pub(crate) async fn fanout_step(cx: &rpc::JobCx, send_key: &str, step: u32) -> r
 	};
 
 	let verdict = evaluate(db, &walk, page).await?;
-	let scheduled = spec
-		.visible_at
-		.is_some_and(|visible_at| visible_at > leptoskit_db::now());
+	let now = leptoskit_db::now();
+	let scheduled = spec.visible_at.is_some_and(|visible_at| visible_at > now);
+	// The batch's languages and local times, read for the whole batch
+	// before its transaction opens; a send with neither reads nothing.
+	let matching: std::collections::BTreeSet<Uuid> = verdict.matching.iter().copied().collect();
+	let resolved = local::resolve(db, &spec, &matching, now).await?;
 
 	// One transaction: the claim, the batch's rows, their push deliveries,
 	// the counts, and — when the rows are visible as they commit — their
@@ -1322,14 +1448,23 @@ pub(crate) async fn fanout_step(cx: &rpc::JobCx, send_key: &str, step: u32) -> r
 		&spec,
 		&send,
 		&verdict.matching,
+		&resolved,
 		filter.as_ref(),
 	)
 	.await?;
 
 	if !scheduled {
+		// The rows visible as they commit: all of them for a send with
+		// one schedule, and for a local-time send the people whose time
+		// has already passed.
 		wake_people(
 			&tx,
-			batch.fanout.delivered_to.iter().map(|(person, _)| *person),
+			batch
+				.fanout
+				.delivered_to
+				.iter()
+				.filter(|(_, _, waits_until)| waits_until.is_none())
+				.map(|(person, ..)| *person),
 		)
 		.await?;
 	}
@@ -1338,6 +1473,28 @@ pub(crate) async fn fanout_step(cx: &rpc::JobCx, send_key: &str, step: u32) -> r
 
 	if batch.deliveries > 0 {
 		push::kick(db, send_key, &spec, "fanout").await?;
+	}
+
+	// A local-time batch's waiting rows turn visible at as many instants
+	// as its people span time zones: one wake for each, for this batch's
+	// people alone.
+	for at in batch.fanout.instants() {
+		rpc::enqueue(
+			db,
+			crate::WakeLocal {
+				send_key: send_key.to_owned(),
+				after: send.cursor,
+				through: last,
+				at,
+			},
+		)
+		.at(at)
+		.key(job_key(
+			"wake",
+			send_key,
+			format!("batch:{last}:at:{}", at.timestamp()),
+		))
+		.await?;
 	}
 
 	// A batch that commits before its send is visible wakes its own people
@@ -1413,6 +1570,7 @@ async fn deliver_batch(
 	spec: &crate::SendSpec,
 	send: &AppSend,
 	matching: &[Uuid],
+	resolved: &local::Resolved,
 	filter: Option<&push::DeviceFilter<'_>>,
 ) -> rpc::Result<Batch> {
 	let already: std::collections::BTreeSet<Uuid> = Notification::query()
@@ -1438,7 +1596,7 @@ async fn deliver_batch(
 			delivered_to: Vec::new(),
 		}
 	} else {
-		fanout(tx, send_key, spec, &fresh).await?
+		fanout(tx, send_key, spec, &fresh, resolved).await?
 	};
 
 	let deliveries = push::deliveries_in_tx(tx, send_key, &fanout, filter).await?;
@@ -1596,20 +1754,45 @@ pub(crate) async fn cancel(cx: &rpc::MutationCx, send_key: &str) -> rpc::Result<
 	// A data row is never seen by anyone — it is the silent half of a send,
 	// not a visible one — so only a visible notification row can make the
 	// send uncancellable.
-	if !fanning
+	let seen = |notification: &<Notification as leptoskit_db::Table>::Columns| {
+		of_send(notification)
+			& notification
+				.kind
+				.eq(crate::options::MessageKind::Notification.as_str())
+			& notification.visible_at.lte(now)
+			& notification.cancelled_at.is_null()
+	};
+	// What a cancel can still stop once someone has seen the send: the
+	// rows not yet visible, and the silent ones.
+	let ahead = |notification: &<Notification as leptoskit_db::Table>::Columns| {
+		of_send(notification)
+			& notification.cancelled_at.is_null()
+			& (notification.visible_at.gt(now)
+				| notification
+					.kind
+					.ne(crate::options::MessageKind::Notification.as_str()))
+	};
+	// A send that isn't fanning out and was never marked cancelled, with a
+	// row somebody can see: only what is still ahead can stop. Every row
+	// of a send with one schedule turns visible together, so nothing is
+	// ahead and the send is past cancelling; a local-time send's later
+	// time zones still are.
+	let partial = !fanning
 		&& state != Some(crate::SendState::Cancelled)
-		&& Notification::query()
-			.filter(|notification| {
-				of_send(notification)
-					& notification
-						.kind
-						.eq(crate::options::MessageKind::Notification.as_str())
-					& notification.visible_at.lte(now)
-					& notification.cancelled_at.is_null()
-			})
+		&& Notification::query().filter(seen).exists(tx).await?;
+
+	if partial && !Notification::query().filter(ahead).exists(tx).await? {
+		// Nothing is ahead. Rows already cancelled mean an earlier cancel
+		// stopped what it could, and this one repeats it; none mean
+		// everything the send wrote has been seen.
+		if Notification::query()
+			.filter(|notification| of_send(notification) & notification.cancelled_at.is_not_null())
 			.exists(tx)
 			.await?
-	{
+		{
+			return Ok(0);
+		}
+
 		return Err(rpc::Error::conflict(
 			"this send is already visible, so it can no longer be cancelled",
 		));
@@ -1622,27 +1805,40 @@ pub(crate) async fn cancel(cx: &rpc::MutationCx, send_key: &str) -> rpc::Result<
 		cancel_fanout(tx, send_key).await?;
 	}
 
-	let pending = Notification::query()
-		.filter(|notification| of_send(notification) & notification.cancelled_at.is_null())
-		.count(tx)
-		.await?;
+	let stoppable = |notification: &<Notification as leptoskit_db::Table>::Columns| {
+		if partial {
+			ahead(notification)
+		} else {
+			of_send(notification) & notification.cancelled_at.is_null()
+		}
+	};
+	let pending = Notification::query().filter(stoppable).count(tx).await?;
 
 	if send.as_ref().is_some_and(|send| send.target.is_some())
 		&& pending > u64::try_from(crate::FANOUT_BATCH).unwrap_or(u64::MAX)
 	{
 		// Unkeyed: a cancel asked again while the job works enqueues a
 		// second, which finds whatever the first left, one at a time.
-		cx.enqueue(crate::CancelRows {
-			send_key: send_key.to_owned(),
-		})
-		.at(now)
-		.await?;
+		if partial {
+			cx.enqueue(crate::CancelHiddenRows {
+				send_key: send_key.to_owned(),
+				hidden_after: now,
+			})
+			.at(now)
+			.await?;
+		} else {
+			cx.enqueue(crate::CancelRows {
+				send_key: send_key.to_owned(),
+			})
+			.at(now)
+			.await?;
+		}
 
 		return Ok(u32::try_from(pending).unwrap_or(u32::MAX));
 	}
 
 	let cancelled = Notification::update()
-		.filter(|notification| of_send(notification) & notification.cancelled_at.is_null())
+		.filter(stoppable)
 		.set(|notification| notification.cancelled_at, Some(now))
 		.run(tx)
 		.await?;
@@ -1650,19 +1846,35 @@ pub(crate) async fn cancel(cx: &rpc::MutationCx, send_key: &str) -> rpc::Result<
 	Ok(u32::try_from(cancelled).unwrap_or(u32::MAX))
 }
 
-/// The body of [`cancel_rows`](crate::cancel_rows): the send's uncancelled
-/// rows, one batch at a time, each batch its own short write, until none
-/// is left.
+/// The body of [`cancel_rows`](crate::cancel_rows) and
+/// [`cancel_hidden_rows`](crate::cancel_hidden_rows): the send's
+/// uncancelled rows, one batch at a time, each batch its own short write,
+/// until none is left. With `hidden_after` — a local-time send cancelled
+/// once some of it was visible — only the rows that were still ahead at
+/// that moment, and the silent ones: what people had seen by then stays.
 ///
 /// # Errors
 ///
 /// Whatever a read or a write fails with; the job runs again and picks up
 /// what is left.
-pub(crate) async fn cancel_rows(db: &Db, send_key: &str) -> rpc::Result<()> {
+pub(crate) async fn cancel_rows(
+	db: &Db,
+	send_key: &str,
+	hidden_after: Option<leptoskit_db::Timestamp>,
+) -> rpc::Result<()> {
 	loop {
 		let batch: Vec<Uuid> = Notification::query()
 			.filter(|notification| {
-				notification.send_key.eq(send_key.to_owned()) & notification.cancelled_at.is_null()
+				let mut condition = notification.send_key.eq(send_key.to_owned())
+					& notification.cancelled_at.is_null();
+				if let Some(hidden_after) = hidden_after {
+					condition = condition
+						& (notification.visible_at.gt(hidden_after)
+							| notification
+								.kind
+								.ne(crate::options::MessageKind::Notification.as_str()));
+				}
+				condition
 			})
 			.order_by(|notification| notification.id.asc())
 			.limit(u64::try_from(crate::FANOUT_BATCH).unwrap_or(u64::MAX))
@@ -2387,6 +2599,7 @@ pub(crate) async fn send_test(
 			person,
 			endpoint,
 			unread: spec.options.badge == Some(crate::options::BadgeSetting::Unread),
+			locale: !spec.variants.is_empty(),
 		})
 		.await?;
 
@@ -2405,13 +2618,21 @@ pub(crate) async fn send_test(
 		Some(crate::options::BadgeSetting::Set(set)) => Some(set),
 		None => None,
 	};
+	// The text this person would read: their variant's, by the rule a
+	// real send resolves it with.
+	let text = spec.localized(
+		targets
+			.locale
+			.as_deref()
+			.and_then(|locale| spec.variant_for(locale)),
+	);
 	let message = transport::Message {
 		id: Uuid::now_v7(),
-		title: spec.title.clone(),
-		body: spec.body.clone(),
+		title: text.title.to_owned(),
+		body: text.body.to_owned(),
 		data: spec.data.clone().unwrap_or_else(|| "{}".to_owned()),
 		expires_at: spec.expires_at,
-		options: spec.options.clone(),
+		options: text.options.into_owned(),
 		badge,
 	};
 

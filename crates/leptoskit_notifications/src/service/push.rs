@@ -218,6 +218,7 @@ pub(crate) async fn register(
 					.set(|endpoint| endpoint.locale, device.locale.clone())
 					.set(|endpoint| endpoint.time_zone, device.time_zone.clone())
 					.set(|endpoint| endpoint.app_version, device.app_version.clone())
+					.set(|endpoint| endpoint.seen_at, Some(leptoskit_db::now()))
 					.run(cx.tx())
 					.await?;
 				// Pending work follows the owner's new credentials; terminal
@@ -244,6 +245,18 @@ pub(crate) async fn register(
 					.set(|endpoint| endpoint.locale, device.locale.clone())
 					.set(|endpoint| endpoint.time_zone, device.time_zone.clone())
 					.set(|endpoint| endpoint.app_version, device.app_version.clone())
+					.set(|endpoint| endpoint.seen_at, Some(leptoskit_db::now()))
+					.run(cx.tx())
+					.await?;
+			} else if seen_long_ago(&existing) {
+				// Nothing changed, and that is news too: a send that
+				// resolves this person's language or time zone reads
+				// their most recently seen endpoint. A browser renews on
+				// every launch, so the stamp moves at most once in
+				// `SEEN_EVERY_SECS`, not once a launch.
+				PushEndpoint::update()
+					.filter(|endpoint| endpoint.id.eq(existing.id))
+					.set(|endpoint| endpoint.seen_at, Some(leptoskit_db::now()))
 					.run(cx.tx())
 					.await?;
 			}
@@ -298,6 +311,7 @@ pub(crate) async fn register(
 		locale: device.locale.clone(),
 		time_zone: device.time_zone.clone(),
 		app_version: device.app_version.clone(),
+		seen_at: Some(leptoskit_db::now()),
 	}
 	.insert(cx.tx())
 	.await
@@ -325,6 +339,19 @@ pub(crate) async fn register(
 		invalidated_at: None,
 		device,
 	})
+}
+
+/// How often an unchanged re-enrollment moves an endpoint's `seen_at`, in
+/// seconds: an hour, so "most recently seen" is right to within one and a
+/// browser's launch-time renewal is usually no write at all.
+const SEEN_EVERY_SECS: i64 = 60 * 60;
+
+/// Whether `endpoint` was last seen long enough ago for an unchanged
+/// re-enrollment to say so again.
+fn seen_long_ago(endpoint: &PushEndpoint) -> bool {
+	endpoint
+		.seen_at
+		.is_none_or(|seen_at| (leptoskit_db::now() - seen_at).num_seconds() >= SEEN_EVERY_SECS)
 }
 
 /// Checks every entry into the live set inside the serializable registration
@@ -650,7 +677,7 @@ pub(crate) async fn schedule(
 			send_key: send_key.to_owned(),
 			round: 0,
 		})
-		.at(becomes_visible(spec))
+		.at(first_round(spec))
 		.key(super::job_key("push", send_key, 0))
 		.await?;
 	}
@@ -682,7 +709,7 @@ pub(crate) async fn deliveries_in_tx(
 	let people: std::collections::BTreeSet<Uuid> = fanout
 		.delivered_to
 		.iter()
-		.map(|(person, _)| *person)
+		.map(|(person, ..)| *person)
 		.collect();
 	let by_person = live_endpoints(tx, people.iter().copied()).await?;
 
@@ -692,7 +719,7 @@ pub(crate) async fn deliveries_in_tx(
 
 	let mut enqueued = 0_usize;
 
-	for (person, notification) in &fanout.delivered_to {
+	for (person, notification, waits_until) in &fanout.delivered_to {
 		for endpoint in by_person.get(person).into_iter().flatten() {
 			if filter.is_some_and(|filter| !filter.admits(*person, endpoint)) {
 				continue;
@@ -709,7 +736,11 @@ pub(crate) async fn deliveries_in_tx(
 				state: DeliveryState::Enqueued.as_str().to_owned(),
 				reason: None,
 				attempts: 0,
-				next_attempt_at: None,
+				// A local-time row still ahead: its delivery is queued
+				// for its own instant, so the rounds before then read
+				// past it without an attempt, and the round after the
+				// last attempt is enqueued for the earliest one waiting.
+				next_attempt_at: *waits_until,
 				attempted_at: None,
 				finished_at: None,
 			}
@@ -729,6 +760,19 @@ pub(crate) fn becomes_visible(spec: &crate::SendSpec) -> leptoskit_db::Timestamp
 	let now = leptoskit_db::now();
 	spec.visible_at
 		.map_or(now, |visible_at| visible_at.max(now))
+}
+
+/// When a send's first push round runs. A send with one schedule waits
+/// for it ([`becomes_visible`]). A local-time send has a schedule per
+/// person, each on its own delivery: its first round runs now, attempts
+/// the people whose time has passed, and enqueues its successor for the
+/// earliest instant still waiting.
+pub(crate) fn first_round(spec: &crate::SendSpec) -> leptoskit_db::Timestamp {
+	if spec.local_time.is_some() {
+		return leptoskit_db::now();
+	}
+
+	becomes_visible(spec)
 }
 
 /// Starts the send's push rounds after a fanout batch committed
@@ -754,7 +798,7 @@ pub(crate) async fn kick(
 			round: 0,
 		},
 	)
-	.at(becomes_visible(spec))
+	.at(first_round(spec))
 	.key(super::job_key("push", send_key, what))
 	.await?;
 
