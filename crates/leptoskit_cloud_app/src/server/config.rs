@@ -3,9 +3,11 @@
 //! Nothing secret has a default, and no value is ever repeated in an
 //! error: a message names the variable and what is wrong with it.
 
+use std::collections::BTreeMap;
 use std::net::IpAddr;
 use std::net::Ipv4Addr;
 use std::net::SocketAddr;
+use std::sync::Arc;
 
 use leptoskit_auth::Keys;
 use leptoskit_auth::Mailbox;
@@ -16,12 +18,14 @@ use leptoskit_cloud::server::DEFAULT_REGION;
 use leptoskit_cloud::server::DevMode;
 use leptoskit_cloud::server::DnsOverHttps;
 use leptoskit_cloud::server::OAuthApp;
+use leptoskit_cloud::server::PaymentsConfig;
 use leptoskit_cloud::server::S3Config;
 use leptoskit_cloud::server::SecretValue;
 use leptoskit_cloud::server::SharedMailer;
 use leptoskit_cloud::server::SharedResolver;
 use leptoskit_cloud::server::ShippingSettings;
 use leptoskit_cloud::server::StorageConfig;
+use leptoskit_cloud::server::Stripe;
 use leptoskit_cloud::server::catalogue_from_json;
 use leptoskit_cloud::size::Region;
 
@@ -65,6 +69,18 @@ pub const REGISTRY: &str = "LEPTOSKIT_CLOUD_REGISTRY";
 /// A JSON price catalogue's path. Without it, previews say there is no price
 /// catalogue.
 pub const PRICE_CATALOGUE: &str = "LEPTOSKIT_CLOUD_PRICE_CATALOGUE";
+/// A restricted Stripe key, to take payment for plans: it writes customers,
+/// checkout sessions and customer portal sessions, and reads subscriptions
+/// and charges. With it, [`STRIPE_WEBHOOK_SECRET`], [`STRIPE_PRICES`] and
+/// [`PRICE_CATALOGUE`] are required. Without it nobody can subscribe.
+pub const STRIPE_KEY: &str = "LEPTOSKIT_CLOUD_STRIPE_KEY";
+/// The secret Stripe signs the events it posts to `/webhooks/stripe` with.
+pub const STRIPE_WEBHOOK_SECRET: &str = "LEPTOSKIT_CLOUD_STRIPE_WEBHOOK_SECRET";
+/// Stripe's price for each plan that is sold, as `pro=price_…,team=price_…`.
+pub const STRIPE_PRICES: &str = "LEPTOSKIT_CLOUD_STRIPE_PRICES";
+/// `true` to have Stripe work out tax at checkout. It collects none until
+/// the Stripe account is registered where tax is owed.
+pub const STRIPE_AUTOMATIC_TAX: &str = "LEPTOSKIT_CLOUD_STRIPE_AUTOMATIC_TAX";
 /// The S3-compatible store source archives and logs are kept in, such as
 /// `https://<account>.r2.cloudflarestorage.com`.
 pub const S3_ENDPOINT: &str = "LEPTOSKIT_CLOUD_S3_ENDPOINT";
@@ -265,6 +281,7 @@ impl ServeConfig {
 			.or_else(|| dev.then(|| DEV_REGISTRY.to_owned()))
 			.ok_or(ConfigError::Missing(REGISTRY))?;
 		let catalogue = catalogue(vars)?;
+		let payments = payments(vars)?;
 		let resolver = resolver(vars, dev)?;
 		let (mailer, mailbox) = if dev {
 			let mailbox = Mailbox::new();
@@ -295,6 +312,7 @@ impl ServeConfig {
 				apps_domain,
 				registry,
 				catalogue,
+				payments,
 				shipping: ShippingSettings::default(),
 				dev: mailbox.map(|mailbox| DevMode { mailbox }),
 			},
@@ -484,6 +502,61 @@ fn catalogue(vars: Vars<'_>) -> Result<Option<Catalogue>, ConfigError> {
 	catalogue_from_json(&text)
 		.map(Some)
 		.map_err(|error| invalid(PRICE_CATALOGUE, error.to_string()))
+}
+
+/// How payment is taken: [`STRIPE_KEY`], [`STRIPE_WEBHOOK_SECRET`] and
+/// [`STRIPE_PRICES`] together, or none of them.
+fn payments(vars: Vars<'_>) -> Result<Option<PaymentsConfig>, ConfigError> {
+	let Some(key) = read(vars, STRIPE_KEY) else {
+		for name in [STRIPE_WEBHOOK_SECRET, STRIPE_PRICES, STRIPE_AUTOMATIC_TAX] {
+			if read(vars, name).is_some() {
+				return Err(invalid(name, format!("is set without {STRIPE_KEY}")));
+			}
+		}
+
+		return Ok(None);
+	};
+	// The error never repeats the key.
+	let stripe =
+		Stripe::new(&key).map_err(|error| invalid(STRIPE_KEY, format!("is unusable: {error}")))?;
+	let webhook_secret = required(vars, STRIPE_WEBHOOK_SECRET)?;
+	let mut prices = BTreeMap::new();
+
+	for pair in required(vars, STRIPE_PRICES)?.split(',') {
+		let Some((plan, price)) = pair.trim().split_once('=') else {
+			return Err(invalid(
+				STRIPE_PRICES,
+				"is a list of `plan=price` pairs, such as `pro=price_123`".to_owned(),
+			));
+		};
+
+		if prices
+			.insert(plan.trim().to_owned(), price.trim().to_owned())
+			.is_some()
+		{
+			return Err(invalid(
+				STRIPE_PRICES,
+				format!("names `{}` twice", plan.trim()),
+			));
+		}
+	}
+
+	let automatic_tax = match read(vars, STRIPE_AUTOMATIC_TAX).as_deref() {
+		None | Some("false") => false,
+		Some("true") => true,
+		Some(_) => {
+			return Err(invalid(
+				STRIPE_AUTOMATIC_TAX,
+				"is `true` or `false`".to_owned(),
+			));
+		}
+	};
+	Ok(Some(PaymentsConfig {
+		provider: Arc::new(stripe),
+		webhook_secret,
+		prices,
+		automatic_tax,
+	}))
 }
 
 /// An OAuth app: both its ID and secret, or neither.
@@ -724,6 +797,68 @@ mod tests {
 		let config = ServeConfig::from_vars(&vars(&pairs), false).expect("valid");
 		let catalogue = config.control.catalogue.expect("a catalogue");
 		assert_eq!(catalogue.plans().len(), 1);
+	}
+
+	#[tokio::test]
+	async fn stripe_is_all_of_its_variables_or_none() {
+		let directory = tempfile::tempdir().expect("a directory");
+		let path = directory.path().join("prices.json");
+		let path_text = path.to_string_lossy().into_owned();
+		std::fs::write(
+			&path,
+			r#"{"currency": "usd", "plans": [
+				{"id": "hobby", "name": "Hobby", "monthly": 0},
+				{"id": "pro", "name": "Pro", "monthly": 100}
+			]}"#,
+		)
+		.expect("written");
+		let mut pairs: Vec<(&str, &str)> = production();
+		pairs.push((PRICE_CATALOGUE, &path_text));
+		let with = |extra: &[(&'static str, &'static str)]| {
+			let mut pairs = pairs.clone();
+			pairs.extend_from_slice(extra);
+			pairs
+		};
+		let config = ServeConfig::from_vars(&vars(&pairs), false).expect("valid");
+		assert!(config.control.payments.is_none());
+
+		let alone = error(&with(&[(STRIPE_PRICES, "pro=price_1")]), false);
+		assert!(alone.starts_with(STRIPE_PRICES), "{alone}");
+		let key = (STRIPE_KEY, "rk_test_made_up"); // gitleaks:allow (fake key)
+		let no_secret = error(&with(&[key, (STRIPE_PRICES, "pro=price_1")]), false);
+		assert!(no_secret.contains(STRIPE_WEBHOOK_SECRET), "{no_secret}");
+		let secret = (STRIPE_WEBHOOK_SECRET, "whsec_made_up");
+		let publishable = error(
+			&with(&[
+				(STRIPE_KEY, "pk_test_made_up"),
+				secret,
+				(STRIPE_PRICES, "pro=price_1"),
+			]),
+			false,
+		);
+		assert!(
+			publishable.starts_with(STRIPE_KEY) && !publishable.contains("pk_test_made_up"),
+			"{publishable}"
+		);
+		let unpaired = error(&with(&[key, secret, (STRIPE_PRICES, "pro")]), false);
+		assert!(unpaired.starts_with(STRIPE_PRICES), "{unpaired}");
+		let twice = error(
+			&with(&[key, secret, (STRIPE_PRICES, "pro=price_1,pro=price_2")]),
+			false,
+		);
+		assert!(twice.contains("twice"), "{twice}");
+
+		let complete = with(&[
+			key,
+			secret,
+			(STRIPE_PRICES, "pro=price_1"),
+			(STRIPE_AUTOMATIC_TAX, "true"),
+		]);
+		let config = ServeConfig::from_vars(&vars(&complete), false).expect("valid");
+		let payments = config.control.payments.expect("payments");
+		assert_eq!(payments.prices["pro"], "price_1");
+		assert!(payments.automatic_tax);
+		assert!(!format!("{payments:?}").contains("whsec_made_up"));
 	}
 
 	#[tokio::test]

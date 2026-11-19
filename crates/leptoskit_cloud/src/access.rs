@@ -521,6 +521,18 @@ pub const OPERATIONS: &[(&str, Requirement)] = &[
 		"set_spend_cap",
 		Requirement::Organization(Permission::ManageBilling),
 	),
+	(
+		"subscription",
+		Requirement::Organization(Permission::ViewBilling),
+	),
+	(
+		"checkout",
+		Requirement::Organization(Permission::ManageBilling),
+	),
+	(
+		"portal",
+		Requirement::Organization(Permission::ManageBilling),
+	),
 	("pair", Requirement::Pairing),
 	("claim", Requirement::Worker),
 	("renew", Requirement::Worker),

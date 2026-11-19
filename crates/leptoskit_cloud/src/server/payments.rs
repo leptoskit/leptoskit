@@ -1,0 +1,704 @@
+//! Taking payment: the few questions the control plane asks of a payment
+//! provider, and the events the provider sends back.
+//!
+//! The control plane sells one thing through the provider: a plan, as a
+//! subscription. It asks for a customer, a hosted checkout page, a hosted
+//! page to manage the subscription, and what a subscription is now. It
+//! never sees a card. [`Stripe`] asks Stripe's API; tests put their own
+//! [`Payments`] in its place.
+//!
+//! What the provider says happened arrives as signed events
+//! ([`verify_event`]). An event is only ever a reason to ask the provider
+//! what is true now: nothing in an event's body decides a plan.
+
+use std::collections::BTreeMap;
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::time::Duration;
+
+use hmac::Mac as _;
+use leptoskit_db::Timestamp;
+use serde_json::Value;
+use subtle::ConstantTimeEq as _;
+use uuid::Uuid;
+
+use crate::billing::SubscriptionStatus;
+
+/// The version of Stripe's API every request names.
+pub const STRIPE_API_VERSION: &str = "2026-10-28.endive";
+
+/// The label checkout sessions carry in Stripe's dashboard.
+const INTEGRATION_IDENTIFIER: &str = "leptoskit_cloud_plan_qhzrtwmk";
+
+/// How long one call may take.
+const CALL_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// The most of an answer that is read.
+const MAX_ANSWER_LEN: usize = 1024 * 1024;
+
+/// The most of an event that is read.
+pub(crate) const MAX_EVENT_LEN: usize = 1024 * 1024;
+
+/// How old an event's signature may be, in seconds.
+pub(crate) const SIGNATURE_TOLERANCE: i64 = 300;
+
+/// The longest ID of the provider's that is kept.
+pub(crate) const MAX_ID_LEN: usize = 255;
+
+type HmacSha256 = hmac::Hmac<sha2::Sha256>;
+
+/// Why a call to the provider gave no answer. Never the reason in detail:
+/// it could carry what the provider said about a key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum PaymentError {
+	/// The provider couldn't be reached, or didn't answer as expected.
+	#[error("the payment provider couldn't be reached")]
+	Unavailable,
+	/// The provider has no such thing.
+	#[error("the payment provider has no such record")]
+	NotFound,
+}
+
+/// What a call answers with.
+pub type Call<'a, T> = Pin<Box<dyn Future<Output = Result<T, PaymentError>> + Send + 'a>>;
+
+/// An organisation, as the provider's customer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NewCustomer<'a> {
+	/// The organisation's ID: the same customer is answered for it however
+	/// many times it is asked for.
+	pub organization: Uuid,
+	pub slug: &'a str,
+	pub name: &'a str,
+}
+
+/// A checkout page for one plan's subscription.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Checkout<'a> {
+	pub customer: &'a str,
+	/// The provider's price for the plan.
+	pub price: &'a str,
+	pub organization: Uuid,
+	pub success_url: &'a str,
+	pub cancel_url: &'a str,
+	/// Whether the provider works out tax.
+	pub automatic_tax: bool,
+}
+
+/// A subscription, as the provider has it now.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Subscription {
+	pub id: String,
+	pub customer: String,
+	pub status: SubscriptionStatus,
+	/// The price of its first item.
+	pub price: Option<String>,
+	/// When what is paid for ends.
+	pub period_end: Option<Timestamp>,
+	/// Whether it ends then instead of renewing.
+	pub cancel_at_period_end: bool,
+}
+
+/// Something that takes payment.
+pub trait Payments: Send + Sync + std::fmt::Debug {
+	/// The customer for an organisation, made if there is none: its ID.
+	fn customer<'a>(&'a self, new: NewCustomer<'a>) -> Call<'a, String>;
+	/// A hosted page that starts a subscription: its address.
+	fn checkout<'a>(&'a self, checkout: Checkout<'a>) -> Call<'a, String>;
+	/// A hosted page where `customer` manages their subscription, payment
+	/// method and invoices: its address.
+	fn portal<'a>(&'a self, customer: &'a str, return_url: &'a str) -> Call<'a, String>;
+	/// The subscription `id`, as it is now.
+	fn subscription<'a>(&'a self, id: &'a str) -> Call<'a, Subscription>;
+	/// The customer the charge `id` was made to, when it has one.
+	fn charge_customer<'a>(&'a self, id: &'a str) -> Call<'a, Option<String>>;
+}
+
+/// A [`Payments`] the control plane shares.
+pub type SharedPayments = Arc<dyn Payments>;
+
+/// How the control plane takes payment.
+#[derive(Clone)]
+pub struct PaymentsConfig {
+	/// What is asked.
+	pub provider: SharedPayments,
+	/// The secret the provider signs its events with.
+	pub webhook_secret: String,
+	/// The provider's price for each plan that is sold, by the plan's slug.
+	/// A plan without one can't be subscribed to here.
+	pub prices: BTreeMap<String, String>,
+	/// Whether checkout asks the provider to work out tax. It collects none
+	/// until the provider's account is registered where tax is owed.
+	pub automatic_tax: bool,
+}
+
+impl std::fmt::Debug for PaymentsConfig {
+	fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		formatter
+			.debug_struct("PaymentsConfig")
+			.field("provider", &self.provider)
+			.field("prices", &self.prices)
+			.field("automatic_tax", &self.automatic_tax)
+			.finish_non_exhaustive()
+	}
+}
+
+impl PaymentsConfig {
+	/// The plan `price` is the provider's price for.
+	pub(crate) fn plan_of(&self, price: &str) -> Option<&str> {
+		self.prices
+			.iter()
+			.find(|(_, candidate)| candidate.as_str() == price)
+			.map(|(plan, _)| plan.as_str())
+	}
+}
+
+/// Whether `id` is one of the provider's IDs: short, and of letters,
+/// digits and underscores, so it is safe in a path and a row.
+pub(crate) fn is_id(id: &str) -> bool {
+	!id.is_empty()
+		&& id.len() <= MAX_ID_LEN
+		&& id
+			.bytes()
+			.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+}
+
+/// Stripe, over its HTTP API.
+#[derive(Clone)]
+pub struct Stripe {
+	key: String,
+	base: reqwest::Url,
+	client: reqwest::Client,
+}
+
+impl std::fmt::Debug for Stripe {
+	fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		formatter
+			.debug_struct("Stripe")
+			.field("base", &self.base.as_str())
+			.finish_non_exhaustive()
+	}
+}
+
+impl Stripe {
+	/// Stripe, with `key`: a restricted key that may write customers,
+	/// checkout sessions and portal sessions, and read subscriptions and
+	/// charges.
+	///
+	/// # Errors
+	///
+	/// When `key` isn't a secret or restricted key.
+	pub fn new(key: &str) -> Result<Self, String> {
+		Self::at("https://api.stripe.com", key)
+	}
+
+	/// Stripe's API at another address, for a local stand-in.
+	///
+	/// # Errors
+	///
+	/// When `base` isn't an `http` or `https` address, or `key` isn't a
+	/// secret or restricted key.
+	pub fn at(base: &str, key: &str) -> Result<Self, String> {
+		let base =
+			reqwest::Url::parse(base).map_err(|_| "Stripe's address isn't a URL".to_owned())?;
+
+		if !matches!(base.scheme(), "https" | "http") || base.query().is_some() {
+			return Err("Stripe's address must be http(s), with no query".to_owned());
+		}
+
+		if !(key.starts_with("rk_") || key.starts_with("sk_"))
+			|| !key.bytes().all(|byte| byte.is_ascii_graphic())
+		{
+			return Err(
+				"the Stripe key must be a restricted key (`rk_…`) or a secret key (`sk_…`)"
+					.to_owned(),
+			);
+		}
+
+		let client = reqwest::Client::builder()
+			.timeout(CALL_TIMEOUT)
+			.redirect(reqwest::redirect::Policy::none())
+			.build()
+			.map_err(|_| "can't make an HTTP client".to_owned())?;
+		Ok(Self {
+			key: key.to_owned(),
+			base,
+			client,
+		})
+	}
+
+	fn address(&self, path: &str) -> Result<reqwest::Url, PaymentError> {
+		self.base.join(path).map_err(|_| PaymentError::Unavailable)
+	}
+
+	async fn send(&self, request: reqwest::RequestBuilder) -> Result<Value, PaymentError> {
+		let mut response = request
+			.bearer_auth(&self.key)
+			.header("stripe-version", STRIPE_API_VERSION)
+			.send()
+			.await
+			.map_err(|_| PaymentError::Unavailable)?;
+
+		if response.status() == reqwest::StatusCode::NOT_FOUND {
+			return Err(PaymentError::NotFound);
+		}
+
+		if !response.status().is_success() {
+			return Err(PaymentError::Unavailable);
+		}
+
+		let mut body = Vec::new();
+
+		while let Some(chunk) = response
+			.chunk()
+			.await
+			.map_err(|_| PaymentError::Unavailable)?
+		{
+			if body.len() + chunk.len() > MAX_ANSWER_LEN {
+				return Err(PaymentError::Unavailable);
+			}
+
+			body.extend_from_slice(&chunk);
+		}
+
+		serde_json::from_slice(&body).map_err(|_| PaymentError::Unavailable)
+	}
+
+	async fn post(
+		&self,
+		path: &str,
+		form: &[(&str, &str)],
+		idempotency_key: Option<&str>,
+	) -> Result<Value, PaymentError> {
+		let body = url::form_urlencoded::Serializer::new(String::new())
+			.extend_pairs(form)
+			.finish();
+		let mut request = self
+			.client
+			.post(self.address(path)?)
+			.header("content-type", "application/x-www-form-urlencoded")
+			.body(body);
+
+		if let Some(key) = idempotency_key {
+			request = request.header("idempotency-key", key);
+		}
+
+		self.send(request).await
+	}
+
+	async fn get(&self, path: &str) -> Result<Value, PaymentError> {
+		self.send(self.client.get(self.address(path)?)).await
+	}
+
+	async fn make_customer(&self, new: NewCustomer<'_>) -> Result<String, PaymentError> {
+		let organization = new.organization.to_string();
+		let answer = self
+			.post(
+				"/v1/customers",
+				&customer_form(&new, &organization),
+				Some(&format!("leptoskit-cloud-customer-{organization}")),
+			)
+			.await?;
+		id_in(&answer, "id")
+	}
+
+	async fn make_checkout(&self, checkout: Checkout<'_>) -> Result<String, PaymentError> {
+		let organization = checkout.organization.to_string();
+		let answer = self
+			.post(
+				"/v1/checkout/sessions",
+				&checkout_form(&checkout, &organization),
+				None,
+			)
+			.await?;
+		url_in(&answer)
+	}
+
+	async fn make_portal(&self, customer: &str, return_url: &str) -> Result<String, PaymentError> {
+		let answer = self
+			.post(
+				"/v1/billing_portal/sessions",
+				&[("customer", customer), ("return_url", return_url)],
+				None,
+			)
+			.await?;
+		url_in(&answer)
+	}
+
+	async fn read_subscription(&self, id: &str) -> Result<Subscription, PaymentError> {
+		if !is_id(id) {
+			return Err(PaymentError::NotFound);
+		}
+
+		let answer = self.get(&format!("/v1/subscriptions/{id}")).await?;
+		parse_subscription(&answer).ok_or(PaymentError::Unavailable)
+	}
+
+	async fn read_charge_customer(&self, id: &str) -> Result<Option<String>, PaymentError> {
+		if !is_id(id) {
+			return Err(PaymentError::NotFound);
+		}
+
+		let answer = self.get(&format!("/v1/charges/{id}")).await?;
+		Ok(reference(&answer["customer"]))
+	}
+}
+
+impl Payments for Stripe {
+	fn customer<'a>(&'a self, new: NewCustomer<'a>) -> Call<'a, String> {
+		Box::pin(self.make_customer(new))
+	}
+
+	fn checkout<'a>(&'a self, checkout: Checkout<'a>) -> Call<'a, String> {
+		Box::pin(self.make_checkout(checkout))
+	}
+
+	fn portal<'a>(&'a self, customer: &'a str, return_url: &'a str) -> Call<'a, String> {
+		Box::pin(self.make_portal(customer, return_url))
+	}
+
+	fn subscription<'a>(&'a self, id: &'a str) -> Call<'a, Subscription> {
+		Box::pin(self.read_subscription(id))
+	}
+
+	fn charge_customer<'a>(&'a self, id: &'a str) -> Call<'a, Option<String>> {
+		Box::pin(self.read_charge_customer(id))
+	}
+}
+
+fn customer_form<'a>(new: &NewCustomer<'a>, organization: &'a str) -> Vec<(&'a str, &'a str)> {
+	vec![
+		("name", new.name),
+		("metadata[organization]", organization),
+		("metadata[slug]", new.slug),
+	]
+}
+
+/// A subscription checkout: one plan, once. No payment method types are
+/// named, so the provider's own settings choose them.
+fn checkout_form<'a>(checkout: &Checkout<'a>, organization: &'a str) -> Vec<(&'a str, &'a str)> {
+	let mut form = vec![
+		("mode", "subscription"),
+		("customer", checkout.customer),
+		("client_reference_id", organization),
+		("line_items[0][price]", checkout.price),
+		("line_items[0][quantity]", "1"),
+		("success_url", checkout.success_url),
+		("cancel_url", checkout.cancel_url),
+		("integration_identifier", INTEGRATION_IDENTIFIER),
+	];
+
+	if checkout.automatic_tax {
+		form.push(("automatic_tax[enabled]", "true"));
+		// Tax needs an address, and the checkout page is where one is given.
+		form.push(("customer_update[address]", "auto"));
+	}
+
+	form
+}
+
+fn id_in(answer: &Value, field: &str) -> Result<String, PaymentError> {
+	answer[field]
+		.as_str()
+		.filter(|id| is_id(id))
+		.map(str::to_owned)
+		.ok_or(PaymentError::Unavailable)
+}
+
+fn url_in(answer: &Value) -> Result<String, PaymentError> {
+	answer["url"]
+		.as_str()
+		.filter(|url| url.starts_with("https://") && url.len() <= 2048)
+		.map(str::to_owned)
+		.ok_or(PaymentError::Unavailable)
+}
+
+/// An ID where the provider sends either the ID or the whole object.
+pub(crate) fn reference(value: &Value) -> Option<String> {
+	value
+		.as_str()
+		.or_else(|| value["id"].as_str())
+		.filter(|id| is_id(id))
+		.map(str::to_owned)
+}
+
+fn seconds(value: &Value) -> Option<Timestamp> {
+	chrono::DateTime::from_timestamp(value.as_i64()?, 0)
+}
+
+/// A subscription from the provider's JSON. The period is the item's on
+/// current versions of the API, and the subscription's on older ones.
+pub(crate) fn parse_subscription(answer: &Value) -> Option<Subscription> {
+	let item = &answer["items"]["data"][0];
+	Some(Subscription {
+		id: reference(&answer["id"])?,
+		customer: reference(&answer["customer"])?,
+		status: SubscriptionStatus::parse(answer["status"].as_str()?),
+		price: reference(&item["price"]),
+		period_end: seconds(&item["current_period_end"])
+			.or_else(|| seconds(&answer["current_period_end"])),
+		cancel_at_period_end: answer["cancel_at_period_end"].as_bool().unwrap_or(false),
+	})
+}
+
+/// An event the provider sent, once its signature is checked.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Event {
+	pub(crate) id: String,
+	pub(crate) kind: String,
+	/// The object the event is about.
+	pub(crate) object: Value,
+}
+
+/// Why an event wasn't taken.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EventError {
+	/// Its signature is missing, wrong, or too old.
+	Signature,
+	/// It is signed, and isn't an event.
+	Malformed,
+}
+
+fn sign(secret: &str, timestamp: &str, body: &[u8]) -> String {
+	let mut mac = <HmacSha256 as hmac::Mac>::new_from_slice(secret.as_bytes())
+		.unwrap_or_else(|_| unreachable!("HMAC takes a key of any length"));
+	mac.update(timestamp.as_bytes());
+	mac.update(b".");
+	mac.update(body);
+	hex::encode(mac.finalize().into_bytes())
+}
+
+/// The `Stripe-Signature` header for `body` signed at `timestamp`, as the
+/// provider writes it. For stand-ins and tests.
+#[must_use]
+pub fn signature_header(secret: &str, timestamp: i64, body: &[u8]) -> String {
+	let timestamp = timestamp.to_string();
+	format!("t={timestamp},v1={}", sign(secret, &timestamp, body))
+}
+
+/// The event in `body`, when `header` is a signature of it by `secret`
+/// made within [`SIGNATURE_TOLERANCE`] of `now`.
+///
+/// # Errors
+///
+/// [`EventError`] otherwise.
+pub(crate) fn verify_event(
+	secret: &str,
+	header: &str,
+	body: &[u8],
+	now: Timestamp,
+) -> Result<Event, EventError> {
+	let mut timestamp = None;
+	let mut signatures = Vec::new();
+
+	for part in header.split(',') {
+		match part.trim().split_once('=') {
+			Some(("t", value)) => timestamp = Some(value),
+			Some(("v1", value)) => signatures.push(value),
+			_ => {}
+		}
+	}
+
+	let timestamp = timestamp.ok_or(EventError::Signature)?;
+	let signed_at: i64 = timestamp.parse().map_err(|_| EventError::Signature)?;
+
+	if (now.timestamp() - signed_at).abs() > SIGNATURE_TOLERANCE {
+		return Err(EventError::Signature);
+	}
+
+	let expected = sign(secret, timestamp, body);
+	// Every candidate is compared, so the time taken doesn't say which.
+	let matched = signatures.iter().take(8).fold(false, |matched, candidate| {
+		matched | bool::from(expected.as_bytes().ct_eq(candidate.as_bytes()))
+	});
+
+	if !matched {
+		return Err(EventError::Signature);
+	}
+
+	let event: Value = serde_json::from_slice(body).map_err(|_| EventError::Malformed)?;
+	let id = reference(&event["id"]).ok_or(EventError::Malformed)?;
+	let kind = event["type"]
+		.as_str()
+		.filter(|kind| !kind.is_empty() && kind.len() <= 100)
+		.ok_or(EventError::Malformed)?
+		.to_owned();
+	let object = event["data"]["object"].clone();
+
+	if !object.is_object() {
+		return Err(EventError::Malformed);
+	}
+
+	Ok(Event { id, kind, object })
+}
+
+#[cfg(test)]
+mod tests {
+	use serde_json::json;
+
+	use super::*;
+
+	const SECRET: &str = "whsec_test";
+
+	fn at(text: &str) -> Timestamp {
+		text.parse().expect("a time")
+	}
+
+	fn event() -> Vec<u8> {
+		json!({
+			"id": "evt_1",
+			"type": "customer.subscription.updated",
+			"data": { "object": { "id": "sub_1" } },
+		})
+		.to_string()
+		.into_bytes()
+	}
+
+	#[test]
+	fn an_event_is_taken_only_with_a_fresh_signature_of_its_bytes() {
+		let now = at("2026-11-19T10:00:00Z");
+		let body = event();
+		let header = signature_header(SECRET, now.timestamp(), &body);
+		let taken = verify_event(SECRET, &header, &body, now).expect("an event");
+		assert_eq!(
+			(taken.id.as_str(), taken.kind.as_str()),
+			("evt_1", "customer.subscription.updated")
+		);
+		assert_eq!(taken.object["id"], "sub_1");
+		// A second signature beside the right one, as when a secret is rolled.
+		let rolled = format!("{header},v1={}", "0".repeat(64));
+		assert!(verify_event(SECRET, &rolled, &body, now).is_ok());
+
+		let mut other = body.clone();
+		other.push(b' ');
+		let late = now + chrono::TimeDelta::seconds(SIGNATURE_TOLERANCE + 1);
+		let early = now - chrono::TimeDelta::seconds(SIGNATURE_TOLERANCE + 1);
+
+		for (secret, header, body, now) in [
+			("whsec_other", header.as_str(), &body, now),
+			(SECRET, header.as_str(), &other, now),
+			(SECRET, header.as_str(), &body, late),
+			(SECRET, header.as_str(), &body, early),
+			(SECRET, "", &body, now),
+			(SECRET, "t=,v1=", &body, now),
+			(SECRET, "v1=abc", &body, now),
+		] {
+			assert_eq!(
+				verify_event(secret, header, body, now),
+				Err(EventError::Signature),
+				"{header}"
+			);
+		}
+
+		// The timestamp is part of what is signed.
+		let moved = header.replace(
+			&format!("t={}", now.timestamp()),
+			&format!("t={}", now.timestamp() + 1),
+		);
+		assert_eq!(
+			verify_event(SECRET, &moved, &body, now),
+			Err(EventError::Signature)
+		);
+	}
+
+	#[test]
+	fn a_signed_body_that_is_not_an_event_is_malformed() {
+		let now = at("2026-11-19T10:00:00Z");
+
+		for body in [
+			"not json".to_owned(),
+			json!({ "type": "x", "data": { "object": {} } }).to_string(),
+			json!({ "id": "evt/../1", "type": "x", "data": { "object": {} } }).to_string(),
+			json!({ "id": "evt_1", "data": { "object": {} } }).to_string(),
+			json!({ "id": "evt_1", "type": "x", "data": { "object": "sub_1" } }).to_string(),
+		] {
+			let header = signature_header(SECRET, now.timestamp(), body.as_bytes());
+			assert_eq!(
+				verify_event(SECRET, &header, body.as_bytes(), now),
+				Err(EventError::Malformed),
+				"{body}"
+			);
+		}
+	}
+
+	#[test]
+	fn a_subscription_is_read_from_either_shape() {
+		let current = json!({
+			"id": "sub_1",
+			"customer": "cus_1",
+			"status": "active",
+			"cancel_at_period_end": true,
+			"items": { "data": [{
+				"current_period_end": 1_800_000_000,
+				"price": { "id": "price_pro" },
+			}] },
+		});
+		let read = parse_subscription(&current).expect("a subscription");
+		assert_eq!(read.status, SubscriptionStatus::Active);
+		assert_eq!(read.price.as_deref(), Some("price_pro"));
+		assert_eq!(
+			read.period_end.map(|at| at.timestamp()),
+			Some(1_800_000_000)
+		);
+		assert!(read.cancel_at_period_end);
+
+		let older = json!({
+			"id": "sub_1",
+			"customer": { "id": "cus_1" },
+			"status": "something_new",
+			"current_period_end": 1_700_000_000,
+			"items": { "data": [{ "price": "price_pro" }] },
+		});
+		let read = parse_subscription(&older).expect("a subscription");
+		assert_eq!(read.customer, "cus_1");
+		assert_eq!(read.status, SubscriptionStatus::Unknown);
+		assert_eq!(
+			read.period_end.map(|at| at.timestamp()),
+			Some(1_700_000_000)
+		);
+		assert!(!read.cancel_at_period_end);
+
+		assert_eq!(parse_subscription(&json!({ "id": "sub_1" })), None);
+	}
+
+	#[test]
+	fn a_checkout_names_no_payment_method_types() {
+		let checkout = Checkout {
+			customer: "cus_1",
+			price: "price_pro",
+			organization: Uuid::nil(),
+			success_url: "https://cloud.example/done",
+			cancel_url: "https://cloud.example/back",
+			automatic_tax: false,
+		};
+		let organization = checkout.organization.to_string();
+		let form = checkout_form(&checkout, &organization);
+		assert!(form.contains(&("mode", "subscription")));
+		assert!(form.contains(&("line_items[0][price]", "price_pro")));
+		assert!(
+			form.iter()
+				.all(|(name, _)| !name.starts_with("payment_method_types"))
+		);
+		assert!(
+			form.iter()
+				.all(|(name, _)| !name.starts_with("automatic_tax"))
+		);
+		let taxed = Checkout {
+			automatic_tax: true,
+			..checkout
+		};
+		assert!(checkout_form(&taxed, &organization).contains(&("automatic_tax[enabled]", "true")));
+	}
+
+	#[test]
+	fn a_key_is_never_printed() {
+		let stripe = Stripe::new("rk_test_abc").expect("a client");
+		assert!(!format!("{stripe:?}").contains("rk_test_abc"));
+		assert!(Stripe::new("pk_test_abc").is_err());
+		assert!(Stripe::new("").is_err());
+		assert!(is_id("sub_1AbC"));
+		assert!(!is_id("sub/1"));
+		assert!(!is_id(""));
+	}
+}

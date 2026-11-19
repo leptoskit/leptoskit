@@ -718,8 +718,8 @@ pub struct UsageTotal {
 	pub updated_at: Timestamp,
 }
 
-/// What an organisation has decided about its bill: so far, its own spend
-/// cap.
+/// An organisation's bill: its own spend cap, and its customer and
+/// subscription at the payment provider.
 #[table(name = "billing_accounts")]
 pub struct BillingAccount {
 	pub id: Id<Self>,
@@ -728,10 +728,42 @@ pub struct BillingAccount {
 	/// The most a month's usage may cost beyond what the plan includes, in
 	/// the catalogue's minor units, or `None` for the plan's own cap.
 	pub spend_cap: Option<i64>,
+	/// The payment provider's customer for the organisation, once it has
+	/// one. Unique: an event about a customer is about one organisation.
+	#[db(unique, max_len = 255)]
+	pub customer: Option<String>,
+	/// The provider's subscription the organisation's plan follows.
+	#[db(max_len = 255)]
+	pub subscription: Option<String>,
+	/// That subscription's status, as the provider last said it.
+	#[db(max_len = 32)]
+	pub status: Option<String>,
+	/// When what the subscription has paid for ends.
+	pub period_end: Option<Timestamp>,
+	/// Whether the subscription ends then instead of renewing.
+	pub cancel_at_period_end: Option<bool>,
 	#[db(created_at)]
 	pub created_at: Timestamp,
 	#[db(updated_at)]
 	pub updated_at: Timestamp,
+}
+
+/// An event the payment provider sent that was dealt with, so that the
+/// same event sent again is dealt with once.
+#[table(name = "payment_events")]
+pub struct PaymentEvent {
+	pub id: Id<Self>,
+	/// The provider's ID for the event.
+	#[db(unique, min_len = 1, max_len = 255)]
+	pub event: String,
+	/// What kind of event, such as `customer.subscription.updated`.
+	#[db(min_len = 1, max_len = 100)]
+	pub kind: String,
+	/// The organisation it was about, when it was about one here.
+	#[db(no_foreign_key)]
+	pub organization_id: Option<Id<Organization>>,
+	#[db(created_at)]
+	pub created_at: Timestamp,
 }
 
 /// A backup of an environment's managed database: a record of a dump its

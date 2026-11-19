@@ -127,6 +127,7 @@ impl Console {
 				apps_domain: "apps.example.test".to_owned(),
 				registry: "registry.example.test/cloud".to_owned(),
 				catalogue: None,
+				payments: None,
 				shipping: ShippingSettings::default(),
 				dev: None,
 			},

@@ -326,6 +326,11 @@ pub(crate) async fn set_spend_cap(
 		NewBillingAccount {
 			organization_id,
 			spend_cap: stored,
+			customer: None,
+			subscription: None,
+			status: None,
+			period_end: None,
+			cancel_at_period_end: None,
 		}
 		.insert(cx.tx())
 		.await?;

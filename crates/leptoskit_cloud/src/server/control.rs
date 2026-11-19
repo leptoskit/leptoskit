@@ -15,6 +15,7 @@ use leptoskit_auth::SolanaOptions;
 use leptoskit_axum::axum::Json;
 use leptoskit_axum::axum::Router;
 use leptoskit_axum::axum::routing::get;
+use leptoskit_axum::axum::routing::post;
 use leptoskit_db::Db;
 use leptoskit_idp::ClientAuth;
 use leptoskit_idp::GrantType;
@@ -140,6 +141,9 @@ pub struct ControlConfig {
 	pub registry: String,
 	/// The prices `preview_release` estimates with, when there are any.
 	pub catalogue: Option<Catalogue>,
+	/// How payment is taken. Without it nobody can subscribe to a plan, and
+	/// the provider's events aren't listened for.
+	pub payments: Option<super::payments::PaymentsConfig>,
 	/// Leases, addresses, retention, and the storage cap.
 	pub shipping: ShippingSettings,
 	/// Development mode, in debug builds only.
@@ -226,6 +230,7 @@ impl Control {
 		check_apps_domain(&config.apps_domain)?;
 		check_registry(&config.registry)?;
 		check_catalogue(config.catalogue.as_ref())?;
+		check_payments(config.payments.as_ref(), config.catalogue.as_ref())?;
 		let store = ObjectStore::new(&config.storage, &origin)
 			.map_err(|error| ControlError::Config(error.to_string()))?;
 		let services = Services::new(
@@ -234,7 +239,17 @@ impl Control {
 			origin.clone(),
 			config.default_region.clone(),
 			Shipping {
-				redactions: store.secrets().into(),
+				redactions: store
+					.secrets()
+					.into_iter()
+					.chain(
+						config
+							.payments
+							.as_ref()
+							.map(|payments| payments.webhook_secret.clone()),
+					)
+					.collect(),
+				payments: config.payments.clone(),
 				vault: super::vault::Vault::new(config.vault.clone()),
 				resolver: config.resolver.clone(),
 				store: store.clone(),
@@ -280,6 +295,17 @@ impl Control {
 
 		if let Some(routes) = store.routes() {
 			router = router.merge(routes);
+		}
+
+		if config.payments.is_some() {
+			router = router.merge(
+				Router::new()
+					.route(
+						super::subscriptions::STRIPE_WEBHOOK_PATH,
+						post(super::subscriptions::stripe_webhook),
+					)
+					.with_state(services.clone()),
+			);
 		}
 
 		// The session layer, then the OAuth provider's outside it: the
@@ -356,6 +382,58 @@ fn check_catalogue(catalogue: Option<&Catalogue>) -> Result<(), ControlError> {
 		}
 		_ => Ok(()),
 	}
+}
+
+/// `Config` when payment is taken for something the catalogue doesn't
+/// sell: every price must be for a plan in the catalogue that costs money,
+/// or an organisation could pay its way onto a plan nothing prices, caps
+/// or limits.
+fn check_payments(
+	payments: Option<&super::payments::PaymentsConfig>,
+	catalogue: Option<&Catalogue>,
+) -> Result<(), ControlError> {
+	let Some(payments) = payments else {
+		return Ok(());
+	};
+	let Some(catalogue) = catalogue else {
+		return Err(ControlError::Config(
+			"payment needs a price catalogue: there is nothing to sell without one".to_owned(),
+		));
+	};
+
+	if payments.webhook_secret.trim().is_empty() {
+		return Err(ControlError::Config(
+			"payment needs the secret the provider signs its events with".to_owned(),
+		));
+	}
+
+	for (plan, price) in &payments.prices {
+		if !catalogue.plan(plan).is_some_and(|plan| !plan.is_free()) {
+			return Err(ControlError::Config(format!(
+				"the payment provider has a price for `{plan}`, which isn't a plan the catalogue \
+				 sells for money"
+			)));
+		}
+
+		if !super::payments::is_id(price) {
+			return Err(ControlError::Config(format!(
+				"the payment provider's price for `{plan}` isn't a price ID"
+			)));
+		}
+	}
+
+	let mut prices: Vec<&String> = payments.prices.values().collect();
+	prices.sort();
+	prices.dedup();
+
+	if prices.len() != payments.prices.len() {
+		return Err(ControlError::Config(
+			"two plans share one of the payment provider's prices: each plan needs its own"
+				.to_owned(),
+		));
+	}
+
+	Ok(())
 }
 
 /// The price catalogue in `text`, a JSON object of `currency`, `plans`, and

@@ -34,11 +34,13 @@ mod lifecycle;
 pub(crate) mod logs;
 pub(crate) mod metering;
 pub(crate) mod operator;
+mod payments;
 mod personal;
 pub mod projects;
 mod secret;
 pub(crate) mod status;
 mod storage;
+pub(crate) mod subscriptions;
 pub mod tokens;
 pub(crate) mod uploads;
 mod vault;
@@ -75,9 +77,21 @@ use leptoskit_auth::Account;
 use leptoskit_db::Db;
 use leptoskit_db::Id;
 use leptoskit_rpc as rpc;
+pub use payments::Call;
+pub use payments::Checkout;
+pub use payments::NewCustomer;
+pub use payments::PaymentError;
+pub use payments::Payments;
+pub use payments::PaymentsConfig;
+pub use payments::STRIPE_API_VERSION;
+pub use payments::SharedPayments;
+pub use payments::Stripe;
+pub use payments::Subscription;
+pub use payments::signature_header;
 pub use storage::S3Config;
 pub use storage::SecretValue;
 pub use storage::StorageConfig;
+pub use subscriptions::STRIPE_WEBHOOK_PATH;
 
 use self::storage::ObjectStore;
 use crate::pricing::Catalogue;
@@ -120,6 +134,8 @@ pub(crate) struct Shipping {
 	pub(crate) vault: vault::Vault,
 	/// What reads a domain's challenge record.
 	pub(crate) resolver: SharedResolver,
+	/// How payment is taken, when it is.
+	pub(crate) payments: Option<PaymentsConfig>,
 }
 
 /// How long leases and addresses last, how long things are kept, and how

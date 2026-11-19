@@ -576,3 +576,27 @@ mod billing {
 		}
 	}
 }
+
+/// Subscriptions and the provider's events (`support/subscriptions.rs`), on
+/// Postgres.
+mod subscriptions {
+	use super::postgres;
+	use super::support;
+	use super::support::subscriptions;
+
+	#[tokio::test]
+	async fn a_plan_follows_the_providers_subscription() {
+		let Some(server) = postgres::Postgres::start() else {
+			return;
+		};
+		let db = leptoskit_db::Db::connect(&server.database())
+			.await
+			.expect("connect");
+		db.migrate(leptoskit_cloud::POSTGRES_MIGRATIONS)
+			.await
+			.expect("the Postgres migrations apply");
+		let till = subscriptions::Till::default();
+		let app = support::app_with(db, subscriptions::taking_payment(&till)).await;
+		subscriptions::a_plan_follows_the_providers_subscription(&app, &till).await;
+	}
+}
