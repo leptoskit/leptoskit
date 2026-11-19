@@ -33,20 +33,20 @@ Do not reopen these. If one turns out to be unworkable, stop and ask.
 
 One pull request per item. Every backend is kept in step, with AppKit as the reference. The gap numbers refer to [js-to-wasm-audit.md](js-to-wasm-audit.md), which has the proposed API and the per-backend table for each.
 
-| #  | Change                                                      | Gap      | State        |
-| -- | ----------------------------------------------------------- | -------- | ------------ |
-| 1  | Text input hints                                            | G9       | #852, open   |
-| 2  | `TextArea`                                                  | G12      | #877, open   |
-| 3  | Labels that focus their fields                              | G13      | #879, open   |
-| 4  | One-shot focus requests                                     | G2       | #887, open   |
-| 5  | Arrow-key navigation for tabs, radio groups and menus       | G5       | #892, open   |
-| 6  | `Modal` and `Popover`                                       | G1       | #896, open   |
-| 7  | Scroll into view                                            | G4       | #913, open   |
-| 8  | A clock hook                                                | G6       | #914, open   |
-| 9  | Typed refusals in the rpc client (status, code, retry time) | G8       | #918, open   |
-| 10 | Streams without a database                                  | G3       | #923, open   |
-| 11 | The ⌘ key on the web                                        | G7a      | #PRNUM, open |
-| 12 | New-tab and download links                                  | G14, G15 | not started  |
+| #  | Change                                                      | Gap      | State       |
+| -- | ----------------------------------------------------------- | -------- | ----------- |
+| 1  | Text input hints                                            | G9       | #852, open  |
+| 2  | `TextArea`                                                  | G12      | #877, open  |
+| 3  | Labels that focus their fields                              | G13      | #879, open  |
+| 4  | One-shot focus requests                                     | G2       | #887, open  |
+| 5  | Arrow-key navigation for tabs, radio groups and menus       | G5       | #892, open  |
+| 6  | `Modal` and `Popover`                                       | G1       | #896, open  |
+| 7  | Scroll into view                                            | G4       | #913, open  |
+| 8  | A clock hook                                                | G6       | #914, open  |
+| 9  | Typed refusals in the rpc client (status, code, retry time) | G8       | #918, open  |
+| 10 | Streams without a database                                  | G3       | #923, open  |
+| 11 | The ⌘ key on the web                                        | G7a      | #924, open  |
+| 12 | New-tab and download links                                  | G14, G15 | not started |
 
 After those: convert the demo (3–4 pull requests), then app shortcuts with native key delivery (G7b), `prompt=login` on provider sign-in (G16) and document titles (G10), then convert the admin page by page (5–7 pull requests).
 
