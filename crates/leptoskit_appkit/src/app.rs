@@ -58,6 +58,9 @@ impl AppKitBackend {
 	/// should stay open, then call [`run_application`] to hand control to
 	/// AppKit.
 	///
+	/// A `Modal` or `Popover` that is already open shows now that there is
+	/// a window for it.
+	///
 	/// Returns `None` when `root` is not a live widget of this backend.
 	pub fn open_window(&self, root: NodeId, title: &str) -> Option<Retained<NSWindow>> {
 		let view = self.view(root)?;
@@ -85,6 +88,9 @@ impl AppKitBackend {
 		window.center();
 
 		window.makeKeyAndOrderFront(None);
+		// An overlay that was already open had no window to show on.
+		let _events = self.suppress_events();
+		self.refresh_overlays();
 		Some(window)
 	}
 }

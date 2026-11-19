@@ -122,6 +122,16 @@ The second part of G1: the two `leptoskit_aria` components the audit names.
 - **Native:** nothing has run and nothing native changed. A menu there is a popover drawn in place whose items press; keys and dismissal wait for the native presentations.
 - **Not tested:** real Escape and a real pointer press outside a menu in Chrome. The test hides the popover the way the browser does and checks that the menu hears it.
 
+### `feat/overlays-appkit`: stacked on `feat/aria-menu`
+
+The third part of G1, for macOS: both renderers.
+
+- **`leptoskit_appkit`** returns `true` from `presents_overlays`. `overlay.rs` holds `Sheet` (an `NSPanel` subclass begun as a sheet on the window of the modal's parent; `cancelOperation:` becomes `Dismiss`) and `Hanging` (an `NSPopover`, transient, whose delegate answers `popoverShouldClose:` with `Dismiss` and `false`). An overlay's view is never a subview of its parent, so `insert_child` skips overlay siblings when it picks the view to go below. `refresh_overlays` runs after each batch and from `open_window`: an overlay needs a window, and waits for one. The sheet is sized to the union of the modal's children, and the modal's background is cleared.
+- **The Swift macOS renderer** does the same with `MacOverlayView` (`desktop/MacOverlayView.swift`, added to `Package.swift` and the CLI's `platform_sources::MACOS`): a hidden view that keeps the overlay's place in the tree, so sibling indexes stay as sent, with the content shown in a sheet or popover. `WidgetProps` gains `id` and `overlay`; both arrive in the JSON form (and in the binary form's extras, which iOS reads). The bridge records with `presenting_overlays()` on macOS only.
+- **Compiled here:** the Rust side, cross-linted for `aarch64-apple-darwin` with clippy. **Not compiled here:** any Swift. **Run here:** nothing, on either renderer.
+- **Tests that CI's macOS runners will be the first to run:** `crates/leptoskit_appkit/tests/overlays.rs` (real windows) and `controller-tests/MacOverlayTests.swift`. Expect to fix things there. The assertions most likely to need adjusting are the ones about AppKit's own behaviour: `attachedSheet` right after `beginSheet`, a popover showing from a window that was only ordered front, and which side a popover lands on.
+- **Known limits:** a popover is centred on its anchor (no start or end alignment). A sheet has no outside press. Arrow keys in a `Menu` still do nothing on macOS, because neither renderer delivers `on_key`. `AppKitBackend::snapshot_png` renders without a window, so an open overlay is not in a snapshot.
+
 ### `feat/public-demo`: no pull request
 
 Twenty-three commits: the public demo service. One process serves one UTC day's generation, resets itself at midnight by re-executing in the same PID, gives each browser its own visitor pass, inbox and real sign-in, hands off to the admin, and lets visitors save private notes that emit one real `note_created` analytics event. [public-demo.md](public-demo.md) on that branch is the operator contract.

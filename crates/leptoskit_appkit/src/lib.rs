@@ -27,6 +27,8 @@
 //! | `Image` | an `NSImageView` loading `source` as a file path |
 //! | `ScrollView` | an `NSScrollView` over a flipped document view, reporting [`NativeEvent::Scroll`] |
 //! | `Vector` | a flipped view with one `CAShapeLayer` per path |
+//! | `Modal` | a sheet on the window holding its parent; Escape dispatches [`NativeEvent::Dismiss`] |
+//! | `Popover` | an `NSPopover` hanging from its anchor's view; Escape and a press outside dispatch [`NativeEvent::Dismiss`] |
 //!
 //! Every container is flipped, so frames from the layout engine apply as they
 //! are: top-left origin, parent-relative coordinates.
@@ -95,6 +97,8 @@ mod app;
 mod backend;
 #[cfg(target_os = "macos")]
 mod measure;
+#[cfg(target_os = "macos")]
+mod overlay;
 
 #[cfg(target_os = "macos")]
 mod pressable;

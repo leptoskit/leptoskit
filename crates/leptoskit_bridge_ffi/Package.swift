@@ -35,7 +35,7 @@ let controllerTargets: [Target] = [
             "mobile/NativeCamera.swift", "mobile/NativeMap.swift", "mobile/NativeLivePhoto.swift",
             "mobile/DevtoolsOverlay.swift",
             "desktop/MacWidgetRenderer.swift", "desktop/MacWidgetControls.swift",
-            "desktop/MacTextLabel.swift", "desktop/MacScrollView.swift",
+            "desktop/MacTextLabel.swift", "desktop/MacScrollView.swift", "desktop/MacOverlayView.swift",
             "mobile/RenderTransaction.swift", "mobile/BinaryTransaction.swift",
             "mobile/WidgetProps.swift", "mobile/WidgetMotion.swift", "mobile/LayerMotion.swift",
             "mobile/ExitingViews.swift",

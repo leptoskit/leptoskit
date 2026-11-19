@@ -9,6 +9,7 @@ use leptoskit_native::NativeBackend;
 use leptoskit_native::NativeEvent;
 use leptoskit_native::NativeKind;
 use leptoskit_native::NativeProps;
+use leptoskit_native::Overlay;
 use leptoskit_native::Progress;
 use leptoskit_native::SharedTextMeasurer;
 use leptoskit_native::TextAlign;
@@ -66,6 +67,8 @@ use objc2_quartz_core::kCACornerCurveCircular;
 use objc2_quartz_core::kCACornerCurveContinuous;
 
 use crate::measure::AppKitTextMeasurer;
+use crate::overlay::Hanging;
+use crate::overlay::Sheet;
 use crate::pressable::content_button;
 use crate::text::attributed_string;
 use crate::text::ns_alignment;
@@ -122,6 +125,8 @@ pub struct AppKitBackend {
 	widgets: Vec<Option<Widget>>,
 	/// Scroll views, whose document size follows their children.
 	scroll_views: Vec<NodeId>,
+	/// Modals and popovers, shown and taken down after each batch.
+	overlays: Vec<NodeId>,
 	sink: Rc<EventSink>,
 	measurer: SharedTextMeasurer,
 	applying: bool,
@@ -146,6 +151,14 @@ struct Widget {
 	control: Control,
 	/// The children, in order.
 	children: Vec<NodeId>,
+	/// The node this one was inserted into. An overlay's view is not in its
+	/// parent's view, so this is how it finds the window to show on.
+	parent: Option<NodeId>,
+	/// The `id` the app gave the element, which popovers name as their
+	/// anchor and overlays as what takes focus.
+	name: Option<String>,
+	/// What a `Modal` or `Popover` was last told to show.
+	overlay: Option<Overlay>,
 	/// The live-region text announced for this widget, if any, so changes
 	/// post exactly one announcement.
 	announced: Option<String>,
@@ -166,12 +179,61 @@ impl Widget {
 			_ => &self.view,
 		}
 	}
+
+	/// Whether AppKit presents this widget above the window, so its view
+	/// never goes into its parent's.
+	const fn is_overlay(&self) -> bool {
+		matches!(self.control, Control::Sheet(_) | Control::Popover(_))
+	}
+
+	/// Keeps what later batches look this widget up by.
+	fn remember(&mut self, props: &NativeProps) {
+		self.name.clone_from(&props.id);
+		self.overlay.clone_from(&props.overlay);
+
+		// A sheet dims the window behind it, so the backdrop a modal draws
+		// on the web has nothing to cover here.
+		if matches!(self.control, Control::Sheet(_))
+			&& let Some(layer) = self.view.layer()
+		{
+			layer.setBackgroundColor(None);
+		}
+	}
+
+	/// The view that takes keyboard focus for this widget, when one can.
+	///
+	/// macOS gives buttons, switches and sliders key focus only while
+	/// Keyboard Navigation is on in System Settings, and never gives it to
+	/// text or containers.
+	fn key_view(&self) -> Option<&NSView> {
+		Some(match &self.control {
+			Control::Button { button, .. }
+			| Control::Pressable { button, .. }
+			| Control::Toggle { button, .. } => button,
+			Control::Switch { switch, .. } => switch,
+			Control::Slider { slider, .. } => slider,
+			Control::Input { field, .. } => field,
+			Control::Area { text, .. } => text,
+			Control::Scroll { scroll, .. } => scroll,
+			Control::Container
+			| Control::Label(_)
+			| Control::Progress { .. }
+			| Control::Image { .. }
+			| Control::Vector(_)
+			| Control::Sheet(_)
+			| Control::Popover(_) => return None,
+		})
+	}
 }
 
 /// The concrete AppKit control of a widget.
 enum Control {
 	/// A plain flipped container.
 	Container,
+	/// A modal: a flipped container shown as a sheet.
+	Sheet(Sheet),
+	/// A popover: a flipped container shown in an `NSPopover`.
+	Popover(Hanging),
 	/// A text label.
 	Label(Retained<NSTextField>),
 	/// A button and the target its clicks go to. Controls hold their target
@@ -246,6 +308,7 @@ impl AppKitBackend {
 			mtm,
 			widgets: Vec::new(),
 			scroll_views: Vec::new(),
+			overlays: Vec::new(),
 			sink: Rc::new(EventSink::default()),
 			measurer: Arc::new(AppKitTextMeasurer::new()),
 			applying: false,
@@ -289,6 +352,49 @@ impl AppKitBackend {
 		match &self.widget(id)?.control {
 			Control::Progress { animating, .. } => Some(*animating),
 			_ => None,
+		}
+	}
+
+	/// Whether a `Modal`'s sheet or a `Popover` is on screen. Other node
+	/// kinds return `None`.
+	///
+	/// An open overlay is only shown once its parent, or a popover's anchor,
+	/// is in a window, and a modal only once it holds something.
+	pub fn overlay_shown(&self, id: NodeId) -> Option<bool> {
+		match &self.widget(id)?.control {
+			Control::Sheet(sheet) => Some(sheet.is_shown()),
+			Control::Popover(popover) => Some(popover.is_shown()),
+			_ => None,
+		}
+	}
+
+	/// The window AppKit shows an overlay's content in: a modal's sheet, or
+	/// a popover's own window while it is on screen.
+	pub fn overlay_window(&self, id: NodeId) -> Option<Retained<objc2_app_kit::NSWindow>> {
+		let widget = self.widget(id)?;
+
+		match &widget.control {
+			Control::Sheet(sheet) => Some(sheet.window().retain()),
+			Control::Popover(_) => widget.view.window(),
+			_ => None,
+		}
+	}
+
+	/// Asks an overlay to close as Escape does, through the same path a real
+	/// key takes: [`NativeEvent::Dismiss`] reaches the listener, and the
+	/// overlay stays until the next tree closes it. Returns `false` when the
+	/// node is not an overlay on screen.
+	pub fn perform_dismiss(&self, id: NodeId) -> bool {
+		match self.widget(id).map(|widget| &widget.control) {
+			Some(Control::Sheet(sheet)) if sheet.is_shown() => {
+				sheet.cancel();
+				true
+			}
+			Some(Control::Popover(popover)) if popover.is_shown() => {
+				popover.cancel();
+				true
+			}
+			_ => false,
 		}
 	}
 
@@ -336,9 +442,19 @@ impl AppKitBackend {
 		let (view, control): (Retained<NSView>, Control) = match kind {
 			// A 3D scene draws in the generated hosts' Swift and Kotlin renderers;
 			// this backend holds its place as an empty view.
+			NativeKind::Modal => {
+				let view = Retained::into_super(FlippedView::new(mtm));
+				let sheet = Sheet::new(mtm, id, Rc::clone(&self.sink), &view);
+
+				(view, Control::Sheet(sheet))
+			}
+			NativeKind::Popover => {
+				let view = Retained::into_super(FlippedView::new(mtm));
+				let popover = Hanging::new(mtm, id, Rc::clone(&self.sink), &view);
+
+				(view, Control::Popover(popover))
+			}
 			NativeKind::View
-			| NativeKind::Modal
-			| NativeKind::Popover
 			| NativeKind::Custom(_)
 			| NativeKind::Scene3d
 			| NativeKind::Video
@@ -378,7 +494,112 @@ impl AppKitBackend {
 			view,
 			control,
 			children: Vec::new(),
+			parent: None,
+			name: None,
+			overlay: None,
 			announced: None,
+		}
+	}
+
+	/// The widget the app gave this `id`.
+	fn named(&self, name: &str) -> Option<&Widget> {
+		self.widgets
+			.iter()
+			.flatten()
+			.find(|widget| widget.name.as_deref() == Some(name))
+	}
+
+	/// Shows each open overlay and takes down each closed one, once the
+	/// views it holds and hangs from are in place.
+	///
+	/// An overlay needs a window: a modal's parent, or a popover's anchor,
+	/// must be in one. Until then it stays down, and a later batch shows it.
+	pub(crate) fn refresh_overlays(&self) {
+		for index in 0..self.overlays.len() {
+			let id = self.overlays[index];
+			let Some(overlay) = self.widget(id).and_then(|widget| widget.overlay.clone()) else {
+				continue;
+			};
+			let shown = match self.widget(id).map(|widget| &widget.control) {
+				Some(Control::Sheet(_)) => self.refresh_sheet(id, overlay.open),
+				Some(Control::Popover(_)) => self.refresh_popover(id, &overlay),
+				_ => false,
+			};
+
+			if shown {
+				self.focus_inside(id, overlay.initial_focus.as_deref());
+			}
+		}
+	}
+
+	/// Shows or takes down a modal's sheet. Returns whether it was shown by
+	/// this call.
+	fn refresh_sheet(&self, id: NodeId, open: bool) -> bool {
+		let widget = self.expect_widget(id);
+		// What the modal holds decides the sheet's size: the modal itself
+		// covers the viewport.
+		let content = widget
+			.children
+			.iter()
+			.filter_map(|&child| self.widget(child))
+			.filter(|child| !child.is_overlay() && !child.view.isHidden())
+			.map(|child| child.view.frame())
+			.reduce(union)
+			.filter(|content| content.size.width > 0.0 && content.size.height > 0.0);
+		let window = widget
+			.parent
+			.and_then(|parent| self.widget(parent))
+			.and_then(|parent| parent.view.window());
+		let Control::Sheet(sheet) = &widget.control else {
+			return false;
+		};
+
+		if let (true, Some(content), Some(window)) = (open, content, window) {
+			sheet.show(&widget.view, content, &window)
+		} else {
+			sheet.hide();
+			false
+		}
+	}
+
+	/// Shows or takes down a popover. Returns whether it was shown by this
+	/// call.
+	fn refresh_popover(&self, id: NodeId, overlay: &Overlay) -> bool {
+		let Control::Popover(popover) = &self.expect_widget(id).control else {
+			return false;
+		};
+		let anchor = overlay
+			.anchor
+			.as_deref()
+			.and_then(|name| self.named(name))
+			.map(|anchor| &*anchor.view);
+
+		if let (true, Some(anchor)) = (overlay.open, anchor) {
+			popover.show(anchor, overlay.placement)
+		} else {
+			popover.hide();
+			false
+		}
+	}
+
+	/// Moves keyboard focus to the widget named `initial` inside an overlay
+	/// that has just been shown. Without a name, AppKit picks what its
+	/// window focuses first.
+	fn focus_inside(&self, id: NodeId, initial: Option<&str>) {
+		let Some(target) = initial
+			.and_then(|name| self.named(name))
+			.and_then(Widget::key_view)
+		else {
+			return;
+		};
+		let widget = self.expect_widget(id);
+		let window = match &widget.control {
+			Control::Sheet(sheet) => Some(sheet.window().retain()),
+			_ => widget.view.window(),
+		};
+
+		if let Some(window) = window {
+			window.makeFirstResponder(Some(target));
 		}
 	}
 
@@ -478,8 +699,22 @@ impl AppKitBackend {
 		if !self.applying {
 			self.refresh_radios();
 			self.refresh_animations();
+			self.refresh_overlays();
 		}
 	}
+}
+
+/// The smallest rectangle holding both.
+fn union(a: NSRect, b: NSRect) -> NSRect {
+	let left = a.origin.x.min(b.origin.x);
+	let top = a.origin.y.min(b.origin.y);
+	let right = (a.origin.x + a.size.width).max(b.origin.x + b.size.width);
+	let bottom = (a.origin.y + a.size.height).max(b.origin.y + b.size.height);
+
+	NSRect::new(
+		NSPoint::new(left, top),
+		NSSize::new(right - left, bottom - top),
+	)
 }
 
 /// Frames snap to this many divisions per point: half points, the device
@@ -861,7 +1096,7 @@ fn apply_control(control: &mut Control, props: &NativeProps) {
 	let enabled = props.enabled.unwrap_or(true);
 
 	match control {
-		Control::Container | Control::Scroll { .. } => {}
+		Control::Container | Control::Scroll { .. } | Control::Sheet(_) | Control::Popover(_) => {}
 		Control::Vector(layers) => layers.set_drawing(props.drawing.as_ref()),
 		Control::Label(label) => {
 			let text = props.text.as_deref().unwrap_or_default();
@@ -1109,23 +1344,12 @@ impl AppKitBackend {
 	/// text or containers, so those requests leave focus where it was.
 	/// Events stay held back as for the rest of the batch.
 	fn focus_requested(&self, mutations: &MutationList) {
-		let Some(widget) = mutations.focus_target().and_then(|id| self.widget(id)) else {
+		let Some(target) = mutations
+			.focus_target()
+			.and_then(|id| self.widget(id))
+			.and_then(Widget::key_view)
+		else {
 			return;
-		};
-		let target: &NSView = match &widget.control {
-			Control::Button { button, .. }
-			| Control::Pressable { button, .. }
-			| Control::Toggle { button, .. } => button,
-			Control::Switch { switch, .. } => switch,
-			Control::Slider { slider, .. } => slider,
-			Control::Input { field, .. } => field,
-			Control::Area { text, .. } => text,
-			Control::Scroll { scroll, .. } => scroll,
-			Control::Container
-			| Control::Label(_)
-			| Control::Progress { .. }
-			| Control::Image { .. }
-			| Control::Vector(_) => return,
 		};
 
 		if let Some(window) = target.window() {
@@ -1135,6 +1359,10 @@ impl AppKitBackend {
 }
 
 impl NativeBackend for AppKitBackend {
+	fn presents_overlays(&self) -> bool {
+		true
+	}
+
 	fn rive_visible(&self, id: NodeId) -> bool {
 		self.view(id).is_some_and(|view| {
 			let mut ancestor = Some(view.retain());
@@ -1248,6 +1476,7 @@ impl NativeBackend for AppKitBackend {
 
 			self.refresh_radios();
 			self.refresh_animations();
+			self.refresh_overlays();
 			self.focus_requested(mutations);
 		});
 	}
@@ -1256,6 +1485,7 @@ impl NativeBackend for AppKitBackend {
 		let mut widget = self.build(id, kind);
 		apply_common(&widget.view, props, widget.kind);
 		apply_control(&mut widget.control, props);
+		widget.remember(props);
 
 		if self.widgets.len() <= id.index() {
 			self.widgets.resize_with(id.index() + 1, || None);
@@ -1263,6 +1493,10 @@ impl NativeBackend for AppKitBackend {
 
 		if kind == NativeKind::ScrollView {
 			self.scroll_views.push(id);
+		}
+
+		if widget.is_overlay() {
+			self.overlays.push(id);
 		}
 
 		self.widgets[id.index()] = Some(widget);
@@ -1274,6 +1508,7 @@ impl NativeBackend for AppKitBackend {
 		let widget = self.expect_widget_mut(id);
 		apply_common(&widget.view, props, widget.kind);
 		apply_control(&mut widget.control, props);
+		widget.remember(props);
 		let live = props.aria().effective_live(widget.kind);
 		let announced = (live != leptoskit_native::Live::Off)
 			.then(|| props.aria().live_text.clone())
@@ -1294,7 +1529,19 @@ impl NativeBackend for AppKitBackend {
 	fn update_layout(&mut self, id: NodeId, x: f32, y: f32, width: f32, height: f32) {
 		let widget = self.expect_widget_mut(id);
 		let measured = matches!(widget.control, Control::Label(_) | Control::Button { .. });
-		let frame = pixel_aligned(x, y, width, height, measured);
+		let mut frame = pixel_aligned(x, y, width, height, measured);
+
+		// AppKit places an overlay. Its frame says only how large it is: a
+		// sheet shifts its view to show what it holds, and a popover's view
+		// fills the popover.
+		if widget.is_overlay() {
+			frame.origin = NSPoint::ZERO;
+		}
+
+		if let Control::Popover(popover) = &widget.control {
+			popover.resize(frame.size);
+		}
+
 		let resized = widget.view.frame().size != frame.size;
 		widget.view.setFrame(frame);
 		sync_corner_curve(&widget.view, widget.kind);
@@ -1305,12 +1552,21 @@ impl NativeBackend for AppKitBackend {
 	}
 
 	fn insert_child(&mut self, parent: NodeId, child: NodeId, index: usize) {
-		let child_view = self.expect_widget(child).view.clone();
+		let child_widget = self.expect_widget(child);
+		let child_view = child_widget.view.clone();
+		let presented = child_widget.is_overlay();
 		let parent_widget = self.expect_widget(parent);
 		let index = index.min(parent_widget.children.len());
+		// An overlay's view is not among its parent's subviews, so the view
+		// to go below is the next sibling that is.
+		let below = parent_widget.children[index..]
+			.iter()
+			.copied()
+			.find(|&sibling| !self.expect_widget(sibling).is_overlay());
 
-		match parent_widget.children.get(index) {
-			Some(&sibling) => {
+		match below {
+			_ if presented => {}
+			Some(sibling) => {
 				let sibling_view = self.expect_widget(sibling).view.clone();
 				// Below the current occupant of the slot means just before it
 				// in the subview order, which is drawing order.
@@ -1324,11 +1580,22 @@ impl NativeBackend for AppKitBackend {
 		}
 
 		self.expect_widget_mut(parent).children.insert(index, child);
+		self.expect_widget_mut(child).parent = Some(parent);
 		self.refresh_controls_if_unbatched();
 	}
 
 	fn remove_child(&mut self, parent: NodeId, child: NodeId) {
-		self.expect_widget(child).view.removeFromSuperview();
+		let child_widget = self.expect_widget_mut(child);
+		child_widget.parent = None;
+
+		// An overlay keeps its view in its own sheet or popover, and comes
+		// down with the refresh, now that it has no parent to show on.
+		match &child_widget.control {
+			Control::Sheet(sheet) => sheet.hide(),
+			Control::Popover(popover) => popover.hide(),
+			_ => child_widget.view.removeFromSuperview(),
+		}
+
 		self.expect_widget_mut(parent)
 			.children
 			.retain(|&existing| existing != child);
@@ -1342,7 +1609,12 @@ impl NativeBackend for AppKitBackend {
 		// The renderer detaches before deleting; this only guards against a
 		// view outliving its node inside a still-live parent.
 		deactivate_control(&widget.control);
-		widget.view.removeFromSuperview();
+
+		if widget.is_overlay() {
+			self.overlays.retain(|&existing| existing != id);
+		} else {
+			widget.view.removeFromSuperview();
+		}
 
 		if widget.kind == NativeKind::ScrollView {
 			self.scroll_views.retain(|&existing| existing != id);
@@ -1436,6 +1708,8 @@ fn deactivate_control(control: &Control) {
 				indicator.stopAnimation(None);
 			}
 		}
+		Control::Sheet(sheet) => sheet.hide(),
+		Control::Popover(popover) => popover.deactivate(),
 		_ => {}
 	}
 }

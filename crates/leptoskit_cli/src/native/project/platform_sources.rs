@@ -12,6 +12,7 @@ pub(crate) const MACOS: &[&str] = &[
 	"desktop/MacWidgetControls.swift",
 	"desktop/MacTextLabel.swift",
 	"desktop/MacScrollView.swift",
+	"desktop/MacOverlayView.swift",
 	"mobile/DevtoolsOverlay.swift",
 	"mobile/RenderTransaction.swift",
 	"mobile/WidgetProps.swift",
