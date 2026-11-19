@@ -29,6 +29,8 @@ use windows::Win32::UI::Accessibility::*;
 use windows::Win32::UI::Controls::*;
 use windows::Win32::UI::HiDpi::GetSystemMetricsForDpi;
 use windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
+use windows::Win32::UI::Input::KeyboardAndMouse::IsWindowEnabled;
+use windows::Win32::UI::Input::KeyboardAndMouse::SetFocus;
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::PCWSTR;
 use windows::core::w;
@@ -1516,6 +1518,40 @@ impl Drop for Widget {
 	}
 }
 
+impl WindowsBackend {
+	/// Moves keyboard focus to the widget the batch asks to focus, once its
+	/// windows are in place.
+	///
+	/// Only controls in the Tab order take it: buttons, toggles, sliders and
+	/// text fields. Text and containers have no window that shows focus, so
+	/// those requests leave focus where it was. Events stay held back as for
+	/// the rest of the batch.
+	fn focus_requested(&self, mutations: &MutationList) {
+		let Some(widget) = mutations.focus_target().and_then(|id| self.widget(id)) else {
+			return;
+		};
+		let takes_focus = !matches!(
+			widget.kind,
+			NativeKind::Text | NativeKind::TextRun | NativeKind::LinearProgressIndicator
+		);
+		let Some(control) = widget
+			.control
+			.filter(|_| takes_focus && widget.control_alive.get())
+		else {
+			return;
+		};
+
+		// SAFETY: The control is a live window this thread created. The
+		// focus messages it sends arrive while events are held back, so no
+		// listener runs inside this call.
+		unsafe {
+			if IsWindowEnabled(control).as_bool() {
+				let _ = SetFocus(Some(control));
+			}
+		}
+	}
+}
+
 impl NativeBackend for WindowsBackend {
 	fn rive_visible(&self, id: NodeId) -> bool {
 		let Some(widget) = self.widgets.get(id.index()).and_then(Option::as_ref) else {
@@ -1603,6 +1639,7 @@ impl NativeBackend for WindowsBackend {
 
 		self.applying = false;
 		self.refresh_tree();
+		self.focus_requested(mutations);
 	}
 
 	fn create(&mut self, id: NodeId, kind: NativeKind, props: &NativeProps) {

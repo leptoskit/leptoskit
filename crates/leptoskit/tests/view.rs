@@ -382,3 +382,26 @@ fn a_field_names_its_label_by_id() {
 	assert_eq!(outline(&markup), outline(&builders));
 	markup.validate().expect("the labels exist");
 }
+
+#[test]
+fn a_field_takes_focus_from_a_request() {
+	reactive_graph::owner::Owner::new().with(|| {
+		let to_code = FocusRequest::new();
+		let screen = move || {
+			view! {
+				<View>
+					<Button on:press=move || to_code.request()>"Send code"</Button>
+					<TextInput aria_label="Code" focus_on=to_code />
+				</View>
+			}
+		};
+		assert_eq!(screen().children[1].props.focus_request, None);
+
+		to_code.request();
+		let first = screen().children[1].props.focus_request;
+		assert!(first.is_some(), "the field carries the request");
+
+		to_code.request();
+		assert!(screen().children[1].props.focus_request > first);
+	});
+}

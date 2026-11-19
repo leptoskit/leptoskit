@@ -10,6 +10,7 @@ use leptoskit_native::NativeKind;
 use leptoskit_native::SubmitLabel;
 use leptoskit_native::components::Pressable;
 use leptoskit_native::components::Text;
+use leptoskit_native::components::TextInput;
 use leptoskit_native::components::View;
 use leptoskit_yoga::Dimension;
 
@@ -895,4 +896,29 @@ fn focused_and_scrolled_nodes_serialize_their_renderer_directives() {
 
 	assert!(page.contains("data-lk-scroll=\"1 40 smooth\""), "{page}");
 	assert!(page.contains("data-lk-focus=\"true\""), "{page}");
+}
+
+#[test]
+fn a_focus_request_is_written_where_the_browser_can_carry_it_out() {
+	use leptoskit_native::FocusRequest;
+
+	let page = reactive_graph::owner::Owner::new().with(|| {
+		let to_code = FocusRequest::new();
+		let before = render(TextInput().aria_label("Code").focus_on(to_code)).to_html();
+		assert!(!before.contains("data-lk-focus-request"), "{before}");
+
+		to_code.request();
+		render(View().children([
+			TextInput().aria_label("Code").focus_on(to_code),
+			Text("Nothing to focus here").focus_on(to_code),
+		]))
+		.to_html()
+	});
+
+	assert_eq!(
+		page.matches("data-lk-focus-request=\"").count(),
+		2,
+		"{page}"
+	);
+	assert!(!page.contains("data-lk-focus=\"true\""), "{page}");
 }

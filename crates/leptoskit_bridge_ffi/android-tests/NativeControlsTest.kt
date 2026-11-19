@@ -236,5 +236,37 @@ class NativeControlsTest {
             assertEquals(1, parent.childCount)
         }
 
+    @Test
+    fun aFocusRequestMovesFocusOnce() =
+        onMain {
+            val root = FrameLayout(InstrumentationRegistry.getInstrumentation().targetContext)
+            val renderer = NativeWidgetRenderer(root, { _, _, _ -> })
+            renderer.render(
+                RenderBatch(
+                    1,
+                    listOf(
+                        RenderMutation.Create(1, "view", WidgetProps()),
+                        RenderMutation.Create(2, "text_input", WidgetProps()),
+                        RenderMutation.Create(3, "text_input", WidgetProps()),
+                        RenderMutation.InsertChild(1, 2, 0),
+                        RenderMutation.InsertChild(1, 3, 1),
+                    ),
+                ),
+            )
+            val content = root.getChildAt(0) as FrameLayout
+            val email = content.getChildAt(0) as EditText
+            val code = content.getChildAt(1) as EditText
+            assertFalse(code.isFocused)
+
+            renderer.render(RenderBatch(null, listOf(RenderMutation.UpdateProps(3, props("""{"focus_request":7}""")))))
+            assertTrue(code.isFocused)
+
+            // The person moves on, and a later change to the field leaves them there.
+            email.requestFocus()
+            renderer.render(RenderBatch(null, listOf(RenderMutation.UpdateProps(3, props("""{"value":"12"}""")))))
+            assertTrue(email.isFocused)
+            assertFalse(code.isFocused)
+        }
+
     private fun props(json: String) = WidgetProps.fromJson(JSONObject(json))
 }

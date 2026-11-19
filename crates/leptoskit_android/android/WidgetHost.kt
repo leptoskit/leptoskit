@@ -335,6 +335,7 @@ class WidgetHost(
         suppress {
             val mutations = JSONArray(encoded)
             var relabel = false
+            var focus: Long? = null
             repeat(mutations.length()) { index ->
                 val mutation = mutations.getJSONObject(index)
                 val name = mutation.keys().next()
@@ -344,6 +345,7 @@ class WidgetHost(
                     "Create" -> {
                         create(id, fields.getString("kind"), fields.getJSONObject("props"))
                         relabel = relabel || labelledBy(fields.getJSONObject("props")) != null
+                        if (!fields.getJSONObject("props").isNull("focus_request")) focus = id
                     }
 
                     "UpdateProps" -> {
@@ -351,6 +353,7 @@ class WidgetHost(
                         node.props = fields.getJSONObject("props")
                         update(node)
                         relabel = relabel || labelledBy(node.props) != null
+                        if (!node.props.isNull("focus_request")) focus = id
                     }
 
                     "UpdateLayout" -> {
@@ -393,6 +396,7 @@ class WidgetHost(
                     }
 
                     "Delete" -> {
+                        if (focus == id) focus = null
                         nodes.remove(id)?.let { node ->
                             node.outer.clearFocus()
                             (node.outer.parent as? ViewGroup)?.removeView(node.outer)
@@ -415,7 +419,23 @@ class WidgetHost(
             if (relabel) linkLabels()
             refresh()
             refreshMountedRoot()
+            focus?.let { nodes[it] }?.let(::moveFocus)
         }
+    }
+
+    /**
+     * Carries out a one-shot focus request. The surface sends `focus_request`
+     * only with the commit that makes the request, so focus moves once.
+     *
+     * A text field takes input focus. Other views take it only outside touch
+     * mode, as with a keyboard or a remote, so TalkBack's cursor is moved to
+     * them as well.
+     */
+    private fun moveFocus(node: Node) {
+        val view = node.control ?: node.outer
+
+        view.requestFocus()
+        view.performAccessibilityAction(AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS, null)
     }
 
     /**

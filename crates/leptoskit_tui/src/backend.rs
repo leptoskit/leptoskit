@@ -453,6 +453,16 @@ impl NativeBackend for TuiBackend {
 			self.apply_one(mutation);
 		}
 
+		// A one-shot request moves focus once. A widget holding focus with
+		// `focused(true)` still takes it back, as it does after any commit.
+		if let Some(node) = mutations
+			.focus_target()
+			.filter(|node| self.focusables().contains(node))
+		{
+			let events = self.set_focus(Some(node));
+			self.pending.extend(events);
+		}
+
 		self.claim_focus();
 	}
 

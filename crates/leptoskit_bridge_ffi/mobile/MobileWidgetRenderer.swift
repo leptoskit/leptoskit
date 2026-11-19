@@ -31,6 +31,8 @@ final class MobileWidgetRenderer: NSObject, UIScrollViewDelegate, NativeRiveSink
     private var widgets: [Int: UIView] = [:]
     var properties: [Int: WidgetProps] = [:]
     private var focusRequests: [Int: Bool] = [:]
+    /// The widget this transaction asks to focus once, through `Element::focus_on`.
+    private var focusTarget: Int?
     private var dismissTap: UITapGestureRecognizer?
     /// Requested corner radii, fitted to each frame as layout changes it.
     private var radii: [Int: CGFloat] = [:]
@@ -89,6 +91,7 @@ final class MobileWidgetRenderer: NSObject, UIScrollViewDelegate, NativeRiveSink
         view.endEditing(true)
         properties.removeAll()
         focusRequests.removeAll()
+        focusTarget = nil
         devtools?.close()
         devtools = nil
 
@@ -160,6 +163,20 @@ final class MobileWidgetRenderer: NSObject, UIScrollViewDelegate, NativeRiveSink
         for (id, focused) in requests {
             if focused { widgets[id]?.becomeFirstResponder() } else { widgets[id]?.resignFirstResponder() }
         }
+
+        moveFocus()
+    }
+
+    /// Carries out a one-shot focus request. A text field or text area takes
+    /// the keyboard; anything else takes the VoiceOver cursor, since iOS has
+    /// no keyboard focus for it without a hardware keyboard.
+    private func moveFocus() {
+        defer { focusTarget = nil }
+        guard let widget = focusTarget.flatMap({ widgets[$0] }) else { return }
+
+        if !widget.becomeFirstResponder() {
+            UIAccessibility.post(notification: .layoutChanged, argument: widget)
+        }
     }
 
     private func updateCanvas(_ named: Int?) {
@@ -224,6 +241,7 @@ final class MobileWidgetRenderer: NSObject, UIScrollViewDelegate, NativeRiveSink
         widget.tag = item.id
         widgets[item.id] = widget
         focusRequests[item.id] = item.props.focused
+        if item.props.focusRequest != nil { focusTarget = item.id }
         properties[item.id] = item.props
         radii[item.id] = item.props.cornerRadius
 
@@ -248,6 +266,8 @@ final class MobileWidgetRenderer: NSObject, UIScrollViewDelegate, NativeRiveSink
             if item.props.focused != properties[item.id]?.focused {
                 focusRequests[item.id] = item.props.focused
             }
+
+            if item.props.focusRequest != nil { focusTarget = item.id }
 
             motion.willChange(item.id, widget.layer, from: properties[item.id], to: item.props)
             properties[item.id] = item.props
@@ -288,6 +308,7 @@ final class MobileWidgetRenderer: NSObject, UIScrollViewDelegate, NativeRiveSink
         if let item = change.delete {
             properties[item.id] = nil
             focusRequests[item.id] = nil
+            if focusTarget == item.id { focusTarget = nil }
             radii[item.id] = nil
             scrolls.forget(item.id)
             motion.forget(item.id)

@@ -38,6 +38,41 @@ struct MacRendererTests {
         #expect(events.first?.text == "after")
     }
 
+    /// A focus request makes its widget the window's first responder once: a later transaction that
+    /// carries no request leaves focus where the person put it.
+    @Test func focusRequestsMoveFocusOnce() throws {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 320, height: 240), styleMask: [.titled],
+            backing: .buffered, defer: true)
+        let view = NSView()
+        window.contentView = view
+        let renderer = MacWidgetRenderer(view: view)
+        try renderer.render(decode("""
+        {"version":1,"root":1,"mutations":[
+          {"Create":{"id":1,"kind":"view","props":{}}},
+          {"Create":{"id":2,"kind":"text_area","props":{}}},
+          {"Create":{"id":3,"kind":"text_area","props":{}}},
+          {"InsertChild":{"parent":1,"child":2}},
+          {"InsertChild":{"parent":1,"child":3}}
+        ]}
+        """))
+        let root = try #require(view.subviews.first)
+        let notes = try #require(root.subviews.first as? MacTextArea)
+        let reply = try #require(root.subviews.last as? MacTextArea)
+        #expect(window.firstResponder !== reply.text)
+
+        try renderer.render(decode("""
+        {"version":1,"mutations":[{"UpdateProps":{"id":3,"props":{"focus_request":7}}}]}
+        """))
+        #expect(window.firstResponder === reply.text)
+
+        window.makeFirstResponder(notes.text)
+        try renderer.render(decode("""
+        {"version":1,"mutations":[{"UpdateProps":{"id":3,"props":{"value":"On my way"}}}]}
+        """))
+        #expect(window.firstResponder === notes.text)
+    }
+
     /// A text area is a text view inside a scroll view: it shows several lines, sends each edit, and
     /// cuts a proposal at `max_length`.
     @Test func textAreasHoldLinesAndSendEdits() throws {

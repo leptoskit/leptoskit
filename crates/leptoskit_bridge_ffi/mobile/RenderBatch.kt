@@ -68,6 +68,12 @@ internal class WidgetProps(
                 }
             }?.takeIf { it.isFinite() && it > 0 }
 
+    /**
+     * The serial of a one-shot focus request, as `Element::focus_on` makes
+     * it. It travels in [rest], only in the batch that makes the request.
+     */
+    val focusRequest: Long? = rest?.takeUnless { it.isNull("focus_request") }?.getLong("focus_request")
+
     /** Where a scroll view's content is scrolled to; it travels in [rest]. */
     val scrollOffset: ScrollOffset? = rest?.optJSONObject("scroll_offset")?.let(ScrollOffset::fromJson)
 

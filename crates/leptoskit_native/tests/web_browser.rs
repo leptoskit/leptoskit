@@ -1784,6 +1784,69 @@ async fn key_handlers_hear_keys_first_and_focused_fields_take_focus() {
 }
 
 #[wasm_bindgen_test]
+async fn a_focus_request_moves_focus_once_and_lets_the_person_move_on() {
+	use leptoskit_native::FocusRequest;
+	use leptoskit_native::components::TextInput;
+
+	let parent = container();
+	let revision = ArcRwSignal::new(0);
+	let handles = Arc::new(Mutex::new(None));
+	let mount = mount_to(parent.clone(), {
+		let (revision, handles) = (revision.clone(), Arc::clone(&handles));
+		move || {
+			let to_code = FocusRequest::new();
+			let to_title = FocusRequest::new();
+			*handles.lock().unwrap() = Some((to_code, to_title));
+
+			move || {
+				render(
+					View()
+						.child(Text(format!("Step {}", revision.get())).focus_on(to_title))
+						.child(TextInput().aria_label("Email"))
+						.child(TextInput().aria_label("Code").focus_on(to_code)),
+				)
+			}
+		}
+	});
+	tick().await;
+	next_frame().await;
+	let (to_code, to_title) = handles.lock().unwrap().expect("the screen built");
+	let field = |label: &str| -> web_sys::HtmlElement {
+		find(&parent, &format!("input[aria-label=\"{label}\"]"))
+	};
+	let active = || document().active_element();
+	assert_ne!(active(), Some(field("Code").into()), "nothing asked yet");
+
+	to_code.request();
+	tick().await;
+	next_frame().await;
+	assert_eq!(active(), Some(field("Code").into()), "the request lands");
+
+	// The person moves on; a later render for another reason leaves them.
+	field("Email").focus().expect("focus the email field");
+	revision.update(|revision| *revision += 1);
+	tick().await;
+	next_frame().await;
+	assert_eq!(active(), Some(field("Email").into()), "focus stays put");
+
+	to_code.request();
+	tick().await;
+	next_frame().await;
+	assert_eq!(active(), Some(field("Code").into()), "a new request lands");
+
+	// Text takes focus from a request without joining the Tab order.
+	to_title.request();
+	tick().await;
+	next_frame().await;
+	let title = active().expect("something has focus");
+	assert_eq!(title.text_content().as_deref(), Some("Step 1"));
+	assert_eq!(title.get_attribute("tabindex").as_deref(), Some("-1"));
+
+	drop(mount);
+	parent.remove();
+}
+
+#[wasm_bindgen_test]
 fn vector_paths_map_their_view_box_onto_the_frame() {
 	use leptoskit_native::PathData;
 	use leptoskit_native::VectorPath;

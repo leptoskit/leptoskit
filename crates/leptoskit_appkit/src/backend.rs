@@ -1097,6 +1097,41 @@ fn load_image(source: &str) -> Option<Retained<NSImage>> {
 	NSImage::initWithContentsOfFile(NSImage::alloc(), &NSString::from_str(path))
 }
 
+impl AppKitBackend {
+	/// Moves keyboard focus to the widget the batch asks to focus, once its
+	/// views are in place.
+	///
+	/// A control that takes key focus becomes the window's first responder.
+	/// macOS gives buttons, switches and sliders key focus only while
+	/// Keyboard Navigation is on in System Settings, and never gives it to
+	/// text or containers, so those requests leave focus where it was.
+	/// Events stay held back as for the rest of the batch.
+	fn focus_requested(&self, mutations: &MutationList) {
+		let Some(widget) = mutations.focus_target().and_then(|id| self.widget(id)) else {
+			return;
+		};
+		let target: &NSView = match &widget.control {
+			Control::Button { button, .. }
+			| Control::Pressable { button, .. }
+			| Control::Toggle { button, .. } => button,
+			Control::Switch { switch, .. } => switch,
+			Control::Slider { slider, .. } => slider,
+			Control::Input { field, .. } => field,
+			Control::Area { text, .. } => text,
+			Control::Scroll { scroll, .. } => scroll,
+			Control::Container
+			| Control::Label(_)
+			| Control::Progress { .. }
+			| Control::Image { .. }
+			| Control::Vector(_) => return,
+		};
+
+		if let Some(window) = target.window() {
+			window.makeFirstResponder(Some(target));
+		}
+	}
+}
+
 impl NativeBackend for AppKitBackend {
 	fn rive_visible(&self, id: NodeId) -> bool {
 		self.view(id).is_some_and(|view| {
@@ -1211,6 +1246,7 @@ impl NativeBackend for AppKitBackend {
 
 			self.refresh_radios();
 			self.refresh_animations();
+			self.focus_requested(mutations);
 		});
 	}
 

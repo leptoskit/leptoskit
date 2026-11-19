@@ -92,7 +92,7 @@ leptoskit codepush release --from dist/ios --platform ios --channel production
 
 The app downloads the release when the user asks for an update, tries it, and keeps it only if it renders. Anything that needs new native code, such as a new plugin or permission, still needs an App Store release. [Code push](../guide/05-code-push.md) covers signing, publishing, and rollback, and [host projects](host-projects.md#code-push-in-the-generated-apps) the update flow inside the app.
 
-A `focused(true)` request takes effect when the property changes. After the user dismisses the keyboard, unrelated renders do not focus the field again. Set focus to false and then true to request focus again.
+A `focused(true)` request takes effect when the property changes. After the user dismisses the keyboard, unrelated renders do not focus the field again. Set focus to false and then true to request focus again. A [`FocusRequest`](../guide/15-accessibility.md#move-focus-once) says the same thing directly: each `request()` raises the keyboard on its text field once, and on any other widget it moves the VoiceOver cursor there.
 
 ## Home-screen widgets
 

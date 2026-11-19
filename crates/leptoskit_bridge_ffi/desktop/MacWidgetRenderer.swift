@@ -90,6 +90,8 @@ final class MacWidgetRenderer: NSObject, NSTextFieldDelegate, NativeRiveSink {
     private let exits = ExitingViews<NSView>(
         superview: { $0.superview }, layer: { $0.layer }, remove: { $0.removeFromSuperview() })
     private var applying = false
+    /// The widget this transaction asks to focus once, through `Element::focus_on`.
+    private var focusTarget: Int?
     /// The DevTools highlight and picking, in apps `leptoskit dev` reports to a hub.
     private(set) var devtools: DevtoolsOverlay?
     var onEvent: ((Int, UInt32, String) -> Void)?
@@ -164,6 +166,19 @@ final class MacWidgetRenderer: NSObject, NSTextFieldDelegate, NativeRiveSink {
         exits.start(motion)
         updateScrollSizes()
         scrollToTargets()
+        moveFocus()
+    }
+
+    /// Carries out a one-shot focus request by making the widget the window's
+    /// first responder. macOS gives buttons and toggles key focus only while
+    /// Keyboard Navigation is on, and never gives it to text or containers,
+    /// so those requests leave focus where it was.
+    private func moveFocus() {
+        defer { focusTarget = nil }
+        guard let widget = focusTarget.flatMap({ widgets[$0] }) else { return }
+        let target: NSView = (widget as? MacTextArea)?.text ?? widget
+
+        if target.acceptsFirstResponder { target.window?.makeFirstResponder(target) }
     }
 
     /// Scrolls each view whose target changed, once its document is sized.
@@ -247,6 +262,7 @@ final class MacWidgetRenderer: NSObject, NSTextFieldDelegate, NativeRiveSink {
         (widget as? NativeLivePhotoView)?.show(session: item.props.livePhoto)
         widget.identifier = NSUserInterfaceItemIdentifier(String(item.id))
         widgets[item.id] = widget
+        if item.props.focusRequest != nil { focusTarget = item.id }
         properties[item.id] = item.props
         try MacWidgetStyle.apply(item.props, to: widget)
         scrolls.receive(item.props.scrollOffset, for: item.id)
@@ -268,6 +284,7 @@ final class MacWidgetRenderer: NSObject, NSTextFieldDelegate, NativeRiveSink {
 
         if let item = change.updateProps, let widget = widgets[item.id] {
             if let layer = widget.layer { motion.willChange(item.id, layer, from: properties[item.id], to: item.props) }
+            if item.props.focusRequest != nil { focusTarget = item.id }
             properties[item.id] = item.props
             try MacWidgetStyle.apply(item.props, to: widget)
             scrolls.receive(item.props.scrollOffset, for: item.id)
@@ -299,6 +316,7 @@ final class MacWidgetRenderer: NSObject, NSTextFieldDelegate, NativeRiveSink {
         if let item = change.delete {
             scrolls.forget(item.id)
             properties[item.id] = nil
+            if focusTarget == item.id { focusTarget = nil }
             motion.forget(item.id)
 
             // A view animating out, or inside one, goes when its animation ends.

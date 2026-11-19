@@ -40,6 +40,7 @@ pub mod controls;
 pub mod devtools;
 pub mod element;
 pub mod flatten;
+pub mod focus;
 pub mod gesture;
 pub mod splash;
 
@@ -84,6 +85,7 @@ pub use controls::RadioGroup;
 pub use controls::SliderState;
 pub use element::Element;
 pub use element::NativeEventSlot;
+pub use focus::FocusRequest;
 pub use gesture::Gesture;
 pub use gesture::GestureEvent;
 pub use gesture::GestureState;

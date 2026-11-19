@@ -196,7 +196,9 @@ pub(crate) fn lift_splash() {
 
 /// Whether any element in the tree asks for keyboard focus.
 fn asks_for_focus(element: &Element) -> bool {
-	element.props.focused == Some(true) || element.children.iter().any(asks_for_focus)
+	element.props.focused == Some(true)
+		|| element.props.focus_request.is_some()
+		|| element.children.iter().any(asks_for_focus)
 }
 
 /// Whether any element in the tree sets a scroll offset.
@@ -274,6 +276,10 @@ fn focus_after_render() {
 		let Some(document) = web_sys::window().and_then(|window| window.document()) else {
 			return;
 		};
+		if focus_requested(&document) {
+			return;
+		}
+
 		let Ok(candidates) = document.query_selector_all("[data-lk-focus]") else {
 			return;
 		};
@@ -290,6 +296,50 @@ fn focus_after_render() {
 			}
 		}
 	});
+}
+
+/// Moves focus to the element carrying the newest focus request, when the
+/// renderer has not carried that request out yet. Requests are numbered in
+/// the order they are made, so the highest number carried out is all there
+/// is to remember, and an element that is rebuilt with a request it already
+/// answered leaves focus where the person has since put it.
+#[cfg(target_arch = "wasm32")]
+fn focus_requested(document: &web_sys::Document) -> bool {
+	thread_local! {
+		static ANSWERED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+	}
+
+	let Ok(candidates) = document.query_selector_all("[data-lk-focus-request]") else {
+		return false;
+	};
+	let newest = (0..candidates.length())
+		.filter_map(|index| {
+			candidates
+				.item(index)?
+				.dyn_into::<web_sys::HtmlElement>()
+				.ok()
+		})
+		.filter_map(|element| {
+			let serial = element
+				.get_attribute("data-lk-focus-request")?
+				.parse::<u64>()
+				.ok()?;
+			Some((serial, element))
+		})
+		.max_by_key(|(serial, _)| *serial);
+	let Some((serial, target)) = newest.filter(|(serial, _)| *serial > ANSWERED.get()) else {
+		return false;
+	};
+	ANSWERED.set(serial);
+
+	// A heading or a container takes focus from code once it has a tab
+	// index; `-1` keeps it out of the Tab order.
+	if target.tab_index() < 0 && !target.has_attribute("tabindex") {
+		let _ = target.set_attribute("tabindex", "-1");
+	}
+
+	let _ = target.focus();
+	true
 }
 
 /// What a node's typed DOM element is built from, besides the attributes
@@ -479,6 +529,7 @@ fn render_node(
 		.collect::<Vec<_>>();
 	let focused = props.focused == Some(true);
 	let scroll = props.scroll_offset.map(scroll_target);
+	let focus_request = props.focus_request.as_ref().map(u64::to_string);
 	// Every sheet is in by now: the children's were added above.
 	let render_scope = root.then(|| root_scope(sheets));
 
@@ -487,6 +538,7 @@ fn render_node(
 		custom_attribute("data-lk-style", scope),
 		custom_attribute("data-lk-motion", motion_scope),
 		custom_attribute("data-lk-focus", focused.then_some("true")),
+		custom_attribute("data-lk-focus-request", focus_request),
 		custom_attribute("data-lk-scroll", scroll),
 		custom_attribute("for", label_for),
 		custom_attribute("class", classes),

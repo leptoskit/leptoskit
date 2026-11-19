@@ -214,6 +214,7 @@ fn every_prop() -> NativeProps {
 		text_align: Some(TextAlign::Center),
 		direction: Some(leptoskit_yoga::Direction::Rtl),
 		focused: Some(true),
+		focus_request: Some(11),
 		scroll_offset: Some(ScrollOffset::new(0.0, 640.5).animated()),
 		// Never sent: the guest runs motion itself.
 		motion: None,

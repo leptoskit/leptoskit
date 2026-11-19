@@ -24,6 +24,7 @@ import android.util.TypedValue
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
+import android.view.accessibility.AccessibilityNodeInfo
 import android.view.animation.LinearInterpolator
 import android.view.animation.PathInterpolator
 import android.view.inputmethod.EditorInfo
@@ -74,6 +75,9 @@ internal class NativeWidgetRenderer(
 
     /** Scroll views whose target changed in the batch being applied. */
     private val retargeted = ArrayList<NativeScrollView>()
+
+    /** The widget this batch asks to focus once, through `Element::focus_on`. */
+    private var focusTarget: Long? = null
     var onRiveViewportChange: (() -> Unit)? = null
     private val props = NativeWidgetProps { density }
     private val motion = NativeMotion { density }
@@ -178,11 +182,25 @@ internal class NativeWidgetRenderer(
             retargeted.forEach(NativeScrollView::scrollToTarget)
             updateCanvas(batch.root)
             configureEditors()
+            moveFocus()
         } finally {
             retargeted.clear()
+            focusTarget = null
 
             applying = false
         }
+    }
+
+    /**
+     * Carries out a one-shot focus request. A text field takes input focus.
+     * Other views take it only outside touch mode, as with a keyboard or a
+     * remote, so TalkBack's cursor is moved to them as well.
+     */
+    private fun moveFocus() {
+        val view = focusTarget?.let { widgets[it] } ?: return
+
+        view.requestFocus()
+        view.performAccessibilityAction(AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS, null)
     }
 
     /** Notes a scroll view's target when it differs from the last one it received. */
@@ -239,6 +257,7 @@ internal class NativeWidgetRenderer(
             is RenderMutation.UpdateProps -> {
                 val view = widget(change.id)
                 rememberControl(change.id, view, change.props)
+                if (change.props.focusRequest != null) focusTarget = change.id
                 motion.touch(change.id, view, change.props)
                 props.apply(view, change.props)
                 retarget(view, change.props.scrollOffset)
@@ -267,6 +286,7 @@ internal class NativeWidgetRenderer(
             is RenderMutation.Delete -> {
                 riveBitmaps.remove(change.id)
                 controlProps.remove(change.id)
+                if (focusTarget == change.id) focusTarget = null
 
                 val view = widgets.remove(change.id) ?: return
                 if (view is NativeRiveImage) view.setImageDrawable(null)
@@ -437,6 +457,7 @@ internal class NativeWidgetRenderer(
         widget.tag = id
         widgets[id] = widget
         rememberControl(id, widget, item.props)
+        if (item.props.focusRequest != null) focusTarget = id
         motion.touch(id, widget, item.props, isNew = true)
         props.apply(widget, item.props)
         retarget(widget, item.props.scrollOffset)

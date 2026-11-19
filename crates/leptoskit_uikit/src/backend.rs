@@ -1334,6 +1334,39 @@ fn apply_progress_props(
 	view.setIsAccessibilityElement(true, mtm);
 }
 
+impl UIKitBackend {
+	/// Moves focus to the widget the batch asks to focus, once its views
+	/// are in place.
+	///
+	/// A text field or text area becomes first responder, which raises the
+	/// keyboard. iOS has no keyboard focus for anything else without a
+	/// hardware keyboard, so every other widget takes the `VoiceOver` cursor
+	/// instead. Events stay held back as for the rest of the batch.
+	fn focus_requested(&self, mutations: &MutationList) {
+		let Some(id) = mutations.focus_target() else {
+			return;
+		};
+		let Some(widget) = self
+			.widgets
+			.get(id.index())
+			.and_then(Option::as_ref)
+			.filter(|widget| widget.id == id)
+		else {
+			return;
+		};
+
+		match &widget.control {
+			Control::Input { field, .. } => {
+				field.becomeFirstResponder();
+			}
+			Control::Area { text, .. } => {
+				text.becomeFirstResponder();
+			}
+			_ => crate::accessibility::move_cursor(&widget.view),
+		}
+	}
+}
+
 impl NativeBackend for UIKitBackend {
 	fn rive_visible(&self, id: NodeId) -> bool {
 		let Some(view) = self.view(id) else {
@@ -1408,6 +1441,7 @@ impl NativeBackend for UIKitBackend {
 
 			self.applying = false;
 			self.refresh();
+			self.focus_requested(mutations);
 		});
 	}
 
