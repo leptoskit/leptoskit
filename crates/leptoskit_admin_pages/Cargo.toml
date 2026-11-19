@@ -26,7 +26,8 @@ chrono = { workspace = true }
 console_error_panic_hook = { workspace = true, optional = true }
 futures = { workspace = true }
 leptos = { workspace = true }
-leptoskit = { workspace = true, features = ["aria", "auth", "query", "rpc", "web"] }
+# `apm`: the fleet's measurements, which Health draws.
+leptoskit = { workspace = true, features = ["apm", "aria", "auth", "query", "rpc", "web"] }
 # The insights engine's types: a query, and what it answered.
 leptoskit_analytics = { workspace = true, features = ["insights"] }
 # Copy in a drawer.

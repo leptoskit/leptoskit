@@ -348,6 +348,14 @@ The builders (Trends, Funnels, Retention, a saved insight) are `Page::Insight`, 
 - **Tests:** `pages_for_the_script` writes each trends variant's model as JSON and two `-workings.html` pages; `script.mjs` serves the JSON for the header, fakes the dashboards and insights endpoints, and checks the in-place change (marks, status, reveal, focus, Back), the breakdown colours, Save and Add to dashboard, and the phone stations. The trends, funnel and retention snapshots only gained the menus' roles and the station toggles' ▾.
 - **Next (5d):** dashboards (their cards and live refresh), Live with a G3 stream, the web overview and the actors page, Health's fleet charts, the sign-in page; then delete `admin.mjs` and the attribute rules in `shell_css`.
 
+### `feat/admin-health-signin`: admin conversion, part 5g (Health)
+
+- **Model:** `model::project::Body::Health(Health)`: the health word, the last check, the Run health check action, and the fleet's last hour as `Fleet` (hosts, per-release series, limitations), a mirror of the control service's `Fleet` built in `infra/pages.rs` `health_tab`. `leptoskit_apm`'s `Window`, `HostSample` and `ExportHealth` now derive `PartialEq`, and the pages crate turns on leptoskit's `apm` feature.
+- **Drawing:** `infra/health.rs` moved to the pages crate as `pages/health.rs`, unchanged but for `short`; `pages/project.rs` draws the check card above it.
+- **Route:** the project route reads the fleet inside `hydrated_screen` only for Health; the server's own `health` handler and `health_screen` are gone. Nothing builds a server `Screen` now: `shell::Screen`, `server::render` and `Shown::Screen` go with `admin.mjs`.
+- **Tests:** `pages_for_the_script` records one instance's measurements and writes `health.html`; `script.mjs` checks it hydrates without the script, draws the routes and hosts, and Run health check asks, then sends `status`.
+- **Next:** the sign-in and refusal pages; then delete `admin.mjs`, the SSE route, the server `Screen` path and the attribute rules in `shell_css`.
+
 ### `feat/admin-web-overview`: admin conversion, part 5f (web overview)
 
 - **Model:** `model::analytics::Web`: the address, the `WebOverview` query and its result, the daily visitors' trend and what it answered, the pageviews and sessions series for the sparklines, whether the channels note shows, and the two drawers. The server (`analytics/web.rs`) runs the queries and still draws the visitors chart once for its drawer's `Drawn`; `pages/web.rs` draws the page.

@@ -433,18 +433,28 @@ async fn project(
 		return not_found();
 	};
 
-	if tab == infra::Tab::Health {
-		return health(&admin, me, &headers, &id).await;
-	}
-
 	let linked = query.workings.is_some();
 
 	hydrated_screen(&admin, me, &headers, query.workings, |proof| {
 		let state = proof.states.iter().find(|state| state.project.id == id)?;
+		// Only Health draws the fleet's last hour of measurements.
+		let fleet = (tab == infra::Tab::Health)
+			.then(|| admin.inner().control.as_ref())
+			.flatten()
+			.map(|service| {
+				service
+					.fleet(
+						&Principal::owner(),
+						&id,
+						proof.now.saturating_sub(3600),
+						proof.now,
+					)
+					.map_err(|error| error.to_string())
+			});
 		let context = infra::Context {
 			now: proof.now,
 			preferences: proof.preferences,
-			fleet: None,
+			fleet,
 			simulated: proof.simulated,
 			linked,
 		};
@@ -453,44 +463,6 @@ async fn project(
 		))))
 	})
 	.await
-}
-
-/// A project's Health tab, which the admin still draws itself.
-async fn health(admin: &Admin, me: Option<SignedIn>, headers: &HeaderMap, id: &str) -> Response {
-	let gate = match gate(admin, me, headers).await {
-		Ok(gate) => gate,
-		Err(response) => return response,
-	};
-	let states = match states(admin).await {
-		Ok(states) => states,
-		Err(error) => return failure(&format!("the control service didn't answer: {error}")),
-	};
-	let Some(state) = states.iter().find(|state| state.project.id == id) else {
-		return not_found();
-	};
-	let now = now();
-	let fleet = admin.inner().control.as_ref().map(|service| {
-		service
-			.fleet(&Principal::owner(), id, now.saturating_sub(3600), now)
-			.map_err(|error| error.to_string())
-	});
-	let context = infra::Context {
-		now,
-		preferences: &gate.preferences,
-		fleet,
-		simulated: admin.inner().simulated_infrastructure,
-		linked: false,
-	};
-	let screen = infra::health_screen(state, &context);
-	let facts = analytics_facts(admin).await;
-	let proof = learn::Proof {
-		states: &states,
-		now,
-		facts: facts.as_ref(),
-		preferences: &gate.preferences,
-		simulated: admin.inner().simulated_infrastructure,
-	};
-	render(admin, &gate, headers, &proof, screen)
 }
 
 async fn operation(

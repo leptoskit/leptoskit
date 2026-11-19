@@ -95,7 +95,7 @@ pub struct SeriesKey {
 }
 
 /// One fixed time window. `latency` contains non-cumulative bucket counts.
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Window {
 	pub start_unix_seconds: u64,
 	pub count: u64,
@@ -167,7 +167,7 @@ pub struct Snapshot {
 
 /// Platform measurements with an explicit scope. Linux cgroup values describe
 /// the containing cgroup; they are not assumed to be whole-VM measurements.
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct HostSample {
 	pub at_unix_seconds: u64,
 	pub process_resident_bytes: Option<u64>,
@@ -179,7 +179,7 @@ pub struct HostSample {
 	pub filesystem_capacity_bytes: Option<u64>,
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct ExportHealth {
 	pub successful_batches: u64,
 	pub failed_batches: u64,

@@ -1,6 +1,5 @@
 //! The Infrastructure screens.
 
-use leptoskit::prelude::*;
 use leptoskit_admin_pages::model;
 use leptoskit_admin_pages::model::project;
 /// A project's tabs.
@@ -14,17 +13,12 @@ use super::ago;
 use super::describe;
 use super::drawers;
 use super::duration;
-use super::health;
 use super::phase_word;
 use super::short;
 use crate::BASE;
 use crate::access::Preferences;
-use crate::components;
 use crate::components::Kind;
 use crate::components::Tone;
-use crate::shell::Screen;
-use crate::shell::Section;
-use crate::style;
 
 /// What a project page needs besides the project.
 pub(crate) struct Context<'a> {
@@ -36,10 +30,6 @@ pub(crate) struct Context<'a> {
 	pub simulated: bool,
 	/// Whether a link opened a drawer, so none opens by default.
 	pub linked: bool,
-}
-
-fn project_href(id: &str, tab: Tab) -> String {
-	format!("{BASE}/infra/projects/{id}/{}", tab.slug())
 }
 
 fn operation_href(id: &str) -> String {
@@ -99,7 +89,8 @@ pub(crate) fn project(state: &ProjectState, tab: Tab, context: &Context<'_>) -> 
 		Tab::Overview => overview(state, context),
 		Tab::Changes => changes(state, context),
 		Tab::Releases => releases(state, context.now, context.simulated),
-		Tab::Operations | Tab::Health => {
+		Tab::Health => health_tab(state, context),
+		Tab::Operations => {
 			(
 				project::Body::Operations(
 					state
@@ -297,21 +288,6 @@ fn status_explanation(simulated: bool) -> &'static str {
 		 probed."
 	} else {
 		"Runs `lk infra status`: it probes every host and changes nothing."
-	}
-}
-
-/// A button that asks first: the script shows the confirm sheet with
-/// `explain` before sending the action.
-fn confirmable(kind: Kind, label: &str, action: &str, explain: &str) -> Element {
-	let button = Button(label)
-		.class(kind.class_name())
-		.test_id(action.to_owned())
-		.aria_description(explain);
-
-	if kind == Kind::Primary {
-		components::raised(button)
-	} else {
-		button
 	}
 }
 
@@ -545,124 +521,67 @@ fn releases(state: &ProjectState, now: u64, simulated: bool) -> TabBody {
 	)
 }
 
-/// The Health tab, which the admin still draws itself: its charts move
-/// with the analytics pages.
-pub(crate) fn health_screen(state: &ProjectState, context: &Context<'_>) -> Screen {
-	let id = &state.project.id;
-	let badges = badges(state);
-	let items: Vec<(String, String, Option<String>)> = Tab::ALL
-		.into_iter()
-		.zip(badges)
-		.map(|(tab, badge)| (tab.label().to_owned(), project_href(id, tab), badge))
-		.collect();
-	let selected = Tab::ALL
-		.iter()
-		.position(|known| *known == Tab::Health)
-		.unwrap_or(0);
+/// Health: the last check, and the fleet's last hour.
+fn health_tab(state: &ProjectState, context: &Context<'_>) -> TabBody {
+	let fleet = context.fleet.as_ref().map(|fleet| {
+		fleet.as_ref().map_err(Clone::clone).map(|fleet| {
+			project::Fleet {
+				hosts: fleet
+					.hosts
+					.iter()
+					.map(|host| {
+						project::Host {
+							instance: host.instance.clone(),
+							release: host.release.clone(),
+							seen: host.seen,
+							host: host.host.clone(),
+							export: host.export.clone(),
+						}
+					})
+					.collect(),
+				from: fleet.from,
+				to: fleet.to,
+				instances: fleet.instances,
+				stale_instances: fleet.stale_instances,
+				series: fleet
+					.series
+					.iter()
+					.map(|series| {
+						project::FleetSeries {
+							release: series.release.clone(),
+							key: series.key.clone(),
+							windows: series.windows.clone(),
+						}
+					})
+					.collect(),
+				limitations: fleet.limitations.clone(),
+			}
+		})
+	});
 
-	let mut page = View()
-		.class("flex-col gap-5")
-		.child(
-			View()
-				.class("flex-row flex-wrap items-center gap-2")
-				.child(components::link(
-					"Projects",
-					format!("{BASE}/infra/projects"),
-				))
-				.child(Text("/").class(style::MUTED))
-				.child(Text(id.clone()).class(style::SECONDARY)),
-		)
-		.child(
-			View()
-				.class("flex-row flex-wrap items-center gap-3")
-				.child(Heading(1, id.clone()).class(style::PAGE_TITLE))
-				.child(Text(state.project.environment.clone()).class(style::CHIP)),
-		)
-		.child(components::tabs(&items, selected));
-
-	if let Err(reason) = &state.config {
-		page = page.child(
-			Status(format!(
-				"The admin can't read this project's [infra]: {reason}. Actions still go to the \
-				 control service, which reads the file itself."
-			))
-			.class("text-sm text-[var(--admin-warn)]"),
-		);
-	}
-
-	if let Some(operation) = state.active() {
-		let (_, word) = phase_word(operation.phase);
-		page = page.child(
-			View()
-				.class(
-					"flex-row flex-wrap items-center gap-3 rounded-xl border \
-					 border-[var(--admin-line-strong)] bg-[var(--admin-sunken)] px-4 py-3",
-				)
-				.test_id("active")
-				.child(
-					View()
-						.class("h-2.5 w-2.5 rounded-full bg-[var(--admin-ember)] animate-pulse")
-						.aria_hidden(true),
-				)
-				.child(
-					Text(format!(
-						"{word}: {} · started {}",
-						describe(&operation.intent.action),
-						ago(operation.created, context.now)
-					))
-					.class("flex-1 text-sm font-semibold text-[var(--admin-ink)]"),
-				)
-				.child(components::link("Follow it", operation_href(&operation.id))),
-		);
-	}
-
-	let (tone, word) = health(state);
-	let mut body = vec![
-		components::card("Health check")
-			.workings("status", "lk infra status")
-			.child(components::status_word(tone, word))
-			.child(
-				Text(state.health().map_or_else(
-					|| "No health check has run yet.".to_owned(),
-					|operation| {
-						format!(
-							"{} ({})",
-							operation.message,
-							ago(operation.updated, context.now)
-						)
-					},
-				))
-				.class(style::SECONDARY),
-			)
-			.child(confirmable(
+	(
+		project::Body::Health(Box::new(project::Health {
+			health: health(state),
+			last: state.health().map_or_else(
+				|| "No health check has run yet.".to_owned(),
+				|operation| {
+					format!(
+						"{} ({})",
+						operation.message,
+						ago(operation.updated, context.now)
+					)
+				},
+			),
+			status: action(
 				Kind::Secondary,
 				"Run health check",
-				"action:status",
+				project::Request::Status,
 				status_explanation(context.simulated),
-			))
-			.build(),
-	];
-
-	match &context.fleet {
-		Some(Ok(fleet)) => body.extend(health::section(fleet, 500)),
-		Some(Err(error)) => {
-			body.push(
-				Status(format!(
-					"The control service couldn't read measurements: {error}"
-				))
-				.class("text-sm text-[var(--admin-bad)]"),
-			);
-		}
-		None => {}
-	}
-
-	Screen {
-		title: format!("{} · {id}", Tab::Health.label()),
-		section: Section::ProjectHealth(id.clone()),
-		content: page.children(body),
-		drawers: vec![drawers::status_drawer(state)],
-		open: None,
-	}
+			),
+			fleet,
+		})),
+		vec![drawers::status_drawer(state)],
+	)
 }
 
 fn backups(state: &ProjectState, now: u64, simulated: bool) -> TabBody {

@@ -1,5 +1,5 @@
 //! Health: what the fleet's servers reported in the last hour, merged
-//! across instances by the control service.
+//! across instances by the control service, and the last health check.
 
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
@@ -10,7 +10,6 @@ use leptoskit::apm::Signal;
 use leptoskit::apm::Source;
 use leptoskit::apm::Window;
 use leptoskit::prelude::*;
-use leptoskit_deploy_console::control::Fleet;
 
 use crate::charts;
 use crate::charts::LineChart;
@@ -18,7 +17,17 @@ use crate::charts::Marker;
 use crate::charts::Series;
 use crate::components;
 use crate::components::Tone;
+use crate::model::project::Fleet;
 use crate::style;
+
+/// A commit shortened to 12 characters; tags as they are.
+fn short(version: &str) -> &str {
+	if matches!(version.len(), 40 | 64) && version.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+		&version[..12]
+	} else {
+		version
+	}
+}
 
 /// Merged counts for one window or one route.
 #[derive(Clone, Debug, Default)]
@@ -208,7 +217,7 @@ pub(crate) fn section(fleet: &Fleet, slo_ms: u64) -> Vec<Element> {
 		{
 			markers.push(Marker {
 				at: index,
-				label: crate::infra::short(new).to_owned(),
+				label: short(new).to_owned(),
 			});
 		}
 
@@ -359,7 +368,7 @@ pub(crate) fn section(fleet: &Fleet, slo_ms: u64) -> Vec<Element> {
 							.class(style::CODE)
 							.class("truncate"),
 					)
-					.child(Text(crate::infra::short(&host.release).to_owned()).class(style::LABEL)),
+					.child(Text(short(&host.release).to_owned()).class(style::LABEL)),
 			);
 
 		match &host.host {
