@@ -130,7 +130,7 @@ pub(super) fn generate(
 			.filter(|screen| screen.for_ios())
 			.map(crate::launch::Launch::ios_plist),
 		&linked_frameworks(registry)?,
-		&background_modes(registry),
+		&background_modes(registry, config),
 		&bg_task_identifiers(registry),
 		entitlements.as_deref(),
 	)?;
@@ -625,15 +625,34 @@ fn merge_string_array(dictionary: &mut plist::Dictionary, key: &str, values: &[S
 	);
 }
 
-fn background_modes(registry: &Registry) -> Vec<String> {
+/// The background mode that lets iOS wake the app for a push that shows
+/// nothing: a silent data message from the notifications service.
+const REMOTE_NOTIFICATION_MODE: &str = "remote-notification";
+
+/// The `UIBackgroundModes` the app declares: each selected plugin's, and,
+/// when `[native.ios] aps-environment` opts the app into push, the one that
+/// lets a silent data message wake it. An app that never opted into push
+/// declares nothing for it.
+fn background_modes(
+	registry: &Registry,
+	config: &leptoskit_config::LeptoskitConfig,
+) -> Vec<String> {
 	let mut seen = std::collections::BTreeSet::new();
 	let mut output = Vec::new();
+	let push = config
+		.native
+		.ios
+		.aps_environment
+		.map(|_| REMOTE_NOTIFICATION_MODE.to_owned());
 
-	for plugin in &registry.plugins {
-		for mode in &plugin.apple_background_modes {
-			if seen.insert(mode.clone()) {
-				output.push(mode.clone());
-			}
+	for mode in registry
+		.plugins
+		.iter()
+		.flat_map(|plugin| &plugin.apple_background_modes)
+		.chain(&push)
+	{
+		if seen.insert(mode.clone()) {
+			output.push(mode.clone());
 		}
 	}
 
@@ -1302,6 +1321,56 @@ mod tests {
 	// it the same file compiles with the plugin simply absent. Anything but
 	// macOS, or a machine without Xcode, skips: the generated project is
 	// still exercised textually by the snapshot tests everywhere else.
+	/// A push-enabled app declares the background mode a silent data
+	/// message needs to wake it, once, beside what its plugins declare; an
+	/// app that never opted into push declares nothing for it.
+	#[test]
+	fn a_push_enabled_app_declares_the_remote_notification_background_mode() {
+		let plugin = |modes: &[&str]| -> super::super::super::registry::Plugin {
+			serde_json::from_value(serde_json::json!({
+				"name": "background",
+				"apple-background-modes": modes,
+			}))
+			.unwrap()
+		};
+		let registry = |plugins| {
+			Registry {
+				package: "app".into(),
+				plugins,
+				support: Vec::new(),
+				bridge: PathBuf::new(),
+				target: PathBuf::new(),
+				host_features: Vec::new(),
+				devtools_feature: None,
+				missing: Vec::new(),
+				scene3d: false,
+			}
+		};
+		let push = LeptoskitConfig::from_toml(
+			"[app]\nplatforms = [\"web\", \"ios\"]\n[native]\npackage_id = \
+			 \"com.example.notes\"\nplugins = [\"notifications\"]\n[native.ios]\naps-environment \
+			 = \"development\"\n",
+			Path::new("notes"),
+		)
+		.unwrap();
+
+		assert_eq!(
+			super::background_modes(&registry(vec![plugin(&["fetch"])]), &push),
+			["fetch", "remote-notification"]
+		);
+		assert_eq!(
+			super::background_modes(&registry(vec![plugin(&["remote-notification"])]), &push),
+			["remote-notification"],
+			"declared once"
+		);
+		assert_eq!(
+			super::background_modes(&registry(vec![plugin(&["fetch"])]), &config()),
+			["fetch"],
+			"an app without push declares nothing for it"
+		);
+		assert!(super::background_modes(&registry(Vec::new()), &config()).is_empty());
+	}
+
 	#[test]
 	fn generated_app_swift_typechecks_with_and_without_the_notifications_module() {
 		let Some(sdk) = simulator_sdk() else {

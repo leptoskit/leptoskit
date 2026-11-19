@@ -24,6 +24,15 @@ final class MacApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         withExtendedLifetime(delegate) {}
     }
 
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        #if canImport(LeptosKitNotifications)
+        // Before launch finishes: a click that starts the app is delivered
+        // as launch ends, and only to a delegate that is already installed.
+        // The delegate also lets a notification show while the app is open.
+        NotificationsPlugin.installDelegate()
+        #endif
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         let window = NSWindow(
             contentRect: NSRect(origin: .zero, size: Self.initialWindowSize),
@@ -145,6 +154,16 @@ final class MacApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
     ) {
         #if canImport(LeptosKitNotifications)
         NotificationsPlugin.noteRegistrationFailure(error)
+        #endif
+    }
+
+    func application(
+        _ application: NSApplication,
+        didReceiveRemoteNotification userInfo: [String: Any]
+    ) {
+        // A push handed to the app without a click: a silent data message.
+        #if canImport(LeptosKitNotifications)
+        NotificationsPlugin.noteRemoteNotification(userInfo)
         #endif
     }
 

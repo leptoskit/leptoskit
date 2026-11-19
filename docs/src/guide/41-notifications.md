@@ -2,7 +2,7 @@
 
 You want to tell someone something after they have left the screen: an invoice was paid, a ride is arriving, someone replied. The usual route hands your users and your sending patterns to a third-party push platform, and binds delivery to OS credentials you have to enrol for. leptoskit has a notifications **service** you add with one table in `leptoskit.toml`: a small program with its own database that runs beside your app's server, stores one durable notification per recipient, and serves each person their own inbox. Your server sends to explicit recipients, to a topic's subscribers, to the people a condition matches over topics, the attributes you set, and the devices people enrolled — their platform, language, time zone, or app version — or to everyone the service knows, and when you configure a push transport, the same send also wakes the devices its recipients enrolled — APNs, FCM, and Web Push, first-party, with your app's own credentials and no management vendor in between. Each send can be shaped — priority, an image, a sound, a badge, a click link, per-platform overrides, or a silent data message — and one call tests a spec on a real device before a campaign.
 
-This page shows how to add it, send from your server, read the inbox on every platform, manage categories and schedules, and stand up push delivery. It also says plainly what it does not do yet: **client enrollment beyond the web, iOS, Android, and macOS**, push tap routing, and any claim that a provider's acceptance means a person saw a banner.
+This page shows how to add it, send from your server, read the inbox on every platform, manage categories and schedules, and stand up push delivery. It also says plainly what it does not do yet: **client enrollment beyond the web, iOS, Android, and macOS**, a record of who opened what, and any claim that a provider's acceptance means a person saw a banner.
 
 ## Add the service
 
@@ -443,9 +443,9 @@ options: MessageOptions {
 
 - **iOS and macOS**: an APNs background push — `content-available` alone in `aps`, the background push type, priority 5 — with your `data` under `lk`, the notification's id as `lkn`, and the badge, when the send sets one, as `lkbadge`. The system wakes the app when it judges it can, and may hold or drop background pushes; Apple asks for no more than two or three an hour.
 - **Android**: an FCM data message with no notification block of any kind — a message with one is shown in the tray instead of reaching the app — carrying your `data`'s keys, `lkn`, and `lkbadge` as strings in the data map.
-- **Web**: not sent. Browsers require every push to show a notification — Chrome shows a generic one of its own, Safari revokes the site's push permission after pushes that show nothing, and Edge doesn't take them — and the receiver worker has no page to hand data to. The service skips a data send's Web Push deliveries as `skipped`, with the reason `platform_unsupported`; its deliveries to native devices go as usual.
+- **Web**: not sent. Browsers require every push to show a notification — Chrome shows a generic one of its own, Safari revokes the site's push permission after pushes that show nothing, and Edge doesn't take them. The service skips a data send's Web Push deliveries as `skipped`, with the reason `platform_unsupported`; its deliveries to native devices go as usual.
 
-What leptoskit doesn't do yet is hand the received data to your app's code. The generated iOS, macOS, and Android hosts don't forward an arriving data message — `application(_:didReceiveRemoteNotification:fetchCompletionHandler:)` on Apple platforms, `FirebaseMessagingService.onMessageReceived` on Android — to your app, so until an app adds that handler itself, a data send reaches the device and is reported `accepted`, and none of your code runs on it. An app that adds the handler reads `lk`, `lkn`, and `lkbadge` from the payload.
+Your app reads an arriving data message as `Received::Data` from the [receiver](#know-what-was-tapped-and-what-arrived): the send's `data`, the id of the send's row for this person, and the badge the send asked for. It is handed over while your app is running. On iOS and macOS the system starts or wakes the app for a background push only when it chooses to, and a message that arrives while the app isn't running waits, among the sixteen most recent, until the app next asks. On Android the message is handed to the app's messaging service, which keeps it in memory: your code reads it if the app is open or opens before the system ends the process. A data message is a hint to refresh, not a guaranteed delivery: keep the thing that matters in your own service and let the message say "go and look".
 
 A data send still creates one durable row per recipient — the send's bookkeeping, not an inbox item. It never appears in the inbox, never counts toward `unread_count`, and can always be cancelled, because nobody ever saw it. Its push deliveries, status, idempotency, and fanout behave exactly like a visible send's.
 
@@ -462,7 +462,7 @@ options: MessageOptions {
 
 `badge` sets the app badge the platform shows next to your icon. `BadgeSetting::Set(n)` sets that exact number — `Set(0)` clears it. `BadgeSetting::Unread` is the interesting one: the service resolves it **per recipient at push time** to that person's live unread count — the same number `unread_count` would answer right then. One send to a thousand people badges each of their own counts.
 
-On the web the receiver service worker calls `navigator.setAppBadge(n)` where the browser supports it (and `clearAppBadge` for zero); where it doesn't, the count rides in the payload and nothing else happens. A data send can carry a badge too, but there is no notification for the platform to badge from: the number rides as `lkbadge` in the data, for your app to apply itself (`UNUserNotificationCenter.setBadgeCount` on Apple platforms; on Android, launchers badge from the app's notifications). That needs the data-message handler [described above](#silent-data-messages), which the generated hosts don't have yet.
+On the web the receiver service worker calls `navigator.setAppBadge(n)` where the browser supports it (and `clearAppBadge` for zero); where it doesn't, the count rides in the payload and nothing else happens. A data send can carry a badge too, but there is no notification for the platform to badge from: the number rides as `lkbadge` in the data, for your app to apply itself: [`Received::Data`](#know-what-was-tapped-and-what-arrived) carries it as `badge`, and your app sets it through its own host code (`UNUserNotificationCenter.setBadgeCount` on Apple platforms; on Android, launchers badge from the app's notifications).
 
 ## Say it in each person's language
 
@@ -693,7 +693,7 @@ notifications
 	.await?;
 ```
 
-This shows a banner only while your app runs, and only where the plugin is implemented: iOS and macOS through `UNUserNotificationCenter`, Android 26+ through `NotificationManager`, the browser through the `Notification` API, and Linux through D-Bus. **Windows returns `Unavailable`** — there is no Windows toast backend yet. On Android the channel must exist before a post (posts to a channel that doesn't are dropped), and Android 13+ also needs `POST_NOTIFICATIONS` — declared in your app's `android/app/src/main/AndroidManifest.xml` ([the `android/` folder is yours](../platforms/android.md)) and granted at runtime through `request_permission`, which uses the host's permission broker. On every platform a successful post doesn't prove the person saw anything: Focus modes, notification permissions, channel settings, and foreground presentation policy decide that. **iOS and macOS are the sharp case**: the system shows no banner for an app that is in the foreground unless the app's notification-centre delegate asks for one, and the generated hosts don't install that delegate yet, so there a post made while your app is open lands in Notification Centre without a banner. Scheduled **local** notifications, badges from the plugin, and click routing are not available everywhere either — see the [plugin inventory](../platforms/plugin-inventory.md) for what each platform does. None of this posting reaches a device where your app isn't running; that is what server push, below, is for.
+This shows a banner only while your app runs, and only where the plugin is implemented: iOS and macOS through `UNUserNotificationCenter`, Android 26+ through `NotificationManager`, the browser through the `Notification` API, and Linux through D-Bus. **Windows returns `Unavailable`** — there is no Windows toast backend yet. On Android the channel must exist before a post (posts to a channel that doesn't are dropped), and Android 13+ also needs `POST_NOTIFICATIONS` — declared in your app's `android/app/src/main/AndroidManifest.xml` ([the `android/` folder is yours](../platforms/android.md)) and granted at runtime through `request_permission`, which uses the host's permission broker. On every platform a successful post doesn't prove the person saw anything: Focus modes, notification permissions, channel settings, and foreground presentation policy decide that. **iOS and macOS are the sharp case**: the system shows no banner for an app that is in the foreground unless the app's notification-centre delegate asks for one. The generated hosts install that delegate, so a post made while your app is open shows its banner; an app whose `hosts/ios/App.swift` or `hosts/macos/App.swift` was generated before this needs [three lines added](#apps-generated-before-receiving), and a menu-bar app has no delegate at all. A tap on a local notification reaches your app on iOS, macOS, and Android as `Received::Opened` with the notification's own id in `local` ([below](#know-what-was-tapped-and-what-arrived)). Scheduled **local** notifications and badges from the plugin are not available everywhere — see the [plugin inventory](../platforms/plugin-inventory.md) for what each platform does. None of this posting reaches a device where your app isn't running; that is what server push, below, is for.
 
 ## Push delivery
 
@@ -877,7 +877,7 @@ Failures name their retry state rather than swallowing it: `EnrollError::Unconfi
 
 Registration failures are surfaced, not guessed around: the OS's provisioning refusal comes back as an error carrying a stable code — `aps-environment` names the missing or mismatched entitlement — never the OS's own error text, a silent OS answers an explicit "unconfirmed" instead of hanging or replaying a prior token, and a cancelled wait gives up without losing the callback — the broker keeps it for the next read. There is no swizzling, no background daemon, and no token cached to storage.
 
-**What a push does while the app is closed** is the OS's work: APNs wakes the system, which shows the alert from the payload — title and body, collapsed by the notification's id — and your durable inbox row is already in the service. What this does **not** include yet: routing a tap into a screen (the envelope's `data` is carried, but the tap-routing story is later work), and any claim of live APNs acceptance here — provider acceptance is only ever proven by a real device with real credentials, which this setup doesn't exercise.
+**What a push does while the app is closed** is the OS's work: APNs wakes the system, which shows the alert from the payload — title and body, collapsed by the notification's id — and your durable inbox row is already in the service. A push that arrives while the app is **open** shows its banner too, and a tap on either reaches your code through the [receiver](#know-what-was-tapped-and-what-arrived). What this does **not** include: any claim of live APNs acceptance here — provider acceptance is only ever proven by a real device with real credentials, which this setup doesn't exercise.
 
 ### Enroll an Android device
 
@@ -917,7 +917,7 @@ let enrollment = native::enroll().await?;
 
 What differs under the hood: Firebase answers with a registration token — printable ASCII of no assumed length, not hex — the generated messaging service forwards token **refreshes** to the same in-memory broker the registration task feeds, and a device without usable Firebase refuses instead of pretending. The refusal is a stable code, not SDK text: `firebase-not-configured` means the app generated without the push opt-in or has no `google-services.json` values (the Firebase classes are found reflectively, so an app that never opted in simply answers this), `os-refused` covers the rest, and `token-shape` means Firebase handed over something outside the contract's bounds. The token is held in memory only — Firebase hands it out again on the next launch — and its bytes never appear in a log, an error, or a `Debug` print.
 
-A device at Google Play services' mercy is a real constraint worth knowing: delivery needs Play services on the device. While your app is in the **foreground**, Firebase hands an arriving push to the app instead of showing it, and the generated messaging service doesn't pass it on to your code yet, so nothing appears in the tray; the item is in the inbox, and your open screen's live inbox query is what shows it (compose a banner with the local-notifications plugin, above, if you want one). What a push does while the app is **closed** is Google's work: the message's notification block shows the title and body in the system tray, collapsed by the notification's id, and your durable inbox row is already in the service. A tap opens the app — routing it into a screen is the same later work as iOS's. And as everywhere: acceptance at the provider is only ever proven by a real device with real credentials, which this setup doesn't exercise.
+A device at Google Play services' mercy is a real constraint worth knowing: delivery needs Play services on the device. While your app is in the **foreground**, Firebase hands an arriving push to the app instead of showing it. The generated messaging service passes it to the notifications plugin, which posts it in the tray itself — title, body, the channel the send named or your default one, with a repeat of the same notification replacing the first — and tells your code it arrived. The image, color, and sound a send asked for are not applied to a push shown this way. What a push does while the app is **closed** is Google's work: the message's notification block shows the title and body in the system tray, collapsed by the notification's id, and your durable inbox row is already in the service. A tap on either opens the app and reaches your code through the [receiver](#know-what-was-tapped-and-what-arrived). An app whose `android/` folder was generated before this needs nothing changed: the messaging service is generated on every build, and the tap is read from the intent your activity already keeps. And as everywhere: acceptance at the provider is only ever proven by a real device with real credentials, which this setup doesn't exercise.
 
 ### Enroll a macOS device
 
@@ -954,7 +954,7 @@ At runtime the flow is the iOS flow verbatim — request permission from a gestu
 let enrollment = native::enroll().await?;
 ```
 
-One honest limitation: the stock **menu-bar host** (a `[native] mode = "menu-bar"` app that keeps the generated status-item lifecycle) carries no forwarding delegate, so its registration answers stay "unconfirmed" — a push-enabled app wants the standard windowed host, or its own delegate wired to the plugin's `noteDeviceToken` and `noteRegistrationFailure`. And what a push does while the app is **closed** is the OS's work, as on iOS: APNs shows the alert, your durable inbox row is already in the service, and routing a tap into a screen is still later work. As everywhere, provider acceptance is only ever proven by a real Mac with real credentials, which this setup doesn't exercise — and the same goes for the signing above: the profile and identity steps follow Apple's code-signing rules, but they haven't been run against a real Apple developer account as part of leptoskit's own testing, so treat your first push-enabled Mac build as the check.
+One honest limitation: the stock **menu-bar host** (a `[native] mode = "menu-bar"` app that keeps the generated status-item lifecycle) carries no forwarding delegate, so its registration answers stay "unconfirmed", and it installs no notification-centre delegate either, so it shows no banner while it runs and hears no taps — a push-enabled app wants the standard windowed host, or its own delegate wired to the plugin's `noteDeviceToken`, `noteRegistrationFailure`, `installDelegate`, and `noteRemoteNotification`. And what a push does while the app is **closed** is the OS's work, as on iOS: APNs shows the alert and your durable inbox row is already in the service. A push that arrives while the app is open shows its banner, and a tap reaches your code through the [receiver](#know-what-was-tapped-and-what-arrived). As everywhere, provider acceptance is only ever proven by a real Mac with real credentials, which this setup doesn't exercise — and the same goes for the signing above: the profile and identity steps follow Apple's code-signing rules, but they haven't been run against a real Apple developer account as part of leptoskit's own testing, so treat your first push-enabled Mac build as the check.
 
 ### Enroll a browser
 
@@ -1034,7 +1034,137 @@ Disable requires a successful authenticated revoke acknowledgement. Failures, in
 
 **When the browser changes the subscription on its own** — a rotated or replaced subscription, the `pushsubscriptionchange` event — the worker cannot reconcile anything: it deliberately holds no credentials, so it has no identity to enroll with. The supported reconciliation is the next authenticated app launch calling `reconcile` again with the saved enrollment; a stale handle's `disable` leaves the replaced subscription alone, and the replaced subscription's endpoint dies at its push service, whose answer invalidates the stale record on its next delivery. Churn is bounded by the ten-endpoint limit, and the person can revoke the dead ones from their own list.
 
-The receiver itself shows what the service pushed: the envelope's title and body under a tag built from the notification's id, so a repeat replaces rather than stacks; the send's `data` rides on the banner's own data, inert. A send's options reach it too — an image, a badge count (`navigator.setAppBadge` where the browser has it), a silent flag, and the web presentation set. The service never pushes a [data message](#silent-data-messages) to a browser; one flagged `lkdata` that arrived anyway would show nothing, leaving only the badge it asked to set. A push that is missing, oversized (past the service's 4 KiB record), malformed, or typed wrong still shows one truthful banner — "New notification", no invented text — under a stable tag, so a broken sender can never silently swallow a delivery. A click closes the banner, focuses an app window of this origin and opens the send's own link when it resolves to this origin — a path like `/invoice/42`, or an absolute URL of this origin — and otherwise brings it to your inbox route with the notification's id, or opens that route in a new window. A click on one of the `web.actions` buttons does the same and adds the button's id to the address as `lka`, so the page can tell "Approve" from a click on the banner. Bringing an open window to the address is a navigation — the page loads again there — not an in-app route change. A link anywhere else is refused at click time: payload content can never steer a click off the app's own origin. The worker holds no credentials and calls no server: nothing fetches, and **no read state changes until the authenticated app itself opens** and marks what it read.
+The receiver itself shows what the service pushed: the envelope's title and body under a tag built from the notification's id, so a repeat replaces rather than stacks; the send's `data` rides on the banner's own data, inert. A send's options reach it too — an image, a badge count (`navigator.setAppBadge` where the browser has it), a silent flag, and the web presentation set. The service never pushes a [data message](#silent-data-messages) to a browser. One flagged `lkdata` that arrived anyway is handed to the pages that are open; when one of them is in view it shows nothing, and when none is it shows the "New notification" banner, because a browser punishes a push that shows nothing. A push that is missing, oversized (past the service's 4 KiB record), malformed, or typed wrong still shows one truthful banner — "New notification", no invented text — under a stable tag, so a broken sender can never silently swallow a delivery. A click closes the banner, focuses an app window of this origin and opens the send's own link when it resolves to this origin — a path like `/invoice/42`, or an absolute URL of this origin — and otherwise brings it to your inbox route with the notification's id, or opens that route in a new window. A click on one of the `web.actions` buttons does the same and adds the button's id to the address as `lka`, so the page can tell "Approve" from a click on the banner. An address the worker opens for a click always carries the notification's id as `lkn`, on a send's own link too. A page that runs a [receiver](#know-what-was-tapped-and-what-arrived) is handed the click instead and changes its own route, with nothing loading again; a page that doesn't answer within half a second is brought to the address the old way, which loads it again there. A link anywhere else is refused at click time: payload content can never steer a click off the app's own origin. The worker holds no credentials and calls no server: nothing fetches, and **no read state changes until the authenticated app itself opens** and marks what it read.
+
+### Know what was tapped and what arrived
+
+A push that only shows a banner leaves three questions to your app. Which notification did the person tap, so the right screen opens? What arrived while the app was already open, so the screen in front of them is current? And what did a silent data message say? One receiver answers all three, on iOS, macOS, Android, and the web.
+
+Make a receiver when your app starts and read it in a loop. On a device it is `native::Receiver`:
+
+```rust
+use leptoskit::prelude::*;
+use leptoskit_notifications::native::Receiver;
+use leptoskit_notifications::receive::Received;
+
+use crate::routes::Navigation;
+use crate::routes::Route;
+
+#[component]
+pub fn App() -> impl IntoView {
+	let navigation = Navigation::new(Route::Home);
+	let taps = navigation.clone();
+
+	leptos::task::spawn_local(async move {
+		let mut receiver = Receiver::new();
+
+		while let Ok(received) = receiver.next().await {
+			match received {
+				Received::Opened(opened) => {
+					if let Ok(route) = Route::parse(&opened.route("/inbox")) {
+						taps.navigate(route);
+					}
+				}
+				Received::Shown(_shown) => {
+					// A banner just appeared over your app.
+				}
+				Received::Data(_message) => {
+					// A silent message: read `data`, refresh what it names.
+				}
+			}
+		}
+	});
+
+	view! { {navigation.render()} }
+}
+```
+
+In a browser the loop is the same with `browser::Receiver`, which re-exports the same types (`leptoskit_notifications::browser::Received`). An app that builds for both picks the module with `#[cfg(target_arch = "wasm32")]` the way it already does for `enroll`.
+
+**A tap** is `Received::Opened`. It carries:
+
+- `notification`: the id the inbox lists the item under, so you can open it or [mark it read](#read-the-inbox-on-any-platform).
+- `link`: the send's `options.link`, when it had one.
+- `action`: the id of the action button that was pressed, or `None` for a tap on the notification itself.
+- `data`: the send's `data`.
+- `local`: the id of a local notification your app posted with the [plugin](#composing-with-local-notifications), when that is what was tapped.
+- `launched`: `true` for the tap that started the app.
+
+`opened.route("/inbox")` answers where to go: the send's link when it is a path on your app, such as `/invoice/42`, and otherwise the route you name with the notification's id added as `lkn` — the same address the web receiver opens. A link that is a full `https` URL is left for you to read from `link`, because only your app knows whether that URL is its own.
+
+**The tap that started the app** is not lost. The host keeps what arrived before your code ran, and the receiver's first answer holds it, marked `launched`. If you want it before the first screen is drawn, ask without waiting:
+
+```rust
+let mut receiver = Receiver::new();
+
+for received in receiver.pending().await.unwrap_or_default() {
+	if let Received::Opened(opened) = received
+		&& opened.launched
+	{
+		// Start on this screen instead of the home screen.
+	}
+}
+```
+
+Use one receiver for the life of the app: what the first one has taken, a second one never sees.
+
+**A notification that arrived while the app was open** is `Received::Shown`, with its id and `data`. The system has shown it already, so there is nothing to draw. Your inbox query is live and updates itself; use this for anything else that should react.
+
+**A silent data message** is `Received::Data`, described [above](#silent-data-messages).
+
+What each platform does:
+
+|                | Shown while the app is open                   | Tap while the app is running | Tap that starts the app                            | Action button                                               | Data message |
+| -------------- | --------------------------------------------- | ---------------------------- | -------------------------------------------------- | ----------------------------------------------------------- | ------------ |
+| iOS, macOS     | Banner, list entry, sound, and badge; `Shown` | `Opened`                     | `Opened`, `launched`                               | `Opened` with `action`, once the app registers the category | `Data`       |
+| Android        | Posted by the plugin; `Shown`                 | `Opened`                     | `Opened`, `launched`                               | Not sent                                                    | `Data`       |
+| Web            | Banner from the worker; `Shown` on open pages | `Opened`, no reload          | `Opened`, `launched`, read from the page's address | `Opened` with `action`                                      | Not sent     |
+| Windows, Linux | No push                                       | —                            | —                                                  | —                                                           | —            |
+
+Four things to know before you rely on it:
+
+- **It is not a durable record.** The host keeps the sixteen most recent events between asks and drops older ones, and a force-quit app starts empty apart from the launching tap. The inbox is the record; this is what happened on this device just now.
+- **On Android every value in `data` is a string.** FCM carries a flat map of strings, so a number arrives as its text and a nested object as its JSON text. Keys the envelope or Firebase reserve are not in `data`.
+- **On the web, a click reaches a page only while a receiver exists.** Create it once at startup. Until then, and in a page that never creates one, the worker behaves as before and loads the address.
+- **Dismissing a notification is not reported.** Only taps are.
+
+Where nothing can be received — Windows, Linux, the terminal, a browser without service workers, an app whose host predates this — `next` answers `ReceiveError::Unavailable` and the loop above ends. `ReceiveError::NoPlugin` means the notifications plugin is missing from `[native] plugins`.
+
+#### Apps generated before receiving
+
+`hosts/ios/App.swift` and `hosts/macos/App.swift` are written once, when the host is first generated, and are yours from then on, so an existing app doesn't get the new lines by itself. Without them the app builds and enrolls as before, shows no banner while it is open, and its receiver hears nothing. Add them to your app delegate.
+
+On iOS, install the delegate before launch finishes and forward silent pushes:
+
+```swift
+func application(
+    _ application: UIApplication,
+    willFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
+) -> Bool {
+    #if canImport(LeptosKitNotifications)
+    NotificationsPlugin.installDelegate()
+    #endif
+
+    return true
+}
+
+func application(
+    _ application: UIApplication,
+    didReceiveRemoteNotification userInfo: [AnyHashable: Any],
+    fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void
+) {
+    #if canImport(LeptosKitNotifications)
+    NotificationsPlugin.noteRemoteNotification(userInfo)
+    completionHandler(.newData)
+    #else
+    completionHandler(.noData)
+    #endif
+}
+```
+
+On macOS the two are `applicationWillFinishLaunching(_:)` and `application(_:didReceiveRemoteNotification:)`, with the same two calls. It has to be the _will_ finish launching callback: the system delivers the tap that started the app as launch ends, and only to a delegate that is already installed.
+
+An iOS app with `aps-environment` set also gets the `remote-notification` background mode in its `Info.plist`, which is what lets the system wake it for a silent push. That file is generated on every build, so there is nothing to add. Android needs no change at all.
 
 ### What a device says about itself
 
@@ -1200,7 +1330,9 @@ Retention is also the answer for personal data that isn't tied to one person's d
 
 ## What it doesn't do yet
 
-- **Native client enrollment is iOS, Android, and macOS.** The service side of enrollment is done, the web client is this crate's `browser` module, and the native client — iOS's and macOS's APNs token and Android's FCM token alike — is the `native` module (all above). Push notification **tap routing** into a screen is later work, everywhere: a send's `link` is carried in every payload today, but opening it is each app's own code.
+- **Native client enrollment is iOS, Android, and macOS.** The service side of enrollment is done, the web client is this crate's `browser` module, and the native client — iOS's and macOS's APNs token and Android's FCM token alike — is the `native` module (all above). Windows and Linux apps receive no push, so they have nothing to tap.
+- **No record of who opened what.** A tap reaches your app's code, and nothing reports it to the service: there is no opened count per send. Mark the item read from your own screen when the tap lands, as below.
+- **Action buttons are web and Apple only, and Apple's aren't registered yet.** `web.actions` buttons work today. An Apple notification shows buttons only for a category the app registered with the system, which leptoskit doesn't do yet; the receiver already reports a pressed button's id when an app registers its own. Android sends carry no buttons.
 - **No delivery receipts.** The service knows what it stored and what the provider accepted; it doesn't track who saw a banner. `accepted` is as far as status goes.
 - **No per-device state.** Read, dismissed, and cancelled state is per person, shared across their devices by design.
 - **Translations are yours to write.** [Variants](#say-it-in-each-persons-language) pick the right text for each person, but the service does not translate anything, and it has no localization keys that a device resolves from its own string tables. [Local time](#send-at-each-persons-local-time) is a single date and time; a send that repeats every morning is a send your server makes each day.

@@ -68,6 +68,9 @@ pub mod browser;
 #[cfg(feature = "native")]
 pub mod native;
 
+#[cfg(any(feature = "browser", feature = "native"))]
+pub mod receive;
+
 #[cfg(feature = "service")]
 pub mod service;
 

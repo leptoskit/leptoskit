@@ -5,7 +5,9 @@ import android.app.Activity
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.AudioAttributes
 import android.media.RingtoneManager
@@ -17,6 +19,7 @@ import dev.leptoskit.bridge.PluginException
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
+import org.json.JSONObject
 import java.lang.reflect.InvocationTargetException
 import java.lang.reflect.Proxy
 import java.nio.ByteBuffer
@@ -141,6 +144,263 @@ public object RemoteRegistration {
     @Synchronized
     public fun reset(to: Snapshot = Snapshot(0, State.None)) {
         snapshot = to
+    }
+}
+
+/**
+ * What the app has received about notifications and not yet handed to its
+ * guest, as `RECEIVED` answers it: a tap on a notification, a notification
+ * that arrived while the app was open, and a message handed to the app
+ * without a tap. An object on purpose, like [RemoteRegistration]: the
+ * messaging service delivers a message whether or not a plugin and its
+ * guest exist.
+ *
+ * The host interprets nothing. Each item carries the message's data map as
+ * JSON text, and the Rust side — which knows the envelope its service
+ * sends — reads the notification's id, the link, and the send's data out
+ * of it. Only the latest [MAX_ITEMS] are kept: the inbox is the durable
+ * record.
+ */
+public object ReceivedNotifications {
+    /** Bounds shared with the Rust contract. */
+    internal const val MAX_ITEMS = 16
+    internal const val MAX_PAYLOAD_BYTES = 8_192
+
+    /** The kinds, as the Rust contract numbers them: a tap, a
+     * notification shown while the app was open, and a message handed to
+     * the app without a tap. */
+    public const val OPENED: Int = 0
+    public const val PRESENTED: Int = 1
+    public const val MESSAGE: Int = 2
+
+    /** The data key that names the notification, on every push the
+     * notifications service sends. */
+    internal const val EXTRA_ID = "lkn"
+
+    /** The extra Firebase puts on the launch intent of a notification it
+     * posted: with [EXTRA_ID], the mark of a tap on a push. */
+    internal const val EXTRA_FIREBASE_ID = "google.message_id"
+
+    /** The extra the plugin puts on the launch intent of a push it posted
+     * itself because the app was open. */
+    internal const val EXTRA_OPEN = "leptoskit.notifications.open"
+
+    /** The extra the plugin puts on the launch intent of a local
+     * notification: the id the app posted it with. */
+    internal const val EXTRA_LOCAL = "leptoskit.notifications.local"
+
+    /** The tag prefix of a push the plugin posted itself. Not the local
+     * notifications' prefix: cancelling those leaves pushes alone. */
+    internal const val PUSH_TAG_PREFIX = "leptoskit.push."
+
+    /** One received item, exactly as the wire carries it. */
+    public data class Item(
+        public val kind: Int,
+        public val action: String,
+        public val local: String,
+        public val payload: String,
+    )
+
+    private val items = ArrayDeque<Item>()
+
+    /**
+     * Records one item, bounded: a payload outside the contract's bound is
+     * recorded as empty rather than cut, and the oldest item makes room
+     * for the newest.
+     */
+    @Synchronized
+    internal fun note(
+        kind: Int,
+        local: String,
+        data: Map<String, String>,
+    ) {
+        items.addLast(Item(kind, "", local, json(data)))
+
+        while (items.size > MAX_ITEMS) items.removeFirst()
+    }
+
+    /** Takes everything recorded, oldest first, and clears it. */
+    @Synchronized
+    internal fun take(): List<Item> {
+        val taken = items.toList()
+        items.clear()
+
+        return taken
+    }
+
+    /** Clears the broker. Process-scoped state, so only tests call this. */
+    @Synchronized
+    public fun reset() {
+        items.clear()
+    }
+
+    /** A data map as JSON text; empty when there is none that fits. */
+    internal fun json(data: Map<String, String>): String {
+        if (data.isEmpty()) return ""
+        val text = JSONObject(data).toString()
+
+        return if (text.toByteArray(Charsets.UTF_8).size <= MAX_PAYLOAD_BYTES) text else ""
+    }
+
+    /**
+     * Reads a tap out of the intent that started or resumed the activity,
+     * once. A tap on a push carries the message's data as string extras —
+     * Firebase puts them on the launch intent of a notification it posted,
+     * and the plugin does the same for one it posted itself — and a tap on
+     * a local notification carries the id it was posted with. Anything
+     * else is not a tap: an ordinary launch, a deep link, or an intent the
+     * system replays from the recent-apps list. The marks are taken off the
+     * intent once read, so the same intent is never counted twice.
+     */
+    @JvmStatic
+    public fun noteIntentIfPresent(intent: Intent?) {
+        if (intent == null) return
+        val extras = intent.extras ?: return
+
+        if (intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY != 0) return
+
+        @Suppress("DEPRECATION")
+        val strings =
+            extras
+                .keySet()
+                .mapNotNull { key -> (extras.get(key) as? String)?.let { key to it } }
+                .toMap()
+        val local = strings[EXTRA_LOCAL]
+        val push =
+            strings.containsKey(EXTRA_ID) &&
+                (strings.containsKey(EXTRA_FIREBASE_ID) || strings.containsKey(EXTRA_OPEN))
+
+        if (local == null && !push) return
+
+        intent.removeExtra(EXTRA_LOCAL)
+        intent.removeExtra(EXTRA_ID)
+
+        if (local != null) {
+            note(OPENED, if (localIdentifier(local)) local else "", emptyMap())
+        } else {
+            note(OPENED, "", strings)
+        }
+    }
+
+    /** Whether a local identifier is one the contract carries. */
+    private fun localIdentifier(value: String): Boolean =
+        value.isNotEmpty() &&
+            value.length <= 64 &&
+            value.all { it in 'a'..'z' || it in 'A'..'Z' || it in '0'..'9' || it in "._-" }
+
+    /**
+     * The messaging service's `onMessageReceived`. A message with nothing
+     * to show is a silent data message: it is recorded for the guest and
+     * nothing appears. A message with a title or a body reaches the
+     * service only while the app is open — Firebase posts it itself
+     * otherwise — so the plugin posts it, as Firebase would have, and
+     * records that it arrived.
+     */
+    @JvmStatic
+    public fun noteMessage(
+        context: Context,
+        data: Map<String, String>,
+        title: String?,
+        body: String?,
+        channel: String?,
+    ) {
+        if (title == null && body == null) {
+            note(MESSAGE, "", data)
+            return
+        }
+
+        note(PRESENTED, "", data)
+        post(context, data, title.orEmpty(), body.orEmpty(), channel)
+    }
+
+    /**
+     * Posts a push that arrived while the app was open, through the
+     * channel the message names, or the one the manifest names as the
+     * default — the same choice Firebase makes. A tap opens the app with
+     * the message's data, exactly as a tap on a notification Firebase
+     * posted does. Without a usable channel or permission nothing is
+     * posted; the item is in the inbox either way.
+     */
+    private fun post(
+        context: Context,
+        data: Map<String, String>,
+        title: String,
+        body: String,
+        channel: String?,
+    ) {
+        val manager = context.getSystemService(NotificationManager::class.java) ?: return
+        val posted =
+            listOfNotNull(channel, NotificationsPlugin.manifestPushChannel(context))
+                .firstOrNull { manager.getNotificationChannel(it) != null } ?: return
+        val id = data[EXTRA_ID].orEmpty()
+        val builder =
+            Notification
+                .Builder(context, posted)
+                .setSmallIcon(NotificationsPlugin.resolveSmallIcon(context))
+                .setContentTitle(title)
+                .setContentText(body)
+                .setStyle(Notification.BigTextStyle().bigText(body))
+                .setAutoCancel(true)
+
+        contentIntent(context, PUSH_TAG_PREFIX + id, data + (EXTRA_OPEN to "1"))
+            ?.let { builder.setContentIntent(it) }
+
+        try {
+            manager.notify(PUSH_TAG_PREFIX + id, 0, builder.build())
+        } catch (_: SecurityException) {
+            // Posting was refused; the inbox still has the item.
+        }
+    }
+
+    /**
+     * The intent a tap on a posted notification fires: the app's launcher
+     * activity, brought to the front rather than started twice, carrying
+     * `extras` as strings. `key` tells one notification's intent from
+     * another's, so two notifications never share one. `null` when the app
+     * has no launcher activity.
+     */
+    internal fun contentIntent(
+        context: Context,
+        key: String,
+        extras: Map<String, String>,
+    ): PendingIntent? {
+        val launch = context.packageManager.getLaunchIntentForPackage(context.packageName) ?: return null
+
+        launch.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+
+        for ((name, value) in extras) launch.putExtra(name, value)
+
+        return PendingIntent.getActivity(
+            context,
+            key.hashCode(),
+            launch,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+    }
+
+    /** Encodes a `RECEIVED` reply: a `u32` count, then for each item a
+     * `u32` kind and three length-prefixed UTF-8 strings — action, local
+     * identifier, payload — all little-endian. */
+    internal fun encode(items: List<Item>): ByteArray {
+        val fields =
+            items.map { item ->
+                listOf(item.action, item.local, item.payload).map { it.toByteArray(Charsets.UTF_8) }
+            }
+        val size = 4 + fields.sumOf { strings -> 4 + strings.sumOf { 4 + it.size } }
+        val data = ByteBuffer.allocate(size).order(ByteOrder.LITTLE_ENDIAN)
+
+        data.putInt(items.size)
+
+        for ((index, item) in items.withIndex()) {
+            data.putInt(item.kind)
+
+            for (bytes in fields[index]) {
+                data.putInt(bytes.size)
+                data.put(bytes)
+            }
+        }
+
+        return data.array()
     }
 }
 
@@ -303,7 +563,7 @@ class NotificationsPlugin internal constructor(
 
     override val name = "notifications"
     override val methods =
-        intArrayOf(STATE, REQUEST, SHOW, CANCEL, CHANNEL, DELETE, ACTIVE, REMOTE_TOKEN, REMOTE_REGISTER, DEVICE)
+        intArrayOf(STATE, REQUEST, SHOW, CANCEL, CHANNEL, DELETE, ACTIVE, REMOTE_TOKEN, REMOTE_REGISTER, DEVICE, RECEIVED)
 
     companion object {
         /** The notification tag and channel prefix the plugin owns. */
@@ -324,7 +584,7 @@ class NotificationsPlugin internal constructor(
          * Uses `@drawable/ic_notification` when `[app.icons]` generated one,
          * otherwise the system information icon.
          */
-        private fun resolveSmallIcon(context: Context): Int {
+        internal fun resolveSmallIcon(context: Context): Int {
             val id = context.resources.getIdentifier("ic_notification", "drawable", context.packageName)
             return if (id != 0) id else android.R.drawable.ic_dialog_info
         }
@@ -364,6 +624,33 @@ class NotificationsPlugin internal constructor(
         /** Reads what the device says about itself for push targeting. */
         const val DEVICE = 9
 
+        /** Takes what the app received since the last call, waiting a
+         * bounded time for something to arrive. */
+        const val RECEIVED = 10
+
+        /** The longest `RECEIVED` waits for something to arrive, in
+         * milliseconds, matching the Rust contract's
+         * `MAX_RECEIVED_WAIT_MILLIS`. A caller that keeps listening asks
+         * again. */
+        internal const val MAX_RECEIVED_WAIT_MILLIS = 10_000L
+
+        /** How often a waiting `RECEIVED` re-reads the broker, in
+         * milliseconds: the longest a tap waits for a listening guest. */
+        internal const val RECEIVED_WAIT_SLICE_MILLIS = 100L
+
+        /** The channel the app's manifest names as Firebase's default,
+         * when it names one: only a push-enabled app does. */
+        internal fun manifestPushChannel(context: Context): String? =
+            try {
+                @Suppress("DEPRECATION")
+                context.packageManager
+                    .getApplicationInfo(context.packageName, PackageManager.GET_META_DATA)
+                    .metaData
+                    ?.getString(DEFAULT_PUSH_CHANNEL_KEY)
+            } catch (_: PackageManager.NameNotFoundException) {
+                null
+            }
+
         /** The longest device detail a `DEVICE` reply carries, in bytes,
          * matching the Rust contract's `MAX_DEVICE_DETAIL_BYTES`. */
         internal const val MAX_DEVICE_DETAIL_BYTES = 256
@@ -396,21 +683,22 @@ class NotificationsPlugin internal constructor(
     private val registering = AtomicBoolean(false)
 
     init {
-        manager?.let { ensurePushChannel(it, manifestPushChannel()) }
+        manager?.let { ensurePushChannel(it, manifestPushChannel(context)) }
+        // The tap that started the app is on the intent the activity was
+        // launched with, before any guest asks.
+        noteLaunchIntent()
     }
 
-    /** The channel the app's manifest names as Firebase's default, when it
-     * names one: only a push-enabled app does. */
-    private fun manifestPushChannel(): String? =
-        try {
-            @Suppress("DEPRECATION")
-            context.packageManager
-                .getApplicationInfo(context.packageName, PackageManager.GET_META_DATA)
-                .metaData
-                ?.getString(DEFAULT_PUSH_CHANNEL_KEY)
-        } catch (_: PackageManager.NameNotFoundException) {
-            null
-        }
+    /**
+     * Reads a tap from the activity's current intent. The generated
+     * activity keeps its intent current (`onNewIntent` calls `setIntent`),
+     * so this sees the tap that started the app and every tap after it,
+     * and an app's own activity needs no notifications code. Reading is
+     * once per tap: the broker takes its marks off the intent.
+     */
+    private fun noteLaunchIntent() {
+        ReceivedNotifications.noteIntentIfPresent((context as? Activity)?.intent)
+    }
 
     /**
      * Makes the default push channel exist. Firebase posts a push that
@@ -461,10 +749,40 @@ class NotificationsPlugin internal constructor(
             REMOTE_TOKEN -> return remoteToken(payload)
             REMOTE_REGISTER -> return registerRemote(payload)
             DEVICE -> return deviceDetails(payload)
+            RECEIVED -> return received(payload)
             else -> throw PluginException(PluginException.UNAVAILABLE)
         }
 
         return byteArrayOf()
+    }
+
+    /**
+     * Takes what the app received since the last call. With nothing
+     * recorded it waits, up to the bound the caller named and never past
+     * the contract's own, for something to arrive, and then answers an
+     * empty batch. Cancelling the wait loses nothing: what arrives stays
+     * in the broker for the next call. A plugin closed while waiting never
+     * answers.
+     */
+    private suspend fun received(payload: ByteBuffer): ByteArray {
+        val input = payload.duplicate().order(ByteOrder.LITTLE_ENDIAN)
+
+        if (input.remaining() != 4) throw PluginException(PluginException.INVALID_ARGUMENT)
+        val limit = minOf(input.int.toLong() and 0xFFFF_FFFFL, MAX_RECEIVED_WAIT_MILLIS)
+        var waited = 0L
+
+        while (true) {
+            if (closed) throw PluginException(PluginException.CANCELLED)
+            currentCoroutineContext().ensureActive()
+            noteLaunchIntent()
+
+            val items = ReceivedNotifications.take()
+
+            if (items.isNotEmpty() || waited >= limit) return ReceivedNotifications.encode(items)
+
+            delay(RECEIVED_WAIT_SLICE_MILLIS)
+            waited += RECEIVED_WAIT_SLICE_MILLIS
+        }
     }
 
     /** Answers what the device says about itself, without side effects. */
@@ -657,7 +975,7 @@ class NotificationsPlugin internal constructor(
             throw PluginException(PluginException.PERMISSION_DENIED)
         }
 
-        val notification =
+        val builder =
             Notification
                 .Builder(context, configured.id)
                 .setSmallIcon(smallIcon)
@@ -665,10 +983,15 @@ class NotificationsPlugin internal constructor(
                 .setContentText(body)
                 .setStyle(Notification.BigTextStyle().bigText(body))
                 .setAutoCancel(true)
-                .build()
+
+        // A tap opens the app and tells it which notification was tapped.
+        // Without a content intent a tap did nothing at all.
+        ReceivedNotifications
+            .contentIntent(context, PREFIX + id, mapOf(ReceivedNotifications.EXTRA_LOCAL to id))
+            ?.let { builder.setContentIntent(it) }
 
         try {
-            manager.notify(PREFIX + id, 0, notification)
+            manager.notify(PREFIX + id, 0, builder.build())
         } catch (_: SecurityException) {
             throw PluginException(PluginException.PERMISSION_DENIED)
         }

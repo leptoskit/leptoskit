@@ -837,6 +837,282 @@ fn notification_permission() -> Option<String> {
 		.as_string()
 }
 
+pub use crate::receive::DataMessage;
+pub use crate::receive::Opened;
+pub use crate::receive::ReceiveError;
+pub use crate::receive::Received;
+pub use crate::receive::Shown;
+
+/// What this page receives from the receiver worker, in order: a tap on
+/// a notification or one of its action buttons, and a notification that
+/// arrived while the page was open. Make one when the app starts and ask
+/// it for the [`next`](Receiver::next) event in a loop:
+///
+/// ```rust,ignore
+/// let mut receiver = leptoskit_notifications::browser::Receiver::new();
+///
+/// while let Ok(received) = receiver.next().await {
+///     if let Received::Opened(opened) = received {
+///         navigate(&opened.route("/inbox"));
+///     }
+/// }
+/// ```
+///
+/// A page that is open when the person clicks is handed the click and
+/// answers the worker, which then leaves the page where it is: the route
+/// changes in the app, and nothing loads again. While no receiver exists
+/// the worker gets no answer and brings the page to the address instead,
+/// as it always did.
+///
+/// A page the worker opened for a click reads the click from its own
+/// address — the `lkn` and `lka` the worker put there — as the first
+/// event, with [`launched`](Opened::launched) set, and takes the two
+/// off the address so a reload doesn't report the click again.
+///
+/// Outside a browser, and in one without service workers,
+/// [`next`](Receiver::next) answers [`ReceiveError::Unavailable`] once
+/// the launch click, if there was one, has been handed over.
+pub struct Receiver {
+	#[cfg(target_arch = "wasm32")]
+	shared: std::rc::Rc<std::cell::RefCell<page::Shared>>,
+	#[cfg(target_arch = "wasm32")]
+	_listener: Option<page::Listener>,
+}
+
+impl std::fmt::Debug for Receiver {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		f.debug_struct("Receiver").finish_non_exhaustive()
+	}
+}
+
+impl Default for Receiver {
+	fn default() -> Self {
+		Self::new()
+	}
+}
+
+impl Receiver {
+	/// Starts listening to the receiver worker, and reads the click that
+	/// opened this page, if one did.
+	#[must_use]
+	pub fn new() -> Self {
+		#[cfg(not(target_arch = "wasm32"))]
+		return Self {};
+
+		#[cfg(target_arch = "wasm32")]
+		{
+			let shared = std::rc::Rc::new(std::cell::RefCell::new(page::Shared::default()));
+
+			if let Some(opened) = page::launch() {
+				shared
+					.borrow_mut()
+					.queue
+					.push_back(Received::Opened(opened));
+			}
+
+			let listener = page::listen(&shared);
+			shared.borrow_mut().listening = listener.is_some();
+
+			Self {
+				shared,
+				_listener: listener,
+			}
+		}
+	}
+
+	/// Waits for the next event.
+	///
+	/// # Errors
+	///
+	/// [`ReceiveError::Unavailable`] when this page can't hear a worker
+	/// and nothing is left to hand over.
+	#[cfg_attr(
+		not(target_arch = "wasm32"),
+		allow(clippy::unused_async, reason = "matches the wasm signature")
+	)]
+	pub async fn next(&mut self) -> Result<Received, ReceiveError> {
+		#[cfg(not(target_arch = "wasm32"))]
+		return Err(ReceiveError::Unavailable);
+
+		#[cfg(target_arch = "wasm32")]
+		std::future::poll_fn(|context| {
+			let mut shared = self.shared.borrow_mut();
+
+			if let Some(received) = shared.queue.pop_front() {
+				return std::task::Poll::Ready(Ok(received));
+			}
+
+			if !shared.listening {
+				return std::task::Poll::Ready(Err(ReceiveError::Unavailable));
+			}
+
+			shared.waker = Some(context.waker().clone());
+			std::task::Poll::Pending
+		})
+		.await
+	}
+
+	/// Everything that has arrived and not been handed over yet, without
+	/// waiting: at launch, the click that opened the page, if one did.
+	///
+	/// # Errors
+	///
+	/// [`ReceiveError::Unavailable`] outside a browser.
+	#[allow(
+		clippy::unused_async,
+		clippy::unused_async_trait_impl,
+		reason = "async like the native receiver's, so one loop serves both"
+	)]
+	pub async fn pending(&mut self) -> Result<Vec<Received>, ReceiveError> {
+		#[cfg(not(target_arch = "wasm32"))]
+		return Err(ReceiveError::Unavailable);
+
+		#[cfg(target_arch = "wasm32")]
+		Ok(self.shared.borrow_mut().queue.drain(..).collect())
+	}
+}
+
+/// The page's own side of receiving: the worker's messages, the launch
+/// address, and the answer that tells the worker a click was taken.
+#[cfg(target_arch = "wasm32")]
+mod page {
+	use std::cell::RefCell;
+	use std::collections::VecDeque;
+	use std::rc::Rc;
+	use std::task::Waker;
+
+	use js_sys::Function;
+	use js_sys::Reflect;
+	use wasm_bindgen::JsCast;
+	use wasm_bindgen::JsValue;
+	use wasm_bindgen::closure::Closure;
+
+	use super::Opened;
+	use super::Received;
+
+	/// What the listener and the receiver share.
+	#[derive(Default)]
+	pub(super) struct Shared {
+		pub(super) queue: VecDeque<Received>,
+		pub(super) waker: Option<Waker>,
+		pub(super) listening: bool,
+	}
+
+	/// The `message` listener on `navigator.serviceWorker`, removed when
+	/// dropped.
+	pub(super) struct Listener {
+		container: JsValue,
+		function: Function,
+		_closure: Closure<dyn FnMut(JsValue)>,
+	}
+
+	impl Drop for Listener {
+		fn drop(&mut self) {
+			let _ = call(
+				&self.container,
+				"removeEventListener",
+				&[JsValue::from_str("message"), self.function.clone().into()],
+			);
+		}
+	}
+
+	fn get(target: &JsValue, name: &str) -> Option<JsValue> {
+		Reflect::get(target, &JsValue::from_str(name))
+			.ok()
+			.filter(|value| !value.is_undefined() && !value.is_null())
+	}
+
+	fn call(target: &JsValue, name: &str, arguments: &[JsValue]) -> Option<JsValue> {
+		let function = get(target, name)?.dyn_into::<Function>().ok()?;
+		let arguments: js_sys::Array = arguments.iter().collect();
+
+		function.apply(target, &arguments).ok()
+	}
+
+	/// Reads the click that opened this page from its address, and takes
+	/// the click's parameters off the address.
+	pub(super) fn launch() -> Option<Opened> {
+		let global: JsValue = js_sys::global().into();
+		let href = get(&get(&global, "location")?, "href")?.as_string()?;
+		let (opened, clean) = crate::receive::from_address(&href)?;
+
+		// Put the cleaned address back in place: the same history entry,
+		// its state untouched, and nothing loads.
+		if let Some(history) = get(&global, "history") {
+			let state =
+				Reflect::get(&history, &JsValue::from_str("state")).unwrap_or(JsValue::NULL);
+			let _ = call(
+				&history,
+				"replaceState",
+				&[state, JsValue::from_str(""), JsValue::from_str(&clean)],
+			);
+		}
+
+		Some(opened)
+	}
+
+	/// Listens to the worker's messages. `None` where the browser has no
+	/// service workers.
+	pub(super) fn listen(shared: &Rc<RefCell<Shared>>) -> Option<Listener> {
+		let global: JsValue = js_sys::global().into();
+		let container = get(&get(&global, "navigator")?, "serviceWorker")?;
+		let shared = Rc::clone(shared);
+		let closure = Closure::<dyn FnMut(JsValue)>::new(move |event: JsValue| {
+			let Some(data) = get(&event, "data") else {
+				return;
+			};
+			let Some(message) = js_sys::JSON::stringify(&data)
+				.ok()
+				.and_then(|text| text.as_string())
+				.and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+			else {
+				return;
+			};
+			let Some((received, token)) = crate::receive::from_worker(&message) else {
+				return;
+			};
+
+			// Answer the worker that the app has the click, through the
+			// message's own source: the worker then leaves this page
+			// where it is instead of loading it again.
+			if let Some(token) = token
+				&& let Some(source) = get(&event, "source")
+			{
+				let answer = js_sys::Object::new();
+				let _ = Reflect::set(
+					&answer,
+					&JsValue::from_str("lkn_ack"),
+					&JsValue::from_str(&token),
+				);
+				let _ = call(&source, "postMessage", &[answer.into()]);
+			}
+
+			let waker = {
+				let mut shared = shared.borrow_mut();
+				shared.queue.push_back(received);
+				shared.waker.take()
+			};
+
+			if let Some(waker) = waker {
+				waker.wake();
+			}
+		});
+		let function: Function = closure.as_ref().clone().unchecked_into();
+
+		call(
+			&container,
+			"addEventListener",
+			&[JsValue::from_str("message"), function.clone().into()],
+		)?;
+
+		Some(Listener {
+			container,
+			function,
+			_closure: closure,
+		})
+	}
+}
+
 #[cfg(test)]
 mod tests {
 	use super::Availability;

@@ -3,6 +3,7 @@ package dev.leptoskit.plugins.notifications
 import android.Manifest
 import android.app.Notification
 import android.app.NotificationManager
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import androidx.test.platform.app.InstrumentationRegistry
@@ -13,6 +14,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -456,6 +458,220 @@ class NotificationsPluginTest {
         } finally {
             RemoteRegistration.reset()
         }
+    }
+
+    /** A tap on a push starts or resumes the activity with the message's
+     * data as string extras. The plugin reads it from the intent once — at
+     * construction for the tap that started the app, and on every read
+     * after it — and hands it to the guest with the data as JSON; an
+     * ordinary launch, a replay from the recent-apps list, and an intent
+     * already read are not taps. */
+    @Test
+    fun aTapOnAPushIsReadFromTheIntentOnce() {
+        ReceivedNotifications.reset()
+        val id = "0190a1b2-0000-7000-8000-000000000001"
+        val tap =
+            Intent(Intent.ACTION_MAIN)
+                .putExtra("lkn", id)
+                .putExtra("lklink", "/invoice/42")
+                .putExtra("invoice", "42")
+                .putExtra("google.message_id", "0:1")
+                .putExtra("google.sent_time", 1L)
+
+        try {
+            ReceivedNotifications.noteIntentIfPresent(null)
+            ReceivedNotifications.noteIntentIfPresent(Intent(Intent.ACTION_MAIN))
+            ReceivedNotifications.noteIntentIfPresent(Intent(Intent.ACTION_MAIN).putExtra("lkn", id))
+            ReceivedNotifications.noteIntentIfPresent(
+                Intent(tap).addFlags(Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY),
+            )
+            assertEquals(emptyList<ReceivedNotifications.Item>(), ReceivedNotifications.take())
+
+            ReceivedNotifications.noteIntentIfPresent(tap)
+            // The same intent again, as a recreated activity would hand it over.
+            ReceivedNotifications.noteIntentIfPresent(tap)
+
+            val items = ReceivedNotifications.take()
+            assertEquals(1, items.size)
+            assertEquals(ReceivedNotifications.OPENED, items[0].kind)
+            assertEquals("", items[0].action)
+            assertEquals("", items[0].local)
+            val payload = JSONObject(items[0].payload)
+            assertEquals(id, payload.getString("lkn"))
+            assertEquals("/invoice/42", payload.getString("lklink"))
+            assertEquals("42", payload.getString("invoice"))
+            assertEquals("0:1", payload.getString("google.message_id"))
+            assertFalse("only string extras are data", payload.has("google.sent_time"))
+
+            // A push the plugin posted itself carries its own mark instead
+            // of Firebase's, and a local notification the id it was posted
+            // with.
+            ReceivedNotifications.noteIntentIfPresent(
+                Intent(Intent.ACTION_MAIN).putExtra("lkn", id).putExtra(ReceivedNotifications.EXTRA_OPEN, "1"),
+            )
+            ReceivedNotifications.noteIntentIfPresent(
+                Intent(Intent.ACTION_MAIN).putExtra(ReceivedNotifications.EXTRA_LOCAL, "job-1"),
+            )
+            ReceivedNotifications.noteIntentIfPresent(
+                Intent(Intent.ACTION_MAIN).putExtra(ReceivedNotifications.EXTRA_LOCAL, "not an id"),
+            )
+            val later = ReceivedNotifications.take()
+            assertEquals(listOf("", "job-1", ""), later.map { it.local })
+            assertEquals(id, JSONObject(later[0].payload).getString("lkn"))
+            assertEquals("", later[1].payload)
+        } finally {
+            ReceivedNotifications.reset()
+        }
+    }
+
+    /** The messaging service's messages: a data message is recorded for
+     * the guest and nothing is posted; a message with a title — which
+     * reaches the service only while the app is open — is posted, as
+     * Firebase would have posted it, and recorded as having arrived. Only
+     * the latest items are kept, and a payload past the contract's bound
+     * is recorded as empty. */
+    @Test
+    fun messagesAreRecordedAndAForegroundPushIsPosted() =
+        runBlocking {
+            val instrumentation = InstrumentationRegistry.getInstrumentation()
+            val context = instrumentation.targetContext
+            if (Build.VERSION.SDK_INT >= 33 &&
+                context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+            ) {
+                instrumentation.uiAutomation.grantRuntimePermission(context.packageName, Manifest.permission.POST_NOTIFICATIONS)
+            }
+            val manager = context.getSystemService(NotificationManager::class.java)
+            val id = "0190a1b2-0000-7000-8000-${System.nanoTime().toString().takeLast(12).padStart(12, '0')}"
+            val channel = NotificationsPlugin.PREFIX + "received-${System.nanoTime()}"
+            val tag = ReceivedNotifications.PUSH_TAG_PREFIX + id
+            val plugin = withContext(Dispatchers.Main) { NotificationsPlugin(context) }
+
+            ReceivedNotifications.reset()
+            try {
+                plugin.ensurePushChannel(manager, channel)
+
+                ReceivedNotifications.noteMessage(context, mapOf("lkn" to id, "sync" to "orders"), null, null, null)
+                assertEquals(false, manager.activeNotifications.any { it.tag == tag })
+
+                ReceivedNotifications.noteMessage(context, mapOf("lkn" to id), "Paid", "Invoice 42", channel)
+                awaitNotification(manager, tag, "Paid")
+
+                // A channel the device doesn't have posts nothing, and still
+                // records the arrival.
+                ReceivedNotifications.noteMessage(context, mapOf("lkn" to "other"), "Paid", "", "$channel-missing")
+                assertEquals(false, manager.activeNotifications.any { it.tag == ReceivedNotifications.PUSH_TAG_PREFIX + "other" })
+
+                val items =
+                    withContext(Dispatchers.Main) { received(plugin.invoke(10, wait(0))) }
+                assertEquals(
+                    listOf(ReceivedNotifications.MESSAGE, ReceivedNotifications.PRESENTED, ReceivedNotifications.PRESENTED),
+                    items.map { it.kind },
+                )
+                assertEquals("orders", JSONObject(items[0].payload).getString("sync"))
+                assertEquals(id, JSONObject(items[1].payload).getString("lkn"))
+
+                // Taken once.
+                assertEquals(0, withContext(Dispatchers.Main) { received(plugin.invoke(10, wait(0))) }.size)
+
+                repeat(ReceivedNotifications.MAX_ITEMS + 4) { index ->
+                    ReceivedNotifications.noteMessage(context, mapOf("n" to "$index"), null, null, null)
+                }
+                ReceivedNotifications.noteMessage(
+                    context,
+                    mapOf("big" to "x".repeat(ReceivedNotifications.MAX_PAYLOAD_BYTES)),
+                    null,
+                    null,
+                    null,
+                )
+                val kept = ReceivedNotifications.take()
+                assertEquals(ReceivedNotifications.MAX_ITEMS, kept.size)
+                assertEquals("5", JSONObject(kept.first().payload).getString("n"))
+                assertEquals("", kept.last().payload)
+            } finally {
+                withContext(Dispatchers.Main) { plugin.close() }
+                manager.cancel(tag, 0)
+                manager.deleteNotificationChannel(channel)
+                ReceivedNotifications.reset()
+            }
+        }
+
+    /** A waiting read ends as soon as something arrives, an empty wait
+     * ends at its bound, a malformed request is refused, and a plugin
+     * closed while waiting never answers. */
+    @Test
+    fun aReceivedWaitIsBoundedAndEndsWhenSomethingArrives() =
+        runBlocking {
+            val context = InstrumentationRegistry.getInstrumentation().targetContext
+            val plugin = withContext(Dispatchers.Main) { NotificationsPlugin(context) }
+
+            ReceivedNotifications.reset()
+            try {
+                assertEquals(true, plugin.methods.contains(NotificationsPlugin.RECEIVED))
+
+                val waiting = async(Dispatchers.Main) { received(plugin.invoke(10, wait(-1))) }
+                delay(150)
+                ReceivedNotifications.noteMessage(context, mapOf("lkn" to "a"), null, null, null)
+                assertEquals(1, withTimeout(5_000) { waiting.await() }.size)
+
+                val started = System.nanoTime()
+                assertEquals(0, withContext(Dispatchers.Main) { received(plugin.invoke(10, wait(200))) }.size)
+                val waited = (System.nanoTime() - started) / 1_000_000
+                assertEquals(true, waited in 150L..5_000L)
+
+                for (bad in listOf(ByteBuffer.allocate(0), ByteBuffer.allocate(3), ByteBuffer.allocate(5))) {
+                    try {
+                        withContext(Dispatchers.Main) { plugin.invoke(10, bad) }
+                        fail("A malformed wait was accepted")
+                    } catch (error: PluginException) {
+                        assertEquals(PluginException.INVALID_ARGUMENT, error.code)
+                    }
+                }
+
+                val closing = async(Dispatchers.Main) { runCatching { plugin.invoke(10, wait(5_000)) } }
+                delay(150)
+                withContext(Dispatchers.Main) { plugin.close() }
+                val failure = withTimeout(5_000) { closing.await() }.exceptionOrNull()
+                assertEquals(PluginException.CANCELLED, (failure as? PluginException)?.code)
+            } finally {
+                withContext(Dispatchers.Main) { plugin.close() }
+                ReceivedNotifications.reset()
+            }
+        }
+
+    /** A `RECEIVED` request: the wait bound in milliseconds, little-endian. */
+    private fun wait(millis: Int): ByteBuffer =
+        ByteBuffer
+            .allocate(4)
+            .order(ByteOrder.LITTLE_ENDIAN)
+            .putInt(millis)
+            .apply { flip() }
+
+    /** A `RECEIVED` reply decoded the way the Rust contract does: a `u32`
+     * count, then for each item a `u32` kind and three length-prefixed
+     * strings, with nothing left over. */
+    private fun received(reply: ByteArray): List<ReceivedNotifications.Item> {
+        val data = ByteBuffer.wrap(reply).order(ByteOrder.LITTLE_ENDIAN)
+
+        fun text(): String {
+            val bytes = ByteArray(data.int)
+
+            data.get(bytes)
+
+            return String(bytes, Charsets.UTF_8)
+        }
+
+        val items =
+            List(data.int) {
+                val kind = data.int
+                val action = text()
+                val local = text()
+
+                ReceivedNotifications.Item(kind, action, local, text())
+            }
+
+        assertFalse("the reply carries no trailing bytes", data.hasRemaining())
+
+        return items
     }
 
     /** One snapshot reply, decoded: revision `u64`, state `u32`, string. */

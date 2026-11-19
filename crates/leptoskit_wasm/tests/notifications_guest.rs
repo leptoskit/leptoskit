@@ -10,12 +10,13 @@
 //!   credential headers, and both wire codecs end to end.
 //! - **Played**: the OS boundary — the `notifications` plugin's methods 7 and 8
 //!   answer scripted APNs snapshots through the plugin's own codec, and method
-//!   9 the device details the OS reports — and the service — the `http` plugin
-//!   answers scripted JSON for the RPC routes the client really addresses, with
-//!   a destination-deduping, quota-refusing, receipt-replaying stand-in that
-//!   keeps the real service's ownership rules: a renewal of an enrollment the
-//!   person no longer holds answers "gone" and registers nothing. No real APNs,
-//!   no real server, no device.
+//!   9 the device details the OS reports, and method 10 the batches of taps,
+//!   shown notifications, and data messages a host received — and the service —
+//!   the `http` plugin answers scripted JSON for the RPC routes the client
+//!   really addresses, with a destination-deduping, quota-refusing,
+//!   receipt-replaying stand-in that keeps the real service's ownership rules:
+//!   a renewal of an enrollment the person no longer holds answers "gone" and
+//!   registers nothing. No real APNs, no real server, no device.
 //!
 //! Runs as `test:plugins:guest` does, from the wasm the script builds.
 
@@ -33,6 +34,8 @@ use leptoskit_plugin_http::protocol;
 use leptoskit_plugin_notifications::DeviceInfo;
 use leptoskit_plugin_notifications::DeviceToken;
 use leptoskit_plugin_notifications::FcmToken;
+use leptoskit_plugin_notifications::ReceivedItem;
+use leptoskit_plugin_notifications::ReceivedKind;
 use leptoskit_plugin_notifications::RemoteRegistration;
 use leptoskit_plugin_notifications::RemoteState;
 use leptoskit_wasm::EventKind;
@@ -297,7 +300,13 @@ fn body_json(body: &str) -> serde_json::Value {
 struct Run {
 	steps: Vec<String>,
 	service: Service,
+	/// The wait bound of each `RECEIVED` call the guest made, in order.
+	waits: Vec<u32>,
 }
+
+/// What the fake host has received, as it answers each `RECEIVED` call in
+/// order. `None` is a host that predates the method.
+type Inbox = Option<Vec<Vec<ReceivedItem>>>;
 
 /// Runs the guest once for `scenario`, playing the OS and service scripts.
 fn run(wasm: &[u8], scenario: u32, os: Vec<Answer>, service: Service) -> Run {
@@ -310,6 +319,18 @@ fn run_with(
 	scenario: u32,
 	os: Vec<Answer>,
 	devices: Vec<Device>,
+	service: Service,
+) -> Run {
+	run_receiving(wasm, scenario, os, devices, None, service)
+}
+
+/// [`run_with`], with what the host received scripted too.
+fn run_receiving(
+	wasm: &[u8],
+	scenario: u32,
+	os: Vec<Answer>,
+	devices: Vec<Device>,
+	inbox: Inbox,
 	mut service: Service,
 ) -> Run {
 	const REPORT: &str = "notifications-guest-report";
@@ -319,14 +340,17 @@ fn run_with(
 	const REMOTE_TOKEN: MethodId = MethodId(7);
 	const REMOTE_REGISTER: MethodId = MethodId(8);
 	const DEVICE: MethodId = MethodId(9);
+	const RECEIVED: MethodId = MethodId(10);
 
 	let mut host = WasmHost::<HeadlessBackend>::headless(wasm).expect("compile the guest");
 	let report = register(&mut host, REPORT, &[ASK, PANICKED, STEP]);
-	let notifications = register(
-		&mut host,
-		"notifications",
-		&[REMOTE_TOKEN, REMOTE_REGISTER, DEVICE],
-	);
+	let mut methods = vec![REMOTE_TOKEN, REMOTE_REGISTER, DEVICE];
+	if inbox.is_some() {
+		methods.push(RECEIVED);
+	}
+	let notifications = register(&mut host, "notifications", &methods);
+	let mut batches = inbox.unwrap_or_default().into_iter();
+	let mut waits = Vec::new();
 	let mut devices = devices.into_iter();
 	let mut reported = Device::Reports(DeviceInfo::default());
 	let http = register(&mut host, "http", &[MethodId(0)]);
@@ -406,6 +430,16 @@ fn run_with(
 							Device::Unavailable => Err(Error::Unavailable),
 						}
 					}
+					RECEIVED => {
+						waits.push(
+							leptoskit_plugin_notifications::decode_received_wait(&request.payload)
+								.expect("a wait bound"),
+						);
+						let batch = batches
+							.next()
+							.expect("the scenario scripts every received call");
+						Ok(ReceivedItem::encode_batch(&batch).expect("the plugin codec"))
+					}
 					m => panic!("unknown notifications method {}", m.0),
 				}
 			} else if request.plugin == http {
@@ -426,7 +460,11 @@ fn run_with(
 			// The guest's exit poll can submit its last step after the
 			// handled event: nothing more is queued only once every step
 			// the scenario owes has been read.
-			return Run { steps, service };
+			return Run {
+				steps,
+				service,
+				waits,
+			};
 		}
 		assert!(Instant::now() < deadline, "the guest didn't finish");
 		std::thread::sleep(Duration::from_millis(2));
@@ -1057,4 +1095,90 @@ fn an_enrollment_saved_before_details_sends_once() {
 		vec![serde_json::json!({})],
 		"one send, with no details from a host that predates the method"
 	);
+}
+
+/// One received item, as a host builds it.
+fn item(kind: ReceivedKind, action: &str, payload: &serde_json::Value) -> ReceivedItem {
+	ReceivedItem::new(kind, action, "", payload.to_string()).expect("an item in bounds")
+}
+
+#[test]
+#[ignore = "run by test:plugins:guest, which compiles the wasm fixture"]
+fn taps_shown_notifications_and_data_messages_reach_the_app_in_order() {
+	let launch = "0190a1b2-0000-7000-8000-000000000001";
+	let later = "0190a1b2-0000-7000-8000-000000000002";
+	let silent = "0190a1b2-0000-7000-8000-000000000003";
+	let run = run_receiving(
+		&guest(),
+		11,
+		Vec::new(),
+		Vec::new(),
+		Some(vec![
+			// Waiting before the app asked: the tap that launched it, in
+			// the APNs payload's shape.
+			vec![item(
+				ReceivedKind::Opened,
+				"",
+				&serde_json::json!({
+					"aps": { "alert": { "title": "Paid", "body": "Invoice 42" } },
+					"lkn": launch,
+					"lklink": "/invoice/42",
+					"lk": { "invoice": 42 },
+				}),
+			)],
+			// A wait that ended with nothing.
+			Vec::new(),
+			// While the app runs: a data message and a foreground
+			// notification in FCM's data-map shape, then a tap on an
+			// action button whose send had no link.
+			vec![
+				item(
+					ReceivedKind::Message,
+					"",
+					&serde_json::json!({
+						"lkn": silent,
+						"sync": "orders",
+						"lkbadge": "3",
+						"google.message_id": "0:1",
+					}),
+				),
+				item(
+					ReceivedKind::Presented,
+					"",
+					&serde_json::json!({ "lkn": later, "invoice": "43" }),
+				),
+				item(
+					ReceivedKind::Opened,
+					"approve",
+					&serde_json::json!({ "lkn": later, "invoice": "43" }),
+				),
+			],
+		]),
+		Service::new(),
+	);
+
+	assert_eq!(
+		run.steps,
+		vec![
+			format!("opened:{launch}:/invoice/42:-:launched:{{\"invoice\":42}}"),
+			format!("data:{silent}:3:{{\"sync\":\"orders\"}}"),
+			format!("shown:{later}:{{\"invoice\":\"43\"}}"),
+			format!("opened:{later}:/inbox?lkn={later}:approve:running:{{\"invoice\":\"43\"}}"),
+		]
+	);
+	assert_eq!(
+		run.waits,
+		vec![0, 10_000, 10_000],
+		"the first ask never waits, so what it answers is what launched the app"
+	);
+	assert!(run.service.log.is_empty(), "receiving calls no service");
+}
+
+#[test]
+#[ignore = "run by test:plugins:guest, which compiles the wasm fixture"]
+fn a_host_that_predates_receiving_answers_unavailable() {
+	let run = run_receiving(&guest(), 12, Vec::new(), Vec::new(), None, Service::new());
+
+	assert_eq!(run.steps, vec!["received=err:unavailable".to_owned()]);
+	assert!(run.waits.is_empty());
 }

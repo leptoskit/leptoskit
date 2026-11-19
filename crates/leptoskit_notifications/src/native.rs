@@ -743,6 +743,144 @@ pub async fn disable(enrollment: &Enrollment) -> Result<(), DisableError> {
 	}
 }
 
+/// What a native item's plugin kind is called here.
+#[must_use]
+pub fn source(kind: leptoskit_plugin_notifications::ReceivedKind) -> crate::receive::Source {
+	match kind {
+		leptoskit_plugin_notifications::ReceivedKind::Opened => crate::receive::Source::Opened,
+		leptoskit_plugin_notifications::ReceivedKind::Presented => {
+			crate::receive::Source::Presented
+		}
+		leptoskit_plugin_notifications::ReceivedKind::Message => crate::receive::Source::Message,
+	}
+}
+
+/// Reads one item the host received into the event the app sees, or
+/// `None` for a message that carried nothing readable.
+#[must_use]
+pub fn received_from(
+	item: &leptoskit_plugin_notifications::ReceivedItem,
+) -> Option<crate::receive::Received> {
+	crate::receive::from_host(
+		source(item.kind()),
+		item.action(),
+		item.local(),
+		item.payload(),
+	)
+}
+
+/// What this device receives, in order: a tap on a notification or one of
+/// its action buttons, a notification that arrived while the app was
+/// open, and a silent data message. Make one when the app starts and ask
+/// it for the [`next`](Receiver::next) event in a loop:
+///
+/// ```rust,ignore
+/// let mut receiver = leptoskit_notifications::native::Receiver::new();
+///
+/// while let Ok(received) = receiver.next().await {
+///     if let Received::Opened(opened) = received {
+///         navigate(&opened.route("/inbox"));
+///     }
+/// }
+/// ```
+///
+/// The tap that started the app is the first event, with
+/// [`launched`](crate::receive::Opened::launched) set: the host keeps what
+/// arrived before the app's code ran. It keeps the latest sixteen; the
+/// inbox is the durable record, and this is only what happened on this
+/// device just now.
+///
+/// iOS, macOS, and Android. Everywhere else, and on a host older than the
+/// receiving method, [`next`](Receiver::next) answers
+/// [`ReceiveError::Unavailable`](crate::receive::ReceiveError::Unavailable).
+#[derive(Debug, Default)]
+pub struct Receiver {
+	#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+	intake: crate::receive::Intake,
+}
+
+impl Receiver {
+	/// A receiver that has asked the host nothing yet.
+	#[must_use]
+	pub fn new() -> Self {
+		Self::default()
+	}
+
+	/// Waits for the next event. Dropping the wait loses nothing: what
+	/// arrives stays with the host for the next call.
+	///
+	/// # Errors
+	///
+	/// [`ReceiveError`](crate::receive::ReceiveError) when this host
+	/// delivers nothing; the loop above then ends.
+	#[cfg_attr(
+		not(target_arch = "wasm32"),
+		allow(clippy::unused_async, reason = "matches the wasm signature")
+	)]
+	pub async fn next(&mut self) -> Result<crate::receive::Received, crate::receive::ReceiveError> {
+		#[cfg(not(target_arch = "wasm32"))]
+		return Err(crate::receive::ReceiveError::Unavailable);
+
+		#[cfg(target_arch = "wasm32")]
+		loop {
+			if let Some(received) = self.intake.pop() {
+				return Ok(received);
+			}
+
+			self.ask(leptoskit_plugin_notifications::MAX_RECEIVED_WAIT_MILLIS)
+				.await?;
+		}
+	}
+
+	/// Everything that has arrived and not been handed over yet, without
+	/// waiting: at launch, the tap that started the app, if there was one.
+	///
+	/// # Errors
+	///
+	/// [`ReceiveError`](crate::receive::ReceiveError) when this host
+	/// delivers nothing.
+	#[cfg_attr(
+		not(target_arch = "wasm32"),
+		allow(clippy::unused_async, reason = "matches the wasm signature")
+	)]
+	pub async fn pending(
+		&mut self,
+	) -> Result<Vec<crate::receive::Received>, crate::receive::ReceiveError> {
+		#[cfg(not(target_arch = "wasm32"))]
+		return Err(crate::receive::ReceiveError::Unavailable);
+
+		#[cfg(target_arch = "wasm32")]
+		{
+			self.ask(0).await?;
+			Ok(self.intake.drain())
+		}
+	}
+
+	/// Asks the host once and queues what it answers. The first ask never
+	/// waits, whatever `wait_millis` says: what it answers is then exactly
+	/// what was there before the app asked, which is what marks a tap as
+	/// the one that launched the app.
+	#[cfg(target_arch = "wasm32")]
+	async fn ask(&mut self, wait_millis: u32) -> Result<(), crate::receive::ReceiveError> {
+		use crate::receive::ReceiveError;
+
+		// The plugin host answers `Unavailable` when the plugin isn't
+		// installed: the app's configuration, not a device state.
+		let notifications = leptoskit_plugin_notifications::guest::Notifications::new()
+			.map_err(|_| ReceiveError::NoPlugin)?;
+		let wait = if self.intake.first() { 0 } else { wait_millis };
+		let items = notifications.received(wait).await.map_err(|error| {
+			match error {
+				leptoskit_bridge::Error::Unavailable => ReceiveError::Unavailable,
+				other => ReceiveError::Host(other.to_string()),
+			}
+		})?;
+		self.intake.accept(items.iter().filter_map(received_from));
+
+		Ok(())
+	}
+}
+
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
 	use leptoskit_plugin_notifications::DeviceInfo;
@@ -753,8 +891,10 @@ mod tests {
 	use leptoskit_plugin_notifications::remote_failure;
 
 	use super::EnrollError;
+	use super::Receiver;
 	use super::decide;
 	use super::disable_key;
+	use super::received_from;
 	use crate::push::DeviceDetails;
 	use crate::push::PushCredential;
 	use crate::push::RegisterPushEndpoint;
@@ -1121,6 +1261,64 @@ mod tests {
 			error,
 			Err(super::DisableError::Unavailable),
 			"no revoke was attempted off the guest"
+		);
+	}
+
+	#[test]
+	fn a_host_item_becomes_the_event_the_app_sees() {
+		use leptoskit_plugin_notifications::ReceivedItem;
+		use leptoskit_plugin_notifications::ReceivedKind;
+
+		use crate::receive::Opened;
+		use crate::receive::Received;
+
+		let id = "0190a1b2-0000-7000-8000-000000000001";
+		let tap = ReceivedItem::new(
+			ReceivedKind::Opened,
+			"approve",
+			"",
+			format!(r#"{{"aps":{{}},"lkn":"{id}","lklink":"/invoice/42"}}"#),
+		)
+		.unwrap();
+
+		assert_eq!(
+			received_from(&tap),
+			Some(Received::Opened(Opened {
+				notification: Some(id.parse().unwrap()),
+				link: Some("/invoice/42".into()),
+				action: Some("approve".into()),
+				..Opened::default()
+			}))
+		);
+
+		// A local notification's tap names the id the app posted it with.
+		let local = ReceivedItem::new(ReceivedKind::Opened, "", "job-1", "").unwrap();
+		assert_eq!(
+			received_from(&local),
+			Some(Received::Opened(Opened {
+				local: Some("job-1".into()),
+				..Opened::default()
+			}))
+		);
+
+		// A message with nothing readable is nothing to hand over.
+		let empty = ReceivedItem::new(ReceivedKind::Message, "", "", "").unwrap();
+		assert_eq!(received_from(&empty), None);
+	}
+
+	#[test]
+	fn receiving_outside_a_guest_is_unavailable() {
+		use crate::receive::ReceiveError;
+
+		let mut receiver = Receiver::new();
+
+		assert_eq!(
+			futures::executor::block_on(receiver.next()),
+			Err(ReceiveError::Unavailable)
+		);
+		assert_eq!(
+			futures::executor::block_on(receiver.pending()),
+			Err(ReceiveError::Unavailable)
 		);
 	}
 }
