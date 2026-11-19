@@ -20,7 +20,21 @@ fn four_commands_and_ownership() {
 	let summary = command(&config, "plan-summary", None);
 	assert!(summary.status.success());
 	assert!(String::from_utf8_lossy(&summary.stdout).contains("single point of failure"));
+	for pin in [
+		"cloudnative-pg: 0.29.2",
+		"keda: 2.21.1",
+		"cert-manager: v1.21.3",
+		"zot (edge cluster): 0.1.134",
+	] {
+		assert!(String::from_utf8_lossy(&summary.stdout).contains(pin));
+	}
 	assert!(command(&config, "generate", Some(&out)).status.success());
+	assert!(
+		std::fs::read_dir(out.join("eu/launch/addons"))
+			.unwrap()
+			.count()
+			> 20
+	);
 	let unchanged = command(&config, "generate", Some(&out));
 	assert!(unchanged.status.success());
 	assert_eq!(String::from_utf8_lossy(&unchanged.stdout), "unchanged\n");
