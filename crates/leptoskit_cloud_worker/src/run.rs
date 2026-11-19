@@ -1,5 +1,6 @@
 //! The loop: claim a job, run it under a lease, report how it ended.
 
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU8;
@@ -31,6 +32,10 @@ use crate::state::StateError;
 
 /// How long the log's last lines have to arrive before the outcome is
 /// reported without them.
+/// How many times an outcome is offered before the job is left to its
+/// lease: a control plane that keeps failing is not waited on for ever.
+const FINISH_TRIES: u32 = 20;
+
 const LOG_FLUSH: Duration = Duration::from_secs(30);
 
 /// How long the worker waits before asking again while the control plane
@@ -120,8 +125,62 @@ pub struct Worker<B> {
 	settings: Settings,
 }
 
+/// Tells the operator `text`, which may hold a build's words: no control
+/// character reaches their terminal or journal.
 fn note(text: &str) {
+	let text: String = text
+		.chars()
+		.map(|c| if c.is_control() { ' ' } else { c })
+		.collect();
 	eprintln!("leptoskit-cloud-worker: {text}");
+}
+
+/// Deletes `path` and everything in it, even what a build made
+/// unreadable to its own user. Links are removed, never followed.
+fn remove_all(path: &Path) -> std::io::Result<()> {
+	use std::os::unix::fs::PermissionsExt as _;
+
+	if std::fs::remove_dir_all(path).is_ok() {
+		return Ok(());
+	}
+
+	fn open_up(path: &Path) {
+		let Ok(metadata) = std::fs::symlink_metadata(path) else {
+			return;
+		};
+
+		if metadata.is_dir() {
+			let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700));
+
+			if let Ok(entries) = std::fs::read_dir(path) {
+				for entry in entries.flatten() {
+					open_up(&entry.path());
+				}
+			}
+		}
+	}
+
+	open_up(path);
+	std::fs::remove_dir_all(path)
+}
+
+/// Deletes what builds left in `workspace`: a worker that was killed, or
+/// stopped by a second signal, leaves its build's directory behind.
+fn sweep(workspace: &Path) {
+	let Ok(entries) = std::fs::read_dir(workspace) else {
+		return;
+	};
+
+	for entry in entries.flatten() {
+		if entry.file_name().to_string_lossy().starts_with("build-")
+			&& remove_all(&entry.path()).is_err()
+		{
+			note(&format!(
+				"{} was left by an earlier build and couldn't be deleted",
+				entry.path().display()
+			));
+		}
+	}
 }
 
 fn kind_of(input: &JobInput) -> JobKind {
@@ -191,12 +250,8 @@ impl<B: Builder> Worker<B> {
 		builder: B,
 		settings: Settings,
 	) -> Result<Self, RunError> {
-		std::fs::create_dir_all(&settings.workspace).map_err(|source| {
-			StateError::Io {
-				path: settings.workspace.clone(),
-				source,
-			}
-		})?;
+		crate::state::private_directory(&settings.workspace)?;
+		sweep(&settings.workspace);
 		let downloads = reqwest::Client::builder()
 			.redirect(reqwest::redirect::Policy::none())
 			.connect_timeout(Duration::from_secs(10))
@@ -318,6 +373,7 @@ impl<B: Builder> Worker<B> {
 	) -> Result<BuildOutcome, String> {
 		let workspace = tempfile::Builder::new()
 			.prefix("build-")
+			.permissions(std::os::unix::fs::PermissionsExt::from_mode(0o700))
 			.tempdir_in(&self.settings.workspace)
 			.map_err(|error| format!("the workspace couldn't be made: {}", error.kind()))?;
 		let source = workspace.path().join("source");
@@ -363,9 +419,11 @@ impl<B: Builder> Worker<B> {
 		};
 
 		// The source and everything the build wrote go, however it ended.
-		if tokio::task::spawn_blocking(move || workspace.close())
+		let directory = workspace.keep();
+
+		if tokio::task::spawn_blocking(move || remove_all(&directory))
 			.await
-			.map_or(true, |closed| closed.is_err())
+			.map_or(true, |removed| removed.is_err())
 		{
 			note("a build's directory couldn't be deleted");
 		}
@@ -439,10 +497,17 @@ impl<B: Builder> Worker<B> {
 			outcome: outcome.clone(),
 		})?;
 		let mut wait = Duration::from_secs(1);
+		let mut tries = 0;
 		let ended = loop {
+			tries += 1;
+
 			match self.control.finish(job, attempt, outcome.clone()).await {
 				Ok(_) => break Ended::Reported(outcome),
-				Err(error) if error.is_transient() && fate.load(Ordering::SeqCst) != LOST => {
+				Err(error)
+					if error.is_transient()
+						&& fate.load(Ordering::SeqCst) != LOST
+						&& tries < FINISH_TRIES =>
+				{
 					tokio::time::sleep(wait).await;
 					wait = (wait * 2).min(MAX_BACKOFF);
 				}

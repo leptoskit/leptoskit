@@ -109,6 +109,15 @@ async fn download(
 			"the request failed".to_owned()
 		})
 	};
+	// The source is the organisation's own: it travels encrypted, or
+	// stays on this machine.
+	if !url::Url::parse(&input.archive.url).is_ok_and(|url| crate::client::private_transport(&url))
+	{
+		return Err(SourceError::Wrong(
+			"the source archive's address isn't https".to_owned(),
+		));
+	}
+
 	let mut response = http
 		.get(&input.archive.url)
 		.timeout(DOWNLOAD_TIMEOUT)
@@ -317,6 +326,26 @@ mod tests {
 				.expect_err("refused")
 				.to_string()
 				.contains("presigned")
+		);
+	}
+
+	#[tokio::test]
+	async fn the_source_travels_encrypted_or_stays_on_this_machine() {
+		let bytes = packed();
+		let directory = tempfile::tempdir().expect("a directory");
+		let scratch = directory.path().join("scratch");
+		std::fs::create_dir(&scratch).expect("a scratch");
+		let input = input("http://store.example.test/presigned".to_owned(), &bytes);
+		let refused = fetch(
+			&reqwest::Client::new(),
+			&input,
+			&directory.path().join("source"),
+			&scratch,
+		)
+		.await;
+		assert!(
+			matches!(&refused, Err(SourceError::Wrong(reason)) if reason.contains("https")),
+			"{refused:?}"
 		);
 	}
 }

@@ -26,6 +26,7 @@ async fn signals(shutdown: tokio::sync::watch::Sender<bool>) {
 
 		if asked {
 			eprintln!("leptoskit-cloud-worker: stopping now");
+			leptoskit_cloud_worker::kill_running_build();
 			std::process::exit(130);
 		}
 

@@ -15,12 +15,15 @@
 //! checks its size and SHA-256, unpacks it into a fresh directory, and runs
 //! a [`Builder`]. The one builder there is, [`CommandBuilder`], runs a
 //! program the operator names and reads what it built from a file the
-//! program writes. The directory is deleted when the build ends, however
-//! it ends.
+//! program writes. The directory is deleted when the build ends, and one
+//! that a worker which was killed left behind is deleted when it next
+//! starts.
 //!
 //! **The worker doesn't isolate the build.** The program runs as the
 //! worker's own user, with a cleared environment and nothing else between
-//! it and the machine: it can read the worker's key and reach the network.
+//! it and the machine: it can read the worker's key and reach the network,
+//! a process it leaves outside its process group outlives it, and every
+//! variable the operator passes it reaches every build.
 //! Building other people's code safely needs the program to do the work
 //! inside a sandbox of its own, a virtual machine or a container that is
 //! thrown away afterwards and is handed only the source directory. That
@@ -57,6 +60,7 @@ pub use client::Key;
 pub use client::OriginError;
 pub use command::BuildRequest;
 pub use command::CommandBuilder;
+pub use command::kill_running_build;
 pub use logs::LogSink;
 pub use run::Ended;
 pub use run::RunError;

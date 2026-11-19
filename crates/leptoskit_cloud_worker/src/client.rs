@@ -98,14 +98,8 @@ impl CallError {
 /// [`OriginError`] for anything else.
 pub fn origin(value: &str) -> Result<String, OriginError> {
 	let url = url::Url::parse(value).map_err(|_| OriginError)?;
-	let local = match url.host() {
-		Some(url::Host::Domain("localhost")) => true,
-		Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
-		Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
-		_ => false,
-	};
 
-	if !(url.scheme() == "https" || (url.scheme() == "http" && local))
+	if !private_transport(&url)
 		|| url.path() != "/"
 		|| url.query().is_some()
 		|| url.fragment().is_some()
@@ -116,6 +110,22 @@ pub fn origin(value: &str) -> Result<String, OriginError> {
 	}
 
 	Ok(url.origin().ascii_serialization())
+}
+
+/// Whether `url` is on this machine.
+fn local(url: &url::Url) -> bool {
+	match url.host() {
+		Some(url::Host::Domain("localhost")) => true,
+		Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+		Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+		_ => false,
+	}
+}
+
+/// Whether what is sent to `url` stays private on the way: `https`, or
+/// `http` to this machine.
+pub(crate) fn private_transport(url: &url::Url) -> bool {
+	url.scheme() == "https" || (url.scheme() == "http" && local(url))
 }
 
 /// `path` as the path operations are served under, such as `/rpc`.
@@ -155,12 +165,18 @@ impl Control {
 		let origin = self::origin(origin)?;
 		let rpc = rpc_path(rpc)?;
 		// A redirect is never followed: the key goes only where it was told
-		// to go. A proxy from the environment is used, as for any client.
-		let http = reqwest::Client::builder()
+		// to go. A proxy from the environment is used, as for any client,
+		// except for a control plane on this machine: that is plain `http`,
+		// and the key would cross the network to the proxy unencrypted.
+		let mut http = reqwest::Client::builder()
 			.redirect(reqwest::redirect::Policy::none())
-			.connect_timeout(Duration::from_secs(10))
-			.build()
-			.map_err(|_| OriginError)?;
+			.connect_timeout(Duration::from_secs(10));
+
+		if origin.starts_with("http://") {
+			http = http.no_proxy();
+		}
+
+		let http = http.build().map_err(|_| OriginError)?;
 		Ok(Self {
 			http,
 			base: format!("{origin}{rpc}"),

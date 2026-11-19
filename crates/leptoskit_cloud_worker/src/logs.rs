@@ -59,10 +59,15 @@ impl LogSink {
 	}
 }
 
-/// `line` as the protocol takes one: a single line, 4 KiB at most.
+/// `line` as the protocol takes one: a single line, 4 KiB at most, with
+/// no control character but a tab, so a build's output can't move a
+/// terminal's cursor or colour what a person reads after it.
 fn cut(mut line: String) -> String {
-	if line.contains(['\n', '\r']) {
-		line = line.replace(['\n', '\r'], " ");
+	if line.contains(|c: char| c.is_control() && c != '\t') {
+		line = line
+			.chars()
+			.map(|c| if c.is_control() && c != '\t' { ' ' } else { c })
+			.collect();
 	}
 
 	if line.len() > MAX_LOG_LINE_BYTES {
@@ -193,6 +198,11 @@ pub(crate) fn ship(
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[test]
+	fn a_line_holds_no_control_characters_but_tabs() {
+		assert_eq!(cut("a\tb\u{1b}[2Jc\rd\ne".to_owned()), "a\tb [2Jc d e");
+	}
 
 	#[test]
 	fn a_line_is_one_line_of_four_kibibytes_at_most() {

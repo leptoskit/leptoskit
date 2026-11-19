@@ -38,7 +38,9 @@ pub struct Pair {
 	/// The path the control plane serves its operations under.
 	#[arg(long, default_value = "/rpc")]
 	pub rpc: String,
-	/// The pairing code, `lkp_…`. It works once, for ten minutes.
+	/// The pairing code, `lkp_…`. It works once, for ten minutes. Give it
+	/// in the environment: an argument is seen by anyone who lists the
+	/// machine's processes.
 	#[arg(
 		long,
 		env = "LEPTOSKIT_CLOUD_WORKER_PAIRING_CODE",

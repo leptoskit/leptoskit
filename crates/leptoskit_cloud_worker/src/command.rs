@@ -12,8 +12,11 @@
 //! - `PATH`, and any variable the operator named to pass on.
 //!
 //! What it prints, on either stream, is the build's log. It is stopped,
-//! with everything it started, when the build is cancelled or runs past
-//! its time.
+//! with what it started in its own process group, when it ends, when the
+//! build is cancelled, or when it runs past its time. A process that
+//! leaves the group, by `setsid` or by asking a daemon such as Docker's to
+//! start it, is not stopped: a build command that starts one must stop it
+//! when it is asked to end.
 //!
 //! Nothing here isolates the program from the machine: see the crate's
 //! documentation.
@@ -30,10 +33,12 @@ use leptoskit_cloud::deployments::AppFacts;
 use leptoskit_cloud::workers::BuildOutcome;
 use leptoskit_cloud::workers::BuildServerInput;
 use leptoskit_cloud::workers::DeploymentRef;
+use leptoskit_cloud::workers::MAX_LOG_LINE_BYTES;
 use serde::Deserialize;
 use serde::Serialize;
 use tokio::io::AsyncBufReadExt as _;
 use tokio::io::AsyncRead;
+use tokio::io::AsyncReadExt as _;
 
 use crate::build::BuildJob;
 use crate::build::Builder;
@@ -116,7 +121,19 @@ impl CommandBuilder {
 }
 
 fn failed(reason: impl Into<String>) -> BuildOutcome {
-	let mut reason: String = reason.into();
+	BuildOutcome::Failed {
+		reason: shortened(&reason.into()),
+		steps: Vec::new(),
+	}
+}
+
+/// `reason`, held to a reason's length, with its control characters as
+/// spaces: it is shown to an operator as well as to the organisation.
+fn shortened(reason: &str) -> String {
+	let mut reason: String = reason
+		.chars()
+		.map(|c| if c.is_control() { ' ' } else { c })
+		.collect();
 
 	if reason.len() > MAX_REASON {
 		let mut end = MAX_REASON;
@@ -128,29 +145,55 @@ fn failed(reason: impl Into<String>) -> BuildOutcome {
 		reason.truncate(end);
 	}
 
-	BuildOutcome::Failed {
-		reason,
-		steps: Vec::new(),
-	}
+	reason
 }
 
-/// Copies `stream`'s lines to the log.
+/// Copies `stream`'s lines to the log. A line longer than a log's line
+/// is sent in pieces, so a build that never ends a line holds no more
+/// than one line's worth of the worker's memory.
 async fn copy(stream: impl AsyncRead + Unpin, log: LogSink) {
 	let mut reader = tokio::io::BufReader::new(stream);
 	let mut line = Vec::new();
 
-	loop {
-		line.clear();
-
+	let send = |line: &mut Vec<u8>| {
 		// Read by bytes: a build may print what isn't UTF-8.
-		match reader.read_until(b'\n', &mut line).await {
-			Ok(0) | Err(_) => break,
-			Ok(_) => {
-				let text = String::from_utf8_lossy(&line);
-				log.line(text.trim_end_matches(['\n', '\r']));
-			}
+		let text = String::from_utf8_lossy(line);
+		log.line(text.trim_end_matches(['\n', '\r']));
+		line.clear();
+	};
+
+	while let Ok(buffer) = reader.fill_buf().await {
+		if buffer.is_empty() {
+			break;
+		}
+
+		let room = MAX_LOG_LINE_BYTES - line.len();
+		let (taken, ended) = match buffer.iter().take(room).position(|&byte| byte == b'\n') {
+			Some(at) => (at + 1, true),
+			None => (buffer.len().min(room), false),
+		};
+		line.extend_from_slice(&buffer[..taken]);
+		reader.consume(taken);
+
+		if ended || line.len() >= MAX_LOG_LINE_BYTES {
+			send(&mut line);
 		}
 	}
+
+	if !line.is_empty() {
+		send(&mut line);
+	}
+}
+
+/// The group of the build command running now, or 0: what a worker that
+/// is told to stop at once kills on its way out.
+static RUNNING: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+
+/// Kills the build command running now, and what it started in its group.
+/// For a worker that is about to exit without ending its build.
+pub fn kill_running_build() {
+	let group = RUNNING.swap(0, std::sync::atomic::Ordering::SeqCst);
+	signal(rustix::process::Pid::from_raw(group), true);
 }
 
 /// The process group a program leads, taken as it starts: once it has
@@ -186,29 +229,75 @@ async fn end(child: &mut tokio::process::Child, group: Group) {
 	}
 
 	// What outlived the program itself.
-	signal(group, true);
+	gone(group);
+}
+
+/// Kills what is left of the program's group, if anything is: a group
+/// with no one left in it has an ID that may be another's by now.
+fn gone(group: Group) {
+	if let Some(id) = group
+		&& rustix::process::test_kill_process_group(id).is_ok()
+	{
+		signal(group, true);
+	}
 }
 
 /// What the program wrote at `path`, checked against what it was asked.
+///
+/// The file is opened without following a link and without waiting on a
+/// pipe, and only a regular file, read no further than [`MAX_OUTPUT`], is
+/// believed: what is left of a build may have put anything there.
 async fn result(path: &Path, input: &BuildServerInput) -> Option<BuildOutcome> {
-	let length = tokio::fs::symlink_metadata(path).await.ok()?;
+	let flags = rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::NONBLOCK;
+	let file = tokio::fs::OpenOptions::new()
+		.read(true)
+		.custom_flags(flags.bits().cast_signed())
+		.open(path)
+		.await
+		.ok()?;
+	let metadata = file.metadata().await.ok()?;
 
-	if !length.is_file() || length.len() > MAX_OUTPUT {
+	if !metadata.is_file() || metadata.len() > MAX_OUTPUT {
 		return None;
 	}
 
-	let bytes = tokio::fs::read(path).await.ok()?;
+	let mut bytes = Vec::new();
+	file.take(MAX_OUTPUT + 1)
+		.read_to_end(&mut bytes)
+		.await
+		.ok()?;
+
+	if bytes.len() as u64 > MAX_OUTPUT {
+		return None;
+	}
+
 	let outcome: BuildOutcome = serde_json::from_slice(&bytes).ok()?;
 
 	match outcome {
-		BuildOutcome::Succeeded(output) if output.image.repository != input.image_repository => {
+		BuildOutcome::Succeeded(output)
+			if std::iter::once(&output.image)
+				.chain(
+					output
+						.processes
+						.iter()
+						.filter_map(|process| process.image.as_ref()),
+				)
+				.any(|image| image.repository != input.image_repository) =>
+		{
 			Some(failed(
 				"the build command pushed its image somewhere other than where it was told to",
 			))
 		}
 		// Only the worker says a build was stopped.
 		BuildOutcome::Stopped => None,
-		outcome => Some(outcome),
+		// The build's own words, held to a reason's length.
+		BuildOutcome::Failed { reason, steps } => {
+			Some(BuildOutcome::Failed {
+				reason: shortened(&reason),
+				steps,
+			})
+		}
+		outcome @ BuildOutcome::Succeeded(_) => Some(outcome),
 	}
 }
 
@@ -219,7 +308,7 @@ impl CommandBuilder {
 			source,
 			scratch,
 			log,
-			mut stop,
+			stop,
 		} = job;
 		let request = scratch.join("input.json");
 		let output = scratch.join("output.json");
@@ -259,7 +348,7 @@ impl CommandBuilder {
 		}
 
 		command.process_group(0);
-		let mut child = match command.spawn() {
+		let child = match command.spawn() {
 			Ok(child) => child,
 			Err(error) => {
 				log.line(format!(
@@ -270,7 +359,25 @@ impl CommandBuilder {
 			}
 		};
 		let group = group_of(&child);
-		let streams = tokio::spawn({
+		RUNNING.store(
+			rustix::process::Pid::as_raw(group),
+			std::sync::atomic::Ordering::SeqCst,
+		);
+		let outcome = self.wait(child, group, input, &output, log, stop).await;
+		RUNNING.store(0, std::sync::atomic::Ordering::SeqCst);
+		outcome
+	}
+
+	async fn wait(
+		&self,
+		mut child: tokio::process::Child,
+		group: Group,
+		input: &BuildServerInput,
+		output: &Path,
+		log: LogSink,
+		mut stop: crate::build::Stop,
+	) -> BuildOutcome {
+		let mut streams = tokio::spawn({
 			let out = child.stdout.take();
 			let err = child.stderr.take();
 			let log = log.clone();
@@ -304,7 +411,7 @@ impl CommandBuilder {
 		let status = match ended {
 			Ended::Exited(status) => {
 				// Whatever the program left running goes with it.
-				signal(group, true);
+				gone(group);
 				status
 			}
 			Ended::Stopped => {
@@ -322,9 +429,12 @@ impl CommandBuilder {
 				return failed(format!("the build ran past its limit of {minutes} min"));
 			}
 		};
-		// The streams close once every process holding them is gone.
-		let _ = tokio::time::timeout(GRACE, streams).await;
-		let written = result(&output, input).await;
+		// The streams close once every process holding them is gone; one
+		// that left the group may hold them open for good.
+		if tokio::time::timeout(GRACE, &mut streams).await.is_err() {
+			streams.abort();
+		}
+		let written = result(output, input).await;
 
 		match (status, written) {
 			(Ok(status), Some(outcome)) if status.success() => outcome,
@@ -610,5 +720,76 @@ mod tests {
 			gone(&child).await,
 			"what the build started is still running"
 		);
+	}
+
+	#[tokio::test]
+	async fn a_line_that_never_ends_is_sent_in_pieces() {
+		// Three log lines' worth, with no newline at all.
+		let script = format!("head -c {} /dev/zero | tr '\\0' x", MAX_LOG_LINE_BYTES * 3);
+		let (_, log, _directory) = build(&script, |builder| builder, Stop::never()).await;
+		assert_eq!(
+			log.len(),
+			3,
+			"{:?}",
+			log.iter().map(String::len).collect::<Vec<_>>()
+		);
+		assert!(log.iter().all(|line| line.len() == MAX_LOG_LINE_BYTES));
+	}
+
+	#[tokio::test]
+	async fn only_a_regular_file_is_read_as_the_result() {
+		// A link to a file holding a good result, and a pipe no one writes.
+		for setup in [
+			format!(
+				"printf '%s' '{}' > \"$HOME/real.json\" && ln -s \"$HOME/real.json\" \
+				 \"$LEPTOSKIT_BUILD_OUTPUT\"",
+				succeeded(REPOSITORY)
+			),
+			"mkfifo \"$LEPTOSKIT_BUILD_OUTPUT\"".to_owned(),
+		] {
+			let (outcome, log, _directory) = tokio::time::timeout(
+				Duration::from_secs(30),
+				build(&setup, |builder| builder, Stop::never()),
+			)
+			.await
+			.expect("a pipe isn't waited on");
+			assert_eq!(
+				outcome,
+				failed("the build command ended without writing what it built"),
+				"{log:?}"
+			);
+		}
+	}
+
+	#[tokio::test]
+	async fn every_image_must_be_in_the_repository_it_was_given() {
+		let elsewhere = succeeded(REPOSITORY).replace(
+			r#""name":"app","#,
+			&format!(
+				r#""name":"app","image":{{"repository":"registry.example.test/someone/else","digest":"{}"}},"#,
+				Digest::of(b"theirs").as_str()
+			),
+		);
+		let script = format!("printf '%s' '{elsewhere}' > \"$LEPTOSKIT_BUILD_OUTPUT\"");
+		let (outcome, _, _directory) = build(&script, |builder| builder, Stop::never()).await;
+		assert_eq!(
+			outcome,
+			failed("the build command pushed its image somewhere other than where it was told to")
+		);
+	}
+
+	#[tokio::test]
+	async fn a_builds_own_reason_is_held_to_a_reasons_length() {
+		let script = format!(
+			"printf '{{\"result\":\"failed\",\"reason\":\"%s\\\\u001b[2Jfake\"}}' {} > \
+			 \"$LEPTOSKIT_BUILD_OUTPUT\"; exit 1",
+			"x".repeat(2000)
+		);
+		let (outcome, log, _directory) = build(&script, |builder| builder, Stop::never()).await;
+		let BuildOutcome::Failed { reason, .. } = outcome else {
+			panic!("{outcome:?} {log:?}");
+		};
+		assert_eq!(reason.len(), MAX_REASON);
+		assert!(!reason.contains(char::is_control));
 	}
 }

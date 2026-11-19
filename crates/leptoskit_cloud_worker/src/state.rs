@@ -9,6 +9,7 @@
 use std::fs;
 use std::io;
 use std::io::Write as _;
+use std::os::unix::fs::MetadataExt as _;
 use std::os::unix::fs::OpenOptionsExt as _;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::Path;
@@ -41,6 +42,11 @@ pub enum StateError {
 	},
 	#[error("{} isn't what this worker wrote; move it away to start again", path.display())]
 	Unreadable { path: PathBuf },
+	#[error(
+		"{} must be a directory of this user's, not a link and not one another user can write",
+		.0.display()
+	)]
+	NotPrivate(PathBuf),
 	#[error("another worker is running from {}", .0.display())]
 	Locked(PathBuf),
 	#[error("{} already holds a paired worker; use another directory, or remove it", .0.display())]
@@ -113,8 +119,7 @@ impl State {
 				source,
 			}
 		};
-		fs::create_dir_all(directory).map_err(io)?;
-		fs::set_permissions(directory, fs::Permissions::from_mode(0o700)).map_err(io)?;
+		private_directory(directory)?;
 		let lock = private(&directory.join(LOCK), false).map_err(io)?;
 		rustix::fs::flock(&lock, rustix::fs::FlockOperation::NonBlockingLockExclusive)
 			.map_err(|_| StateError::Locked(directory.to_owned()))?;
@@ -165,6 +170,13 @@ impl State {
 		let bytes = serde_json::to_vec_pretty(value)
 			.map_err(|error| io(io::Error::new(io::ErrorKind::InvalidData, error)))?;
 		let temporary = self.directory.join(format!("{name}.new"));
+		// What a worker that died while writing left, or anything else:
+		// the new file is made afresh, never written through.
+		match fs::remove_file(&temporary) {
+			Ok(()) => {}
+			Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+			Err(error) => return Err(io(error)),
+		}
 		let mut file = private(&temporary, true).map_err(io)?;
 		file.write_all(&bytes).map_err(io)?;
 		file.sync_all().map_err(io)?;
@@ -269,12 +281,47 @@ impl State {
 	}
 }
 
-/// Opens `path` for writing, readable by its owner only.
-fn private(path: &Path, truncate: bool) -> io::Result<fs::File> {
+/// Opens `path` for writing, readable by its owner only, and never
+/// through a link. With `fresh`, the file must not be there yet.
+fn private(path: &Path, fresh: bool) -> io::Result<fs::File> {
 	let mut options = fs::OpenOptions::new();
-	options.write(true).create(true).truncate(truncate);
-	options.mode(0o600);
+	options
+		.write(true)
+		.mode(0o600)
+		.custom_flags(rustix::fs::OFlags::NOFOLLOW.bits().cast_signed());
+
+	if fresh {
+		options.create_new(true);
+	} else {
+		options.create(true).truncate(false);
+	}
+
 	options.open(path)
+}
+
+/// Makes `directory` if need be and keeps it to this user: it must be a
+/// directory, not a link to one, owned by this user, and no one else may
+/// read or write it.
+///
+/// # Errors
+///
+/// [`StateError::NotPrivate`] for a directory that isn't this user's, or
+/// an I/O failure.
+pub(crate) fn private_directory(directory: &Path) -> Result<(), StateError> {
+	let io = |source| {
+		StateError::Io {
+			path: directory.to_owned(),
+			source,
+		}
+	};
+	fs::create_dir_all(directory).map_err(io)?;
+	let metadata = fs::symlink_metadata(directory).map_err(io)?;
+
+	if !metadata.is_dir() || metadata.uid() != rustix::process::geteuid().as_raw() {
+		return Err(StateError::NotPrivate(directory.to_owned()));
+	}
+
+	fs::set_permissions(directory, fs::Permissions::from_mode(0o700)).map_err(io)
 }
 
 #[cfg(test)]
@@ -356,5 +403,31 @@ mod tests {
 		let state = State::open(directory.path()).expect("opens");
 		fs::write(directory.path().join(MARKER), b"{ not json").expect("written");
 		assert!(matches!(state.marker(), Err(StateError::Unreadable { .. })));
+	}
+
+	#[test]
+	fn a_state_directory_must_be_a_directory_of_this_users() {
+		let root = tempfile::tempdir().expect("a directory");
+		let real = root.path().join("real");
+		fs::create_dir(&real).expect("a directory");
+		let link = root.path().join("link");
+		std::os::unix::fs::symlink(&real, &link).expect("a link");
+		assert!(matches!(State::open(&link), Err(StateError::NotPrivate(_))));
+
+		// A file left where a new one is written is replaced, not written
+		// through.
+		let path = root.path().join("state");
+		let state = State::open(&path).expect("opens");
+		let elsewhere = root.path().join("elsewhere");
+		fs::write(&elsewhere, "untouched").expect("a file");
+		std::os::unix::fs::symlink(&elsewhere, path.join(format!("{IDENTITY}.new")))
+			.expect("a link");
+		state.pair(&identity()).expect("pairs");
+		assert_eq!(fs::read_to_string(&elsewhere).expect("reads"), "untouched");
+		assert!(
+			!fs::symlink_metadata(path.join(IDENTITY))
+				.expect("written")
+				.is_symlink()
+		);
 	}
 }
