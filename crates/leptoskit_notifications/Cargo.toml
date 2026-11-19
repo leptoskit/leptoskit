@@ -130,10 +130,29 @@ required-features = ["browser"]
 # service, and the shared validation it runs before it calls. No server
 # dependencies; `tests/dependencies.rs` keeps it that way. `chrono` rides
 # with `leptoskit_db`'s own, so the shared schedule checks don't add one.
+#
+# The browser client's bindings (`js-sys`, `leptoskit_service_worker`, and
+# `wasm-bindgen`) are optional, and only the `browser` feature turns them on;
+# the code that uses them is behind `cfg(target_arch = "wasm32")`, so the
+# service and the shared types never compile them. The browser and native
+# clients also turn on `thiserror` for their errors.
+#
+# The service's dependencies (`hex`, `http`, `httpdate`, `jiff`,
+# `leptoskit_axum`, `leptoskit_query`, `reqwest`, `ring`, `sha2`, and
+# `tokio`) are optional too, so the library without features (the shared
+# types and validation) doesn't compile any of them. All three push protocols
+# are built here on ring's constant-time primitives directly: RFC 8291
+# encryption and RFC 8292 VAPID for Web Push, the FCM service-account RSA
+# assertion (RS256), and APNs's ES256 provider token — ring already in the
+# graph through TLS.
 base64 = { workspace = true }
 chrono = { workspace = true }
+hex = { workspace = true, optional = true }
+http = { workspace = true, optional = true }
 httpdate = { version = "1", optional = true }
 jiff = { version = "0.2", optional = true, default-features = false, features = ["std", "tzdb-bundle-always"] }
+js-sys = { workspace = true, optional = true }
+leptoskit_axum = { workspace = true, optional = true }
 leptoskit_db = { workspace = true }
 # The plugin contract the native enrollment rides on: the snapshot types the
 # iOS host's answers cross the bridge in. Optional, like every platform
@@ -142,36 +161,20 @@ leptoskit_db = { workspace = true }
 # the shared types and the service build without it everywhere the guest
 # enrollment does not run.
 leptoskit_plugin_notifications = { workspace = true, optional = true, default-features = false }
+leptoskit_query = { workspace = true, optional = true }
 leptoskit_rpc = { workspace = true, features = ["client"] }
+leptoskit_service_worker = { workspace = true, optional = true }
+reqwest = { workspace = true, optional = true, features = ["json", "rustls-tls", "http2"] }
+ring = { workspace = true, optional = true }
 schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+sha2 = { workspace = true, optional = true }
 thiserror = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true, features = ["rt", "sync"] }
 url = { workspace = true }
 uuid = { workspace = true, features = ["serde", "v7"] }
-
-# The browser client's bindings. They live here, optional and workspace-
-# inherited, and only the `browser` feature turns them on; the code that
-# uses them is behind `cfg(target_arch = "wasm32")`, so the service and
-# the shared types never compile them.
-js-sys = { workspace = true, optional = true }
-leptoskit_service_worker = { workspace = true, optional = true }
 wasm-bindgen = { workspace = true, optional = true }
-
-# Everything below is the service's. The library without features (the shared
-# types and validation) doesn't compile any of it. All three push protocols are
-# built here on ring's constant-time primitives directly: RFC 8291 encryption
-# and RFC 8292 VAPID for Web Push, the FCM service-account RSA assertion
-# (RS256), and APNs's ES256 provider token — ring already in the graph through
-# TLS.
-hex = { workspace = true, optional = true }
-http = { workspace = true, optional = true }
-leptoskit_axum = { workspace = true, optional = true }
-leptoskit_query = { workspace = true, optional = true }
-reqwest = { workspace = true, optional = true, features = ["json", "rustls-tls", "http2"] }
-ring = { workspace = true, optional = true }
-sha2 = { workspace = true, optional = true }
-tokio = { workspace = true, optional = true, features = ["rt", "sync"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 futures = { workspace = true }
