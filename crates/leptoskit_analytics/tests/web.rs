@@ -45,9 +45,6 @@ export function sendOnHide() {
   navigator.sendBeacon = (url, body) => { sent.push({url, body:new Uint8Array(body)}); return true; };
   window.dispatchEvent(new Event('pagehide'));
 }
-export function pushStateUrl(url) { history.pushState(null, "", url); }
-export function replaceStateUrl(url) { history.replaceState(null, "", url); }
-
 "#)]
 extern "C" {
 	#[wasm_bindgen(js_name = interceptFetch)]
@@ -69,10 +66,6 @@ extern "C" {
 	fn intercept_typed(mode: &str);
 	#[wasm_bindgen(js_name = sendOnHide)]
 	fn send_on_hide();
-	#[wasm_bindgen(js_name = pushStateUrl)]
-	fn push_state_url(url: &str);
-	#[wasm_bindgen(js_name = replaceStateUrl)]
-	fn replace_state_url(url: &str);
 }
 
 #[cfg(all(feature = "derive", feature = "typed"))]
@@ -93,7 +86,9 @@ fn name(entry: &wire::Entry) -> String {
 	}
 }
 
-// One test, because the client is one per page.
+// One test, because the client is one per page. The automatic views need
+// a client started with them on, so they have a page of their own in
+// `web_pageviews.rs`.
 #[wasm_bindgen_test]
 async fn the_browser_records_identifies_and_remembers() {
 	clear_storage();
@@ -207,89 +202,4 @@ async fn gloo_timers_sleep(millis: i32) {
 			.unwrap();
 	});
 	wasm_bindgen_futures::JsFuture::from(promise).await.unwrap();
-}
-
-/// The automatic views: the session's first `$pageview` carries the UTM
-/// parameters and the referrer, every navigation pairs a `$pageleave`
-/// with the next `$pageview`, and opting the page out stops all of it.
-#[wasm_bindgen_test]
-async fn views_are_recorded_across_navigations_and_can_be_turned_off() {
-	clear_storage();
-	push_state_url("/landing?utm_source=google&utm_medium=organic");
-	intercept_fetch(200);
-	web::init(web::Options {
-		interval: 60_000,
-		..web::Options::default()
-	});
-
-	// The view of the landing page, with where the session arrived from.
-	web::flush().await;
-	assert_eq!(sent_count(), 1);
-	let batch = sent(0);
-	assert_eq!(batch.entries.len(), 1);
-	assert_eq!(name(&batch.entries[0]), "$pageview");
-	let Body::Event { properties, .. } = &batch.entries[0].body else {
-		panic!("not an event");
-	};
-	let property = |wanted: &str| {
-		properties
-			.iter()
-			.find(|(name, _)| name == wanted)
-			.map(|(_, value)| value.clone())
-	};
-	assert_eq!(
-		property("utm_source"),
-		Some(wire::Value::Text("google".into()))
-	);
-	assert_eq!(
-		property("utm_medium"),
-		Some(wire::Value::Text("organic".into()))
-	);
-	assert!(property("$pathname").is_some());
-
-	// A history navigation ends the page and starts the next one, without
-	// repeating the session's origin.
-	push_state_url("/pricing");
-	web::flush().await;
-	assert_eq!(sent_count(), 2);
-	let batch = sent(1);
-	assert_eq!(batch.entries.len(), 2);
-	assert_eq!(name(&batch.entries[0]), "$pageleave");
-	let Body::Event { properties, .. } = &batch.entries[0].body else {
-		panic!("not an event");
-	};
-	assert!(
-		properties
-			.iter()
-			.any(|(name, value)| name == "$duration" && matches!(value, wire::Value::Float(_)))
-	);
-	assert_eq!(name(&batch.entries[1]), "$pageview");
-	let Body::Event { properties, .. } = &batch.entries[1].body else {
-		panic!("not an event");
-	};
-	assert_eq!(
-		properties
-			.iter()
-			.find(|(name, _)| name == "$pathname")
-			.map(|(_, value)| value.clone()),
-		Some(wire::Value::Text("/pricing".into()))
-	);
-	assert!(
-		!properties.iter().any(|(name, _)| name == "utm_source"),
-		"the session's origin belongs to its first view only"
-	);
-
-	// `replaceState` navigates too.
-	replace_state_url("/checkout");
-	web::flush().await;
-	assert_eq!(sent_count(), 3);
-
-	// Opted out, the page records no views of its own.
-	web::opt_out();
-	push_state_url("/ignored");
-	web::flush().await;
-	assert_eq!(sent_count(), 3, "nothing recorded after opting out");
-	web::opt_in();
-
-	restore_fetch();
 }
