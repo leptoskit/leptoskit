@@ -122,20 +122,87 @@ pub enum Section {
 	Glossary,
 }
 
+/// A lesson as a row in its track on the Learn hub.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LessonRow {
+	/// The lesson's slug, which names its test id.
+	pub slug: String,
+	pub title: String,
+	pub minutes: u8,
+	/// The lesson's own page.
+	pub href: String,
+	/// What shows the outcome holds, once it does.
+	pub evidence: Option<String>,
+	/// The outcome it checks: `Check: you applied a plan`.
+	pub check: String,
+}
+
+/// The first lesson whose outcome doesn't hold yet.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UpNext {
+	pub title: String,
+	pub minutes: u8,
+	/// The track's title.
+	pub track: String,
+	/// What it teaches.
+	pub body: String,
+	/// The outcome it checks: `Check: you applied a plan`.
+	pub check: String,
+	/// Where it's done, and the button that goes there.
+	pub target: String,
+	pub label: String,
+	/// The lesson's own page.
+	pub href: String,
+}
+
+/// The Learn hub: every lesson, checked against the project's real state.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Learn {
+	pub analytics: Vec<LessonRow>,
+	pub infrastructure: Vec<LessonRow>,
+	/// Whether the admin could read analytics to check its lessons.
+	pub analytics_readable: bool,
+	/// `None` once every lesson holds.
+	pub up_next: Option<UpNext>,
+}
+
+/// One lesson's page.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Lesson {
+	pub title: String,
+	/// The track's title.
+	pub track: String,
+	pub minutes: u8,
+	/// What it teaches.
+	pub body: String,
+	/// The outcome it checks: `You applied a plan`.
+	pub outcome: String,
+	/// Where it's done.
+	pub target: String,
+	/// What shows the outcome holds, once it does.
+	pub evidence: Option<String>,
+}
+
 /// The pages this crate builds. Every other page is still rendered by
 /// `leptoskit_admin` alone.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Page {
 	/// The glossary of words the admin uses.
 	Glossary,
+	/// The Learn hub: progress, what's next, and every lesson.
+	Learn(Learn),
+	/// One lesson.
+	Lesson(Lesson),
 }
 
 impl Page {
 	/// The page's title, before the app's name.
 	#[must_use]
-	pub const fn title(&self) -> &'static str {
+	pub fn title(&self) -> &str {
 		match self {
 			Self::Glossary => "Glossary",
+			Self::Learn(_) => "Your progress",
+			Self::Lesson(lesson) => &lesson.title,
 		}
 	}
 
@@ -144,6 +211,7 @@ impl Page {
 	pub const fn section(&self) -> Section {
 		match self {
 			Self::Glossary => Section::Glossary,
+			Self::Learn(_) | Self::Lesson(_) => Section::Learn,
 		}
 	}
 }

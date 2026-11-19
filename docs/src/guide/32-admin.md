@@ -116,7 +116,7 @@ cd crates/leptoskit_admin_pages
 leptoskit build --release --platform web --out /var/lib/notes-admin/client
 ```
 
-Pass that directory to `lk admin serve --client-dir` (or set `LEPTOSKIT_ADMIN_CLIENT_DIR`), or to the library with `.client_dir("/var/lib/notes-admin/client")`. Without it, those pages render and stay as the server drew them: links work, but the theme switch, the account menu and search don't. So far that is the Glossary.
+Pass that directory to `lk admin serve --client-dir` (or set `LEPTOSKIT_ADMIN_CLIENT_DIR`), or to the library with `.client_dir("/var/lib/notes-admin/client")`. Without it, those pages render and stay as the server drew them: links work, but the theme switch, the account menu and search don't. So far that is Learn, its lessons, and the Glossary.
 
 ## Try it on your machine
 

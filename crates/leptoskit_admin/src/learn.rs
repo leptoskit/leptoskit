@@ -1,7 +1,10 @@
 //! The Learn hub: short lessons whose outcomes are checked against the
 //! project's real state. A lesson can't be ticked by reading it.
 
-use leptoskit::prelude::*;
+use leptoskit_admin_pages::model;
+use leptoskit_admin_pages::model::Learn;
+use leptoskit_admin_pages::model::LessonRow;
+use leptoskit_admin_pages::model::UpNext;
 use leptoskit_analytics::query::Query;
 use leptoskit_deploy_console::control::Action;
 use leptoskit_deploy_console::control::Phase;
@@ -9,19 +12,13 @@ use leptoskit_deploy_console::control::Phase;
 use crate::BASE;
 use crate::access::Preferences;
 use crate::analytics::Facts;
-use crate::components;
-use crate::components::Tone;
 use crate::infra::ProjectState;
-use crate::shell::Screen;
-use crate::shell::Section;
-use crate::style;
 
 /// A track of lessons.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Track {
 	Analytics,
 	Infrastructure,
-	Build,
 }
 
 impl Track {
@@ -29,7 +26,6 @@ impl Track {
 		match self {
 			Self::Analytics => "analytics",
 			Self::Infrastructure => "infrastructure",
-			Self::Build => "build",
 		}
 	}
 
@@ -37,7 +33,6 @@ impl Track {
 		match self {
 			Self::Analytics => "Analytics",
 			Self::Infrastructure => "Infrastructure",
-			Self::Build => "Build with leptoskit",
 		}
 	}
 }
@@ -199,16 +194,6 @@ const LESSONS: &[Lesson] = &[
 	},
 ];
 
-const BUILD: &[(&str, &str)] = &[
-	("Builder components", "guide/07-shared-components.html"),
-	("Tailwind in leptoskit", "reference/css-coverage.html"),
-	("Typed RPC and live queries", "guide/24-real-time.html"),
-	(
-		"Shipping to native with code push",
-		"guide/05-code-push.html",
-	),
-];
-
 /// Whether an analytics lesson's outcome holds, and the evidence.
 fn analytics_evidence(lesson: &Lesson, facts: &Facts, preferences: &Preferences) -> Option<String> {
 	let saved = |matches: &dyn Fn(&Query) -> bool| {
@@ -351,57 +336,6 @@ pub(crate) fn progress(proof: &Proof<'_>) -> (usize, usize) {
 	(done, LESSONS.len())
 }
 
-/// Lessons finished in one track, and lessons in it.
-fn track_progress(track: Track, proof: &Proof<'_>) -> (usize, usize) {
-	let lessons: Vec<&Lesson> = LESSONS
-		.iter()
-		.filter(|lesson| lesson.track == track)
-		.collect();
-	let done = lessons
-		.iter()
-		.filter(|lesson| evidence(lesson, proof).is_some())
-		.count();
-	(done, lessons.len())
-}
-
-/// The mark assembling: one piece per finished track.
-fn assembling(analytics: bool, infrastructure: bool, build: bool) -> Element {
-	let piece = |earned: bool, class: &str, place: &str| {
-		View()
-			.class("absolute rounded-[6px]")
-			.class(place)
-			.class(if earned {
-				class.to_owned()
-			} else {
-				"border-2 border-[var(--admin-line-strong)]".to_owned()
-			})
-	};
-
-	View()
-		.class("relative h-[112px] w-[112px] shrink-0")
-		.role(leptoskit::native::Role::Img)
-		.aria_label(format!(
-			"Your mark: {} of 3 pieces",
-			usize::from(analytics) + usize::from(infrastructure) + usize::from(build)
-		))
-		.test_id("progress-mark")
-		.child(piece(
-			analytics,
-			"bg-[var(--admin-ember)]",
-			"left-0 top-4 h-24 w-11",
-		))
-		.child(piece(
-			infrastructure,
-			"bg-[var(--admin-ember-warm)]",
-			"left-14 top-[68px] h-11 w-11",
-		))
-		.child(piece(
-			build,
-			"bg-[var(--admin-mint)] -rotate-12",
-			"left-[60px] top-0 h-11 w-11",
-		))
-}
-
 /// Where a lesson is done: the screen under the only project, or the
 /// project list when there are several.
 fn lesson_target(lesson: &Lesson, states: &[ProjectState]) -> (String, String) {
@@ -432,252 +366,67 @@ fn lesson_href(lesson: &Lesson) -> String {
 	format!("{BASE}/learn/{}/{}", lesson.track.slug(), lesson.slug)
 }
 
-fn lesson_row(lesson: &Lesson, proof: &Proof<'_>) -> Element {
-	let evidence = evidence(lesson, proof);
-	Pressable(format!(
-		"{}: {}",
-		lesson.title,
-		if evidence.is_some() { "done" } else { "to do" }
-	))
-	.href(lesson_href(lesson))
-	.class("cursor-pointer rounded-lg hover:bg-[var(--admin-sunken)]")
-	.test_id(format!("lesson:{}", lesson.slug))
-	.child(
-		View()
-			.class(
-				"flex-row items-center gap-3 rounded-lg border border-[var(--admin-line)] px-3 \
-				 py-2.5",
-			)
-			.child(match &evidence {
-				Some(_) => components::status_word(Tone::Good, "").class("w-5"),
-				None => Text("○").class("w-5 text-sm text-[var(--admin-ink-3)]"),
-			})
-			.child(
-				View()
-					.class("min-w-0 flex-1 flex-col gap-0.5")
-					.child(
-						Text(lesson.title).class("text-sm font-semibold text-[var(--admin-ink)]"),
-					)
-					.child(
-						Text(evidence.unwrap_or_else(|| check(lesson.outcome)))
-							.class(style::MUTED)
-							.class("text-xs"),
-					),
-			)
-			.child(Text(format!("{} min", lesson.minutes)).class(style::LABEL)),
-	)
+/// The hub's rows for one track.
+fn rows(track: Track, proof: &Proof<'_>) -> Vec<LessonRow> {
+	LESSONS
+		.iter()
+		.filter(|lesson| lesson.track == track)
+		.map(|lesson| {
+			LessonRow {
+				slug: lesson.slug.to_owned(),
+				title: lesson.title.to_owned(),
+				minutes: lesson.minutes,
+				href: lesson_href(lesson),
+				evidence: evidence(lesson, proof),
+				check: check(lesson.outcome),
+			}
+		})
+		.collect()
 }
 
-/// The hub.
-pub(crate) fn hub(proof: &Proof<'_>) -> Screen {
-	let (done, total) = progress(proof);
-	let (infra_done, infra_total) = track_progress(Track::Infrastructure, proof);
-	let (analytics_done, analytics_total) = track_progress(Track::Analytics, proof);
-
-	let mut infrastructure = View().class("flex-col gap-2");
-	let mut analytics = View().class("flex-col gap-2");
-
-	for lesson in LESSONS {
-		match lesson.track {
-			Track::Infrastructure => {
-				infrastructure = infrastructure.child(lesson_row(lesson, proof));
-			}
-			Track::Analytics => analytics = analytics.child(lesson_row(lesson, proof)),
-			Track::Build => {}
-		}
-	}
-
-	if proof.facts.is_none() {
-		analytics = analytics.child(
-			Text(
-				"These lessons check your real analytics, which the admin can't read: either no \
-				 analytics service is connected, or it didn't answer. Analytics says which.",
-			)
-			.class(style::MUTED),
-		);
-	}
-
-	let mut build = View().class("flex-col gap-2");
-
-	for (title, path) in BUILD {
-		build = build.child(components::link(
-			*title,
-			format!("https://leptoskit.dev/docs/{path}"),
-		));
-	}
-
-	let left = total - done;
-	let mark = View()
-		.class("flex-col items-center justify-center gap-3 px-4 py-6")
-		.child(View().class("scale-150 py-8").child(assembling(
-			analytics_done == analytics_total,
-			infra_done == infra_total,
-			false,
-		)))
-		.child(
-			Text(match left {
-				0 => "Every lesson, done. The mark is yours.".to_owned(),
-				1 => "One lesson to go.".to_owned(),
-				left => format!("{done} down. {left} to go."),
-			})
-			.class("text-xl text-center text-[var(--admin-ink)] font-[var(--admin-font-note)]"),
-		)
-		.child(
-			Text(format!(
-				"Finish a track and a piece of the mark lands. Analytics {analytics_done} of \
-				 {analytics_total} · Infrastructure {infra_done} of {infra_total}"
-			))
-			.class(style::MUTED)
-			.class("text-center")
-			.test_id("progress"),
-		);
-
-	let next = LESSONS
+/// The hub: every lesson checked, and the first one that doesn't hold yet.
+pub(crate) fn hub(proof: &Proof<'_>) -> Learn {
+	let up_next = LESSONS
 		.iter()
 		.filter(|lesson| lesson.track != Track::Analytics || proof.facts.is_some())
-		.find(|lesson| evidence(lesson, proof).is_none());
-	let up_next = match next {
-		Some(lesson) => {
+		.find(|lesson| evidence(lesson, proof).is_none())
+		.map(|lesson| {
 			let (target, label) = lesson_target(lesson, proof.states);
-			components::card("Up next")
-				.aside(format!("{} min · {}", lesson.minutes, lesson.track.title()))
-				.test_id("up-next")
-				.child(
-					Heading(2, lesson.title)
-						.class("text-2xl text-[var(--admin-ink)] font-[var(--admin-font-note)]"),
-				)
-				.child(Text(lesson.body).class(style::BODY).class("text-base"))
-				.child(components::status_word(Tone::Info, check(lesson.outcome)))
-				.child(
-					View()
-						.class("flex-row flex-wrap items-center gap-4 pt-1")
-						.child(components::raised(
-							Pressable(label.clone())
-								.href(target)
-								.class(style::BUTTON_PRIMARY)
-								.child(Text(label)),
-						))
-						.child(components::link(
-							"Read it here instead",
-							lesson_href(lesson),
-						)),
-				)
-				.child(
-					Text("This lesson ticks itself once it's true of your data.")
-						.class(style::MUTED),
-				)
-				.build()
-		}
-		None => {
-			components::card("All done")
-				.test_id("up-next")
-				.child(
-					Text("Every lesson the admin can check holds for your projects and your data.")
-						.class(style::SECONDARY),
-				)
-				.build()
-		}
-	};
+			UpNext {
+				title: lesson.title.to_owned(),
+				minutes: lesson.minutes,
+				track: lesson.track.title().to_owned(),
+				body: lesson.body.to_owned(),
+				check: check(lesson.outcome),
+				target,
+				label,
+				href: lesson_href(lesson),
+			}
+		});
 
-	let header = View()
-		.class("flex-col gap-1")
-		.child(Heading(1, "Learn").class(style::PAGE_TITLE))
-		.child(
-			Text("Short lessons that check your real project, not a quiz.").class(style::SECONDARY),
-		);
-	let hero = View()
-		.class("grid grid-cols-[2fr_3fr] gap-4 max-lg:grid-cols-1")
-		.child(View().class(style::CARD).child(mark))
-		.child(up_next);
-
-	let content = View()
-		.class("flex-col gap-5")
-		.child(header)
-		.child(hero)
-		.child(
-			View()
-				.class("grid grid-cols-2 gap-4 max-lg:grid-cols-1")
-				.test_id("grid-main")
-				.child(
-					components::card(Track::Analytics.title())
-						.aside(format!("{analytics_done}/{analytics_total}"))
-						.child(analytics)
-						.build(),
-				)
-				.child(
-					View()
-						.class("flex-col gap-4")
-						.child(
-							components::card(Track::Infrastructure.title())
-								.aside(format!("{infra_done}/{infra_total}"))
-								.child(infrastructure)
-								.build(),
-						)
-						.child(
-							components::card(Track::Build.title())
-								.aside("in the book; not tracked here")
-								.child(build)
-								.build(),
-						),
-				),
-		);
-
-	Screen {
-		title: "Your progress".to_owned(),
-		section: Section::Learn,
-		content,
-		drawers: Vec::new(),
-		open: None,
+	Learn {
+		analytics: rows(Track::Analytics, proof),
+		infrastructure: rows(Track::Infrastructure, proof),
+		analytics_readable: proof.facts.is_some(),
+		up_next,
 	}
 }
 
-/// One lesson.
-pub(crate) fn lesson(track: &str, slug: &str, proof: &Proof<'_>) -> Option<Screen> {
+/// One lesson, checked.
+pub(crate) fn lesson(track: &str, slug: &str, proof: &Proof<'_>) -> Option<model::Lesson> {
 	let lesson = LESSONS
 		.iter()
 		.find(|lesson| lesson.track.slug() == track && lesson.slug == slug)?;
-	let evidence = evidence(lesson, proof);
 	let (target, _) = lesson_target(lesson, proof.states);
 
-	let content = View()
-		.class("flex-col gap-5 max-w-[720px]")
-		.child(components::link("Your progress", format!("{BASE}/learn")))
-		.child(Heading(1, lesson.title).class(style::PAGE_TITLE))
-		.child(
-			Text(format!("{} · {} min", lesson.track.title(), lesson.minutes)).class(style::MUTED),
-		)
-		.child(Text(lesson.body).class(style::BODY).class("text-base"))
-		.child(
-			components::card("Do it")
-				.child(Text(format!("{}.", lesson.outcome)).class(style::SECONDARY))
-				.child(components::link_button(
-					components::Kind::Primary,
-					"Open the screen",
-					target,
-				))
-				.build(),
-		)
-		.child(
-			components::card("Outcome")
-				.test_id("outcome")
-				.child(match evidence {
-					Some(evidence) => components::status_word(Tone::Good, evidence),
-					None => {
-						components::status_word(
-							Tone::Info,
-							"Not yet. This ticks itself once it's true of your data.",
-						)
-					}
-				})
-				.build(),
-		);
-
-	Some(Screen {
+	Some(model::Lesson {
 		title: lesson.title.to_owned(),
-		section: Section::Learn,
-		content,
-		drawers: Vec::new(),
-		open: None,
+		track: lesson.track.title().to_owned(),
+		minutes: lesson.minutes,
+		body: lesson.body.to_owned(),
+		outcome: lesson.outcome.to_owned(),
+		target,
+		evidence: evidence(lesson, proof),
 	})
 }
 

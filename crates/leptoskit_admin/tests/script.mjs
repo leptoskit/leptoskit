@@ -142,6 +142,8 @@ function serve(directory, clientDirectory) {
 					return page("live.html");
 				case `${BASE}/learn/glossary`:
 					return page("glossary.html");
+				case `${BASE}/learn`:
+					return page("learn.html");
 				case `${BASE}/sign-in`:
 					return new Response("<!doctype html><title>Sign in</title>", {
 						headers: { "content-type": "text/html" },
@@ -768,6 +770,52 @@ Deno.test("Glossary is the pages' own Rust: theme, Workings mode, search, and th
 		assert(
 			await page.evaluate("location.pathname") === `${BASE}/sign-in`,
 			"and the admin's sign-in page opens",
+		);
+		assert(thrown.length === 0, `nothing threw: ${thrown.join("\n")}`);
+	});
+});
+
+Deno.test("Learn is the pages' own Rust, and its lessons are links", async () => {
+	await withBrowser(async (page, site) => {
+		const thrown = [];
+		page.on("Runtime.exceptionThrown", (event) => {
+			thrown.push(
+				event.exceptionDetails?.exception?.description ??
+					event.exceptionDetails?.text,
+			);
+		});
+		await open(page, `${site.origin}${BASE}/learn`);
+		await page.until(
+			"() => document.documentElement.hasAttribute('data-hydrated')",
+			"the page hydrates",
+		);
+		assert(
+			await page.evaluate(
+				"!document.querySelector('script[src$=\"admin.mjs\"]')",
+			),
+			"the page loads no hand-written script",
+		);
+		assert(
+			await page.evaluate(
+				"document.querySelector('[data-testid=\"up-next\"]') !== null",
+			),
+			"the lesson up next is on the page",
+		);
+
+		// The server's markup and the client's tree agree, so the shell
+		// answers presses: the theme flips.
+		const appearance = () =>
+			page.evaluate(
+				"document.documentElement.getAttribute('data-lk-appearance')",
+			);
+		const before = await appearance();
+		await page.click('[data-testid="theme"]');
+		assert((await appearance()) !== before, "the theme flips");
+
+		await page.click('[data-testid="lesson:first-typed-event"]');
+		await page.until(
+			`() => location.pathname === "${BASE}/learn/analytics/first-typed-event"`,
+			"a lesson row opens its lesson",
 		);
 		assert(thrown.length === 0, `nothing threw: ${thrown.join("\n")}`);
 	});

@@ -275,7 +275,7 @@ Found while converting sign-in: on the web every screen rebuild replaced each la
 - **Delegation caveat:** leptos's `delegation` feature (off in this workspace) puts element handlers on a `window` listener too. If an app turned it on and called `use_shortcut` before any element registered a `keydown` handler, the shortcut listener would run first. Nothing here turns it on.
 - **Part 2, not done: native key delivery.** No native host delivers keys to `on_key` or to shortcuts yet, so `use_shortcut` does nothing there. The audit's G7 lists the hooks per platform (AppKit `keyDown:` and a local monitor, UIKit `pressesBegan` and `keyCommands`, Android `dispatchKeyEvent`, GTK `EventControllerKey`, Win32 `WM_KEYDOWN`). Each must fill `KeyPress::meta`, call the element's handlers first, then `shortcut::dispatch`. A Wasm guest in a native host needs the host to say which modifier is primary (see `feat/key-meta`). The admin conversion needs only the web, so this waits.
 
-### `feat/admin-pages-crate`: admin conversion, part 1
+### `feat/admin-pages-crate`: admin conversion, part 1 (merged, #948)
 
 The admin's pages move to `crates/leptoskit_admin_pages`, one crate built twice like `demo_pages`: `leptoskit_admin` links it with `ssr`, and `leptoskit build` compiles it to Wasm with `hydrate`. `style`, `components`, `workings` and `charts` moved there unchanged, with `leptoskit_admin` importing them, so the unconverted pages render exactly as before. The rail, the tab bar, the brand, the project switcher and the live pulse are shared too.
 
@@ -283,7 +283,14 @@ The admin's pages move to `crates/leptoskit_admin_pages`, one crate built twice 
 - **First page: Glossary.** The hydrated `shell::Shell` holds the theme (`leptoskit::appearance::set` plus the `admin_theme` cookie), Workings mode (POST `/api/preferences`), the account menu (`aria::Menu`, test ids `avatar`, `avatar-menu`, `sign-out`; signs out through `leptoskit::auth`'s `sign_out_mutation`), search (results rendered from `shell::search_targets`, Enter opens the first), and the shortcuts ⌘K/Ctrl+K and Shift+W through `use_shortcut`.
 - **Serving:** `AdminBuilder::client_dir`, `lk admin serve --client-dir` or `LEPTOSKIT_ADMIN_CLIENT_DIR`, and `admin_demo` reads the same variable. The client is served from `{BASE}/pkg/`. Without one, moved pages render but don't respond. How the client ships with an installed `lk` is ifi's decision (asked in the thread); until then it is built from a checkout.
 - **Tests:** `script.mjs` builds the client with `leptoskit build --platform web` unless `LEPTOSKIT_ADMIN_CLIENT` names one, serves `glossary.html` from `pages_for_the_script`, and checks the theme, Shift+W, Ctrl+K and search, and signing out.
-- **Next:** Learn's hub and lessons (their rows become model data), then infrastructure with its drawers and actions, the analytics builder, Live, People and the dialogs, and last delete `admin.mjs` and the attribute rules in `shell_css`.
+- **Next:** see part 2.
+
+### `feat/admin-learn-pages`: admin conversion, part 2
+
+Learn's hub and lessons moved. The lessons and their checks stay in `leptoskit_admin/src/learn.rs`, because the checks read server-side state (projects, operations, analytics facts, preferences); it now builds `model::Learn` and `model::Lesson` values (rows with their evidence, the lesson up next, each lesson's target). `leptoskit_admin_pages/src/pages/learn.rs` draws them, with the same test ids. `server::hydrated_screen` takes a closure over the `Proof` so a page can be built from it, and answers 404 when it returns `None` (an unknown lesson).
+
+- **Tests:** the `learn` and `analytics_learn` snapshots didn't change, so the server's markup is the same as before. `script.mjs` serves `learn.html` and checks that it hydrates without `admin.mjs`, that the theme flips, and that a lesson row opens its lesson.
+- **Next:** infrastructure with its drawers and actions, the analytics builder, Live, People and the dialogs, and last delete `admin.mjs` and the attribute rules in `shell_css`.
 
 ### `feat/public-demo`: pull request #856 (merged)
 
