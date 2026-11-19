@@ -116,6 +116,7 @@ impl Bench {
 			worker: paired.worker.id,
 			name: paired.worker.name.clone(),
 			role: paired.worker.role,
+			capabilities: Vec::new(),
 		};
 		let bench = Self {
 			directory,

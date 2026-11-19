@@ -67,6 +67,9 @@ pub struct Identity {
 	pub worker: Uuid,
 	pub name: String,
 	pub role: WorkerRole,
+	/// The capabilities it declared when it paired.
+	#[serde(default)]
+	pub capabilities: Vec<String>,
 }
 
 impl std::fmt::Debug for Identity {
@@ -338,6 +341,7 @@ mod tests {
 			worker: Uuid::nil(),
 			name: "builder-1".to_owned(),
 			role: WorkerRole::Build,
+			capabilities: Vec::new(),
 		}
 	}
 

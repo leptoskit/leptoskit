@@ -454,14 +454,28 @@ pub(crate) async fn build_logs(
 	.await?;
 	let environment = environment(cx.db(), &project, environment_name).await?;
 	let deployment = super::deployments::by_number(cx.db(), &environment, number).await?;
+	let deployment_id: Id<Deployment> = deployment.id;
+	build_page(cx, after, limit, |chunk| {
+		chunk.deployment_id.eq(Some(deployment_id))
+	})
+	.await
+}
+
+/// A page of the build-kind log whose chunks `which` picks: a deployment's
+/// build, or one publish job's run.
+pub(crate) async fn build_page(
+	cx: &rpc::QueryCx,
+	after: Option<u64>,
+	limit: Option<u32>,
+	which: impl Fn(&<LogChunk as leptoskit_db::Table>::Columns) -> leptoskit_db::Expr,
+) -> rpc::Result<LogPage> {
 	let services = services(cx.context())?;
 	let after = after.unwrap_or_default();
 	let limit = page_size(limit);
-	let deployment_id: Id<Deployment> = deployment.id;
 	let after_line = i64::try_from(after).unwrap_or(i64::MAX);
 	let chunks = LogChunk::query()
 		.filter(|chunk| {
-			chunk.deployment_id.eq(Some(deployment_id))
+			which(chunk)
 				& chunk.kind.eq(LogKind::Build)
 				& chunk
 					.first_line

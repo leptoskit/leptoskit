@@ -262,6 +262,8 @@ struct Fixture {
 	pending_digest: String,
 	/// An archive ready to deploy.
 	ready_digest: String,
+	/// A publish of production, queued.
+	publication: String,
 }
 
 /// What [`Arranging::shipping`] made.
@@ -269,6 +271,8 @@ struct Shipping {
 	pairing_code: String,
 	pending_digest: String,
 	ready_digest: String,
+	/// A publish of production, queued.
+	publication: String,
 }
 
 /// An organisation being arranged, as its owner sees it.
@@ -355,9 +359,29 @@ impl Arranging<'_> {
 			)
 			.await
 			.expect(200);
+		let publication = self
+			.app
+			.call(
+				"publish",
+				json!({
+					"organization": self.organization,
+					"project": "web",
+					"environment": "production",
+					"archive": ready_digest,
+					"stores": ["firefox"],
+				}),
+				self.as_owner(),
+			)
+			.await
+			.expect(200)
+			.json()["id"]
+			.as_str()
+			.expect("an id")
+			.to_owned();
 
 		Shipping {
 			pairing_code,
+			publication,
 			pending_digest: shipping::digest_of(pending),
 			ready_digest,
 		}
@@ -504,6 +528,7 @@ impl Fixture {
 			pairing_code: shipping.pairing_code,
 			pending_digest: shipping.pending_digest,
 			ready_digest: shipping.ready_digest,
+			publication: shipping.publication,
 		}
 	}
 
@@ -610,7 +635,7 @@ impl Fixture {
 					"confirm": "doomed-env",
 				})
 			}
-			"environment_status" | "runtime_logs" | "preview_release" => {
+			"environment_status" | "runtime_logs" | "preview_release" | "publications" => {
 				json!({ "organization": organization, "project": "web", "environment": "production" })
 			}
 			"begin_upload" => {
@@ -630,6 +655,23 @@ impl Fixture {
 					"project": "web",
 					"environment": "staging",
 					"source": { "kind": "upload", "archive": self.ready_digest },
+				})
+			}
+			"publish" => {
+				json!({
+					"organization": organization,
+					"project": "web",
+					"environment": "staging",
+					"archive": self.ready_digest,
+					"stores": ["chrome"],
+				})
+			}
+			"publication" | "publication_log" => {
+				json!({
+					"organization": organization,
+					"project": "web",
+					"environment": "production",
+					"id": self.publication,
 				})
 			}
 			// Whoever may cancel may deploy, and deployed staging #1 just now.

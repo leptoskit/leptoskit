@@ -15,6 +15,7 @@ use crate::cluster::ClusterRole;
 use crate::cluster::Kubernetes;
 use crate::command::CommandBuilder;
 use crate::postgres::Postgres;
+use crate::publish::CommandPublisher;
 use crate::run::Settings;
 use crate::run::Worker;
 use crate::state::Identity;
@@ -89,6 +90,24 @@ pub struct Run {
 	/// How long one build may run, in minutes.
 	#[arg(long, default_value_t = 60)]
 	pub build_timeout_minutes: u64,
+	/// The program that publishes to app and extension stores: run once for
+	/// each publish, in the unpacked source, with the job's store
+	/// credentials. The worker doesn't isolate it; see the readme. Without
+	/// it, a build worker takes no publish jobs: pair one with
+	/// `--capability publish` to be offered them.
+	#[arg(long, env = "LEPTOSKIT_CLOUD_WORKER_PUBLISH_COMMAND")]
+	pub publish_command: Option<PathBuf>,
+	/// An argument for the publish command. Repeat it for more.
+	#[arg(long = "publish-arg")]
+	pub publish_arguments: Vec<String>,
+	/// The name of a variable of the worker's own to give the publish
+	/// command, which otherwise gets `PATH`, the job's credentials, and
+	/// nothing else of them.
+	#[arg(long = "publish-env")]
+	pub publish_environment: Vec<String>,
+	/// How long one publish may run, in minutes.
+	#[arg(long, default_value_t = 120)]
+	pub publish_timeout_minutes: u64,
 	/// For a cluster's worker: the kubeconfig file to reach the cluster
 	/// with, while developing. Without it the worker uses the service
 	/// account of the pod it runs in.
@@ -190,7 +209,11 @@ async fn pair(arguments: Pair) -> Result<(), CommandError> {
 	state.ensure_unpaired()?;
 	let control = Control::new(&arguments.url, &arguments.rpc, None)?;
 	let paired = control
-		.pair(&arguments.code, &arguments.name, arguments.capabilities)
+		.pair(
+			&arguments.code,
+			&arguments.name,
+			arguments.capabilities.clone(),
+		)
 		.await
 		.map_err(CommandError::Pair)?;
 	state.pair(&Identity {
@@ -200,6 +223,7 @@ async fn pair(arguments: Pair) -> Result<(), CommandError> {
 		worker: paired.worker.id,
 		name: paired.worker.name.clone(),
 		role: paired.worker.role,
+		capabilities: arguments.capabilities,
 	})?;
 	println!(
 		"Paired as {} ({:?}). The key is kept in {}.",
@@ -211,7 +235,10 @@ async fn pair(arguments: Pair) -> Result<(), CommandError> {
 }
 
 async fn run(arguments: Run, shutdown: watch::Receiver<bool>) -> Result<(), CommandError> {
-	if arguments.build_timeout_minutes == 0 || arguments.rollout_timeout_minutes == 0 {
+	if arguments.build_timeout_minutes == 0
+		|| arguments.publish_timeout_minutes == 0
+		|| arguments.rollout_timeout_minutes == 0
+	{
 		return Err(CommandError::Usage(
 			"a timeout is a minute or more".to_owned(),
 		));
@@ -246,7 +273,35 @@ async fn run(arguments: Run, shutdown: watch::Receiver<bool>) -> Result<(), Comm
 				.timeout(Duration::from_secs(
 					arguments.build_timeout_minutes.saturating_mul(60),
 				));
-			Worker::new(control, state, builder, Settings::new(workspace))?
+			// Offered publishes, it must be able to run them: one it can't
+			// would hold its organisation's credentials and then fail.
+			if arguments.publish_command.is_none()
+				&& identity
+					.capabilities
+					.iter()
+					.any(|capability| capability == leptoskit_cloud::workers::PUBLISH_CAPABILITY)
+			{
+				return Err(CommandError::Usage(
+					"this worker paired with the `publish` capability, so it needs \
+					 --publish-command"
+						.to_owned(),
+				));
+			}
+
+			let worker = Worker::new(control, state, builder, Settings::new(workspace))?;
+
+			match arguments.publish_command {
+				Some(program) => {
+					worker.with_publisher(
+						CommandPublisher::new(program, arguments.publish_arguments)
+							.pass(arguments.publish_environment)
+							.timeout(Duration::from_secs(
+								arguments.publish_timeout_minutes.saturating_mul(60),
+							)),
+					)
+				}
+				None => worker,
+			}
 		}
 		WorkerRole::Cluster => {
 			let deadline =

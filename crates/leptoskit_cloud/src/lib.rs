@@ -61,6 +61,7 @@ pub mod domains;
 pub mod operator;
 pub mod pricing;
 pub mod projects;
+pub mod publishing;
 pub mod release;
 #[cfg(feature = "server")]
 pub mod server;

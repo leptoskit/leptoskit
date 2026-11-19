@@ -58,6 +58,7 @@ impl Key {
 		let (pem, path) = if text.contains("-----BEGIN") {
 			(key.clone(), None)
 		} else {
+			super::secrets::refuse_path(KEY)?;
 			let path = PathBuf::from(text);
 			let pem = std::fs::read_to_string(&path)
 				.with_context(|| format!("{KEY} names a file that can't be read"))?;

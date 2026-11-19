@@ -111,6 +111,7 @@ fn cluster_worker(
 		worker: shop.cluster.id.parse().expect("an ID"),
 		name: "eu-one-worker".to_owned(),
 		role: WorkerRole::Cluster,
+		capabilities: Vec::new(),
 	};
 	let state = State::open(&directory.path().join("state")).expect("the state opens");
 	state.pair(&identity).expect("keeps its key");

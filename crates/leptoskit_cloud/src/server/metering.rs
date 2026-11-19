@@ -165,21 +165,40 @@ pub(crate) async fn build_ended(
 	let Some(claimed) = job.claimed_at else {
 		return Ok(());
 	};
-	let project = match job.deployment_id {
-		Some(id) => {
+	let project = match (job.deployment_id, job.environment_id) {
+		(Some(id), _) => {
 			Deployment::query()
 				.filter(|row| row.id.eq(id))
 				.first(tx)
 				.await?
 				.map(|row| row.project_id)
 		}
-		None => None,
+		// A publish has no deployment: its environment says whose it is.
+		(None, Some(id)) => {
+			Environment::query()
+				.filter(|row| row.id.eq(id))
+				.first(tx)
+				.await?
+				.map(|row| row.project_id)
+		}
+		(None, None) => None,
+	};
+	// A job that needs a Mac ran on one.
+	let meter = if job
+		.requirements
+		.0
+		.iter()
+		.any(|requirement| requirement == crate::workers::MACOS_CAPABILITY)
+	{
+		Meter::MacosBuildMinutes
+	} else {
+		Meter::LinuxBuildMinutes
 	};
 	record(
 		tx,
 		job.organization_id,
 		project.unwrap_or_else(no_project),
-		Meter::LinuxBuildMinutes,
+		meter,
 		build_minutes(claimed, ended),
 	)
 	.await

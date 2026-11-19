@@ -658,3 +658,23 @@ mod subscriptions {
 		subscriptions::a_missed_event_is_caught_up_with(&app, &till).await;
 	}
 }
+
+/// Publishing on Postgres.
+mod publishing {
+	use super::app;
+	use super::support::publishing;
+
+	#[tokio::test]
+	async fn a_publish_carries_its_stores_credentials() {
+		if let Some((_postgres, app)) = app().await {
+			publishing::a_publish_carries_its_stores_credentials(&app).await;
+		}
+	}
+
+	#[tokio::test]
+	async fn a_publish_is_never_run_twice() {
+		if let Some((_postgres, app)) = app().await {
+			publishing::a_publish_is_never_run_twice(&app).await;
+		}
+	}
+}

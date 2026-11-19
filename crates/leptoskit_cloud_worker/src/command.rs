@@ -151,14 +151,14 @@ fn shortened(reason: &str) -> String {
 /// Copies `stream`'s lines to the log. A line longer than a log's line
 /// is sent in pieces, so a build that never ends a line holds no more
 /// than one line's worth of the worker's memory.
-async fn copy(stream: impl AsyncRead + Unpin, log: LogSink) {
+async fn copy(stream: impl AsyncRead + Unpin, log: LogSink, redact: &Redactions) {
 	let mut reader = tokio::io::BufReader::new(stream);
 	let mut line = Vec::new();
 
 	let send = |line: &mut Vec<u8>| {
 		// Read by bytes: a build may print what isn't UTF-8.
 		let text = String::from_utf8_lossy(line);
-		log.line(text.trim_end_matches(['\n', '\r']));
+		log.line(redact.apply(text.trim_end_matches(['\n', '\r'])));
 		line.clear();
 	};
 
@@ -182,6 +182,105 @@ async fn copy(stream: impl AsyncRead + Unpin, log: LogSink) {
 
 	if !line.is_empty() {
 		send(&mut line);
+	}
+}
+
+/// What replaces a value no log line may show.
+const REDACTED: &str = "[redacted]";
+
+/// The shortest run of a credential's characters that is hidden on its
+/// own: shorter runs are ordinary words as often as a key's.
+const SHORTEST_RUN: usize = 16;
+
+/// The shortest value hidden whole: a credential shorter than this, such
+/// as an alias, would hide ordinary words.
+const SHORTEST_VALUE: usize = 8;
+
+/// The shortest password hidden whole.
+const SHORTEST_PASSWORD: usize = 4;
+
+/// Whether `c` belongs to a run of a key's characters: base64, hex, and
+/// the like.
+fn in_run(c: char) -> bool {
+	c.is_ascii_alphanumeric() || matches!(c, '+' | '/' | '=' | '_' | '-')
+}
+
+/// What no log line of a job may show: its credentials' values.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Redactions {
+	/// Each value, whole.
+	values: Vec<String>,
+	/// Each value's runs of a key's characters, [`SHORTEST_RUN`] or longer.
+	runs: Vec<String>,
+}
+
+impl Redactions {
+	/// What hides `values`, by their names: a password is hidden whole
+	/// at any length of four or more, since a short one is still a
+	/// password.
+	pub(crate) fn new<'a>(values: impl IntoIterator<Item = (&'a str, &'a str)>) -> Self {
+		let mut redactions = Self::default();
+
+		for (name, value) in values {
+			let shortest = if name.contains("PASSWORD") {
+				SHORTEST_PASSWORD
+			} else {
+				SHORTEST_VALUE
+			};
+
+			if value.trim().len() >= shortest {
+				redactions.values.push(value.trim().to_owned());
+			}
+
+			redactions.runs.extend(
+				value
+					.split(|c: char| !in_run(c))
+					.filter(|run| run.len() >= SHORTEST_RUN)
+					.map(str::to_owned),
+			);
+		}
+
+		redactions
+	}
+
+	/// `line` with each value in it, and each long run of characters that
+	/// is part of one, replaced. A line is cut into pieces of the
+	/// protocol's length, and a key's run printed whole may be cut with it:
+	/// a run is hidden when it is part of one of a value's, not only all of
+	/// one.
+	pub(crate) fn apply(&self, line: &str) -> String {
+		if self.values.is_empty() && self.runs.is_empty() {
+			return line.to_owned();
+		}
+
+		let mut line = line.to_owned();
+
+		for value in &self.values {
+			if line.contains(value.as_str()) {
+				line = line.replace(value.as_str(), REDACTED);
+			}
+		}
+
+		let mut out = String::with_capacity(line.len());
+		let mut rest = line.as_str();
+
+		while let Some(start) = rest.find(in_run) {
+			out.push_str(&rest[..start]);
+			rest = &rest[start..];
+			let end = rest.find(|c: char| !in_run(c)).unwrap_or(rest.len());
+			let run = &rest[..end];
+
+			if run.len() >= SHORTEST_RUN && self.runs.iter().any(|known| known.contains(run)) {
+				out.push_str(REDACTED);
+			} else {
+				out.push_str(run);
+			}
+
+			rest = &rest[end..];
+		}
+
+		out.push_str(rest);
+		out
 	}
 }
 
@@ -243,34 +342,8 @@ fn gone(group: Group) {
 }
 
 /// What the program wrote at `path`, checked against what it was asked.
-///
-/// The file is opened without following a link and without waiting on a
-/// pipe, and only a regular file, read no further than [`MAX_OUTPUT`], is
-/// believed: what is left of a build may have put anything there.
 async fn result(path: &Path, input: &BuildServerInput) -> Option<BuildOutcome> {
-	let flags = rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::NONBLOCK;
-	let file = tokio::fs::OpenOptions::new()
-		.read(true)
-		.custom_flags(flags.bits().cast_signed())
-		.open(path)
-		.await
-		.ok()?;
-	let metadata = file.metadata().await.ok()?;
-
-	if !metadata.is_file() || metadata.len() > MAX_OUTPUT {
-		return None;
-	}
-
-	let mut bytes = Vec::new();
-	file.take(MAX_OUTPUT + 1)
-		.read_to_end(&mut bytes)
-		.await
-		.ok()?;
-
-	if bytes.len() as u64 > MAX_OUTPUT {
-		return None;
-	}
-
+	let bytes = written(path).await?;
 	let outcome: BuildOutcome = serde_json::from_slice(&bytes).ok()?;
 
 	match outcome {
@@ -301,41 +374,44 @@ async fn result(path: &Path, input: &BuildServerInput) -> Option<BuildOutcome> {
 	}
 }
 
-impl CommandBuilder {
-	async fn run(&self, job: BuildJob<'_>) -> BuildOutcome {
-		let BuildJob {
-			input,
-			source,
-			scratch,
-			log,
-			stop,
-		} = job;
-		let request = scratch.join("input.json");
-		let output = scratch.join("output.json");
-		let home = scratch.join("home");
-		let temporary = scratch.join("tmp");
-		let prepared = async {
-			tokio::fs::create_dir_all(&home).await?;
-			tokio::fs::create_dir_all(&temporary).await?;
-			let json = serde_json::to_vec_pretty(&BuildRequest::from(input))
-				.map_err(std::io::Error::other)?;
-			tokio::fs::write(&request, json).await
-		};
+/// How a program the worker ran ended.
+pub(crate) enum Exit {
+	/// It ended by itself, with this status.
+	Exited(std::io::Result<std::process::ExitStatus>),
+	/// It was told to stop, and was.
+	Stopped,
+	/// It ran past `minutes` and was stopped.
+	TimedOut { minutes: u64 },
+	/// It couldn't be started.
+	Unstarted,
+}
 
-		if prepared.await.is_err() {
-			return failed("the worker couldn't prepare the build's directory");
-		}
+/// One run of an operator's program: in `source`, with a cleared
+/// environment but for `PATH`, what the operator passes, and `env`.
+pub(crate) struct Launch<'a> {
+	pub(crate) program: &'a Path,
+	pub(crate) arguments: &'a [String],
+	/// Names of the worker's own variables the program is given too.
+	pub(crate) pass: &'a [String],
+	pub(crate) timeout: Duration,
+	pub(crate) source: &'a Path,
+	pub(crate) env: Vec<(String, std::ffi::OsString)>,
+	pub(crate) log: LogSink,
+	pub(crate) stop: crate::build::Stop,
+	/// What no log line may show.
+	pub(crate) redact: std::sync::Arc<Redactions>,
+	/// What the program is, in the log: `build` or `publish`.
+	pub(crate) what: &'static str,
+}
 
-		let mut command = tokio::process::Command::new(&self.program);
+impl Launch<'_> {
+	/// Runs the program to its end, and stops what it started.
+	pub(crate) async fn execute(self) -> Exit {
+		let mut command = tokio::process::Command::new(self.program);
 		command
-			.args(&self.arguments)
-			.current_dir(source)
+			.args(self.arguments)
+			.current_dir(self.source)
 			.env_clear()
-			.env("LEPTOSKIT_BUILD_SOURCE", source)
-			.env("LEPTOSKIT_BUILD_INPUT", &request)
-			.env("LEPTOSKIT_BUILD_OUTPUT", &output)
-			.env("HOME", &home)
-			.env("TMPDIR", &temporary)
 			.stdin(Stdio::null())
 			.stdout(Stdio::piped())
 			.stderr(Stdio::piped())
@@ -347,15 +423,21 @@ impl CommandBuilder {
 			}
 		}
 
+		// The job's own, after the operator's: a job's name wins.
+		for (name, value) in &self.env {
+			command.env(name, value);
+		}
+
 		command.process_group(0);
 		let child = match command.spawn() {
 			Ok(child) => child,
 			Err(error) => {
-				log.line(format!(
-					"worker: couldn't start the build command: {}",
+				self.log.line(format!(
+					"worker: couldn't start the {} command: {}",
+					self.what,
 					error.kind()
 				));
-				return failed("the worker couldn't start its build command");
+				return Exit::Unstarted;
 			}
 		};
 		let group = group_of(&child);
@@ -363,33 +445,27 @@ impl CommandBuilder {
 			rustix::process::Pid::as_raw(group),
 			std::sync::atomic::Ordering::SeqCst,
 		);
-		let outcome = self.wait(child, group, input, &output, log, stop).await;
+		let exit = self.wait(child, group).await;
 		RUNNING.store(0, std::sync::atomic::Ordering::SeqCst);
-		outcome
+		exit
 	}
 
-	async fn wait(
-		&self,
-		mut child: tokio::process::Child,
-		group: Group,
-		input: &BuildServerInput,
-		output: &Path,
-		log: LogSink,
-		mut stop: crate::build::Stop,
-	) -> BuildOutcome {
+	async fn wait(self, mut child: tokio::process::Child, group: Group) -> Exit {
+		let mut stop = self.stop;
 		let mut streams = tokio::spawn({
 			let out = child.stdout.take();
 			let err = child.stderr.take();
-			let log = log.clone();
+			let log = self.log.clone();
+			let redact = std::sync::Arc::clone(&self.redact);
 			async move {
 				let out = async {
 					if let Some(out) = out {
-						copy(out, log.clone()).await;
+						copy(out, log.clone(), &redact).await;
 					}
 				};
 				let err = async {
 					if let Some(err) = err {
-						copy(err, log.clone()).await;
+						copy(err, log.clone(), &redact).await;
 					}
 				};
 				tokio::join!(out, err);
@@ -417,16 +493,17 @@ impl CommandBuilder {
 			Ended::Stopped => {
 				end(&mut child, group).await;
 				streams.abort();
-				return BuildOutcome::Stopped;
+				return Exit::Stopped;
 			}
 			Ended::TimedOut => {
 				end(&mut child, group).await;
 				streams.abort();
 				let minutes = self.timeout.as_secs().div_ceil(60).max(1);
-				log.line(format!(
-					"worker: the build ran past its limit of {minutes} min and was stopped"
+				self.log.line(format!(
+					"worker: the {} ran past its limit of {minutes} min and was stopped",
+					self.what
 				));
-				return failed(format!("the build ran past its limit of {minutes} min"));
+				return Exit::TimedOut { minutes };
 			}
 		};
 		// The streams close once every process holding them is gone; one
@@ -434,7 +511,103 @@ impl CommandBuilder {
 		if tokio::time::timeout(GRACE, &mut streams).await.is_err() {
 			streams.abort();
 		}
-		let written = result(output, input).await;
+
+		Exit::Exited(status)
+	}
+}
+
+/// The bytes the program wrote at `path`, if it is a regular file of
+/// [`MAX_OUTPUT`] bytes at most.
+///
+/// The file is opened without following a link and without waiting on a
+/// pipe: what is left of a program may have put anything there.
+pub(crate) async fn written(path: &Path) -> Option<Vec<u8>> {
+	let flags = rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::NONBLOCK;
+	let file = tokio::fs::OpenOptions::new()
+		.read(true)
+		.custom_flags(flags.bits().cast_signed())
+		.open(path)
+		.await
+		.ok()?;
+	let metadata = file.metadata().await.ok()?;
+
+	if !metadata.is_file() || metadata.len() > MAX_OUTPUT {
+		return None;
+	}
+
+	let mut bytes = Vec::new();
+	file.take(MAX_OUTPUT + 1)
+		.read_to_end(&mut bytes)
+		.await
+		.ok()?;
+
+	if bytes.len() as u64 > MAX_OUTPUT {
+		return None;
+	}
+
+	Some(bytes)
+}
+
+/// Makes `HOME` and `TMPDIR` for a program under `scratch`, and writes
+/// `request` to `input` there.
+pub(crate) async fn prepare(
+	scratch: &Path,
+	input: &Path,
+	request: &impl Serialize,
+) -> std::io::Result<(PathBuf, PathBuf)> {
+	let home = scratch.join("home");
+	let temporary = scratch.join("tmp");
+	tokio::fs::create_dir_all(&home).await?;
+	tokio::fs::create_dir_all(&temporary).await?;
+	let json = serde_json::to_vec_pretty(request).map_err(std::io::Error::other)?;
+	tokio::fs::write(input, json).await?;
+	Ok((home, temporary))
+}
+
+impl CommandBuilder {
+	async fn run(&self, job: BuildJob<'_>) -> BuildOutcome {
+		let BuildJob {
+			input,
+			source,
+			scratch,
+			log,
+			stop,
+		} = job;
+		let request = scratch.join("input.json");
+		let output = scratch.join("output.json");
+		let Ok((home, temporary)) = prepare(scratch, &request, &BuildRequest::from(input)).await
+		else {
+			return failed("the worker couldn't prepare the build's directory");
+		};
+		let exit = Launch {
+			program: &self.program,
+			arguments: &self.arguments,
+			pass: &self.pass,
+			timeout: self.timeout,
+			source,
+			env: vec![
+				("LEPTOSKIT_BUILD_SOURCE".to_owned(), source.into()),
+				("LEPTOSKIT_BUILD_INPUT".to_owned(), request.into()),
+				("LEPTOSKIT_BUILD_OUTPUT".to_owned(), output.clone().into()),
+				("HOME".to_owned(), home.into()),
+				("TMPDIR".to_owned(), temporary.into()),
+			],
+			log,
+			stop,
+			redact: std::sync::Arc::default(),
+			what: "build",
+		}
+		.execute()
+		.await;
+		let status = match exit {
+			Exit::Exited(status) => status,
+			Exit::Stopped => return BuildOutcome::Stopped,
+			Exit::TimedOut { minutes } => {
+				return failed(format!("the build ran past its limit of {minutes} min"));
+			}
+			Exit::Unstarted => return failed("the worker couldn't start its build command"),
+		};
+		let written = result(&output, input).await;
 
 		match (status, written) {
 			(Ok(status), Some(outcome)) if status.success() => outcome,

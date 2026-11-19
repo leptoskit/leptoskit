@@ -2,7 +2,7 @@
 
 `leptoskit-cloud-worker` is LeptosKit Cloud's worker. It pairs with a control plane, asks it for jobs, runs one at a time under a lease, sends the job's log, and reports how it ended.
 
-This crate holds the loop every role shares, the `build` role and the `cluster` role. Native builds and store publishing aren't built yet, and a cluster's worker doesn't take backups yet.
+This crate holds the loop every role shares, the `build` role, with store publishing, and the `cluster` role. A cluster's worker doesn't take backups yet.
 
 ## Pairing
 
@@ -26,14 +26,18 @@ leptoskit-cloud-worker run \
 	--build-command /usr/local/bin/build-leptoskit-server
 ```
 
-| Option                    | Variable                               | What it sets                                                                                                                                                                           |
-| ------------------------- | -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--state`                 | `LEPTOSKIT_CLOUD_WORKER_STATE`         | Where the key and the job's state are kept.                                                                                                                                            |
-| `--workspace`             | `LEPTOSKIT_CLOUD_WORKER_WORKSPACE`     | Where each build's directory is made and deleted. It must be the worker user's own directory, and is made readable by its owner only. `workspace` in the state directory when not set. |
-| `--build-command`         | `LEPTOSKIT_CLOUD_WORKER_BUILD_COMMAND` | The program that builds.                                                                                                                                                               |
-| `--build-arg`             |                                        | An argument for it. Repeat for more.                                                                                                                                                   |
-| `--build-env`             |                                        | The name of one of the worker's own variables to give it. Repeat for more. Every build sees it.                                                                                        |
-| `--build-timeout-minutes` |                                        | How long one build may run. 60 when not set.                                                                                                                                           |
+| Option                      | Variable                                 | What it sets                                                                                                                                                                           |
+| --------------------------- | ---------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--state`                   | `LEPTOSKIT_CLOUD_WORKER_STATE`           | Where the key and the job's state are kept.                                                                                                                                            |
+| `--workspace`               | `LEPTOSKIT_CLOUD_WORKER_WORKSPACE`       | Where each build's directory is made and deleted. It must be the worker user's own directory, and is made readable by its owner only. `workspace` in the state directory when not set. |
+| `--build-command`           | `LEPTOSKIT_CLOUD_WORKER_BUILD_COMMAND`   | The program that builds.                                                                                                                                                               |
+| `--build-arg`               |                                          | An argument for it. Repeat for more.                                                                                                                                                   |
+| `--build-env`               |                                          | The name of one of the worker's own variables to give it. Repeat for more. Every build sees it.                                                                                        |
+| `--build-timeout-minutes`   |                                          | How long one build may run. 60 when not set.                                                                                                                                           |
+| `--publish-command`         | `LEPTOSKIT_CLOUD_WORKER_PUBLISH_COMMAND` | The program that publishes to stores. Without it the worker takes no publish job.                                                                                                      |
+| `--publish-arg`             |                                          | An argument for it. Repeat for more.                                                                                                                                                   |
+| `--publish-env`             |                                          | The name of one of the worker's own variables to give it. Repeat for more. Every publish sees it, and runs the organisation's own code with it.                                        |
+| `--publish-timeout-minutes` |                                          | How long one publish may run. 120 when not set.                                                                                                                                        |
 
 The worker stops after the job in hand at the first interrupt or termination signal, and at once at the second.
 
@@ -78,6 +82,18 @@ What the command prints, on either stream, is the build's log. It writes one of 
 A command that exits with a failure and writes nothing fails the build with its exit status. When the command ends, when its deployment is cancelled, and when it runs past its time, the worker stops it and whatever it started in its own process group (`TERM`, then `KILL` ten seconds later). A worker stopped at once by a second signal kills it on its way out. A process that leaves the group, by `setsid` or because a daemon such as Docker's started it, is not stopped: a command that starts one must stop it when it is asked to end.
 
 **The worker doesn't isolate the build.** The command runs as the worker's own user, so it can read the worker's key and reach the network. A process it leaves running can reach the next build's files and output, and every variable named with `--build-env` reaches every build: never name a credential there that one organisation must not use on another's behalf, such as one registry login for every tenant. Lines in a build's log that start `worker:` may be the build's own. To build other people's code, the command has to do the work inside a sandbox of its own, a virtual machine or a container that is thrown away afterwards and is given only the source directory. No such command ships with this crate.
+
+## Publishing
+
+A build worker bound to an organisation and paired with `--capability publish` (and `--capability macos` on a Mac, for the App Store) is offered that organisation's publish jobs; a shared-pool worker never is. One paired with `publish` refuses to start without `--publish-command`. It is offered publish jobs, and runs each with `--publish-command`, in the unpacked source. The program gets `LEPTOSKIT_PUBLISH_SOURCE`, `LEPTOSKIT_PUBLISH_INPUT` (the job, without the archive's address), `LEPTOSKIT_PUBLISH_STORES` (separated by spaces), `LEPTOSKIT_PUBLISH_SUBMIT` (`1` or `0`), `LEPTOSKIT_PUBLISH_OUTPUT`, a fresh `HOME` and `TMPDIR`, `PATH`, each variable named with `--publish-env`, and the job's store credentials, by the names `lk publish` reads, and `LEPTOSKIT_PUBLISH_CONTENTS_ONLY=1`, so `lk publish` refuses a credential that names a file. It succeeds when it exits with 0 and writes `lk publish --json`'s report to `LEPTOSKIT_PUBLISH_OUTPUT`:
+
+```sh
+#!/bin/sh
+submit=; [ "$LEPTOSKIT_PUBLISH_SUBMIT" = 1 ] && submit=--submit
+exec lk publish $LEPTOSKIT_PUBLISH_STORES --json --yes $submit > "$LEPTOSKIT_PUBLISH_OUTPUT"
+```
+
+Each credential's value is hidden in its log and its report. A publish is never run twice, since it may have reached a store: one that a worker dies holding fails. The worker doesn't isolate the program, which runs the organisation's own code with its store credentials: run it inside a sandbox thrown away afterwards, and don't publish on a worker shared between organisations until that sandbox exists.
 
 ## A cluster's worker
 

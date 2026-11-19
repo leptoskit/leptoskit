@@ -24,6 +24,8 @@
 //! - a build is retried by another worker, at most [`BUILD_ATTEMPTS`] times,
 //!   and then fails with `builder_unavailable`: a build's only effect is an
 //!   image keyed by its digest, so running it again is safe;
+//! - a publish fails: it may have reached a store already, so nothing runs it
+//!   again;
 //! - a release becomes *unknown*: the cluster may or may not run it, so nothing
 //!   retries it or calls it failed. An operator reconciles it, or the worker
 //!   that held it sends its saved outcome with `finish`, which is still
@@ -184,6 +186,9 @@ pub enum JobKind {
 	/// cluster worker.
 	#[db(rename = "restore_database")]
 	RestoreDatabase,
+	/// Build an app for its stores and upload it: for build workers.
+	#[db(rename = "publish")]
+	Publish,
 }
 
 impl JobKind {
@@ -191,7 +196,7 @@ impl JobKind {
 	#[must_use]
 	pub const fn role(self) -> WorkerRole {
 		match self {
-			Self::BuildServer => WorkerRole::Build,
+			Self::BuildServer | Self::Publish => WorkerRole::Build,
 			Self::Release
 			| Self::DestroyEnvironment
 			| Self::BackupDatabase
@@ -447,6 +452,241 @@ pub enum BuildOutcome {
 	Stopped,
 }
 
+/// The stores a publish job may name, as `lk publish` names them. The
+/// macOS download (`macos`) isn't one: it signs with an identity in the
+/// keychain of the Mac that builds it, which would be the operator's.
+pub const PUBLISH_STORES: [&str; 6] = ["chrome", "edge", "firefox", "app_store", "play", "solana"];
+
+/// The stores whose builds need a Mac: a publish job that names one
+/// requires [`MACOS_CAPABILITY`].
+pub const APPLE_STORES: [&str; 1] = ["app_store"];
+
+/// The capability a build worker that runs a publish program declares:
+/// every publish job requires it.
+pub const PUBLISH_CAPABILITY: &str = "publish";
+
+/// The capability a build worker on a Mac declares.
+pub const MACOS_CAPABILITY: &str = "macos";
+
+/// The credentials a publish job may carry, by store: the environment
+/// variables `lk publish` reads, leased from the environment's secrets of
+/// the same names. Nothing else is: no `PATH`, no store address override,
+/// and none of the variables that only hold a file's path, since a path
+/// names a file on the worker rather than the organisation's own. A
+/// keystore goes as its `_BASE64` variable; a credential that may be a
+/// path or its contents must be its contents, which the worker asks of
+/// `lk publish` with `LEPTOSKIT_PUBLISH_CONTENTS_ONLY`.
+pub const PUBLISH_CREDENTIALS: [(&str, &str); 20] = [
+	("chrome", "LEPTOSKIT_PUBLISH_CHROME_SERVICE_ACCOUNT"),
+	("edge", "LEPTOSKIT_PUBLISH_EDGE_CLIENT_ID"),
+	("edge", "LEPTOSKIT_PUBLISH_EDGE_API_KEY"),
+	("firefox", "LEPTOSKIT_PUBLISH_FIREFOX_JWT_ISSUER"),
+	("firefox", "LEPTOSKIT_PUBLISH_FIREFOX_JWT_SECRET"),
+	("app_store", "LEPTOSKIT_PUBLISH_APPLE_ISSUER_ID"),
+	("app_store", "LEPTOSKIT_PUBLISH_APPLE_KEY_ID"),
+	("app_store", "LEPTOSKIT_PUBLISH_APPLE_KEY"),
+	("play", "LEPTOSKIT_PUBLISH_PLAY_SERVICE_ACCOUNT"),
+	("play", "LEPTOSKIT_ANDROID_KEYSTORE_BASE64"),
+	("play", "LEPTOSKIT_ANDROID_KEYSTORE_PASSWORD"),
+	("play", "LEPTOSKIT_ANDROID_KEY_ALIAS"),
+	("play", "LEPTOSKIT_ANDROID_KEY_PASSWORD"),
+	("solana", "LEPTOSKIT_PUBLISH_SOLANA_API_KEY"),
+	("solana", "LEPTOSKIT_PUBLISH_SOLANA_KEYPAIR"),
+	("solana", "LEPTOSKIT_SOLANA_KEYSTORE_BASE64"),
+	("solana", "LEPTOSKIT_SOLANA_KEYSTORE_PASSWORD"),
+	("solana", "LEPTOSKIT_SOLANA_KEY_ALIAS"),
+	("solana", "LEPTOSKIT_SOLANA_KEY_PASSWORD"),
+	// The dApp Store build checks that its key isn't Google Play's.
+	("solana", "LEPTOSKIT_ANDROID_KEYSTORE_BASE64"),
+];
+
+/// Whether `name` is a credential some store's publish job may carry.
+#[must_use]
+pub fn is_publish_credential(name: &str) -> bool {
+	PUBLISH_CREDENTIALS
+		.iter()
+		.any(|(_, credential)| *credential == name)
+}
+
+/// The most steps a publish report keeps.
+pub const MAX_PUBLISH_STEPS: usize = 200;
+
+/// The most bytes any one text of a publish report keeps.
+pub const MAX_PUBLISH_TEXT: usize = 2_000;
+
+/// The longest a publish's failure reason is.
+pub const MAX_PUBLISH_REASON: usize = 500;
+
+impl PublishOutcome {
+	/// The outcome held to its bounds, about `stores` only: see
+	/// [`PublishReport::bounded`].
+	#[must_use]
+	pub fn bounded(self, stores: &[String]) -> Self {
+		match self {
+			Self::Published(report) => Self::Published(report.bounded(stores)),
+			Self::Failed { reason } => {
+				let mut reason: String = reason
+					.chars()
+					.map(|c| if c.is_control() { ' ' } else { c })
+					.collect();
+				let mut end = reason.len().min(MAX_PUBLISH_REASON);
+
+				while !reason.is_char_boundary(end) {
+					end -= 1;
+				}
+
+				reason.truncate(end);
+				Self::Failed { reason }
+			}
+			Self::Stopped => Self::Stopped,
+		}
+	}
+}
+
+/// `publish`'s input: one archive to build for, and upload to, app and
+/// extension stores.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct PublishInput {
+	/// The organisation, project, and environment whose secrets are its
+	/// credentials.
+	pub organization: String,
+	pub project: String,
+	pub environment: String,
+	/// The source archive, to fetch and unpack with
+	/// `leptoskit_cloud::archive`.
+	pub archive: Download,
+	/// Its digest: check the bytes against it before unpacking.
+	pub digest: Digest,
+	/// Its size in bytes.
+	pub size: u64,
+	/// The Rust toolchain to build with, such as `stable`.
+	pub toolchain: String,
+	/// The stores, from [`PUBLISH_STORES`], in `lk publish`'s order.
+	pub stores: Vec<String>,
+	/// Also send each upload for review or release, which reaches users.
+	pub submit: bool,
+}
+
+/// Who can take a step a store still needs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum StepTaker {
+	/// An agent can do it in the store's dashboard.
+	Agent,
+	/// Only the account holder can.
+	Person,
+}
+
+/// Text to enter into a store's field.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct StepField {
+	pub label: String,
+	pub value: String,
+}
+
+/// One step a store still needs that its API can't take.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct StoreStep {
+	pub store: String,
+	pub by: StepTaker,
+	/// What to do, in one sentence.
+	pub what: String,
+	/// Where to do it.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub url: Option<String>,
+	/// What to enter, ready to paste.
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub enter: Vec<StepField>,
+	/// Why the API can't do it.
+	pub why: String,
+	/// How leptoskit will know it is done.
+	pub done_when: String,
+}
+
+/// Where one store stands after a publish, in one line.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct StoreStatus {
+	pub store: String,
+	pub summary: String,
+}
+
+/// `lk publish --json`'s report: each store's status, then the steps left.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct PublishReport {
+	pub stores: Vec<StoreStatus>,
+	#[serde(default)]
+	pub steps: Vec<StoreStep>,
+}
+
+impl PublishReport {
+	/// The report held to [`MAX_PUBLISH_STEPS`] steps and
+	/// [`MAX_PUBLISH_TEXT`] bytes a text, with no control characters, and
+	/// only the statuses of `stores`: it comes from a program that ran the
+	/// organisation's own code.
+	#[must_use]
+	pub fn bounded(mut self, stores: &[String]) -> Self {
+		fn text(value: &mut String) {
+			if value.contains(char::is_control) {
+				*value = value
+					.chars()
+					.map(|c| if c.is_control() { ' ' } else { c })
+					.collect();
+			}
+
+			if value.len() > MAX_PUBLISH_TEXT {
+				let mut end = MAX_PUBLISH_TEXT;
+
+				while !value.is_char_boundary(end) {
+					end -= 1;
+				}
+
+				value.truncate(end);
+			}
+		}
+
+		let mut seen = std::collections::BTreeSet::new();
+		self.stores
+			.retain(|status| stores.contains(&status.store) && seen.insert(status.store.clone()));
+		self.steps.retain(|step| stores.contains(&step.store));
+		self.steps.truncate(MAX_PUBLISH_STEPS);
+
+		for status in &mut self.stores {
+			text(&mut status.summary);
+		}
+
+		for step in &mut self.steps {
+			text(&mut step.what);
+			text(&mut step.why);
+			text(&mut step.done_when);
+
+			if let Some(url) = &mut step.url {
+				text(url);
+			}
+
+			step.enter.truncate(20);
+
+			for field in &mut step.enter {
+				text(&mut field.label);
+				text(&mut field.value);
+			}
+		}
+
+		self
+	}
+}
+
+/// How a publish ended.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "result", rename_all = "snake_case")]
+pub enum PublishOutcome {
+	/// `lk publish` ran to its end: each store's status, and the steps left.
+	Published(PublishReport),
+	/// It failed: `reason` is its first error.
+	Failed { reason: String },
+	/// It stopped because it was cancelled.
+	Stopped,
+}
+
 /// What happens to the database during a release.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -656,6 +896,7 @@ pub enum JobInput {
 	DestroyEnvironment(DestroyEnvironmentInput),
 	BackupDatabase(BackupDatabaseInput),
 	RestoreDatabase(RestoreDatabaseInput),
+	Publish(PublishInput),
 }
 
 /// How a job ended, as its worker reports it with `finish`.
@@ -667,6 +908,7 @@ pub enum JobOutcome {
 	DestroyEnvironment(DestroyOutcome),
 	BackupDatabase(BackupOutcome),
 	RestoreDatabase(RestoreOutcome),
+	Publish(PublishOutcome),
 }
 
 impl JobOutcome {
@@ -679,13 +921,15 @@ impl JobOutcome {
 			Self::DestroyEnvironment(_) => JobKind::DestroyEnvironment,
 			Self::BackupDatabase(_) => JobKind::BackupDatabase,
 			Self::RestoreDatabase(_) => JobKind::RestoreDatabase,
+			Self::Publish(_) => JobKind::Publish,
 		}
 	}
 }
 
-/// The values of the secrets a release's spec names in `secret_env`, by
-/// those names: handed to the one cluster worker that claims the release,
-/// in the claim's answer, and nowhere else. `Debug` prints names only.
+/// The values of the secrets a release's spec names in `secret_env`, or of
+/// a publish's store credentials, by those names: handed to the one worker
+/// that claims the job, in the claim's answer, and nowhere else. `Debug`
+/// prints names only.
 ///
 /// A worker puts them in the environment's Kubernetes Secret
 /// (`leptoskit_cloud_runtime::SecretValues`) and keeps them nowhere: not in
@@ -739,7 +983,8 @@ pub struct Assignment {
 	pub lease_expires_at: Timestamp,
 	pub lease_seconds: u32,
 	pub input: JobInput,
-	/// For a release whose spec names secrets: their values. Each is
+	/// For a release whose spec names secrets, or a publish whose
+	/// environment has its stores' credentials: their values. Each is
 	/// recorded as leased to this job before it is sent.
 	#[serde(default, skip_serializing_if = "LeasedSecrets::is_empty")]
 	pub secrets: LeasedSecrets,

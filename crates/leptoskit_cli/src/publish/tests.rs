@@ -4342,3 +4342,39 @@ fn confirm_skips_its_question_without_a_terminal() {
 	let configured = project(MACOS_PROJECT);
 	run_scenario("run-confirm-skipped", configured.path(), &[]);
 }
+
+#[test]
+fn the_cloud_carries_every_credential_a_store_needs() {
+	use leptoskit_cloud::workers::PUBLISH_CREDENTIALS;
+	use leptoskit_cloud::workers::PUBLISH_STORES;
+
+	// A cloud publish has no files of its own: a keystore goes as its bytes.
+	// The macOS download signs with the building Mac's keychain, so the
+	// cloud doesn't publish it.
+	for needed in super::NEEDED
+		.iter()
+		.filter(|needed| PUBLISH_STORES.contains(&needed.store))
+	{
+		let name = super::alternative(needed.name).unwrap_or(needed.name);
+		assert!(
+			PUBLISH_CREDENTIALS.contains(&(needed.store, name)),
+			"the cloud doesn't carry {name} for {}",
+			needed.store
+		);
+	}
+
+	assert!(!PUBLISH_STORES.contains(&"macos"));
+
+	for store in PUBLISH_STORES {
+		assert!(
+			super::NEEDED.iter().any(|needed| needed.store == store),
+			"{store} isn't a store `leptoskit publish` knows"
+		);
+	}
+
+	assert_eq!(
+		super::alternative(crate::native::signing::ANDROID_KEYSTORE),
+		Some(crate::native::signing::ANDROID_KEYSTORE_BASE64)
+	);
+	assert_eq!(super::alternative(super::chrome::CREDENTIAL), None);
+}

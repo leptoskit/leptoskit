@@ -70,6 +70,8 @@ use crate::workers::Download;
 use crate::workers::JobInput;
 use crate::workers::JobKind;
 use crate::workers::JobOutcome;
+use crate::workers::PublishInput;
+use crate::workers::PublishOutcome;
 use crate::workers::ReleaseInput;
 use crate::workers::RestoreDatabaseInput;
 use crate::workers::RestoreOutcome;
@@ -108,6 +110,22 @@ pub enum StoredInput {
 	/// A restore, as the worker gets it. Its `location` is the cluster
 	/// worker's own name for a dump, and no credential.
 	RestoreDatabase(RestoreDatabaseInput),
+	/// A publish to app and extension stores.
+	Publish {
+		organization: String,
+		project: String,
+		environment: String,
+		/// The archive's key in the sources bucket.
+		archive_key: String,
+		digest: Digest,
+		size: u64,
+		toolchain: String,
+		stores: Vec<String>,
+		submit: bool,
+		/// The environment's secrets leased to the worker at claim, by
+		/// name: each one of `crate::workers::PUBLISH_CREDENTIALS`.
+		credentials: Vec<String>,
+	},
 }
 
 impl StoredInput {
@@ -120,6 +138,7 @@ impl StoredInput {
 			Self::DestroyEnvironment(_) => JobKind::DestroyEnvironment,
 			Self::BackupDatabase(_) => JobKind::BackupDatabase,
 			Self::RestoreDatabase(_) => JobKind::RestoreDatabase,
+			Self::Publish { .. } => JobKind::Publish,
 		}
 	}
 }
@@ -200,6 +219,13 @@ pub(crate) fn takes(taker: &Taker<'_>, job: &Job) -> bool {
 		return false;
 	}
 
+	// A publish carries its organisation's store credentials, and nothing
+	// isolates one job from the next on a worker: only a worker bound to
+	// the organisation takes one, never the shared pool.
+	if job.kind == JobKind::Publish && taker.organization.is_none() {
+		return false;
+	}
+
 	job.requirements
 		.0
 		.iter()
@@ -251,6 +277,38 @@ pub(crate) fn assignment_input(
 		StoredInput::DestroyEnvironment(input) => JobInput::DestroyEnvironment(input.clone()),
 		StoredInput::BackupDatabase(input) => JobInput::BackupDatabase(input.clone()),
 		StoredInput::RestoreDatabase(input) => JobInput::RestoreDatabase(input.clone()),
+		StoredInput::Publish {
+			organization,
+			project,
+			environment,
+			archive_key,
+			digest,
+			size,
+			toolchain,
+			stores,
+			submit,
+			credentials: _,
+		} => {
+			let presigned =
+				services
+					.shipping()
+					.store
+					.presign_get(Bucket::Sources, archive_key, ttl)?;
+			JobInput::Publish(PublishInput {
+				organization: organization.clone(),
+				project: project.clone(),
+				environment: environment.clone(),
+				archive: Download {
+					url: presigned.url,
+					expires_at: presigned.expires_at,
+				},
+				digest: digest.clone(),
+				size: *size,
+				toolchain: toolchain.clone(),
+				stores: stores.clone(),
+				submit: *submit,
+			})
+		}
 	})
 }
 
@@ -276,7 +334,8 @@ pub(crate) async fn summary(db: &impl leptoskit_db::Read, job: &Job) -> rpc::Res
 			Some(
 				JobOutcome::DestroyEnvironment(DestroyOutcome::Failed { reason })
 				| JobOutcome::BackupDatabase(BackupOutcome::Failed { reason })
-				| JobOutcome::RestoreDatabase(RestoreOutcome::Failed { reason }),
+				| JobOutcome::RestoreDatabase(RestoreOutcome::Failed { reason })
+				| JobOutcome::Publish(PublishOutcome::Failed { reason }),
 			) => Some(reason.clone()),
 			_ => None,
 		},
@@ -339,6 +398,21 @@ pub(crate) async fn lapse(tx: &Tx, mut job: Job, reason: &str) -> rpc::Result<La
 		job.state = JobState::Abandoned;
 		job.save(tx).await?;
 		backups::backup_abandoned(tx, &job, reason).await?;
+		return Ok(Lapsed::Abandoned);
+	}
+
+	// A publish may have reached a store, so it isn't run again: it fails,
+	// saying what is known.
+	if job.kind == JobKind::Publish {
+		metering::build_ended(tx, &job, held_until).await?;
+		job.state = JobState::Abandoned;
+		job.outcome = Json(Some(JobOutcome::Publish(PublishOutcome::Failed {
+			reason: format!(
+				"{reason}; it may have uploaded to a store before it stopped, so check each \
+				 store's dashboard before publishing again"
+			),
+		})));
+		job.save(tx).await?;
 		return Ok(Lapsed::Abandoned);
 	}
 
@@ -499,7 +573,9 @@ pub(crate) async fn sweep(services: &Services) -> rpc::Result<Swept> {
 	let unclaimed = Job::query()
 		.filter(|job| {
 			job.state.eq(JobState::Queued)
-				& job.kind.eq(JobKind::BuildServer)
+				& job
+					.kind
+					.in_list(vec![JobKind::BuildServer, JobKind::Publish])
 				& job.queued_at.lt(stale)
 		})
 		.limit(SWEEP_BATCH)
@@ -518,6 +594,17 @@ pub(crate) async fn sweep(services: &Services) -> rpc::Result<Swept> {
 					return Ok(false);
 				};
 				job.state = JobState::Abandoned;
+
+				if job.kind == JobKind::Publish {
+					job.outcome = Json(Some(JobOutcome::Publish(PublishOutcome::Failed {
+						reason: "no build worker that can build for these stores claimed it in \
+						         time"
+							.to_owned(),
+					})));
+					job.save(tx).await?;
+					return Ok(true);
+				}
+
 				job.save(tx).await?;
 				deployments::build_abandoned(tx, &job, "no build worker claimed it in time")
 					.await?;

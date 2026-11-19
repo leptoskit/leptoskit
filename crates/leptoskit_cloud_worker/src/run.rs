@@ -15,6 +15,8 @@ use leptoskit_cloud::workers::JobInput;
 use leptoskit_cloud::workers::JobKind;
 use leptoskit_cloud::workers::JobOutcome;
 use leptoskit_cloud::workers::MAX_WAIT_SECONDS;
+use leptoskit_cloud::workers::PublishInput;
+use leptoskit_cloud::workers::PublishOutcome;
 use tokio::sync::watch;
 use uuid::Uuid;
 
@@ -122,6 +124,8 @@ pub struct Worker<B> {
 	builder: B,
 	/// What a cluster's worker does with its jobs, when this is one.
 	cluster: Option<crate::cluster::ClusterRole>,
+	/// What a build worker publishes with, when it publishes.
+	publisher: Option<crate::publish::CommandPublisher>,
 	/// For presigned addresses: no key, and no redirects.
 	downloads: reqwest::Client,
 	settings: Settings,
@@ -131,6 +135,7 @@ pub struct Worker<B> {
 #[derive(Clone, Copy)]
 enum Work<'a> {
 	Build(&'a BuildServerInput),
+	Publish(&'a PublishInput, &'a crate::publish::CommandPublisher),
 	Cluster(&'a crate::cluster::ClusterRole),
 }
 
@@ -153,13 +158,16 @@ fn summary(outcome: &JobOutcome) -> String {
 		JobOutcome::DestroyEnvironment(DestroyOutcome::Failed { reason })
 		| JobOutcome::BackupDatabase(BackupOutcome::Failed { reason })
 		| JobOutcome::RestoreDatabase(RestoreOutcome::Failed { reason })
-		| JobOutcome::BuildServer(BuildOutcome::Failed { reason, .. }) => {
-			format!("failed: {reason}")
+		| JobOutcome::BuildServer(BuildOutcome::Failed { reason, .. })
+		| JobOutcome::Publish(PublishOutcome::Failed { reason }) => format!("failed: {reason}"),
+		JobOutcome::Publish(PublishOutcome::Published(report)) => {
+			format!("published to {} stores", report.stores.len())
 		}
 		JobOutcome::BackupDatabase(BackupOutcome::Taken(_)) => "backed up".to_owned(),
 		JobOutcome::RestoreDatabase(RestoreOutcome::Restored { .. }) => "restored".to_owned(),
 		JobOutcome::BuildServer(BuildOutcome::Succeeded(_)) => "built".to_owned(),
-		JobOutcome::BuildServer(BuildOutcome::Stopped) => "stopped".to_owned(),
+		JobOutcome::BuildServer(BuildOutcome::Stopped)
+		| JobOutcome::Publish(PublishOutcome::Stopped) => "stopped".to_owned(),
 	}
 }
 
@@ -228,6 +236,7 @@ fn kind_of(input: &JobInput) -> JobKind {
 		JobInput::DestroyEnvironment(_) => JobKind::DestroyEnvironment,
 		JobInput::BackupDatabase(_) => JobKind::BackupDatabase,
 		JobInput::RestoreDatabase(_) => JobKind::RestoreDatabase,
+		JobInput::Publish(_) => JobKind::Publish,
 	}
 }
 
@@ -305,6 +314,7 @@ impl<B: Builder> Worker<B> {
 			state,
 			builder,
 			cluster: None,
+			publisher: None,
 			downloads,
 			settings,
 		})
@@ -314,6 +324,13 @@ impl<B: Builder> Worker<B> {
 	#[must_use]
 	pub fn with_cluster(mut self, cluster: crate::cluster::ClusterRole) -> Self {
 		self.cluster = Some(cluster);
+		self
+	}
+
+	/// Takes publish jobs with `publisher`.
+	#[must_use]
+	pub fn with_publisher(mut self, publisher: crate::publish::CommandPublisher) -> Self {
+		self.publisher = Some(publisher);
 		self
 	}
 
@@ -364,6 +381,17 @@ impl<B: Builder> Worker<B> {
 			return Ok(());
 		};
 
+		if marker.kind == JobKind::Publish {
+			// A publish whose lease runs out fails, and is never run again:
+			// it may have reached a store.
+			note(&format!(
+				"job {}: the publish was interrupted; it fails when its lease runs out, and isn't \
+				 run again",
+				marker.job
+			));
+			return Ok(self.state.clear()?);
+		}
+
 		if marker.kind != JobKind::BuildServer {
 			return Err(RunError::Unreconciled {
 				job: marker.job,
@@ -408,7 +436,21 @@ impl<B: Builder> Worker<B> {
 				));
 				self.job(&assignment, Work::Build(input)).await?
 			}
-			(input, Some(cluster)) if !matches!(input, JobInput::BuildServer(_)) => {
+			(JobInput::Publish(input), None) if self.publisher.is_some() => {
+				note(&format!(
+					"job {job}: publishing {}/{} to {} (attempt {})",
+					input.organization,
+					input.project,
+					input.stores.join(", "),
+					assignment.attempt
+				));
+				let publisher = self.publisher.as_ref().expect("checked above");
+				self.job(&assignment, Work::Publish(input, publisher))
+					.await?
+			}
+			(input, Some(cluster))
+				if !matches!(input, JobInput::BuildServer(_) | JobInput::Publish(_)) =>
+			{
 				note(&format!(
 					"job {job}: {:?} (attempt {})",
 					kind_of(input),
@@ -448,7 +490,7 @@ impl<B: Builder> Worker<B> {
 		let fetched = {
 			let mut stop = stop.clone();
 			tokio::select! {
-				fetched = crate::build::fetch(&self.downloads, input, &source, &scratch) => Some(fetched),
+				fetched = crate::build::fetch(&self.downloads, input.into(), &source, &scratch) => Some(fetched),
 				() = stop.stopped() => None,
 			}
 		};
@@ -494,6 +536,74 @@ impl<B: Builder> Worker<B> {
 		outcome
 	}
 
+	/// Fetches and publishes, or says why there is nothing to report.
+	async fn publish_in(
+		&self,
+		input: &PublishInput,
+		publisher: &crate::publish::CommandPublisher,
+		credentials: leptoskit_cloud::workers::LeasedSecrets,
+		log: &logs::LogSink,
+		stop: &Stop,
+	) -> Result<PublishOutcome, String> {
+		let workspace = tempfile::Builder::new()
+			.prefix("build-")
+			.permissions(std::os::unix::fs::PermissionsExt::from_mode(0o700))
+			.tempdir_in(&self.settings.workspace)
+			.map_err(|error| format!("the workspace couldn't be made: {}", error.kind()))?;
+		let source = workspace.path().join("source");
+		let scratch = workspace.path().join("scratch");
+		tokio::fs::create_dir(&scratch)
+			.await
+			.map_err(|error| format!("the workspace couldn't be made: {}", error.kind()))?;
+		log.line("worker: fetching the source");
+		let fetched = {
+			let mut stop = stop.clone();
+			tokio::select! {
+				fetched = crate::build::fetch(&self.downloads, input.into(), &source, &scratch) => Some(fetched),
+				() = stop.stopped() => None,
+			}
+		};
+		let outcome = match fetched {
+			None => Ok(PublishOutcome::Stopped),
+			// Nothing reached a store, but a publish is never run again.
+			Some(Err(error)) => {
+				log.line(format!("worker: {error}"));
+				Ok(PublishOutcome::Failed {
+					reason: error.to_string(),
+				})
+			}
+			Some(Ok(unpacked)) => {
+				log.line(format!(
+					"worker: unpacked {} files, {} bytes",
+					unpacked.files.len(),
+					unpacked.bytes
+				));
+				Ok(publisher
+					.publish(crate::publish::PublishJob {
+						input,
+						source: &source,
+						scratch: &scratch,
+						credentials,
+						log: log.clone(),
+						stop: stop.clone(),
+					})
+					.await)
+			}
+		};
+
+		// The source, and everything the publish wrote, goes.
+		let directory = workspace.keep();
+
+		if tokio::task::spawn_blocking(move || remove_all(&directory))
+			.await
+			.map_or(true, |removed| removed.is_err())
+		{
+			note("a publish's directory couldn't be deleted");
+		}
+
+		outcome
+	}
+
 	/// Runs a job from its marker to its reported outcome.
 	async fn job(&self, assignment: &Assignment, work: Work<'_>) -> Result<Ended, RunError> {
 		let job = assignment.job;
@@ -523,6 +633,11 @@ impl<B: Builder> Worker<B> {
 				self.build_in(input, &log, &stop)
 					.await
 					.map(JobOutcome::BuildServer)
+			}
+			Work::Publish(input, publisher) => {
+				self.publish_in(input, publisher, assignment.secrets.clone(), &log, &stop)
+					.await
+					.map(JobOutcome::Publish)
 			}
 			Work::Cluster(cluster) => Ok(cluster.run(assignment, &log).await),
 		};

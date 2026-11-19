@@ -340,7 +340,7 @@ async fn store(cx: &rpc::MutationCx, args: StoreSecret) -> rpc::Result<SecretSum
 	)
 	.await?;
 	let environment_id = environment(cx.tx(), &project, &environment_name).await?.id;
-	check_name(&name).map_err(|error| invalid_name(&error))?;
+	check_secret_name(&name).map_err(|error| invalid_name(&error))?;
 
 	if value.is_empty() {
 		return Err(rpc::Error::invalid(
@@ -464,7 +464,7 @@ pub(crate) async fn unset_secret(
 	.await?;
 	let environment = environment(cx.tx(), &project, environment_name).await?;
 	let environment_id = environment.id;
-	check_name(name).map_err(|error| invalid_name(&error))?;
+	check_secret_name(name).map_err(|error| invalid_name(&error))?;
 	// A deployment in flight may already name this secret in the release it
 	// is about to apply, which would then have nothing to start with.
 	super::deployments::settled(cx.tx(), &environment).await?;
@@ -488,8 +488,19 @@ pub(crate) async fn unset_secret(
 	Ok(())
 }
 
+/// Checks that `name` can name a secret: as a variable's name, or one of
+/// the store credentials a publish carries, which no release is given.
+fn check_secret_name(name: &str) -> Result<(), String> {
+	if crate::workers::is_publish_credential(name) {
+		return Ok(());
+	}
+
+	check_name(name)
+}
+
 /// What a release of `environment` starts its processes with: the
-/// variables and their values, and the names of the secrets.
+/// variables and their values, and the names of the secrets. A store
+/// credential is a publish's, never the app's.
 pub(crate) async fn for_release(
 	db: &impl leptoskit_db::Read,
 	environment: Id<Environment>,
@@ -507,6 +518,7 @@ pub(crate) async fn for_release(
 		.await?
 		.into_iter()
 		.map(|row| row.name)
+		.filter(|name| !crate::workers::is_publish_credential(name))
 		.collect();
 	secrets.sort_unstable();
 	Ok((variables, secrets))
@@ -542,6 +554,74 @@ pub(crate) struct Lessee<'a> {
 	pub(crate) organization: &'a Organization,
 	pub(crate) project: &'a Project,
 	pub(crate) environment: &'a Environment,
+}
+
+/// The values leased to `job`'s current attempt that can still be opened,
+/// for hiding them in what its worker reports: a value since replaced or
+/// removed, or one the vault can no longer open, is left out. Never sent
+/// anywhere.
+///
+/// # Errors
+///
+/// When the database fails.
+pub(crate) async fn leased_values(
+	tx: &impl leptoskit_db::Connection,
+	services: &super::Services,
+	job: &Job,
+) -> rpc::Result<Vec<String>> {
+	let job_id = job.id;
+	let attempt = job.attempt;
+	let leases = crate::tables::SecretLease::query()
+		.filter(|lease| lease.job_id.eq(job_id) & lease.attempt.eq(attempt))
+		.all(tx)
+		.await?;
+	let Some(first) = leases.first() else {
+		return Ok(Vec::new());
+	};
+	let Some(environment) = Environment::query()
+		.filter(|row| row.id.eq(first.environment_id))
+		.first(tx)
+		.await?
+	else {
+		return Ok(Vec::new());
+	};
+	let Ok(Some(key)) = services
+		.shipping()
+		.vault
+		.data_key(tx, first.organization_id)
+		.await
+	else {
+		return Ok(Vec::new());
+	};
+	let mut values = Vec::new();
+
+	for lease in &leases {
+		let secret_id = lease.secret_id;
+		let version = lease.version;
+		let Some(row) = Secret::query()
+			.filter(|row| row.id.eq(secret_id) & row.version.eq(version))
+			.first(tx)
+			.await?
+		else {
+			continue;
+		};
+
+		if let Ok(value) = key.open(
+			&Place {
+				organization: lease.organization_id,
+				project: environment.project_id,
+				environment: environment.id,
+				secret: row.id,
+				name: &row.name,
+				version: row.version,
+			},
+			&row.sealed,
+		) {
+			values.push(value);
+		}
+	}
+
+	Ok(values)
 }
 
 /// Why a lease gave nothing.

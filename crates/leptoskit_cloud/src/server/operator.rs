@@ -593,6 +593,9 @@ pub(crate) async fn reconcile(
 		(JobKind::BackupDatabase, _) => {
 			return Err(rpc::Error::server("a backup is never unknown"));
 		}
+		(JobKind::Publish, _) => {
+			return Err(rpc::Error::server("a publish is never unknown"));
+		}
 	}
 
 	audit::record(
