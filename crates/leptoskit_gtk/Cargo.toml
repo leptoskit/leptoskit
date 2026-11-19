@@ -26,6 +26,10 @@ leptoskit_native = { workspace = true, features = ["rive"] }
 leptoskit_rive = { workspace = true }
 
 [[test]]
+name = "overlays"
+harness = false
+
+[[test]]
 name = "widgets"
 harness = false
 

@@ -686,7 +686,7 @@ in
       exec = ''
         set -euo pipefail
         bash ${currentDir}/setup/scripts/run_displayed.sh \
-          cargo test --locked -p leptoskit_gtk --test widgets -- --test-threads=1
+          cargo test --locked -p leptoskit_gtk --test widgets --test overlays -- --test-threads=1
       '';
       description = "Exercise real GTK widgets, keyboard input, pixels, and accessibility under Xvfb.";
       binary = "bash";

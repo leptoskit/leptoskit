@@ -40,7 +40,7 @@ One pull request per item. Every backend is kept in step, with AppKit as the ref
 | 3  | Labels that focus their fields                              | G13      | #879, open  |
 | 4  | One-shot focus requests                                     | G2       | #887, open  |
 | 5  | Arrow-key navigation for tabs, radio groups and menus       | G5       | #892, open  |
-| 6  | `Modal` and `Popover` (GTK and Windows still to come)       | G1       | #896, open  |
+| 6  | `Modal` and `Popover` (Windows still to come)               | G1       | #896, open  |
 | 7  | Scroll into view                                            | G4       | not started |
 | 8  | A clock hook                                                | G6       | not started |
 | 9  | Typed refusals in the rpc client (status, code, retry time) | G8       | not started |
@@ -144,7 +144,7 @@ The third part of G1, for iOS: both renderers.
 - **Tests that CI's iOS job will be the first to run:** `overlays` in `crates/leptoskit_uikit/examples/native_probe.rs` and `ios-controls/OverlayControls.swift`. Both switch animations off and expect a presentation, and a dismissal, to be in place when the call returns. If UIKit defers either even without animation, those assertions need `until`.
 - **Known limits:** a popover is centred on its anchor. On an iPhone the sheet is the full "large" height however little the modal holds (a custom detent needs iOS 16; the crate supports 15). Arrow keys in a `Menu` do nothing, because neither renderer delivers `on_key`.
 
-### `feat/overlays-android`: stacked on `feat/overlays-uikit`
+### `feat/overlays-android` (#907): stacked on `feat/overlays-uikit`
 
 The third part of G1, for Android: both hosts.
 
@@ -155,6 +155,17 @@ The third part of G1, for Android: both hosts.
 - **Checked here:** `WidgetHost.kt`, `ProbeActivity.kt` and every Kotlin file under `mobile/` and `android/` type-check with `kotlinc` against the API 34 `android.jar` (one error that was already there: `VANILLA_ICE_CREAM` is API 35). `ktlint` is clean. The Rust side is cross-linted for `aarch64-linux-android` with the `probe` feature. **Run here:** nothing: there is no emulator.
 - **Tests that CI's Android jobs will be the first to run:** `verifyOverlays` in `android-tests/ProbeActivity.kt` (a real Activity: dialog size and place, popup place, Back and outside touches ask, a removed popover comes down) and `anOverlayKeepsItsPlaceAndWaitsForAWindow` in the bridge's `NativeControlsTest.kt`, which has no window and so checks only the tree.
 - **Known limits:** arrow keys in a `Menu` do nothing, because neither host delivers `on_key`. A dialog needs an Activity. A modal's own background is not drawn.
+
+### `feat/overlays-gtk`: stacked on `feat/overlays-android`
+
+The third part of G1, for Linux. GTK has no Swift or Kotlin renderer: generated Linux apps use this backend.
+
+- **`leptoskit_gtk`** returns `true` from `presents_overlays`. `overlay.rs` holds `Overlay`: a host `Frame` in either a modal, undecorated, non-resizable `gtk::Window` (transient for the window of the modal's parent) or a `gtk::Popover` with `autohide` off and no arrow. A display-wide style under the class `leptoskit-overlay` strips the theme's panel, shadow and padding. The node's own frame is a child of that host and never of its parent's content, so `insert_child` counts only the siblings that are not overlays.
+- **Placement** uses the frame layout already worked out, not GTK's own. The popover is hung (`Frame::hang`, which also presents it from `size_allocate`, as GTK asks of a popover's parent) on the root node's frame, or on the frame of the overlay it is inside, and points at a one-pixel line along its own top edge.
+- **Dismissal:** `autohide` is off so that nothing closes by itself. `watch` puts two capture-phase controllers on each window an overlay shows in: a key controller that turns Escape into `Dismiss` for the top overlay, and a click gesture that turns a press outside the top popover into `Dismiss` without claiming the press. A press on the popover's anchor asks for nothing, as in the terminal. A dialog's `close-request` reports `Dismiss` and is refused.
+- **Focus** moves on an idle, to `initial_focus` or the popover's first control (a dialog's window focuses its own first control). A popover remembers what had focus and gives it back when it closes with focus inside.
+- **Run here:** `tests/overlays.rs`, four tests on real windows under Xvfb with `xdotool` presses and keys, and all of `tests/widgets.rs`. `test:widgets:gtk` now runs both files. Xvfb has no window manager, so nothing here shows where a window manager puts the dialog.
+- **Known limits:** GTK does not dim the window behind a modal. Arrow keys in a `Menu` do nothing, because the backend delivers `on_key` only for radios and sliders. A host that never calls `open_window` or commits after its window maps does not show an overlay that was already open.
 
 ### `feat/public-demo`: no pull request
 

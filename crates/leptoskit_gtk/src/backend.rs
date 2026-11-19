@@ -32,6 +32,7 @@ use leptoskit_yoga::NodeId;
 
 use crate::frame::Frame;
 use crate::measure::GtkTextMeasurer;
+use crate::overlay::Overlay;
 
 /// Runs on the GTK thread, outside backend borrows. It may update the surface.
 pub type EventListener = Rc<dyn Fn(NodeId, NativeEvent)>;
@@ -49,6 +50,9 @@ struct Widget {
 	css_text: RefCell<String>,
 	animation: Option<glib::SourceId>,
 	radio_anchor: Option<gtk::CheckButton>,
+	/// Set for a `Modal` or `Popover`: GTK shows its frame in a window of
+	/// its own, so the frame is never a child of its parent's.
+	overlay: Option<Overlay>,
 }
 
 #[derive(Default)]
@@ -62,6 +66,11 @@ struct State {
 	pointer: Option<Rc<dyn Fn(PointerSample) -> PointerDecision>>,
 	clock: Option<Rc<dyn Fn(u64) -> PointerDecision>>,
 	gesture_timer: Option<glib::SourceId>,
+	/// The overlays on screen, in the order they opened.
+	overlays: Vec<NodeId>,
+	/// The windows already listening for Escape and for a press outside a
+	/// popover.
+	watched: Vec<glib::WeakRef<gtk::Window>>,
 }
 
 struct Host {
@@ -226,8 +235,45 @@ impl GtkBackend {
 			.map(|widget| widget.control.clone())
 	}
 
+	/// Whether a `Modal`'s window or a `Popover`'s popover is on screen.
+	/// `None` for any other node.
+	pub fn overlay_shown(&self, id: NodeId) -> Option<bool> {
+		self.state
+			.borrow()
+			.widgets
+			.get(&id)?
+			.overlay
+			.as_ref()
+			.map(Overlay::is_shown)
+	}
+
+	/// The window a `Modal` shows in, for native testing.
+	pub fn overlay_window(&self, id: NodeId) -> Option<gtk::Window> {
+		self.state
+			.borrow()
+			.widgets
+			.get(&id)?
+			.overlay
+			.as_ref()?
+			.window()
+	}
+
+	/// The popover a `Popover` shows in, for native testing.
+	pub fn overlay_popover(&self, id: NodeId) -> Option<gtk::Popover> {
+		self.state
+			.borrow()
+			.widgets
+			.get(&id)?
+			.overlay
+			.as_ref()?
+			.popover()
+	}
+
 	/// Shows the committed root in a desktop window. The host owns its
 	/// lifetime.
+	///
+	/// A `Modal` or `Popover` that is already open shows now that there is
+	/// a window for it.
 	pub fn open_window(
 		&self,
 		root: NodeId,
@@ -395,6 +441,7 @@ impl GtkBackend {
 
 	fn refresh(&self) {
 		Self::refresh_state(&self.state);
+		refresh_overlays(&self.state);
 	}
 
 	/// Refreshes after a mutation applied on its own; a batch refreshes once
@@ -551,6 +598,10 @@ impl Drop for GtkBackend {
 
 		for widget in state.widgets.values_mut() {
 			stop(widget);
+
+			if let Some(overlay) = widget.overlay.take() {
+				overlay.close();
+			}
 		}
 
 		// Hosts may still retain a root. Disconnect callbacks by clearing the
@@ -827,7 +878,7 @@ impl NativeBackend for GtkBackend {
 		}
 
 		frame.put(&control, graphene::Rect::new(0.0, 0.0, 0.0, 0.0), 0, true);
-		let widget = Widget {
+		let mut widget = Widget {
 			kind,
 			frame,
 			control,
@@ -840,7 +891,15 @@ impl NativeBackend for GtkBackend {
 			css_text: RefCell::new(String::new()),
 			animation: None,
 			radio_anchor,
+			overlay: None,
 		};
+		let weak = Rc::downgrade(&self.state);
+		let flag = self.state.borrow().suppressed.clone();
+		widget.overlay = matches!(kind, NativeKind::Modal | NativeKind::Popover).then(|| {
+			Overlay::new(kind == NativeKind::Popover, &widget.frame, move || {
+				emit(&weak, &flag, id, NativeEvent::Dismiss);
+			})
+		});
 		connect(&self.state, id, &widget);
 		self.state.borrow_mut().widgets.insert(id, widget);
 		self.refresh_if_unbatched();
@@ -864,6 +923,15 @@ impl NativeBackend for GtkBackend {
 			return;
 		};
 		widget.rect = graphene::Rect::new(x, y, width, height);
+
+		// An overlay's frame is in viewport coordinates, and its own window
+		// is placed once the batch is in.
+		if widget.overlay.is_some() {
+			drop(state);
+			self.refresh_if_unbatched();
+			return;
+		}
+
 		let parent = widget.parent;
 		let frame = widget.frame.clone();
 		let rect = widget.rect;
@@ -886,12 +954,35 @@ impl NativeBackend for GtkBackend {
 		widget.parent = Some(parent);
 		let frame = widget.frame.clone();
 		let rect = widget.rect;
+		let overlay = widget.overlay.is_some();
+		let Some(siblings) = state
+			.widgets
+			.get(&parent)
+			.map(|parent| parent.children.clone())
+		else {
+			return;
+		};
+		let index = index.min(siblings.len());
+		// An overlay's frame is in its own window, so the overlays before
+		// this child do not count towards where its frame goes.
+		let position = siblings[..index]
+			.iter()
+			.filter(|id| {
+				state
+					.widgets
+					.get(id)
+					.is_some_and(|widget| widget.overlay.is_none())
+			})
+			.count();
 		let Some(parent) = state.widgets.get_mut(&parent) else {
 			return;
 		};
-		let index = index.min(parent.children.len());
 		parent.children.insert(index, child);
-		parent.content.put(&frame, rect, index, false);
+
+		if !overlay {
+			parent.content.put(&frame, rect, position, false);
+		}
+
 		self.update_scroll_extents_if_unbatched(&state);
 		drop(state);
 		self.refresh_if_unbatched();
@@ -905,10 +996,20 @@ impl NativeBackend for GtkBackend {
 		};
 		widget.parent = None;
 		let frame = widget.frame.clone();
+		// An overlay comes down now that it has no parent to show over.
+		let overlay = widget.overlay.clone();
 
 		if let Some(parent) = state.widgets.get_mut(&parent) {
 			parent.children.retain(|id| *id != child);
-			parent.content.remove(&frame);
+
+			if overlay.is_none() {
+				parent.content.remove(&frame);
+			}
+		}
+
+		if let Some(overlay) = overlay {
+			state.overlays.retain(|id| *id != child);
+			overlay.hide();
 		}
 
 		self.update_scroll_extents_if_unbatched(&state);
@@ -920,13 +1021,27 @@ impl NativeBackend for GtkBackend {
 	fn delete(&mut self, id: NodeId) {
 		let guard = Suppression::new(&self.state);
 
-		if let Some(mut widget) = self.state.borrow_mut().widgets.remove(&id) {
+		let removed = {
+			let mut state = self.state.borrow_mut();
+			state.overlays.retain(|overlay| *overlay != id);
+			state.widgets.remove(&id)
+		};
+
+		if let Some(mut widget) = removed {
 			stop(&mut widget);
 			widget.frame.set_sensitive(false);
 			widget.frame.set_visible(false);
+
+			if let Some(overlay) = widget.overlay.take() {
+				overlay.close();
+			}
 		}
 
 		drop(guard);
+	}
+
+	fn presents_overlays(&self) -> bool {
+		true
 	}
 
 	fn text_measurer(&self) -> SharedTextMeasurer {
@@ -955,6 +1070,318 @@ impl NativeBackend for GtkBackend {
 
 		self.refresh();
 	}
+}
+
+/// What to do with one overlay, worked out while the state is borrowed and
+/// carried out once it is not: showing a window runs GTK's own callbacks.
+enum Plan {
+	Hide,
+	Dialog {
+		parent: gtk::Window,
+		held: graphene::Rect,
+		viewport: graphene::Size,
+	},
+	Hanging {
+		below: Frame,
+		rect: graphene::Rect,
+	},
+}
+
+/// How many ancestors a node has.
+fn depth(state: &State, mut id: NodeId) -> usize {
+	let mut depth = 0;
+
+	while let Some(parent) = state.widgets.get(&id).and_then(|widget| widget.parent) {
+		depth += 1;
+		id = parent;
+	}
+
+	depth
+}
+
+fn plan(state: &State, id: NodeId) -> Plan {
+	let Some(widget) = state.widgets.get(&id) else {
+		return Plan::Hide;
+	};
+	let open = widget
+		.props
+		.overlay
+		.as_ref()
+		.is_some_and(|overlay| overlay.open);
+	let Some(parent) = widget.parent.and_then(|parent| state.widgets.get(&parent)) else {
+		return Plan::Hide;
+	};
+
+	if !open || !interactive(state, id) {
+		return Plan::Hide;
+	}
+
+	if widget.kind == NativeKind::Modal {
+		let held = widget
+			.children
+			.iter()
+			.filter_map(|child| state.widgets.get(child))
+			.filter(|child| child.overlay.is_none() && child.props.hidden != Some(true))
+			.map(|child| child.rect)
+			.reduce(|held, rect| held.union(&rect));
+		let window = parent
+			.frame
+			.root()
+			.and_downcast::<gtk::Window>()
+			.filter(WidgetExt::is_mapped);
+
+		return match (held, window) {
+			(Some(held), Some(parent)) if held.width() >= 1.0 && held.height() >= 1.0 => {
+				Plan::Dialog {
+					parent,
+					held,
+					viewport: graphene::Size::new(widget.rect.width(), widget.rect.height()),
+				}
+			}
+			_ => Plan::Hide,
+		};
+	}
+
+	// A popover's frame is measured from the viewport's corner: the root's,
+	// or that of the overlay on screen the popover is inside.
+	let mut below = parent;
+
+	while below
+		.overlay
+		.as_ref()
+		.is_none_or(|overlay| !overlay.is_shown())
+	{
+		let Some(next) = below.parent.and_then(|parent| state.widgets.get(&parent)) else {
+			break;
+		};
+		below = next;
+	}
+
+	let rect = graphene::Rect::new(
+		widget.rect.x() - below.rect.x(),
+		widget.rect.y() - below.rect.y(),
+		widget.rect.width(),
+		widget.rect.height(),
+	);
+
+	if !below.frame.is_mapped() || rect.width() < 1.0 || rect.height() < 1.0 {
+		return Plan::Hide;
+	}
+
+	Plan::Hanging {
+		below: below.frame.clone(),
+		rect,
+	}
+}
+
+/// Shows each open `Modal` and `Popover` and takes down each closed one,
+/// once the frames they hold are in place. An overlay needs a window: until
+/// the tree it belongs to is in one, it stays down.
+fn refresh_overlays(shared: &Rc<RefCell<State>>) {
+	let guard = Suppression::new(shared);
+	let mut overlays = {
+		let state = shared.borrow();
+		state
+			.widgets
+			.iter()
+			.filter(|(_, widget)| widget.overlay.is_some())
+			.map(|(id, _)| (depth(&state, *id), *id))
+			.collect::<Vec<_>>()
+	};
+	// An overlay inside another finds the outer one already on screen.
+	overlays.sort_by_key(|(depth, _)| *depth);
+
+	for (_, id) in overlays {
+		let (plan, overlay, frame) = {
+			let state = shared.borrow();
+			let Some(widget) = state.widgets.get(&id) else {
+				continue;
+			};
+			let Some(overlay) = widget.overlay.clone() else {
+				continue;
+			};
+			(plan(&state, id), overlay, widget.frame.clone())
+		};
+		let opened = match plan {
+			Plan::Hide => {
+				overlay.hide();
+				false
+			}
+			Plan::Dialog {
+				parent,
+				held,
+				viewport,
+			} => overlay.show_dialog(&parent, &frame, held, viewport),
+			Plan::Hanging { below, rect } => overlay.show_popover(&below, &frame, rect),
+		};
+
+		if !overlay.is_shown() {
+			shared.borrow_mut().overlays.retain(|shown| *shown != id);
+			continue;
+		}
+
+		if !opened {
+			continue;
+		}
+
+		shared.borrow_mut().overlays.push(id);
+
+		if let Some(root) = overlay.root() {
+			watch(shared, &root);
+		}
+
+		focus_overlay(shared, id, &overlay);
+	}
+
+	drop(guard);
+}
+
+/// Moves focus into an overlay that has just opened: to the element its
+/// `initial_focus` names, or else to the first control inside.
+///
+/// The move waits for the main loop's next idle turn, as a focus request
+/// does, so the events it raises reach the application.
+fn focus_overlay(shared: &Rc<RefCell<State>>, id: NodeId, overlay: &Overlay) {
+	let state = Rc::downgrade(shared);
+	let overlay = overlay.clone();
+	glib::idle_add_local_once(move || {
+		let Some(state) = state.upgrade() else {
+			return;
+		};
+		let target = {
+			let state = state.borrow();
+			let name = state
+				.widgets
+				.get(&id)
+				.and_then(|widget| widget.props.overlay.as_ref())
+				.and_then(|overlay| overlay.initial_focus.clone());
+			name.and_then(|name| {
+				state
+					.widgets
+					.values()
+					.find(|widget| widget.props.id.as_deref() == Some(name.as_str()))
+					.map(|widget| widget.control.clone())
+			})
+		};
+
+		if !overlay.is_shown() {
+			return;
+		}
+
+		match target {
+			Some(control) => {
+				control.grab_focus();
+			}
+			None => overlay.focus_first(),
+		}
+	});
+}
+
+/// The overlay on top in a window: the last one opened whose keys and
+/// presses that window takes.
+fn top_overlay(state: &State, window: &gtk::Window) -> Option<NodeId> {
+	state.overlays.iter().rev().copied().find(|id| {
+		state
+			.widgets
+			.get(id)
+			.and_then(|widget| widget.overlay.as_ref())
+			.and_then(Overlay::root)
+			.as_ref()
+			== Some(window)
+	})
+}
+
+/// Listens on a window for what asks its top overlay to close: Escape, and
+/// a press outside a popover. Neither closes anything. The application
+/// hears `Dismiss` and closes the overlay with its next tree.
+fn watch(shared: &Rc<RefCell<State>>, window: &gtk::Window) {
+	{
+		let mut state = shared.borrow_mut();
+		state.watched.retain(|watched| watched.upgrade().is_some());
+
+		if state
+			.watched
+			.iter()
+			.any(|watched| watched.upgrade().as_ref() == Some(window))
+		{
+			return;
+		}
+
+		state.watched.push(window.downgrade());
+	}
+	let flag = shared.borrow().suppressed.clone();
+	let key = gtk::EventControllerKey::new();
+	key.set_propagation_phase(gtk::PropagationPhase::Capture);
+	let weak = Rc::downgrade(shared);
+	let key_flag = flag.clone();
+	let key_window = window.downgrade();
+	key.connect_key_pressed(move |_, key, _, _| {
+		if key != gdk::Key::Escape {
+			return glib::Propagation::Proceed;
+		}
+
+		let top = weak.upgrade().and_then(|state| {
+			let window = key_window.upgrade()?;
+			top_overlay(&state.borrow(), &window)
+		});
+		let Some(top) = top else {
+			return glib::Propagation::Proceed;
+		};
+		emit(&weak, &key_flag, top, NativeEvent::Dismiss);
+		glib::Propagation::Stop
+	});
+	window.add_controller(key);
+
+	let press = gtk::GestureClick::new();
+	press.set_button(0);
+	press.set_propagation_phase(gtk::PropagationPhase::Capture);
+	let weak = Rc::downgrade(shared);
+	let press_window = window.downgrade();
+	press.connect_pressed(move |gesture, _, x, y| {
+		let outside = weak.upgrade().and_then(|state| {
+			let window = press_window.upgrade()?;
+			let state = state.borrow();
+			let top = top_overlay(&state, &window)?;
+			let widget = state.widgets.get(&top)?;
+			let popover = widget.overlay.as_ref()?.popover()?;
+			let pressed = gesture.current_event().and_then(|event| event.surface());
+
+			if pressed.is_some() && pressed == popover.surface() {
+				return None;
+			}
+
+			// A press on the control a popover hangs from is that control's
+			// to answer: it decides whether its popover stays.
+			let anchor = widget
+				.props
+				.overlay
+				.as_ref()
+				.and_then(|overlay| overlay.anchor.as_deref())
+				.and_then(|name| {
+					state
+						.widgets
+						.values()
+						.find(|widget| widget.props.id.as_deref() == Some(name))
+				})
+				.map(|anchor| anchor.frame.clone());
+			let on_anchor = pressed == window.surface()
+				&& anchor.is_some_and(|anchor| {
+					window
+						.pick(x, y, gtk::PickFlags::DEFAULT)
+						.is_some_and(|picked| {
+							picked == *anchor.upcast_ref::<gtk::Widget>()
+								|| picked.is_ancestor(&anchor)
+						})
+				});
+
+			(!on_anchor).then_some(top)
+		});
+
+		if let Some(top) = outside {
+			emit(&weak, &flag, top, NativeEvent::Dismiss);
+		}
+	});
+	window.add_controller(press);
 }
 
 fn sync_hosts(state: &mut State) {
@@ -1042,7 +1469,18 @@ fn update_scroll_extents(state: &State) {
 fn configure(widget: &Widget, _dark: Option<bool>) {
 	let props = &widget.props;
 	let rtl = props.direction == Some(leptoskit_yoga::Direction::Rtl);
-	widget.frame.style(props);
+
+	if widget.kind == NativeKind::Modal {
+		// The backdrop a modal draws on the web has no screen to cover: the
+		// window is as large as what the modal holds.
+		widget.frame.style(&NativeProps {
+			background: None,
+			..props.clone()
+		});
+	} else {
+		widget.frame.style(props);
+	}
+
 	widget.control.set_direction(if rtl {
 		gtk::TextDirection::Rtl
 	} else {
