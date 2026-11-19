@@ -847,3 +847,92 @@ async fn a_worker_runs_only_the_protocol() {
 		assert!(fine, "{operation}: {} {}", answer.status, answer.text);
 	}
 }
+
+/// A cluster's worker is held to the same line: the worker operations and
+/// nothing else, and of those only what is its own. It can't renew, log to,
+/// or finish a job another worker holds, by that job's real ID, and a build
+/// worker can't report for an environment that exists.
+#[tokio::test]
+async fn a_cluster_worker_runs_only_the_protocol() {
+	let fixture = Fixture::new(Caller::Person(Role::Owner)).await;
+	let app = &fixture.app;
+	let ops = shipping::operator(app).await;
+	let cluster = shipping::pair(
+		app,
+		&ops,
+		json!({ "role": "cluster", "cluster": "eu-one" }),
+		"matrix-cluster-worker",
+	)
+	.await;
+
+	for (operation, requirement) in in_matrix_order() {
+		let answer = cluster.call(operation, fixture.args(operation).await).await;
+		let fine = match requirement {
+			Requirement::Worker => {
+				match *operation {
+					"claim" => answer.status == 200,
+					"report_status" => {
+						answer.status == 404
+							&& answer.message().starts_with("environment_not_found")
+					}
+					_ => answer.status == 404 && answer.message().starts_with("job_not_held"),
+				}
+			}
+			Requirement::Pairing | Requirement::Builtin => answer.status != 500,
+			_ => answer.status == 403 && answer.message().starts_with("not_for_workers"),
+		};
+		assert!(fine, "{operation}: {} {}", answer.status, answer.text);
+	}
+
+	// The fixture's deployment waits for its build: a build worker takes
+	// it, and the cluster's worker can do nothing to that job.
+	let build = shipping::pair(app, &ops, json!({ "role": "build" }), "matrix-builder").await;
+	let held = build.take().await;
+	cluster.renew(&held).await.refused(404, "job_not_held");
+	cluster
+		.log(&held, 0, &["not mine"])
+		.await
+		.refused(404, "job_not_held");
+	cluster
+		.finish(&held, shipping::built(&held, b"not mine", &[]))
+		.await
+		.refused(404, "job_not_held");
+	cluster
+		.finish(&held, shipping::applied())
+		.await
+		.refused(404, "job_not_held");
+
+	// Nor can the build worker speak for the cluster about a real
+	// environment, or a second build worker for the first.
+	let environments = app
+		.call(
+			"environments",
+			json!({ "organization": fixture.organization, "project": "web" }),
+			As::Session(&fixture.owner),
+		)
+		.await
+		.expect(200)
+		.json();
+	let environment = environments[0]["id"].clone();
+	let named = json!({ "slug": "web", "id": environment });
+	build
+		.call(
+			"report_status",
+			json!({
+				"environment": environment,
+				"observed": {
+					"environment": { "organization": named, "project": named, "environment": named },
+					"processes": [],
+				},
+			}),
+		)
+		.await
+		.refused(403, "cluster_worker_required");
+	let other = shipping::pair(app, &ops, json!({ "role": "build" }), "matrix-builder-2").await;
+	other.renew(&held).await.refused(404, "job_not_held");
+	other
+		.finish(&held, shipping::built(&held, b"not mine", &[]))
+		.await
+		.refused(404, "job_not_held");
+	build.renew(&held).await.expect(200);
+}

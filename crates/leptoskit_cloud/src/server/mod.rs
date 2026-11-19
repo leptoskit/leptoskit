@@ -128,13 +128,22 @@ pub struct ShippingSettings {
 	pub runtime_logs: Duration,
 	/// The most archive bytes one organisation may keep.
 	pub storage_cap: u64,
+	/// The longest one attempt at a build may run, from its claim:
+	/// renewing never takes its lease past this.
+	pub build_deadline: Duration,
+	/// The most log bytes one build may send, over all its attempts.
+	pub build_log_cap: u64,
+	/// The most build log bytes one organisation may keep at once; they
+	/// count until their retention ends.
+	pub organization_log_cap: u64,
 }
 
 impl Default for ShippingSettings {
 	/// Two-minute leases, fifteen-minute addresses, an hour for a build to
 	/// be claimed, a sweep every fifteen seconds, archives kept a week,
-	/// build logs thirty days and runtime logs seven, and 5 GiB of archives
-	/// per organisation.
+	/// build logs thirty days and runtime logs seven, 5 GiB of archives
+	/// per organisation, two hours for an attempt at a build, 64 MiB of log
+	/// per build, and 2 GiB of build logs per organisation.
 	fn default() -> Self {
 		Self {
 			lease: Duration::from_mins(2),
@@ -146,6 +155,9 @@ impl Default for ShippingSettings {
 			build_logs: Duration::from_hours(30 * 24),
 			runtime_logs: Duration::from_hours(7 * 24),
 			storage_cap: 5 * 1024 * 1024 * 1024,
+			build_deadline: Duration::from_hours(2),
+			build_log_cap: 64 * 1024 * 1024,
+			organization_log_cap: 2 * 1024 * 1024 * 1024,
 		}
 	}
 }

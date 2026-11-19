@@ -8,6 +8,7 @@
 -- loses data: every row in `environment_statuses` is deleted
 -- loses data: every row in `jobs` is deleted
 -- loses data: every row in `log_chunks` is deleted
+-- loses data: every row in `log_usage` is deleted
 -- loses data: every row in `source_archives` is deleted
 -- loses data: every row in `worker_pairings` is deleted
 -- loses data: every row in `workers` is deleted
@@ -26,6 +27,7 @@ DROP TABLE "clusters",
 "environment_statuses",
 "jobs",
 "log_chunks",
+"log_usage",
 "source_archives",
 "worker_pairings",
 "workers";

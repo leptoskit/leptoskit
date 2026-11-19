@@ -769,7 +769,7 @@ pub(crate) async fn deploy(
 	archive.expires_at = leptoskit_db::now() + delta(shipping.settings.archive_keep);
 	let digest = Digest::parse(&archive.digest)
 		.map_err(|_| rpc::Error::server("an archive's digest is malformed"))?;
-	let key = archive_key(organization.id.uuid(), &digest);
+	let key = archive_key(organization.id.uuid(), archive.id.uuid(), &digest);
 	let size = number_of_bytes(archive.size);
 	archive.save(cx.tx()).await?;
 
@@ -958,6 +958,18 @@ fn rollback_target(target: &Deployment, placement: Option<&Placement>) -> rpc::R
 	let (Some(build), Some(placement)) = (target.build.0.as_ref(), placement) else {
 		return unavailable("has no build to return to".to_owned());
 	};
+
+	// A release that failed after its server started may have applied
+	// migrations the control plane never heard about: until that is
+	// settled, nothing can say the database is where the target expects.
+	if placement.schema_uncertain {
+		return unavailable(
+			"can't be returned to while the database's migrations are uncertain: a release that \
+			 failed may have applied some; deploy a fix forward, which settles them"
+				.to_owned(),
+		);
+	}
+
 	let known = &placement.migrations.0;
 
 	if *known != build.migrations {
@@ -1537,7 +1549,22 @@ pub(crate) async fn build_finished(tx: &Tx, job: &Job, outcome: &BuildOutcome) -
 	}
 
 	match outcome {
-		BuildOutcome::Succeeded(output) => built(tx, changing, output).await,
+		BuildOutcome::Succeeded(output) => {
+			if let Some(stray) = stray_image(job, output) {
+				changing.stamp(
+					&LineKind::Server,
+					Stamp::Failed,
+					Some(detail(&format!(
+						"the build named the image repository `{stray}`, not the one it was given"
+					))),
+				);
+				fail(&mut changing, Stage::Building, Blocker::BuildFailed)?;
+				changing.save(tx).await?;
+				return Ok(());
+			}
+
+			built(tx, changing, output).await
+		}
 		BuildOutcome::Failed { reason, steps } => {
 			changing.steps(&LineKind::Server, steps.clone());
 			changing.stamp(&LineKind::Server, Stamp::Failed, Some(detail(reason)));
@@ -1556,6 +1583,28 @@ pub(crate) async fn build_finished(tx: &Tx, job: &Job, outcome: &BuildOutcome) -
 			Ok(())
 		}
 	}
+}
+
+/// The first image repository `output` names that isn't the one `job` gave
+/// its build, if any: the server's image, or a process's own. A build's
+/// images stay in its organisation's and project's repository.
+fn stray_image<'o>(job: &Job, output: &'o BuildServerOutput) -> Option<&'o str> {
+	let StoredInput::BuildServer {
+		image_repository, ..
+	} = &job.input.0
+	else {
+		return Some(output.image.repository.as_str());
+	};
+
+	std::iter::once(&output.image)
+		.chain(
+			output
+				.processes
+				.iter()
+				.filter_map(|process| process.image.as_ref()),
+		)
+		.map(|image| image.repository.as_str())
+		.find(|repository| *repository != image_repository)
 }
 
 /// Stamps what a successful build made: the server, each service, and the

@@ -34,7 +34,9 @@ use crate::operator::JobState;
 use crate::tables::Job;
 use crate::tables::LogChunk;
 use crate::tables::LogKind;
+use crate::tables::LogUsage;
 use crate::tables::NewLogChunk;
+use crate::tables::NewLogUsage;
 use crate::tables::NewStatusReport;
 use crate::tables::NewWorker;
 use crate::tables::Pairing;
@@ -42,6 +44,7 @@ use crate::tables::Placement;
 use crate::tables::StatusReport;
 use crate::tables::Worker;
 use crate::workers::Assignment;
+use crate::workers::DestroyOutcome;
 use crate::workers::Finished;
 use crate::workers::JobKind;
 use crate::workers::JobOutcome;
@@ -68,7 +71,9 @@ const MAX_NAME_LEN: usize = 64;
 /// server may have queued a job.
 const POLL: Duration = Duration::from_secs(1);
 
-/// How many queued jobs one claim looks through.
+/// How many queued jobs one claim reads at a time. It reads page after page
+/// until it finds one this worker may take, so jobs it may not take, however
+/// many, never hide one it may.
 const CANDIDATES: u64 = 100;
 
 fn not_held(job: Uuid) -> rpc::Error {
@@ -312,12 +317,6 @@ async fn claim_job(cx: &rpc::MutationCx) -> rpc::Result<Option<Assignment>> {
 		WorkerRole::Build => vec![JobKind::BuildServer],
 		WorkerRole::Cluster => vec![JobKind::Release, JobKind::DestroyEnvironment],
 	};
-	let candidates = Job::query()
-		.filter(|job| job.state.eq(JobState::Queued) & job.kind.in_list(kinds.clone()))
-		.order_by(|job| job.created_at.asc())
-		.limit(CANDIDATES)
-		.all(tx)
-		.await?;
 	// A cluster worker takes one job per environment at a time, and none
 	// while one is unknown.
 	let busy: Vec<_> = if row.role == WorkerRole::Cluster {
@@ -340,12 +339,50 @@ async fn claim_job(cx: &rpc::MutationCx) -> rpc::Result<Option<Assignment>> {
 		cluster: row.cluster_id,
 		capabilities: &row.capabilities.0,
 	};
-	let Some(mut job) = candidates.into_iter().find(|job| {
-		jobs::takes(&taker, job)
-			&& job
-				.environment_id
-				.is_none_or(|environment| !busy.contains(&environment))
-	}) else {
+	// Role, organisation, and cluster are decided by the query, so another
+	// tenant's or another cluster's queue never fills a page; capabilities
+	// and busy environments are decided here, a page at a time.
+	let organization = row.organization_id;
+	let cluster = row.cluster_id;
+	let role = row.role;
+	let mut offset = 0;
+	let found = loop {
+		let page = Job::query()
+			.filter(|job| {
+				let mut eligible = job.state.eq(JobState::Queued) & job.kind.in_list(kinds.clone());
+
+				if let Some(organization) = organization {
+					eligible = eligible & job.organization_id.eq(organization);
+				}
+
+				if role == WorkerRole::Cluster {
+					eligible = eligible & job.cluster_id.eq(cluster);
+				}
+
+				eligible
+			})
+			.order_by(|job| job.created_at.asc())
+			.order_by(|job| job.id.asc())
+			.offset(offset)
+			.limit(CANDIDATES)
+			.all(tx)
+			.await?;
+		let read = page.len() as u64;
+		let found = page.into_iter().find(|job| {
+			jobs::takes(&taker, job)
+				&& job
+					.environment_id
+					.is_none_or(|environment| !busy.contains(&environment))
+		});
+
+		if found.is_some() || read < CANDIDATES {
+			break found;
+		}
+
+		offset += CANDIDATES;
+	};
+
+	let Some(mut job) = found else {
 		return Ok(None);
 	};
 	let settings = services.shipping().settings;
@@ -353,7 +390,8 @@ async fn claim_job(cx: &rpc::MutationCx) -> rpc::Result<Option<Assignment>> {
 	job.state = JobState::Leased;
 	job.worker_id = Some(worker_id);
 	job.attempt += 1;
-	job.lease_expires_at = Some(now + delta(settings.lease));
+	job.claimed_at = Some(now);
+	job.lease_expires_at = Some(lease_until(&job, now, &settings));
 	job.save(tx).await?;
 	let attempt = u32::try_from(job.attempt).unwrap_or(u32::MAX);
 
@@ -372,14 +410,34 @@ async fn claim_job(cx: &rpc::MutationCx) -> rpc::Result<Option<Assignment>> {
 	}))
 }
 
-/// The job `id` while this worker holds it under a live lease.
+/// When a lease given or renewed at `now` ends: a lease's length on, but
+/// for a build never past its claim and the build deadline.
+fn lease_until(
+	job: &Job,
+	now: leptoskit_db::Timestamp,
+	settings: &super::ShippingSettings,
+) -> leptoskit_db::Timestamp {
+	let lease = now + delta(settings.lease);
+
+	match (job.kind, job.claimed_at) {
+		(JobKind::BuildServer, Some(claimed)) => {
+			lease.min(claimed + delta(settings.build_deadline))
+		}
+		_ => lease,
+	}
+}
+
+/// The job `id` while this worker holds it under a live lease. A lease
+/// past its end holds nothing, whether or not the sweeper has seen it yet.
 async fn held(tx: &Tx, caller: &WorkerCaller, id: Uuid) -> rpc::Result<Job> {
 	let worker_id = caller.id;
+	let now = leptoskit_db::now();
 	Job::query()
 		.filter(|job| {
 			job.id.eq(Id::<Job>::from_uuid(id))
 				& job.worker_id.eq(Some(worker_id))
 				& job.state.eq(JobState::Leased)
+				& job.lease_expires_at.gt(now)
 		})
 		.first(tx)
 		.await?
@@ -391,7 +449,13 @@ pub(crate) async fn renew(cx: &rpc::MutationCx, job: Uuid) -> rpc::Result<Renewe
 	let services = services(cx.context())?;
 	live_worker(cx.tx(), caller).await?;
 	let mut row = held(cx.tx(), caller, job).await?;
-	let expires = leptoskit_db::now() + delta(services.shipping().settings.lease);
+	let now = leptoskit_db::now();
+	let expires = lease_until(&row, now, &services.shipping().settings);
+
+	if expires <= now {
+		return Err(not_held(job));
+	}
+
 	row.lease_expires_at = Some(expires);
 	row.save(cx.tx()).await?;
 	Ok(Renewed {
@@ -432,19 +496,22 @@ pub(crate) async fn append_log(
 			attempt,
 			seq,
 			lines: u32::try_from(lines.len()).unwrap_or(u32::MAX),
+			bytes: u32::try_from(size).unwrap_or(u32::MAX),
 			digest,
 		})
 		.await?;
 	let secrets = &services.shipping().redactions;
 	let now = leptoskit_db::now();
-	let stored: Vec<StoredLine> = lines
-		.iter()
-		.map(|line| {
+	let cut: Vec<String> = lines.iter().map(|line| logs::cut(line)).collect();
+	let cut: Vec<&str> = cut.iter().map(String::as_str).collect();
+	let stored: Vec<StoredLine> = logs::redact_lines(&cut, secrets)
+		.into_iter()
+		.map(|text| {
 			StoredLine {
 				at: now,
 				process: None,
 				pod: None,
-				text: logs::redact(&logs::cut(line), secrets),
+				text,
 			}
 		})
 		.collect();
@@ -468,6 +535,7 @@ struct AppendChunk {
 	attempt: u32,
 	seq: u32,
 	lines: u32,
+	bytes: u32,
 	digest: String,
 }
 
@@ -488,7 +556,7 @@ async fn append_chunk(cx: &rpc::MutationCx, args: AppendChunk) -> rpc::Result<St
 	let caller = worker(cx.context())?;
 	let services = services(cx.context())?;
 	let tx = cx.tx();
-	let job = held(tx, caller, args.job).await?;
+	let mut job = held(tx, caller, args.job).await?;
 
 	if i64::from(args.attempt) != job.attempt {
 		return Err(not_held(args.job));
@@ -533,6 +601,21 @@ async fn append_chunk(cx: &rpc::MutationCx, args: AppendChunk) -> rpc::Result<St
 			 `report_status`",
 		));
 	};
+	let settings = services.shipping().settings;
+	let bytes = i64::from(args.bytes);
+	let build_cap = i64::try_from(settings.build_log_cap).unwrap_or(i64::MAX);
+
+	if job.log_bytes.saturating_add(bytes) > build_cap {
+		return Err(rpc::Error::conflict(format!(
+			"log_full: this build has sent {} KiB of log, and may send at most {} KiB",
+			job.log_bytes / 1024,
+			build_cap / 1024
+		)));
+	}
+
+	charge_log(tx, job.organization_id, bytes, &settings).await?;
+	job.log_bytes += bytes;
+	job.save(tx).await?;
 	let first_line = next_line(tx, |chunk| chunk.deployment_id.eq(Some(deployment))).await?;
 	let key = log_key(
 		job.organization_id.uuid(),
@@ -549,13 +632,56 @@ async fn append_chunk(cx: &rpc::MutationCx, args: AppendChunk) -> rpc::Result<St
 		seq,
 		first_line,
 		lines: i64::from(args.lines),
+		bytes,
 		digest: args.digest,
 		object_key: key.clone(),
-		expires_at: leptoskit_db::now() + delta(services.shipping().settings.build_logs),
+		expires_at: leptoskit_db::now() + delta(settings.build_logs),
 	}
 	.insert(tx)
 	.await?;
 	Ok(key)
+}
+
+/// Counts `bytes` more of build log against `organization`, or refuses
+/// with `Conflict` (`log_full`) when that takes it past its cap. The count
+/// goes down as the sweeper deletes chunks.
+async fn charge_log(
+	tx: &Tx,
+	organization: Id<crate::tables::Organization>,
+	bytes: i64,
+	settings: &super::ShippingSettings,
+) -> rpc::Result<()> {
+	let cap = i64::try_from(settings.organization_log_cap).unwrap_or(i64::MAX);
+	let usage = LogUsage::query()
+		.filter(|usage| usage.organization_id.eq(organization))
+		.first(tx)
+		.await?;
+	let used = usage.as_ref().map_or(0, |usage| usage.bytes);
+
+	if used.saturating_add(bytes) > cap {
+		return Err(rpc::Error::conflict(format!(
+			"log_full: the organisation keeps {} MiB of build logs, its most; older logs expire \
+			 after a while",
+			used / 1024 / 1024
+		)));
+	}
+
+	match usage {
+		Some(mut usage) => {
+			usage.bytes += bytes;
+			usage.save(tx).await?;
+		}
+		None => {
+			NewLogUsage {
+				organization_id: organization,
+				bytes,
+			}
+			.insert(tx)
+			.await?;
+		}
+	}
+
+	Ok(())
 }
 
 /// The number the next chunk's first line gets in the log `filter` picks:
@@ -600,7 +726,18 @@ pub(crate) async fn finish(
 		)));
 	}
 
-	if let Some(recorded) = &row.outcome.0 {
+	// A removal that failed and then worked, on the worker's own retry,
+	// may say so: the failure it recorded is what it replaces.
+	let retried_removal = row.state == JobState::Unknown
+		&& matches!(
+			&row.outcome.0,
+			Some(JobOutcome::DestroyEnvironment(
+				DestroyOutcome::Failed { .. }
+			))
+		)
+		&& outcome == JobOutcome::DestroyEnvironment(DestroyOutcome::Destroyed);
+
+	if let Some(recorded) = row.outcome.0.as_ref().filter(|_| !retried_removal) {
 		return if *recorded == outcome {
 			Ok(Finished {
 				job,
@@ -614,6 +751,19 @@ pub(crate) async fn finish(
 	}
 
 	match row.state {
+		// A build's lease past its end holds nothing, even before the
+		// sweeper sees it: the build is the sweeper's to offer again.
+		JobState::Leased
+			if row.kind == JobKind::BuildServer
+				&& row
+					.lease_expires_at
+					.is_none_or(|expires| expires <= leptoskit_db::now()) =>
+		{
+			return Err(not_held(job));
+		}
+		// A release or removal reports what happened whenever it can, its
+		// lease run out or the sweeper having called it unknown: the
+		// cluster did it or not either way, and is never asked twice.
 		JobState::Leased | JobState::Unknown => {}
 		JobState::Done => {
 			return Err(rpc::Error::conflict(format!(
@@ -623,7 +773,13 @@ pub(crate) async fn finish(
 		JobState::Queued | JobState::Abandoned => return Err(not_held(job)),
 	}
 
-	row.state = JobState::Done;
+	// A removal that failed left workloads, routes, or data behind, and
+	// nothing else remembers them: the job stays unknown, in front of
+	// operators, until one reconciles it, which can run it again.
+	row.state = match &outcome {
+		JobOutcome::DestroyEnvironment(DestroyOutcome::Failed { .. }) => JobState::Unknown,
+		_ => JobState::Done,
+	};
 	row.lease_expires_at = None;
 	row.outcome = Json(Some(outcome.clone()));
 	row.save(tx).await?;
@@ -673,31 +829,45 @@ pub(crate) async fn report_status(
 	}
 
 	let services = services(cx.context())?.clone();
+	let messages: Vec<String> = logs
+		.iter()
+		.map(|RuntimeValue(line)| logs::cut(&line.message))
+		.collect();
+	let messages: Vec<&str> = messages.iter().map(String::as_str).collect();
+	let texts = logs::redact_lines(&messages, &services.shipping().redactions);
 	let lines: Vec<StoredLine> = logs
 		.into_iter()
-		.map(|RuntimeValue(line)| {
+		.zip(texts)
+		.map(|(RuntimeValue(line), text)| {
 			let at = chrono::DateTime::from_timestamp_millis(line.at_millis)
 				.unwrap_or_else(leptoskit_db::now);
 			StoredLine {
 				at,
-				process: Some(line.process),
-				pod: line.pod,
-				text: logs::redact(&logs::cut(&line.message), &services.shipping().redactions),
+				process: Some(logs::plain(&logs::cut(&line.process))),
+				pod: line.pod.as_deref().map(|pod| logs::plain(&logs::cut(pod))),
+				text,
 			}
 		})
 		.collect();
+	let groups = status_chunks(&lines)?;
 	let received = cx
 		.mutate(ReportStatus {
 			environment,
 			observed: observed.0,
-			lines: u32::try_from(lines.len()).unwrap_or(u32::MAX),
-			digest: logs::chunk_digest(lines.iter().map(|line| line.text.as_str())),
+			chunks: groups
+				.iter()
+				.map(|(group, bytes)| {
+					ReportedChunk {
+						lines: u32::try_from(group.len()).unwrap_or(u32::MAX),
+						bytes: u32::try_from(bytes.len()).unwrap_or(u32::MAX),
+						digest: logs::chunk_digest(group.iter().map(|line| line.text.as_str())),
+					}
+				})
+				.collect(),
 		})
 		.await?;
 
-	if let Some(key) = &received.chunk {
-		let bytes = serde_json::to_vec(&lines)
-			.map_err(|_| rpc::Error::server("couldn't write a log chunk"))?;
+	for (key, (_, bytes)) in received.chunks.iter().zip(groups) {
 		services
 			.shipping()
 			.store
@@ -708,20 +878,65 @@ pub(crate) async fn report_status(
 	Ok(received.status)
 }
 
+/// `lines` in runs whose stored object stays under
+/// [`MAX_SMALL_OBJECT`](super::storage::MAX_SMALL_OBJECT), which is all the
+/// log readers read, each with its bytes as stored.
+fn status_chunks(lines: &[StoredLine]) -> rpc::Result<Vec<(&[StoredLine], Vec<u8>)>> {
+	let limit = super::storage::MAX_SMALL_OBJECT;
+	let mut chunks = Vec::new();
+	let mut start = 0;
+
+	while start < lines.len() {
+		// `[` and `]`, then each line and the comma before the next.
+		let mut size = 2;
+		let mut end = start;
+
+		while end < lines.len() {
+			let line = serde_json::to_vec(&lines[end])
+				.map_err(|_| rpc::Error::server("couldn't write a log chunk"))?;
+			let next = size + line.len() + usize::from(end > start);
+
+			if next > limit && end > start {
+				break;
+			}
+
+			size = next;
+			end += 1;
+		}
+
+		let group = &lines[start..end];
+		let bytes = serde_json::to_vec(group)
+			.map_err(|_| rpc::Error::server("couldn't write a log chunk"))?;
+		chunks.push((group, bytes));
+		start = end;
+	}
+
+	Ok(chunks)
+}
+
 /// `report_status`'s writes. Never registered.
 #[derive(Clone, Serialize, Deserialize)]
 struct ReportStatus {
 	environment: Uuid,
 	observed: Observed,
+	/// The report's lines, in chunks small enough to read back.
+	chunks: Vec<ReportedChunk>,
+}
+
+/// One chunk of a report's lines.
+#[derive(Clone, Serialize, Deserialize)]
+struct ReportedChunk {
 	lines: u32,
+	bytes: u32,
 	digest: String,
 }
 
-/// What [`ReportStatus`] wrote: the answer, and where the lines go.
+/// What [`ReportStatus`] wrote: the answer, and where each chunk's lines
+/// go.
 #[derive(Clone, Serialize, Deserialize)]
 struct Reported {
 	status: StatusReceived,
-	chunk: Option<String>,
+	chunks: Vec<String>,
 }
 
 impl rpc::Operation for ReportStatus {
@@ -785,13 +1000,14 @@ async fn report(cx: &rpc::MutationCx, args: ReportStatus) -> rpc::Result<Reporte
 		.await?;
 	}
 
-	let chunk = if args.lines == 0 {
-		None
-	} else {
-		let first_line = next_line(tx, |chunk| {
-			chunk.environment_id.eq(environment_id) & chunk.kind.eq(LogKind::Runtime)
-		})
-		.await?;
+	let mut chunks = Vec::with_capacity(args.chunks.len());
+	let mut first_line = next_line(tx, |chunk| {
+		chunk.environment_id.eq(environment_id) & chunk.kind.eq(LogKind::Runtime)
+	})
+	.await?;
+	let mut lines = 0;
+
+	for reported in args.chunks {
 		let key = log_key(
 			project.organization_id.uuid(),
 			args.environment,
@@ -806,23 +1022,26 @@ async fn report(cx: &rpc::MutationCx, args: ReportStatus) -> rpc::Result<Reporte
 			attempt: 0,
 			seq: 0,
 			first_line,
-			lines: i64::from(args.lines),
-			digest: args.digest,
+			lines: i64::from(reported.lines),
+			bytes: i64::from(reported.bytes),
+			digest: reported.digest,
 			object_key: key.clone(),
 			expires_at: now + delta(services.shipping().settings.runtime_logs),
 		}
 		.insert(tx)
 		.await?;
-		Some(key)
-	};
+		first_line += i64::from(reported.lines);
+		lines += reported.lines;
+		chunks.push(key);
+	}
 
 	Ok(Reported {
 		status: StatusReceived {
 			environment: args.environment,
 			reported_at: now,
-			log_lines: args.lines,
+			log_lines: lines,
 		},
-		chunk,
+		chunks,
 	})
 }
 

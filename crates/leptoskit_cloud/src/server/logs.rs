@@ -8,7 +8,7 @@
 //! find a row whose object isn't there yet, or failed to arrive: it skips
 //! it, and the worker that sent it sends it again.
 //!
-//! Every line is redacted before it is stored ([`redact`]): worker keys,
+//! Every line is redacted before it is stored ([`redact_lines`]): worker keys,
 //! API tokens, pairing codes, presigned addresses' signatures, bearer
 //! tokens, and the values the control plane was configured with as
 //! secrets. A chunk expires with the log's retention, and the sweeper
@@ -93,22 +93,207 @@ pub(crate) fn cut(line: &str) -> String {
 
 /// The line with every secret it carries replaced: see the
 /// [module docs](self). `secrets` are configured values to hide wherever
-/// they appear.
+/// they appear. Control characters are written out ([`plain`]).
+#[cfg(test)]
 pub(crate) fn redact(line: &str, secrets: &[String]) -> String {
-	let mut out = line.to_owned();
+	redact_lines(&[line], secrets).remove(0)
+}
 
-	for secret in secrets.iter().filter(|secret| secret.len() >= 8) {
-		if out.contains(secret.as_str()) {
-			out = out.replace(secret.as_str(), REDACTED);
+/// `lines`, in order, each with every secret it carries replaced, and with
+/// its control characters written out ([`plain`]).
+///
+/// Secrets are looked for in the lines run together as well as in each
+/// alone, so one split over two or more lines of a chunk is replaced in
+/// every line it touches. Nothing is remembered from chunk to chunk; at a
+/// chunk's edges, a first line that starts with the end of a configured
+/// secret, or a last line that ends with the start of one, loses that part
+/// when it is [`MIN_SECRET`] bytes or more. A worker key, token, or
+/// signature split over two chunks is hidden only in the chunk its marker
+/// is in.
+pub(crate) fn redact_lines(lines: &[&str], secrets: &[String]) -> Vec<String> {
+	let mut spans: Vec<Vec<(usize, usize)>> = lines
+		.iter()
+		.map(|line| secret_spans(line, secrets))
+		.collect();
+	let joined: String = lines.concat();
+	let mut offset = 0;
+	let bounds: Vec<(usize, usize)> = lines
+		.iter()
+		.map(|line| {
+			let start = offset;
+			offset += line.len();
+			(start, offset)
+		})
+		.collect();
+
+	// Each span of the joined text goes to the lines it touches. Spans are
+	// merged first, so they and the lines are walked once, in step.
+	let mut line = 0;
+
+	for (start, end) in merged(secret_spans(&joined, secrets)) {
+		while line < bounds.len() && bounds[line].1 <= start {
+			line += 1;
 		}
+
+		let mut touched = line;
+
+		while touched < bounds.len() && bounds[touched].0 < end {
+			let (from, to) = bounds[touched];
+			let (start, end) = (start.max(from), end.min(to));
+
+			if start < end {
+				spans[touched].push((start - from, end - from));
+			}
+
+			touched += 1;
+		}
+	}
+
+	if let (Some(first), Some(first_spans)) = (lines.first(), spans.first_mut())
+		&& let Some(length) = edge(first, secrets, Edge::Start)
+	{
+		first_spans.push((0, length));
+	}
+
+	if let (Some(last), Some(last_spans)) = (lines.last(), spans.last_mut())
+		&& let Some(length) = edge(last, secrets, Edge::End)
+	{
+		last_spans.push((last.len() - length, last.len()));
+	}
+
+	lines
+		.iter()
+		.zip(spans)
+		.map(|(line, spans)| plain(&replace(line, spans)))
+		.collect()
+}
+
+/// The shortest configured secret, or part of one at a chunk's edge, that
+/// is hidden: shorter text matches too much that isn't secret.
+const MIN_SECRET: usize = 8;
+
+/// Which end of a line [`edge`] looks at.
+#[derive(Clone, Copy)]
+enum Edge {
+	Start,
+	End,
+}
+
+/// How many bytes at `line`'s `edge` are the cut-off part of a configured
+/// secret: the longest end of one the line starts with, or start of one it
+/// ends with, of [`MIN_SECRET`] bytes or more.
+fn edge(line: &str, secrets: &[String], edge: Edge) -> Option<usize> {
+	secrets
+		.iter()
+		.filter(|secret| secret.len() > MIN_SECRET)
+		.filter_map(|secret| {
+			(MIN_SECRET..secret.len())
+				.rev()
+				.filter(|&length| {
+					match edge {
+						Edge::Start => secret.is_char_boundary(secret.len() - length),
+						Edge::End => secret.is_char_boundary(length),
+					}
+				})
+				.find(|&length| {
+					match edge {
+						Edge::Start => line.starts_with(&secret[secret.len() - length..]),
+						Edge::End => line.ends_with(&secret[..length]),
+					}
+				})
+		})
+		.max()
+}
+
+/// `spans` in order, with those that touch or overlap made one.
+fn merged(mut spans: Vec<(usize, usize)>) -> Vec<(usize, usize)> {
+	spans.sort_unstable();
+	let mut out: Vec<(usize, usize)> = Vec::with_capacity(spans.len());
+
+	for (start, end) in spans {
+		match out.last_mut() {
+			Some(last) if start <= last.1 => last.1 = last.1.max(end),
+			_ => out.push((start, end)),
+		}
+	}
+
+	out
+}
+
+/// `line` with each of `spans` replaced by [`REDACTED`]; spans that touch
+/// or overlap are replaced once.
+fn replace(line: &str, spans: Vec<(usize, usize)>) -> String {
+	if spans.is_empty() {
+		return line.to_owned();
+	}
+
+	let mut out = String::with_capacity(line.len());
+	let mut at = 0;
+
+	for (start, end) in merged(spans) {
+		out.push_str(&line[at..start]);
+		out.push_str(REDACTED);
+		at = end;
+	}
+
+	out.push_str(&line[at..]);
+	out
+}
+
+/// `text` with every control character but a tab written out as
+/// `\u{…}`, so a log's reader's terminal is never told to move its cursor,
+/// change its title, or hide text.
+pub(crate) fn plain(text: &str) -> String {
+	if !text.chars().any(|c| c.is_control() && c != '\t') {
+		return text.to_owned();
+	}
+
+	let mut out = String::with_capacity(text.len());
+
+	for c in text.chars() {
+		if c.is_control() && c != '\t' {
+			out.extend(c.escape_unicode());
+		} else {
+			out.push(c);
+		}
+	}
+
+	out
+}
+
+/// Where the secrets in `text` are, as byte ranges: see the
+/// [module docs](self).
+fn secret_spans(text: &str, secrets: &[String]) -> Vec<(usize, usize)> {
+	let mut spans = Vec::new();
+
+	for secret in secrets.iter().filter(|secret| secret.len() >= MIN_SECRET) {
+		spans.extend(
+			text.match_indices(secret.as_str())
+				.map(|(start, found)| (start, start + found.len())),
+		);
 	}
 
 	// Credentials: the lookup part stays, so a reader can tell which.
 	for prefix in ["lkc_", "lkw_"] {
-		out = redact_credentials(&out, prefix);
+		let mut from = 0;
+
+		// Each search starts past what the last one read, so the text is
+		// read once however many prefixes it holds.
+		while let Some(found) = text[from..].find(prefix) {
+			let rest_at = from + found + prefix.len();
+			let rest = &text[rest_at..];
+			let lookup = hex_run(rest);
+			from = rest_at + lookup;
+
+			if lookup >= 12 && rest[lookup..].starts_with('_') {
+				let start = from + 1;
+				from = start + hex_run(&rest[lookup + 1..]);
+				spans.push((start, from));
+			}
+		}
 	}
 
-	out = redact_after(&out, "lkp_", hex_run);
+	after(&mut spans, text, "lkp_", hex_run);
 
 	for parameter in [
 		"X-Amz-Signature=",
@@ -119,20 +304,21 @@ pub(crate) fn redact(line: &str, secrets: &[String]) -> String {
 		"x-amz-security-token=",
 		"sig=",
 	] {
-		out = redact_after(&out, parameter, |rest| {
+		after(&mut spans, text, parameter, |rest| {
 			rest.find(['&', ' ', '"', '\'', '\n', '\t'])
 				.unwrap_or(rest.len())
 		});
 	}
 
 	for scheme in ["Bearer ", "bearer "] {
-		out = redact_after(&out, scheme, |rest| {
+		after(&mut spans, text, scheme, |rest| {
 			rest.find([' ', '"', '\'', '\n', '\t', ',', ';'])
 				.unwrap_or(rest.len())
 		});
 	}
 
-	out
+	spans.retain(|(start, end)| start < end);
+	spans
 }
 
 /// The length of the run of hex digits `text` starts with.
@@ -140,50 +326,17 @@ fn hex_run(text: &str) -> usize {
 	text.bytes().take_while(u8::is_ascii_hexdigit).count()
 }
 
-/// Replaces what `span` measures after each `marker` with
-/// [`REDACTED`], when it is anything.
-fn redact_after(text: &str, marker: &str, span: impl Fn(&str) -> usize) -> String {
-	let mut out = String::with_capacity(text.len());
-	let mut rest = text;
+/// Adds what `span` measures after each `marker` in `text` to `spans`. A
+/// marker inside what the one before it measured isn't looked at again, so
+/// the text is read once however many markers it holds.
+fn after(spans: &mut Vec<(usize, usize)>, text: &str, marker: &str, span: impl Fn(&str) -> usize) {
+	let mut from = 0;
 
-	while let Some(index) = rest.find(marker) {
-		let after = index + marker.len();
-		out.push_str(&rest[..after]);
-		rest = &rest[after..];
-		let length = span(rest);
-
-		if length > 0 && !rest.starts_with(REDACTED) {
-			out.push_str(REDACTED);
-			rest = &rest[length..];
-		}
+	while let Some(found) = text[from..].find(marker) {
+		let start = from + found + marker.len();
+		from = start + span(&text[start..]);
+		spans.push((start, from));
 	}
-
-	out.push_str(rest);
-	out
-}
-
-/// `<prefix><12 hex>_<secret>` keeps its prefix and lookup part, and loses
-/// its secret.
-fn redact_credentials(text: &str, prefix: &str) -> String {
-	let mut out = String::with_capacity(text.len());
-	let mut rest = text;
-
-	while let Some(index) = rest.find(prefix) {
-		let start = index + prefix.len();
-		out.push_str(&rest[..start]);
-		rest = &rest[start..];
-		let lookup = hex_run(rest);
-
-		if lookup >= 12 && rest[lookup..].starts_with('_') {
-			let secret = hex_run(&rest[lookup + 1..]);
-			out.push_str(&rest[..=lookup]);
-			out.push_str(REDACTED);
-			rest = &rest[lookup + 1 + secret..];
-		}
-	}
-
-	out.push_str(rest);
-	out
 }
 
 /// Reads one chunk's lines; a chunk whose object is missing has none.
@@ -445,6 +598,78 @@ mod tests {
 		);
 		assert_eq!(redact("nothing to see", &[]), "nothing to see");
 		assert_eq!(redact("lkw_short", &[]), "lkw_short");
+	}
+
+	#[test]
+	fn a_secret_split_over_lines_is_hidden_in_each() {
+		let secrets = ["s3cr3t-value-of-some-length".to_owned()];
+		let key = format!("lkw_0123456789ab_{}", "c0ffee".repeat(10));
+		let (key_start, key_end) = key.split_at(40);
+		let lines = [
+			"the secret is s3cr3t-val",
+			"ue-of-some-length, and the key is",
+			key_start,
+			key_end,
+			"nothing here",
+		];
+		let redacted = redact_lines(&lines, &secrets);
+		assert_eq!(redacted[0], "the secret is [redacted]");
+		assert_eq!(redacted[1], "[redacted], and the key is");
+		assert_eq!(redacted[2], "lkw_0123456789ab_[redacted]");
+		assert_eq!(redacted[3], "[redacted]");
+		assert_eq!(redacted[4], "nothing here");
+	}
+
+	#[test]
+	fn a_configured_secret_cut_by_a_chunks_edge_is_hidden() {
+		let secrets = ["s3cr3t-value-of-some-length".to_owned()];
+		// The chunk before ended with the secret's start, and this one
+		// starts with its end.
+		assert_eq!(
+			redact_lines(&["key: s3cr3t-value-of"], &secrets),
+			["key: [redacted]"]
+		);
+		assert_eq!(
+			redact_lines(&["-some-length is the key"], &secrets),
+			["[redacted] is the key"]
+		);
+		// Seven bytes of it could be anything.
+		assert_eq!(redact_lines(&["key: s3cr3t-"], &secrets), ["key: s3cr3t-"]);
+	}
+
+	#[test]
+	fn text_full_of_markers_is_read_once() {
+		// 64 KiB of `sig=` in a thousand lines with no delimiter: each
+		// marker's span used to run to the end of the text, and reach every
+		// line after it.
+		let line = "sig=".repeat(16);
+		let lines: Vec<&str> = std::iter::repeat_n(line.as_str(), 1000).collect();
+		let started = std::time::Instant::now();
+		let redacted = redact_lines(&lines, &[]);
+		assert!(
+			started.elapsed() < std::time::Duration::from_secs(2),
+			"{:?}",
+			started.elapsed()
+		);
+		assert_eq!(redacted.len(), 1000);
+		assert_eq!(redacted[0], "sig=[redacted]");
+		assert_eq!(redacted[999], "[redacted]");
+		assert_eq!(spans_of(&"lkw_".repeat(16_000)), 0);
+	}
+
+	/// How many spans `secret_spans` finds in `text`.
+	fn spans_of(text: &str) -> usize {
+		secret_spans(text, &[]).len()
+	}
+
+	#[test]
+	fn control_characters_are_written_out() {
+		assert_eq!(
+			plain("\u{1b}[2Jgone\r\u{7}\ttab \u{9b}31m"),
+			"\\u{1b}[2Jgone\\u{d}\\u{7}\ttab \\u{9b}31m"
+		);
+		assert_eq!(plain("plain text, ünïcödé"), "plain text, ünïcödé");
+		assert_eq!(redact("a\u{1b}b", &[]), "a\\u{1b}b");
 	}
 
 	#[test]

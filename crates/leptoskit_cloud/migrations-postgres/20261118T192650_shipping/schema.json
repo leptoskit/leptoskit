@@ -1,6 +1,6 @@
 {
   "format": 2,
-  "dialect": "sqlite",
+  "dialect": "postgres",
   "packs": [
     {
       "name": "auth",
@@ -118,6 +118,10 @@
         {
           "namespace": "live",
           "name": "commits"
+        },
+        {
+          "namespace": "live",
+          "name": "pending"
         }
       ],
       "builtin": true
@@ -1454,6 +1458,22 @@
           "nullable": true
         },
         {
+          "name": "claimed_at",
+          "type": {
+            "kind": "timestamp"
+          },
+          "nullable": true,
+          "comment": "When the attempt now held was claimed: a build's lease is never\nrenewed past this and the build deadline."
+        },
+        {
+          "name": "log_bytes",
+          "type": {
+            "kind": "int64"
+          },
+          "nullable": false,
+          "comment": "The log bytes its attempts have sent, held to the build log cap."
+        },
+        {
           "name": "outcome",
           "type": {
             "kind": "json"
@@ -1609,6 +1629,14 @@
           "nullable": false
         },
         {
+          "name": "bytes",
+          "type": {
+            "kind": "int64"
+          },
+          "nullable": false,
+          "comment": "The bytes of its lines as the worker sent them, counted against the\norganisation's log cap until the chunk is deleted."
+        },
+        {
           "name": "digest",
           "type": {
             "kind": "text"
@@ -1701,6 +1729,47 @@
             "min": 1,
             "max": 300
           }
+        }
+      ]
+    },
+    {
+      "name": {
+        "name": "log_usage"
+      },
+      "comment": "The build log bytes an organisation keeps: every chunk's bytes from\nwhen it is indexed until it is deleted, held to the organisation's log\ncap. One row per organisation, made by its first chunk.",
+      "columns": [
+        {
+          "name": "id",
+          "type": {
+            "kind": "uuid"
+          },
+          "nullable": false
+        },
+        {
+          "name": "organization_id",
+          "type": {
+            "kind": "uuid"
+          },
+          "nullable": false
+        },
+        {
+          "name": "bytes",
+          "type": {
+            "kind": "int64"
+          },
+          "nullable": false
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "indexes": [
+        {
+          "name": "log_usage_organization_id_key",
+          "columns": [
+            "organization_id"
+          ],
+          "unique": true
         }
       ]
     },
@@ -2090,7 +2159,7 @@
       "name": {
         "name": "source_archives"
       },
-      "comment": "A source archive an organisation uploaded, kept under\n`sources/<organization>/<digest>` in the object store. Unique by\norganisation and digest: bytes are shared within an organisation, never\nacross them. Until `verified_at` is set it is an upload in progress,\nand `expires_at` is when its upload address stops working; after, it is\nwhen the archive is deleted unless a deployment uses it.",
+      "comment": "A source archive an organisation uploaded, kept under\n`sources/<organization>/<archive id>/<digest>` in the object store, a key\nof its own so a deleted row's object is never a later row's. Unique by\norganisation and digest: bytes are shared within an organisation, never\nacross them. Until `verified_at` is set it is an upload in progress,\nand `expires_at` is when its upload address stops working; after, it is\nwhen the archive is deleted unless a deployment uses it.",
       "columns": [
         {
           "name": "id",
@@ -5365,7 +5434,10 @@
             ]
           }
         }
-      ]
+      ],
+      "partition": {
+        "column": "seq"
+      }
     },
     {
       "name": {
@@ -5433,6 +5505,29 @@
             "txid"
           ]
         }
+      ],
+      "partition": {
+        "column": "version"
+      }
+    },
+    {
+      "name": {
+        "namespace": "live",
+        "name": "pending"
+      },
+      "comment": "`live.pending`, Postgres only: the transactions waiting for a version at\ncommit.",
+      "columns": [
+        {
+          "name": "txid",
+          "type": {
+            "kind": "int64"
+          },
+          "nullable": false,
+          "comment": "The transaction's ID."
+        }
+      ],
+      "primary_key": [
+        "txid"
       ]
     },
     {
@@ -5910,14 +6005,54 @@
       ]
     }
   ],
+  "sequences": [
+    {
+      "name": {
+        "namespace": "live",
+        "name": "change_seq"
+      }
+    },
+    {
+      "name": {
+        "namespace": "live",
+        "name": "version_seq"
+      }
+    }
+  ],
+  "functions": [
+    {
+      "name": {
+        "namespace": "live",
+        "name": "capture"
+      },
+      "returns": "trigger",
+      "language": "plpgsql",
+      "security_definer": true,
+      "body": "DECLARE\n\tcaptured_table text := TG_ARGV[0];\n\tkey_columns text[] := string_to_array(TG_ARGV[1], ',');\n\tcopied_columns text[] := TG_ARGV[2:TG_NARGS - 1];\n\tcurrent_txid bigint := pg_current_xact_id()::text::bigint;\n\told_row jsonb;\n\tnew_row jsonb;\n\tchanged_columns jsonb := '[]'::jsonb;\nBEGIN\n\tIF TG_OP <> 'INSERT' THEN\n\t\told_row := to_jsonb(OLD);\n\tEND IF;\n\n\tIF TG_OP <> 'DELETE' THEN\n\t\tnew_row := to_jsonb(NEW);\n\tEND IF;\n\n\tIF TG_OP = 'UPDATE' THEN\n\t\tSELECT coalesce(jsonb_agg(entry.key ORDER BY entry.key), '[]'::jsonb)\n\t\tINTO changed_columns\n\t\tFROM jsonb_each(new_row) AS entry\n\t\tWHERE entry.value IS DISTINCT FROM old_row -> entry.key;\n\tEND IF;\n\n\tINSERT INTO live.changes (\"seq\", \"txid\", \"version\", \"table_name\", \"op\", \"key\", \"old\", \"new\", \"changed\")\n\tVALUES (\n\t\tnextval('live.change_seq'),\n\t\tcurrent_txid,\n\t\tNULL,\n\t\tcaptured_table,\n\t\tleft(TG_OP, 1),\n\t\t(SELECT jsonb_agg(coalesce(new_row, old_row) -> part.name ORDER BY part.position)\n\t\t\tFROM unnest(key_columns) WITH ORDINALITY AS part(name, position)),\n\t\t(SELECT jsonb_object_agg(copied.name, old_row -> copied.name)\n\t\t\tFROM unnest(copied_columns) AS copied(name) WHERE old_row IS NOT NULL),\n\t\t(SELECT jsonb_object_agg(copied.name, new_row -> copied.name)\n\t\t\tFROM unnest(copied_columns) AS copied(name) WHERE new_row IS NOT NULL),\n\t\tchanged_columns\n\t);\n\n\t-- The first write in this transaction registers it for a version at\n\t-- commit. A transaction-local setting remembers it, rather than reading\n\t-- the table, which a serializable transaction would conflict through.\n\tIF current_setting('leptoskit.live_registered', true) IS DISTINCT FROM 'on' THEN\n\t\tPERFORM set_config('leptoskit.live_registered', 'on', true);\n\t\tINSERT INTO live.pending (txid) VALUES (current_txid);\n\tEND IF;\n\n\tRETURN NULL;\nEND;",
+      "checksum": "4097acf3d0ac8c842bbd5fe18d0e5bd2a958149aa7ecf56b6d1b743546eccff2"
+    },
+    {
+      "name": {
+        "namespace": "live",
+        "name": "seal"
+      },
+      "returns": "trigger",
+      "language": "plpgsql",
+      "security_definer": true,
+      "body": "DECLARE\n\tnext_version bigint;\nBEGIN\n\t-- A transaction registers once, so this runs once, even when\n\t-- `SET CONSTRAINTS ALL IMMEDIATE` runs it before a later write: that\n\t-- write's change joins the version, which nobody sees before the commit.\n\tPERFORM pg_advisory_xact_lock(7812448352492680805);\n\tnext_version := nextval('live.version_seq');\n\tINSERT INTO live.commits (version, txid, committed_at, actor, origin)\n\tVALUES (\n\t\tnext_version,\n\t\tNEW.txid,\n\t\tclock_timestamp(),\n\t\tnullif(current_setting('leptoskit.user_id', true), '')::uuid,\n\t\tcoalesce(nullif(current_setting('leptoskit.origin', true), ''), 'sql')\n\t);\n\tPERFORM pg_notify('leptoskit_live', next_version::text);\n\tRETURN NULL;\nEND;",
+      "checksum": "2bbe55683a748e37fc5ebc5fc661e7c0e6ccd529be2a445c5caf42dc0143b411"
+    }
+  ],
   "triggers": [
     {
-      "name": "live_deployment_events_delete",
+      "name": "live_capture",
       "table": {
         "name": "deployment_events"
       },
       "timing": "after",
       "events": [
+        "insert",
+        "update",
         "delete"
       ],
       "columns": [
@@ -5928,59 +6063,31 @@
         "created_at"
       ],
       "action": {
-        "kind": "statements",
-        "sql": "INSERT INTO \"live_changes\" (\"seq\", \"txid\", \"version\", \"table_name\", \"op\", \"key\", \"old\", \"new\", \"changed\") VALUES ((SELECT coalesce(max(\"seq\"), 0) + 1 FROM \"live_changes\"), NULL, NULL, 'deployment_events', 'D', json_array(CASE WHEN OLD.\"id\" IS NULL THEN NULL ELSE lower(hex(OLD.\"id\")) END), json_object('id', CASE WHEN OLD.\"id\" IS NULL THEN NULL ELSE lower(hex(OLD.\"id\")) END, 'deployment_id', CASE WHEN OLD.\"deployment_id\" IS NULL THEN NULL ELSE lower(hex(OLD.\"deployment_id\")) END, 'seq', OLD.\"seq\", 'event', json(OLD.\"event\"), 'created_at', OLD.\"created_at\"), NULL, '[]');"
+        "kind": "function",
+        "function": {
+          "namespace": "live",
+          "name": "capture"
+        },
+        "arguments": [
+          "deployment_events",
+          "id",
+          "id",
+          "deployment_id",
+          "seq",
+          "event",
+          "created_at"
+        ]
       }
     },
     {
-      "name": "live_deployment_events_insert",
-      "table": {
-        "name": "deployment_events"
-      },
-      "timing": "after",
-      "events": [
-        "insert"
-      ],
-      "columns": [
-        "id",
-        "deployment_id",
-        "seq",
-        "event",
-        "created_at"
-      ],
-      "action": {
-        "kind": "statements",
-        "sql": "INSERT INTO \"live_changes\" (\"seq\", \"txid\", \"version\", \"table_name\", \"op\", \"key\", \"old\", \"new\", \"changed\") VALUES ((SELECT coalesce(max(\"seq\"), 0) + 1 FROM \"live_changes\"), NULL, NULL, 'deployment_events', 'I', json_array(CASE WHEN NEW.\"id\" IS NULL THEN NULL ELSE lower(hex(NEW.\"id\")) END), NULL, json_object('id', CASE WHEN NEW.\"id\" IS NULL THEN NULL ELSE lower(hex(NEW.\"id\")) END, 'deployment_id', CASE WHEN NEW.\"deployment_id\" IS NULL THEN NULL ELSE lower(hex(NEW.\"deployment_id\")) END, 'seq', NEW.\"seq\", 'event', json(NEW.\"event\"), 'created_at', NEW.\"created_at\"), '[]');"
-      }
-    },
-    {
-      "name": "live_deployment_events_update",
-      "table": {
-        "name": "deployment_events"
-      },
-      "timing": "after",
-      "events": [
-        "update"
-      ],
-      "columns": [
-        "id",
-        "deployment_id",
-        "seq",
-        "event",
-        "created_at"
-      ],
-      "action": {
-        "kind": "statements",
-        "sql": "INSERT INTO \"live_changes\" (\"seq\", \"txid\", \"version\", \"table_name\", \"op\", \"key\", \"old\", \"new\", \"changed\") VALUES ((SELECT coalesce(max(\"seq\"), 0) + 1 FROM \"live_changes\"), NULL, NULL, 'deployment_events', 'U', json_array(CASE WHEN NEW.\"id\" IS NULL THEN NULL ELSE lower(hex(NEW.\"id\")) END), json_object('id', CASE WHEN OLD.\"id\" IS NULL THEN NULL ELSE lower(hex(OLD.\"id\")) END, 'deployment_id', CASE WHEN OLD.\"deployment_id\" IS NULL THEN NULL ELSE lower(hex(OLD.\"deployment_id\")) END, 'seq', OLD.\"seq\", 'event', json(OLD.\"event\"), 'created_at', OLD.\"created_at\"), json_object('id', CASE WHEN NEW.\"id\" IS NULL THEN NULL ELSE lower(hex(NEW.\"id\")) END, 'deployment_id', CASE WHEN NEW.\"deployment_id\" IS NULL THEN NULL ELSE lower(hex(NEW.\"deployment_id\")) END, 'seq', NEW.\"seq\", 'event', json(NEW.\"event\"), 'created_at', NEW.\"created_at\"), (SELECT json_group_array(\"value\") FROM json_each(json_array(CASE WHEN OLD.\"created_at\" IS NOT NEW.\"created_at\" THEN 'created_at' END, CASE WHEN OLD.\"deployment_id\" IS NOT NEW.\"deployment_id\" THEN 'deployment_id' END, CASE WHEN OLD.\"event\" IS NOT NEW.\"event\" THEN 'event' END, CASE WHEN OLD.\"id\" IS NOT NEW.\"id\" THEN 'id' END, CASE WHEN OLD.\"seq\" IS NOT NEW.\"seq\" THEN 'seq' END)) WHERE \"type\" <> 'null'));"
-      }
-    },
-    {
-      "name": "live_deployments_delete",
+      "name": "live_capture",
       "table": {
         "name": "deployments"
       },
       "timing": "after",
       "events": [
+        "insert",
+        "update",
         "delete"
       ],
       "columns": [
@@ -6010,97 +6117,50 @@
         "updated_at"
       ],
       "action": {
-        "kind": "statements",
-        "sql": "INSERT INTO \"live_changes\" (\"seq\", \"txid\", \"version\", \"table_name\", \"op\", \"key\", \"old\", \"new\", \"changed\") VALUES ((SELECT coalesce(max(\"seq\"), 0) + 1 FROM \"live_changes\"), NULL, NULL, 'deployments', 'D', json_array(CASE WHEN OLD.\"id\" IS NULL THEN NULL ELSE lower(hex(OLD.\"id\")) END), json_object('id', CASE WHEN OLD.\"id\" IS NULL THEN NULL ELSE lower(hex(OLD.\"id\")) END, 'organization_id', CASE WHEN OLD.\"organization_id\" IS NULL THEN NULL ELSE lower(hex(OLD.\"organization_id\")) END, 'project_id', CASE WHEN OLD.\"project_id\" IS NULL THEN NULL ELSE lower(hex(OLD.\"project_id\")) END, 'environment_id', CASE WHEN OLD.\"environment_id\" IS NULL THEN NULL ELSE lower(hex(OLD.\"environment_id\")) END, 'number', OLD.\"number\", 'state', json(OLD.\"state\"), 'in_flight_environment', CASE WHEN OLD.\"in_flight_environment\" IS NULL THEN NULL ELSE lower(hex(OLD.\"in_flight_environment\")) END, 'live_environment', CASE WHEN OLD.\"live_environment\" IS NULL THEN NULL ELSE lower(hex(OLD.\"live_environment\")) END, 'source', json(OLD.\"source\"), 'archive_id', CASE WHEN OLD.\"archive_id\" IS NULL THEN NULL ELSE lower(hex(OLD.\"archive_id\")) END, 'rollback_of', OLD.\"rollback_of\", 'signer', json(OLD.\"signer\"), 'config', json(OLD.\"config\"), 'plan', json(OLD.\"plan\"), 'lines', json(OLD.\"lines\"), 'fine_print', json(OLD.\"fine_print\"), 'cluster_id', CASE WHEN OLD.\"cluster_id\" IS NULL THEN NULL ELSE lower(hex(OLD.\"cluster_id\")) END, 'hostname', OLD.\"hostname\", 'build', json(OLD.\"build\"), 'spec', json(OLD.\"spec\"), 'unknown', OLD.\"unknown\", 'superseded_by', OLD.\"superseded_by\", 'created_at', OLD.\"created_at\", 'updated_at', OLD.\"updated_at\"), NULL, '[]');"
+        "kind": "function",
+        "function": {
+          "namespace": "live",
+          "name": "capture"
+        },
+        "arguments": [
+          "deployments",
+          "id",
+          "id",
+          "organization_id",
+          "project_id",
+          "environment_id",
+          "number",
+          "state",
+          "in_flight_environment",
+          "live_environment",
+          "source",
+          "archive_id",
+          "rollback_of",
+          "signer",
+          "config",
+          "plan",
+          "lines",
+          "fine_print",
+          "cluster_id",
+          "hostname",
+          "build",
+          "spec",
+          "unknown",
+          "superseded_by",
+          "created_at",
+          "updated_at"
+        ]
       }
     },
     {
-      "name": "live_deployments_insert",
-      "table": {
-        "name": "deployments"
-      },
-      "timing": "after",
-      "events": [
-        "insert"
-      ],
-      "columns": [
-        "id",
-        "organization_id",
-        "project_id",
-        "environment_id",
-        "number",
-        "state",
-        "in_flight_environment",
-        "live_environment",
-        "source",
-        "archive_id",
-        "rollback_of",
-        "signer",
-        "config",
-        "plan",
-        "lines",
-        "fine_print",
-        "cluster_id",
-        "hostname",
-        "build",
-        "spec",
-        "unknown",
-        "superseded_by",
-        "created_at",
-        "updated_at"
-      ],
-      "action": {
-        "kind": "statements",
-        "sql": "INSERT INTO \"live_changes\" (\"seq\", \"txid\", \"version\", \"table_name\", \"op\", \"key\", \"old\", \"new\", \"changed\") VALUES ((SELECT coalesce(max(\"seq\"), 0) + 1 FROM \"live_changes\"), NULL, NULL, 'deployments', 'I', json_array(CASE WHEN NEW.\"id\" IS NULL THEN NULL ELSE lower(hex(NEW.\"id\")) END), NULL, json_object('id', CASE WHEN NEW.\"id\" IS NULL THEN NULL ELSE lower(hex(NEW.\"id\")) END, 'organization_id', CASE WHEN NEW.\"organization_id\" IS NULL THEN NULL ELSE lower(hex(NEW.\"organization_id\")) END, 'project_id', CASE WHEN NEW.\"project_id\" IS NULL THEN NULL ELSE lower(hex(NEW.\"project_id\")) END, 'environment_id', CASE WHEN NEW.\"environment_id\" IS NULL THEN NULL ELSE lower(hex(NEW.\"environment_id\")) END, 'number', NEW.\"number\", 'state', json(NEW.\"state\"), 'in_flight_environment', CASE WHEN NEW.\"in_flight_environment\" IS NULL THEN NULL ELSE lower(hex(NEW.\"in_flight_environment\")) END, 'live_environment', CASE WHEN NEW.\"live_environment\" IS NULL THEN NULL ELSE lower(hex(NEW.\"live_environment\")) END, 'source', json(NEW.\"source\"), 'archive_id', CASE WHEN NEW.\"archive_id\" IS NULL THEN NULL ELSE lower(hex(NEW.\"archive_id\")) END, 'rollback_of', NEW.\"rollback_of\", 'signer', json(NEW.\"signer\"), 'config', json(NEW.\"config\"), 'plan', json(NEW.\"plan\"), 'lines', json(NEW.\"lines\"), 'fine_print', json(NEW.\"fine_print\"), 'cluster_id', CASE WHEN NEW.\"cluster_id\" IS NULL THEN NULL ELSE lower(hex(NEW.\"cluster_id\")) END, 'hostname', NEW.\"hostname\", 'build', json(NEW.\"build\"), 'spec', json(NEW.\"spec\"), 'unknown', NEW.\"unknown\", 'superseded_by', NEW.\"superseded_by\", 'created_at', NEW.\"created_at\", 'updated_at', NEW.\"updated_at\"), '[]');"
-      }
-    },
-    {
-      "name": "live_deployments_update",
-      "table": {
-        "name": "deployments"
-      },
-      "timing": "after",
-      "events": [
-        "update"
-      ],
-      "columns": [
-        "id",
-        "organization_id",
-        "project_id",
-        "environment_id",
-        "number",
-        "state",
-        "in_flight_environment",
-        "live_environment",
-        "source",
-        "archive_id",
-        "rollback_of",
-        "signer",
-        "config",
-        "plan",
-        "lines",
-        "fine_print",
-        "cluster_id",
-        "hostname",
-        "build",
-        "spec",
-        "unknown",
-        "superseded_by",
-        "created_at",
-        "updated_at"
-      ],
-      "action": {
-        "kind": "statements",
-        "sql": "INSERT INTO \"live_changes\" (\"seq\", \"txid\", \"version\", \"table_name\", \"op\", \"key\", \"old\", \"new\", \"changed\") VALUES ((SELECT coalesce(max(\"seq\"), 0) + 1 FROM \"live_changes\"), NULL, NULL, 'deployments', 'U', json_array(CASE WHEN NEW.\"id\" IS NULL THEN NULL ELSE lower(hex(NEW.\"id\")) END), json_object('id', CASE WHEN OLD.\"id\" IS NULL THEN NULL ELSE lower(hex(OLD.\"id\")) END, 'organization_id', CASE WHEN OLD.\"organization_id\" IS NULL THEN NULL ELSE lower(hex(OLD.\"organization_id\")) END, 'project_id', CASE WHEN OLD.\"project_id\" IS NULL THEN NULL ELSE lower(hex(OLD.\"project_id\")) END, 'environment_id', CASE WHEN OLD.\"environment_id\" IS NULL THEN NULL ELSE lower(hex(OLD.\"environment_id\")) END, 'number', OLD.\"number\", 'state', json(OLD.\"state\"), 'in_flight_environment', CASE WHEN OLD.\"in_flight_environment\" IS NULL THEN NULL ELSE lower(hex(OLD.\"in_flight_environment\")) END, 'live_environment', CASE WHEN OLD.\"live_environment\" IS NULL THEN NULL ELSE lower(hex(OLD.\"live_environment\")) END, 'source', json(OLD.\"source\"), 'archive_id', CASE WHEN OLD.\"archive_id\" IS NULL THEN NULL ELSE lower(hex(OLD.\"archive_id\")) END, 'rollback_of', OLD.\"rollback_of\", 'signer', json(OLD.\"signer\"), 'config', json(OLD.\"config\"), 'plan', json(OLD.\"plan\"), 'lines', json(OLD.\"lines\"), 'fine_print', json(OLD.\"fine_print\"), 'cluster_id', CASE WHEN OLD.\"cluster_id\" IS NULL THEN NULL ELSE lower(hex(OLD.\"cluster_id\")) END, 'hostname', OLD.\"hostname\", 'build', json(OLD.\"build\"), 'spec', json(OLD.\"spec\"), 'unknown', OLD.\"unknown\", 'superseded_by', OLD.\"superseded_by\", 'created_at', OLD.\"created_at\", 'updated_at', OLD.\"updated_at\"), json_object('id', CASE WHEN NEW.\"id\" IS NULL THEN NULL ELSE lower(hex(NEW.\"id\")) END, 'organization_id', CASE WHEN NEW.\"organization_id\" IS NULL THEN NULL ELSE lower(hex(NEW.\"organization_id\")) END, 'project_id', CASE WHEN NEW.\"project_id\" IS NULL THEN NULL ELSE lower(hex(NEW.\"project_id\")) END, 'environment_id', CASE WHEN NEW.\"environment_id\" IS NULL THEN NULL ELSE lower(hex(NEW.\"environment_id\")) END, 'number', NEW.\"number\", 'state', json(NEW.\"state\"), 'in_flight_environment', CASE WHEN NEW.\"in_flight_environment\" IS NULL THEN NULL ELSE lower(hex(NEW.\"in_flight_environment\")) END, 'live_environment', CASE WHEN NEW.\"live_environment\" IS NULL THEN NULL ELSE lower(hex(NEW.\"live_environment\")) END, 'source', json(NEW.\"source\"), 'archive_id', CASE WHEN NEW.\"archive_id\" IS NULL THEN NULL ELSE lower(hex(NEW.\"archive_id\")) END, 'rollback_of', NEW.\"rollback_of\", 'signer', json(NEW.\"signer\"), 'config', json(NEW.\"config\"), 'plan', json(NEW.\"plan\"), 'lines', json(NEW.\"lines\"), 'fine_print', json(NEW.\"fine_print\"), 'cluster_id', CASE WHEN NEW.\"cluster_id\" IS NULL THEN NULL ELSE lower(hex(NEW.\"cluster_id\")) END, 'hostname', NEW.\"hostname\", 'build', json(NEW.\"build\"), 'spec', json(NEW.\"spec\"), 'unknown', NEW.\"unknown\", 'superseded_by', NEW.\"superseded_by\", 'created_at', NEW.\"created_at\", 'updated_at', NEW.\"updated_at\"), (SELECT json_group_array(\"value\") FROM json_each(json_array(CASE WHEN OLD.\"archive_id\" IS NOT NEW.\"archive_id\" THEN 'archive_id' END, CASE WHEN OLD.\"build\" IS NOT NEW.\"build\" THEN 'build' END, CASE WHEN OLD.\"cluster_id\" IS NOT NEW.\"cluster_id\" THEN 'cluster_id' END, CASE WHEN OLD.\"config\" IS NOT NEW.\"config\" THEN 'config' END, CASE WHEN OLD.\"created_at\" IS NOT NEW.\"created_at\" THEN 'created_at' END, CASE WHEN OLD.\"environment_id\" IS NOT NEW.\"environment_id\" THEN 'environment_id' END, CASE WHEN OLD.\"fine_print\" IS NOT NEW.\"fine_print\" THEN 'fine_print' END, CASE WHEN OLD.\"hostname\" IS NOT NEW.\"hostname\" THEN 'hostname' END, CASE WHEN OLD.\"id\" IS NOT NEW.\"id\" THEN 'id' END, CASE WHEN OLD.\"in_flight_environment\" IS NOT NEW.\"in_flight_environment\" THEN 'in_flight_environment' END, CASE WHEN OLD.\"lines\" IS NOT NEW.\"lines\" THEN 'lines' END, CASE WHEN OLD.\"live_environment\" IS NOT NEW.\"live_environment\" THEN 'live_environment' END, CASE WHEN OLD.\"number\" IS NOT NEW.\"number\" THEN 'number' END, CASE WHEN OLD.\"organization_id\" IS NOT NEW.\"organization_id\" THEN 'organization_id' END, CASE WHEN OLD.\"plan\" IS NOT NEW.\"plan\" THEN 'plan' END, CASE WHEN OLD.\"project_id\" IS NOT NEW.\"project_id\" THEN 'project_id' END, CASE WHEN OLD.\"rollback_of\" IS NOT NEW.\"rollback_of\" THEN 'rollback_of' END, CASE WHEN OLD.\"signer\" IS NOT NEW.\"signer\" THEN 'signer' END, CASE WHEN OLD.\"source\" IS NOT NEW.\"source\" THEN 'source' END, CASE WHEN OLD.\"spec\" IS NOT NEW.\"spec\" THEN 'spec' END, CASE WHEN OLD.\"state\" IS NOT NEW.\"state\" THEN 'state' END, CASE WHEN OLD.\"superseded_by\" IS NOT NEW.\"superseded_by\" THEN 'superseded_by' END, CASE WHEN OLD.\"unknown\" IS NOT NEW.\"unknown\" THEN 'unknown' END, CASE WHEN OLD.\"updated_at\" IS NOT NEW.\"updated_at\" THEN 'updated_at' END)) WHERE \"type\" <> 'null'));"
-      }
-    },
-    {
-      "name": "live_environment_statuses_delete",
+      "name": "live_capture",
       "table": {
         "name": "environment_statuses"
       },
       "timing": "after",
       "events": [
+        "insert",
+        "update",
         "delete"
       ],
       "columns": [
@@ -6111,59 +6171,31 @@
         "reported_at"
       ],
       "action": {
-        "kind": "statements",
-        "sql": "INSERT INTO \"live_changes\" (\"seq\", \"txid\", \"version\", \"table_name\", \"op\", \"key\", \"old\", \"new\", \"changed\") VALUES ((SELECT coalesce(max(\"seq\"), 0) + 1 FROM \"live_changes\"), NULL, NULL, 'environment_statuses', 'D', json_array(CASE WHEN OLD.\"id\" IS NULL THEN NULL ELSE lower(hex(OLD.\"id\")) END), json_object('id', CASE WHEN OLD.\"id\" IS NULL THEN NULL ELSE lower(hex(OLD.\"id\")) END, 'environment_id', CASE WHEN OLD.\"environment_id\" IS NULL THEN NULL ELSE lower(hex(OLD.\"environment_id\")) END, 'cluster_id', CASE WHEN OLD.\"cluster_id\" IS NULL THEN NULL ELSE lower(hex(OLD.\"cluster_id\")) END, 'observed', json(OLD.\"observed\"), 'reported_at', OLD.\"reported_at\"), NULL, '[]');"
+        "kind": "function",
+        "function": {
+          "namespace": "live",
+          "name": "capture"
+        },
+        "arguments": [
+          "environment_statuses",
+          "id",
+          "id",
+          "environment_id",
+          "cluster_id",
+          "observed",
+          "reported_at"
+        ]
       }
     },
     {
-      "name": "live_environment_statuses_insert",
-      "table": {
-        "name": "environment_statuses"
-      },
-      "timing": "after",
-      "events": [
-        "insert"
-      ],
-      "columns": [
-        "id",
-        "environment_id",
-        "cluster_id",
-        "observed",
-        "reported_at"
-      ],
-      "action": {
-        "kind": "statements",
-        "sql": "INSERT INTO \"live_changes\" (\"seq\", \"txid\", \"version\", \"table_name\", \"op\", \"key\", \"old\", \"new\", \"changed\") VALUES ((SELECT coalesce(max(\"seq\"), 0) + 1 FROM \"live_changes\"), NULL, NULL, 'environment_statuses', 'I', json_array(CASE WHEN NEW.\"id\" IS NULL THEN NULL ELSE lower(hex(NEW.\"id\")) END), NULL, json_object('id', CASE WHEN NEW.\"id\" IS NULL THEN NULL ELSE lower(hex(NEW.\"id\")) END, 'environment_id', CASE WHEN NEW.\"environment_id\" IS NULL THEN NULL ELSE lower(hex(NEW.\"environment_id\")) END, 'cluster_id', CASE WHEN NEW.\"cluster_id\" IS NULL THEN NULL ELSE lower(hex(NEW.\"cluster_id\")) END, 'observed', json(NEW.\"observed\"), 'reported_at', NEW.\"reported_at\"), '[]');"
-      }
-    },
-    {
-      "name": "live_environment_statuses_update",
-      "table": {
-        "name": "environment_statuses"
-      },
-      "timing": "after",
-      "events": [
-        "update"
-      ],
-      "columns": [
-        "id",
-        "environment_id",
-        "cluster_id",
-        "observed",
-        "reported_at"
-      ],
-      "action": {
-        "kind": "statements",
-        "sql": "INSERT INTO \"live_changes\" (\"seq\", \"txid\", \"version\", \"table_name\", \"op\", \"key\", \"old\", \"new\", \"changed\") VALUES ((SELECT coalesce(max(\"seq\"), 0) + 1 FROM \"live_changes\"), NULL, NULL, 'environment_statuses', 'U', json_array(CASE WHEN NEW.\"id\" IS NULL THEN NULL ELSE lower(hex(NEW.\"id\")) END), json_object('id', CASE WHEN OLD.\"id\" IS NULL THEN NULL ELSE lower(hex(OLD.\"id\")) END, 'environment_id', CASE WHEN OLD.\"environment_id\" IS NULL THEN NULL ELSE lower(hex(OLD.\"environment_id\")) END, 'cluster_id', CASE WHEN OLD.\"cluster_id\" IS NULL THEN NULL ELSE lower(hex(OLD.\"cluster_id\")) END, 'observed', json(OLD.\"observed\"), 'reported_at', OLD.\"reported_at\"), json_object('id', CASE WHEN NEW.\"id\" IS NULL THEN NULL ELSE lower(hex(NEW.\"id\")) END, 'environment_id', CASE WHEN NEW.\"environment_id\" IS NULL THEN NULL ELSE lower(hex(NEW.\"environment_id\")) END, 'cluster_id', CASE WHEN NEW.\"cluster_id\" IS NULL THEN NULL ELSE lower(hex(NEW.\"cluster_id\")) END, 'observed', json(NEW.\"observed\"), 'reported_at', NEW.\"reported_at\"), (SELECT json_group_array(\"value\") FROM json_each(json_array(CASE WHEN OLD.\"cluster_id\" IS NOT NEW.\"cluster_id\" THEN 'cluster_id' END, CASE WHEN OLD.\"environment_id\" IS NOT NEW.\"environment_id\" THEN 'environment_id' END, CASE WHEN OLD.\"id\" IS NOT NEW.\"id\" THEN 'id' END, CASE WHEN OLD.\"observed\" IS NOT NEW.\"observed\" THEN 'observed' END, CASE WHEN OLD.\"reported_at\" IS NOT NEW.\"reported_at\" THEN 'reported_at' END)) WHERE \"type\" <> 'null'));"
-      }
-    },
-    {
-      "name": "live_log_chunks_delete",
+      "name": "live_capture",
       "table": {
         "name": "log_chunks"
       },
       "timing": "after",
       "events": [
+        "insert",
+        "update",
         "delete"
       ],
       "columns": [
@@ -6177,84 +6209,49 @@
         "seq",
         "first_line",
         "lines",
+        "bytes",
         "digest",
         "object_key",
         "expires_at",
         "created_at"
       ],
       "action": {
-        "kind": "statements",
-        "sql": "INSERT INTO \"live_changes\" (\"seq\", \"txid\", \"version\", \"table_name\", \"op\", \"key\", \"old\", \"new\", \"changed\") VALUES ((SELECT coalesce(max(\"seq\"), 0) + 1 FROM \"live_changes\"), NULL, NULL, 'log_chunks', 'D', json_array(CASE WHEN OLD.\"id\" IS NULL THEN NULL ELSE lower(hex(OLD.\"id\")) END), json_object('id', CASE WHEN OLD.\"id\" IS NULL THEN NULL ELSE lower(hex(OLD.\"id\")) END, 'kind', OLD.\"kind\", 'organization_id', CASE WHEN OLD.\"organization_id\" IS NULL THEN NULL ELSE lower(hex(OLD.\"organization_id\")) END, 'environment_id', CASE WHEN OLD.\"environment_id\" IS NULL THEN NULL ELSE lower(hex(OLD.\"environment_id\")) END, 'deployment_id', CASE WHEN OLD.\"deployment_id\" IS NULL THEN NULL ELSE lower(hex(OLD.\"deployment_id\")) END, 'job_id', CASE WHEN OLD.\"job_id\" IS NULL THEN NULL ELSE lower(hex(OLD.\"job_id\")) END, 'attempt', OLD.\"attempt\", 'seq', OLD.\"seq\", 'first_line', OLD.\"first_line\", 'lines', OLD.\"lines\", 'digest', OLD.\"digest\", 'object_key', OLD.\"object_key\", 'expires_at', OLD.\"expires_at\", 'created_at', OLD.\"created_at\"), NULL, '[]');"
+        "kind": "function",
+        "function": {
+          "namespace": "live",
+          "name": "capture"
+        },
+        "arguments": [
+          "log_chunks",
+          "id",
+          "id",
+          "kind",
+          "organization_id",
+          "environment_id",
+          "deployment_id",
+          "job_id",
+          "attempt",
+          "seq",
+          "first_line",
+          "lines",
+          "bytes",
+          "digest",
+          "object_key",
+          "expires_at",
+          "created_at"
+        ]
       }
     },
     {
-      "name": "live_log_chunks_insert",
-      "table": {
-        "name": "log_chunks"
-      },
-      "timing": "after",
-      "events": [
-        "insert"
-      ],
-      "columns": [
-        "id",
-        "kind",
-        "organization_id",
-        "environment_id",
-        "deployment_id",
-        "job_id",
-        "attempt",
-        "seq",
-        "first_line",
-        "lines",
-        "digest",
-        "object_key",
-        "expires_at",
-        "created_at"
-      ],
-      "action": {
-        "kind": "statements",
-        "sql": "INSERT INTO \"live_changes\" (\"seq\", \"txid\", \"version\", \"table_name\", \"op\", \"key\", \"old\", \"new\", \"changed\") VALUES ((SELECT coalesce(max(\"seq\"), 0) + 1 FROM \"live_changes\"), NULL, NULL, 'log_chunks', 'I', json_array(CASE WHEN NEW.\"id\" IS NULL THEN NULL ELSE lower(hex(NEW.\"id\")) END), NULL, json_object('id', CASE WHEN NEW.\"id\" IS NULL THEN NULL ELSE lower(hex(NEW.\"id\")) END, 'kind', NEW.\"kind\", 'organization_id', CASE WHEN NEW.\"organization_id\" IS NULL THEN NULL ELSE lower(hex(NEW.\"organization_id\")) END, 'environment_id', CASE WHEN NEW.\"environment_id\" IS NULL THEN NULL ELSE lower(hex(NEW.\"environment_id\")) END, 'deployment_id', CASE WHEN NEW.\"deployment_id\" IS NULL THEN NULL ELSE lower(hex(NEW.\"deployment_id\")) END, 'job_id', CASE WHEN NEW.\"job_id\" IS NULL THEN NULL ELSE lower(hex(NEW.\"job_id\")) END, 'attempt', NEW.\"attempt\", 'seq', NEW.\"seq\", 'first_line', NEW.\"first_line\", 'lines', NEW.\"lines\", 'digest', NEW.\"digest\", 'object_key', NEW.\"object_key\", 'expires_at', NEW.\"expires_at\", 'created_at', NEW.\"created_at\"), '[]');"
-      }
-    },
-    {
-      "name": "live_log_chunks_update",
-      "table": {
-        "name": "log_chunks"
-      },
-      "timing": "after",
-      "events": [
-        "update"
-      ],
-      "columns": [
-        "id",
-        "kind",
-        "organization_id",
-        "environment_id",
-        "deployment_id",
-        "job_id",
-        "attempt",
-        "seq",
-        "first_line",
-        "lines",
-        "digest",
-        "object_key",
-        "expires_at",
-        "created_at"
-      ],
-      "action": {
-        "kind": "statements",
-        "sql": "INSERT INTO \"live_changes\" (\"seq\", \"txid\", \"version\", \"table_name\", \"op\", \"key\", \"old\", \"new\", \"changed\") VALUES ((SELECT coalesce(max(\"seq\"), 0) + 1 FROM \"live_changes\"), NULL, NULL, 'log_chunks', 'U', json_array(CASE WHEN NEW.\"id\" IS NULL THEN NULL ELSE lower(hex(NEW.\"id\")) END), json_object('id', CASE WHEN OLD.\"id\" IS NULL THEN NULL ELSE lower(hex(OLD.\"id\")) END, 'kind', OLD.\"kind\", 'organization_id', CASE WHEN OLD.\"organization_id\" IS NULL THEN NULL ELSE lower(hex(OLD.\"organization_id\")) END, 'environment_id', CASE WHEN OLD.\"environment_id\" IS NULL THEN NULL ELSE lower(hex(OLD.\"environment_id\")) END, 'deployment_id', CASE WHEN OLD.\"deployment_id\" IS NULL THEN NULL ELSE lower(hex(OLD.\"deployment_id\")) END, 'job_id', CASE WHEN OLD.\"job_id\" IS NULL THEN NULL ELSE lower(hex(OLD.\"job_id\")) END, 'attempt', OLD.\"attempt\", 'seq', OLD.\"seq\", 'first_line', OLD.\"first_line\", 'lines', OLD.\"lines\", 'digest', OLD.\"digest\", 'object_key', OLD.\"object_key\", 'expires_at', OLD.\"expires_at\", 'created_at', OLD.\"created_at\"), json_object('id', CASE WHEN NEW.\"id\" IS NULL THEN NULL ELSE lower(hex(NEW.\"id\")) END, 'kind', NEW.\"kind\", 'organization_id', CASE WHEN NEW.\"organization_id\" IS NULL THEN NULL ELSE lower(hex(NEW.\"organization_id\")) END, 'environment_id', CASE WHEN NEW.\"environment_id\" IS NULL THEN NULL ELSE lower(hex(NEW.\"environment_id\")) END, 'deployment_id', CASE WHEN NEW.\"deployment_id\" IS NULL THEN NULL ELSE lower(hex(NEW.\"deployment_id\")) END, 'job_id', CASE WHEN NEW.\"job_id\" IS NULL THEN NULL ELSE lower(hex(NEW.\"job_id\")) END, 'attempt', NEW.\"attempt\", 'seq', NEW.\"seq\", 'first_line', NEW.\"first_line\", 'lines', NEW.\"lines\", 'digest', NEW.\"digest\", 'object_key', NEW.\"object_key\", 'expires_at', NEW.\"expires_at\", 'created_at', NEW.\"created_at\"), (SELECT json_group_array(\"value\") FROM json_each(json_array(CASE WHEN OLD.\"attempt\" IS NOT NEW.\"attempt\" THEN 'attempt' END, CASE WHEN OLD.\"created_at\" IS NOT NEW.\"created_at\" THEN 'created_at' END, CASE WHEN OLD.\"deployment_id\" IS NOT NEW.\"deployment_id\" THEN 'deployment_id' END, CASE WHEN OLD.\"digest\" IS NOT NEW.\"digest\" THEN 'digest' END, CASE WHEN OLD.\"environment_id\" IS NOT NEW.\"environment_id\" THEN 'environment_id' END, CASE WHEN OLD.\"expires_at\" IS NOT NEW.\"expires_at\" THEN 'expires_at' END, CASE WHEN OLD.\"first_line\" IS NOT NEW.\"first_line\" THEN 'first_line' END, CASE WHEN OLD.\"id\" IS NOT NEW.\"id\" THEN 'id' END, CASE WHEN OLD.\"job_id\" IS NOT NEW.\"job_id\" THEN 'job_id' END, CASE WHEN OLD.\"kind\" IS NOT NEW.\"kind\" THEN 'kind' END, CASE WHEN OLD.\"lines\" IS NOT NEW.\"lines\" THEN 'lines' END, CASE WHEN OLD.\"object_key\" IS NOT NEW.\"object_key\" THEN 'object_key' END, CASE WHEN OLD.\"organization_id\" IS NOT NEW.\"organization_id\" THEN 'organization_id' END, CASE WHEN OLD.\"seq\" IS NOT NEW.\"seq\" THEN 'seq' END)) WHERE \"type\" <> 'null'));"
-      }
-    },
-    {
-      "name": "live_auth_accounts_delete",
+      "name": "live_capture",
       "table": {
         "namespace": "auth",
         "name": "accounts"
       },
       "timing": "after",
       "events": [
+        "insert",
+        "update",
         "delete"
       ],
       "columns": [
@@ -6264,60 +6261,31 @@
         "locked_until"
       ],
       "action": {
-        "kind": "statements",
-        "sql": "INSERT INTO \"live_changes\" (\"seq\", \"txid\", \"version\", \"table_name\", \"op\", \"key\", \"old\", \"new\", \"changed\") VALUES ((SELECT coalesce(max(\"seq\"), 0) + 1 FROM \"live_changes\"), NULL, NULL, 'auth.accounts', 'D', json_array(CASE WHEN OLD.\"id\" IS NULL THEN NULL ELSE lower(hex(OLD.\"id\")) END), json_object('id', CASE WHEN OLD.\"id\" IS NULL THEN NULL ELSE lower(hex(OLD.\"id\")) END, 'created_at', OLD.\"created_at\", 'disabled_at', OLD.\"disabled_at\", 'locked_until', OLD.\"locked_until\"), NULL, '[]');"
+        "kind": "function",
+        "function": {
+          "namespace": "live",
+          "name": "capture"
+        },
+        "arguments": [
+          "auth.accounts",
+          "id",
+          "id",
+          "created_at",
+          "disabled_at",
+          "locked_until"
+        ]
       }
     },
     {
-      "name": "live_auth_accounts_insert",
-      "table": {
-        "namespace": "auth",
-        "name": "accounts"
-      },
-      "timing": "after",
-      "events": [
-        "insert"
-      ],
-      "columns": [
-        "id",
-        "created_at",
-        "disabled_at",
-        "locked_until"
-      ],
-      "action": {
-        "kind": "statements",
-        "sql": "INSERT INTO \"live_changes\" (\"seq\", \"txid\", \"version\", \"table_name\", \"op\", \"key\", \"old\", \"new\", \"changed\") VALUES ((SELECT coalesce(max(\"seq\"), 0) + 1 FROM \"live_changes\"), NULL, NULL, 'auth.accounts', 'I', json_array(CASE WHEN NEW.\"id\" IS NULL THEN NULL ELSE lower(hex(NEW.\"id\")) END), NULL, json_object('id', CASE WHEN NEW.\"id\" IS NULL THEN NULL ELSE lower(hex(NEW.\"id\")) END, 'created_at', NEW.\"created_at\", 'disabled_at', NEW.\"disabled_at\", 'locked_until', NEW.\"locked_until\"), '[]');"
-      }
-    },
-    {
-      "name": "live_auth_accounts_update",
-      "table": {
-        "namespace": "auth",
-        "name": "accounts"
-      },
-      "timing": "after",
-      "events": [
-        "update"
-      ],
-      "columns": [
-        "id",
-        "created_at",
-        "disabled_at",
-        "locked_until"
-      ],
-      "action": {
-        "kind": "statements",
-        "sql": "INSERT INTO \"live_changes\" (\"seq\", \"txid\", \"version\", \"table_name\", \"op\", \"key\", \"old\", \"new\", \"changed\") VALUES ((SELECT coalesce(max(\"seq\"), 0) + 1 FROM \"live_changes\"), NULL, NULL, 'auth.accounts', 'U', json_array(CASE WHEN NEW.\"id\" IS NULL THEN NULL ELSE lower(hex(NEW.\"id\")) END), json_object('id', CASE WHEN OLD.\"id\" IS NULL THEN NULL ELSE lower(hex(OLD.\"id\")) END, 'created_at', OLD.\"created_at\", 'disabled_at', OLD.\"disabled_at\", 'locked_until', OLD.\"locked_until\"), json_object('id', CASE WHEN NEW.\"id\" IS NULL THEN NULL ELSE lower(hex(NEW.\"id\")) END, 'created_at', NEW.\"created_at\", 'disabled_at', NEW.\"disabled_at\", 'locked_until', NEW.\"locked_until\"), (SELECT json_group_array(\"value\") FROM json_each(json_array(CASE WHEN OLD.\"created_at\" IS NOT NEW.\"created_at\" THEN 'created_at' END, CASE WHEN OLD.\"disabled_at\" IS NOT NEW.\"disabled_at\" THEN 'disabled_at' END, CASE WHEN OLD.\"id\" IS NOT NEW.\"id\" THEN 'id' END, CASE WHEN OLD.\"locked_until\" IS NOT NEW.\"locked_until\" THEN 'locked_until' END)) WHERE \"type\" <> 'null'));"
-      }
-    },
-    {
-      "name": "live_auth_sessions_delete",
+      "name": "live_capture",
       "table": {
         "namespace": "auth",
         "name": "sessions"
       },
       "timing": "after",
       "events": [
+        "insert",
+        "update",
         "delete"
       ],
       "columns": [
@@ -6336,78 +6304,59 @@
         "created_at"
       ],
       "action": {
-        "kind": "statements",
-        "sql": "INSERT INTO \"live_changes\" (\"seq\", \"txid\", \"version\", \"table_name\", \"op\", \"key\", \"old\", \"new\", \"changed\") VALUES ((SELECT coalesce(max(\"seq\"), 0) + 1 FROM \"live_changes\"), NULL, NULL, 'auth.sessions', 'D', json_array(CASE WHEN OLD.\"id\" IS NULL THEN NULL ELSE lower(hex(OLD.\"id\")) END), json_object('id', CASE WHEN OLD.\"id\" IS NULL THEN NULL ELSE lower(hex(OLD.\"id\")) END, 'account_id', CASE WHEN OLD.\"account_id\" IS NULL THEN NULL ELSE lower(hex(OLD.\"account_id\")) END, 'access_expires_at', OLD.\"access_expires_at\", 'refreshed_at', OLD.\"refreshed_at\", 'aal', OLD.\"aal\", 'authenticated_at', OLD.\"authenticated_at\", 'mfa_at', OLD.\"mfa_at\", 'last_seen_at', OLD.\"last_seen_at\", 'idle_expires_at', OLD.\"idle_expires_at\", 'expires_at', OLD.\"expires_at\", 'device', OLD.\"device\", 'revoked_at', OLD.\"revoked_at\", 'created_at', OLD.\"created_at\"), NULL, '[]');"
+        "kind": "function",
+        "function": {
+          "namespace": "live",
+          "name": "capture"
+        },
+        "arguments": [
+          "auth.sessions",
+          "id",
+          "id",
+          "account_id",
+          "access_expires_at",
+          "refreshed_at",
+          "aal",
+          "authenticated_at",
+          "mfa_at",
+          "last_seen_at",
+          "idle_expires_at",
+          "expires_at",
+          "device",
+          "revoked_at",
+          "created_at"
+        ]
       }
     },
     {
-      "name": "live_auth_sessions_insert",
+      "name": "seal",
       "table": {
-        "namespace": "auth",
-        "name": "sessions"
+        "namespace": "live",
+        "name": "pending"
       },
       "timing": "after",
       "events": [
         "insert"
       ],
-      "columns": [
-        "id",
-        "account_id",
-        "access_expires_at",
-        "refreshed_at",
-        "aal",
-        "authenticated_at",
-        "mfa_at",
-        "last_seen_at",
-        "idle_expires_at",
-        "expires_at",
-        "device",
-        "revoked_at",
-        "created_at"
-      ],
+      "deferred": true,
       "action": {
-        "kind": "statements",
-        "sql": "INSERT INTO \"live_changes\" (\"seq\", \"txid\", \"version\", \"table_name\", \"op\", \"key\", \"old\", \"new\", \"changed\") VALUES ((SELECT coalesce(max(\"seq\"), 0) + 1 FROM \"live_changes\"), NULL, NULL, 'auth.sessions', 'I', json_array(CASE WHEN NEW.\"id\" IS NULL THEN NULL ELSE lower(hex(NEW.\"id\")) END), NULL, json_object('id', CASE WHEN NEW.\"id\" IS NULL THEN NULL ELSE lower(hex(NEW.\"id\")) END, 'account_id', CASE WHEN NEW.\"account_id\" IS NULL THEN NULL ELSE lower(hex(NEW.\"account_id\")) END, 'access_expires_at', NEW.\"access_expires_at\", 'refreshed_at', NEW.\"refreshed_at\", 'aal', NEW.\"aal\", 'authenticated_at', NEW.\"authenticated_at\", 'mfa_at', NEW.\"mfa_at\", 'last_seen_at', NEW.\"last_seen_at\", 'idle_expires_at', NEW.\"idle_expires_at\", 'expires_at', NEW.\"expires_at\", 'device', NEW.\"device\", 'revoked_at', NEW.\"revoked_at\", 'created_at', NEW.\"created_at\"), '[]');"
+        "kind": "function",
+        "function": {
+          "namespace": "live",
+          "name": "seal"
+        }
       }
     },
     {
-      "name": "live_auth_sessions_update",
-      "table": {
-        "namespace": "auth",
-        "name": "sessions"
-      },
-      "timing": "after",
-      "events": [
-        "update"
-      ],
-      "columns": [
-        "id",
-        "account_id",
-        "access_expires_at",
-        "refreshed_at",
-        "aal",
-        "authenticated_at",
-        "mfa_at",
-        "last_seen_at",
-        "idle_expires_at",
-        "expires_at",
-        "device",
-        "revoked_at",
-        "created_at"
-      ],
-      "action": {
-        "kind": "statements",
-        "sql": "INSERT INTO \"live_changes\" (\"seq\", \"txid\", \"version\", \"table_name\", \"op\", \"key\", \"old\", \"new\", \"changed\") VALUES ((SELECT coalesce(max(\"seq\"), 0) + 1 FROM \"live_changes\"), NULL, NULL, 'auth.sessions', 'U', json_array(CASE WHEN NEW.\"id\" IS NULL THEN NULL ELSE lower(hex(NEW.\"id\")) END), json_object('id', CASE WHEN OLD.\"id\" IS NULL THEN NULL ELSE lower(hex(OLD.\"id\")) END, 'account_id', CASE WHEN OLD.\"account_id\" IS NULL THEN NULL ELSE lower(hex(OLD.\"account_id\")) END, 'access_expires_at', OLD.\"access_expires_at\", 'refreshed_at', OLD.\"refreshed_at\", 'aal', OLD.\"aal\", 'authenticated_at', OLD.\"authenticated_at\", 'mfa_at', OLD.\"mfa_at\", 'last_seen_at', OLD.\"last_seen_at\", 'idle_expires_at', OLD.\"idle_expires_at\", 'expires_at', OLD.\"expires_at\", 'device', OLD.\"device\", 'revoked_at', OLD.\"revoked_at\", 'created_at', OLD.\"created_at\"), json_object('id', CASE WHEN NEW.\"id\" IS NULL THEN NULL ELSE lower(hex(NEW.\"id\")) END, 'account_id', CASE WHEN NEW.\"account_id\" IS NULL THEN NULL ELSE lower(hex(NEW.\"account_id\")) END, 'access_expires_at', NEW.\"access_expires_at\", 'refreshed_at', NEW.\"refreshed_at\", 'aal', NEW.\"aal\", 'authenticated_at', NEW.\"authenticated_at\", 'mfa_at', NEW.\"mfa_at\", 'last_seen_at', NEW.\"last_seen_at\", 'idle_expires_at', NEW.\"idle_expires_at\", 'expires_at', NEW.\"expires_at\", 'device', NEW.\"device\", 'revoked_at', NEW.\"revoked_at\", 'created_at', NEW.\"created_at\"), (SELECT json_group_array(\"value\") FROM json_each(json_array(CASE WHEN OLD.\"aal\" IS NOT NEW.\"aal\" THEN 'aal' END, CASE WHEN OLD.\"access_expires_at\" IS NOT NEW.\"access_expires_at\" THEN 'access_expires_at' END, CASE WHEN OLD.\"account_id\" IS NOT NEW.\"account_id\" THEN 'account_id' END, CASE WHEN OLD.\"authenticated_at\" IS NOT NEW.\"authenticated_at\" THEN 'authenticated_at' END, CASE WHEN OLD.\"created_at\" IS NOT NEW.\"created_at\" THEN 'created_at' END, CASE WHEN OLD.\"device\" IS NOT NEW.\"device\" THEN 'device' END, CASE WHEN OLD.\"expires_at\" IS NOT NEW.\"expires_at\" THEN 'expires_at' END, CASE WHEN OLD.\"id\" IS NOT NEW.\"id\" THEN 'id' END, CASE WHEN OLD.\"idle_expires_at\" IS NOT NEW.\"idle_expires_at\" THEN 'idle_expires_at' END, CASE WHEN OLD.\"last_seen_at\" IS NOT NEW.\"last_seen_at\" THEN 'last_seen_at' END, CASE WHEN OLD.\"mfa_at\" IS NOT NEW.\"mfa_at\" THEN 'mfa_at' END, CASE WHEN OLD.\"previous_refresh_hash\" IS NOT NEW.\"previous_refresh_hash\" THEN 'previous_refresh_hash' END, CASE WHEN OLD.\"refresh_hash\" IS NOT NEW.\"refresh_hash\" THEN 'refresh_hash' END, CASE WHEN OLD.\"refreshed_at\" IS NOT NEW.\"refreshed_at\" THEN 'refreshed_at' END, CASE WHEN OLD.\"revoked_at\" IS NOT NEW.\"revoked_at\" THEN 'revoked_at' END, CASE WHEN OLD.\"token_hash\" IS NOT NEW.\"token_hash\" THEN 'token_hash' END)) WHERE \"type\" <> 'null'));"
-      }
-    },
-    {
-      "name": "live_rpc_inbox_delete",
+      "name": "live_capture",
       "table": {
         "namespace": "rpc",
         "name": "inbox"
       },
       "timing": "after",
       "events": [
+        "insert",
+        "update",
         "delete"
       ],
       "columns": [
@@ -6422,70 +6371,36 @@
         "created_at"
       ],
       "action": {
-        "kind": "statements",
-        "sql": "INSERT INTO \"live_changes\" (\"seq\", \"txid\", \"version\", \"table_name\", \"op\", \"key\", \"old\", \"new\", \"changed\") VALUES ((SELECT coalesce(max(\"seq\"), 0) + 1 FROM \"live_changes\"), NULL, NULL, 'rpc.inbox', 'D', json_array(CASE WHEN OLD.\"id\" IS NULL THEN NULL ELSE lower(hex(OLD.\"id\")) END), json_object('id', CASE WHEN OLD.\"id\" IS NULL THEN NULL ELSE lower(hex(OLD.\"id\")) END, 'account', OLD.\"account\", 'title', OLD.\"title\", 'body', OLD.\"body\", 'link', OLD.\"link\", 'action', json(OLD.\"action\"), 'kind', OLD.\"kind\", 'read_at', OLD.\"read_at\", 'created_at', OLD.\"created_at\"), NULL, '[]');"
+        "kind": "function",
+        "function": {
+          "namespace": "live",
+          "name": "capture"
+        },
+        "arguments": [
+          "rpc.inbox",
+          "id",
+          "id",
+          "account",
+          "title",
+          "body",
+          "link",
+          "action",
+          "kind",
+          "read_at",
+          "created_at"
+        ]
       }
     },
     {
-      "name": "live_rpc_inbox_insert",
-      "table": {
-        "namespace": "rpc",
-        "name": "inbox"
-      },
-      "timing": "after",
-      "events": [
-        "insert"
-      ],
-      "columns": [
-        "id",
-        "account",
-        "title",
-        "body",
-        "link",
-        "action",
-        "kind",
-        "read_at",
-        "created_at"
-      ],
-      "action": {
-        "kind": "statements",
-        "sql": "INSERT INTO \"live_changes\" (\"seq\", \"txid\", \"version\", \"table_name\", \"op\", \"key\", \"old\", \"new\", \"changed\") VALUES ((SELECT coalesce(max(\"seq\"), 0) + 1 FROM \"live_changes\"), NULL, NULL, 'rpc.inbox', 'I', json_array(CASE WHEN NEW.\"id\" IS NULL THEN NULL ELSE lower(hex(NEW.\"id\")) END), NULL, json_object('id', CASE WHEN NEW.\"id\" IS NULL THEN NULL ELSE lower(hex(NEW.\"id\")) END, 'account', NEW.\"account\", 'title', NEW.\"title\", 'body', NEW.\"body\", 'link', NEW.\"link\", 'action', json(NEW.\"action\"), 'kind', NEW.\"kind\", 'read_at', NEW.\"read_at\", 'created_at', NEW.\"created_at\"), '[]');"
-      }
-    },
-    {
-      "name": "live_rpc_inbox_update",
-      "table": {
-        "namespace": "rpc",
-        "name": "inbox"
-      },
-      "timing": "after",
-      "events": [
-        "update"
-      ],
-      "columns": [
-        "id",
-        "account",
-        "title",
-        "body",
-        "link",
-        "action",
-        "kind",
-        "read_at",
-        "created_at"
-      ],
-      "action": {
-        "kind": "statements",
-        "sql": "INSERT INTO \"live_changes\" (\"seq\", \"txid\", \"version\", \"table_name\", \"op\", \"key\", \"old\", \"new\", \"changed\") VALUES ((SELECT coalesce(max(\"seq\"), 0) + 1 FROM \"live_changes\"), NULL, NULL, 'rpc.inbox', 'U', json_array(CASE WHEN NEW.\"id\" IS NULL THEN NULL ELSE lower(hex(NEW.\"id\")) END), json_object('id', CASE WHEN OLD.\"id\" IS NULL THEN NULL ELSE lower(hex(OLD.\"id\")) END, 'account', OLD.\"account\", 'title', OLD.\"title\", 'body', OLD.\"body\", 'link', OLD.\"link\", 'action', json(OLD.\"action\"), 'kind', OLD.\"kind\", 'read_at', OLD.\"read_at\", 'created_at', OLD.\"created_at\"), json_object('id', CASE WHEN NEW.\"id\" IS NULL THEN NULL ELSE lower(hex(NEW.\"id\")) END, 'account', NEW.\"account\", 'title', NEW.\"title\", 'body', NEW.\"body\", 'link', NEW.\"link\", 'action', json(NEW.\"action\"), 'kind', NEW.\"kind\", 'read_at', NEW.\"read_at\", 'created_at', NEW.\"created_at\"), (SELECT json_group_array(\"value\") FROM json_each(json_array(CASE WHEN OLD.\"account\" IS NOT NEW.\"account\" THEN 'account' END, CASE WHEN OLD.\"action\" IS NOT NEW.\"action\" THEN 'action' END, CASE WHEN OLD.\"body\" IS NOT NEW.\"body\" THEN 'body' END, CASE WHEN OLD.\"created_at\" IS NOT NEW.\"created_at\" THEN 'created_at' END, CASE WHEN OLD.\"id\" IS NOT NEW.\"id\" THEN 'id' END, CASE WHEN OLD.\"kind\" IS NOT NEW.\"kind\" THEN 'kind' END, CASE WHEN OLD.\"link\" IS NOT NEW.\"link\" THEN 'link' END, CASE WHEN OLD.\"read_at\" IS NOT NEW.\"read_at\" THEN 'read_at' END, CASE WHEN OLD.\"title\" IS NOT NEW.\"title\" THEN 'title' END)) WHERE \"type\" <> 'null'));"
-      }
-    },
-    {
-      "name": "live_rpc_jobs_delete",
+      "name": "live_capture",
       "table": {
         "namespace": "rpc",
         "name": "jobs"
       },
       "timing": "after",
       "events": [
+        "insert",
+        "update",
         "delete"
       ],
       "columns": [
@@ -6517,94 +6432,41 @@
         "created_at"
       ],
       "action": {
-        "kind": "statements",
-        "sql": "INSERT INTO \"live_changes\" (\"seq\", \"txid\", \"version\", \"table_name\", \"op\", \"key\", \"old\", \"new\", \"changed\") VALUES ((SELECT coalesce(max(\"seq\"), 0) + 1 FROM \"live_changes\"), NULL, NULL, 'rpc.jobs', 'D', json_array(CASE WHEN OLD.\"id\" IS NULL THEN NULL ELSE lower(hex(OLD.\"id\")) END), json_object('id', CASE WHEN OLD.\"id\" IS NULL THEN NULL ELSE lower(hex(OLD.\"id\")) END, 'key', OLD.\"key\", 'name', OLD.\"name\", 'queue', OLD.\"queue\", 'arguments', json(OLD.\"arguments\"), 'owner', OLD.\"owner\", 'viewer', OLD.\"viewer\", 'visibility', OLD.\"visibility\", 'serial_key', OLD.\"serial_key\", 'state', OLD.\"state\", 'attempts', OLD.\"attempts\", 'max_attempts', OLD.\"max_attempts\", 'priority', OLD.\"priority\", 'run_at', OLD.\"run_at\", 'deadline_at', OLD.\"deadline_at\", 'started_at', OLD.\"started_at\", 'finished_at', OLD.\"finished_at\", 'locked_until', OLD.\"locked_until\", 'result', json(OLD.\"result\"), 'error', OLD.\"error\", 'progress', OLD.\"progress\", 'fraction', OLD.\"fraction\", 'steps', json(OLD.\"steps\"), 'cancel_requested', OLD.\"cancel_requested\", 'failure_pending', OLD.\"failure_pending\", 'created_at', OLD.\"created_at\"), NULL, '[]');"
-      }
-    },
-    {
-      "name": "live_rpc_jobs_insert",
-      "table": {
-        "namespace": "rpc",
-        "name": "jobs"
-      },
-      "timing": "after",
-      "events": [
-        "insert"
-      ],
-      "columns": [
-        "id",
-        "key",
-        "name",
-        "queue",
-        "arguments",
-        "owner",
-        "viewer",
-        "visibility",
-        "serial_key",
-        "state",
-        "attempts",
-        "max_attempts",
-        "priority",
-        "run_at",
-        "deadline_at",
-        "started_at",
-        "finished_at",
-        "locked_until",
-        "result",
-        "error",
-        "progress",
-        "fraction",
-        "steps",
-        "cancel_requested",
-        "failure_pending",
-        "created_at"
-      ],
-      "action": {
-        "kind": "statements",
-        "sql": "INSERT INTO \"live_changes\" (\"seq\", \"txid\", \"version\", \"table_name\", \"op\", \"key\", \"old\", \"new\", \"changed\") VALUES ((SELECT coalesce(max(\"seq\"), 0) + 1 FROM \"live_changes\"), NULL, NULL, 'rpc.jobs', 'I', json_array(CASE WHEN NEW.\"id\" IS NULL THEN NULL ELSE lower(hex(NEW.\"id\")) END), NULL, json_object('id', CASE WHEN NEW.\"id\" IS NULL THEN NULL ELSE lower(hex(NEW.\"id\")) END, 'key', NEW.\"key\", 'name', NEW.\"name\", 'queue', NEW.\"queue\", 'arguments', json(NEW.\"arguments\"), 'owner', NEW.\"owner\", 'viewer', NEW.\"viewer\", 'visibility', NEW.\"visibility\", 'serial_key', NEW.\"serial_key\", 'state', NEW.\"state\", 'attempts', NEW.\"attempts\", 'max_attempts', NEW.\"max_attempts\", 'priority', NEW.\"priority\", 'run_at', NEW.\"run_at\", 'deadline_at', NEW.\"deadline_at\", 'started_at', NEW.\"started_at\", 'finished_at', NEW.\"finished_at\", 'locked_until', NEW.\"locked_until\", 'result', json(NEW.\"result\"), 'error', NEW.\"error\", 'progress', NEW.\"progress\", 'fraction', NEW.\"fraction\", 'steps', json(NEW.\"steps\"), 'cancel_requested', NEW.\"cancel_requested\", 'failure_pending', NEW.\"failure_pending\", 'created_at', NEW.\"created_at\"), '[]');"
-      }
-    },
-    {
-      "name": "live_rpc_jobs_update",
-      "table": {
-        "namespace": "rpc",
-        "name": "jobs"
-      },
-      "timing": "after",
-      "events": [
-        "update"
-      ],
-      "columns": [
-        "id",
-        "key",
-        "name",
-        "queue",
-        "arguments",
-        "owner",
-        "viewer",
-        "visibility",
-        "serial_key",
-        "state",
-        "attempts",
-        "max_attempts",
-        "priority",
-        "run_at",
-        "deadline_at",
-        "started_at",
-        "finished_at",
-        "locked_until",
-        "result",
-        "error",
-        "progress",
-        "fraction",
-        "steps",
-        "cancel_requested",
-        "failure_pending",
-        "created_at"
-      ],
-      "action": {
-        "kind": "statements",
-        "sql": "INSERT INTO \"live_changes\" (\"seq\", \"txid\", \"version\", \"table_name\", \"op\", \"key\", \"old\", \"new\", \"changed\") VALUES ((SELECT coalesce(max(\"seq\"), 0) + 1 FROM \"live_changes\"), NULL, NULL, 'rpc.jobs', 'U', json_array(CASE WHEN NEW.\"id\" IS NULL THEN NULL ELSE lower(hex(NEW.\"id\")) END), json_object('id', CASE WHEN OLD.\"id\" IS NULL THEN NULL ELSE lower(hex(OLD.\"id\")) END, 'key', OLD.\"key\", 'name', OLD.\"name\", 'queue', OLD.\"queue\", 'arguments', json(OLD.\"arguments\"), 'owner', OLD.\"owner\", 'viewer', OLD.\"viewer\", 'visibility', OLD.\"visibility\", 'serial_key', OLD.\"serial_key\", 'state', OLD.\"state\", 'attempts', OLD.\"attempts\", 'max_attempts', OLD.\"max_attempts\", 'priority', OLD.\"priority\", 'run_at', OLD.\"run_at\", 'deadline_at', OLD.\"deadline_at\", 'started_at', OLD.\"started_at\", 'finished_at', OLD.\"finished_at\", 'locked_until', OLD.\"locked_until\", 'result', json(OLD.\"result\"), 'error', OLD.\"error\", 'progress', OLD.\"progress\", 'fraction', OLD.\"fraction\", 'steps', json(OLD.\"steps\"), 'cancel_requested', OLD.\"cancel_requested\", 'failure_pending', OLD.\"failure_pending\", 'created_at', OLD.\"created_at\"), json_object('id', CASE WHEN NEW.\"id\" IS NULL THEN NULL ELSE lower(hex(NEW.\"id\")) END, 'key', NEW.\"key\", 'name', NEW.\"name\", 'queue', NEW.\"queue\", 'arguments', json(NEW.\"arguments\"), 'owner', NEW.\"owner\", 'viewer', NEW.\"viewer\", 'visibility', NEW.\"visibility\", 'serial_key', NEW.\"serial_key\", 'state', NEW.\"state\", 'attempts', NEW.\"attempts\", 'max_attempts', NEW.\"max_attempts\", 'priority', NEW.\"priority\", 'run_at', NEW.\"run_at\", 'deadline_at', NEW.\"deadline_at\", 'started_at', NEW.\"started_at\", 'finished_at', NEW.\"finished_at\", 'locked_until', NEW.\"locked_until\", 'result', json(NEW.\"result\"), 'error', NEW.\"error\", 'progress', NEW.\"progress\", 'fraction', NEW.\"fraction\", 'steps', json(NEW.\"steps\"), 'cancel_requested', NEW.\"cancel_requested\", 'failure_pending', NEW.\"failure_pending\", 'created_at', NEW.\"created_at\"), (SELECT json_group_array(\"value\") FROM json_each(json_array(CASE WHEN OLD.\"arguments\" IS NOT NEW.\"arguments\" THEN 'arguments' END, CASE WHEN OLD.\"attempts\" IS NOT NEW.\"attempts\" THEN 'attempts' END, CASE WHEN OLD.\"cancel_requested\" IS NOT NEW.\"cancel_requested\" THEN 'cancel_requested' END, CASE WHEN OLD.\"created_at\" IS NOT NEW.\"created_at\" THEN 'created_at' END, CASE WHEN OLD.\"deadline_at\" IS NOT NEW.\"deadline_at\" THEN 'deadline_at' END, CASE WHEN OLD.\"error\" IS NOT NEW.\"error\" THEN 'error' END, CASE WHEN OLD.\"failure_pending\" IS NOT NEW.\"failure_pending\" THEN 'failure_pending' END, CASE WHEN OLD.\"finished_at\" IS NOT NEW.\"finished_at\" THEN 'finished_at' END, CASE WHEN OLD.\"fraction\" IS NOT NEW.\"fraction\" THEN 'fraction' END, CASE WHEN OLD.\"id\" IS NOT NEW.\"id\" THEN 'id' END, CASE WHEN OLD.\"key\" IS NOT NEW.\"key\" THEN 'key' END, CASE WHEN OLD.\"locked_until\" IS NOT NEW.\"locked_until\" THEN 'locked_until' END, CASE WHEN OLD.\"max_attempts\" IS NOT NEW.\"max_attempts\" THEN 'max_attempts' END, CASE WHEN OLD.\"name\" IS NOT NEW.\"name\" THEN 'name' END, CASE WHEN OLD.\"owner\" IS NOT NEW.\"owner\" THEN 'owner' END, CASE WHEN OLD.\"priority\" IS NOT NEW.\"priority\" THEN 'priority' END, CASE WHEN OLD.\"progress\" IS NOT NEW.\"progress\" THEN 'progress' END, CASE WHEN OLD.\"queue\" IS NOT NEW.\"queue\" THEN 'queue' END, CASE WHEN OLD.\"result\" IS NOT NEW.\"result\" THEN 'result' END, CASE WHEN OLD.\"run_at\" IS NOT NEW.\"run_at\" THEN 'run_at' END, CASE WHEN OLD.\"serial_key\" IS NOT NEW.\"serial_key\" THEN 'serial_key' END, CASE WHEN OLD.\"started_at\" IS NOT NEW.\"started_at\" THEN 'started_at' END, CASE WHEN OLD.\"state\" IS NOT NEW.\"state\" THEN 'state' END, CASE WHEN OLD.\"steps\" IS NOT NEW.\"steps\" THEN 'steps' END, CASE WHEN OLD.\"viewer\" IS NOT NEW.\"viewer\" THEN 'viewer' END, CASE WHEN OLD.\"visibility\" IS NOT NEW.\"visibility\" THEN 'visibility' END)) WHERE \"type\" <> 'null'));"
+        "kind": "function",
+        "function": {
+          "namespace": "live",
+          "name": "capture"
+        },
+        "arguments": [
+          "rpc.jobs",
+          "id",
+          "id",
+          "key",
+          "name",
+          "queue",
+          "arguments",
+          "owner",
+          "viewer",
+          "visibility",
+          "serial_key",
+          "state",
+          "attempts",
+          "max_attempts",
+          "priority",
+          "run_at",
+          "deadline_at",
+          "started_at",
+          "finished_at",
+          "locked_until",
+          "result",
+          "error",
+          "progress",
+          "fraction",
+          "steps",
+          "cancel_requested",
+          "failure_pending",
+          "created_at"
+        ]
       }
     }
   ]
