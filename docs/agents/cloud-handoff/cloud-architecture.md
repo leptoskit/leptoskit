@@ -15,12 +15,12 @@ Background research (read the part your task names; do not re-research):
 
 It is different from the existing pieces, and builds on them:
 
-| Existing (keep working, do not rewrite) | What it is |
-| --- | --- |
-| `lk infra` + `lk deploy` (`crates/leptoskit_cli/src/infra`) | The app author provisions their own VM with OpenTofu and Kamal. |
-| `lk console serve` (`leptoskit_deploy_console::control`) | A self-hosted, single-owner deployment service. |
+| Existing (keep working, do not rewrite)                                                                | What it is                                                                             |
+| ------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------- |
+| `lk infra` + `lk deploy` (`crates/leptoskit_cli/src/infra`)                                            | The app author provisions their own VM with OpenTofu and Kamal.                        |
+| `lk console serve` (`leptoskit_deploy_console::control`)                                               | A self-hosted, single-owner deployment service.                                        |
 | The hosted pilot (`leptoskit_deploy_console::hosted`, the `leptoskit-cloud` binary in `leptoskit_app`) | An operator-enrolled broker: customers bring their own compute and a dedicated worker. |
-| `lk publish` (`crates/leptoskit_cli/src/publish`) | Uploads to six stores from the developer's machine. |
+| `lk publish` (`crates/leptoskit_cli/src/publish`)                                                      | Uploads to six stores from the developer's machine.                                    |
 
 LeptosKit Cloud adds: public signup, organisations and teams, shared multi-tenant compute on Kubernetes, cloud builds, managed Postgres, custom domains, usage metering and billing, and store publishing from cloud build machines with credentials kept in a vault. `docs/agents/deployment-control-plane.md` step 4 ("Hosted operation") said not to turn the single-owner executor into a multi-tenant one by adding an organisation ID. This is the separate design that step asked for.
 
@@ -35,16 +35,16 @@ LeptosKit Cloud adds: public signup, organisations and teams, shared multi-tenan
 
 ## 2. Crates
 
-| Crate | Published | What it holds |
-| --- | --- | --- |
-| `crates/leptoskit_cloud` | yes | Domain types, validation, the source archive, pricing/metering types; tables and RPC operations (bodies behind the `server` feature); the worker protocol. Client-safe without features: the wasm UI and the CLI compile it. |
-| `crates/leptoskit_cloud_runtime` | yes | `ReleaseSpec` (pure data), the `Runtime` trait, Kubernetes manifests (`kubernetes` feature), the cluster adapter over `kube` (`kube` feature), a local process adapter (`local`), a recording fake (`testing`). Depends on nothing else in the cloud. |
-| `crates/leptoskit_cloud_platform` | no | Operator side: the platform configuration, OpenTofu and k3s bootstrap generation, add-on manifests, and the price/cost model. |
-| `crates/leptoskit_cloud_worker` | no | One binary, `leptoskit-cloud-worker`, with two roles: `build` (builds, native builds, store publishing) and `cluster` (applies releases in one cluster). Both use the same pair/claim/finish loop. |
-| `crates/leptoskit_cloud_app` | no | The cloud's own leptoskit app: sign-up, the dashboard, and the control-plane server binary `leptoskit-cloud-control` (SSR plus the API). Dogfood: it is a leptoskit app with `render = "ssr"`, hydrated, with no hand-written JavaScript. |
-| `crates/leptoskit_cli/src/cloud/` | (part of the CLI) | `lk cloud …`. |
-| `crates/leptoskit_config/src/cloud.rs` | (part of config) | The `[cloud]` table. |
-| `crates/leptoskit_cli/src/publish/<store>.rs` | (part of the CLI) | New stores. |
+| Crate                                         | Published         | What it holds                                                                                                                                                                                                                                         |
+| --------------------------------------------- | ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `crates/leptoskit_cloud`                      | yes               | Domain types, validation, the source archive, pricing/metering types; tables and RPC operations (bodies behind the `server` feature); the worker protocol. Client-safe without features: the wasm UI and the CLI compile it.                          |
+| `crates/leptoskit_cloud_runtime`              | yes               | `ReleaseSpec` (pure data), the `Runtime` trait, Kubernetes manifests (`kubernetes` feature), the cluster adapter over `kube` (`kube` feature), a local process adapter (`local`), a recording fake (`testing`). Depends on nothing else in the cloud. |
+| `crates/leptoskit_cloud_platform`             | no                | Operator side: the platform configuration, OpenTofu and k3s bootstrap generation, add-on manifests, and the price/cost model.                                                                                                                         |
+| `crates/leptoskit_cloud_worker`               | no                | One binary, `leptoskit-cloud-worker`, with two roles: `build` (builds, native builds, store publishing) and `cluster` (applies releases in one cluster). Both use the same pair/claim/finish loop.                                                    |
+| `crates/leptoskit_cloud_app`                  | no                | The cloud's own leptoskit app: sign-up, the dashboard, and the control-plane server binary `leptoskit-cloud-control` (SSR plus the API). Dogfood: it is a leptoskit app with `render = "ssr"`, hydrated, with no hand-written JavaScript.             |
+| `crates/leptoskit_cli/src/cloud/`             | (part of the CLI) | `lk cloud …`.                                                                                                                                                                                                                                         |
+| `crates/leptoskit_config/src/cloud.rs`        | (part of config)  | The `[cloud]` table.                                                                                                                                                                                                                                  |
+| `crates/leptoskit_cli/src/publish/<store>.rs` | (part of the CLI) | New stores.                                                                                                                                                                                                                                           |
 
 Dependency direction: `leptoskit_cloud_runtime` ← `leptoskit_cloud` ← { `leptoskit_cloud_worker`, `leptoskit_cloud_app`, `leptoskit_cli` }. `leptoskit_cloud_platform` depends on `leptoskit_cloud_runtime` only. No core crate (`leptoskit`, `leptoskit_native`, …) depends on any cloud crate.
 
@@ -85,12 +85,12 @@ Identifiers are UUID v7. Slugs match `[a-z][a-z0-9-]{1,38}[a-z0-9]`, with reserv
 `Size` is `xs`, `s`, `m`, `l`, `xl`. It maps to CPU and memory in one table (operator-overridable later; the defaults are code):
 
 | Size | CPU request / limit (millicores) | Memory (MiB) |
-| --- | --- | --- |
-| xs | 100 / 500 | 128 |
-| s | 250 / 1000 | 256 |
-| m | 500 / 2000 | 512 |
-| l | 1000 / 2000 | 1024 |
-| xl | 2000 / 4000 | 2048 |
+| ---- | -------------------------------- | ------------ |
+| xs   | 100 / 500                        | 128          |
+| s    | 250 / 1000                       | 256          |
+| m    | 500 / 2000                       | 512          |
+| l    | 1000 / 2000                      | 1024         |
+| xl   | 2000 / 4000                      | 2048         |
 
 `Scale { min, max }`: `min <= max`, `max <= 20`. `min = 0` means sleep when idle.
 
@@ -159,19 +159,19 @@ max = 2
 
 Declared in `leptoskit_cloud` with `#[rpc::query]`, `#[rpc::mutation]`, `#[rpc::action]`. Every operation authorises on the server from the caller's identity and membership; nothing trusts an organisation or project named in arguments without checking membership. Names are stable; grouping by module:
 
-| Module | Operations |
-| --- | --- |
-| `account` | `whoami`, `organizations`, `create_organization`, `members`, `invite_member`, `accept_invitation`, `set_member_role`, `remove_member` |
-| `tokens` | `tokens`, `create_token` (value shown once), `revoke_token` |
-| `projects` | `projects`, `project`, `create_project`, `delete_project` (type-to-confirm argument), `environments`, `create_environment`, `update_environment`, `delete_environment` |
-| `deployments` | `begin_upload` (returns a presigned PUT for an archive digest), `deploy`, `deployment`, `deployments` (live), `deployment_events` (live), `cancel_deployment`, `rollback`, `runtime_logs`, `build_logs` |
-| `config` | `variables`, `set_variable`, `unset_variable`, `secrets` (names only), `set_secret`, `unset_secret` |
-| `domains` | `domains`, `attach_domain`, `verify_domain`, `detach_domain` |
-| `databases` | `database`, `database_backups`, `create_backup`, `restore_backup` (confirm argument) |
-| `billing` | `plans`, `subscription`, `checkout`, `portal`, `usage`, `estimate` (cost of a `[cloud]` table before deploying), `set_spend_cap` |
-| `stores` | `store_connections`, `connect_store`, `disconnect_store`, `publish`, `store_releases` (live), `store_release`, `signing_request` / `submit_signature` (wallet-delegated signing) |
-| `workers` (worker keys only) | `pair`, `claim`, `renew`, `append_log`, `finish` |
-| `operator` (operator role only) | `clusters`, `register_cluster`, `workers`, `issue_pairing`, `revoke_worker`, `reconcile` |
+| Module                          | Operations                                                                                                                                                                                              |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `account`                       | `whoami`, `organizations`, `create_organization`, `members`, `invite_member`, `accept_invitation`, `set_member_role`, `remove_member`                                                                   |
+| `tokens`                        | `tokens`, `create_token` (value shown once), `revoke_token`                                                                                                                                             |
+| `projects`                      | `projects`, `project`, `create_project`, `delete_project` (type-to-confirm argument), `environments`, `create_environment`, `update_environment`, `delete_environment`                                  |
+| `deployments`                   | `begin_upload` (returns a presigned PUT for an archive digest), `deploy`, `deployment`, `deployments` (live), `deployment_events` (live), `cancel_deployment`, `rollback`, `runtime_logs`, `build_logs` |
+| `config`                        | `variables`, `set_variable`, `unset_variable`, `secrets` (names only), `set_secret`, `unset_secret`                                                                                                     |
+| `domains`                       | `domains`, `attach_domain`, `verify_domain`, `detach_domain`                                                                                                                                            |
+| `databases`                     | `database`, `database_backups`, `create_backup`, `restore_backup` (confirm argument)                                                                                                                    |
+| `billing`                       | `plans`, `subscription`, `checkout`, `portal`, `usage`, `estimate` (cost of a `[cloud]` table before deploying), `set_spend_cap`                                                                        |
+| `stores`                        | `store_connections`, `connect_store`, `disconnect_store`, `publish`, `store_releases` (live), `store_release`, `signing_request` / `submit_signature` (wallet-delegated signing)                        |
+| `workers` (worker keys only)    | `pair`, `claim`, `renew`, `append_log`, `finish`                                                                                                                                                        |
+| `operator` (operator role only) | `clusters`, `register_cluster`, `workers`, `issue_pairing`, `revoke_worker`, `reconcile`                                                                                                                |
 
 Rules that hold across the API:
 
@@ -245,11 +245,11 @@ Prices are data in the platform crate's catalogue, with the cost basis, its sour
 
 Proposed defaults (the owner decides the real numbers):
 
-| Plan | Price | Includes |
-| --- | --- | --- |
-| Hobby | free | one project, size `xs`, sleeps when idle, shared database up to 500 MB, 100 Linux build minutes, default hostname only, hard caps |
-| Pro | $20 a month plus usage, with $20 of usage included | teams, custom domains, autoscaling, always-on, continuous backups, store publishing |
-| Scale | by agreement | dedicated nodes, a customer's own cluster |
+| Plan  | Price                                              | Includes                                                                                                                          |
+| ----- | -------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| Hobby | free                                               | one project, size `xs`, sleeps when idle, shared database up to 500 MB, 100 Linux build minutes, default hostname only, hard caps |
+| Pro   | $20 a month plus usage, with $20 of usage included | teams, custom domains, autoscaling, always-on, continuous backups, store publishing                                               |
+| Scale | by agreement                                       | dedicated nodes, a customer's own cluster                                                                                         |
 
 Meters: compute seconds per size, database instance hours and storage GB-months, object storage GB-months, egress GB over an allowance, Linux and macOS build minutes, custom hostnames. Suggested unit prices, from the research: Linux build minute $0.005, macOS build minute $0.04, an always-on `m` app with a 1 GB database about $12–15 a month all in.
 

@@ -19,25 +19,25 @@ Read, in this order:
 
 Every branch below is pushed. They form one linear stack on `main` at `511655984`, in merge order: each branch contains everything below it.
 
-| # | Branch | Tip | What it is |
-| --- | --- | --- | --- |
-| 1 | `docs/cloud-design` | `b1fc235fc` | The console's design direction. |
-| 2 | `feat/cloud-platform` | `9f89ce0b8` | `leptoskit_cloud_platform`: typed platform config, OpenTofu JSON, two-phase k3s node bootstrap, the operator command. |
-| 3 | `feat/cloud-foundation` | `231f3208d` | `leptoskit_cloud` shared types (slugs, sizes, deployment states, source archive, price estimate) and the `[cloud]` config table with its schema. |
-| 4 | `feat/cloud-platform-addons` | `1d87eb051` | Cluster add-on manifests (gVisor, CloudNativePG, KEDA, cert-manager, Traefik, zot, policies) and the runbook. |
-| 5 | `feat/cloud-runtime` | `7f0db7fc1` | `leptoskit_cloud_runtime`: `ReleaseSpec`, the `Runtime` trait, Kubernetes manifests, a recording fake. |
-| 6 | `feat/cloud-runtime-cluster` | `906d76dc0` | Corrections (rollout quota, KEDA `InterceptorRoute`, agreement with the platform) and the cluster adapter over `kube`, with its RBAC. |
-| 7 | `fix/rpc-app-server-feature` | `d70bf63e0` | Two `leptoskit_rpc` fixes: app crates gate their operations behind their own feature and `#[api(scope)]` is kept on operations; client service helpers compile only where used. |
-| 8 | `feat/cloud-control-accounts` | `2c81180ad` | Control 1: sign-up, organisations, members, invitations, API tokens, projects, environments, audit log, the `leptoskit-cloud-control` server, and the fixes for its security review. |
-| 9 | `feat/cloud-cli-accounts` | `2e9376376` | `lk cloud login` (device flow) and the `whoami`, `org`, `project`, `env`, `token`, `link` commands. Also makes `leptoskit_cloud`'s tables server-only and fixes the binary dropping the identity provider's routes. Includes three `wip(cloud)` commits to squash away. |
-| 10 | `feat/publish-solana` | `3706b9c4d` | `lk publish solana`: the Solana dApp Store through Solana Mobile's official tool. |
-| 11 | `feat/cloud-control-deployments` | `b9828ad7b` | Control 2: uploads, the deployment lifecycle with release-sheet lines and stamps, logs, the worker protocol, operator operations. Reconciled onto the stack by cherry-pick; **the reconciliation was interrupted** (see below). |
-| 12 | `docs/cloud-handoff` | this branch | This folder, on top of 11. |
+| #  | Branch                           | Tip         | What it is                                                                                                                                                                                                                                                              |
+| -- | -------------------------------- | ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1  | `docs/cloud-design`              | `b1fc235fc` | The console's design direction.                                                                                                                                                                                                                                         |
+| 2  | `feat/cloud-platform`            | `9f89ce0b8` | `leptoskit_cloud_platform`: typed platform config, OpenTofu JSON, two-phase k3s node bootstrap, the operator command.                                                                                                                                                   |
+| 3  | `feat/cloud-foundation`          | `231f3208d` | `leptoskit_cloud` shared types (slugs, sizes, deployment states, source archive, price estimate) and the `[cloud]` config table with its schema.                                                                                                                        |
+| 4  | `feat/cloud-platform-addons`     | `1d87eb051` | Cluster add-on manifests (gVisor, CloudNativePG, KEDA, cert-manager, Traefik, zot, policies) and the runbook.                                                                                                                                                           |
+| 5  | `feat/cloud-runtime`             | `7f0db7fc1` | `leptoskit_cloud_runtime`: `ReleaseSpec`, the `Runtime` trait, Kubernetes manifests, a recording fake.                                                                                                                                                                  |
+| 6  | `feat/cloud-runtime-cluster`     | `906d76dc0` | Corrections (rollout quota, KEDA `InterceptorRoute`, agreement with the platform) and the cluster adapter over `kube`, with its RBAC.                                                                                                                                   |
+| 7  | `fix/rpc-app-server-feature`     | `d70bf63e0` | Two `leptoskit_rpc` fixes: app crates gate their operations behind their own feature and `#[api(scope)]` is kept on operations; client service helpers compile only where used.                                                                                         |
+| 8  | `feat/cloud-control-accounts`    | `2c81180ad` | Control 1: sign-up, organisations, members, invitations, API tokens, projects, environments, audit log, the `leptoskit-cloud-control` server, and the fixes for its security review.                                                                                    |
+| 9  | `feat/cloud-cli-accounts`        | `2e9376376` | `lk cloud login` (device flow) and the `whoami`, `org`, `project`, `env`, `token`, `link` commands. Also makes `leptoskit_cloud`'s tables server-only and fixes the binary dropping the identity provider's routes. Includes three `wip(cloud)` commits to squash away. |
+| 10 | `feat/publish-solana`            | `3706b9c4d` | `lk publish solana`: the Solana dApp Store through Solana Mobile's official tool.                                                                                                                                                                                       |
+| 11 | `feat/cloud-control-deployments` | `b9828ad7b` | Control 2: uploads, the deployment lifecycle with release-sheet lines and stamps, logs, the worker protocol, operator operations. Reconciled onto the stack by cherry-pick; **the reconciliation was interrupted** (see below).                                         |
+| 12 | `docs/cloud-handoff`             | this branch | This folder, on top of 11.                                                                                                                                                                                                                                              |
 
 One branch is **not** on the stack:
 
-| Branch | Tip | What it is |
-| --- | --- | --- |
+| Branch                     | Tip         | What it is                                                                                                                                                                                                                                                                                                        |
+| -------------------------- | ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `feat/cloud-console-shell` | `e43ec3140` | UI 1: the console's shell, sign-in, welcome, device approval, organisations, account, projects list. Server-rendered and hydrated with leptoskit, no JavaScript. Its base is an older state of layer 8 (before the security fixes and layers 9 to 11), so it must be cherry-picked onto the stack and reconciled. |
 
 Draft pull requests are open for the stack; each targets the branch below it.
