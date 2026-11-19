@@ -107,14 +107,50 @@ impl Target {
 			environment: environment(args),
 		})
 	}
+
+	/// Says which environment a change is about to reach, on standard
+	/// error, so production is never changed unawares.
+	fn announce(&self, args: &CloudArgs, what: &str) {
+		announce(
+			args,
+			&self.organization,
+			&self.project,
+			&self.environment,
+			what,
+		);
+	}
+}
+
+/// Says which environment a change is about to reach, on standard error.
+pub(super) fn announce(
+	args: &CloudArgs,
+	organization: &str,
+	project: &str,
+	environment: &str,
+	what: &str,
+) {
+	if !args.json {
+		anstream::eprintln!(
+			"{what} in {}/{}/{}.",
+			super::printable(organization),
+			super::printable(project),
+			super::printable(environment)
+		);
+	}
 }
 
 pub(super) fn var(command: &VarCommand, args: &CloudArgs, context: &Context) -> Result<Value> {
+	let target = Target::of(args, context)?;
+	match command {
+		VarCommand::List => {}
+		VarCommand::Set { name, .. } => target.announce(args, &format!("Setting {name}")),
+		VarCommand::Unset { name } => target.announce(args, &format!("Removing {name}")),
+	}
 	let Target {
 		organization,
 		project,
 		environment,
-	} = Target::of(args, context)?;
+	} = target;
 	let client = &context.client;
 	match command {
 		VarCommand::List => {
@@ -151,11 +187,17 @@ pub(super) fn secret(
 	context: &Context,
 	stdin: &mut dyn FnMut() -> Result<SecretInput>,
 ) -> Result<Value> {
+	let target = Target::of(args, context)?;
+	match command {
+		SecretCommand::List => {}
+		SecretCommand::Set { name, .. } => target.announce(args, &format!("Storing {name}")),
+		SecretCommand::Unset { name } => target.announce(args, &format!("Removing {name}")),
+	}
 	let Target {
 		organization,
 		project,
 		environment,
-	} = Target::of(args, context)?;
+	} = target;
 	let client = &context.client;
 	match command {
 		SecretCommand::List => {
@@ -167,10 +209,17 @@ pub(super) fn secret(
 		}
 		SecretCommand::Set { name, from_env } => {
 			let text = match from_env {
+				// Never keep `VarError` as a cause: a value that isn't
+				// UTF-8 would be printed in it.
 				Some(variable) => {
-					std::env::var(variable).with_context(|| {
-						format!("${variable} isn't set, or isn't text. Export it, then retry.")
-					})?
+					std::env::var_os(variable)
+						.with_context(|| format!("${variable} isn't set. Export it, then retry."))?
+						.into_string()
+						.map_err(|_| {
+							anyhow::anyhow!(
+								"${variable} isn't UTF-8 text. Encode the value as base64 first."
+							)
+						})?
 				}
 				None => {
 					match stdin()? {
@@ -250,11 +299,19 @@ pub(super) fn domain(
 	args: &CloudArgs,
 	context: &Context,
 ) -> Result<Value> {
+	let target = Target::of(args, context)?;
+	match command {
+		DomainCommand::List | DomainCommand::Verify { .. } => {}
+		DomainCommand::Add { hostname } => target.announce(args, &format!("Attaching {hostname}")),
+		DomainCommand::Remove { hostname, .. } => {
+			target.announce(args, &format!("Detaching {hostname}"));
+		}
+	}
 	let Target {
 		organization,
 		project,
 		environment,
-	} = Target::of(args, context)?;
+	} = target;
 	let client = &context.client;
 	match command {
 		DomainCommand::List => {
@@ -311,11 +368,13 @@ pub(super) fn deployments(
 }
 
 pub(super) fn rollback(args: &CloudArgs, context: &Context, to: u64) -> Result<Value> {
+	let target = Target::of(args, context)?;
+	target.announce(args, &format!("Rolling back to deployment {to}"));
 	let Target {
 		organization,
 		project,
 		environment,
-	} = Target::of(args, context)?;
+	} = target;
 	value(context.client.rollback(deployments::Rollback {
 		organization,
 		project,
@@ -325,11 +384,19 @@ pub(super) fn rollback(args: &CloudArgs, context: &Context, to: u64) -> Result<V
 }
 
 pub(super) fn db(command: &DbCommand, args: &CloudArgs, context: &Context) -> Result<Value> {
+	let target = Target::of(args, context)?;
+	match command {
+		DbCommand::Show | DbCommand::Backups => {}
+		DbCommand::Backup => target.announce(args, "Backing up the database"),
+		DbCommand::Restore { backup, .. } => {
+			target.announce(args, &format!("Restoring backup {backup}"));
+		}
+	}
 	let Target {
 		organization,
 		project,
 		environment,
-	} = Target::of(args, context)?;
+	} = target;
 	let client = &context.client;
 	match command {
 		DbCommand::Show => {

@@ -340,14 +340,10 @@ impl Context {
 			leptoskit_config::cloud::CloudConfig::default()
 		};
 		let environment_url = std::env::var("LEPTOSKIT_CLOUD_URL").ok();
-		let url = transport::origin(
-			args.url
-				.as_deref()
-				.or(environment_url.as_deref())
-				.or(config.url.as_deref())
-				.unwrap_or(DEFAULT_URL),
-		)?;
+		let explicit = args.url.as_deref().or(environment_url.as_deref());
+		let url = transport::origin(explicit.or(config.url.as_deref()).unwrap_or(DEFAULT_URL))?;
 		let token = std::env::var("LEPTOSKIT_CLOUD_TOKEN").ok().map(Secret::new);
+		check_token_origin(token.is_some(), explicit, &url)?;
 		let client = Client::new(&url, &credentials::Store::default_root()?, token)?;
 		Ok(Self {
 			client,
@@ -380,6 +376,24 @@ impl Context {
 			.or_else(|| self.config.project.as_ref().map(ToString::to_string))
 			.context("Choose a project with --project, or run `lk cloud link`.")
 	}
+}
+
+/// A token from the environment goes only to the hosted cloud, or to an
+/// origin named outside the project: by `--url` or `LEPTOSKIT_CLOUD_URL`.
+/// A `[cloud].url` in a cloned repository must not be able to collect a
+/// CI token, the secrets set with it, or the source archive.
+fn check_token_origin(token: bool, explicit: Option<&str>, url: &str) -> Result<()> {
+	let named = explicit
+		.map(transport::origin)
+		.transpose()?
+		.is_some_and(|origin| origin == url);
+	ensure!(
+		!token || named || url == DEFAULT_URL,
+		"leptoskit.toml points [cloud].url at {}, and LEPTOSKIT_CLOUD_TOKEN only goes to an \
+		 origin you name. Pass --url or set LEPTOSKIT_CLOUD_URL to send it there.",
+		printable(url)
+	);
+	Ok(())
 }
 
 fn value(value: impl Serialize) -> Result<Value> {
@@ -805,6 +819,29 @@ fn set_link_value(document: &mut toml_edit::DocumentMut, key: &str, value: &str)
 	document["cloud"][key] = toml_edit::Item::Value(replacement);
 }
 
+/// Text from the cloud or the organization's own program, safe for a
+/// terminal: control characters other than a line break, and the format
+/// characters that reorder or hide text (bidi overrides and isolates,
+/// zero-width characters, line and paragraph separators), become spaces.
+/// A value can't move the cursor, write the clipboard, retitle the window,
+/// or show itself reversed.
+pub(super) fn printable(text: &str) -> String {
+	text.chars()
+		.map(|c| {
+			let hidden = (c.is_control() && c != '\n')
+				|| matches!(
+					c,
+					'\u{061C}'
+						| '\u{180E}' | '\u{200B}'..='\u{200F}'
+						| '\u{2028}'..='\u{202E}'
+						| '\u{2060}'..='\u{206F}'
+						| '\u{FEFF}' | '\u{FFF9}'..='\u{FFFB}'
+				);
+			if hidden { ' ' } else { c }
+		})
+		.collect()
+}
+
 fn human(value: &Value) -> String {
 	match value {
 		Value::Null => "Done.".into(),
@@ -813,11 +850,11 @@ fn human(value: &Value) -> String {
 		Value::Object(fields) => {
 			fields
 				.iter()
-				.map(|(key, value)| format!("{key}: {}", human(value)))
+				.map(|(key, value)| format!("{}: {}", printable(key), human(value)))
 				.collect::<Vec<_>>()
 				.join("\n")
 		}
-		Value::String(value) => value.clone(),
-		other => other.to_string(),
+		Value::String(value) => printable(value),
+		other => printable(&other.to_string()),
 	}
 }

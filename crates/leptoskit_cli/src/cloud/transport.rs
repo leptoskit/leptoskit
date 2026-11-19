@@ -55,7 +55,10 @@ pub struct Rejected {
 
 impl std::fmt::Display for Rejected {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-		f.write_str(message(&self.code).unwrap_or(&self.message))
+		match message(&self.code) {
+			Some(message) => f.write_str(message),
+			None => f.write_str(&super::printable(&self.message).replace('\n', " ")),
+		}
 	}
 }
 
@@ -220,18 +223,14 @@ impl Reply {
 
 		let mut body = self.body.clone();
 		for secret in secrets {
-			if !secret.expose().is_empty() {
-				body = body.replace(secret.expose(), "[redacted]");
-			}
+			body = redact(&body, secret);
 		}
 		let wire = body.split_once('|').map_or(body.as_str(), |(_, text)| text);
 		let (code, text) = wire.split_once(':').unwrap_or(("request_rejected", wire));
 		let mut message = text.trim().to_owned();
 
 		for secret in secrets {
-			if !secret.expose().is_empty() {
-				message = message.replace(secret.expose(), "[redacted]");
-			}
+			message = redact(&message, secret);
 		}
 
 		Err(Rejected {
@@ -241,6 +240,22 @@ impl Reply {
 		}
 		.into())
 	}
+}
+
+/// `text` without `secret`, as is and as JSON would escape it.
+fn redact(text: &str, secret: &Secret) -> String {
+	let value = secret.expose();
+	if value.is_empty() {
+		return text.to_owned();
+	}
+	let mut text = text.replace(value, "[redacted]");
+	if let Ok(quoted) = serde_json::to_string(value) {
+		let escaped = &quoted[1..quoted.len() - 1];
+		if escaped != value {
+			text = text.replace(escaped, "[redacted]");
+		}
+	}
+	text
 }
 
 pub(super) fn read(
@@ -263,14 +278,19 @@ pub(super) fn read(
 /// its headers, to an `https://` address or `http://` on loopback, never
 /// following a redirect. The address is the credential, so no error
 /// repeats it.
-pub(super) fn put(ticket: &leptoskit_cloud::deployments::UploadTicket, bytes: &[u8]) -> Result<()> {
+pub(super) fn put(
+	ticket: &leptoskit_cloud::deployments::UploadTicket,
+	bytes: &[u8],
+	cloud_is_loopback: bool,
+) -> Result<()> {
 	let url =
 		url::Url::parse(&ticket.url).map_err(|_| anyhow::anyhow!("Invalid upload address."))?;
 	ensure!(
 		ticket.method.eq_ignore_ascii_case("PUT")
 			&& (url.scheme() == "https" || (url.scheme() == "http" && loopback(&url)))
 			&& url.username().is_empty()
-			&& url.password().is_none(),
+			&& url.password().is_none()
+			&& (cloud_is_loopback || !loopback(&url)),
 		"The cloud gave an upload address this CLI won't send to."
 	);
 	let mut config = ureq::Agent::config_builder()
@@ -281,7 +301,9 @@ pub(super) fn put(ticket: &leptoskit_cloud::deployments::UploadTicket, bytes: &[
 		config = config.proxy(None);
 	}
 	let agent: ureq::Agent = config.build().into();
-	let mut request = agent.put(ticket.url.as_str());
+	// Send to the address that was checked, as `url` serializes it, never
+	// the raw string another parser might read differently.
+	let mut request = agent.put(url.as_str());
 	for (name, value) in &ticket.headers {
 		request = request.header(name.as_str(), value.as_str());
 	}

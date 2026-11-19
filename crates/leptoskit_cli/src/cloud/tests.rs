@@ -1061,7 +1061,7 @@ fn cloud_publish_uploads_the_project_once_follows_the_log_and_prints_the_report(
 	let text = stores::report_text(&report);
 	assert!(text.starts_with("What to do next"));
 	assert!(!text.contains('\u{1b}'));
-	assert_eq!(stores::printable("a\u{1b}]0;x\u{7}b\nc"), "a ]0;x b\nc");
+	assert_eq!(printable("a\u{1b}]0;x\u{7}b\nc"), "a ]0;x b\nc");
 }
 
 #[test]
@@ -1073,11 +1073,94 @@ fn cloud_publish_refuses_an_upload_address_that_is_not_secure() {
 		.unwrap()
 	};
 	for refused in [
+		"http://127.0.0.1:9/upload",
 		"http://store.example/upload",
 		"https://user:pass@store.example/upload",
 		"file:///etc/passwd",
 	] {
-		let error = transport::put(&ticket(refused), b"bytes").unwrap_err();
+		let error = transport::put(&ticket(refused), b"bytes", false).unwrap_err();
 		assert!(!format!("{error:?}").contains("store.example"), "{error:?}");
 	}
+}
+
+#[test]
+fn cloud_output_from_the_server_cannot_drive_the_terminal() {
+	let shown = human(&json!({
+		"name\u{1b}[2J": "value\u{1b}]52;c;aGk=\u{7}",
+		"url": "https://store.example/\u{202e}gnp.exe",
+	}));
+	assert!(!shown.contains('\u{1b}'));
+	assert!(!shown.contains('\u{7}'));
+	assert!(!shown.contains('\u{202e}'));
+	let rejected = transport::Reply {
+		status: 400,
+		body: "ServerError|some_new_code: look\u{1b}[1A here".into(),
+	}
+	.result::<Value>(&[])
+	.unwrap_err()
+	.to_string();
+	assert!(!rejected.contains('\u{1b}'), "{rejected}");
+}
+
+#[test]
+fn cloud_refusals_hide_a_secret_even_when_json_escaped() {
+	let secret = Secret::new("pa\"ss\\word".into());
+	let error = transport::Reply {
+		status: 400,
+		body: r#"ServerError|value_not_text: got "pa\"ss\\word""#.into(),
+	}
+	.result::<Value>(&[&secret])
+	.unwrap_err();
+	let rejected = error.downcast_ref::<transport::Rejected>().unwrap();
+	assert!(
+		!format!("{rejected:?}").contains(r#"pa\"ss"#),
+		"{rejected:?}"
+	);
+}
+
+#[test]
+fn cloud_env_token_only_goes_to_an_origin_named_outside_the_project() {
+	// No token: any origin.
+	assert!(check_token_origin(false, None, "https://elsewhere.example").is_ok());
+	// A token goes to the hosted cloud, or to an origin the caller named.
+	assert!(check_token_origin(true, None, DEFAULT_URL).is_ok());
+	assert!(
+		check_token_origin(
+			true,
+			Some("https://self-hosted.example/"),
+			"https://self-hosted.example"
+		)
+		.is_ok()
+	);
+	// Never to one only leptoskit.toml names.
+	let error = check_token_origin(true, None, "https://attacker.example")
+		.unwrap_err()
+		.to_string();
+	assert!(error.contains("LEPTOSKIT_CLOUD_URL"), "{error}");
+	assert!(
+		check_token_origin(
+			true,
+			Some("https://self-hosted.example"),
+			"https://attacker.example"
+		)
+		.is_err()
+	);
+}
+
+#[test]
+fn cloud_publish_refuses_to_pack_a_home_directory() {
+	let home = tempfile::tempdir().unwrap();
+	std::fs::write(home.path().join("leptoskit.toml"), "[app]\nname = \"x\"\n").unwrap();
+	std::fs::create_dir(home.path().join(".ssh")).unwrap();
+	let server = server(|path, _, _| panic!("no call expected, got {path}"));
+	let directory = private_directory();
+	let context = signed_in(
+		&server,
+		&directory,
+		Some(home.path().join("leptoskit.toml")),
+	);
+	let error = execute(&parsed(&["publish", "play"]), &context)
+		.unwrap_err()
+		.to_string();
+	assert!(error.contains("home or system directory"), "{error}");
 }

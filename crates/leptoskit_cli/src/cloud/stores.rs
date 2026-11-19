@@ -20,6 +20,7 @@ use serde_json::Value;
 
 use super::CloudArgs;
 use super::Context;
+use super::printable;
 use super::ship::environment;
 use super::value;
 use crate::publish::steps;
@@ -70,14 +71,31 @@ pub(super) fn publish(
 		.as_deref()
 		.and_then(Path::parent)
 		.context("Run `lk cloud publish` in a project with leptoskit.toml.")?;
+	refuse_root(root)?;
+	super::ship::announce(
+		args,
+		&organization,
+		&project,
+		&environment,
+		&format!(
+			"Publishing to {}{}",
+			stores.join(", "),
+			if submit {
+				", and submitting for review or release,"
+			} else {
+				""
+			}
+		),
+	);
 	let packed = archive::pack(root, &archive::PackOptions::default())
 		.map_err(|error| anyhow::anyhow!("Could not pack the project: {error}."))?;
 	note(
 		args,
 		&format!(
-			"Packed {} files ({} bytes) as {}.",
+			"Packed {} files ({} bytes) from {} as {}.",
 			packed.files.len(),
 			packed.bytes.len(),
+			printable(&root.display().to_string()),
 			packed.digest.as_str()
 		),
 	);
@@ -111,6 +129,31 @@ pub(super) fn publish(
 	ended(args, summary)
 }
 
+/// Refuses to pack a directory that is plainly not one project: the
+/// filesystem's root, the home directory, or one holding SSH keys or this
+/// CLI's own sign-in. A stray `leptoskit.toml` above the project would
+/// otherwise send all of it to the cloud.
+fn refuse_root(root: &Path) -> Result<()> {
+	let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+	let canonical = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+	let is_home = home
+		.as_deref()
+		.and_then(|home| home.canonicalize().ok())
+		.is_some_and(|home| home == canonical);
+	if canonical.parent().is_none()
+		|| is_home
+		|| root.join(".ssh").exists()
+		|| root.join(".config/leptoskit").exists()
+	{
+		bail!(
+			"{} holds leptoskit.toml, but it looks like a home or system directory, not a \
+			 project. Run `lk cloud publish` in the project's own directory.",
+			printable(&root.display().to_string())
+		);
+	}
+	Ok(())
+}
+
 fn upload(
 	context: &Context,
 	organization: &str,
@@ -126,7 +169,7 @@ fn upload(
 	match began {
 		deployments::BeganUpload::Stored { .. } => Ok(()),
 		deployments::BeganUpload::Upload { ticket } => {
-			super::transport::put(&ticket, &packed.bytes)?;
+			super::transport::put(&ticket, &packed.bytes, context.client.is_loopback())?;
 			context
 				.client
 				.complete_upload(deployments::CompleteUpload {
@@ -215,7 +258,7 @@ pub(super) fn report_text(report: &PublishReport) -> String {
 			.iter()
 			.map(|status| {
 				steps::Status {
-					store: printable(&status.store),
+					store: line(&status.store),
 					summary: printable(&status.summary),
 				}
 			})
@@ -225,19 +268,19 @@ pub(super) fn report_text(report: &PublishReport) -> String {
 			.iter()
 			.map(|step| {
 				steps::Step {
-					store: printable(&step.store),
+					store: line(&step.store),
 					by: match step.by {
 						StepTaker::Agent => steps::Who::Agent,
 						StepTaker::Person => steps::Who::Person,
 					},
 					what: printable(&step.what),
-					url: step.url.as_deref().map(printable),
+					url: step.url.as_deref().map(line),
 					enter: step
 						.enter
 						.iter()
 						.map(|field| {
 							steps::Field {
-								label: printable(&field.label),
+								label: line(&field.label),
 								value: printable(&field.value),
 							}
 						})
@@ -251,13 +294,10 @@ pub(super) fn report_text(report: &PublishReport) -> String {
 	.text()
 }
 
-/// Text from the organization's own program, safe for a terminal: control
-/// characters other than a line break become spaces, so a log line can't
-/// move the cursor, retitle the window or hide what follows.
-pub(super) fn printable(text: &str) -> String {
-	text.chars()
-		.map(|c| if c.is_control() && c != '\n' { ' ' } else { c })
-		.collect()
+/// A field that is one line: [`printable`], with line breaks as spaces too,
+/// so it can't fake lines of the report.
+fn line(text: &str) -> String {
+	printable(text).replace('\n', " ")
 }
 
 fn note(args: &CloudArgs, text: &str) {

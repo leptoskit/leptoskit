@@ -109,6 +109,19 @@ impl Client {
 		})
 	}
 
+	/// Whether the cloud is on this machine, as in tests and a local stack.
+	#[must_use]
+	pub fn is_loopback(&self) -> bool {
+		url::Url::parse(&self.origin).is_ok_and(|url| {
+			match url.host() {
+				Some(url::Host::Domain(host)) => host == "localhost",
+				Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+				Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+				None => false,
+			}
+		})
+	}
+
 	/// Whether this invocation uses a CI token rather than a signed-in person.
 	#[must_use]
 	pub fn uses_api_token(&self) -> bool {
