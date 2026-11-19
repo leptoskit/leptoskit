@@ -37,6 +37,9 @@ doc-valid-idents = [
 	"OpenXR",
 	"WebXR",
 	"LiDAR",
+	"WebKit",
+	"TipTap",
+	"ProseMirror",
 	"..",
 ]
 

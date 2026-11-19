@@ -95,6 +95,13 @@ brotli = "8"
 bytemuck = "1"
 bytes = "1"
 camino = "1"
+canvist_extension_clipboard = { git = "https://github.com/canvist/canvist", rev = "ee11cba6ff942d82d30958c8c8612c26c98370dd", default-features = false }
+canvist_extension_document = { git = "https://github.com/canvist/canvist", rev = "ee11cba6ff942d82d30958c8c8612c26c98370dd", default-features = false }
+canvist_extension_hard_break = { git = "https://github.com/canvist/canvist", rev = "ee11cba6ff942d82d30958c8c8612c26c98370dd", default-features = false }
+canvist_extension_history = { git = "https://github.com/canvist/canvist", rev = "ee11cba6ff942d82d30958c8c8612c26c98370dd", default-features = false }
+canvist_extension_paragraph = { git = "https://github.com/canvist/canvist", rev = "ee11cba6ff942d82d30958c8c8612c26c98370dd", default-features = false }
+canvist_headless = { git = "https://github.com/canvist/canvist", rev = "ee11cba6ff942d82d30958c8c8612c26c98370dd", default-features = false }
+canvist_layout = { git = "https://github.com/canvist/canvist", rev = "ee11cba6ff942d82d30958c8c8612c26c98370dd", default-features = false, features = ["editor", "json"] }
 cc = { version = "1", features = ["parallel"] }
 chrono = "0.4"
 clap = "4"
@@ -205,6 +212,7 @@ tower-http = "0.6"
 tract-onnx = { version = "0.23.9", default-features = false }
 trybuild = "1"
 unic-langid = "0.9"
+unicode-segmentation = "1"
 unicode-width = "0.2"
 ureq = { version = "3", default-features = false }
 url = "2"

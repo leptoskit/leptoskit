@@ -279,6 +279,12 @@ type = "cargo"
 path = "crates/leptoskit_3d"
 type = "cargo"
 
+# Outside the release group and unpublished while its canvist dependencies are
+# pinned to a git revision; declared so changesets can name it.
+[package.leptoskit_canvist]
+path = "crates/leptoskit_canvist"
+type = "cargo"
+
 [package.leptoskit_game]
 path = "crates/leptoskit_game"
 type = "cargo"

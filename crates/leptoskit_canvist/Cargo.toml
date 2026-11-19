@@ -1,0 +1,65 @@
+[package]
+name = "leptoskit_canvist"
+version = "0.3.0"
+authors.workspace = true
+categories = ["text-editors", "wasm", "web-programming"]
+edition.workspace = true
+homepage.workspace = true
+keywords = ["editor", "canvas", "rich-text", "leptos", "wasm"]
+license.workspace = true
+# canvist's engine crates are git-pinned until canvist releases its
+# per-extension crates, and Cargo will not publish a crate with git
+# dependencies.
+publish = false
+readme = "readme.md"
+repository.workspace = true
+rust-version.workspace = true
+description = "The canvist text editor for leptoskit: a canvas editor whose browser host is Rust compiled to Wasm, with no hand-written JavaScript."
+
+[dependencies]
+canvist_extension_document = { workspace = true }
+canvist_extension_hard_break = { workspace = true }
+canvist_extension_history = { workspace = true }
+canvist_extension_paragraph = { workspace = true }
+canvist_headless = { workspace = true }
+
+[dev-dependencies]
+unicode-segmentation = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+canvist_extension_clipboard = { workspace = true, optional = true }
+canvist_layout = { workspace = true, optional = true }
+js-sys = { workspace = true, optional = true }
+unicode-segmentation = { workspace = true, optional = true }
+wasm-bindgen = { workspace = true, optional = true }
+wasm-bindgen-futures = { workspace = true, optional = true }
+web-sys = { workspace = true, optional = true, features = ["AbortController", "AbortSignal", "AddEventListenerOptions", "CanvasRenderingContext2d", "ClipboardEvent", "CompositionEvent", "ContextAttributes2d", "CssStyleDeclaration", "DataTransfer", "Document", "DomRect", "DomRectReadOnly", "DomTokenList", "Element", "Event", "EventTarget", "FocusOptions", "FontFace", "FontFaceSet", "FontFaceSetLoadEvent", "HtmlCanvasElement", "HtmlElement", "HtmlTextAreaElement", "IdleRequestOptions", "ImageData", "InputEvent", "KeyboardEvent", "MediaQueryList", "MouseEvent", "Navigator", "Node", "Performance", "PointerEvent", "Range", "ResizeObserver", "ResizeObserverBoxOptions", "ResizeObserverEntry", "ResizeObserverOptions", "ResizeObserverSize", "Text", "TextMetrics", "UiEvent", "Window", "console"] }
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+js-sys = { workspace = true }
+wasm-bindgen = { workspace = true }
+wasm-bindgen-futures = { workspace = true }
+wasm-bindgen-test = { workspace = true }
+web-sys = { workspace = true, features = ["ClipboardEvent", "ClipboardEventInit", "CompositionEvent", "CompositionEventInit", "CssStyleDeclaration", "DataTransfer", "Document", "DomRect", "Element", "Event", "EventInit", "EventTarget", "HtmlCanvasElement", "HtmlElement", "HtmlTextAreaElement", "InputEvent", "InputEventInit", "KeyboardEvent", "KeyboardEventInit", "Node", "NodeList", "PointerEvent", "PointerEventInit", "Window"] }
+
+[features]
+default = []
+# The browser host: `web::attach` and everything behind it. It compiles only
+# for `wasm32`; on every other target the feature adds nothing.
+web = [
+	"dep:canvist_extension_clipboard",
+	"dep:canvist_layout",
+	"dep:js-sys",
+	"dep:unicode-segmentation",
+	"dep:wasm-bindgen",
+	"dep:wasm-bindgen-futures",
+	"dep:web-sys",
+]
+
+[[example]]
+name = "editor"
+crate-type = ["cdylib"]
+required-features = ["web"]
+
+[lints]
+workspace = true
