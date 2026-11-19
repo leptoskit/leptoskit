@@ -617,7 +617,7 @@ private func receivedItems(_ data: Data) -> [ReceivedNotifications.Item] {
     }
     func text() -> String {
         let length = Int(u32())
-        let value = String(decoding: bytes[offset..<(offset + length)], as: UTF8.self)
+        let value = String(bytes: bytes[offset..<(offset + length)], encoding: .utf8) ?? ""
         offset += length
         return value
     }
