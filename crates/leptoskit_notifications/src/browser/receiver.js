@@ -14,7 +14,10 @@
 // job for it is the badge it asked to set. On a click it closes the
 // banner, focuses a window of this origin the person already has, and
 // otherwise opens your inbox route — or the send's own link, when it
-// carries one that resolves to this origin — with the notification's id.
+// carries one that resolves to this origin — with the notification's id,
+// and with the pressed action button's id when the click was on one. As it
+// activates it claims the pages this origin already has open, so the tab a
+// person enrolled from is one a click can route.
 //
 // This worker holds no credentials and calls no server: nothing fetches,
 // nothing evaluates, and no read state changes here — the authenticated app
@@ -246,15 +249,25 @@
 	// origin again at click time — with the notification's id when the
 	// envelope carried one. Payload content cannot add a path, a host, a
 	// scheme, or anything else — a link off this origin is refused here
-	// rather than navigated.
-	function targetUrl(data) {
+	// rather than navigated. A click on one of the banner's action
+	// buttons adds that button's id as `lka`, as a query value the URL
+	// encodes: it can name an action, never a second parameter or a place.
+	function targetUrl(data, action) {
 		const link = data && typeof data.lklink === "string" ? data.lklink : null;
+		const pressed = typeof action === "string" && action.length > 0 &&
+				action.length <= MAX_ACTION_CHARS
+			? action
+			: null;
 
 		if (link) {
 			try {
 				const linked = new URL(link, self.location.origin);
 
 				if (linked.origin === self.location.origin) {
+					if (pressed) {
+						linked.searchParams.set("lka", pressed);
+					}
+
 					return linked.href;
 				}
 			} catch (_error) {
@@ -278,6 +291,10 @@
 
 		if (id) {
 			url.searchParams.set("lkn", id);
+		}
+
+		if (pressed) {
+			url.searchParams.set("lka", pressed);
 		}
 
 		return url.href;
@@ -366,7 +383,12 @@
 	async function open(event) {
 		event.notification.close();
 
-		const url = targetUrl(event.notification && event.notification.data);
+		// `event.action` is the browser's own: the id of the action button
+		// that was pressed, and the empty string for the banner's body.
+		const url = targetUrl(
+			event.notification && event.notification.data,
+			event.action,
+		);
 		let client = null;
 
 		try {
@@ -415,6 +437,22 @@
 		}
 	}
 
+	// One activation: take the pages this origin already has open. A
+	// worker a page has just registered doesn't control that page until
+	// its next load, and `WindowClient.navigate` is refused for a page the
+	// worker doesn't control — so without the claim, a click focuses the
+	// very tab the person enrolled from and leaves it where it was. This
+	// worker handles no fetches, so claiming a page changes nothing about
+	// how that page loads.
+	async function activate() {
+		try {
+			await self.clients.claim();
+		} catch (_error) {
+			// Only the active worker may claim; a refusal leaves pages to
+			// be controlled from their next load, as before.
+		}
+	}
+
 	// The event wiring belongs to a service worker's own global only. A
 	// page that evaluates this script — your build, or the tests — gets
 	// the same functions to call directly, and no listeners.
@@ -423,6 +461,10 @@
 		self.registration !== null &&
 		typeof self.registration.showNotification === "function"
 	) {
+		self.addEventListener("activate", (event) => {
+			event.waitUntil(activate());
+		});
+
 		self.addEventListener("push", (event) => {
 			event.waitUntil(deliver(event));
 		});
@@ -432,5 +474,5 @@
 		});
 	}
 
-	self.lkn = { deliver, envelopeOf, open, targetUrl };
+	self.lkn = { activate, deliver, envelopeOf, open, targetUrl };
 })();

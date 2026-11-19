@@ -20,6 +20,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.fail
 import org.junit.Test
 import java.io.ByteArrayOutputStream
+import java.lang.reflect.InvocationTargetException
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.concurrent.atomic.AtomicInteger
@@ -369,6 +370,93 @@ class NotificationsPluginTest {
                 RemoteRegistration.reset()
             }
         }
+
+    /** A push that names no channel posts through the one the manifest
+     * names as Firebase's default, so that channel has to exist: the plugin
+     * creates it in its own namespace, once, and leaves an existing one —
+     * the app's own wording, the person's own settings — exactly as it is.
+     * An app that isn't push-enabled names none, and gets none. */
+    @Test
+    fun theDefaultPushChannelExistsOnceAndIsNeverOverwritten() =
+        runBlocking {
+            val context = InstrumentationRegistry.getInstrumentation().targetContext
+            val manager = context.getSystemService(NotificationManager::class.java)
+            val id = NotificationsPlugin.PREFIX + "default-${System.nanoTime()}"
+            val plugin = withContext(Dispatchers.Main) { NotificationsPlugin(context) }
+            try {
+                // The fixture app isn't push-enabled: its manifest names no
+                // default channel, so constructing the plugin made none.
+                assertNull(manager.getNotificationChannel(NotificationsPlugin.PREFIX + "default"))
+
+                plugin.ensurePushChannel(manager, null)
+                plugin.ensurePushChannel(manager, "someone-elses-channel")
+                plugin.ensurePushChannel(manager, NotificationsPlugin.PREFIX)
+                assertNull(manager.getNotificationChannel("someone-elses-channel"))
+                assertNull(manager.getNotificationChannel(NotificationsPlugin.PREFIX))
+
+                plugin.ensurePushChannel(manager, id)
+                val created = manager.getNotificationChannel(id)
+                assertNotNull(created)
+                assertEquals(NotificationManager.IMPORTANCE_DEFAULT, created.importance)
+                assertEquals(NotificationsPlugin.DEFAULT_PUSH_CHANNEL_NAME, created.name.toString())
+
+                // The app's own configuration wins from then on.
+                withContext(Dispatchers.Main) {
+                    plugin.invoke(
+                        4,
+                        fields(listOf(id.removePrefix(NotificationsPlugin.PREFIX), "Updates", "From the team"), listOf(1, 0)),
+                    )
+                }
+                plugin.ensurePushChannel(manager, id)
+                assertEquals("Updates", manager.getNotificationChannel(id).name.toString())
+            } finally {
+                manager.deleteNotificationChannel(id)
+                withContext(Dispatchers.Main) { plugin.close() }
+            }
+        }
+
+    /** Firebase without initialization values throws `IllegalStateException`
+     * from a method the plugin calls through reflection, which hands it over
+     * wrapped: the wrapper is opened, so the answer is
+     * `firebase-not-configured` and not the catch-all `os-refused`. */
+    @Test
+    fun aWrappedFirebaseFailureKeepsItsStableCode() {
+        val notConfigured = RemoteRegistration.FailureCode.FIREBASE_NOT_CONFIGURED
+        val refused = RemoteRegistration.FailureCode.OS_REFUSED
+
+        assertEquals(
+            notConfigured,
+            SystemFirebaseRegistrar.registrationFailure(
+                InvocationTargetException(IllegalStateException("Default FirebaseApp is not initialized")),
+            ),
+        )
+        assertEquals(notConfigured, SystemFirebaseRegistrar.registrationFailure(IllegalStateException()))
+        assertEquals(notConfigured, SystemFirebaseRegistrar.registrationFailure(ClassNotFoundException()))
+        assertEquals(notConfigured, SystemFirebaseRegistrar.registrationFailure(NoClassDefFoundError()))
+        assertEquals(
+            refused,
+            SystemFirebaseRegistrar.registrationFailure(InvocationTargetException(SecurityException())),
+        )
+        assertEquals(refused, SystemFirebaseRegistrar.registrationFailure(NoSuchMethodException()))
+    }
+
+    /** The real registrar in an app without Firebase — this fixture carries
+     * no `firebase-messaging` — answers the stable code instead of throwing
+     * or leaving the broker empty. */
+    @Test
+    fun theRealRegistrarWithoutFirebaseAnswersNotConfigured() {
+        RemoteRegistration.reset()
+        try {
+            SystemFirebaseRegistrar.register()
+
+            assertEquals(
+                RemoteRegistration.State.Failed(RemoteRegistration.FailureCode.FIREBASE_NOT_CONFIGURED),
+                RemoteRegistration.current().state,
+            )
+        } finally {
+            RemoteRegistration.reset()
+        }
+    }
 
     /** One snapshot reply, decoded: revision `u64`, state `u32`, string. */
     private class SnapshotReply(

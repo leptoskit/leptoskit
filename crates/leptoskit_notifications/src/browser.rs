@@ -23,8 +23,8 @@
 //!    you need it for a template engine.
 //! 2. Register it once at startup: [`register`] with the script's path
 //!    (`"/sw.js"`) and [`RegisterOptions::default()`], then [`ready`] to wait
-//!    for control. Nothing in this module registers for you: offline caching
-//!    rules and scopes stay yours.
+//!    for an active worker. Nothing in this module registers for you: offline
+//!    caching rules and scopes stay yours.
 //! 3. On **launch**, once the person is signed in, call [`reconcile`]: it
 //!    registers the subscription the browser already holds, if it holds one,
 //!    and answers `None` when it doesn't. It never prompts — reading a
@@ -95,7 +95,7 @@ pub use leptoskit_service_worker::RegisterOptions;
 pub use leptoskit_service_worker::Registration;
 /// The page-side worker API this module's workflow sits on, re-exported
 /// so an app's enrollment code imports one path: register the receiver
-/// ([`register`]), wait for it to control the page ([`ready`]), then
+/// ([`register`]), wait for it to be active ([`ready`]), then
 /// [`enroll`]. Outside a browser these answer the same `Unavailable`
 /// errors [`leptoskit_service_worker`] documents.
 pub use leptoskit_service_worker::get_registration;

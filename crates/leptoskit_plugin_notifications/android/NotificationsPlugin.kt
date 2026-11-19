@@ -17,6 +17,7 @@ import dev.leptoskit.bridge.PluginException
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
+import java.lang.reflect.InvocationTargetException
 import java.lang.reflect.Proxy
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -159,10 +160,13 @@ internal fun interface FirebaseRegistrar {
 /** Asks `FirebaseMessaging` for its token without a compile-time Firebase
  * dependency: the app carries `firebase-messaging` only when
  * `[native.android] push` opts it in, so the classes resolve reflectively and
- * their absence is the contract's own `firebase-not-configured` answer.
- * Tokens cross into the broker and are never logged. */
+ * their absence is the contract's own `firebase-not-configured` answer. A
+ * push-enabled release build keeps these names from R8 with the rules
+ * generation writes beside the bridge's own. Tokens cross into the broker
+ * and are never logged. */
 internal object SystemFirebaseRegistrar : FirebaseRegistrar {
     private const val MESSAGING = "com.google.firebase.messaging.FirebaseMessaging"
+    private const val TASK = "com.google.android.gms.tasks.Task"
     private const val SUCCESS = "com.google.android.gms.tasks.OnSuccessListener"
     private const val FAILURE = "com.google.android.gms.tasks.OnFailureListener"
 
@@ -172,6 +176,7 @@ internal object SystemFirebaseRegistrar : FirebaseRegistrar {
             val messaging = Class.forName(MESSAGING, false, loader)
             val instance = messaging.getMethod("getInstance").invoke(null)
             val task = messaging.getMethod("getToken").invoke(instance)
+            val tasks = Class.forName(TASK, false, loader)
             val success = Class.forName(SUCCESS, false, loader)
             val failure = Class.forName(FAILURE, false, loader)
             val listener =
@@ -204,16 +209,39 @@ internal object SystemFirebaseRegistrar : FirebaseRegistrar {
                         }
                     }
                 }
-            task.javaClass.getMethod("addOnSuccessListener", success).invoke(task, listener)
-            task.javaClass.getMethod("addOnFailureListener", failure).invoke(task, listener)
-        } catch (absent: ClassNotFoundException) {
-            RemoteRegistration.noteFailure(RemoteRegistration.FailureCode.FIREBASE_NOT_CONFIGURED)
+            // Looked up on the public `Task` type, not on the returned
+            // task's own class: the SDK's implementation class is its own
+            // business, and reflection refuses a method found through a
+            // class that isn't public.
+            tasks.getMethod("addOnSuccessListener", success).invoke(task, listener)
+            tasks.getMethod("addOnFailureListener", failure).invoke(task, listener)
         } catch (absent: NoClassDefFoundError) {
-            RemoteRegistration.noteFailure(RemoteRegistration.FailureCode.FIREBASE_NOT_CONFIGURED)
-        } catch (uninitialized: IllegalStateException) {
-            RemoteRegistration.noteFailure(RemoteRegistration.FailureCode.FIREBASE_NOT_CONFIGURED)
+            RemoteRegistration.noteFailure(registrationFailure(absent))
         } catch (refused: Exception) {
-            RemoteRegistration.noteFailure(RemoteRegistration.FailureCode.OS_REFUSED)
+            RemoteRegistration.noteFailure(registrationFailure(refused))
+        }
+    }
+
+    /**
+     * Maps what the reflective registration threw to its stable code. A
+     * method called through reflection reports what it threw wrapped in an
+     * `InvocationTargetException`, so the wrapper is opened first: Firebase
+     * without initialization values throws `IllegalStateException` from
+     * `getInstance`, and that is `firebase-not-configured` however it
+     * arrives. Missing Firebase classes are the same answer; everything
+     * else is the OS's refusal. Matched on the exception family, never on
+     * error text.
+     */
+    internal fun registrationFailure(error: Throwable): String {
+        val cause = if (error is InvocationTargetException) error.targetException ?: error else error
+
+        return when (cause) {
+            is ClassNotFoundException,
+            is NoClassDefFoundError,
+            is IllegalStateException,
+            -> RemoteRegistration.FailureCode.FIREBASE_NOT_CONFIGURED
+
+            else -> RemoteRegistration.FailureCode.OS_REFUSED
         }
     }
 }
@@ -280,6 +308,17 @@ class NotificationsPlugin internal constructor(
     companion object {
         /** The notification tag and channel prefix the plugin owns. */
         internal const val PREFIX = "leptoskit.notifications."
+
+        /** The manifest entry that names the channel Firebase posts a push
+         * through when the send names none. Generation writes it, naming
+         * `leptoskit.notifications.default`, while `[native.android] push`
+         * is on. */
+        internal const val DEFAULT_PUSH_CHANNEL_KEY = "com.google.firebase.messaging.default_notification_channel_id"
+
+        /** What the default push channel is called in the system's settings
+         * until the app configures the `default` channel with its own
+         * wording. */
+        internal const val DEFAULT_PUSH_CHANNEL_NAME = "Notifications"
 
         /**
          * Uses `@drawable/ic_notification` when `[app.icons]` generated one,
@@ -355,6 +394,44 @@ class NotificationsPlugin internal constructor(
     private val manager = context.getSystemService(NotificationManager::class.java)
     private var closed = false
     private val registering = AtomicBoolean(false)
+
+    init {
+        manager?.let { ensurePushChannel(it, manifestPushChannel()) }
+    }
+
+    /** The channel the app's manifest names as Firebase's default, when it
+     * names one: only a push-enabled app does. */
+    private fun manifestPushChannel(): String? =
+        try {
+            @Suppress("DEPRECATION")
+            context.packageManager
+                .getApplicationInfo(context.packageName, PackageManager.GET_META_DATA)
+                .metaData
+                ?.getString(DEFAULT_PUSH_CHANNEL_KEY)
+        } catch (_: PackageManager.NameNotFoundException) {
+            null
+        }
+
+    /**
+     * Makes the default push channel exist. Firebase posts a push that
+     * names no channel — or one that doesn't exist — through the channel
+     * the manifest names, and falls back to a "Miscellaneous" channel of
+     * its own when that one is missing too. Only a channel in the plugin's
+     * own namespace is created, and one that already exists is left exactly
+     * as the app or the person set it: `configure_channel` with the id
+     * `default` renames and reshapes it.
+     */
+    internal fun ensurePushChannel(
+        manager: NotificationManager,
+        id: String?,
+    ) {
+        if (id == null || !id.startsWith(PREFIX) || id.length == PREFIX.length) return
+        if (manager.getNotificationChannel(id) != null) return
+
+        manager.createNotificationChannel(
+            NotificationChannel(id, DEFAULT_PUSH_CHANNEL_NAME, NotificationManager.IMPORTANCE_DEFAULT),
+        )
+    }
 
     override suspend fun invoke(
         method: Int,

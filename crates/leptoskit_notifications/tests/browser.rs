@@ -129,7 +129,14 @@ fn install_fakes() {
 				},
 			};
 			w.registration = w.__lknRegistration;
+			w.__lknClaimed = 0;
 			w.clients = {
+				// Recorded after one microtask, so a caller that doesn't
+				// wait for the claim is caught not waiting.
+				claim: async () => {
+					await Promise.resolve();
+					w.__lknClaimed += 1;
+				},
 				matchAll: async () => w.__lknClients,
 				openWindow: async (url) => {
 					w.__lknOpened.push(url);
@@ -176,9 +183,12 @@ fn install_fakes() {
 				dispatchable.waitUntil = event.waitUntil;
 				w.dispatchEvent(dispatchable);
 			};
-			w.__lknClickEvent = (data) => {
+			w.__lknClickEvent = (data, action) => {
 				const pending = [];
 				const event = {
+					// The browser's own: the pressed button's id, and the
+					// empty string for a click on the banner's body.
+					action: action == null ? "" : action,
 					notification: {
 						// The browser hands the click a structured clone
 						// of the options' data: an object, not text.
@@ -209,6 +219,7 @@ fn remove_fakes() {
 				"__lknShown", "__lknOpened", "__lknFocused", "__lknNavigated",
 				"__lknClosed", "__lknPending", "__lknClients", "__lknBadges",
 				"__lknRegistration", "__lknPushEvent", "__lknClickEvent",
+				"__lknClaimed",
 			]) {
 				delete w[name];
 			}
@@ -296,12 +307,22 @@ fn push_event(text: &str, byte_length: Option<u32>) -> js_sys::Object {
 }
 
 fn click_event(data: &str) -> js_sys::Object {
+	action_click_event(data, None)
+}
+
+/// A click on one of the banner's action buttons, or on its body when
+/// `action` is `None`.
+fn action_click_event(data: &str, action: Option<&str>) -> js_sys::Object {
 	let make = js_sys::Reflect::get(&window().into(), &JsValue::from_str("__lknClickEvent"))
 		.expect("the click factory")
 		.dyn_into::<js_sys::Function>()
 		.expect("a function");
 	let call = make
-		.call1(&JsValue::UNDEFINED, &JsValue::from_str(data))
+		.call2(
+			&JsValue::UNDEFINED,
+			&JsValue::from_str(data),
+			&action.map_or(JsValue::UNDEFINED, JsValue::from_str),
+		)
 		.expect("an event");
 	call.dyn_into().expect("an event object")
 }
@@ -327,6 +348,20 @@ async fn click(data: &str) {
 		.expect("a function");
 	let promise = open
 		.call1(&lkn_namespace().into(), &click_event(data).into())
+		.expect("a promise");
+	as_promise(promise).await.expect("the click settled");
+}
+
+async fn click_action(data: &str, action: &str) {
+	let open = js_sys::Reflect::get(&lkn_namespace(), &JsValue::from_str("open"))
+		.expect("open")
+		.dyn_into::<js_sys::Function>()
+		.expect("a function");
+	let promise = open
+		.call1(
+			&lkn_namespace().into(),
+			&action_click_event(data, Some(action)).into(),
+		)
 		.expect("a promise");
 	as_promise(promise).await.expect("the click settled");
 }
@@ -783,6 +818,95 @@ async fn a_click_without_a_window_opens_the_route_with_the_id() {
 
 	assert_eq!(count("__lknClosed"), 1);
 	assert_eq!(opened(), vec![format!("{}/inbox?lkn={}", origin(), id)]);
+
+	remove_fakes();
+}
+
+/// A worker a page has just registered doesn't control that page until
+/// its next load, and `WindowClient.navigate` is refused for a page the
+/// worker doesn't control: the tab a person enrolled from would be
+/// focused by a click and left where it was. Claiming on activation is
+/// what puts that tab within the click's reach.
+#[wasm_bindgen_test]
+async fn activating_claims_the_pages_already_open() {
+	install_fakes();
+	install_script();
+
+	let activate = js_sys::Reflect::get(&lkn_namespace(), &JsValue::from_str("activate"))
+		.expect("the namespace")
+		.dyn_into::<js_sys::Function>()
+		.expect("the receiver exports its activate handler");
+	let promise = activate.call0(&lkn_namespace().into()).expect("a promise");
+	assert_eq!(count("__lknClaimed"), 0, "the claim is asynchronous");
+	as_promise(promise).await.expect("activation settled");
+	assert_eq!(
+		count("__lknClaimed"),
+		1,
+		"the open pages are claimed inside the activation's lifetime"
+	);
+
+	// The registered listener hands that same work to `waitUntil`, so the
+	// browser keeps the worker alive until the claim lands.
+	eval(
+		r#"
+		(() => {
+			const event = new Event("activate");
+			event.waitUntil = (promise) => { window.__lknPending.push(promise); };
+			window.dispatchEvent(event);
+		})();
+	"#,
+	);
+	let lifetime = counter("__lknPending")
+		.pop()
+		.dyn_into::<js_sys::Promise>()
+		.expect("the activation registered a lifetime");
+	as_promise(lifetime.into())
+		.await
+		.expect("the lifetime resolves");
+	assert!(count("__lknClaimed") >= 2, "the listener claims too");
+
+	remove_fakes();
+}
+
+/// A banner's action buttons are not the banner's body: the click says
+/// which one was pressed, and the page the click opens is told — as
+/// `lka` beside the notification's id — instead of every button behaving
+/// like a plain click.
+#[wasm_bindgen_test]
+async fn an_action_button_click_carries_its_action_to_the_page() {
+	install_fakes();
+	install_script();
+	install_clients();
+
+	let id = notification_id();
+	click_action(&format!(r#"{{"lkn":"{id}"}}"#), "approve").await;
+	wait_for_handlers().await;
+	assert_eq!(
+		navigated(),
+		vec![format!("{}/inbox?lkn={id}&lka=approve", origin())],
+		"the pressed action rides the route"
+	);
+
+	// The send's own link carries it too, and the value is encoded: an
+	// action id is the sender's text, never a second query parameter.
+	click_action(
+		&format!(r#"{{"lkn":"{id}","lklink":"/invoice/42?tab=pay"}}"#),
+		"a&b=c",
+	)
+	.await;
+	wait_for_handlers().await;
+	assert_eq!(
+		navigated()[1],
+		format!("{}/invoice/42?tab=pay&lka=a%26b%3Dc", origin())
+	);
+
+	// A click on the body — the browser's empty action — adds nothing,
+	// and neither does an action longer than any the service sends.
+	click(&format!(r#"{{"lkn":"{id}"}}"#)).await;
+	click_action(&format!(r#"{{"lkn":"{id}"}}"#), &"x".repeat(101)).await;
+	wait_for_handlers().await;
+	let plain = format!("{}/inbox?lkn={id}", origin());
+	assert_eq!(navigated()[2..], [plain.clone(), plain]);
 
 	remove_fakes();
 }

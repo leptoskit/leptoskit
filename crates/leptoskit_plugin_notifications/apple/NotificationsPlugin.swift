@@ -187,9 +187,14 @@ public enum RemoteRegistration {
 private final class SystemNotificationService: NotificationService {
     private let center = UNUserNotificationCenter.current()
     func authorization() async -> UNAuthorizationStatus { await center.notificationSettings().authorizationStatus }
-    // Notifications are silent on Apple, so asking for sound would request
-    // a permission the plugin never uses.
-    func requestAuthorization() async throws { _ = try await center.requestAuthorization(options: [.alert]) }
+    // Alerts, badges, and sounds together: the one question covers what a
+    // push from the notifications service can carry (`aps.badge`,
+    // `aps.sound`), and the system applies only what the person allowed.
+    // Asking for alerts alone left a push's badge and sound without effect.
+    // The plugin's own local posts stay silent and set no badge.
+    func requestAuthorization() async throws {
+        _ = try await center.requestAuthorization(options: NotificationsPlugin.authorizationOptions)
+    }
     func add(_ request: UNNotificationRequest) async throws { try await center.add(request) }
     func identifiers() async -> [String] {
         let pending = await center.pendingNotificationRequests().map(\.identifier)
@@ -215,6 +220,11 @@ public final class NotificationsPlugin: NativePlugin {
     #else
     public let methods: [UInt32] = [0, 1, 2, 3, 6]
     #endif
+    /// What the permission request asks the person to allow. Alerts alone
+    /// would leave a push's badge (`aps.badge`) and sound (`aps.sound`)
+    /// without effect: the system applies only what was asked for and
+    /// granted.
+    static let authorizationOptions: UNAuthorizationOptions = [.alert, .badge, .sound]
     /// The longest device detail a `DEVICE` reply carries, in bytes,
     /// matching the Rust contract's `MAX_DEVICE_DETAIL_BYTES`.
     static let maxDeviceDetailBytes = 256

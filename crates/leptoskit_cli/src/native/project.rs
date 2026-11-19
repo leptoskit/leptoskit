@@ -157,6 +157,34 @@ const MESSAGING_SERVICE: &str = "dev.leptoskit.plugins.notifications.LeptosKitMe
 /// exactly what turning it on wrote.
 const MESSAGING_SERVICE_FILE: &str = "LeptosKitMessagingService.kt";
 
+/// The intent action Firebase resolves an app's messaging service by. A
+/// service declared without it is never chosen: every event goes to the
+/// SDK's own default service instead.
+const MESSAGING_EVENT: &str = "com.google.firebase.MESSAGING_EVENT";
+
+/// The manifest entry naming the channel Firebase posts a push through when
+/// the message names none, or names one the device doesn't have.
+const DEFAULT_CHANNEL_KEY: &str = "com.google.firebase.messaging.default_notification_channel_id";
+
+/// The default push channel: the notifications plugin's `default` channel,
+/// under the prefix the plugin gives every channel it creates. The plugin
+/// creates it when the app starts and the manifest names it.
+const DEFAULT_CHANNEL: &str = "leptoskit.notifications.default";
+
+/// The manifest entry naming the small icon Firebase shows for a push.
+const DEFAULT_ICON_KEY: &str = "com.google.firebase.messaging.default_notification_icon";
+
+/// The drawable `[app.icons] notification` generates, which the
+/// notifications plugin also uses for local posts.
+const NOTIFICATION_ICON: &str = "ic_notification";
+
+/// What a push-enabled release build keeps from R8. The notifications
+/// plugin compiles without Firebase, so it reaches `FirebaseMessaging` and
+/// the task's listeners by name at runtime; a shrunk build renames or
+/// removes names nothing refers to in code, and registration would then
+/// answer `firebase-not-configured`, `os-refused`, or nothing at all.
+const PUSH_KEEP_RULES: &str = include_str!("templates/push-proguard-rules.pro");
+
 /// The Gradle-plugins data file the app's build script reads: each line is
 /// applied as a plugin id, and the file exists only while the app is
 /// push-enabled, so an existing app's script applies nothing until
@@ -209,8 +237,29 @@ fn validate_android_push(
 		 }}\n",
 		script_path.display()
 	);
+	anyhow::ensure!(
+		!applies_plugins_as_scripts(&script),
+		"{} applies the plugins in .leptoskit/android/{GRADLE_PLUGINS_FILE} with `apply(plugin)`, \
+		 which Gradle reads as a script path: the build would fail looking for a file named \
+		 {GOOGLE_SERVICES_PLUGIN}. Change that call to `apply(plugin = plugin)`.",
+		script_path.display()
+	);
 
 	Ok(())
+}
+
+/// Whether the app's Gradle script still carries the scaffold's earlier
+/// plugin loop, which passed each plugin id as `apply`'s first positional
+/// argument. In Gradle's Kotlin scripts that argument is `from`, a script
+/// to read, so the Google services plugin was never applied and the build
+/// stopped on a script that doesn't exist.
+fn applies_plugins_as_scripts(script: &str) -> bool {
+	let compact: String = script
+		.chars()
+		.filter(|character| !character.is_whitespace())
+		.collect();
+
+	compact.contains("->apply(plugin)}") || compact.contains("{apply(it)}")
 }
 
 /// Apps scaffolded before the CLI generated its R8 rules list only their own
@@ -309,8 +358,10 @@ fn android(
 /// The generated half of the Android host, for a phone or, with `quest`, for
 /// a Meta Quest headset. `[native.android] push` adds the Firebase pieces:
 /// the messaging dependency, the Google services plugin's data file, the
-/// messaging service source, and its manifest declaration. With push off,
-/// none of it is written and stale copies of all of it are removed.
+/// messaging service source, its manifest declaration with Firebase's
+/// intent filter, the default channel and icon entries, and the keep rules
+/// for the names the plugin reaches by reflection. With push off, none of
+/// it is written and stale copies of all of it are removed.
 fn android_host(
 	root: &Path,
 	config: &leptoskit_config::LeptoskitConfig,
@@ -327,10 +378,7 @@ fn android_host(
 	)?;
 	write(&dir.join("abi.txt"), abi)?;
 	push_plugins_file(&dir, push)?;
-	copy(
-		&registry.bridge.join("android/proguard-rules.pro"),
-		&dir.join("proguard-rules.pro"),
-	)?;
+	write_keep_rules(registry, &dir, push)?;
 	let sources = dir.join("sources");
 	prepare_android_sources(registry, &sources)?;
 	let mut kotlin = String::from(
@@ -384,6 +432,7 @@ fn android_host(
 			name: MESSAGING_SERVICE.to_owned(),
 			foreground_service_type: String::new(),
 			exported: false,
+			actions: vec![MESSAGING_EVENT.to_owned()],
 		});
 	}
 
@@ -444,6 +493,27 @@ fn android_host(
 	}
 
 	manifest = android_file_providers(registry, &res, &manifest)?;
+
+	if push {
+		// The generated resources are final here, so the manifest names the
+		// notification icon only when the build will find it: generation
+		// wrote the drawable, and the app's script adds the generated
+		// resources to the build.
+		let icon = res
+			.join(format!("drawable-mdpi/{NOTIFICATION_ICON}.png"))
+			.is_file()
+			&& android_res_warning(root).is_none();
+
+		if !icon {
+			crate::ui::warning(
+				"warning: native.android.push is on and the app has no notification icon, so a \
+				 push shows the launcher icon's outline, which Android draws as a plain white \
+				 shape. Set `notification` under [app.icons] to a white-on-transparent image.",
+			);
+		}
+
+		manifest = super::manifest::with_meta_data(&manifest, &push_meta_data(icon))?;
+	}
 
 	// Quest packages the same host for the headset: its manifest says so.
 	if let Some(quest) = quest {
@@ -574,6 +644,46 @@ fn android_dependencies(registry: &Registry, push: bool) -> String {
 	output
 }
 
+/// The `<meta-data>` a push-enabled app's manifest carries for Firebase: the
+/// default channel always, and the small icon when the app generated one.
+/// Naming a drawable that doesn't exist would stop the build, and without
+/// either entry Firebase posts through its own "Miscellaneous" channel with
+/// the launcher icon.
+fn push_meta_data(icon: bool) -> Vec<super::manifest::MetaData<'static>> {
+	let mut entries = vec![super::manifest::MetaData {
+		name: DEFAULT_CHANNEL_KEY,
+		attribute: "value",
+		value: DEFAULT_CHANNEL.to_owned(),
+	}];
+
+	if icon {
+		entries.push(super::manifest::MetaData {
+			name: DEFAULT_ICON_KEY,
+			attribute: "resource",
+			value: format!("@drawable/{NOTIFICATION_ICON}"),
+		});
+	}
+
+	entries
+}
+
+/// Writes the R8 keep rules the app's release build reads: the bridge's own,
+/// and, while push is on, the Firebase names the notifications plugin looks
+/// up by reflection. With push off the file is the bridge's, byte for byte.
+fn write_keep_rules(registry: &Registry, dir: &Path, push: bool) -> Result<()> {
+	let source = registry.bridge.join("android/proguard-rules.pro");
+	let destination = dir.join("proguard-rules.pro");
+
+	if !push {
+		return copy(&source, &destination);
+	}
+
+	let mut rules =
+		std::fs::read_to_string(&source).with_context(|| format!("read {}", source.display()))?;
+	rules.push_str(PUSH_KEEP_RULES);
+	write(&destination, &rules)
+}
+
 /// Writes the Gradle-plugins data file while push is on, and removes a stale
 /// one when push turns off, so the app's script applies nothing rather than
 /// a plugin whose configuration generation no longer writes.
@@ -615,6 +725,7 @@ fn android_services(registry: &Registry) -> Vec<super::manifest::services::Servi
 				name: service.name.clone(),
 				foreground_service_type: service.foreground_service_type.clone(),
 				exported: service.exported,
+				actions: Vec::new(),
 			}
 		})
 		.collect()

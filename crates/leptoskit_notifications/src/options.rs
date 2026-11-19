@@ -226,9 +226,11 @@ pub struct WebPushAction {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub struct AndroidOptions {
-	/// The notification channel it posts through. The channel must exist
-	/// (the local-notifications plugin configures one) or Android drops
-	/// the post.
+	/// The notification channel it posts through: the id the app gave the
+	/// local-notifications plugin's `configure_channel`. The service sends
+	/// it under the prefix the plugin creates channels with
+	/// (`leptoskit.notifications.`). A channel the device doesn't have
+	/// falls back to the app's default push channel.
 	pub channel_id: Option<String>,
 	/// The accent color, `#RRGGBB` exactly.
 	pub color: Option<String>,

@@ -706,8 +706,14 @@ fn fcm_android(message: &Message, include: Include, ttl: Option<i64>) -> serde_j
 	let mut notification = serde_json::Map::new();
 
 	if let Some(android_options) = message.options.android.as_ref() {
+		if let Some(channel) = android_options.channel_id.as_deref() {
+			notification.insert(
+				"channel_id".to_owned(),
+				serde_json::json!(android_channel(channel)),
+			);
+		}
+
 		let fields = [
-			("channel_id", android_options.channel_id.as_deref()),
 			("color", android_options.color.as_deref()),
 			("icon", android_options.icon.as_deref()),
 			("tag", android_options.tag.as_deref()),
@@ -745,6 +751,25 @@ fn fcm_android(message: &Message, include: Include, ttl: Option<i64>) -> serde_j
 	}
 
 	android
+}
+
+/// The prefix the local-notifications plugin gives every Android channel it
+/// creates: `configure_channel` with the id `inbox` makes the channel
+/// `leptoskit.notifications.inbox`.
+const ANDROID_CHANNEL_PREFIX: &str = "leptoskit.notifications.";
+
+/// The channel id Android knows a send's `android.channel_id` by. A send
+/// names the id the app gave the plugin, and the device holds that channel
+/// under the plugin's prefix, so the prefix is added here: the raw id names
+/// no channel, and Firebase posts a message whose channel doesn't exist
+/// through its fallback instead. An id that already carries the prefix is
+/// sent as it is, so the full name works too.
+fn android_channel(id: &str) -> std::borrow::Cow<'_, str> {
+	if id.starts_with(ANDROID_CHANNEL_PREFIX) {
+		std::borrow::Cow::Borrowed(id)
+	} else {
+		std::borrow::Cow::Owned(format!("{ANDROID_CHANNEL_PREFIX}{id}"))
+	}
 }
 
 /// The `apns` block FCM serves an iOS app through the same project: the
@@ -1013,6 +1038,20 @@ fn retry_after(response: &WireResponse) -> Option<Duration> {
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[test]
+	fn a_channel_id_is_sent_under_the_plugins_prefix_exactly_once() {
+		assert_eq!(android_channel("inbox"), "leptoskit.notifications.inbox");
+		assert_eq!(
+			android_channel("leptoskit.notifications.inbox"),
+			"leptoskit.notifications.inbox"
+		);
+		// Only the whole prefix counts as already carrying it.
+		assert_eq!(
+			android_channel("leptoskit.inbox"),
+			"leptoskit.notifications.leptoskit.inbox"
+		);
+	}
 
 	#[test]
 	fn quota_minimum_and_server_retry_after_are_honored() {

@@ -16,6 +16,9 @@ pub struct ServiceComponent {
 	pub name: String,
 	pub foreground_service_type: String,
 	pub exported: bool,
+	/// The intent actions the service answers, one `<intent-filter>` each.
+	/// Empty for a service only its own app starts by class.
+	pub actions: Vec<String>,
 }
 
 /// A plugin-declared Android `<receiver>` with its intent-filter actions.
@@ -82,19 +85,33 @@ fn insertion(
 			continue;
 		}
 
-		if service.foreground_service_type.is_empty() {
-			writeln!(
+		write!(
+			additions,
+			"<service {prefix}:name=\"{}\" {prefix}:exported=\"{}\"",
+			service.name, service.exported
+		)?;
+
+		if !service.foreground_service_type.is_empty() {
+			write!(
 				additions,
-				"<service {prefix}:name=\"{}\" {prefix}:exported=\"{}\"/>",
-				service.name, service.exported
+				" {prefix}:foregroundServiceType=\"{}\"",
+				service.foreground_service_type
 			)?;
+		}
+
+		if service.actions.is_empty() {
+			additions.push_str("/>\n");
 		} else {
-			writeln!(
-				additions,
-				"<service {prefix}:name=\"{}\" {prefix}:exported=\"{}\" \
-				 {prefix}:foregroundServiceType=\"{}\"/>",
-				service.name, service.exported, service.foreground_service_type
-			)?;
+			additions.push_str(">\n");
+
+			for action in &service.actions {
+				writeln!(
+					additions,
+					"<intent-filter><action {prefix}:name=\"{action}\"/></intent-filter>"
+				)?;
+			}
+
+			additions.push_str("</service>\n");
 		}
 	}
 
@@ -159,6 +176,7 @@ mod tests {
 			name: "dev.leptoskit.plugins.background.BackgroundService".into(),
 			foreground_service_type: "dataSync|health".into(),
 			exported: false,
+			actions: Vec::new(),
 		}];
 		let receivers = [ReceiverComponent {
 			name: "dev.leptoskit.plugins.background.BootReceiver".into(),
@@ -186,12 +204,36 @@ mod tests {
 	}
 
 	#[test]
+	fn a_service_with_actions_gets_one_intent_filter_each() {
+		let source = r#"<manifest xmlns:android="http://schemas.android.com/apk/res/android"><application/></manifest>"#;
+		let services = [ServiceComponent {
+			name: "dev.example.Messaging".into(),
+			foreground_service_type: String::new(),
+			exported: false,
+			actions: vec!["com.google.firebase.MESSAGING_EVENT".into()],
+		}];
+		let output = app_components(source, &services, &[]).unwrap();
+
+		assert!(
+			output.contains(
+				"<service android:name=\"dev.example.Messaging\" \
+				 android:exported=\"false\">\n<intent-filter><action \
+				 android:name=\"com.google.firebase.MESSAGING_EVENT\"/></intent-filter>\n</\
+				 service>"
+			),
+			"{output}"
+		);
+		assert_eq!(app_components(&output, &services, &[]).unwrap(), output);
+	}
+
+	#[test]
 	fn respects_app_owned_declarations_and_self_closing_application() {
 		let source = r#"<manifest xmlns:a="http://schemas.android.com/apk/res/android"><application a:name=".App"><service a:name="dev.leptoskit.plugins.background.BackgroundService" a:exported="false"/></application></manifest>"#;
 		let services = [ServiceComponent {
 			name: "dev.leptoskit.plugins.background.BackgroundService".into(),
 			foreground_service_type: "dataSync".into(),
 			exported: true,
+			actions: Vec::new(),
 		}];
 		let output = app_components(source, &services, &[]).unwrap();
 		assert_eq!(output, source);

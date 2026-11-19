@@ -64,7 +64,8 @@ pub const OUTPUT: &str = ".leptoskit/release";
 pub struct ReleaseOptions {
 	/// Build the release without signing it: an APK or app no store takes,
 	/// for measuring or testing. Without it, an Android, Quest, or iOS
-	/// release is signed, or not built.
+	/// release is signed, or not built. A push-enabled macOS app is built
+	/// ad-hoc signed and without its push entitlement.
 	#[arg(long, requires = "release")]
 	pub unsigned: bool,
 	/// Who an iOS release's `.ipa` is for: app-store-connect, ad-hoc, or

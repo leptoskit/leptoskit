@@ -18,7 +18,7 @@ use sha2::Digest;
 use sha2::Sha256;
 
 pub(crate) mod config;
-mod desktop;
+pub(crate) mod desktop;
 mod guest_profile;
 mod harmonyos;
 mod lock;
@@ -496,7 +496,16 @@ pub fn run(command: NativeCommand) -> Result<()> {
 	if build {
 		match &signing {
 			Some(signing) => build_signed(&root, &config, target, signing, &options)?,
-			None => build_application(&root, &config, target, release, options.build_number)?,
+			None => {
+				build_application(
+					&root,
+					&config,
+					target,
+					release,
+					options.build_number,
+					options.unsigned,
+				)?;
+			}
 		}
 
 		if !matches!(signing, Some(signing::Signing::Ios(_))) {
@@ -841,9 +850,10 @@ fn build_application(
 	target: Target,
 	release: bool,
 	build_number: Option<u64>,
+	unsigned: bool,
 ) -> Result<()> {
 	match target {
-		Target::Macos => desktop::build(root, config, release),
+		Target::Macos => desktop::build(root, config, release, unsigned),
 		Target::Windows | Target::Linux | Target::Tui => unreachable!("desktop hosts built above"),
 		Target::Harmonyos | Target::HarmonyosX86_64 => harmonyos::build(root, release),
 		Target::Wearos | Target::Watchos => watch::build(target),
@@ -3619,10 +3629,16 @@ exit "${LEPTOSKIT_TEST_POD_STATUS:-0}"
 			.unwrap_err()
 			.to_string();
 			assert!(build_error.contains("experimental"), "{build_error}");
-			let packaging =
-				build_application(&root, &LeptoskitConfig::default(), target, false, None)
-					.unwrap_err()
-					.to_string();
+			let packaging = build_application(
+				&root,
+				&LeptoskitConfig::default(),
+				target,
+				false,
+				None,
+				false,
+			)
+			.unwrap_err()
+			.to_string();
 			assert!(packaging.contains("experimental"), "{packaging}");
 			std::env::set_current_dir(&previous).unwrap();
 			let _ = std::fs::remove_dir_all(&root);

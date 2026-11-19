@@ -40,6 +40,11 @@ pub struct Plan<'a> {
 	/// opts it into push. Re-signing drops a built bundle's entitlements, so
 	/// the distribution passes them again.
 	pub entitlements: Option<&'a Path>,
+	/// The provisioning profile a push-enabled app embeds, from
+	/// `[native.macos] provisioning-profile`. Apple's push entitlement is
+	/// restricted: macOS launches an app that claims it only with a
+	/// matching profile at `Contents/embedded.provisionprofile`.
+	pub provisioning_profile: Option<&'a Path>,
 }
 
 /// What a distribution wrote.
@@ -174,6 +179,10 @@ pub fn distribute(runner: &dyn Runner, plan: &Plan<'_>, key: &KeyFile) -> Result
 		set_versions(plist, plan.version, plan.build)?;
 	}
 
+	// The profile is part of what the signature seals, so it goes in first.
+	// A build made for a distribution carries none of its own.
+	crate::native::desktop::embed_profile(&artifacts.app, plan.provisioning_profile)?;
+
 	// Inside out: the extension is sealed before the app that contains it.
 	if let Some(entitlements) = extension {
 		runner.run(&sign(plan.identity, &appex, Some(entitlements)))?;
@@ -305,6 +314,7 @@ mod tests {
 				identity: "",
 				safari_entitlements: None,
 				entitlements: None,
+				provisioning_profile: None,
 			}
 			.artifacts()
 		};
@@ -330,6 +340,8 @@ mod tests {
 		let out = root.path().join("out");
 		let entitlements = root.path().join("entitlements.plist");
 		let app_entitlements = root.path().join("App.entitlements");
+		let profile = root.path().join("push.provisionprofile");
+		std::fs::write(&profile, "developer id profile").unwrap();
 		let recorder = Recorder {
 			seen: std::cell::RefCell::default(),
 			answer: Box::new(|tool| {
@@ -349,10 +361,12 @@ mod tests {
 			identity: "Developer ID Application: Example (ABCDE12345)",
 			safari_entitlements: Some(&entitlements),
 			entitlements: Some(&app_entitlements),
+			provisioning_profile: Some(&profile),
 		};
 		let runner = CopyingRecorder {
 			inner: recorder,
 			from: app.clone(),
+			sealed_with_profile: std::cell::RefCell::default(),
 		};
 
 		let artifacts = distribute(&runner, &plan, &key()).unwrap();
@@ -382,6 +396,21 @@ mod tests {
 		ditto -c -k --keepParent <root>/out/Notes.app <root>/out/Notes.zip
 		");
 
+		// A push-enabled app carries its provisioning profile, and it is in
+		// place before the app is sealed: a profile added after signing
+		// would break the seal, and one that is missing leaves an app macOS
+		// refuses to launch.
+		let embedded = artifacts.app.join("Contents/embedded.provisionprofile");
+		assert_eq!(
+			std::fs::read_to_string(&embedded).unwrap(),
+			"developer id profile"
+		);
+		assert_eq!(*runner.sealed_with_profile.borrow(), vec![true]);
+		assert!(
+			!app.join("Contents/embedded.provisionprofile").exists(),
+			"the build is untouched"
+		);
+
 		// The copy carries the version; the build is untouched.
 		for plist in [
 			"Contents/Info.plist",
@@ -408,12 +437,27 @@ mod tests {
 	struct CopyingRecorder {
 		inner: Recorder,
 		from: PathBuf,
+		/// Whether the provisioning profile was embedded each time the app
+		/// itself was signed.
+		sealed_with_profile: std::cell::RefCell<Vec<bool>>,
 	}
 
 	impl Runner for CopyingRecorder {
 		fn run(&self, tool: &Tool) -> Result<()> {
 			if tool.program == "ditto" && tool.args.len() == 2 {
 				crate::native::safari::copy_tree(&self.from, Path::new(&tool.args[1]))?;
+			}
+
+			// The app itself is the last thing `distribute` seals with
+			// entitlements; the appex and the disk image are other paths.
+			if tool.program == "codesign"
+				&& tool.args.first().is_some_and(|arg| arg == "--force")
+				&& let Some(app) = tool.args.last().map(Path::new)
+				&& app.extension().is_some_and(|extension| extension == "app")
+			{
+				self.sealed_with_profile
+					.borrow_mut()
+					.push(app.join("Contents/embedded.provisionprofile").is_file());
 			}
 
 			self.inner.run(tool)
