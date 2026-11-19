@@ -413,7 +413,9 @@ class NotificationsPlugin internal constructor(
     /** Encodes a snapshot reply: revision `u64`, state `u32`, then a
      * length-prefixed string (empty for no answer). */
     internal fun encodeSnapshot(snapshot: RemoteRegistration.Snapshot): ByteArray {
-        val data = ByteBuffer.allocate(16 + RemoteRegistration.MAX_TOKEN_CHARACTERS)
+        // Little-endian, as the bridge codec reads every integer: a
+        // `ByteBuffer` is big-endian until told otherwise.
+        val data = ByteBuffer.allocate(16 + RemoteRegistration.MAX_TOKEN_CHARACTERS).order(ByteOrder.LITTLE_ENDIAN)
 
         data.putInt((snapshot.revision ushr 32).toInt())
         data.putInt(snapshot.revision.toInt())
