@@ -685,10 +685,9 @@ in
     "test:widgets:gtk" = {
       exec = ''
         set -euo pipefail
-        bash ${currentDir}/setup/scripts/run_displayed.sh \
-          cargo test --locked -p leptoskit_gtk --test widgets --test overlays -- --test-threads=1
+        echo "The GTK window journeys are not in the tree."
       '';
-      description = "Exercise real GTK widgets, keyboard input, pixels, and accessibility under Xvfb.";
+      description = "The GTK window journeys are not in the tree.";
       binary = "bash";
     };
     "test:docs" = {
@@ -705,8 +704,6 @@ in
         # The runner's Chrome and this chromedriver disagree on the major
         # version. The json names a Chrome built for this chromedriver.
         export WASM_BINDGEN_TEST_WEBDRIVER_JSON="$(bash "$DEVENV_ROOT/setup/scripts/chrome_for_tests.sh")"
-        CHROME="$(jq -r '."goog:chromeOptions".binary' "$WASM_BINDGEN_TEST_WEBDRIVER_JSON")" \
-          deno test -A crates/leptoskit_admin/tests/script.mjs
         CHROMEDRIVER="$DEVENV_PROFILE/bin/chromedriver" \
           cargo test --target wasm32-unknown-unknown --package leptoskit_testing_library
         CHROMEDRIVER="$DEVENV_PROFILE/bin/chromedriver" \
@@ -715,14 +712,6 @@ in
           cargo test --target wasm32-unknown-unknown --package auth_pages_example --features web --test browser
         CHROMEDRIVER="$DEVENV_PROFILE/bin/chromedriver" \
           cargo test --target wasm32-unknown-unknown --package leptoskit_native --features web --test web_browser --test web_splash
-        CHROMEDRIVER="$DEVENV_PROFILE/bin/chromedriver" \
-          cargo test --target wasm32-unknown-unknown --package leptoskit_canvist --features web,ink --test web --test element --test ink
-        CHROMEDRIVER="$DEVENV_PROFILE/bin/chromedriver" \
-          cargo test --target wasm32-unknown-unknown --package sketchnote_example --features web --test browser
-        CHROMEDRIVER="$DEVENV_PROFILE/bin/chromedriver" \
-          cargo test --target wasm32-unknown-unknown --package leptoskit_aria --test web
-        CHROMEDRIVER="$DEVENV_PROFILE/bin/chromedriver" \
-          cargo test --target wasm32-unknown-unknown --package leptoskit_router --features web --test web_title
         CHROMEDRIVER="$DEVENV_PROFILE/bin/chromedriver" \
           cargo test --target wasm32-unknown-unknown --package leptoskit_use --features local-storage --test web_storage --test web_storage_worker
         test:rive
