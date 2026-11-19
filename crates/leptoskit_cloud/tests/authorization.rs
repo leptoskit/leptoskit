@@ -19,6 +19,7 @@ use serde_json::Value;
 use serde_json::json;
 use support::App;
 use support::As;
+use support::shipping;
 
 /// Every operation the server serves has a row in the table, and every row
 /// is served: the inventory is what the server's router mounts, the
@@ -168,11 +169,19 @@ fn expected(caller: Caller, operation: &str, requirement: Requirement) -> Outcom
 	};
 	let permission = match requirement {
 		Requirement::Builtin => return builtin(operation, caller.who()),
-		Requirement::Person if token.is_some() => return Outcome::Refused(403, "person_required"),
+		Requirement::Worker => return Outcome::Refused(403, "worker_required"),
+		Requirement::Operator | Requirement::Person if token.is_some() => {
+			return Outcome::Refused(403, "person_required");
+		}
+		Requirement::Operator => return Outcome::Refused(403, "operator_required"),
 		// The matrix's invitation is nobody's: a person gets as far as
 		// finding that out.
 		Requirement::Person if operation == "accept_invitation" => return Outcome::Answered(404),
-		Requirement::SignedIn | Requirement::Person => return Outcome::Answered(200),
+		// A pairing code is its own credential: whoever holds the fixture's
+		// pairs a worker with it.
+		Requirement::Pairing | Requirement::SignedIn | Requirement::Person => {
+			return Outcome::Answered(200);
+		}
 		Requirement::Organization(permission) | Requirement::Project(permission) => permission,
 	};
 
@@ -191,6 +200,9 @@ fn expected(caller: Caller, operation: &str, requirement: Requirement) -> Outcom
 		Some((_, true)) if !permission.reaches_project_tokens() => {
 			Outcome::Refused(403, "project_token")
 		}
+		// The fixture's production has no earlier release to return to: a
+		// caller who may roll back gets as far as finding that out.
+		_ if operation == "rollback" => Outcome::Refused(409, "rollback_unavailable"),
 		_ => Outcome::Answered(200),
 	}
 }
@@ -227,6 +239,19 @@ struct Fixture {
 	extra_account: String,
 	pending_invitation: String,
 	token_id: String,
+	/// A live pairing code for a build worker.
+	pairing_code: String,
+	/// An archive begun and uploaded, waiting for `complete_upload`.
+	pending_digest: String,
+	/// An archive ready to deploy.
+	ready_digest: String,
+}
+
+/// What [`Arranging::shipping`] made.
+struct Shipping {
+	pairing_code: String,
+	pending_digest: String,
+	ready_digest: String,
 }
 
 /// An organisation being arranged, as its owner sees it.
@@ -266,6 +291,58 @@ impl Arranging<'_> {
 				)
 				.await
 				.expect(200);
+		}
+	}
+
+	/// A cluster for `web` to run on, a pairing code, an archive waiting to be
+	/// completed, and one ready, deployed to `web`'"'"'s production as #1,
+	/// which stays queued: no worker takes it.
+	async fn shipping(self) -> Shipping {
+		let ops = shipping::operator(self.app).await;
+		shipping::register_cluster(self.app, &ops, "eu-one").await;
+		let issued = self
+			.app
+			.call(
+				"issue_pairing",
+				json!({ "role": "build" }),
+				As::Session(&ops),
+			)
+			.await;
+		let pairing_code = issued.expect(200).json()["code"]
+			.as_str()
+			.expect("a code")
+			.to_owned();
+		let ready_digest = shipping::upload(
+			self.app,
+			self.as_owner(),
+			self.organization,
+			"web",
+			b"ready",
+		)
+		.await;
+		let pending = b"pending";
+		let began =
+			shipping::begin(self.app, self.as_owner(), self.organization, "web", pending).await;
+		let ticket = began.expect(200).json()["ticket"].clone();
+		assert_eq!(shipping::put(self.app, &ticket, pending).await, 200);
+		self.app
+			.call(
+				"deploy",
+				json!({
+					"organization": self.organization,
+					"project": "web",
+					"environment": "production",
+					"source": { "kind": "upload", "archive": ready_digest },
+				}),
+				self.as_owner(),
+			)
+			.await
+			.expect(200);
+
+		Shipping {
+			pairing_code,
+			pending_digest: shipping::digest_of(pending),
+			ready_digest,
 		}
 	}
 
@@ -395,6 +472,7 @@ impl Fixture {
 		let (_, token_id) = app
 			.token(As::Session(&owner), &organization, &["read"], None)
 			.await;
+		let shipping = arranging.shipping().await;
 		let credential = arranging.credential(caller).await;
 
 		Self {
@@ -406,6 +484,9 @@ impl Fixture {
 			extra_account,
 			pending_invitation,
 			token_id,
+			pairing_code: shipping.pairing_code,
+			pending_digest: shipping.pending_digest,
+			ready_digest: shipping.ready_digest,
 		}
 	}
 
@@ -417,6 +498,10 @@ impl Fixture {
 	}
 
 	/// Valid arguments for `operation`, so an allowed call succeeds.
+	#[expect(
+		clippy::too_many_lines,
+		reason = "one arm per operation: the matrix's table of arguments"
+	)]
 	async fn args(&self, operation: &str) -> Value {
 		let organization = self.organization.as_str();
 		// A bound token can see only its own project, so it deletes that,
@@ -430,11 +515,12 @@ impl Fixture {
 		match operation {
 			"rpc.inbox" => json!({ "limit": 10 }),
 			"rpc.mark_read" | "rpc.job_status" | "rpc.cancel_job" => json!({ "id": nothing }),
-			"rpc.mark_all_read" | "whoami" | "organizations" => json!({}),
+			"rpc.mark_all_read" | "whoami" | "organizations" | "claim" | "clusters" | "workers"
+			| "jobs" => json!({}),
 			"rpc.service_token" => json!({ "service": "billing" }),
 			"create_organization" => json!({ "slug": "new-team", "name": "New team" }),
 			"accept_invitation" => json!({ "token": "0".repeat(64) }),
-			"members" | "projects" | "invitations" | "tokens" => {
+			"members" | "projects" | "invitations" | "tokens" | "in_flight" => {
 				json!({ "organization": organization })
 			}
 			"invite_member" => {
@@ -460,7 +546,9 @@ impl Fixture {
 			"create_project" => {
 				json!({ "organization": organization, "slug": "fresh", "name": "Fresh" })
 			}
-			"project" | "environments" => json!({ "organization": organization, "project": "web" }),
+			"project" | "environments" | "deployments" => {
+				json!({ "organization": organization, "project": "web" })
+			}
 			"delete_project" => {
 				json!({ "organization": organization, "project": doomed, "confirm": doomed })
 			}
@@ -505,6 +593,77 @@ impl Fixture {
 					"confirm": "doomed-env",
 				})
 			}
+			"environment_status" | "runtime_logs" | "preview_release" => {
+				json!({ "organization": organization, "project": "web", "environment": "production" })
+			}
+			"begin_upload" => {
+				json!({
+					"organization": organization,
+					"project": "web",
+					"digest": shipping::digest_of(b"fresh"),
+					"size": 5,
+				})
+			}
+			"complete_upload" => {
+				json!({ "organization": organization, "project": "web", "digest": self.pending_digest })
+			}
+			"deploy" => {
+				json!({
+					"organization": organization,
+					"project": "web",
+					"environment": "staging",
+					"source": { "kind": "upload", "archive": self.ready_digest },
+				})
+			}
+			// Whoever may cancel may deploy, and deployed staging #1 just now.
+			"cancel_deployment" => {
+				json!({
+					"organization": organization,
+					"project": "web",
+					"environment": "staging",
+					"number": 1,
+				})
+			}
+			"rollback" => {
+				json!({
+					"organization": organization,
+					"project": "web",
+					"environment": "production",
+					"to": 1,
+				})
+			}
+			"deployment" | "deployment_events" | "build_logs" => {
+				json!({
+					"organization": organization,
+					"project": "web",
+					"environment": "production",
+					"number": 1,
+				})
+			}
+			"pair" => json!({ "code": self.pairing_code, "name": "matrix-worker" }),
+			"renew" => json!({ "job": nothing }),
+			"append_log" => json!({ "job": nothing, "attempt": 1, "seq": 0, "lines": ["hi"] }),
+			"finish" => {
+				json!({
+					"job": nothing,
+					"attempt": 1,
+					"outcome": { "kind": "release", "result": "applied" },
+				})
+			}
+			"report_status" => {
+				let named = json!({ "slug": "web", "id": nothing });
+				json!({
+					"environment": nothing,
+					"observed": {
+						"environment": { "organization": named, "project": named, "environment": named },
+						"processes": [],
+					},
+				})
+			}
+			"register_cluster" => json!({ "name": "eu-two", "region": "eu-central" }),
+			"issue_pairing" => json!({ "role": "build" }),
+			"revoke_worker" => json!({ "worker": nothing }),
+			"reconcile" => json!({ "job": nothing, "found": { "found": "applied" } }),
 			other => panic!("`{other}` has no arguments in the matrix: add them"),
 		}
 	}
@@ -588,14 +747,103 @@ async fn nobody_is_allowed_anything() {
 		let args = fixture.args(operation).await;
 		let answer = fixture.app.call(operation, args, As::Nobody).await;
 
-		if *requirement == Requirement::Builtin {
-			let expected = builtin(operation, Who::Nobody);
+		match requirement {
+			Requirement::Builtin => {
+				let expected = builtin(operation, Who::Nobody);
+				assert!(
+					expected.matches(&answer),
+					"{operation}: {expected:?}, got {answer:?}"
+				);
+			}
+			// The code is the credential.
+			Requirement::Pairing => {
+				answer.expect(200);
+			}
+			Requirement::Worker => answer.refused(401, "worker_key_required"),
+			_ => answer.refused(401, "sign_in_required"),
+		}
+	}
+}
+
+/// An operator is a person: their session and their CLI run every operator
+/// operation, and their API token, whatever its scope, runs none.
+#[tokio::test]
+async fn operators_and_only_operators_run_the_cloud() {
+	let fixture = Fixture::new(Caller::Person(Role::Owner)).await;
+	let app = &fixture.app;
+	let ops = shipping::operator(app).await;
+	let cli = app.cli_access(&ops).await;
+	let ops_org = app.personal(As::Session(&ops)).await;
+	let (token, _) = app
+		.token(As::Session(&ops), &ops_org, &["admin"], None)
+		.await;
+
+	for (operation, requirement) in OPERATIONS {
+		if *requirement != Requirement::Operator {
+			continue;
+		}
+
+		for (caller, label) in [(As::Session(&ops), "session"), (As::Bearer(&cli), "cli")] {
+			let args = match *operation {
+				"register_cluster" => {
+					json!({ "name": format!("eu-{label}"), "region": "eu-central" })
+				}
+				_ => fixture.args(operation).await,
+			};
+			let answer = app.call(operation, args, caller).await;
+			let expected = match *operation {
+				"revoke_worker" => Outcome::Refused(404, "worker_not_found"),
+				"reconcile" => Outcome::Refused(404, "job_not_found"),
+				_ => Outcome::Answered(200),
+			};
 			assert!(
 				expected.matches(&answer),
-				"{operation}: {expected:?}, got {answer:?}"
+				"{label} {operation}: {expected:?}, got {answer:?}"
 			);
-		} else {
-			answer.refused(401, "sign_in_required");
 		}
+
+		let answer = app
+			.call(operation, fixture.args(operation).await, As::Bearer(&token))
+			.await;
+		answer.refused(403, "person_required");
+	}
+}
+
+/// A worker's key runs the worker operations and nothing else: no
+/// organisation's, and no operator's.
+#[tokio::test]
+async fn a_worker_runs_only_the_protocol() {
+	let fixture = Fixture::new(Caller::Person(Role::Owner)).await;
+	let app = &fixture.app;
+	let paired = app
+		.call(
+			"pair",
+			json!({ "code": fixture.pairing_code, "name": "matrix-worker" }),
+			As::Nobody,
+		)
+		.await;
+	let key = paired.expect(200).json()["key"]
+		.as_str()
+		.expect("a key")
+		.to_owned();
+
+	for (operation, requirement) in in_matrix_order() {
+		let answer = app
+			.call(operation, fixture.args(operation).await, As::Bearer(&key))
+			.await;
+		let fine = match requirement {
+			Requirement::Worker => {
+				match *operation {
+					"claim" => answer.status == 200,
+					"report_status" => answer.message().starts_with("cluster_worker_required"),
+					_ => answer.message().starts_with("job_not_held"),
+				}
+			}
+			// Spent by the fixture's own pairing above.
+			Requirement::Pairing => answer.message().starts_with("pairing_invalid"),
+			Requirement::Builtin => answer.status != 500,
+			_ => answer.status == 403 && answer.message().starts_with("not_for_workers"),
+		};
+		assert!(fine, "{operation}: {} {}", answer.status, answer.text);
 	}
 }

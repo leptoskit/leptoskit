@@ -1,6 +1,8 @@
 //! The control plane's tables: organisations and who is in them,
 //! invitations, API tokens, projects, environments, operators, and the
-//! audit log.
+//! audit log; source archives, deployments and their events, clusters and
+//! where environments are placed on them, workers and their pairing codes,
+//! jobs, log chunks, and what clusters report.
 //!
 //! Every key is a UUID v7, so rows order by creation. People are
 //! `Id<Account>`s from `leptoskit_auth`, stored without a foreign key: a
@@ -21,8 +23,22 @@ use leptoskit_db::table;
 
 use crate::access::Role;
 use crate::access::TokenScope;
+use crate::deployment::DeploymentState;
+use crate::deployment::Source;
+use crate::deployments::DeployConfig;
+use crate::deployments::EventKind;
+use crate::deployments::Line;
+use crate::deployments::Signer;
+use crate::operator::ClusterFacts;
+use crate::operator::JobState;
 use crate::projects::EnvironmentKind;
 use crate::projects::EnvironmentScale;
+use crate::release::Plan;
+use crate::workers::BuildServerOutput;
+use crate::workers::JobKind;
+use crate::workers::JobOutcome;
+use crate::workers::MigrationFingerprint;
+use crate::workers::WorkerRole;
 
 /// An organisation: the tenant everything else belongs to. Each person has
 /// one personal organisation, made the first time they use the cloud, and
@@ -230,4 +246,291 @@ pub struct AuditEvent {
 	pub client: String,
 	#[db(created_at)]
 	pub created_at: Timestamp,
+}
+
+/// A source archive an organisation uploaded, kept under
+/// `sources/<organization>/<digest>` in the object store. Unique by
+/// organisation and digest: bytes are shared within an organisation, never
+/// across them. Until `verified_at` is set it is an upload in progress,
+/// and `expires_at` is when its upload address stops working; after, it is
+/// when the archive is deleted unless a deployment uses it.
+#[table(
+	name = "source_archives",
+	unique(organization_id, digest),
+	index(expires_at)
+)]
+pub struct SourceArchive {
+	pub id: Id<Self>,
+	#[db(on_delete = cascade)]
+	pub organization_id: Id<Organization>,
+	/// `sha256:<hex>`.
+	#[db(min_len = 71, max_len = 71)]
+	pub digest: String,
+	/// The size it was promised, then checked, in bytes.
+	pub size: i64,
+	pub verified_at: Option<Timestamp>,
+	pub expires_at: Timestamp,
+	#[db(no_foreign_key)]
+	pub created_by: Id<Account>,
+	#[db(created_at)]
+	pub created_at: Timestamp,
+}
+
+/// A Kubernetes cluster environments run on, registered by an operator.
+#[table(name = "clusters")]
+pub struct Cluster {
+	pub id: Id<Self>,
+	/// Unique across the cloud, such as `eu-central-1`.
+	#[db(unique, min_len = 3, max_len = 40)]
+	pub name: String,
+	#[db(min_len = 2, max_len = 32)]
+	pub region: String,
+	pub facts: Json<ClusterFacts>,
+	#[db(max_len = 2_000)]
+	pub capacity_notes: String,
+	#[db(created_at)]
+	pub created_at: Timestamp,
+}
+
+/// Where an environment runs: its cluster, its hostname, and the migrations
+/// its database has, as far as the control plane knows. Made by its first
+/// deployment.
+#[table(name = "environment_placements")]
+pub struct Placement {
+	pub id: Id<Self>,
+	#[db(unique, on_delete = cascade)]
+	pub environment_id: Id<Environment>,
+	pub cluster_id: Id<Cluster>,
+	/// Unique across the cloud.
+	#[db(unique, min_len = 3, max_len = 253)]
+	pub hostname: String,
+	/// The migrations the last live deployment carried, which its server
+	/// applied as it started.
+	pub migrations: Json<Vec<MigrationFingerprint>>,
+	/// Whether a release that may have applied migrations failed or was
+	/// interrupted, so the database may have more than `migrations` says.
+	pub schema_uncertain: bool,
+	#[db(created_at)]
+	pub created_at: Timestamp,
+	#[db(updated_at)]
+	pub updated_at: Timestamp,
+}
+
+/// One deployment of an environment, numbered from 1 in it. Its state
+/// changes only in `server::lifecycle`, each change with its event.
+#[table(
+	name = "deployments",
+	live,
+	unique(environment_id, number),
+	index(organization_id, created_at),
+	index(project_id, created_at)
+)]
+pub struct Deployment {
+	pub id: Id<Self>,
+	#[db(on_delete = cascade)]
+	pub organization_id: Id<Organization>,
+	#[db(on_delete = cascade)]
+	pub project_id: Id<Project>,
+	#[db(on_delete = cascade)]
+	pub environment_id: Id<Environment>,
+	pub number: i64,
+	pub state: Json<DeploymentState>,
+	/// The environment, while this deployment is queued, building,
+	/// migrating, or rolling out: unique, so an environment has one
+	/// deployment in flight, whoever races to make a second.
+	#[db(unique, no_foreign_key)]
+	pub in_flight_environment: Option<Id<Environment>>,
+	/// The environment, while this deployment is live: unique, so an
+	/// environment has one.
+	#[db(unique, no_foreign_key)]
+	pub live_environment: Option<Id<Environment>>,
+	pub source: Json<Source>,
+	/// The archive an upload source uses, kept while this deployment needs
+	/// it.
+	#[db(no_foreign_key)]
+	pub archive_id: Option<Id<SourceArchive>>,
+	/// The number of the deployment a rollback returns to.
+	pub rollback_of: Option<i64>,
+	pub signer: Json<Signer>,
+	pub config: Json<DeployConfig>,
+	pub plan: Json<Plan>,
+	pub lines: Json<Vec<Line>>,
+	pub fine_print: Json<Vec<String>>,
+	pub cluster_id: Id<Cluster>,
+	#[db(min_len = 3, max_len = 253)]
+	pub hostname: String,
+	/// What the build made, once it has.
+	pub build: Json<Option<BuildServerOutput>>,
+	/// The spec its release applies, once built.
+	pub spec: Json<Option<leptoskit_cloud_runtime::ReleaseSpec>>,
+	/// Whether its release's worker went quiet and what the cluster runs is
+	/// unknown.
+	pub unknown: bool,
+	/// The number of the deployment that replaced it.
+	pub superseded_by: Option<i64>,
+	#[db(created_at)]
+	pub created_at: Timestamp,
+	#[db(updated_at)]
+	pub updated_at: Timestamp,
+}
+
+/// One thing that happened to a deployment, numbered from 1.
+#[table(name = "deployment_events", live, unique(deployment_id, seq))]
+pub struct EventRecord {
+	pub id: Id<Self>,
+	#[db(on_delete = cascade)]
+	pub deployment_id: Id<Deployment>,
+	pub seq: i64,
+	pub event: Json<EventKind>,
+	#[db(created_at)]
+	pub created_at: Timestamp,
+}
+
+/// A worker: a build worker for the shared pool or one organisation, or a
+/// cluster's worker. Its key is `lkw_<prefix>_<secret>`; only the SHA-256
+/// of the secret is kept.
+#[table(name = "workers")]
+pub struct Worker {
+	pub id: Id<Self>,
+	#[db(min_len = 1, max_len = 64)]
+	pub name: String,
+	pub role: WorkerRole,
+	/// The organisation whose jobs it takes, or `None` for the shared pool.
+	#[db(on_delete = cascade)]
+	pub organization_id: Option<Id<Organization>>,
+	/// The cluster it applies releases to.
+	pub cluster_id: Option<Id<Cluster>>,
+	#[db(unique, min_len = 12, max_len = 12)]
+	pub prefix: String,
+	#[db(secret)]
+	pub secret_hash: Vec<u8>,
+	pub capabilities: Json<Vec<String>>,
+	pub last_seen_at: Option<Timestamp>,
+	pub revoked_at: Option<Timestamp>,
+	#[db(created_at)]
+	pub created_at: Timestamp,
+}
+
+/// A one-use code that pairs one worker, for ten minutes. Only its SHA-256
+/// is kept.
+#[table(name = "worker_pairings")]
+pub struct Pairing {
+	pub id: Id<Self>,
+	#[db(unique, secret)]
+	pub code_hash: Vec<u8>,
+	pub role: WorkerRole,
+	#[db(on_delete = cascade)]
+	pub organization_id: Option<Id<Organization>>,
+	pub cluster_id: Option<Id<Cluster>>,
+	pub expires_at: Timestamp,
+	pub used_at: Option<Timestamp>,
+	/// The worker it paired.
+	#[db(no_foreign_key)]
+	pub worker_id: Option<Id<Worker>>,
+	#[db(no_foreign_key)]
+	pub issued_by: Id<Account>,
+	#[db(created_at)]
+	pub created_at: Timestamp,
+}
+
+/// A job for a worker. Its input is kept without presigned addresses, which
+/// `claim` makes fresh for each attempt.
+#[table(name = "jobs", index(state, created_at), index(deployment_id))]
+pub struct Job {
+	pub id: Id<Self>,
+	pub kind: JobKind,
+	pub state: JobState,
+	/// The organisation it is for: a worker bound to one takes only its
+	/// jobs, and a shared-pool worker any.
+	#[db(no_foreign_key)]
+	pub organization_id: Id<Organization>,
+	#[db(no_foreign_key)]
+	pub deployment_id: Option<Id<Deployment>>,
+	#[db(no_foreign_key)]
+	pub environment_id: Option<Id<Environment>>,
+	/// The cluster whose worker takes it, for a cluster job.
+	#[db(no_foreign_key)]
+	pub cluster_id: Option<Id<Cluster>>,
+	/// The capabilities a worker needs to take it.
+	pub requirements: Json<Vec<String>>,
+	pub input: Json<crate::server::StoredInput>,
+	/// Runs so far.
+	pub attempt: i64,
+	pub max_attempts: i64,
+	/// Its deployment was cancelled: `renew` tells the worker to stop.
+	pub cancel_requested: bool,
+	/// The worker that holds it, or last held it.
+	#[db(no_foreign_key)]
+	pub worker_id: Option<Id<Worker>>,
+	pub lease_expires_at: Option<Timestamp>,
+	pub outcome: Json<Option<JobOutcome>>,
+	/// When it first went unclaimed: a build nobody claims for long enough
+	/// fails with `builder_unavailable`.
+	pub queued_at: Timestamp,
+	#[db(created_at)]
+	pub created_at: Timestamp,
+	#[db(updated_at)]
+	pub updated_at: Timestamp,
+}
+
+/// Which log a chunk belongs to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, leptoskit_db::Enum)]
+pub enum LogKind {
+	/// A deployment's build.
+	#[db(rename = "build")]
+	Build,
+	/// An environment's processes.
+	#[db(rename = "runtime")]
+	Runtime,
+}
+
+/// A chunk of a log, kept in the object store under `object_key`, with its
+/// place in the log: its lines are `first_line` to `first_line + lines -
+/// 1`. Deleted with its object when it expires.
+#[table(
+	name = "log_chunks",
+	live,
+	unique(job_id, attempt, seq),
+	index(deployment_id, first_line),
+	index(environment_id, first_line),
+	index(expires_at)
+)]
+pub struct LogChunk {
+	pub id: Id<Self>,
+	pub kind: LogKind,
+	#[db(no_foreign_key)]
+	pub organization_id: Id<Organization>,
+	#[db(no_foreign_key)]
+	pub environment_id: Id<Environment>,
+	/// The deployment, for a build log.
+	#[db(no_foreign_key)]
+	pub deployment_id: Option<Id<Deployment>>,
+	/// The job and its attempt, for a build log.
+	#[db(no_foreign_key)]
+	pub job_id: Option<Id<Job>>,
+	pub attempt: i64,
+	pub seq: i64,
+	pub first_line: i64,
+	pub lines: i64,
+	/// SHA-256 of the lines as the worker sent them, so a chunk sent again
+	/// is recognised.
+	#[db(min_len = 64, max_len = 64)]
+	pub digest: String,
+	#[db(min_len = 1, max_len = 300)]
+	pub object_key: String,
+	pub expires_at: Timestamp,
+	#[db(created_at)]
+	pub created_at: Timestamp,
+}
+
+/// What a cluster worker last reported an environment runs.
+#[table(name = "environment_statuses", live)]
+pub struct StatusReport {
+	pub id: Id<Self>,
+	#[db(unique, on_delete = cascade)]
+	pub environment_id: Id<Environment>,
+	#[db(no_foreign_key)]
+	pub cluster_id: Id<Cluster>,
+	pub observed: Json<leptoskit_cloud_runtime::Observed>,
+	pub reported_at: Timestamp,
 }

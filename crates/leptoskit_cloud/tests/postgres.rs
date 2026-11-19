@@ -142,3 +142,94 @@ async fn a_members_tokens_follow_their_role() {
 		scenarios::a_members_tokens_follow_their_role(&app).await;
 	}
 }
+
+/// The shipping scenarios on Postgres: its serializable transactions
+/// refuse the claim races and the in-flight races differently.
+mod shipping {
+	use super::app;
+	use super::support::shipping;
+
+	#[tokio::test]
+	async fn a_deployment_goes_live() {
+		if let Some((_postgres, app)) = app().await {
+			shipping::a_deployment_goes_live(&app).await;
+		}
+	}
+
+	#[tokio::test]
+	async fn the_cluster_reports_what_it_runs() {
+		if let Some((_postgres, app)) = app().await {
+			shipping::the_cluster_reports_what_it_runs(&app).await;
+		}
+	}
+
+	#[tokio::test]
+	async fn a_lapsed_build_is_retried_then_abandoned() {
+		if let Some((_postgres, app)) = app().await {
+			shipping::a_lapsed_build_is_retried_then_abandoned(&app).await;
+		}
+	}
+
+	#[tokio::test]
+	async fn a_lapsed_release_waits_for_reconciliation() {
+		if let Some((_postgres, app)) = app().await {
+			shipping::a_lapsed_release_waits_for_reconciliation(&app).await;
+		}
+	}
+
+	#[tokio::test]
+	async fn cancelling_stops_a_deployment() {
+		if let Some((_postgres, app)) = app().await {
+			shipping::cancelling_stops_a_deployment(&app).await;
+		}
+	}
+
+	#[tokio::test]
+	async fn uploads_are_verified_per_organization() {
+		if let Some((_postgres, app)) = app().await {
+			shipping::uploads_are_verified_per_organization(&app).await;
+		}
+	}
+
+	#[tokio::test]
+	async fn deploying_needs_a_cluster() {
+		if let Some((_postgres, app)) = app().await {
+			shipping::deploying_needs_a_cluster(&app).await;
+		}
+	}
+
+	#[tokio::test]
+	async fn workers_pair_once_and_can_be_revoked() {
+		if let Some((_postgres, app)) = app().await {
+			shipping::workers_pair_once_and_can_be_revoked(&app).await;
+		}
+	}
+
+	#[tokio::test]
+	async fn deleting_an_environment_tears_it_down() {
+		if let Some((_postgres, app)) = app().await {
+			shipping::deleting_an_environment_tears_it_down(&app).await;
+		}
+	}
+
+	#[tokio::test]
+	async fn build_logs_are_ordered_paged_and_expire() {
+		if let Some((_postgres, app)) = app().await {
+			shipping::build_logs_are_ordered_paged_and_expire(&app).await;
+		}
+	}
+
+	#[tokio::test]
+	async fn a_build_that_forgets_migrations_fails() {
+		if let Some((_postgres, app)) = app().await {
+			shipping::a_build_that_forgets_migrations_fails(&app).await;
+		}
+	}
+
+	#[tokio::test]
+	async fn races_have_one_winner() {
+		if let Some((_postgres, app)) = app().await {
+			shipping::races_have_one_winner(&app).await;
+		}
+	}
+}

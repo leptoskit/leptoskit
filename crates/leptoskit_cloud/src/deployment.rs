@@ -37,7 +37,7 @@ use crate::archive::Digest;
 use crate::slug::Slug;
 
 /// Where a deployment is.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum DeploymentState {
 	/// Accepted, waiting for a build worker, or, for a rollback, for the
@@ -68,7 +68,7 @@ pub enum DeploymentState {
 }
 
 /// A stage a deployment can fail in.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Stage {
 	/// Waiting to start: refused before any work began.
@@ -328,8 +328,23 @@ impl<'de> Deserialize<'de> for Blocker {
 	}
 }
 
+impl schemars::JsonSchema for Blocker {
+	fn schema_name() -> std::borrow::Cow<'static, str> {
+		"Blocker".into()
+	}
+
+	fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+		let codes: Vec<&str> = Self::ALL.iter().map(|blocker| blocker.code()).collect();
+		schemars::json_schema!({
+			"type": "string",
+			"description": "Why a deployment failed, as a stable code.",
+			"enum": codes
+		})
+	}
+}
+
 /// Where a deployment's source came from.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Source {
 	/// A source archive the CLI packed and uploaded, by its digest.
@@ -447,6 +462,20 @@ impl<'de> Deserialize<'de> for GitRepository {
 	}
 }
 
+impl schemars::JsonSchema for GitRepository {
+	fn schema_name() -> std::borrow::Cow<'static, str> {
+		"GitRepository".into()
+	}
+
+	fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+		schemars::json_schema!({
+			"type": "string",
+			"format": "uri",
+			"description": "An `https://` repository address with no credentials, query, or fragment."
+		})
+	}
+}
+
 /// A full Git commit ID: 40 lower-case hex digits (SHA-1), or 64 (SHA-256).
 /// Branch names and short IDs aren't commits: a deployment names exactly
 /// what it built.
@@ -499,6 +528,20 @@ impl<'de> Deserialize<'de> for CommitId {
 	fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
 		let value = String::deserialize(deserializer)?;
 		Self::parse(&value).map_err(serde::de::Error::custom)
+	}
+}
+
+impl schemars::JsonSchema for CommitId {
+	fn schema_name() -> std::borrow::Cow<'static, str> {
+		"CommitId".into()
+	}
+
+	fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+		schemars::json_schema!({
+			"type": "string",
+			"description": "A full commit ID: 40 or 64 lower-case hex digits.",
+			"pattern": "^([0-9a-f]{40}|[0-9a-f]{64})$"
+		})
 	}
 }
 

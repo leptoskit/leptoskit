@@ -10,11 +10,17 @@ use std::net::SocketAddr;
 use leptoskit_auth::Keys;
 use leptoskit_auth::Mailbox;
 use leptoskit_auth::SmtpMailer;
+use leptoskit_cloud::pricing::Catalogue;
 use leptoskit_cloud::server::ControlConfig;
 use leptoskit_cloud::server::DEFAULT_REGION;
 use leptoskit_cloud::server::DevMode;
 use leptoskit_cloud::server::OAuthApp;
+use leptoskit_cloud::server::S3Config;
+use leptoskit_cloud::server::SecretValue;
 use leptoskit_cloud::server::SharedMailer;
+use leptoskit_cloud::server::ShippingSettings;
+use leptoskit_cloud::server::StorageConfig;
+use leptoskit_cloud::server::catalogue_from_json;
 use leptoskit_cloud::size::Region;
 
 /// The public origin, such as `https://cloud.leptoskit.com`.
@@ -38,6 +44,35 @@ pub const GOOGLE_CLIENT_SECRET: &str = "LEPTOSKIT_CLOUD_GOOGLE_CLIENT_SECRET";
 pub const BIND: &str = "LEPTOSKIT_CLOUD_BIND";
 /// Where projects run when they don't say.
 pub const DEFAULT_REGION_VAR: &str = "LEPTOSKIT_CLOUD_DEFAULT_REGION";
+/// The domain environments are served under, such as `apps.example.com`.
+pub const APPS_DOMAIN: &str = "LEPTOSKIT_CLOUD_APPS_DOMAIN";
+/// Where built images are pushed, such as `registry.example.com/leptoskit`.
+pub const REGISTRY: &str = "LEPTOSKIT_CLOUD_REGISTRY";
+/// A JSON price catalogue's path. Without it, previews say there is no price
+/// catalogue.
+pub const PRICE_CATALOGUE: &str = "LEPTOSKIT_CLOUD_PRICE_CATALOGUE";
+/// The S3-compatible store source archives and logs are kept in, such as
+/// `https://<account>.r2.cloudflarestorage.com`.
+pub const S3_ENDPOINT: &str = "LEPTOSKIT_CLOUD_S3_ENDPOINT";
+/// The store's region; `auto` when not set.
+pub const S3_REGION: &str = "LEPTOSKIT_CLOUD_S3_REGION";
+/// The bucket source archives go in.
+pub const S3_SOURCES_BUCKET: &str = "LEPTOSKIT_CLOUD_S3_SOURCES_BUCKET";
+/// The bucket build and runtime logs go in.
+pub const S3_LOGS_BUCKET: &str = "LEPTOSKIT_CLOUD_S3_LOGS_BUCKET";
+/// The store's access key.
+pub const S3_ACCESS_KEY_ID: &str = "LEPTOSKIT_CLOUD_S3_ACCESS_KEY_ID";
+pub const S3_SECRET_ACCESS_KEY: &str = "LEPTOSKIT_CLOUD_S3_SECRET_ACCESS_KEY";
+/// `true` to address buckets as `endpoint/bucket`, as `MinIO` does.
+pub const S3_PATH_STYLE: &str = "LEPTOSKIT_CLOUD_S3_PATH_STYLE";
+/// In `--dev`, the directory the control plane keeps objects in and serves
+/// on loopback, instead of an S3 store.
+pub const STORAGE_DIR: &str = "LEPTOSKIT_CLOUD_STORAGE_DIR";
+
+/// `--dev`'s apps domain, unless [`APPS_DOMAIN`] says otherwise.
+pub const DEV_APPS_DOMAIN: &str = "apps.localhost";
+/// `--dev`'s registry, unless [`REGISTRY`] says otherwise.
+pub const DEV_REGISTRY: &str = "registry.localhost/leptoskit";
 
 /// Where the server listens unless [`BIND`] says otherwise: this machine
 /// only.
@@ -200,6 +235,19 @@ impl ServeConfig {
 		let origin_from_bind = dev && read(vars, ORIGIN).is_none();
 		let origin = origin(vars, dev, bind)?;
 		let keys = keys(vars, dev)?;
+		// Everything else is checked before the SMTP mailer starts its pool.
+		let default_region =
+			read(vars, DEFAULT_REGION_VAR).unwrap_or_else(|| DEFAULT_REGION.into());
+		Region::parse(&default_region)
+			.map_err(|error| invalid(DEFAULT_REGION_VAR, error.to_string()))?;
+		let storage = storage(vars, dev)?;
+		let apps_domain = read(vars, APPS_DOMAIN)
+			.or_else(|| dev.then(|| DEV_APPS_DOMAIN.to_owned()))
+			.ok_or(ConfigError::Missing(APPS_DOMAIN))?;
+		let registry = read(vars, REGISTRY)
+			.or_else(|| dev.then(|| DEV_REGISTRY.to_owned()))
+			.ok_or(ConfigError::Missing(REGISTRY))?;
+		let catalogue = catalogue(vars)?;
 		let (mailer, mailbox) = if dev {
 			let mailbox = Mailbox::new();
 			(SharedMailer::new(mailbox.clone()), Some(mailbox))
@@ -212,10 +260,6 @@ impl ServeConfig {
 			})?;
 			(SharedMailer::new(mailer), None)
 		};
-		let default_region =
-			read(vars, DEFAULT_REGION_VAR).unwrap_or_else(|| DEFAULT_REGION.into());
-		Region::parse(&default_region)
-			.map_err(|error| invalid(DEFAULT_REGION_VAR, error.to_string()))?;
 
 		Ok(Self {
 			bind,
@@ -227,6 +271,11 @@ impl ServeConfig {
 				github: oauth_app(vars, GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET)?,
 				google: oauth_app(vars, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET)?,
 				default_region,
+				storage,
+				apps_domain,
+				registry,
+				catalogue,
+				shipping: ShippingSettings::default(),
 				dev: mailbox.map(|mailbox| DevMode { mailbox }),
 			},
 			origin_from_bind,
@@ -308,6 +357,67 @@ fn keys(vars: Vars<'_>, dev: bool) -> Result<Keys, ConfigError> {
 	}
 }
 
+/// The object store: S3 when [`S3_ENDPOINT`] is set, and in `--dev` without
+/// it, a directory: [`STORAGE_DIR`], or one under the system's temporary
+/// directory.
+fn storage(vars: Vars<'_>, dev: bool) -> Result<StorageConfig, ConfigError> {
+	if !dev && read(vars, STORAGE_DIR).is_some() {
+		return Err(invalid(
+			STORAGE_DIR,
+			format!("is for --dev only: set {S3_ENDPOINT} and its buckets"),
+		));
+	}
+
+	let Some(endpoint) = read(vars, S3_ENDPOINT) else {
+		return if dev {
+			let directory = read(vars, STORAGE_DIR).map_or_else(
+				|| std::env::temp_dir().join("leptoskit-cloud-dev-storage"),
+				std::path::PathBuf::from,
+			);
+			Ok(StorageConfig::Local { directory })
+		} else {
+			Err(ConfigError::Missing(S3_ENDPOINT))
+		};
+	};
+	let endpoint = url::Url::parse(&endpoint)
+		.ok()
+		.filter(|url| matches!(url.scheme(), "https" | "http") && url.host().is_some())
+		.ok_or_else(|| {
+			invalid(
+				S3_ENDPOINT,
+				"must be an http(s) address, such as https://s3.example.com",
+			)
+		})?;
+	let path_style = match read(vars, S3_PATH_STYLE).as_deref() {
+		None | Some("false") => false,
+		Some("true") => true,
+		Some(_) => return Err(invalid(S3_PATH_STYLE, "must be `true` or `false`")),
+	};
+
+	Ok(StorageConfig::S3(S3Config {
+		endpoint,
+		region: read(vars, S3_REGION).unwrap_or_else(|| "auto".to_owned()),
+		sources_bucket: required(vars, S3_SOURCES_BUCKET)?,
+		logs_bucket: required(vars, S3_LOGS_BUCKET)?,
+		access_key_id: required(vars, S3_ACCESS_KEY_ID)?,
+		secret_access_key: SecretValue::new(required(vars, S3_SECRET_ACCESS_KEY)?),
+		path_style,
+	}))
+}
+
+/// The price catalogue at [`PRICE_CATALOGUE`]'s path, if it names one.
+fn catalogue(vars: Vars<'_>) -> Result<Option<Catalogue>, ConfigError> {
+	let Some(path) = read(vars, PRICE_CATALOGUE) else {
+		return Ok(None);
+	};
+	let text = std::fs::read_to_string(&path)
+		.map_err(|error| invalid(PRICE_CATALOGUE, format!("can't be read: {error}")))?;
+
+	catalogue_from_json(&text)
+		.map(Some)
+		.map_err(|error| invalid(PRICE_CATALOGUE, error.to_string()))
+}
+
 /// An OAuth app: both its ID and secret, or neither.
 fn oauth_app(
 	vars: Vars<'_>,
@@ -351,6 +461,13 @@ mod tests {
 			(AUTH_KEYS, KEY),
 			(SMTP_URL, SMTP),
 			(MAIL_FROM, "Cloud <cloud@example.com>"),
+			(APPS_DOMAIN, "apps.example.com"),
+			(REGISTRY, "registry.example.com/leptoskit"),
+			(S3_ENDPOINT, "https://s3.example.com"),
+			(S3_SOURCES_BUCKET, "sources"),
+			(S3_LOGS_BUCKET, "logs"),
+			(S3_ACCESS_KEY_ID, "AKIDEXAMPLE"),
+			(S3_SECRET_ACCESS_KEY, "wJalrXUtnFEMI-hunter3"), // gitleaks:allow (fake key)
 		]
 	}
 
@@ -376,11 +493,32 @@ mod tests {
 		assert!(config.control.dev.is_none());
 		assert!(config.control.github.is_none());
 		assert!(!format!("{config:?}").contains("hunter2"));
+		assert!(!format!("{config:?}").contains("hunter3"));
+		assert_eq!(config.control.apps_domain, "apps.example.com");
+		assert!(config.control.catalogue.is_none());
+		let StorageConfig::S3(s3) = &config.control.storage else {
+			panic!("an S3 store");
+		};
+		assert_eq!((s3.region.as_str(), s3.path_style), ("auto", false));
+		assert_eq!(s3.secret_access_key.expose(), "wJalrXUtnFEMI-hunter3");
 	}
 
 	#[test]
 	fn nothing_secret_is_defaulted() {
-		for name in [AUTH_KEYS, SMTP_URL, MAIL_FROM, ORIGIN, DATABASE_URL] {
+		for name in [
+			AUTH_KEYS,
+			SMTP_URL,
+			MAIL_FROM,
+			ORIGIN,
+			DATABASE_URL,
+			APPS_DOMAIN,
+			REGISTRY,
+			S3_ENDPOINT,
+			S3_SOURCES_BUCKET,
+			S3_LOGS_BUCKET,
+			S3_ACCESS_KEY_ID,
+			S3_SECRET_ACCESS_KEY,
+		] {
 			assert_eq!(error(&without(name), false), format!("set {name}"));
 		}
 	}
@@ -399,6 +537,10 @@ mod tests {
 			(DATABASE_URL, "mysql://x", "must start with"),
 			(BIND, "everywhere", "must be an address"),
 			(DEFAULT_REGION_VAR, "Mars!", "isn't a region name"),
+			(S3_ENDPOINT, "s3.example.com", "must be an http(s) address"),
+			(S3_PATH_STYLE, "yes", "must be `true` or `false`"),
+			(STORAGE_DIR, "/var/objects", "is for --dev only"),
+			(PRICE_CATALOGUE, "/nonexistent/prices.json", "can't be read"),
 		] {
 			let mut pairs = without(name);
 			pairs.push((name, value));
@@ -425,6 +567,12 @@ mod tests {
 		let config = ServeConfig::from_vars(&vars(&local), true).expect("valid");
 		assert_eq!(config.control.origin, "http://127.0.0.1:8080");
 		assert!(config.control.dev.is_some());
+		assert_eq!(config.control.apps_domain, DEV_APPS_DOMAIN);
+		assert_eq!(config.control.registry, DEV_REGISTRY);
+		assert!(matches!(
+			config.control.storage,
+			StorageConfig::Local { .. }
+		));
 
 		// A free port is reached at the port it gets.
 		let any_port = [(DATABASE_URL, "sqlite::memory:"), (BIND, "127.0.0.1:0")];
@@ -439,5 +587,42 @@ mod tests {
 			(ORIGIN, "https://cloud.example.com"),
 		];
 		assert!(error(&remote, true).contains("this machine only"));
+	}
+
+	#[tokio::test]
+	async fn a_price_catalogue_is_read_from_its_file() {
+		let directory = tempfile::tempdir().expect("a directory");
+		let path = directory.path().join("prices.json");
+		let path_text = path.to_string_lossy().into_owned();
+		let mut pairs: Vec<(&str, &str)> = production();
+		pairs.push((PRICE_CATALOGUE, &path_text));
+
+		std::fs::write(&path, r#"{"currency": "usd", "plans": []}"#).expect("written");
+		let message = error(&pairs, false);
+		assert!(
+			message.starts_with(PRICE_CATALOGUE) && message.contains("at least one plan"),
+			"{message}"
+		);
+
+		std::fs::write(
+			&path,
+			r#"{"currency": "usd", "plans": [{"id": "hobby", "name": "Hobby", "monthly": 0}]}"#,
+		)
+		.expect("written");
+		let config = ServeConfig::from_vars(&vars(&pairs), false).expect("valid");
+		let catalogue = config.control.catalogue.expect("a catalogue");
+		assert_eq!(catalogue.plans().len(), 1);
+	}
+
+	#[tokio::test]
+	async fn path_style_buckets_for_stores_that_need_them() {
+		let mut pairs = production();
+		pairs.push((S3_PATH_STYLE, "true"));
+		pairs.push((S3_REGION, "us-east-1"));
+		let config = ServeConfig::from_vars(&vars(&pairs), false).expect("valid");
+		let StorageConfig::S3(s3) = config.control.storage else {
+			panic!("an S3 store");
+		};
+		assert_eq!((s3.region.as_str(), s3.path_style), ("us-east-1", true));
 	}
 }

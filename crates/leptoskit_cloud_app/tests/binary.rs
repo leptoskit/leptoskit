@@ -15,6 +15,7 @@ use tokio::process::Command;
 const BINARY: &str = env!("CARGO_BIN_EXE_leptoskit-cloud-control");
 const KEYS: &str = "k1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 const SMTP_PASSWORD: &str = "hunter2";
+const S3_SECRET: &str = "wJalrXUtnFEMI-hunter3";
 
 /// The binary with only `vars` in its environment.
 fn control(vars: &[(&str, &str)], args: &[&str]) -> Command {
@@ -49,6 +50,20 @@ fn production(path: &Path) -> Vec<(&'static str, String)> {
 			"Cloud <cloud@example.com>".to_owned(),
 		),
 		("LEPTOSKIT_CLOUD_BIND", "127.0.0.1:0".to_owned()),
+		("LEPTOSKIT_CLOUD_APPS_DOMAIN", "apps.example.com".to_owned()),
+		(
+			"LEPTOSKIT_CLOUD_REGISTRY",
+			"registry.example.com/leptoskit".to_owned(),
+		),
+		// Never contacted: nothing in these tests uploads, and nothing expires.
+		(
+			"LEPTOSKIT_CLOUD_S3_ENDPOINT",
+			"https://s3.example.com".to_owned(),
+		),
+		("LEPTOSKIT_CLOUD_S3_SOURCES_BUCKET", "sources".to_owned()),
+		("LEPTOSKIT_CLOUD_S3_LOGS_BUCKET", "logs".to_owned()),
+		("LEPTOSKIT_CLOUD_S3_ACCESS_KEY_ID", "AKIDEXAMPLE".to_owned()),
+		("LEPTOSKIT_CLOUD_S3_SECRET_ACCESS_KEY", S3_SECRET.to_owned()),
 	]
 }
 
@@ -148,6 +163,19 @@ async fn development_serves_identity_protocol_and_readiness_routes() {
 		.await
 		.expect("device authorization");
 	assert_eq!(device.status().as_u16(), 200);
+	// `--dev` keeps objects in a local store the control plane serves: the
+	// route is reached, and refuses an address it didn't sign.
+	let forged = client
+		.get(format!(
+			"{}/_leptoskit/storage/sources/forged/archive?expires=0&sig=00",
+			server.origin
+		))
+		.send()
+		.await
+		.expect("local storage responds");
+	assert_eq!(forged.status().as_u16(), 403);
+	let body = forged.text().await.expect("body");
+	assert!(body.starts_with("signature_mismatch"), "{body}");
 }
 
 #[tokio::test]
@@ -175,6 +203,7 @@ async fn serving_without_keys_is_refused_without_repeating_secrets() {
 	assert!(!ok);
 	assert!(stderr.contains("set LEPTOSKIT_CLOUD_AUTH_KEYS"), "{stderr}");
 	assert!(!stderr.contains(SMTP_PASSWORD) && !stdout.contains(SMTP_PASSWORD));
+	assert!(!stderr.contains(S3_SECRET) && !stdout.contains(S3_SECRET));
 
 	let mut vars = vars;
 	vars.push((
