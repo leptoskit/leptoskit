@@ -846,6 +846,7 @@ pub(crate) async fn finish(
 
 	match &outcome {
 		JobOutcome::BuildServer(outcome) => {
+			super::metering::build_ended(tx, &row, leptoskit_db::now()).await?;
 			super::deployments::build_finished(tx, &row, outcome).await?;
 		}
 		JobOutcome::Release(outcome) => {
@@ -1057,6 +1058,16 @@ async fn report(cx: &rpc::MutationCx, args: ReportStatus) -> rpc::Result<Reporte
 		.first(tx)
 		.await?
 	{
+		let counted_to = super::metering::observed(
+			tx,
+			&project,
+			&environment,
+			existing.metered_at.unwrap_or(existing.reported_at),
+			now,
+			&args.observed,
+		)
+		.await?;
+		existing.metered_at = Some(counted_to);
 		existing.observed = Json(args.observed);
 		existing.cluster_id = placement.cluster_id;
 		existing.reported_at = now;
@@ -1067,6 +1078,7 @@ async fn report(cx: &rpc::MutationCx, args: ReportStatus) -> rpc::Result<Reporte
 			cluster_id: placement.cluster_id,
 			observed: Json(args.observed),
 			reported_at: now,
+			metered_at: Some(now),
 		}
 		.insert(tx)
 		.await?;

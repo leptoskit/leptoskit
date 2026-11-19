@@ -171,6 +171,13 @@ pub(crate) async fn create_project(
 		.count(cx.tx())
 		.await?;
 
+	super::billing::refuse_another_project(
+		cx.tx(),
+		services(cx.context())?.shipping(),
+		&access.organization,
+	)
+	.await?;
+
 	if count >= MAX_PROJECTS {
 		return Err(rpc::Error::conflict(format!(
 			"too_many_projects: `{organization}` has {MAX_PROJECTS} projects"

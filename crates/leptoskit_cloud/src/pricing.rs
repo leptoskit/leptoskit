@@ -294,6 +294,39 @@ pub struct Plan {
 	/// Quantities each month that cost nothing, per meter.
 	#[serde(default)]
 	pub allowances: BTreeMap<Meter, u64>,
+	/// What an organisation on the plan may have at once.
+	#[serde(default)]
+	pub limits: Limits,
+	/// The most a month's usage may cost, in minor units, beyond what the
+	/// plan includes, for an organisation that hasn't set a cap of its own.
+	/// `None` is no cap unless one is set.
+	#[serde(default)]
+	pub spend_cap: Option<u64>,
+}
+
+impl Plan {
+	/// Whether the plan costs nothing a month, so nothing pays for usage
+	/// beyond what it includes.
+	#[must_use]
+	pub const fn is_free(&self) -> bool {
+		matches!(self.monthly, Some(0))
+	}
+}
+
+/// What an organisation on a plan may have at once. `None` is no limit.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Limits {
+	/// Organisations on this plan one person may make, their own included.
+	/// Read from the plan new organisations start on.
+	#[serde(default)]
+	pub organizations: Option<u64>,
+	/// Projects.
+	#[serde(default)]
+	pub projects: Option<u64>,
+	/// Custom domains, over every environment.
+	#[serde(default)]
+	pub custom_domains: Option<u64>,
 }
 
 /// The plans and prices the cloud offers, validated.
@@ -413,6 +446,11 @@ impl Catalogue {
 	#[must_use]
 	pub fn price(&self, meter: Meter) -> Option<UnitPrice> {
 		self.meters.get(&meter).copied()
+	}
+
+	/// Every meter with a price, in [`Meter`] order.
+	pub fn prices(&self) -> impl Iterator<Item = (Meter, UnitPrice)> + '_ {
+		self.meters.iter().map(|(meter, price)| (*meter, *price))
 	}
 }
 

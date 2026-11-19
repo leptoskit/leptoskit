@@ -18,6 +18,7 @@ use leptoskit_rpc::live::Update;
 use serde_json::Value;
 use serde_json::json;
 use support::backups;
+use support::billing;
 use support::config;
 use support::databases;
 use support::domains;
@@ -543,4 +544,25 @@ async fn a_quiet_worker_fails_a_backup_and_leaves_a_restore_unknown() {
 #[tokio::test]
 async fn a_deleted_environment_takes_its_backups() {
 	backups::a_deleted_environment_takes_its_backups(&support::app().await).await;
+}
+
+#[tokio::test]
+async fn usage_is_counted_priced_and_capped() {
+	let db = leptoskit_db::testing::sqlite_migrated(leptoskit_cloud::MIGRATIONS).await;
+	let app = support::app_with(db, |config| config.catalogue = Some(billing::catalogue())).await;
+	billing::usage_is_counted_priced_and_capped(&app).await;
+}
+
+#[tokio::test]
+async fn a_plans_limits_are_counted() {
+	let db = leptoskit_db::testing::sqlite_migrated(leptoskit_cloud::MIGRATIONS).await;
+	let app = support::app_with(db, |config| config.catalogue = Some(billing::catalogue())).await;
+	billing::a_plans_limits_are_counted(&app).await;
+}
+
+#[tokio::test]
+async fn a_build_whose_lease_ran_out_is_counted() {
+	let db = leptoskit_db::testing::sqlite_migrated(leptoskit_cloud::MIGRATIONS).await;
+	let app = support::app_with(db, |config| config.catalogue = Some(billing::catalogue())).await;
+	billing::a_build_whose_lease_ran_out_is_counted(&app).await;
 }
