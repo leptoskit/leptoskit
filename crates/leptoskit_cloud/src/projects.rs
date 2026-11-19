@@ -387,14 +387,14 @@ pub async fn update_environment(
 	revision: i64,
 	scale: EnvironmentScale,
 ) -> rpc::Result<EnvironmentSummary> {
-	crate::server::projects::update_environment(
+	Box::pin(crate::server::projects::update_environment(
 		cx,
 		&organization,
 		&project,
 		&environment,
 		revision,
 		scale,
-	)
+	))
 	.await
 }
 

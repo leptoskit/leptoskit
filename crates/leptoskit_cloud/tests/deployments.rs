@@ -622,3 +622,170 @@ async fn payment_pages_are_handed_out_slowly() {
 async fn without_payment_nothing_is_sold() {
 	subscriptions::without_payment_nothing_is_sold(&support::app().await).await;
 }
+
+#[tokio::test]
+async fn plan_scale_limits_block_oversized_environments_and_deploys() {
+	let catalogue = leptoskit_cloud::server::catalogue_from_json(
+		r#"{
+			"currency": "usd",
+			"plans": [{
+				"id": "hobby",
+				"name": "Hobby",
+				"monthly": 0,
+				"limits": { "max_size": "xs", "max_replicas": 1, "require_sleep": true }
+			}],
+			"meters": {
+				"compute_seconds_xs": { "minor": 1, "per": 3600 },
+				"build_minutes_linux": { "minor": 10 }
+			}
+		}"#,
+	)
+	.expect("a catalogue");
+	let db = leptoskit_db::testing::sqlite_migrated(leptoskit_cloud::MIGRATIONS).await;
+	let app = support::app_with(db, |config| config.catalogue = Some(catalogue)).await;
+	let shop = Shop::open(&app).await;
+
+	// Oversized process rejected on update_environment.
+	app.call(
+		"update_environment",
+		json!({
+			"organization": shop.org,
+			"project": "notes",
+			"environment": "production",
+			"revision": 0,
+			"scale": {
+				"app": { "size": "xl", "min": 0, "max": 1, "sleep": "when-idle" },
+				"services": {}
+			}
+		}),
+		shop.as_ana(),
+	)
+	.await
+	.refused(403, "quota_exceeded");
+
+	// Always-on process rejected when plan requires sleep.
+	app.call(
+		"update_environment",
+		json!({
+			"organization": shop.org,
+			"project": "notes",
+			"environment": "production",
+			"revision": 0,
+			"scale": {
+				"app": { "size": "xs", "min": 1, "max": 1, "sleep": "never" },
+				"services": {}
+			}
+		}),
+		shop.as_ana(),
+	)
+	.await
+	.refused(403, "quota_exceeded");
+
+	// Multiple replicas rejected when max_replicas == 1.
+	app.call(
+		"update_environment",
+		json!({
+			"organization": shop.org,
+			"project": "notes",
+			"environment": "production",
+			"revision": 0,
+			"scale": {
+				"app": { "size": "xs", "min": 0, "max": 2, "sleep": "when-idle" },
+				"services": {}
+			}
+		}),
+		shop.as_ana(),
+	)
+	.await
+	.refused(403, "quota_exceeded");
+}
+
+#[tokio::test]
+async fn bootstrap_operator_is_idempotent_without_email_sign_in() {
+	let db = leptoskit_db::testing::sqlite_migrated(leptoskit_cloud::MIGRATIONS).await;
+	let first = leptoskit_cloud::server::bootstrap_operator(&db, "ops@example.com")
+		.await
+		.expect("bootstrap succeeds");
+	let second = leptoskit_cloud::server::bootstrap_operator(&db, "OPS@EXAMPLE.COM")
+		.await
+		.expect("second bootstrap is idempotent");
+	assert_eq!(first, second);
+	let list = leptoskit_cloud::server::operators(&db).await.unwrap();
+	assert_eq!(list, vec!["ops@example.com".to_owned()]);
+}
+
+#[tokio::test]
+async fn update_environment_scales_live_deployment_and_next_deploy_clears_scale_differs() {
+	let app = support::app().await;
+	let shop = Shop::open(&app).await;
+	let first = shop.ship("production", b"v1", &[]).await;
+	assert_eq!(first, 1);
+
+	// Read current revision before scaling.
+	let envs = app
+		.call(
+			"environments",
+			json!({ "organization": shop.org, "project": "notes" }),
+			shop.as_ana(),
+		)
+		.await
+		.expect(200)
+		.json();
+	let rev = envs[0]["revision"].as_i64().unwrap();
+
+	// Updating scale on a live environment queues an immediate cluster release
+	// job.
+	let updated = app
+		.call(
+			"update_environment",
+			json!({
+				"organization": shop.org,
+				"project": "notes",
+				"environment": "production",
+				"revision": rev,
+				"scale": {
+					"app": { "size": "s", "min": 1, "max": 1, "sleep": "never" },
+					"services": {}
+				}
+			}),
+			shop.as_ana(),
+		)
+		.await
+		.expect(200)
+		.json();
+	assert_eq!(updated["scale_differs"], true);
+
+	// The cluster worker can immediately claim and finish the scaling release
+	// job.
+	let claimed = shop
+		.cluster
+		.claim()
+		.await
+		.expect("immediate scaling release job");
+	assert_eq!(
+		claimed["input"]["kind"], "release",
+		"expected immediate release job: {claimed}"
+	);
+	let spec = &claimed["input"]["spec"];
+	assert_eq!(spec["processes"][0]["resources"]["memory_mib"], 256);
+	assert_eq!(spec["processes"][0]["scale"]["min"], 1);
+	assert_eq!(spec["processes"][0]["scale"]["max"], 1);
+	shop.cluster
+		.finish(&claimed, shipping::applied())
+		.await
+		.expect(200);
+
+	// A subsequent deploy consumes the override and clears scale_differs so
+	// future leptoskit.toml edits are not permanently locked out.
+	let _second = shop.ship("production", b"v2", &[]).await;
+	let envs_after = app
+		.call(
+			"environments",
+			json!({ "organization": shop.org, "project": "notes" }),
+			shop.as_ana(),
+		)
+		.await
+		.expect(200)
+		.json();
+	assert_eq!(envs_after[0]["scale_differs"], false);
+}

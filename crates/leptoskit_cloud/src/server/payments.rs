@@ -272,7 +272,32 @@ impl Stripe {
 			return Err(PaymentError::NotFound);
 		}
 
-		if !response.status().is_success() {
+		let status = response.status();
+
+		if !status.is_success() {
+			let mut err_body = Vec::new();
+
+			while let Some(chunk) = response.chunk().await.ok().flatten() {
+				let take = chunk.len().min(4096_usize.saturating_sub(err_body.len()));
+				err_body.extend_from_slice(&chunk[..take]);
+				if err_body.len() >= 4096 {
+					break;
+				}
+			}
+
+			let parsed = serde_json::from_slice::<Value>(&err_body).ok();
+			let kind = parsed
+				.as_ref()
+				.and_then(|v| v.pointer("/error/type").and_then(Value::as_str))
+				.unwrap_or("unknown");
+			let code = parsed
+				.as_ref()
+				.and_then(|v| v.pointer("/error/code").and_then(Value::as_str))
+				.unwrap_or("none");
+			eprintln!(
+				"leptoskit-cloud: stripe answered {} ({kind}/{code})",
+				status.as_u16()
+			);
 			return Err(PaymentError::Unavailable);
 		}
 
@@ -766,5 +791,99 @@ mod tests {
 		assert!(is_id("sub_1AbC"));
 		assert!(!is_id("sub/1"));
 		assert!(!is_id(""));
+	}
+
+	#[tokio::test]
+	async fn stripe_checkout_sends_api_version_and_handles_errors() {
+		use std::sync::Arc;
+
+		use leptoskit_axum::axum::Router;
+		use leptoskit_axum::axum::extract::State;
+		use leptoskit_axum::axum::http::HeaderMap;
+		use leptoskit_axum::axum::http::StatusCode;
+		use leptoskit_axum::axum::routing::post;
+		use tokio::sync::Mutex;
+
+		type RecordedRequests = Arc<Mutex<Vec<(String, String)>>>;
+
+		let captured: RecordedRequests = Arc::new(Mutex::new(Vec::new()));
+		let app = Router::new()
+			.route(
+				"/v1/checkout/sessions",
+				post(
+					|State(log): State<RecordedRequests>, headers: HeaderMap, body: String| {
+						async move {
+							let version = headers
+								.get("stripe-version")
+								.and_then(|v| v.to_str().ok())
+								.unwrap_or("")
+								.to_owned();
+							log.lock().await.push((version, body));
+							(
+								StatusCode::OK,
+								leptoskit_axum::axum::Json(json!({
+									"id": "cs_test_1",
+									"url": "https://checkout.stripe.com/c/pay/cs_test_1"
+								})),
+							)
+						}
+					},
+				),
+			)
+			.route(
+				"/v1/customers",
+				post(|| {
+					async {
+						(
+							StatusCode::BAD_REQUEST,
+							leptoskit_axum::axum::Json(json!({
+								"error": { "type": "invalid_request_error", "code": "parameter_invalid" }
+							})),
+						)
+					}
+				}),
+			)
+			.with_state(captured.clone());
+
+		let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+		let addr = listener.local_addr().unwrap();
+		let server = tokio::spawn(async move {
+			leptoskit_axum::axum::serve(listener, app).await.unwrap();
+		});
+
+		let stripe = Stripe::at(&format!("http://{addr}"), "rk_test_abc").unwrap();
+		let url = stripe
+			.checkout(Checkout {
+				customer: "cus_123",
+				price: "price_pro",
+				organization: Uuid::nil(),
+				success_url: "https://cloud.example/acme/settings/billing",
+				cancel_url: "https://cloud.example/acme/settings/billing",
+				automatic_tax: false,
+			})
+			.await
+			.expect("checkout succeeds");
+		assert_eq!(url, "https://checkout.stripe.com/c/pay/cs_test_1");
+
+		let recorded = captured.lock().await;
+		assert_eq!(recorded.len(), 1);
+		assert_eq!(recorded[0].0, STRIPE_API_VERSION);
+		assert!(recorded[0].1.contains("mode=subscription"));
+		assert!(
+			recorded[0]
+				.1
+				.contains("integration_identifier=leptoskit_cloud_plan_qhzrtwmk")
+		);
+
+		// Non-2xx Stripe JSON errors return Unavailable without panicking.
+		let err = stripe
+			.customer(NewCustomer {
+				organization: Uuid::nil(),
+			})
+			.await
+			.unwrap_err();
+		assert!(matches!(err, PaymentError::Unavailable));
+
+		server.abort();
 	}
 }

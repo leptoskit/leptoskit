@@ -107,6 +107,20 @@ pub const S3_ACCESS_KEY_ID: &str = "LEPTOSKIT_CLOUD_S3_ACCESS_KEY_ID";
 pub const S3_SECRET_ACCESS_KEY: &str = "LEPTOSKIT_CLOUD_S3_SECRET_ACCESS_KEY";
 /// `true` to address buckets as `endpoint/bucket`, as `MinIO` does.
 pub const S3_PATH_STYLE: &str = "LEPTOSKIT_CLOUD_S3_PATH_STYLE";
+/// `false` to disable `x-amz-checksum-sha256` / `x-amz-checksum-mode` headers
+/// for S3-compatible gateways that reject checksum headers. Defaults to `true`.
+pub const S3_CHECKSUM_HEADERS: &str = "LEPTOSKIT_CLOUD_S3_CHECKSUM_HEADERS";
+/// `false` on secondary control-plane replicas so only one replica runs the
+/// background sweeper loop. Defaults to `true`.
+pub const SWEEPER: &str = "LEPTOSKIT_CLOUD_SWEEPER";
+/// Optional email address to idempotently bootstrap as an operator during
+/// `migrate` or `serve` without requiring interactive email sign-in first.
+pub const BOOTSTRAP_OPERATOR_EMAIL: &str = "LEPTOSKIT_CLOUD_BOOTSTRAP_OPERATOR_EMAIL";
+/// Optional maximum bytes per database backup dump (defaults to 20 GiB).
+pub const BACKUP_CAP_BYTES: &str = "LEPTOSKIT_CLOUD_BACKUP_CAP_BYTES";
+/// Optional maximum unexpired runtime log bytes per organisation (defaults to
+/// 512 MiB).
+pub const RUNTIME_LOG_CAP_BYTES: &str = "LEPTOSKIT_CLOUD_RUNTIME_LOG_CAP_BYTES";
 /// In `--dev`, the directory the control plane keeps objects in and serves
 /// on loopback, instead of an S3 store.
 pub const STORAGE_DIR: &str = "LEPTOSKIT_CLOUD_STORAGE_DIR";
@@ -220,10 +234,19 @@ pub struct ServeConfig {
 	pub control: ControlConfig,
 	/// The console's client build: [`SITE`].
 	pub site: Option<std::path::PathBuf>,
+	/// Optional operator email to bootstrap on startup:
+	/// [`BOOTSTRAP_OPERATOR_EMAIL`].
+	pub bootstrap_operator_email: Option<String>,
 	/// Whether the origin is the bind address, which `--dev` uses when
 	/// [`ORIGIN`] isn't set: then a bind to port 0 is reached at the port it
 	/// gets.
 	origin_from_bind: bool,
+}
+
+/// Optional operator email read from [`BOOTSTRAP_OPERATOR_EMAIL`].
+#[must_use]
+pub fn bootstrap_operator_email(vars: Vars<'_>) -> Option<String> {
+	read(vars, BOOTSTRAP_OPERATOR_EMAIL)
 }
 
 impl ServeConfig {
@@ -295,6 +318,7 @@ impl ServeConfig {
 		let catalogue = catalogue(vars)?;
 		let payments = payments(vars, dev)?;
 		let resolver = resolver(vars, dev)?;
+		let shipping = shipping_settings(vars)?;
 		let (mailer, mailbox) = if dev {
 			let mailbox = Mailbox::new();
 			(SharedMailer::new(mailbox.clone()), Some(mailbox))
@@ -327,13 +351,41 @@ impl ServeConfig {
 				payments,
 				rate_limits: leptoskit_cloud::server::RateLimits::default(),
 				client_ip_header: client_ip_header(vars)?,
-				shipping: ShippingSettings::default(),
+				shipping,
 				dev: mailbox.map(|mailbox| DevMode { mailbox }),
 			},
 			site: read(vars, SITE).map(std::path::PathBuf::from),
+			bootstrap_operator_email: bootstrap_operator_email(vars),
 			origin_from_bind,
 		})
 	}
+}
+
+fn shipping_settings(vars: Vars<'_>) -> Result<ShippingSettings, ConfigError> {
+	let run_sweeper = match read(vars, SWEEPER).as_deref() {
+		None | Some("true") => true,
+		Some("false") => false,
+		Some(_) => return Err(invalid(SWEEPER, "must be `true` or `false`")),
+	};
+	let mut settings = ShippingSettings {
+		run_sweeper,
+		..ShippingSettings::default()
+	};
+	if let Some(raw) = read(vars, BACKUP_CAP_BYTES) {
+		settings.backup_cap = raw
+			.parse::<u64>()
+			.ok()
+			.filter(|&v| v > 0)
+			.ok_or_else(|| invalid(BACKUP_CAP_BYTES, "must be a positive byte count"))?;
+	}
+	if let Some(raw) = read(vars, RUNTIME_LOG_CAP_BYTES) {
+		settings.organization_runtime_log_cap = raw
+			.parse::<u64>()
+			.ok()
+			.filter(|&v| v > 0)
+			.ok_or_else(|| invalid(RUNTIME_LOG_CAP_BYTES, "must be a positive byte count"))?;
+	}
+	Ok(settings)
 }
 
 /// What reads a custom domain's challenge record: [`DNS_RESOLVER`], over
@@ -493,6 +545,11 @@ fn storage(vars: Vars<'_>, dev: bool) -> Result<StorageConfig, ConfigError> {
 		Some("true") => true,
 		Some(_) => return Err(invalid(S3_PATH_STYLE, "must be `true` or `false`")),
 	};
+	let checksum_headers = match read(vars, S3_CHECKSUM_HEADERS).as_deref() {
+		None | Some("true") => true,
+		Some("false") => false,
+		Some(_) => return Err(invalid(S3_CHECKSUM_HEADERS, "must be `true` or `false`")),
+	};
 
 	Ok(StorageConfig::S3(S3Config {
 		endpoint,
@@ -502,6 +559,7 @@ fn storage(vars: Vars<'_>, dev: bool) -> Result<StorageConfig, ConfigError> {
 		access_key_id: required(vars, S3_ACCESS_KEY_ID)?,
 		secret_access_key: SecretValue::new(required(vars, S3_SECRET_ACCESS_KEY)?),
 		path_style,
+		checksum_headers,
 	}))
 }
 

@@ -327,6 +327,16 @@ pub struct Limits {
 	/// Custom domains, over every environment.
 	#[serde(default)]
 	pub custom_domains: Option<u64>,
+	/// Largest process size allowed on this plan (for example `xs` on Hobby).
+	#[serde(default)]
+	pub max_size: Option<Size>,
+	/// Maximum replica count (`scale.max`) allowed per process on this plan.
+	#[serde(default)]
+	pub max_replicas: Option<u32>,
+	/// When true, processes on this plan must sleep when idle (`min = 0`,
+	/// `sleep = "when-idle"`).
+	#[serde(default)]
+	pub require_sleep: bool,
 }
 
 /// The plans and prices the cloud offers, validated.

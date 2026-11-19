@@ -158,6 +158,8 @@ pub use auth::SignInGate;
 #[cfg(any(feature = "postgres", feature = "sqlite"))]
 pub use auth::context;
 #[cfg(any(feature = "postgres", feature = "sqlite"))]
+pub use email::ensure_verified_email_account;
+#[cfg(any(feature = "postgres", feature = "sqlite"))]
 pub use error::AuthError;
 #[cfg(any(feature = "postgres", feature = "sqlite"))]
 pub use error::PasswordProblem;

@@ -420,6 +420,47 @@ pub(crate) fn refuse_unusable(account: &Account) -> Result<()> {
 	}
 }
 
+/// Idempotently ensures a verified account exists for `address` in `db`.
+/// Intended for non-interactive operator bootstrap where the initial operator
+/// account is provisioned before email sign-in.
+///
+/// # Errors
+///
+/// Returns [`leptoskit_db::DbError`] when the database operation fails.
+pub async fn ensure_verified_email_account(
+	db: &leptoskit_db::Db,
+	address: &Email,
+) -> leptoskit_db::Result<Id<Account>> {
+	if let Some(mut existing) = EmailAddress::query()
+		.filter(|row| row.address.eq(address.clone()))
+		.first(db)
+		.await?
+	{
+		if existing.verified_at.is_none() {
+			existing.verified_at = Some(leptoskit_db::now());
+			existing.save(db).await?;
+		}
+		return Ok(existing.account_id);
+	}
+	let tx = db.begin().await?;
+	let account = NewAccount {
+		disabled_at: None,
+		locked_until: None,
+	}
+	.insert(&tx)
+	.await?;
+	NewEmailAddress {
+		account_id: account.id,
+		address: address.clone(),
+		verified_at: Some(leptoskit_db::now()),
+		is_primary: true,
+	}
+	.insert(&tx)
+	.await?;
+	tx.commit().await?;
+	Ok(account.id)
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;

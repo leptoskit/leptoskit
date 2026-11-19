@@ -516,6 +516,66 @@ pub(crate) async fn refuse_another_project(
 	Ok(())
 }
 
+/// `Forbidden` (`quota_exceeded`) when any process scale exceeds the
+/// organisation's plan limits (`max_size`, `max_replicas`, or `require_sleep`).
+///
+/// # Errors
+///
+/// `Forbidden` (`quota_exceeded`) when a process asks for more than the plan
+/// allows.
+pub(crate) fn refuse_scale_above_plan(
+	shipping: &Shipping,
+	organization: &Organization,
+	scale: &crate::projects::EnvironmentScale,
+) -> rpc::Result<()> {
+	let Some(plan_limits) = limits(shipping, organization) else {
+		return Ok(());
+	};
+	let check_process = |name: &str, process: &crate::projects::ProcessScale| -> rpc::Result<()> {
+		if let Some(max_size) = plan_limits.max_size
+			&& process.size > max_size
+		{
+			return Err(rpc::Error::forbidden(format!(
+				"quota_exceeded: the `{}` plan allows process sizes up to `{max_size}`, and \
+				 `{name}` asks for `{}`",
+				organization.plan, process.size
+			)));
+		}
+
+		if let Some(max_replicas) = plan_limits.max_replicas
+			&& (process.max > max_replicas || process.min > max_replicas)
+		{
+			return Err(rpc::Error::forbidden(format!(
+				"quota_exceeded: the `{}` plan allows at most {max_replicas} replica{}, and \
+				 `{name}` asks for up to {}",
+				organization.plan,
+				if max_replicas == 1 { "" } else { "s" },
+				process.max.max(process.min)
+			)));
+		}
+
+		if plan_limits.require_sleep
+			&& (process.sleep != crate::size::Sleep::WhenIdle || process.min > 0)
+		{
+			return Err(rpc::Error::forbidden(format!(
+				"quota_exceeded: the `{}` plan requires processes to sleep when idle (`min = 0`, \
+				 `sleep = \"when-idle\"`), and `{name}` is set to stay awake",
+				organization.plan
+			)));
+		}
+
+		Ok(())
+	};
+
+	check_process("app", &scale.app)?;
+
+	for (name, service) in &scale.services {
+		check_process(name, service)?;
+	}
+
+	Ok(())
+}
+
 /// `Forbidden` (`quota_exceeded`) when `organization` has as many custom
 /// domains as its plan allows, over every environment it has.
 ///

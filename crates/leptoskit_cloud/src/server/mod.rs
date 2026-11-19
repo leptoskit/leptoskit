@@ -183,9 +183,17 @@ pub struct ShippingSettings {
 	/// The most build log bytes one organisation may keep at once; they
 	/// count until their retention ends.
 	pub organization_log_cap: u64,
+	/// The most runtime log bytes one organisation may keep at once across
+	/// its environments; newer chunks are dropped once full until older
+	/// chunks expire, while status and compute metering continue uninterrupted.
+	pub organization_runtime_log_cap: u64,
 	/// The most bytes one backup's dump may be. A worker is told it, and a
 	/// dump a worker says is larger is a backup that failed.
 	pub backup_cap: u64,
+	/// Whether this replica runs the background sweeper loop. Set to `false` on
+	/// secondary replicas in multi-replica deployments to avoid redundant S3
+	/// deletes and Stripe polling.
+	pub run_sweeper: bool,
 }
 
 impl Default for ShippingSettings {
@@ -193,8 +201,8 @@ impl Default for ShippingSettings {
 	/// be claimed, a sweep every fifteen seconds, archives kept a week,
 	/// build logs thirty days and runtime logs seven, 5 GiB of archives
 	/// per organisation, two hours for an attempt at a build, 64 MiB of log
-	/// per build, 2 GiB of build logs per organisation, and 20 GiB for a
-	/// backup.
+	/// per build, 2 GiB of build logs per organisation, 512 MiB of runtime
+	/// logs per organisation, and 20 GiB for a backup.
 	fn default() -> Self {
 		Self {
 			lease: Duration::from_mins(2),
@@ -210,7 +218,9 @@ impl Default for ShippingSettings {
 			publish_deadline: Duration::from_hours(3),
 			build_log_cap: 64 * 1024 * 1024,
 			organization_log_cap: 2 * 1024 * 1024 * 1024,
+			organization_runtime_log_cap: 512 * 1024 * 1024,
 			backup_cap: 20 * 1024 * 1024 * 1024,
+			run_sweeper: true,
 		}
 	}
 }
@@ -332,6 +342,38 @@ pub async fn grant_operator(db: &Db, email: &str) -> Result<Id<Account>, Operato
 		tx.commit().await?;
 	}
 
+	Ok(account)
+}
+
+/// Idempotently creates a verified account for `email` when none exists and
+/// makes it an operator. Used during first-time cluster bootstrap (for example
+/// via `LEPTOSKIT_CLOUD_BOOTSTRAP_OPERATOR_EMAIL`) so an operator can register
+/// clusters and pair workers before interactive email sign-in.
+///
+/// # Errors
+///
+/// [`OperatorError::UnknownEmail`] when `email` is not a valid email address,
+/// or [`OperatorError::Db`] when the database fails.
+pub async fn bootstrap_operator(db: &Db, email: &str) -> Result<Id<Account>, OperatorError> {
+	let db = db.system("cloud: bootstrap operator");
+	let normalized = email.trim().to_ascii_lowercase();
+	let address = leptoskit_db::Email::parse(&normalized)
+		.map_err(|_| OperatorError::UnknownEmail(normalized.clone()))?;
+	let account = leptoskit_auth::ensure_verified_email_account(&db, &address).await?;
+	let existing = Operator::query()
+		.filter(|operator| operator.account_id.eq(account))
+		.first(&db)
+		.await?;
+	if existing.is_none() {
+		let tx = db.begin().await?;
+		NewOperator {
+			account_id: account,
+		}
+		.insert(&tx)
+		.await?;
+		audit::record_system(&tx, "operator.bootstrap", Some(account.to_string())).await?;
+		tx.commit().await?;
+	}
 	Ok(account)
 }
 

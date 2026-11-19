@@ -189,7 +189,7 @@ pub struct Control {
 	router: Router,
 	cli_client_id: String,
 	services: Services,
-	_sweeper: Arc<Sweeper>,
+	_sweeper: Arc<Option<Sweeper>>,
 }
 
 /// The sweeper's task, stopped when the last [`Control`] goes.
@@ -326,7 +326,11 @@ impl Control {
 		// session layer then carries.
 		let router = router.layer(auth.layer()).layer(idp.layer());
 
-		let sweeper = Sweeper(tokio::spawn(sweep_forever(services.clone())));
+		let sweeper = if services.shipping().settings.run_sweeper {
+			Some(Sweeper(tokio::spawn(sweep_forever(services.clone()))))
+		} else {
+			None
+		};
 
 		Ok(Self {
 			auth,

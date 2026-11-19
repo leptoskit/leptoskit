@@ -866,7 +866,7 @@ pub(crate) async fn deploy(
 		Permission::Deploy,
 	)
 	.await?;
-	let environment = environment(cx.tx(), &project, environment_name).await?;
+	let mut environment = environment(cx.tx(), &project, environment_name).await?;
 	let services = services(cx.context())?;
 	let shipping = services.shipping();
 	let organization = access.organization.clone();
@@ -900,6 +900,18 @@ pub(crate) async fn deploy(
 		&cluster.facts.0,
 	)
 	.map_err(|error| rpc::Error::invalid(error.to_string()))?;
+	let deployed_scale = scale_of_plan(&plan);
+	super::billing::refuse_scale_above_plan(shipping, &organization, &deployed_scale)?;
+
+	// Once a deployment consumes the scale (either from a prior console
+	// override or from `leptoskit.toml`), sync the environment's stored
+	// scale and clear `scale_differs` so future `leptoskit.toml` edits take
+	// effect again.
+	if environment.scale_differs || environment.scale.0 != deployed_scale {
+		environment.scale = Json(deployed_scale);
+		environment.scale_differs = false;
+		environment.save(cx.tx()).await?;
+	}
 
 	let planned_database = plan.postgres;
 	let number = next_number(cx.tx(), &environment).await?;
@@ -1400,6 +1412,193 @@ pub(crate) async fn rollback(
 	let waker = services.clone();
 	cx.after_commit(async move { jobs::wake(&waker) });
 	Ok(summary(&row, &project.slug, &environment.name))
+}
+
+/// Converts a planned release's process sizes and replica counts back into an
+/// [`crate::projects::EnvironmentScale`].
+fn scale_of_plan(plan: &Plan) -> crate::projects::EnvironmentScale {
+	let mut scale = crate::projects::EnvironmentScale::sleeping();
+	for process in &plan.processes {
+		let entry = crate::projects::ProcessScale {
+			size: process.size,
+			min: process.min,
+			max: process.max,
+			sleep: if process.sleep {
+				crate::size::Sleep::WhenIdle
+			} else {
+				crate::size::Sleep::Never
+			},
+		};
+		if process.kind == ProcessKind::App {
+			scale.app = entry;
+		} else {
+			scale.services.insert(process.name.clone(), entry);
+		}
+	}
+	scale
+}
+
+/// Applies an updated environment scale immediately to a live deployment by
+/// queueing a cluster release job using the live image and new process
+/// resources/replicas. When the environment has no live deployment yet (or
+/// already has a deployment or restore in flight), this is a no-op and the
+/// saved scale will apply on the next deploy.
+pub(crate) async fn apply_live_scale(
+	cx: &rpc::MutationCx,
+	access: &authorize::Access,
+	project: &Project,
+	environment: &Environment,
+) -> rpc::Result<()> {
+	let environment_id = environment.id;
+	let Some(live) = Deployment::query()
+		.filter(|row| row.live_environment.eq(Some(environment_id)))
+		.first(cx.tx())
+		.await?
+	else {
+		return Ok(());
+	};
+	let in_flight = Deployment::query()
+		.filter(|row| row.in_flight_environment.eq(Some(environment_id)))
+		.first(cx.tx())
+		.await?;
+	if in_flight.is_some() {
+		return Ok(());
+	}
+	if super::backups::refuse_restoring(cx.tx(), environment)
+		.await
+		.is_err()
+	{
+		return Ok(());
+	}
+	let Some(placement) = Placement::query()
+		.filter(|row| row.environment_id.eq(environment_id))
+		.first(cx.tx())
+		.await?
+	else {
+		return Ok(());
+	};
+	let (Some(build), Some(mut spec)) = (live.build.0.clone(), live.spec.0.clone()) else {
+		return Ok(());
+	};
+
+	let services = services(cx.context())?;
+	super::billing::refuse_over_cap(cx.tx(), services.shipping(), &access.organization).await?;
+
+	let database = rollback_database(cx.tx(), &live, environment, placement.cluster_id).await?;
+	let (database, door) = database.unzip();
+	if door.is_some() {
+		spec.policy.database = door;
+	}
+
+	let scale = &environment.scale.0;
+	let mut plan = live.plan.0.clone();
+	for process in &mut spec.processes {
+		let target = if process.kind == ProcessKind::App {
+			Some(&scale.app)
+		} else {
+			scale.services.get(&process.name)
+		};
+		if let Some(target) = target {
+			process.resources = leptoskit_cloud_runtime::Resources {
+				cpu_request_millis: target.size.cpu_request_millicores(),
+				cpu_limit_millis: target.size.cpu_limit_millicores(),
+				memory_mib: target.size.memory_mib(),
+			};
+			process.scale = leptoskit_cloud_runtime::Scale {
+				min: target.min,
+				max: target.max,
+				sleep: target.sleep == crate::size::Sleep::WhenIdle,
+			};
+		}
+	}
+	for planned in &mut plan.processes {
+		let target = if planned.kind == ProcessKind::App {
+			Some(&scale.app)
+		} else {
+			scale.services.get(&planned.name)
+		};
+		if let Some(target) = target {
+			planned.size = target.size;
+			planned.min = target.min;
+			planned.max = target.max;
+			planned.sleep = target.sleep == crate::size::Sleep::WhenIdle;
+		}
+	}
+	spec.policy.quota = leptoskit_cloud_runtime::Quota::for_processes(&spec.processes);
+
+	let number = next_number(cx.tx(), environment).await?;
+	spec.deployment = self::number(number);
+	let held = super::domains::for_release(cx.tx(), environment_id).await?;
+	spec.routes
+		.retain(|route| route.hostname == placement.hostname || held.contains(&route.hostname));
+	spec.validate()
+		.map_err(|error| rpc::Error::invalid(format!("invalid_scale: {error}")))?;
+
+	let signer = signer(cx.tx(), &access.caller, None).await?;
+	let lines = rollback_lines(&live);
+	let row = lifecycle::create(
+		cx.tx(),
+		NewDeployment {
+			organization_id: access.organization.id,
+			project_id: project.id,
+			environment_id,
+			number,
+			state: lifecycle::queued(),
+			in_flight_environment: None,
+			live_environment: None,
+			source: Json(Source::Rollback {
+				deployment: live.id.uuid(),
+			}),
+			archive_id: None,
+			rollback_of: Some(live.number),
+			signer: Json(signer.clone()),
+			config: Json(live.config.0.clone()),
+			plan: Json(plan),
+			lines: Json(lines),
+			fine_print: Json(live.fine_print.0.clone()),
+			cluster_id: placement.cluster_id,
+			hostname: placement.hostname.clone(),
+			build: Json(Some(build)),
+			spec: Json(Some(spec.clone())),
+			unknown: false,
+			superseded_by: None,
+		},
+		vec![EventKind::Created { signer }],
+	)
+	.await?;
+	let mut changing = Changing::new(row);
+	changing.advance(DeploymentState::Migrating)?;
+	changing.advance(DeploymentState::RollingOut)?;
+	let row = changing.save(cx.tx()).await?;
+	jobs::queue(
+		cx.tx(),
+		Queue {
+			organization: access.organization.id,
+			deployment: Some(row.id),
+			environment: Some(environment_id),
+			cluster: Some(placement.cluster_id),
+			requirements: Vec::new(),
+			max_attempts: 1,
+			input: StoredInput::Release(Box::new(ReleaseInput {
+				deployment: DeploymentRef {
+					organization: access.organization.slug.clone(),
+					project: project.slug.clone(),
+					environment: environment.name.clone(),
+					number: self::number(number),
+				},
+				spec: RuntimeValue(spec),
+				migration: MigrationStep::None {
+					reason: format!("scaling live deployment #{} changes no schema", live.number),
+				},
+				previous: Some(self::number(live.number)),
+				database,
+			})),
+		},
+	)
+	.await?;
+	let waker = services.clone();
+	cx.after_commit(async move { jobs::wake(&waker) });
+	Ok(())
 }
 
 /// The number of the deployment live in `environment`.

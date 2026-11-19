@@ -1224,9 +1224,31 @@ async fn report(cx: &rpc::MutationCx, args: ReportStatus) -> rpc::Result<Reporte
 		chunk.environment_id.eq(environment_id) & chunk.kind.eq(LogKind::Runtime)
 	})
 	.await?;
+	let runtime_cap = i64::try_from(services.shipping().settings.organization_runtime_log_cap)
+		.unwrap_or(i64::MAX);
+	let mut runtime_used: i64 = if args.chunks.is_empty() {
+		0
+	} else {
+		let org_id = project.organization_id;
+		LogChunk::query()
+			.filter(|chunk| {
+				chunk.organization_id.eq(org_id)
+					& chunk.kind.eq(LogKind::Runtime)
+					& chunk.expires_at.gt(now)
+			})
+			.all(tx)
+			.await?
+			.into_iter()
+			.fold(0_i64, |acc, chunk| acc.saturating_add(chunk.bytes))
+	};
 	let mut lines = 0;
 
 	for reported in args.chunks {
+		let chunk_bytes = i64::from(reported.bytes);
+		if runtime_used.saturating_add(chunk_bytes) > runtime_cap {
+			break;
+		}
+		runtime_used = runtime_used.saturating_add(chunk_bytes);
 		let key = log_key(
 			project.organization_id.uuid(),
 			args.environment,
@@ -1242,7 +1264,7 @@ async fn report(cx: &rpc::MutationCx, args: ReportStatus) -> rpc::Result<Reporte
 			seq: 0,
 			first_line,
 			lines: i64::from(reported.lines),
-			bytes: i64::from(reported.bytes),
+			bytes: chunk_bytes,
 			digest: reported.digest,
 			object_key: key.clone(),
 			expires_at: now + delta(services.shipping().settings.runtime_logs),

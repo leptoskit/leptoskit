@@ -152,6 +152,10 @@ pub struct S3Config {
 	pub secret_access_key: SecretValue,
 	/// Address buckets as `endpoint/bucket` rather than `bucket.endpoint`.
 	pub path_style: bool,
+	/// Sign `x-amz-checksum-sha256` on presigned PUTs and request
+	/// `x-amz-checksum-mode: ENABLED` on HEAD. Disable for S3-compatible stores
+	/// that reject checksum headers.
+	pub checksum_headers: bool,
 }
 
 /// Where objects are kept.
@@ -504,6 +508,7 @@ struct S3Store {
 	credentials: rusty_s3::Credentials,
 	secret: String,
 	client: reqwest::Client,
+	checksum_headers: bool,
 }
 
 impl S3Store {
@@ -536,6 +541,7 @@ impl S3Store {
 			),
 			secret: config.secret_access_key.expose().to_owned(),
 			client,
+			checksum_headers: config.checksum_headers,
 		})
 	}
 
@@ -555,22 +561,34 @@ impl S3Store {
 		ttl: Duration,
 		expires_at: Timestamp,
 	) -> Presigned {
-		let checksum = checksum_header(digest);
 		let mut action = self.bucket(bucket).put_object(Some(&self.credentials), key);
 		action
 			.headers_mut()
 			.insert("content-length", size.to_string());
-		action
-			.headers_mut()
-			.insert("x-amz-checksum-sha256", checksum.clone());
+		let mut headers = BTreeMap::from([("content-length".to_owned(), size.to_string())]);
+		if self.checksum_headers {
+			let checksum = checksum_header(digest);
+			action
+				.headers_mut()
+				.insert("x-amz-checksum-sha256", checksum.clone());
+			headers.insert("x-amz-checksum-sha256".to_owned(), checksum);
+		}
 		Presigned {
 			url: action.sign(ttl).to_string(),
-			headers: BTreeMap::from([
-				("content-length".to_owned(), size.to_string()),
-				("x-amz-checksum-sha256".to_owned(), checksum),
-			]),
+			headers,
 			expires_at,
 		}
+	}
+
+	async fn head_plain(&self, bucket: Bucket, key: &str) -> Result<reqwest::Response, StoreError> {
+		let head = self
+			.bucket(bucket)
+			.head_object(Some(&self.credentials), key);
+		self.client
+			.head(head.sign(SELF_PRESIGN).as_str())
+			.send()
+			.await
+			.map_err(|_| StoreError::Request(format!("HEAD {key} got no answer")))
 	}
 
 	async fn verify(
@@ -580,17 +598,29 @@ impl S3Store {
 		size: u64,
 		digest: &Digest,
 	) -> Result<Verification, StoreError> {
-		let mut head = self
-			.bucket(bucket)
-			.head_object(Some(&self.credentials), key);
-		head.headers_mut().insert("x-amz-checksum-mode", "ENABLED");
-		let response = self
-			.client
-			.head(head.sign(SELF_PRESIGN).as_str())
-			.header("x-amz-checksum-mode", "ENABLED")
-			.send()
-			.await
-			.map_err(|_| StoreError::Request(format!("HEAD {key} got no answer")))?;
+		let response = if self.checksum_headers {
+			let mut head = self
+				.bucket(bucket)
+				.head_object(Some(&self.credentials), key);
+			head.headers_mut().insert("x-amz-checksum-mode", "ENABLED");
+			let resp = self
+				.client
+				.head(head.sign(SELF_PRESIGN).as_str())
+				.header("x-amz-checksum-mode", "ENABLED")
+				.send()
+				.await
+				.map_err(|_| StoreError::Request(format!("HEAD {key} got no answer")))?;
+			// S3-compatible stores that don't support `x-amz-checksum-mode`
+			// may answer 400 or 501; fall back to a plain HEAD and streaming
+			// verification.
+			if matches!(resp.status().as_u16(), 400 | 501) {
+				self.head_plain(bucket, key).await?
+			} else {
+				resp
+			}
+		} else {
+			self.head_plain(bucket, key).await?
+		};
 
 		match response.status().as_u16() {
 			404 => return Ok(Verification::Missing),
@@ -1296,6 +1326,7 @@ mod tests {
 				access_key_id: "AKIDEXAMPLE".to_owned(),
 				secret_access_key: SecretValue::new("wJalrXUtnFEMI-secret"),
 				path_style: true,
+				checksum_headers: true,
 			}),
 			"https://cloud.example.com",
 		)
@@ -1423,6 +1454,44 @@ mod tests {
 			requests
 				.iter()
 				.any(|request| request.starts_with("HEAD /sources/"))
+		);
+
+		// With checksum_headers disabled, presigned PUT omits
+		// x-amz-checksum-sha256 and verify uses plain HEAD + streaming
+		// GET cleanly.
+		let no_checksum = ObjectStore::new(
+			&StorageConfig::S3(S3Config {
+				endpoint: url::Url::parse(&endpoint).unwrap(),
+				region: "auto".to_owned(),
+				sources_bucket: "sources".to_owned(),
+				logs_bucket: "logs".to_owned(),
+				access_key_id: "AKIDEXAMPLE".to_owned(),
+				secret_access_key: SecretValue::new("wJalrXUtnFEMI-secret"),
+				path_style: true,
+				checksum_headers: false,
+			}),
+			"https://cloud.example.com",
+		)
+		.unwrap();
+		let presigned = no_checksum.presign_put(
+			Bucket::Sources,
+			&key,
+			bytes.len() as u64,
+			&digest,
+			Duration::from_mins(5),
+		);
+		assert!(
+			!presigned
+				.unwrap()
+				.headers
+				.contains_key("x-amz-checksum-sha256")
+		);
+		assert_eq!(
+			no_checksum
+				.verify(Bucket::Sources, &key, bytes.len() as u64, &digest)
+				.await
+				.unwrap(),
+			Verification::Matches
 		);
 	}
 
