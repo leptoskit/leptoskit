@@ -458,6 +458,32 @@ impl Outcome {
 	}
 }
 
+/// What a transport would post for one message, before anything about a
+/// particular endpoint or the operator's credentials is added: the pure
+/// half of an attempt. Each transport's `attempt` posts exactly this body
+/// with these headers — plus its authorization, and for APNs the app's
+/// topic — so a preview built from it shows the bytes a device's provider
+/// is sent.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Shaped {
+	/// The request's headers, lower case, without the authorization and
+	/// without anything that names the operator's configuration.
+	pub(crate) headers: Vec<(String, String)>,
+	/// The body as it is posted — for Web Push, before it is encrypted.
+	pub(crate) body: Vec<u8>,
+	/// What the provider's limit counts for this body.
+	pub(crate) bytes: usize,
+	/// The provider's limit.
+	pub(crate) limit: usize,
+	/// How many steps of the documented degradation order were applied to
+	/// make it fit: none, the platform overrides and the image, then the
+	/// sound, badge, and link too, then the send's `data` as well.
+	pub(crate) trims: usize,
+	/// Whether it fits after every step. When it doesn't, nothing is
+	/// posted and the delivery ends `oversized`.
+	pub(crate) fits: bool,
+}
+
 /// One provider's sender. `credential` is the stored, canonical
 /// credential string for this transport's platform.
 pub(crate) trait Transport: Send + Sync {

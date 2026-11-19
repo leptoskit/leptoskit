@@ -55,6 +55,7 @@ use crate::service::transport::Boundary;
 use crate::service::transport::Message;
 use crate::service::transport::Outcome;
 use crate::service::transport::Pinned;
+use crate::service::transport::Shaped;
 use crate::service::transport::Transport;
 use crate::service::transport::WireRequest;
 use crate::service::transport::WireResponse;
@@ -191,9 +192,7 @@ impl WebPush {
 		&self,
 		endpoint: &str,
 		keys: &WebPushKeys,
-		message: &Message,
-		include: Include,
-		ttl: i64,
+		shaped: &Shaped,
 	) -> Result<WireRequest, BuildFailure> {
 		let ua_public = base64_url(&keys.p256dh).ok_or(BuildFailure::Keys)?;
 		let auth = base64_url(&keys.auth).ok_or(BuildFailure::Keys)?;
@@ -207,32 +206,13 @@ impl WebPush {
 			.map(|url| url.origin().ascii_serialization())
 			.ok_or(BuildFailure::Keys)?;
 		let authorization = self.vapid_header(&audience)?;
-		let body = encrypt_payload(&ua_public, &auth, &envelope(message, include))?;
-
-		// Urgency tells the push service how hard to try: a high-priority
-		// send wakes the radio, an ordinary one may wait for the device
-		// to wake on its own. Unset is the service's ordinary, as before.
-		let urgency = match message.options.priority {
-			Some(crate::options::SendPriority::High) => "high",
-			Some(crate::options::SendPriority::Normal) | None => "normal",
-		};
+		let body = encrypt_payload(&ua_public, &auth, &shaped.body)?;
+		let mut headers = shaped.headers.clone();
+		headers.push(("authorization".to_owned(), authorization));
 
 		Ok(WireRequest {
 			url: endpoint.to_owned(),
-			headers: vec![
-				("ttl".to_owned(), ttl.clamp(0, DEFAULT_TTL_SECS).to_string()),
-				("urgency".to_owned(), urgency.to_owned()),
-				// The stable tag: a repeat replaces, not stacks, wherever the
-				// service coalesces — best-effort, like every provider's. A topic
-				// is 32 base64url characters, exactly a UUID without its dashes.
-				("topic".to_owned(), message.id.simple().to_string()),
-				("content-encoding".to_owned(), "aes128gcm".to_owned()),
-				(
-					"content-type".to_owned(),
-					"application/octet-stream".to_owned(),
-				),
-				("authorization".to_owned(), authorization),
-			],
+			headers,
 			body,
 			pinned: None,
 		})
@@ -342,53 +322,33 @@ impl Transport for WebPush {
 				}
 			};
 
-			let ttl = message.expires_at.map_or(DEFAULT_TTL_SECS, |expires_at| {
-				(expires_at - leptoskit_db::now())
-					.num_seconds()
-					.clamp(0, DEFAULT_TTL_SECS)
-			});
+			// Size is checked on the encrypted body, trimmed in the
+			// shared order; a body past the record size would overflow
+			// the single record its header declares, so nothing oversized
+			// is ever sent.
+			let shaped = shape(message, leptoskit_db::now());
 
-			// Size is checked on the encrypted body, trimming the
-			// payload's optional extras in the shared order — platform
-			// overrides and the image, then sound, badge, and link —
-			// before falling back to the id-only envelope, and past it a
-			// terminal clear result: a body past the record size would
-			// overflow the single record its header declares, so nothing
-			// oversized is ever sent.
-			for include in [
-				Include::All,
-				Include::NoPlatform,
-				Include::NoSimpleOptions,
-				Include::Minimal,
-			] {
-				match self.build_wire(
-					&subscription.endpoint,
-					&subscription.keys,
-					message,
-					include,
-					ttl,
-				) {
-					Ok(request) if request.body.len() <= BODY_LIMIT => {
-						return self.post(request, pinned).await;
-					}
-					Ok(_) => {}
-					// A `p256dh` that isn't a point on the curve fails every
-					// stage alike: no payload size helps, and saying
-					// `oversized` would send the operator to the message.
-					Err(BuildFailure::Keys) => {
-						return Outcome::Ended {
-							reason: DeliveryReason::SubscriptionUnusable,
-							invalidate: false,
-						};
-					}
-					// The system RNG refused: it comes back.
-					Err(BuildFailure::Random) => return Outcome::Transient { after: None },
+			match self.build_wire(&subscription.endpoint, &subscription.keys, &shaped) {
+				Ok(request) if shaped.fits && request.body.len() <= BODY_LIMIT => {
+					self.post(request, pinned).await
 				}
-			}
-
-			Outcome::Ended {
-				reason: DeliveryReason::Oversized,
-				invalidate: false,
+				Ok(_) => {
+					Outcome::Ended {
+						reason: DeliveryReason::Oversized,
+						invalidate: false,
+					}
+				}
+				// A `p256dh` that isn't a point on the curve fails
+				// whatever the payload: saying `oversized` would send the
+				// operator to the message.
+				Err(BuildFailure::Keys) => {
+					Outcome::Ended {
+						reason: DeliveryReason::SubscriptionUnusable,
+						invalidate: false,
+					}
+				}
+				// The system RNG refused: it comes back.
+				Err(BuildFailure::Random) => Outcome::Transient { after: None },
 			}
 		};
 
@@ -534,6 +494,70 @@ enum Include {
 	NoSimpleOptions,
 	/// The id-only envelope: the visible text and the notification's id.
 	Minimal,
+}
+
+/// How long the encrypted body of a `plaintext`-byte envelope is: the
+/// RFC 8188 header — a 16-byte salt, the 4-byte record size, the key id's
+/// length, and the sender's 65-byte public point — then the one record:
+/// the envelope, its 1-byte delimiter, and the 16-byte AES-GCM tag.
+const fn encrypted_len(plaintext: usize) -> usize {
+	16 + 4 + 1 + 65 + plaintext + 1 + 16
+}
+
+/// What a browser's push service is sent for `message`, as of `now` —
+/// which the remaining life the `ttl` header names is measured from: the
+/// envelope the worker reads, before it is encrypted for one browser,
+/// trimmed in the shared order — the web options and the image, then the
+/// silent flag, badge, and link, then the id-only envelope — until its
+/// encrypted length fits the record.
+pub(crate) fn shape(message: &Message, now: leptoskit_db::Timestamp) -> Shaped {
+	let ttl = message.expires_at.map_or(DEFAULT_TTL_SECS, |expires_at| {
+		(expires_at - now).num_seconds().clamp(0, DEFAULT_TTL_SECS)
+	});
+	// Urgency tells the push service how hard to try: a high-priority
+	// send wakes the radio, an ordinary one may wait for the device to
+	// wake on its own. Unset is the service's ordinary, as before.
+	let urgency = match message.options.priority {
+		Some(crate::options::SendPriority::High) => "high",
+		Some(crate::options::SendPriority::Normal) | None => "normal",
+	};
+	let headers = vec![
+		("ttl".to_owned(), ttl.clamp(0, DEFAULT_TTL_SECS).to_string()),
+		("urgency".to_owned(), urgency.to_owned()),
+		// The stable tag: a repeat replaces, not stacks, wherever the
+		// service coalesces — best-effort, like every provider's. A topic
+		// is 32 base64url characters, exactly a UUID without its dashes.
+		("topic".to_owned(), message.id.simple().to_string()),
+		("content-encoding".to_owned(), "aes128gcm".to_owned()),
+		(
+			"content-type".to_owned(),
+			"application/octet-stream".to_owned(),
+		),
+	];
+	let stages = [
+		Include::All,
+		Include::NoPlatform,
+		Include::NoSimpleOptions,
+		Include::Minimal,
+	];
+	let mut trims = 0;
+	let mut body = envelope(message, stages[0]);
+
+	while encrypted_len(body.len()) > BODY_LIMIT && trims + 1 < stages.len() {
+		trims += 1;
+		body = envelope(message, stages[trims]);
+	}
+
+	let bytes = encrypted_len(body.len());
+
+	Shaped {
+		headers,
+		body,
+		bytes,
+		limit: BODY_LIMIT,
+		trims,
+		fits: bytes <= BODY_LIMIT,
+	}
 }
 
 /// The push envelope a client's service worker reads: the visible text,
@@ -763,6 +787,33 @@ mod tests {
 		assert_eq!(
 			body, expected,
 			"the RFC 8291 Appendix A body, byte for byte"
+		);
+	}
+
+	/// The length a preview predicts for an encrypted body is the length
+	/// encryption gives it, for an empty envelope, a small one, and one
+	/// that exactly fills the record.
+	#[test]
+	fn the_predicted_encrypted_length_is_the_real_one() {
+		let ua_public = base64_url(
+			"BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4",
+		)
+		.unwrap();
+		let auth_secret = base64_url("BTBZMqHH6r4Tts7J_aSIgg").unwrap();
+
+		for length in [0, 1, 41, 1_000, super::BODY_LIMIT - super::encrypted_len(0)] {
+			let Ok(body) = super::encrypt_payload(&ua_public, &auth_secret, &vec![b'x'; length])
+			else {
+				panic!("a {length}-byte envelope encrypts");
+			};
+
+			assert_eq!(body.len(), super::encrypted_len(length), "{length} bytes");
+		}
+
+		assert_eq!(
+			super::encrypted_len(super::BODY_LIMIT - super::encrypted_len(0)),
+			super::BODY_LIMIT,
+			"the largest envelope fills the record exactly"
 		);
 	}
 }

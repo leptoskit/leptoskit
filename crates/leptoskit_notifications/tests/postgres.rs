@@ -40,6 +40,9 @@ const BOB: Uuid = Uuid::from_u128(0xB0B0_0000_0000_0000_0000_0000_0000_0002);
 mod postgres;
 use postgres::Postgres;
 
+#[cfg(feature = "service")]
+#[path = "support/composer.rs"]
+mod composer;
 #[path = "support/engine.rs"]
 mod engine;
 #[cfg(feature = "service")]
@@ -1511,6 +1514,200 @@ async fn rows_from_before_the_migration_are_unopened_on_postgres() {
 		.expect("the database opens");
 
 	opens::rows_from_before_the_migration_are_unopened(
+		&db,
+		&POSTGRES_MIGRATIONS[..before],
+		POSTGRES_MIGRATIONS,
+	)
+	.await;
+}
+
+/// A migrated database on `postgres`, and the composer checks' service
+/// over it: the send history, the audience catalogue, and what stands
+/// behind them.
+#[cfg(feature = "service")]
+async fn composer_service(postgres: &Postgres, workers: bool) -> composer::Service {
+	let db = Db::connect(&postgres.database())
+		.await
+		.expect("the database opens");
+	db.migrate(POSTGRES_MIGRATIONS)
+		.await
+		.expect("migrations apply");
+
+	composer::serve(&db, workers).await
+}
+
+/// The list of sends pages newest first on Postgres too.
+#[tokio::test(flavor = "multi_thread")]
+#[cfg(feature = "service")]
+async fn the_list_pages_newest_first_on_postgres() {
+	let Some(postgres) = Postgres::start() else {
+		return;
+	};
+	composer::the_list_pages_newest_first(&composer_service(&postgres, false).await).await;
+}
+
+/// Every kind of send is listed with its content on Postgres too.
+#[tokio::test(flavor = "multi_thread")]
+#[cfg(feature = "service")]
+async fn each_kind_of_send_is_listed_with_its_content_on_postgres() {
+	let Some(postgres) = Postgres::start() else {
+		return;
+	};
+	composer::each_kind_of_send_is_listed_with_its_content(
+		&composer_service(&postgres, false).await,
+	)
+	.await;
+}
+
+/// A report counts its pushes and its reads by the hour on Postgres, where
+/// the hour is cut from a `timestamptz` and the counts come back as `bigint`.
+#[tokio::test(flavor = "multi_thread")]
+#[cfg(feature = "service")]
+async fn a_report_describes_the_send_and_counts_its_pushes_and_reads_on_postgres() {
+	let Some(postgres) = Postgres::start() else {
+		return;
+	};
+	composer::a_report_describes_the_send_and_counts_its_pushes_and_reads(
+		&composer_service(&postgres, true).await,
+	)
+	.await;
+}
+
+/// Only the app reads the history on Postgres too.
+#[tokio::test(flavor = "multi_thread")]
+#[cfg(feature = "service")]
+async fn only_the_app_reads_the_history_on_postgres() {
+	let Some(postgres) = Postgres::start() else {
+		return;
+	};
+	composer::only_the_app_reads_the_history(&composer_service(&postgres, false).await).await;
+}
+
+/// A recipients send's retry still answers correctly on Postgres, now that
+/// its spec is stored.
+#[tokio::test(flavor = "multi_thread")]
+#[cfg(feature = "service")]
+async fn a_retried_recipients_send_still_answers_correctly_on_postgres() {
+	let Some(postgres) = Postgres::start() else {
+		return;
+	};
+	composer::a_retried_recipients_send_still_answers_correctly(
+		&composer_service(&postgres, false).await,
+	)
+	.await;
+}
+
+/// A pruned send leaves the list on Postgres too.
+#[tokio::test(flavor = "multi_thread")]
+#[cfg(feature = "service")]
+async fn a_pruned_send_leaves_the_list_on_postgres() {
+	let Some(postgres) = Postgres::start() else {
+		return;
+	};
+	composer::a_pruned_send_leaves_the_list(&composer_service(&postgres, false).await).await;
+}
+
+/// The overview counts what the service knows on Postgres too.
+#[tokio::test(flavor = "multi_thread")]
+#[cfg(feature = "service")]
+async fn the_overview_counts_what_the_service_knows_on_postgres() {
+	let Some(postgres) = Postgres::start() else {
+		return;
+	};
+	composer::the_overview_counts_what_the_service_knows(&composer_service(&postgres, false).await)
+		.await;
+}
+
+/// Topics are listed by the recursive walk on Postgres, where a prefix is
+/// matched under the database's own collation.
+#[tokio::test(flavor = "multi_thread")]
+#[cfg(feature = "service")]
+async fn topics_are_listed_with_their_subscribers_on_postgres() {
+	let Some(postgres) = Postgres::start() else {
+		return;
+	};
+	composer::topics_are_listed_with_their_subscribers(&composer_service(&postgres, false).await)
+		.await;
+}
+
+/// Attribute keys and values are listed on Postgres too.
+#[tokio::test(flavor = "multi_thread")]
+#[cfg(feature = "service")]
+async fn attributes_are_listed_with_their_values_on_postgres() {
+	let Some(postgres) = Postgres::start() else {
+		return;
+	};
+	composer::attributes_are_listed_with_their_values(&composer_service(&postgres, false).await)
+		.await;
+}
+
+/// Categories are listed from both their sources on Postgres too.
+#[tokio::test(flavor = "multi_thread")]
+#[cfg(feature = "service")]
+async fn categories_are_listed_with_opt_outs_and_last_send_on_postgres() {
+	let Some(postgres) = Postgres::start() else {
+		return;
+	};
+	composer::categories_are_listed_with_opt_outs_and_last_send(
+		&composer_service(&postgres, false).await,
+	)
+	.await;
+}
+
+/// An estimate is exact below its cap and says so above it on Postgres too.
+#[tokio::test(flavor = "multi_thread")]
+#[cfg(feature = "service")]
+async fn an_estimate_is_exact_below_its_cap_and_says_so_above_it_on_postgres() {
+	let Some(postgres) = Postgres::start() else {
+		return;
+	};
+	composer::an_estimate_is_exact_below_its_cap_and_says_so_above_it(
+		&composer_service(&postgres, false).await,
+	)
+	.await;
+}
+
+/// A person's endpoints are listed without credentials on Postgres too.
+#[tokio::test(flavor = "multi_thread")]
+#[cfg(feature = "service")]
+async fn a_persons_endpoints_are_listed_without_credentials_on_postgres() {
+	let Some(postgres) = Postgres::start() else {
+		return;
+	};
+	composer::a_persons_endpoints_are_listed_without_credentials(
+		&composer_service(&postgres, false).await,
+	)
+	.await;
+}
+
+/// Only the app reads the catalogue on Postgres too.
+#[tokio::test(flavor = "multi_thread")]
+#[cfg(feature = "service")]
+async fn only_the_app_reads_the_catalogue_on_postgres() {
+	let Some(postgres) = Postgres::start() else {
+		return;
+	};
+	composer::only_the_app_reads_the_catalogue(&composer_service(&postgres, false).await).await;
+}
+
+/// The send-history migration applies over existing sends on Postgres,
+/// and leaves them out of the list.
+#[tokio::test(flavor = "multi_thread")]
+#[cfg(feature = "service")]
+async fn sends_from_before_the_history_are_not_listed_on_postgres() {
+	let Some(postgres) = Postgres::start() else {
+		return;
+	};
+	let before = POSTGRES_MIGRATIONS
+		.iter()
+		.position(|migration| migration.name.ends_with("_open_tracking"))
+		.expect("the registry lists open_tracking")
+		+ 1;
+	let db = Db::connect(&postgres.database())
+		.await
+		.expect("the database opens");
+
+	composer::sends_from_before_the_history_are_not_listed(
 		&db,
 		&POSTGRES_MIGRATIONS[..before],
 		POSTGRES_MIGRATIONS,

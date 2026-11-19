@@ -521,6 +521,391 @@ async fn a_send_report_counts_only_the_sends_own_rows(db: &Db) {
 	);
 }
 
+/// What a read answers: its rows.
+type Rows = Vec<Vec<Value>>;
+
+/// The reads the composer added, each through its index and each counting
+/// or listing what was seeded: the page of the send list and a category's
+/// latest send, a report's push breakdown and its reads by the hour, the
+/// walks of distinct topics, attribute keys, attribute values, and
+/// categories — one index seek per name, whatever the tables hold — and
+/// the capped counts behind them. The catalogue's statements are the
+/// service's own, from `service::plans`.
+#[expect(
+	clippy::too_many_lines,
+	clippy::cognitive_complexity,
+	reason = "one corpus, and every read the composer added against it"
+)]
+async fn the_composers_reads_use_their_indexes(db: &Db) {
+	use leptoskit_notifications::push::PushPlatform;
+	use leptoskit_notifications::service::plans;
+	use leptoskit_notifications::service::plans::Names;
+
+	let dialect = db.dialect();
+	let sql = Sql(dialect);
+	let corpus = Corpus::seed(db).await;
+	let stamp = sql.timestamp(
+		&corpus
+			.base
+			.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+	);
+	let yes = match dialect {
+		Dialect::Sqlite => "1",
+		Dialect::Postgres => "true",
+	};
+	let no = match dialect {
+		Dialect::Sqlite => "0",
+		Dialect::Postgres => "false",
+	};
+
+	// 2,000 sends in the history across 40 categories, among 1,000 from
+	// before it.
+	let mut sends = Vec::new();
+
+	for n in 0..3_000_u128 {
+		let (history, category) = if n % 3 == 0 {
+			("NULL".to_owned(), "NULL".to_owned())
+		} else {
+			(
+				sql.uuid(id_at(
+					corpus.base + Duration::milliseconds(i64::try_from(n).unwrap()),
+					60_000 + n,
+				)),
+				format!("'cat-{:02}'", n % 40),
+			)
+		};
+		sends.push(format!(
+			"('sent-{n}', '{}', 1, 0, 1, 'complete', {history}, {category}, {stamp})",
+			"0".repeat(64)
+		));
+	}
+
+	insert(
+		db,
+		"sends",
+		"idempotency_key, intent, delivered, skipped_opted_out, targeted, state, history_id, \
+		 category, created_at",
+		&sends,
+	)
+	.await;
+
+	// 9,000 attributes: everyone has one of three plans, and one of 300
+	// cities.
+	let mut attributes = Vec::new();
+
+	for n in 0..4_500_u128 {
+		for (key, value) in [
+			(
+				"plan",
+				["free", "pro", "team"][usize::try_from(n % 3).unwrap()].to_owned(),
+			),
+			("city", format!("city-{:03}", n % 300)),
+		] {
+			attributes.push(format!(
+				"({}, {}, '{key}', '{value}', {stamp}, {stamp})",
+				sql.new_id(),
+				sql.uuid(person(n)),
+			));
+		}
+	}
+
+	insert(
+		db,
+		"person_attributes",
+		"id, person, key, value, created_at, updated_at",
+		&attributes,
+	)
+	.await;
+
+	// 6,000 preferences over 60 categories, twenty of which no send has
+	// used; a third of them opt-outs.
+	let mut preferences = Vec::new();
+
+	for n in 0..6_000_u128 {
+		preferences.push(format!(
+			"({}, {}, 'cat-{:02}', {}, {stamp})",
+			sql.new_id(),
+			sql.uuid(person(n / 60)),
+			n % 60,
+			if (n / 60) % 3 == 0 { yes } else { no },
+		));
+	}
+
+	insert(
+		db,
+		"category_preferences",
+		"id, person, category, opted_out, created_at",
+		&preferences,
+	)
+	.await;
+
+	// 6,000 endpoints: 2,000 people with two APNs devices each, 500 of
+	// those people's devices gone, and 2,000 FCM devices.
+	let mut endpoints = Vec::new();
+
+	for n in 0..6_000_u128 {
+		let (platform, who) = if n < 4_000 {
+			("apns", n / 2)
+		} else {
+			("fcm", n)
+		};
+		endpoints.push(format!(
+			"({}, {}, '{platform}', 'sealed', 1, '{n:064}', {}, {stamp})",
+			sql.uuid(id_at(corpus.base, 70_000 + n)),
+			sql.uuid(person(who)),
+			if n < 1_000 { stamp.as_str() } else { "NULL" },
+		));
+	}
+
+	insert(
+		db,
+		"push_endpoints",
+		"id, person, platform, credential, generation, fingerprint, invalidated_at, created_at",
+		&endpoints,
+	)
+	.await;
+
+	// A hundred of the big send's notifications, read across three hours.
+	let mut read = Vec::new();
+
+	for n in 0..300_u128 {
+		let at = corpus.base + Duration::minutes(i64::try_from(n % 3).unwrap() * 60 + 5);
+		read.push(format!(
+			"({}, '{}', {}, 'news', 't', '', '{{}}', {stamp}, {}, {stamp})",
+			sql.uuid(id_at(corpus.base, 80_000 + n)),
+			Corpus::BIG,
+			sql.uuid(person(9_000 + n)),
+			if n < 100 {
+				sql.timestamp(&at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true))
+			} else {
+				"NULL".to_owned()
+			},
+		));
+	}
+
+	insert(
+		db,
+		"notifications",
+		"id, send_key, person, category, title, body, data, visible_at, read_at, created_at",
+		&read,
+	)
+	.await;
+	run(db, "ANALYZE").await;
+
+	let text = |text: &str| Value::Text(text.to_owned());
+	let cases: Vec<(&str, Statement, &str, Option<Rows>)> = vec![
+		(
+			"a page of the send list",
+			Statement::new(
+				numbered(
+					dialect,
+					"SELECT idempotency_key FROM sends WHERE history_id IS NOT NULL ORDER BY \
+					 history_id DESC LIMIT {}",
+				),
+				vec![Value::Int(51)],
+			),
+			"sends_history_id_idx",
+			None,
+		),
+		(
+			"a category's latest send",
+			Statement::new(
+				numbered(
+					dialect,
+					"SELECT idempotency_key FROM sends WHERE category = {} AND history_id IS NOT \
+					 NULL ORDER BY history_id DESC LIMIT 1",
+				),
+				vec![text("cat-07")],
+			),
+			"sends_category_history_id_idx",
+			Some(vec![vec![text("sent-2927")]]),
+		),
+		(
+			// One of the small sends: the big one is half the table, which
+			// Postgres rightly reads whole.
+			"a report's push breakdown",
+			plans::push_counts(dialect, "small-7"),
+			"push_deliveries_send_key_",
+			Some(vec![vec![
+				text("apns"),
+				text("accepted"),
+				Value::Null,
+				Value::Int(10),
+			]]),
+		),
+		(
+			"a report's reads by the hour",
+			plans::reads_by_hour(dialect, Corpus::BIG),
+			"notifications_send_key_person_key",
+			None,
+		),
+		(
+			"the walk of topics",
+			plans::names(dialect, Names::Topics, Some("alpha"), None, 3),
+			"topic_subscriptions_topic_person_idx",
+			Some(vec![
+				vec![text("beta")],
+				vec![text("small-0")],
+				vec![text("small-1")],
+			]),
+		),
+		(
+			"the walk of attribute keys",
+			plans::names(dialect, Names::AttributeKeys, None, None, 51),
+			"person_attributes_key_value_idx",
+			Some(vec![vec![text("city")], vec![text("plan")]]),
+		),
+		(
+			"the walk of one key's values",
+			plans::names(
+				dialect,
+				Names::AttributeValues("city"),
+				Some("city-297"),
+				None,
+				51,
+			),
+			"person_attributes_key_value_idx",
+			Some(vec![vec![text("city-298")], vec![text("city-299")]]),
+		),
+		(
+			"the walk of categories",
+			plans::names(dialect, Names::Categories, Some("cat-37"), None, 4),
+			"category_preferences_category_opted_out_idx",
+			Some(vec![
+				vec![text("cat-38")],
+				vec![text("cat-39")],
+				vec![text("cat-40")],
+				vec![text("cat-41")],
+			]),
+		),
+		(
+			"the walk of categories, on the sends' side",
+			plans::names(dialect, Names::Categories, None, None, 2),
+			"sends_category_history_id_idx",
+			Some(vec![vec![text("cat-00")], vec![text("cat-01")]]),
+		),
+		(
+			"a topic's subscriber count",
+			plans::topic_count(dialect, "small-7"),
+			"topic_subscriptions_topic_person_idx",
+			Some(vec![vec![Value::Int(20)]]),
+		),
+		(
+			"a large topic's subscriber count, of half the table",
+			plans::topic_count(dialect, "alpha"),
+			"topic_subscriptions_topic_person_idx",
+			Some(vec![vec![Value::Int(1_500)]]),
+		),
+		(
+			"the count of people holding a key, of half the table",
+			plans::attribute_count(dialect, "plan", None),
+			"person_attributes_key_value_idx",
+			Some(vec![vec![Value::Int(4_500)]]),
+		),
+		(
+			"the count of people holding a value",
+			plans::attribute_count(dialect, "city", Some("city-007")),
+			"person_attributes_key_value_idx",
+			Some(vec![vec![Value::Int(15)]]),
+		),
+		(
+			"a category's opt-out count",
+			plans::opted_out_count(dialect, "cat-05"),
+			"category_preferences_category_opted_out_idx",
+			None,
+		),
+		(
+			"the people with a live endpoint on a platform, of half the table",
+			plans::platform_people(dialect, PushPlatform::Apns),
+			"push_endpoints_platform_invalidated_at_person_idx",
+			Some(vec![vec![Value::Int(1_500)]]),
+		),
+	];
+
+	for (what, statement, index, answer) in cases {
+		let plan = explain(db, &statement).await;
+
+		// A count of half a table is the one place Postgres may rightly
+		// read the table instead: the count stops at its cap either way,
+		// which the plan's `Limit` shows.
+		let bounded = dialect == Dialect::Postgres && what.ends_with(", of half the table");
+
+		if bounded {
+			assert!(
+				plan.contains("Limit"),
+				"{what} should stop at its cap:\n{plan}"
+			);
+		} else {
+			assert!(
+				plan.contains(index),
+				"{what} should read through {index}:\n{plan}"
+			);
+		}
+
+		// None of the others walks a whole table to find its rows: on SQLite a
+		// bare `SCAN t` is a walk of the table, and one `USING … INDEX`
+		// is a read of the index.
+		for line in plan.lines() {
+			assert!(
+				!(line.contains("SCAN")
+					&& !line.contains("INDEX")
+					&& !line.contains("walk")
+					&& !line.contains("capped")
+					&& !line.contains("nexts")
+					&& !line.contains("SUBQUERY")
+					&& !line.contains("CONSTANT"))
+					&& (bounded || !line.contains("Seq Scan")),
+				"{what} should not walk a table:\n{plan}"
+			);
+		}
+
+		if let Some(answer) = answer {
+			assert_eq!(
+				db.fetch(statement).await.expect("the read runs"),
+				answer,
+				"{what}"
+			);
+		}
+	}
+
+	// The breakdown and the hours count what was seeded.
+	let mut pushes = db
+		.fetch(plans::push_counts(dialect, Corpus::BIG))
+		.await
+		.expect("the breakdown");
+	pushes.sort_by_key(|row| format!("{row:?}"));
+	assert_eq!(
+		pushes,
+		vec![
+			vec![
+				text("fcm"),
+				text("accepted"),
+				Value::Null,
+				Value::Int(2_900)
+			],
+			vec![text("fcm"), text("enqueued"), Value::Null, Value::Int(100)],
+		]
+	);
+	let hours = db
+		.fetch(plans::reads_by_hour(dialect, Corpus::BIG))
+		.await
+		.expect("the hours");
+	assert_eq!(hours.len(), 3, "{hours:?}");
+	assert!(
+		hours
+			.iter()
+			.all(|row| [Value::Int(33), Value::Int(34)].contains(&row[1])),
+		"{hours:?}"
+	);
+
+	// A third of cat-05's hundred preferences are opt-outs.
+	let opted = db
+		.fetch(plans::opted_out_count(dialect, "cat-05"))
+		.await
+		.expect("the count");
+	assert_eq!(opted, vec![vec![Value::Int(34)]]);
+}
+
 /// A walk over two topics reads each topic's subscribers on its own, in
 /// person order straight from `(topic, person)`: one statement per topic,
 /// none of them sorting or de-duplicating.
@@ -1221,6 +1606,11 @@ async fn sqlite_a_send_report_counts_only_the_sends_own_rows() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn sqlite_the_composers_reads_use_their_indexes() {
+	the_composers_reads_use_their_indexes(&on_sqlite().await).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn sqlite_a_walk_over_several_topics_reads_each_in_index_order() {
 	a_walk_over_several_topics_reads_each_in_index_order(&on_sqlite().await).await;
 }
@@ -1308,6 +1698,15 @@ mod on_postgres {
 		};
 
 		a_send_report_counts_only_the_sends_own_rows(&connect(&postgres).await).await;
+	}
+
+	#[tokio::test(flavor = "multi_thread")]
+	async fn postgres_the_composers_reads_use_their_indexes() {
+		let Some(postgres) = Postgres::start() else {
+			return;
+		};
+
+		the_composers_reads_use_their_indexes(&connect(&postgres).await).await;
 	}
 
 	#[tokio::test(flavor = "multi_thread")]

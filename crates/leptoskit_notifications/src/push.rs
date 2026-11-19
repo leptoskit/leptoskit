@@ -694,7 +694,12 @@ pub fn check_app_version(version: &str) -> Result<(), String> {
 
 /// One enrolled endpoint: the opaque record of a device or browser the
 /// person's app pushed them to enroll. The credential is never in it.
-#[table(name = "push_endpoints", unique(fingerprint), index(person))]
+#[table(
+	name = "push_endpoints",
+	unique(fingerprint),
+	index(person),
+	index(platform, invalidated_at, person)
+)]
 pub struct PushEndpoint {
 	/// An opaque id the service assigns: what lists and revocations name.
 	#[db(key)]
@@ -1183,6 +1188,39 @@ pub async fn push_deliveries(
 
 	crate::check_key(&send_key).map_err(rpc::Error::invalid)?;
 	crate::service::push::status_page(cx.db(), &send_key, &page).await
+}
+
+/// One person's enrolled endpoints, for the app's server: what
+/// [`push_endpoints`] answers that person about themselves — the opaque
+/// id, the platform, when it enrolled, whether its provider invalidated
+/// it, and what the device said about itself — a bounded page at a time.
+/// An operator choosing which device to send a test to
+/// ([`send_test`](fn@crate::send_test)) reads this.
+///
+/// No credential is in the answer: not a device token, not a browser's
+/// endpoint address or keys, and nothing derived from one.
+///
+/// Only the app may call it: [`rpc::client::call_as_app`] from server
+/// code.
+///
+/// # Errors
+///
+/// [`rpc::Error::Forbidden`] from anywhere but the app's server, and
+/// [`rpc::Error::Invalid`] for a cursor that isn't one of this list's.
+#[rpc::query(service = "notifications")]
+pub async fn person_endpoints(
+	cx: &rpc::QueryCx,
+	person: uuid::Uuid,
+	page: rpc::PageArgs,
+) -> rpc::Result<rpc::Page<EndpointSummary>> {
+	if cx.identity().caller.as_deref() != Some(rpc::server::APP_CALLER) {
+		return Err(rpc::Error::forbidden(
+			"only the app lists a person's endpoints: call this from its server, with the \
+			 service's token",
+		));
+	}
+
+	crate::service::push::list(cx.db(), person, &page).await
 }
 
 /// Attempts the due push deliveries of one send, in bounded batches: the

@@ -237,6 +237,21 @@ let target = SendTarget::Condition(format!(
 ));
 ```
 
+**From a parsed condition back to text.** A screen that lets someone build an audience holds the condition as a tree, not as text, and has to hand the service text. `Condition` prints itself: `to_string()` writes the canonical spelling, with spaces around operators, parentheses only where the grouping needs them, and every value quoted the way `quoted` writes it. Parsing that text gives back the same tree, for every tree the parser can produce:
+
+```rust
+use leptoskit_notifications::condition::Condition;
+
+let parsed = Condition::parse("user.city=='New York'&&('a' in topics||'b' in topics)")?;
+assert_eq!(
+    parsed.to_string(),
+    "user.city == 'New York' && ('a' in topics || 'b' in topics)",
+);
+assert_eq!(Condition::parse(&parsed.to_string())?, parsed);
+```
+
+Every attribute value the service stores can be written as a quoted value, the empty value included (`''`), so there is no stored value a condition cannot name.
+
 Topic names need none of this — they can hold neither a space nor a quote — so a condition pasted from Firebase means exactly what it meant there. Parentheses and `!` can be opened at most 32 deep in the text, however little they group.
 
 One shape is refused outright: a condition that already holds for a person with no topics, no attributes, and no device, like `!('a' in topics)`, is an "everyone" audience in disguise — the plain target below says that with a name, so the condition grammar makes you use it. Everything else anchors on something: a topic, or an attribute predicate such as `user.plan == 'pro'`. Condition sends fan out like topic sends: same batches, same snapshot-as-reached, same idempotency. Which index a condition's fanout walks follows from its anchor — a condition that cannot match without one of its topics walks the topic's subscribers, and one anchored only on attributes walks the person registry below.
@@ -356,6 +371,57 @@ Treat this target with the respect a big lever deserves. It fans out in the same
 
 Everyone is not a condition, and it can't be narrowed: `SendTarget::Everyone` is the whole registry, every time. When you want most people, say which ones — a condition over attributes — because a send to everyone is a promise to every person in it.
 
+## Know your audience before you send
+
+Picking an audience blind is how a message meant for a hundred people goes to a hundred thousand. Before a send, a person composing it needs to see what there is to choose from and about how many people a choice would reach. The audience catalogue answers both, to your app's server only:
+
+```rust
+use leptoskit_notifications::catalogue::{
+    AttributeValues, EstimateAudience, NotificationsOverview, Topics,
+};
+use leptoskit_rpc::PageArgs;
+
+let first = PageArgs { after: None, until: None, limit: 20 };
+
+// What the service knows, in one call.
+let overview = call_as_app(NotificationsOverview {}).await?;
+
+// Topics that start with "news.", with their subscriber counts.
+let topics = call_as_app(Topics { page: first.clone(), prefix: Some("news.".into()) }).await?;
+
+// The values people hold for one attribute.
+let plans = call_as_app(AttributeValues { key: "plan".into(), page: first, prefix: None }).await?;
+
+// About how many people a target would reach.
+let estimate = call_as_app(EstimateAudience {
+    target: SendTarget::Condition("user.plan == 'pro' && 'news.sports' in topics".into()),
+    category: Some("news".into()),
+})
+.await?;
+```
+
+| Call                     | Answers                                                                                                                                                                                                   |
+| ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `notifications_overview` | how many people the service knows, how many have a working device on each platform and whether that platform is configured, how many topics exist, and which topic patterns are open to self-subscription |
+| `topics`                 | topics with at least one subscriber, in name order, each with its subscriber count and whether it is open; `prefix` narrows the list                                                                      |
+| `attribute_keys`         | the attribute keys anyone holds, each with how many people hold it                                                                                                                                        |
+| `attribute_values`       | the values people hold for one key, each with how many people hold it; `prefix` narrows the list                                                                                                          |
+| `categories`             | the categories you have sent in or that anyone set a preference for, each with how many people opted out and when you last sent in it                                                                     |
+| `estimate_audience`      | for a target: how many people it matches, how many of them opted out of the category, how many would get it, and how many of those have a device on each platform                                         |
+| `person_endpoints`       | one person's devices, as the person's own device list shows them: platform, dates, and the details the device reported                                                                                    |
+
+**Counts stop at a cap and say so.** Counting every subscriber of a topic with ten million of them would take as long as reading them. So every count is a `Count { count, exact }`: when `exact` is `false`, the real number is larger than `count`, and a screen should show "100,000+". A topic, attribute, or category count stops at 100,000. The overview's counts of people stop at 1,000,000 and its count of topics at 1,000.
+
+**An estimate is exact for a small audience and a floor for a large one.** `estimate_audience` walks the audience the way a send does, for at most 5,000 people. If it reaches the end, `exact` is `true` and the numbers are what a send right now would do. If it doesn't, `exact` is `false` and the numbers count only the people it walked: read them as "at least". It is meant to be asked as someone edits a target. For the exact size of a large audience, use `validate_only` (in [Track a large send](#track-a-large-send)), which walks all of it. A person whose only devices have been [revoked or have stopped working](#when-the-server-revokes-a-device) is not counted in the per-platform reach.
+
+**Lists are pages of at most 50.** Each list answers a `Page`; pass its `end` as the next `after`. Names come in the order your database sorts text. On Postgres a `prefix` search looks at up to 500 names per call, so a call can answer fewer rows than you asked for with `has_more` set: keep paging.
+
+**No credential is ever answered.** `person_endpoints` shows the same summary the person's own device list shows. Device tokens and browser subscription keys never leave the service.
+
+**Attribute values are your data about people.** A value can be personal (a city, an email domain). These calls are for your server and for operators you trust with that data.
+
+A topic with no subscribers and an attribute nobody holds do not appear: the service only knows what is stored.
+
 ## Track a large send
 
 A recipients send answers with its final counts because it finished inside the call. A topic, condition, or everyone send answers `fanning_out` and keeps working — so ask it how it's going, and try the whole thing without spending it:
@@ -413,7 +479,45 @@ A few things to know when you read the numbers:
 - **A silent data message has no open.** Nobody sees it, so its rows never count as `opened`.
 - **Ask when someone looks.** A report reads the send's own rows, so its cost grows with the size of the send and not with the size of your database. That is fine for a page a person opens. Don't poll it every few seconds for every send.
 
+A report also says what the send was and how its pushes went:
+
+- `spec`: the send as you made it, so a screen can show the message or start a new send from it. A send made before the service kept a history may have none.
+- `target`: who it went to, as a `TargetSummary`. `kind` is `recipients`, `topic`, `condition`, or `everyone`. `text` is the topic or the condition. For a recipients send there is no text, only `recipients`, the number of people listed: the list itself is not kept.
+- `push`: one `PushCounts` per platform the send pushed on, with how many pushes are `enqueued`, `retrying`, `accepted`, `rejected`, and `skipped`, and `reasons`, which says why the rejected and skipped ones ended (`unregistered`, `oversized`, and so on).
+- `reads_by_hour`: how many rows were read in each UTC hour, oldest first, for the first 168 hours (a week) in which any was read.
+
+`accepted` means the provider took the push, not that a device showed it. Like the inbox counts, the push counts and the hours are counted over what is still stored.
+
 Only your app's server can read a report. Conversions and funnels — what people did after they opened — are not part of this service.
+
+### Browse the sends you made
+
+A report answers for a send whose key you know. A screen that shows "what have we sent lately?" needs the list. `list_sends` answers it from your server, newest first, a page at a time:
+
+```rust
+use leptoskit_notifications::{ListSends, SendFilter, SendState};
+use leptoskit_rpc::PageArgs;
+
+let page = call_as_app(ListSends {
+    page: PageArgs { after: None, until: None, limit: 20 },
+    filter: SendFilter::all().in_state(SendState::Complete),
+})
+.await?;
+
+for sent in &page.items {
+    println!("{} · {} · {} delivered", sent.created_at, sent.title, sent.delivered);
+}
+```
+
+Each `SendEntry` carries the send's key (pass it to `send_report` for the rest), when it was made, its state, label, category, title, kind, target summary, schedule (`visible_at`, `local_time`, `expires_at`), and the three counts `send_status` answers. Pass the page's `end` as the next call's `after` to read on. A page holds at most 100 sends. `SendFilter::all()` lists everything, and `in_state` keeps one state.
+
+Three things to know:
+
+- **The list starts when you upgrade.** Sends made by an earlier version of the service have a report but are not listed.
+- **A send leaves the list when its record is deleted.** That is the [send record's retention](#how-long-things-are-kept), 90 days by default and longer while any of its rows are stored.
+- **A condition is shown as written.** If you put personal values into a condition, anyone who can see this list sees them.
+
+Only your app's server can list sends.
 
 **Name a send with a label.** An idempotency key has to be unique per send, so it makes a poor name for a campaign that goes out in several sends. Give those sends the same `label` instead:
 
@@ -1302,6 +1406,39 @@ Each item names the notification, the endpoint's opaque id, the platform, a stat
 
 Delivery is **at least once**. An attempt whose answer was lost retries, so a device may see the same notification twice; every attempt carries the notification's id as its collapse id — `apns-collapse-id`, the FCM collapse key, the Web Push `Topic` — so a repeat _usually_ replaces its predecessor instead of stacking. Collapse is best-effort: a provider that doesn't coalesce, or a device that was offline for both attempts, can still show two banners, and the id-only fallback keeps its collapse id too. The payload is the visible title and body plus the notification's id for routing; the send's `data` rides along where it fits and is dropped, down to an id-only envelope, when the provider's payload limit says so (limits are checked on the encoded bytes, not the raw strings). A send's `expires_at` is the providers' TTL — APNs `apns-expiration`, the FCM `ttl`, the Web Push `TTL` — so a provider holds a message no longer than the notification is worth delivering. Nothing executable ever rides in a push. APNs and Web Push carry your `data` whole under its own key; FCM's data is one flat map, so keys that would collide with the envelope's own (`lkn`, `lklink`, `lkimg`, `lkbadge`) or that FCM reserves (`from`, `message_type`, and anything starting `google.` or `gcm.`) are dropped from the FCM copy rather than sent, because FCM refuses a whole message for one of them.
 
+### Preview a push
+
+A notification that is too big is not refused. Each provider has a size limit near four kilobytes, and the service trims a push that is over it until it fits: first the per-platform options and the image, then the sound, badge, and link, then the send's `data`. The first you hear of it is a notification that arrives without its picture. `preview_push` shows you before you send:
+
+```rust
+use leptoskit_notifications::preview::{PreviewPush, PreviewSample};
+
+let previews = call_as_app(PreviewPush {
+    spec: spec.clone(),
+    sample: PreviewSample::default(),
+})
+.await?;
+
+for preview in &previews {
+    println!(
+        "{:?}: {} of {} bytes, trimmed {:?}, fits: {}",
+        preview.platform, preview.bytes, preview.limit, preview.trimmed, preview.fits,
+    );
+}
+```
+
+It answers one `PushPreview` each for APNs, FCM, and Web Push, in that order:
+
+- `headers` and `body`: the request the provider would be sent. The body is built by the same code that builds a real push, so it is the same bytes.
+- `bytes` and `limit`: what the provider counts against its limit, and the limit. Apple counts the body. FCM counts the keys and values a device receives. For Web Push it is the size after encryption.
+- `trimmed`: what was removed to make it fit, in order: `platform_and_image`, `sound_badge_link`, `data`. Empty when everything fits.
+- `fits`: `false` when even the smallest form is too big. Nothing would be sent on that platform, and the delivery would end `oversized`.
+- `skipped`: set when the platform is never sent this kind of send. A silent data message is not pushed to browsers.
+
+A preview cannot know three things only a real delivery knows, so it uses stand-ins. The notification's id is the all-zero id unless you pass one in `PreviewSample`. The FCM body shows `<device token>` where the device's token goes. A badge set to the unread count shows 1 unless you pass `unread`. Pass `locale` to see the text a person with that language would get from the send's [variants](#say-it-in-each-persons-language).
+
+The preview leaves out the authorization header and the APNs topic, reads no credential, and works on a server with no push configured. The Web Push body is shown before encryption, because the encrypted bytes are different for every push. A spec that `send` would refuse is refused here the same way. Only your app's server can ask for a preview.
+
 ### Web Push hosts and security
 
 A Web Push subscription's endpoint is attacker-shaped material — anyone who can drive an enrollment can hand the service a URL — so the service pushes only to the shipped push services' hosts: Google's (`fcm.googleapis.com`, where Chrome and Android Chrome deliver), Mozilla's (`updates.push.services.mozilla.com`, Firefox's), Apple's (any subdomain of `push.apple.com`, such as Safari's `web.push.apple.com`, as Apple asks senders to allow), and Microsoft's Windows Push Notification Services (any subdomain of `notify.windows.com`, where Edge on Windows delivers). The two domains match whole labels: `web.push.apple.com` passes, while `webpush.apple.com`, the bare `push.apple.com`, and `web.push.apple.com.attacker.test` don't. Lookalike hosts (`fcm.googleapis.com.attacker.test`), private and reserved addresses (the full IANA special-purpose registries, transition networks included), credentials-in-URL, and non-443 ports are refused at enrollment. To push through another operator-run push service, name it in `LEPTOSKIT_NOTIFICATIONS_WEB_PUSH_EXTRA_HOSTS`; those are resolved within a bounded time and validated at connection time (every address must be globally routable), and the connection is pinned to the exact addresses that passed — re-resolved on each attempt, so an address rotation is picked up without a rebind hole. Requests are never redirected: a push service that answers with a redirect has, as far as this service is concerned, not taken the message.
@@ -1399,6 +1536,7 @@ A few rules hold whatever you set:
 - **Nothing in use is deleted.** A notification with a push still waiting to go out stays, and so does that push. A send that is still working through its audience keeps every row it has written. A scheduled notification is never too old before its time has come, and one you cancelled ahead of its time is kept until that time is `ENDED_DAYS` in the past.
 - **A push record never outlives its notification.** When a notification goes, its push records go with it, whatever their age.
 - **A person's inbox simply gets shorter.** Deleted rows leave the inbox and the unread count the same way a dismissed one does. Nothing on an open screen breaks.
+- **The send list is the send records.** A send is in [`list_sends`](#browse-the-sends-you-made) for as long as its record is kept, and a report's push counts and reads by hour are counted over the rows still stored.
 - **A send's report counts what is left.** The read, opened, and dismissed counts in a [send's report](#see-what-a-send-came-to) are counted over the rows still stored, so they shrink as rows are deleted. What the send delivered is kept on the send's own record and does not change.
 
 **How long a retry is safe.** The idempotency key is remembered for as long as the send's record is kept: at least `SENDS_DAYS` after the send, and for as long as any notification or push record from that send is still stored. With the defaults that is a year for a send that reached an inbox. During that time a repeat of the same call answers the first result and sends nothing. After the record is deleted, the service has forgotten the key, and the same call is a new send. So keep `SENDS_DAYS` longer than the longest time any of your systems might retry a send. It cannot be set below 2 days.
@@ -1408,7 +1546,7 @@ Retention is also the answer for personal data that isn't tied to one person's d
 ## What it doesn't do yet
 
 - **Native client enrollment is iOS, Android, and macOS.** The service side of enrollment is done, the web client is this crate's `browser` module, and the native client — iOS's and macOS's APNs token and Android's FCM token alike — is the `native` module (all above). Windows and Linux apps receive no push, so they have nothing to tap.
-- **Opens are counted only when your app reports them, and nothing after the open is tracked.** A tap reaches your app's code; [`mark_opened`](#record-the-open) reports it, and the [send's report](#see-what-a-send-came-to) counts it. There are no conversions or funnels, no per-device or per-platform breakdown of opens, and no list of sends to browse yet.
+- **Opens are counted only when your app reports them, and nothing after the open is tracked.** A tap reaches your app's code; [`mark_opened`](#record-the-open) reports it, and the [send's report](#see-what-a-send-came-to) counts it. There are no conversions or funnels, and no per-device or per-platform breakdown of opens.
 - **Action buttons are web and Apple only, and Apple's aren't registered yet.** `web.actions` buttons work today. An Apple notification shows buttons only for a category the app registered with the system, which leptoskit doesn't do yet; the receiver already reports a pressed button's id when an app registers its own. Android sends carry no buttons.
 - **No delivery receipts.** The service knows what it stored and what the provider accepted; it doesn't track who saw a banner. `accepted` is as far as status goes.
 - **No per-device state.** Read, dismissed, and cancelled state is per person, shared across their devices by design.
@@ -1426,14 +1564,15 @@ The service ships the way [services](32-services.md#deploying) do: `leptoskit bu
 
 A new version of the service can change its tables, and it makes those changes when it starts, before it serves anything. On a small database that takes no time you would notice. On a large one a few of the changes take as long as copying or indexing the table, and the service is not serving while they run. Plan a quiet moment for these:
 
-| Change                                                            | SQLite                                                                                            | Postgres                                                                                                                   |
-| ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| `topics_and_fanout` (adds fanout state to send records)           | copies every send record and builds an index over every notification                              | builds a unique index over every notification and rewrites every send record; writes to both tables wait until it finishes |
-| `message_options` (adds a notification's kind and options)        | copies every notification and rebuilds its indexes                                                | reads every notification once to check the new column; nothing can read or write notifications until it finishes           |
-| `scale_indexes` (indexes for the unread count and the push queue) | builds one index over every notification and two over every push record; writes wait, reads go on | the same three builds; writes to those two tables wait, reads go on. You can build them ahead with no waiting, as below    |
+| Change                                                            | SQLite                                                                                                                               | Postgres                                                                                                                   |
+| ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------- |
+| `topics_and_fanout` (adds fanout state to send records)           | copies every send record and builds an index over every notification                                                                 | builds a unique index over every notification and rewrites every send record; writes to both tables wait until it finishes |
+| `message_options` (adds a notification's kind and options)        | copies every notification and rebuilds its indexes                                                                                   | reads every notification once to check the new column; nothing can read or write notifications until it finishes           |
+| `send_history` (the send list and the audience catalogue)         | builds two small indexes over send records and one each over attributes, category preferences, and devices; writes wait, reads go on | the same five builds; writes to those tables wait, reads go on. You can build them ahead with no waiting, as below         |
+| `scale_indexes` (indexes for the unread count and the push queue) | builds one index over every notification and two over every push record; writes wait, reads go on                                    | the same three builds; writes to those two tables wait, reads go on. You can build them ahead with no waiting, as below    |
 
 The other changes add empty tables or empty columns and take no measurable time at any size. That includes `endpoint_seen`, which adds one empty column recording when each device was last heard from.
 
-On Postgres you can take the wait out of `scale_indexes` by building its three indexes yourself before you upgrade, while the old version is still running. Build each with `CREATE INDEX CONCURRENTLY`, under exactly the name and columns the migration file uses, and check that each one finished valid. The migration then finds them and only has a moment's work left. The migration file's own comment has the details.
+On Postgres you can take the wait out of `scale_indexes` and `send_history` by building their indexes yourself before you upgrade, while the old version is still running. Build each with `CREATE INDEX CONCURRENTLY`, under exactly the name and columns the migration file uses, and check that each one finished valid. The migration then finds them and only has a moment's work left. Each migration file's own comment has the details.
 
 Rolling a change back is for emergencies, and some rollbacks lose data: the comment at the top of each `down.sql` says what. Rolling `message_options` back cancels every silent data message, because the older version could not tell them from ordinary notifications and would have shown them in people's inboxes.
