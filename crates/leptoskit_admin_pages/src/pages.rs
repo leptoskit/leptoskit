@@ -1,6 +1,7 @@
 //! The pages this crate builds, each framed by the [`Shell`].
 
 mod glossary;
+mod infra;
 mod learn;
 
 use leptoskit::prelude::Element;
@@ -13,7 +14,18 @@ use crate::shell::Shell;
 pub(crate) fn screen_of(shell: &Shell) -> Box<dyn Fn() -> Element + Send + Sync> {
 	let shell = shell.clone();
 
-	Box::new(move || shell.frame(content(&shell.model.page)))
+	match &shell.model.page {
+		Page::Operation(operation) if operation.running => {
+			let follow = infra::Follow::open(&operation.id);
+			Box::new(move || {
+				let Page::Operation(operation) = &shell.model.page else {
+					return shell.frame(content(&shell.model.page));
+				};
+				shell.frame(infra::operation(operation, Some(follow)))
+			})
+		}
+		_ => Box::new(move || shell.frame(content(&shell.model.page))),
+	}
 }
 
 /// The content of `page`, without the frame, for a page that has no state
@@ -25,5 +37,7 @@ pub fn content(page: &Page) -> Element {
 		Page::Glossary => glossary::content(),
 		Page::Learn(learn) => learn::hub(learn),
 		Page::Lesson(lesson) => learn::lesson(lesson),
+		Page::Projects(cards) => infra::projects(cards),
+		Page::Operation(operation) => infra::operation(operation, None),
 	}
 }

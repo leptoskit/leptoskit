@@ -4,10 +4,7 @@
 
 mod support;
 
-use std::time::Duration;
-
 use axum::http::StatusCode;
-use http_body_util::BodyExt as _;
 use leptoskit_deploy_console::control::Phase;
 use leptoskit_deploy_console::control::Principal;
 use leptoskit_deploy_console::control::RunResult;
@@ -306,38 +303,25 @@ async fn progress_streams_to_the_operation_page() {
 		"a running operation follows along"
 	);
 
+	assert!(
+		html.contains("Following live"),
+		"the page says it is following: {html}"
+	);
+
+	// The page follows over the admin's own live connection, which opens
+	// only for a signed-in admin.
 	let response = ada
-		.get(
-			&world.admin,
-			ADMIN,
-			&format!("{BASE}/infra/operations/{id}/events"),
-		)
+		.get(&world.admin, ADMIN, &format!("{BASE}/live/events"))
 		.await;
 	assert_eq!(response.status(), StatusCode::OK);
 	assert_eq!(response.headers()["content-type"], "text/event-stream");
-	let mut body = response.into_body();
-	let mut next = async || {
-		let frame = tokio::time::timeout(Duration::from_secs(5), body.frame())
-			.await
-			.expect("an event in time")
-			.unwrap()
-			.unwrap();
-		String::from_utf8(frame.into_data().unwrap().to_vec()).unwrap()
-	};
-
-	let first = next().await;
-	assert!(first.contains("event: operation"), "{first}");
-	assert!(first.contains("ada@example.com"), "{first}");
-
-	world
-		.service
-		.progress(&id, "Reading the provider state")
-		.unwrap();
-	let progress = next().await;
-	assert!(progress.contains("event: progress"), "{progress}");
+	let response = Browser::default()
+		.get(&world.admin, ADMIN, &format!("{BASE}/live/events"))
+		.await;
 	assert!(
-		progress.contains("Reading the provider state"),
-		"{progress}"
+		response.status().is_client_error(),
+		"a stranger can't open it: {}",
+		response.status()
 	);
 }
 

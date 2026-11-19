@@ -158,6 +158,25 @@ pub const MINT_PIECE: &str = "h-3 w-3 shrink-0 rounded-[3px] bg-[var(--admin-min
 /// The source label inside a mint tab, shown in Workings mode.
 pub const MINT_SOURCE: &str =
 	"truncate font-[var(--admin-font-mono)] text-[11.5px] font-medium text-[var(--admin-ink-2)]";
+/// The mint tab outside Workings mode: the words alone.
+pub const MINT_TAB_QUIET: &str = "flex-row items-center gap-1.5 rounded-full border \
+                                  border-transparent bg-transparent py-0.5 pl-1.5 pr-2.5 text-xs \
+                                  font-semibold text-[var(--admin-mint-text)] cursor-pointer \
+                                  overflow-hidden max-w-full";
+/// The mint tab of the open drawer: filled mint.
+pub const MINT_TAB_OPEN: &str = "flex-row items-center gap-1.5 rounded-full border \
+                                 border-[var(--admin-mint)] bg-[var(--admin-mint)] py-0.5 pl-1.5 \
+                                 pr-2.5 text-xs font-semibold text-[#0f0b16] cursor-pointer \
+                                 overflow-hidden max-w-full";
+/// The piece inside the open drawer's tab, upright.
+pub const MINT_PIECE_OPEN: &str =
+	"h-3 w-3 shrink-0 rounded-[3px] bg-[#0f0b16] transition-transform duration-200";
+/// The source label inside the open drawer's tab.
+pub const MINT_SOURCE_OPEN: &str =
+	"truncate font-[var(--admin-font-mono)] text-[11.5px] font-medium text-[#0f0b16]";
+/// The card whose drawer is open.
+pub const CARD_OPEN: &str = "flex-col gap-3 rounded-xl border border-[var(--admin-mint)] \
+                             bg-[var(--admin-surface)] p-4 md:p-5";
 
 /// The Workings drawer: always ink.
 pub const UNDERSIDE: &str = "flex-col bg-[var(--admin-underside)] text-[#f4efe8]";
@@ -225,6 +244,11 @@ mod tests {
 			MINT_TAB,
 			MINT_PIECE,
 			MINT_SOURCE,
+			MINT_TAB_QUIET,
+			MINT_TAB_OPEN,
+			MINT_PIECE_OPEN,
+			MINT_SOURCE_OPEN,
+			CARD_OPEN,
 			UNDERSIDE,
 			CODE_BLOCK,
 			CODE_BLOCK_PAPER,

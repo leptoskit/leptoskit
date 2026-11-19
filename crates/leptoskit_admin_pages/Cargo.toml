@@ -22,8 +22,12 @@ crate-type = ["cdylib", "rlib"]
 # The browser's task executor, started before the page runs a request.
 any_spawner = { workspace = true, optional = true, features = ["wasm-bindgen"] }
 console_error_panic_hook = { workspace = true, optional = true }
+futures = { workspace = true }
 leptos = { workspace = true }
-leptoskit = { workspace = true, features = ["aria", "auth", "query", "web"] }
+leptoskit = { workspace = true, features = ["aria", "auth", "query", "rpc", "web"] }
+# Copy in a drawer.
+leptoskit_plugin_clipboard = { workspace = true, optional = true }
+schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 wasm-bindgen = { workspace = true, optional = true }
 wasm-bindgen-futures = { workspace = true, optional = true }
@@ -33,12 +37,13 @@ web-sys = { workspace = true, optional = true, features = ["Document", "Element"
 
 [features]
 default = []
-# The server: renders the pages.
-ssr = ["leptos/ssr", "leptoskit/ssr"]
+# The server: renders the pages, and runs the streams' bodies.
+ssr = ["leptos/ssr", "leptoskit/db-sqlite", "leptoskit/rpc-live-streams", "leptoskit/ssr"]
 # The browser: hydrates the page the server rendered.
 hydrate = [
 	"dep:any_spawner",
 	"dep:console_error_panic_hook",
+	"dep:leptoskit_plugin_clipboard",
 	"dep:wasm-bindgen",
 	"dep:wasm-bindgen-futures",
 	"dep:web-sys",

@@ -15,6 +15,7 @@
 pub mod charts;
 pub mod components;
 pub mod model;
+pub mod ops;
 pub mod pages;
 pub mod shell;
 pub mod style;

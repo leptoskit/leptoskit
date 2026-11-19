@@ -6,13 +6,16 @@
 //! server renders the whole page and the script only adds behaviour.
 
 use leptoskit::native::Color;
+use leptoskit::native::FocusRequest;
 use leptoskit::native::TextSpan;
 use leptoskit::prelude::*;
+use serde::Deserialize;
+use serde::Serialize;
 
 use crate::style;
 
 /// A state word's tone, always shown with an icon and a word.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub enum Tone {
 	/// ✓ Healthy, Succeeded, Create.
 	Good,
@@ -127,7 +130,13 @@ impl Card {
 				.child(mint_tab(drawer, source));
 		}
 
-		let mut card = View().class(style::CARD).child(header).children(self.body);
+		let open = self.workings.as_ref().is_some_and(|(drawer, _)| {
+			crate::workings::Workings::current().is_some_and(|workings| workings.is_open(drawer))
+		});
+		let mut card = View()
+			.class(if open { style::CARD_OPEN } else { style::CARD })
+			.child(header)
+			.children(self.body);
 
 		if let Some((drawer, _)) = self.workings {
 			card = card.test_id(format!("card:{drawer}"));
@@ -144,6 +153,43 @@ impl Card {
 /// The mint tab: the logo's mint piece and `Workings`, with the card's
 /// source beside it in Workings mode.
 pub fn mint_tab(drawer: &str, source: &str) -> Element {
+	if let Some(workings) = crate::workings::Workings::current() {
+		let open = workings.is_open(drawer);
+		let mode = workings.mode.get();
+		let here = FocusRequest::new();
+		let id = drawer.to_owned();
+
+		return Pressable(format!("Show workings: {source}"))
+			.class(match (open, mode) {
+				(true, _) => style::MINT_TAB_OPEN,
+				(false, true) => style::MINT_TAB,
+				(false, false) => style::MINT_TAB_QUIET,
+			})
+			.aria_expanded(open)
+			.test_id(format!("workings-tab:{drawer}"))
+			.focus_on(here)
+			.on_press(move || workings.toggle(&id, Some(here)))
+			.child(
+				View()
+					.class(if open {
+						style::MINT_PIECE_OPEN
+					} else {
+						style::MINT_PIECE
+					})
+					.test_id("mint-piece"),
+			)
+			.child(Text("Workings"))
+			.children(mode.then(|| {
+				Text(source)
+					.class(if open {
+						style::MINT_SOURCE_OPEN
+					} else {
+						style::MINT_SOURCE
+					})
+					.test_id("mint-source")
+			}));
+	}
+
 	Pressable(format!("Show workings: {source}"))
 		.class(style::MINT_TAB)
 		.test_id(format!("workings-tab:{drawer}"))
@@ -323,7 +369,7 @@ pub fn bar(fraction: f64, threshold: Option<f64>) -> Element {
 }
 
 /// One line of a code block.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Line {
 	/// The line's text, without a trailing newline.
 	pub text: String,
@@ -334,7 +380,7 @@ pub struct Line {
 }
 
 /// How a code line stands out.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Mark {
 	/// An ordinary line.
 	Plain,
@@ -463,6 +509,7 @@ fn classify(word: &str) -> Color {
 /// per-line wash, and **Copy**. `copy_as` names what Copy gives, such as
 /// `TOML`.
 pub fn code_block(lines: &[Line], copy_as: &str) -> Element {
+	let text = crate::workings::text_of(lines);
 	// Copy sits in its own row above the code, so it never covers a line's
 	// end at any width; the stylesheet pins the row while the code scrolls
 	// sideways.
@@ -475,15 +522,16 @@ pub fn code_block(lines: &[Line], copy_as: &str) -> Element {
 				.class("font-[var(--admin-font-mono)] text-[11px] text-[#9d93a8]")
 				.aria_hidden(true),
 		)
-		.child(
-			Button("Copy")
+		.child(copy_button(
+			Button(copied_label(&text))
 				.aria_label(format!("Copy as {copy_as}"))
 				.class(
 					"rounded-md border border-[#4a3f58] bg-[#1d1726] px-2 py-0.5 text-[11px] \
 					 font-semibold text-[#c9c0d0] cursor-pointer hover:text-white",
 				)
 				.test_id("copy"),
-		);
+			text,
+		));
 	let mut block = View().class(style::CODE_BLOCK).test_id("code").child(head);
 
 	for (index, line) in lines.iter().enumerate() {
@@ -548,8 +596,8 @@ pub fn paper_code(text: &str, copy_as: &str) -> Element {
 		);
 	}
 
-	block.child(
-		Button("Copy")
+	block.child(copy_button(
+		Button(copied_label(text))
 			.aria_label(format!("Copy as {copy_as}"))
 			.class(
 				"absolute right-1.5 top-1.5 rounded-md border border-[var(--admin-line-strong)] \
@@ -557,7 +605,25 @@ pub fn paper_code(text: &str, copy_as: &str) -> Element {
 				 text-[var(--admin-ink-2)] cursor-pointer hover:text-[var(--admin-ink)]",
 			)
 			.test_id("copy"),
-	)
+		text.to_owned(),
+	))
+}
+
+/// "Copied" for a moment after `text` was copied, otherwise "Copy".
+fn copied_label(text: &str) -> &'static str {
+	if crate::workings::Workings::current().is_some_and(|workings| workings.copied(text)) {
+		"Copied"
+	} else {
+		"Copy"
+	}
+}
+
+/// `button` copies `text` when pressed, on a page this crate runs.
+fn copy_button(button: Element, text: String) -> Element {
+	match crate::workings::Workings::current() {
+		Some(workings) => button.on_press(move || workings.copy(text.clone(), None)),
+		None => button,
+	}
 }
 
 /// A sentence whose `backticked` commands are set apart, the way the
