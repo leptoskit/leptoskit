@@ -192,6 +192,54 @@ A value lives as long as the screen keeps asking for it. When a whole rebuild fi
 
 `leptoskit::guest::mount` keeps the values for a native app. In the browser, render the screen with `leptoskit::web::screen(move || …)` where you would write `move || leptoskit::web::render(…)`: it rebuilds the same way and keeps the values. Outside both, as in a test that builds a screen once, `remember` is `RwSignal::new`.
 
+## Count time passing
+
+A countdown to midnight, a "Copied" label that clears itself after a second, a banner that hides after five: each needs time to pass with nobody pressing anything. The browser has `setTimeout` and a native app has its own timer, and a shared screen should not care which one it is running on.
+
+`use_clock` returns a signal that holds the time since you called it, and moves forward by itself:
+
+```rust
+use std::time::Duration;
+
+use leptoskit::hooks::use_clock;
+use leptoskit::hooks::use_timeout_fn;
+use leptoskit::prelude::*;
+
+#[component]
+fn CopyButton(text: String) -> impl IntoView {
+	let copied = RwSignal::new(false);
+	let clock = use_clock(Duration::from_millis(100));
+	let clear = use_timeout_fn(clock, move || copied.set(false), Duration::from_millis(1200));
+	(clear.stop)();
+
+	view! {
+		<Button on:press=move || { copy(&text); copied.set(true); (clear.start)(); }>
+			{move || if copied.get() { "Copied" } else { "Copy" }}
+		</Button>
+	}
+}
+```
+
+The argument is how often the clock moves. A countdown shown in seconds wants one second. A label that should clear close to on time wants a tenth of a second. Read the clock inside a `Text` closure and only that text updates:
+
+```rust
+let clock = use_clock(Duration::from_secs(1));
+let left = move || seconds_to_midnight(started_at + clock.get());
+
+view! { <Text>{move || format!("Resets in {} s", left())}</Text> }
+```
+
+The value is measured, not counted. A browser tab that was asleep for ten minutes wakes to a clock ten minutes on, in one step, and timers built on the clock fire once for what they missed.
+
+Turn on the `clock` feature of `leptoskit`, which brings the `use` and `query` features with it. Every hook that takes a clock accepts this one: `use_timeout_fn`, `use_interval_fn`, `use_interval`, `use_debounce_fn`, `use_throttle_fn`, `signal_debounced` and `signal_throttled`. One clock can drive all of them.
+
+Call `use_clock` where code runs once: in a component whose body reads no signals, or beside the app state you create before mounting. A view function that rebuilds starts a new clock each time it runs, so create the clock outside it and pass it in.
+
+- **Web:** the clock runs on `setTimeout`, and stops when the component that made it leaves the page. Browsers slow timers in background tabs, so the clock moves in larger steps there and still shows the right time.
+- **macOS, iOS, Android, Windows, Linux and terminal apps:** the clock runs on the app's timer plugin. A native app keeps its state for as long as it runs, so a clock made there keeps going after its screen leaves. Make one for the app and share it. Each tick wakes the app, so prefer one second to a few milliseconds.
+- **A native host built before the timer plugin existed:** the clock stays at zero.
+- **On the server:** the clock reads zero while the page renders.
+
 ## Group a state struct into a store
 
 A screen's state outgrows one value: a form has its fields, a session has its messages. Keeping the whole struct in one `RwSignal` works, but the signal cannot tell the fields apart, so every screen that read any of them rebuilds when any field changes. Wrapping each field in its own signal by hand fixes that, at the cost of the struct no longer being a plain value.

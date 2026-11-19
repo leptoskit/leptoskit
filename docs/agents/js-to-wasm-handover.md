@@ -190,6 +190,15 @@ G4. `Reveal`, `ScrollAlign` and `Element::reveal_on` in `leptoskit_native` (`rev
 - **Backends that now apply `scroll_offset`:** GTK (`scroll_to_offsets`, sets the adjustments after the batch, raising `upper` to the new extent first), Windows (`Widget::update_props` sets the scroll cell and the batch-end `refresh_scroll` clamps it), AppKit (`scrollToPoint` and `reflectScrolledClipView` after the documents are sized) and UIKit (`setContentOffset:animated:`). Each scrolls when the offset changes and not while it holds the same one. GTK, Windows and AppKit do not animate.
 - **Not done:** the terminal and HarmonyOS apply neither. Only the nearest scroll view moves, where the web scrolls every ancestor.
 
+### `feat/clock-hook`: stacked on `feat/scroll-into-view`
+
+G6. `leptoskit_use::use_clock(interval)` returns a `Clock` that advances by itself. It is a loop over `leptoskit_query::try_sleep`, wrapped in `futures::future::abortable` and aborted from `on_cleanup`. The value is `now_ms()` minus the start, kept from going backwards, so it is measured and not counted.
+
+- **Feature:** `clock` on `leptoskit_use` (it brings in `leptoskit_query` and `any_spawner`, which the crate otherwise avoids), and `clock` on `leptoskit`, which turns on `use` and `query`. `leptoskit_use/web` passes `browser` to `leptoskit_query` when both are on.
+- **Run here:** `tests/clock.rs` on tokio, and `tests/web_clock.rs` in headless Chrome. `test:browser` in `devenv.nix` now runs the browser one.
+- **Not run:** a native guest. There the loop uses the timer plugin through `leptoskit_query`'s `guest` feature, which the query cache already relies on.
+- **Limit to know for the conversions:** the timer stops on owner cleanup. A leptos component on the web has an owner that is cleaned when it leaves. A native guest keeps its owner for as long as it runs, so a clock made in a screen there keeps ticking after the screen leaves; make one for the app. A view function that rebuilds starts a new clock on each run, and `remember(|| use_clock(…))` does not fix that on the web, because the closure runs under the owner of the first build, which is cleaned on the next. A clock that a rebuilt screen can keep would be a new API, and has not been asked for.
+
 ### `feat/public-demo`: no pull request
 
 Twenty-three commits: the public demo service. One process serves one UTC day's generation, resets itself at midnight by re-executing in the same PID, gives each browser its own visitor pass, inbox and real sign-in, hands off to the admin, and lets visitors save private notes that emit one real `note_created` analytics event. [public-demo.md](public-demo.md) on that branch is the operator contract.

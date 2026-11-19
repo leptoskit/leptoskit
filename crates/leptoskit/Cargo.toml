@@ -245,6 +245,8 @@ query = ["dep:leptoskit_query", "leptoskit_devtools?/query"]
 rive = ["dep:leptoskit_rive", "leptoskit_rive/native", "leptoskit_native/rive", "leptoskit_wasm?/rive"]
 uikit = ["dep:leptoskit_uikit"]
 use = ["dep:leptoskit_use"]
+# `use_clock`: a clock that advances on the platform's own timer.
+clock = ["use", "query", "leptoskit_use/clock"]
 virtual = ["dep:leptoskit_virtual"]
 storage = ["use", "leptoskit_use/local-storage"]
 # Import SVG documents into `Vector` drawings with `Drawing::parse_svg`.

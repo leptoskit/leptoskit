@@ -7976,12 +7976,14 @@ dependencies = [
 name = "leptoskit_use"
 version = "0.3.0"
 dependencies = [
+ "any_spawner",
  "blocking",
  "futures",
  "js-sys",
  "leptos",
  "leptoskit_native",
  "leptoskit_plugin_posture",
+ "leptoskit_query",
  "parking_lot",
  "reactive_graph",
  "serde",
@@ -7989,6 +7991,7 @@ dependencies = [
  "sha2 0.10.9",
  "tempfile",
  "thiserror 2.0.21",
+ "tokio",
  "wasm-bindgen",
  "wasm-bindgen-test",
  "web-sys",

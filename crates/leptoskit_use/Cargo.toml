@@ -14,8 +14,10 @@ rust-version.workspace = true
 description = "Cross-platform reactive primitives for Leptos, inspired by leptos-use."
 
 [dependencies]
+any_spawner = { workspace = true, optional = true }
 futures = { workspace = true }
 leptoskit_plugin_posture = { workspace = true }
+leptoskit_query = { workspace = true, optional = true }
 parking_lot = { workspace = true }
 reactive_graph = { workspace = true }
 serde = { workspace = true, optional = true }
@@ -37,11 +39,15 @@ leptoskit_native = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+any_spawner = { workspace = true, features = ["tokio"] }
 tempfile = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt", "time"] }
 
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dev-dependencies]
+any_spawner = { workspace = true, features = ["wasm-bindgen"] }
 js-sys = { workspace = true }
 leptos = { workspace = true, features = ["csr"] }
+leptoskit_query = { workspace = true, features = ["browser"] }
 leptoskit_native = { workspace = true, features = ["web"] }
 wasm-bindgen-test = { workspace = true }
 web-sys = { workspace = true, features = ["CustomEvent", "Document", "HtmlElement"] }
@@ -57,8 +63,14 @@ local-storage = [
 	"dep:wasm-bindgen",
 	"dep:web-sys",
 ]
+# `use_clock`, a clock that advances by itself on the platform's timer.
+clock = ["dep:any_spawner", "dep:leptoskit_query"]
 # Browser-only hooks over DOM and media APIs.
-web = ["dep:js-sys", "dep:wasm-bindgen", "dep:web-sys"]
+web = ["dep:js-sys", "dep:wasm-bindgen", "dep:web-sys", "leptoskit_query?/browser"]
+
+[[test]]
+name = "clock"
+required-features = ["clock"]
 
 [lints]
 workspace = true

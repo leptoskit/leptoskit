@@ -18,6 +18,74 @@ use crate::watch_with_options;
 /// timer.
 pub type Clock = Signal<Duration>;
 
+/// A [`Clock`] that advances by itself, about once every `interval`, on the
+/// platform's own timer: `setTimeout` in the browser, the timer plugin in a
+/// native app, and tokio or a timer thread elsewhere.
+///
+/// Use it for a countdown, a "Copied" label that clears itself, or anything
+/// else that needs time to pass without the host driving a signal. The value
+/// is the time since the hook was called. It is measured, not counted, so a
+/// tab the browser put to sleep catches up in one step when it wakes, and
+/// intervals built on it [coalesce](use_interval_fn) what they missed.
+///
+/// ```no_run
+/// use std::time::Duration;
+///
+/// use leptoskit_use::use_clock;
+/// use leptoskit_use::use_timeout_fn;
+/// use reactive_graph::prelude::*;
+/// use reactive_graph::signal::RwSignal;
+///
+/// let copied = RwSignal::new(true);
+/// let clock = use_clock(Duration::from_millis(100));
+/// use_timeout_fn(
+/// 	clock,
+/// 	move || copied.set(false),
+/// 	Duration::from_millis(1200),
+/// );
+/// ```
+///
+/// The clock stops when the owner it was created under is cleaned up, so a
+/// screen that leaves takes its timer with it. An `interval` under one
+/// millisecond is treated as one millisecond.
+///
+/// The app's task executor runs the timer, which every app target leptoskit
+/// builds sets up. Where the host has no timer, such as a native host built
+/// before the timer plugin existed, the clock stays at zero. While a page
+/// renders on the server the clock reads zero and stops when the render's
+/// owner is cleaned up.
+#[cfg(feature = "clock")]
+#[must_use]
+pub fn use_clock(interval: Duration) -> Clock {
+	let interval = interval.max(Duration::from_millis(1));
+	let elapsed = RwSignal::new(Duration::ZERO);
+	let (ticking, stop) = futures::future::abortable(async move {
+		let started = leptoskit_query::now_ms();
+		let mut latest = Duration::ZERO;
+
+		while leptoskit_query::try_sleep(interval).await.is_ok() {
+			// A wall clock can be set back. This one never goes back.
+			let now = Duration::from_millis(leptoskit_query::now_ms().saturating_sub(started));
+			latest = latest.max(now);
+
+			if elapsed.try_set(latest).is_some() {
+				// The signal is gone, and so is whoever was reading it.
+				return;
+			}
+		}
+	});
+	let ticking = async move {
+		let _ = ticking.await;
+	};
+	#[cfg(not(target_family = "wasm"))]
+	any_spawner::Executor::spawn(ticking);
+	#[cfg(target_family = "wasm")]
+	any_spawner::Executor::spawn_local(ticking);
+	on_cleanup(move || stop.abort());
+
+	elapsed.into()
+}
+
 /// Restartable one-shot timer controls.
 #[derive(Clone)]
 pub struct UseTimeoutFnReturn {

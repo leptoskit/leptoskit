@@ -50,6 +50,7 @@ This is an independent implementation. It mirrors the portable portion of leptos
 | Logic / math            | `use_not`, `use_and`, `use_or`, `use_abs`, `use_ceil`, `use_floor`, `use_round`, `use_min`, `use_max` | Unary numbers use `f64`; min/max use ordered vectors and return `None` for empty input.                  |
 | Watch                   | `watch_with_options`, `watch_pausable`, `whenever`, `sync_signal`                                     | Synchronous on every host, including SSR; equality suppresses redundant callbacks.                       |
 | Timers                  | `use_timeout_fn`, `use_interval_fn`, `use_interval`                                                   | Explicit monotonic clock and `Duration`; intervals coalesce missed ticks.                                |
+| Clock (`clock` feature) | `use_clock`                                                                                           | A clock driven by the platform's timer; needs an executor.                                               |
 | Filters                 | `use_debounce_fn`, `use_throttle_fn`, `signal_debounced`, `signal_throttled`                          | Trailing debounce; leading-only throttle. Explicit clock.                                                |
 | Storage                 | `use_storage`, `use_async_storage`, `Storage`, `AsyncStorage`, `MemoryStorage`, `LocalStorage`        | Typed host adapters; fallible operations; persist before updating signals. Optional persistent backends. |
 | Async state             | `use_async_state`, `AsyncState`                                                                       | Executor-free; each execution is a caller-driven future with pending/success/error state.                |
@@ -117,6 +118,16 @@ let timer = use_timeout_fn(now, move || finished.set(true), Duration::from_secs(
 now.set(Duration::from_secs(1));
 assert!(finished.get());
 assert!(!timer.is_pending.get());
+```
+
+With the `clock` feature, `use_clock(interval)` is a clock that needs no driving. It advances about once per `interval` on the platform's own timer, through `leptoskit_query`'s `try_sleep`: `setTimeout` in a browser, the timer plugin in a native leptoskit app, and tokio or a timer thread elsewhere. It is the one hook here that spawns a task, so the app's `any_spawner` executor must be set up, and it stops when its owner is cleaned up.
+
+```rust,ignore
+use std::time::Duration;
+use leptoskit_use::{use_clock, use_interval};
+
+let clock = use_clock(Duration::from_secs(1));
+let seconds = use_interval(clock, Duration::from_secs(1));
 ```
 
 Timeouts and intervals start on creation. Zero duration fires on the next clock change. Pause/stop cancels the deadline; start/resume schedules from the current time. Owner cleanup unsubscribes watchers and timers. Arena signal handles must not be invoked after owner disposal, except watcher controls and async storage operations, which explicitly handle disposal.
