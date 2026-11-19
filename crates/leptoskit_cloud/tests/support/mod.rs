@@ -13,6 +13,7 @@ pub mod billing;
 pub mod config;
 pub mod databases;
 pub mod domains;
+pub mod limits;
 pub mod review;
 pub mod scenarios;
 pub mod shipping;
@@ -32,6 +33,8 @@ use leptoskit_cloud::server::Control;
 use leptoskit_cloud::server::ControlConfig;
 use leptoskit_cloud::server::DEFAULT_REGION;
 use leptoskit_cloud::server::Lookup;
+use leptoskit_cloud::server::Rate;
+use leptoskit_cloud::server::RateLimits;
 use leptoskit_cloud::server::ResolveError;
 use leptoskit_cloud::server::Resolver;
 use leptoskit_cloud::server::SharedMailer;
@@ -270,6 +273,18 @@ pub fn test_settings() -> ShippingSettings {
 	}
 }
 
+/// Rates nothing in a scenario reaches.
+pub fn unlimited() -> RateLimits {
+	let rate = Rate::a_minute(u32::MAX);
+	RateLimits {
+		person: rate,
+		token: rate,
+		worker: rate,
+		anonymous: rate,
+		payment_pages: rate,
+	}
+}
+
 /// A control plane over `db`, which must be migrated, with `configure`
 /// applied to its configuration: a local store in a fresh directory,
 /// [`APPS_DOMAIN`], [`REGISTRY`], no price catalogue, and
@@ -299,6 +314,9 @@ pub async fn app_with(db: Db, configure: impl FnOnce(&mut ControlConfig)) -> App
 		registry: REGISTRY.to_owned(),
 		catalogue: None,
 		payments: None,
+		// Scenarios ask as fast as they can: the ones about rates set their own.
+		rate_limits: unlimited(),
+		client_ip_header: None,
 		shipping: test_settings(),
 		dev: None,
 	};

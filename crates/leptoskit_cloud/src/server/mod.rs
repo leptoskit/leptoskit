@@ -41,6 +41,7 @@ mod secret;
 pub(crate) mod status;
 mod storage;
 pub(crate) mod subscriptions;
+mod throttle;
 pub mod tokens;
 pub(crate) mod uploads;
 mod vault;
@@ -92,6 +93,8 @@ pub use storage::S3Config;
 pub use storage::SecretValue;
 pub use storage::StorageConfig;
 pub use subscriptions::STRIPE_WEBHOOK_PATH;
+pub use throttle::Rate;
+pub use throttle::RateLimits;
 
 use self::storage::ObjectStore;
 use crate::pricing::Catalogue;
@@ -136,6 +139,12 @@ pub(crate) struct Shipping {
 	pub(crate) resolver: SharedResolver,
 	/// How payment is taken, when it is.
 	pub(crate) payments: Option<PaymentsConfig>,
+	/// How often each kind of caller may ask, and the counts so far.
+	pub(crate) rates: RateLimits,
+	pub(crate) throttle: Arc<throttle::Throttle>,
+	/// The header a proxy in front of the control plane puts the client's
+	/// address in, when there is one.
+	pub(crate) client_ip_header: Option<String>,
 }
 
 /// How long leases and addresses last, how long things are kept, and how
@@ -169,6 +178,9 @@ pub struct ShippingSettings {
 	/// The most build log bytes one organisation may keep at once; they
 	/// count until their retention ends.
 	pub organization_log_cap: u64,
+	/// The most bytes one backup's dump may be. A worker is told it, and a
+	/// dump a worker says is larger is a backup that failed.
+	pub backup_cap: u64,
 }
 
 impl Default for ShippingSettings {
@@ -176,7 +188,8 @@ impl Default for ShippingSettings {
 	/// be claimed, a sweep every fifteen seconds, archives kept a week,
 	/// build logs thirty days and runtime logs seven, 5 GiB of archives
 	/// per organisation, two hours for an attempt at a build, 64 MiB of log
-	/// per build, and 2 GiB of build logs per organisation.
+	/// per build, 2 GiB of build logs per organisation, and 20 GiB for a
+	/// backup.
 	fn default() -> Self {
 		Self {
 			lease: Duration::from_mins(2),
@@ -191,6 +204,7 @@ impl Default for ShippingSettings {
 			build_deadline: Duration::from_hours(2),
 			build_log_cap: 64 * 1024 * 1024,
 			organization_log_cap: 2 * 1024 * 1024 * 1024,
+			backup_cap: 20 * 1024 * 1024 * 1024,
 		}
 	}
 }

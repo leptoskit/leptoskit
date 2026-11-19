@@ -22,6 +22,7 @@ use support::billing;
 use support::config;
 use support::databases;
 use support::domains;
+use support::limits;
 use support::review;
 use support::shipping;
 use support::shipping::Shop;
@@ -582,6 +583,28 @@ async fn a_missed_event_is_caught_up_with() {
 	let db = leptoskit_db::testing::sqlite_migrated(leptoskit_cloud::MIGRATIONS).await;
 	let app = support::app_with(db, subscriptions::taking_payment(&till)).await;
 	subscriptions::a_missed_event_is_caught_up_with(&app, &till).await;
+}
+
+#[tokio::test]
+async fn an_estimate_prices_a_table() {
+	let db = leptoskit_db::testing::sqlite_migrated(leptoskit_cloud::MIGRATIONS).await;
+	let app = support::app_with(db, |config| config.catalogue = Some(billing::catalogue())).await;
+	billing::an_estimate_prices_a_table(&app).await;
+}
+
+#[tokio::test]
+async fn a_caller_who_asks_too_often_waits() {
+	let db = leptoskit_db::testing::sqlite_migrated(leptoskit_cloud::MIGRATIONS).await;
+	let app = support::app_with(db, limits::slow).await;
+	limits::a_caller_who_asks_too_often_waits(&app).await;
+}
+
+#[tokio::test]
+async fn payment_pages_are_handed_out_slowly() {
+	let till = subscriptions::Till::default();
+	let db = leptoskit_db::testing::sqlite_migrated(leptoskit_cloud::MIGRATIONS).await;
+	let app = support::app_with(db, limits::two_pages(&till)).await;
+	limits::payment_pages_are_handed_out_slowly(&app, &till).await;
 }
 
 #[tokio::test]

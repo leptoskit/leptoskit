@@ -144,6 +144,14 @@ pub struct ControlConfig {
 	/// How payment is taken. Without it nobody can subscribe to a plan, and
 	/// the provider's events aren't listened for.
 	pub payments: Option<super::payments::PaymentsConfig>,
+	/// How often each kind of caller may ask.
+	pub rate_limits: super::RateLimits,
+	/// The header a proxy in front of the control plane puts the client's
+	/// address in, such as `x-real-ip`: one the proxy sets itself, whatever
+	/// the client sent. Rate limits, sign-in's own included, count by it.
+	/// `None` when clients connect directly, and the connection's address
+	/// is used.
+	pub client_ip_header: Option<String>,
 	/// Leases, addresses, retention, and the storage cap.
 	pub shipping: ShippingSettings,
 	/// Development mode, in debug builds only.
@@ -249,6 +257,12 @@ impl Control {
 					}))
 					.collect(),
 				payments: config.payments.clone(),
+				rates: config.rate_limits,
+				throttle: Arc::default(),
+				client_ip_header: config
+					.client_ip_header
+					.as_deref()
+					.map(str::to_ascii_lowercase),
 				vault: super::vault::Vault::new(config.vault.clone()),
 				resolver: config.resolver.clone(),
 				store: store.clone(),
@@ -556,6 +570,10 @@ fn auth(db: &Db, origin: &str, config: &ControlConfig) -> Result<Auth, ControlEr
 	}
 
 	builder = builder.sign_in_methods(methods);
+
+	if let Some(header) = &config.client_ip_header {
+		builder = builder.client_ip_header(header);
+	}
 
 	if config.dev.is_some() {
 		builder = dev_sign_in(builder)?;

@@ -256,6 +256,15 @@ async fn start_checkout(cx: &rpc::MutationCx, args: StartCheckout) -> rpc::Resul
 	})
 }
 
+/// Counts one page asked of the provider for `organization`: each is a
+/// call out, made with the control plane's own key.
+fn pace(services: &Services, organization: Uuid) -> rpc::Result<()> {
+	let shipping = services.shipping();
+	shipping
+		.throttle
+		.hit(&format!("pay:{organization}"), shipping.rates.payment_pages)
+}
+
 fn return_url(services: &Services, slug: &str, outcome: Option<&str>) -> String {
 	let page = format!("{}/{slug}/settings/billing", services.origin());
 
@@ -303,6 +312,7 @@ pub(crate) async fn checkout(
 	let Some(customer) = &started.customer else {
 		return Err(unreachable_provider(PaymentError::Unavailable));
 	};
+	pace(services, started.organization)?;
 	let url = config
 		.provider
 		.checkout(Checkout {
@@ -326,7 +336,7 @@ struct OpenPortal {
 
 impl rpc::Operation for OpenPortal {
 	type Context = rpc::MutationCx;
-	type Output = (String, String);
+	type Output = (Uuid, String, String);
 
 	const KIND: rpc::Kind = rpc::Kind::Mutation;
 	const NAME: &'static str = "portal";
@@ -334,13 +344,16 @@ impl rpc::Operation for OpenPortal {
 	fn run(
 		self,
 		cx: &rpc::MutationCx,
-	) -> impl Future<Output = rpc::Result<(String, String)>> + Send {
+	) -> impl Future<Output = rpc::Result<(Uuid, String, String)>> + Send {
 		open_portal(cx, self)
 	}
 }
 
-/// The organisation's slug and customer, as the caller.
-async fn open_portal(cx: &rpc::MutationCx, args: OpenPortal) -> rpc::Result<(String, String)> {
+/// The organisation's ID, slug and customer, as the caller.
+async fn open_portal(
+	cx: &rpc::MutationCx,
+	args: OpenPortal,
+) -> rpc::Result<(Uuid, String, String)> {
 	let access = authorize::organization(
 		cx.tx(),
 		cx.context(),
@@ -373,16 +386,21 @@ async fn open_portal(cx: &rpc::MutationCx, args: OpenPortal) -> rpc::Result<(Str
 		&client(cx.context()),
 	)
 	.await?;
-	Ok((access.organization.slug.clone(), customer))
+	Ok((
+		organization_id.uuid(),
+		access.organization.slug.clone(),
+		customer,
+	))
 }
 
 /// `portal`'s body: who may, then the page.
 pub(crate) async fn portal(cx: &rpc::ActionCx, organization: String) -> rpc::Result<BillingLink> {
 	let services = services(cx.context())?;
-	let (slug, customer) = cx.mutate(OpenPortal { organization }).await?;
+	let (organization, slug, customer) = cx.mutate(OpenPortal { organization }).await?;
 	let Some(config) = &services.shipping().payments else {
 		return Err(unavailable());
 	};
+	pace(services, organization)?;
 	let url = config
 		.provider
 		.portal(&customer, &return_url(services, &slug, None))

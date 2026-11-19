@@ -46,6 +46,78 @@ pub fn catalogue() -> Catalogue {
 	.expect("a catalogue")
 }
 
+/// An estimate prices a whole `[cloud]` table before anything is
+/// deployed: on the organisation's plan or another, for members only.
+pub async fn an_estimate_prices_a_table(app: &App) {
+	let ana = app.sign_in("ana@example.com").await;
+	let org = app.personal(As::Session(&ana)).await;
+	let estimate = |config: Value, plan: Value, caller| {
+		app.call(
+			"estimate",
+			json!({ "organization": org, "config": config, "plan": plan }),
+			caller,
+		)
+	};
+
+	// An empty table is production alone, with the defaults.
+	let free = estimate(json!({}), Value::Null, As::Session(&ana)).await;
+	let free = free.expect(200).json();
+	assert_eq!(
+		(&free["plan"], &free["plan_price"], &free["currency"]),
+		(&json!("hobby"), &json!(0), &json!("usd"))
+	);
+	let lines = free["lines"].as_array().expect("lines");
+	assert!(
+		lines
+			.iter()
+			.any(|line| line["meter"] == "build_minutes_linux"),
+		"{free}"
+	);
+	assert!(
+		free["assumptions"]
+			.as_array()
+			.is_some_and(|said| !said.is_empty()),
+		"{free}"
+	);
+	// The same table on a plan that is paid for: the plan's price, and
+	// usage beyond what it includes.
+	let paid = estimate(json!({}), json!("pro"), As::Session(&ana)).await;
+	let paid = paid.expect(200).json();
+	assert_eq!(
+		(&paid["plan"], &paid["plan_price"]),
+		(&json!("pro"), &json!(2000))
+	);
+	let number = |value: &Value| value.as_u64().expect("a number");
+	assert_eq!(
+		number(&paid["total"]),
+		2000 + number(&paid["usage"]).saturating_sub(number(&paid["included"]))
+	);
+	// More environments cost more.
+	let two = json!({ "cloud": { "environments": { "staging": {} } } });
+	let both = estimate(two, json!("pro"), As::Session(&ana)).await;
+	let both = both.expect(200).json();
+	assert!(number(&both["usage"]) > number(&paid["usage"]), "{both}");
+
+	estimate(json!({}), json!("enterprise"), As::Session(&ana))
+		.await
+		.refused(404, "plan_not_found");
+	let wrong = json!({ "cloud": { "environments": { "Not A Slug": {} } } });
+	let refused = estimate(wrong, Value::Null, As::Session(&ana)).await;
+	assert_eq!(refused.status, 400, "{}", refused.text);
+	// A deploy token may ask; a stranger learns nothing of the organisation.
+	let (token, _) = app.token(As::Session(&ana), &org, &["deploy"], None).await;
+	estimate(json!({}), Value::Null, As::Bearer(&token))
+		.await
+		.expect(200);
+	let mallory = app.sign_in("mallory@example.com").await;
+	estimate(json!({}), Value::Null, As::Session(&mallory))
+		.await
+		.refused(404, "organization_not_found");
+	estimate(json!({}), Value::Null, As::Nobody)
+		.await
+		.expect(401);
+}
+
 async fn usage(shop: &Shop<'_>) -> Value {
 	shop.app
 		.call("usage", json!({ "organization": shop.org }), shop.as_ana())

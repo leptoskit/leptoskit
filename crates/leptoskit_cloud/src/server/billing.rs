@@ -281,6 +281,44 @@ pub(crate) async fn usage(
 	})
 }
 
+/// The most environments one estimate prices: far more than a table has.
+const MAX_ESTIMATED: usize = 50;
+
+pub(crate) async fn estimate(
+	cx: &rpc::QueryCx,
+	organization: &str,
+	config: &crate::deployments::DeployConfig,
+	plan: Option<&str>,
+) -> rpc::Result<crate::deployments::CostEstimate> {
+	let access = authorize::organization(
+		cx.db(),
+		cx.context(),
+		organization,
+		Permission::ViewProjects,
+	)
+	.await?;
+	let services = services(cx.context())?;
+	let Some(catalogue) = &services.shipping().catalogue else {
+		return Err(rpc::Error::conflict(
+			"unpriced: this cloud wasn't given a price catalogue, so nothing is priced",
+		));
+	};
+	let wanted = plan.unwrap_or(access.organization.plan.as_str());
+	let plan = catalogue.plan(wanted).ok_or_else(|| {
+		rpc::Error::not_found(format!("plan_not_found: this cloud has no `{wanted}` plan"))
+	})?;
+	let cloud = crate::release::resolve_all(config)
+		.map_err(|error| rpc::Error::invalid(error.to_string()))?;
+
+	if cloud.environments.len() > MAX_ESTIMATED {
+		return Err(rpc::Error::invalid(format!(
+			"invalid_config: an estimate prices {MAX_ESTIMATED} environments at most"
+		)));
+	}
+
+	Ok(super::deployments::estimate(catalogue, plan, &cloud))
+}
+
 pub(crate) async fn set_spend_cap(
 	cx: &rpc::MutationCx,
 	organization: &str,

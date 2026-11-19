@@ -69,6 +69,11 @@ pub const REGISTRY: &str = "LEPTOSKIT_CLOUD_REGISTRY";
 /// A JSON price catalogue's path. Without it, previews say there is no price
 /// catalogue.
 pub const PRICE_CATALOGUE: &str = "LEPTOSKIT_CLOUD_PRICE_CATALOGUE";
+/// The header the proxy in front of the control plane puts the client's
+/// address in, such as `x-real-ip`: one the proxy sets itself, whatever the
+/// client sent. Rate limits count by it. Without it they count by the
+/// connection's address, which behind a proxy is the proxy's.
+pub const CLIENT_IP_HEADER: &str = "LEPTOSKIT_CLOUD_CLIENT_IP_HEADER";
 /// A restricted Stripe key, to take payment for plans: it writes customers,
 /// checkout sessions and customer portal sessions, and reads subscriptions
 /// and charges. With it, [`STRIPE_WEBHOOK_SECRET`], [`STRIPE_PRICES`] and
@@ -317,6 +322,8 @@ impl ServeConfig {
 				registry,
 				catalogue,
 				payments,
+				rate_limits: leptoskit_cloud::server::RateLimits::default(),
+				client_ip_header: client_ip_header(vars)?,
 				shipping: ShippingSettings::default(),
 				dev: mailbox.map(|mailbox| DevMode { mailbox }),
 			},
@@ -506,6 +513,26 @@ fn catalogue(vars: Vars<'_>) -> Result<Option<Catalogue>, ConfigError> {
 	catalogue_from_json(&text)
 		.map(Some)
 		.map_err(|error| invalid(PRICE_CATALOGUE, error.to_string()))
+}
+
+/// [`CLIENT_IP_HEADER`], when it is a header's name.
+fn client_ip_header(vars: Vars<'_>) -> Result<Option<String>, ConfigError> {
+	let Some(header) = read(vars, CLIENT_IP_HEADER) else {
+		return Ok(None);
+	};
+
+	if header.is_empty()
+		|| !header
+			.bytes()
+			.all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+	{
+		return Err(invalid(
+			CLIENT_IP_HEADER,
+			"is a header's name, such as `x-real-ip`".to_owned(),
+		));
+	}
+
+	Ok(Some(header.to_ascii_lowercase()))
 }
 
 /// How payment is taken: [`STRIPE_KEY`], [`STRIPE_WEBHOOK_SECRET`] and
@@ -834,6 +861,23 @@ mod tests {
 		let config = ServeConfig::from_vars(&vars(&pairs), false).expect("valid");
 		let catalogue = config.control.catalogue.expect("a catalogue");
 		assert_eq!(catalogue.plans().len(), 1);
+	}
+
+	#[tokio::test]
+	async fn a_proxys_header_is_a_headers_name() {
+		let mut pairs = production();
+		let config = ServeConfig::from_vars(&vars(&pairs), false).expect("valid");
+		assert_eq!(config.control.client_ip_header, None);
+		pairs.push((CLIENT_IP_HEADER, "X-Real-IP"));
+		let config = ServeConfig::from_vars(&vars(&pairs), false).expect("valid");
+		assert_eq!(
+			config.control.client_ip_header.as_deref(),
+			Some("x-real-ip")
+		);
+		pairs.pop();
+		pairs.push((CLIENT_IP_HEADER, "x-real-ip: 1.2.3.4"));
+		let refused = error(&pairs, false);
+		assert!(refused.starts_with(CLIENT_IP_HEADER), "{refused}");
 	}
 
 	#[tokio::test]

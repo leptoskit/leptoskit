@@ -214,6 +214,21 @@ pub fn resolve(
 		.ok_or_else(|| ResolveError(format!("`{environment}` isn't an environment's name")))
 }
 
+/// Every environment `config`'s `[cloud]` table has, production included,
+/// resolved with [`app_config`]'s facts.
+///
+/// # Errors
+///
+/// [`ResolveError`], naming the table and key.
+pub fn resolve_all(
+	config: &DeployConfig,
+) -> Result<leptoskit_config::cloud::ResolvedCloud, ResolveError> {
+	config
+		.cloud
+		.resolved(&app_config(&config.app))
+		.map_err(|error| ResolveError(error.to_string()))
+}
+
 /// One process, as the plan runs it.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[expect(

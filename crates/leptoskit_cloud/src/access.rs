@@ -518,6 +518,10 @@ pub const OPERATIONS: &[(&str, Requirement)] = &[
 	("plans", Requirement::SignedIn),
 	("usage", Requirement::Organization(Permission::ViewBilling)),
 	(
+		"estimate",
+		Requirement::Organization(Permission::ViewProjects),
+	),
+	(
 		"set_spend_cap",
 		Requirement::Organization(Permission::ManageBilling),
 	),

@@ -358,6 +358,7 @@ pub(crate) async fn create_backup(
 				database: database.name.clone(),
 				backup: row.id.uuid(),
 				expires_at: row.expires_at,
+				max_bytes: Some(services(cx.context())?.shipping().settings.backup_cap),
 			}),
 		},
 	)
@@ -559,6 +560,7 @@ pub(crate) async fn restore_backup(
 				backup,
 				location,
 				safety_expires_at: now + keep(),
+				max_bytes: Some(services(cx.context())?.shipping().settings.backup_cap),
 			}),
 		},
 	)
@@ -611,10 +613,16 @@ fn keepable(taken: &BackupTaken) -> bool {
 
 /// A backup's or a restore's outcome as it is kept, before the job's row,
 /// a backup's row, or an answer holds any of it: a reason is scrubbed and
-/// cut, a dump whose location can't be kept is a backup that failed, and a
-/// restore's dump whose location can't be kept is left out.
-pub(crate) fn kept(outcome: JobOutcome) -> JobOutcome {
+/// cut, a dump whose location can't be kept or that is more than `cap`
+/// bytes is a backup that failed, and a restore's dump like that is left
+/// out.
+pub(crate) fn kept(outcome: JobOutcome, cap: u64) -> JobOutcome {
 	match outcome {
+		JobOutcome::BackupDatabase(BackupOutcome::Taken(taken)) if taken.bytes > cap => {
+			JobOutcome::BackupDatabase(BackupOutcome::Failed {
+				reason: "the dump is larger than a backup may be".to_owned(),
+			})
+		}
 		JobOutcome::BackupDatabase(BackupOutcome::Taken(taken)) if !keepable(&taken) => {
 			JobOutcome::BackupDatabase(BackupOutcome::Failed {
 				reason: "its cluster's worker said where it is in a way that can't be kept"
@@ -628,7 +636,9 @@ pub(crate) fn kept(outcome: JobOutcome) -> JobOutcome {
 		}
 		JobOutcome::RestoreDatabase(RestoreOutcome::Restored { before_restore }) => {
 			JobOutcome::RestoreDatabase(RestoreOutcome::Restored {
-				before_restore: before_restore.filter(keepable),
+				before_restore: before_restore
+					.filter(|taken| taken.bytes <= cap)
+					.filter(keepable),
 			})
 		}
 		JobOutcome::RestoreDatabase(RestoreOutcome::Failed { reason: why }) => {
