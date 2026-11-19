@@ -199,6 +199,15 @@ function serve(directory, clientDirectory) {
 					};
 					return response;
 				}
+				case `${BASE}/analytics/overview`:
+					if (request.headers.get("x-admin-page") === "json") {
+						models.push(url.pathname + url.search);
+						return new Response(
+							await Deno.readFile(`${directory}/web-week.json`),
+							{ headers: { "content-type": "application/json" } },
+						);
+					}
+					return page("web.html");
 				case `${BASE}/analytics/library`:
 					return page("library.html");
 				case `${BASE}/analytics/people`:
@@ -803,6 +812,50 @@ Deno.test("a dashboard is the pages' own Rust, and reads itself again as events 
 		assert(
 			await page.evaluate("window.stayed === true") && await cards() === 1,
 			"the dashboard changed in place, without loading again",
+		);
+	});
+});
+
+Deno.test("the web overview is the pages' own Rust, and its chips change it in place", async () => {
+	await withBrowser(async (page, site) => {
+		await open(page, `${site.origin}${BASE}/analytics/overview`);
+		await hydrated(page, "the web overview");
+		assert(
+			await page.evaluate(
+				"!document.querySelector('script[src$=\"admin.mjs\"]')",
+			),
+			"the page loads no hand-written script",
+		);
+		const chosen = () =>
+			page.evaluate(
+				`Array.from(document.querySelectorAll('[data-testid="filters"] [aria-current="page"]'))
+				.map((chip) => chip.getAttribute("aria-label")).join()`,
+			);
+		assert(
+			await chosen() === "Last 30 days,Compare previous period",
+			`it opens on the last 30 days, compared: ${await chosen()}`,
+		);
+
+		await page.evaluate("window.stayed = true");
+		await page.evaluate(
+			`Array.from(document.querySelectorAll('[data-testid="filters"] a'))
+			.find((chip) => chip.getAttribute("aria-label") === "Last 7 days").click()`,
+		);
+		await page.until(
+			`() => location.search.includes("days=7")`,
+			"the address follows the chip",
+		);
+		await page.until(
+			`() => document.querySelector('[data-testid="filters"] [aria-current="page"]')?.getAttribute("aria-label") === "Last 7 days"`,
+			"the week is chosen",
+		);
+		assert(
+			site.models.length === 1 && site.models[0].includes("days=7"),
+			`one model for the week: ${site.models}`,
+		);
+		assert(
+			await page.evaluate("window.stayed === true"),
+			"the page changed in place, without loading again",
 		);
 	});
 });

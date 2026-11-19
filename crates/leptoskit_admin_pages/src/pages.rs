@@ -9,9 +9,11 @@ mod library;
 mod live;
 mod people;
 mod project;
+mod web;
 
 use leptos::prelude::Get as _;
 use leptoskit::prelude::Element;
+pub(crate) use web::path as web_path;
 
 use crate::model::Page;
 use crate::shell::Shell;
@@ -75,9 +77,9 @@ pub(crate) fn screen_of(shell: &Shell) -> Box<dyn Fn() -> Element + Send + Sync>
 				shell.frame(live::page(live, Some(watch)))
 			})
 		}
-		// The pages that read themselves again as events arrive, and the
-		// builders, which also change in place.
-		Page::Insight(_) | Page::Dashboard(_) | Page::Notice(_) => {
+		// The pages that read themselves again as events arrive; the
+		// builders and the web overview also change in place.
+		Page::Insight(_) | Page::Web(_) | Page::Dashboard(_) | Page::Notice(_) => {
 			let swap = crate::analytics::swap::Swap::new(
 				shell.page,
 				shell.workings,
@@ -88,10 +90,11 @@ pub(crate) fn screen_of(shell: &Shell) -> Box<dyn Fn() -> Element + Send + Sync>
 			Box::new(move || {
 				// The page a swap put in place, or the server's.
 				let page = shell.page.get();
-				let Page::Insight(insight) = &page else {
-					return shell.frame(content(&page));
-				};
-				shell.frame(insight::page(insight, Some(actions)))
+				shell.frame(match &page {
+					Page::Insight(insight) => insight::page(insight, Some(actions)),
+					Page::Web(web) => web::page(web, Some(actions)),
+					page => content(page),
+				})
 			})
 		}
 		_ => Box::new(move || shell.frame(content(&shell.model.page))),
@@ -115,6 +118,7 @@ pub fn content(page: &Page) -> Element {
 		Page::Person(person) => people::person(person, None),
 		Page::Insight(insight) => insight::page(insight, None),
 		Page::Live(live) => live::page(live, None),
+		Page::Web(web) => web::page(web, None),
 		Page::Dashboard(dashboard) => analytics::dashboard(dashboard),
 		Page::Actors(actors) => analytics::actors(actors),
 		Page::Notice(notice) => analytics::notice(notice),

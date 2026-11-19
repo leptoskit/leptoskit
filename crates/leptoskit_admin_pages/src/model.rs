@@ -286,6 +286,8 @@ pub enum Page {
 	Insight(Box<insight::Insight>),
 	/// Events as they arrive.
 	Live(Box<live::Live>),
+	/// The web overview.
+	Web(Box<analytics::Web>),
 	/// A dashboard's cards.
 	Dashboard(Box<analytics::Dashboard>),
 	/// The people behind one point of a chart.
@@ -310,6 +312,7 @@ impl Page {
 			Self::Person(person) => &person.name,
 			Self::Insight(insight) => &insight.name,
 			Self::Live(_) => "Live",
+			Self::Web(_) => "Web analytics",
 			Self::Dashboard(dashboard) => &dashboard.name,
 			Self::Actors(actors) => &actors.title,
 			Self::Notice(notice) => &notice.title,
@@ -329,6 +332,7 @@ impl Page {
 			| Self::Dashboard(_)
 			| Self::Notice(_) => &[],
 			Self::Actors(actors) => std::slice::from_ref(&actors.drawer),
+			Self::Web(web) => &web.drawers,
 			Self::Person(person) => std::slice::from_ref(&person.drawer),
 			Self::Insight(insight) => std::slice::from_ref(&insight.drawer),
 			Self::Live(live) => std::slice::from_ref(&live.drawer),
@@ -349,6 +353,7 @@ impl Page {
 			Self::Insight(insight) => insight.kind.section(),
 			Self::Live(_) => Section::Live,
 			Self::Actors(actors) => actors.section.clone(),
+			Self::Web(_) => Section::Overview,
 			Self::Notice(notice) => notice.section.clone(),
 			Self::Operation(operation) => Section::ProjectOperations(operation.project.clone()),
 			Self::Project(project) => {

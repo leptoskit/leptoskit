@@ -967,6 +967,13 @@ async fn pages_for_the_script() {
 	assert_eq!(status, StatusCode::OK, "{dashboard}");
 	std::fs::write(directory.join("dashboard.json"), json).unwrap();
 
+	// The web overview over the last week, for a chip that changes it in
+	// place.
+	let week = format!("{BASE}/analytics/overview?days=7");
+	let (status, json) = page_model(&world, &mut ada, &week).await;
+	assert_eq!(status, StatusCode::OK, "{week}");
+	std::fs::write(directory.join("web-week.json"), json).unwrap();
+
 	let project = format!("{BASE}/infra/projects/notes-production");
 	for (file, path) in [
 		(
@@ -992,6 +999,7 @@ async fn pages_for_the_script() {
 		("people.html", format!("{BASE}/analytics/people")),
 		("person.html", person),
 		("dashboard.html", dashboard),
+		("web.html", format!("{BASE}/analytics/overview")),
 		("glossary.html", format!("{BASE}/learn/glossary")),
 		("learn.html", format!("{BASE}/learn")),
 		("overview.html", format!("{project}/overview")),

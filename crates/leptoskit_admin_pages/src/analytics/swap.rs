@@ -151,6 +151,7 @@ impl Swap {
 		self.page.with_untracked(|page| {
 			match page {
 				Page::Insight(insight) => Some(insight.path.clone()),
+				Page::Web(_) => Some(crate::pages::web_path()),
 				_ => None,
 			}
 		})
@@ -194,15 +195,19 @@ impl Swap {
 				.and_then(|(_, data)| serde_json::from_value::<Page>(data).ok());
 			let mut next = match next {
 				Some(Page::Insight(next)) => next,
-				// A page that only reads itself again.
-				Some(next @ (Page::Dashboard(_) | Page::Notice(_))) if !chosen => {
+				// The web overview, which changes in place too, or a page that
+				// only reads itself again.
+				Some(next @ (Page::Web(_) | Page::Dashboard(_) | Page::Notice(_)))
+					if matches!(next, Page::Web(_)) || !chosen =>
+				{
 					let title = format!(
 						"{} · {} admin",
 						next.title(),
 						self.app.with_value(Clone::clone)
 					);
 					self.page.set(next);
-					browser::show(&href, &title, false);
+					browser::show(&href, &title, chosen);
+					self.workings.announce_change(None, None);
 					return;
 				}
 				_ => {
@@ -250,7 +255,7 @@ impl Swap {
 #[cfg(feature = "hydrate")]
 fn rereads(page: &Page) -> bool {
 	match page {
-		Page::Insight(_) | Page::Dashboard(_) => true,
+		Page::Insight(_) | Page::Web(_) | Page::Dashboard(_) => true,
 		Page::Notice(notice) => {
 			matches!(notice.why, crate::model::analytics::Why::Listening { .. })
 		}

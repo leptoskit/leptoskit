@@ -1,12 +1,15 @@
-//! The analytics pages that aren't a builder: a dashboard, the people behind
-//! one point of a chart, and what a page says when it has nothing to read.
+//! The analytics pages that aren't a builder: the web overview, a
+//! dashboard, the people behind one point of a chart, and what a page says
+//! when it has nothing to read.
 
 use leptoskit_analytics::query::Query;
 use leptoskit_analytics::query::QueryResult;
+use leptoskit_analytics::query::WebOverviewResult;
 use serde::Deserialize;
 use serde::Serialize;
 
 use super::Section;
+use crate::analytics::params::Params;
 use crate::workings::Drawer;
 
 /// A dashboard: its saved insights, each run and drawn small.
@@ -76,4 +79,25 @@ pub enum Why {
 	/// The service has no events yet; the page listens for the first.
 	/// `shows` says what the page will show.
 	Listening { shows: String },
+}
+
+/// The web overview: the service's figures and tables for the site, with
+/// the daily series the tiles and chart draw.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Web {
+	/// What the address asked for, as it came.
+	pub address: Params,
+	/// The `WebOverview` query the page ran.
+	pub query: Query,
+	pub result: WebOverviewResult,
+	/// The daily visitors' trend, and what it answered.
+	pub visitors_query: Query,
+	pub visitors: Result<QueryResult, String>,
+	/// Daily pageviews and sessions, for the tiles' sparklines.
+	pub pageviews: Option<Vec<f64>>,
+	pub sessions: Option<Vec<f64>>,
+	/// Whether the note about channels still shows.
+	pub channels_note: bool,
+	/// The figures' and the chart's Workings.
+	pub drawers: Vec<Drawer>,
 }
