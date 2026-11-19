@@ -22,6 +22,14 @@ impl<B: NativeBackend> NativeSurface<B> {
 			return EventOutcome::Unhandled;
 		}
 
+		// Where a scroll view is tells a later reveal whether its element
+		// is already in view.
+		if let NativeEvent::Scroll { offset_x, offset_y } = *event {
+			self.scrolled
+				.borrow_mut()
+				.insert(target, (offset_x, offset_y));
+		}
+
 		// A dismissal is for the overlay it names: a popover the app keeps
 		// open does not close the modal around it.
 		if matches!(*event, NativeEvent::Dismiss) {

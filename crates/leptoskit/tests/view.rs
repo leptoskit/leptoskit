@@ -405,3 +405,29 @@ fn a_field_takes_focus_from_a_request() {
 		assert!(screen().children[1].props.focus_request > first);
 	});
 }
+
+#[test]
+fn an_element_is_revealed_from_a_request() {
+	reactive_graph::owner::Owner::new().with(|| {
+		let to_notice = Reveal::new();
+		let screen = move || {
+			view! {
+				<ScrollView>
+					<Button on:press=move || to_notice.request()>"Save"</Button>
+					<Text reveal_on=(to_notice, ScrollAlign::Center)>"Saved."</Text>
+				</ScrollView>
+			}
+		};
+		assert_eq!(screen().children[1].props.reveal, None);
+
+		to_notice.request();
+		let first = screen().children[1]
+			.props
+			.reveal
+			.expect("the notice carries the request");
+		assert_eq!(first.align, ScrollAlign::Center);
+
+		to_notice.request();
+		assert!(screen().children[1].props.reveal.unwrap().serial > first.serial);
+	});
+}

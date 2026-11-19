@@ -1109,6 +1109,21 @@ impl Widget {
 		}
 
 		let old_source = self.props.borrow().source.clone();
+
+		// A scroll view scrolls when its offset changes, and not again while
+		// it holds the same one. The refresh that ends the batch keeps the
+		// offset inside what the new layout can reach.
+		if let Some(offset) = props.scroll_offset
+			&& self.document.is_some()
+			&& self.props.borrow().scroll_offset != Some(offset)
+		{
+			let scale = self.scale();
+			self.scroll.set([
+				(offset.x.max(0.0) * scale).round() as i32,
+				(offset.y.max(0.0) * scale).round() as i32,
+			]);
+		}
+
 		*self.props.borrow_mut() = props.clone();
 		let font = Font::new(props.text_style(), self.scale());
 		*self.brush.borrow_mut() = Brush::new(self.fill());

@@ -109,6 +109,7 @@ pub fn is_layout_only(kind: NativeKind, props: &NativeProps) -> bool {
 		direction: _,
 		focused,
 		focus_request,
+		reveal,
 		scroll_offset,
 		overlay,
 		// Motion is web-only: native hosts show the resting pose, so it
@@ -159,6 +160,7 @@ pub fn is_layout_only(kind: NativeKind, props: &NativeProps) -> bool {
 		&& spans.is_none()
 		&& focused.is_none()
 		&& focus_request.is_none()
+		&& reveal.is_none()
 		&& scroll_offset.is_none()
 		&& overlay.is_none()
 		&& extra.is_empty()

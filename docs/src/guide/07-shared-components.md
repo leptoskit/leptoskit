@@ -516,6 +516,40 @@ Use `Pressable("Accessible name")` for custom decorative button content. Registe
 
 Use `ScrollView()` for a scroll container. `View().class("overflow-scroll")` also becomes a native scroll widget during resolution. Scroll views scroll on both axes. To react to scrolling, register a handler with `.on(NativeEventSlot::Scroll, handler)`: the web and every native backend report the scroll offset. The generated macOS, iOS, and Android apps don't report scroll events yet.
 
+### Scroll an element into view
+
+Some actions change something the person can't see. A form fails and the error summary is above the fold. A code arrives and the button that uses it is below the keyboard. A row in a long list is the one the screen is talking about. The screen knows which element it means, but not where layout put it, so a numeric `scroll_offset` is the wrong tool.
+
+Create a `Reveal`, give it to the element with `reveal_on`, and call `request()` from any handler:
+
+```rust
+#[component]
+fn Settings() -> impl IntoView {
+	let to_notice = Reveal::new();
+
+	view! {
+		<ScrollView class="h-full">
+			<Text reveal_on=(to_notice, ScrollAlign::Nearest)>"Saved."</Text>
+			<SettingsForm />
+			<Button on:press=move || { save(); to_notice.request(); }>"Save"</Button>
+		</ScrollView>
+	}
+}
+```
+
+Each call to `request()` scrolls once, after the screen next updates. The person can then scroll anywhere, and later updates leave the view where they put it. The handle is `Copy`, so any number of handlers can capture it. Give one handle to one element.
+
+`ScrollAlign` says where the element ends up along the direction the view scrolls. `Nearest` scrolls the least distance that shows it and does nothing when it is already in view. `Start`, `Center` and `End` place it deliberately. Across the view, the least movement is always used.
+
+To carry the person there as well, pair it with a [focus request](15-accessibility.md#move-focus-once) on the same element.
+
+- **Web:** the browser's `scrollIntoView` scrolls every scrolling ancestor that needs to move, including the page. The scroll is smooth unless the person asked their system to reduce motion, and then it jumps.
+- **macOS, iOS and Android apps:** the nearest `ScrollView` around the element scrolls, with the platform's own scroll animation.
+- **Linux (GTK), Windows, and the AppKit backend crate:** the nearest `ScrollView` scrolls, and the content arrives at once, without an animation.
+- **Terminal and HarmonyOS:** nothing scrolls yet.
+
+In the apps only the nearest `ScrollView` moves. An element in a scroll view that is itself scrolled out of sight in an outer one stays out of sight, where the web would scroll both. An element outside any `ScrollView` has nothing to scroll, so the request does nothing.
+
 Use `ListView()` or `GridView(columns)` for eager collections that fill the remainder of a bounded column. Every item is built and laid out. For long lists, `VirtualList` builds only the items on screen; see [virtualized lists](17-virtualized-lists.md).
 
 Add `overflow-hidden` when children must clip to a rounded container on both renderers:

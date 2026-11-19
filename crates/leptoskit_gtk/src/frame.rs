@@ -323,6 +323,11 @@ impl Frame {
 		self.queue_draw();
 	}
 
+	/// The size last given to [`Self::set_extent`].
+	pub fn extent(&self) -> Option<(i32, i32)> {
+		self.imp().extent.get()
+	}
+
 	pub fn set_extent(&self, width: i32, height: i32) {
 		self.imp().extent.set(Some((width, height)));
 		self.queue_resize();

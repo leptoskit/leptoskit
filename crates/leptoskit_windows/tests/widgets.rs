@@ -27,6 +27,7 @@ use windows::Win32::System::Com::CoUninitialize;
 use windows::Win32::System::Variant::VARIANT;
 use windows::Win32::UI::Accessibility::*;
 use windows::Win32::UI::Controls::*;
+use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::Interface;
@@ -755,6 +756,62 @@ fn scroll_document_moves_and_reports_native_offsets() {
 		assert_ne!(GetWindowLongW(view, GWL_STYLE) as u32 & WS_HSCROLL.0, 0);
 		assert_ne!(GetWindowLongW(view, GWL_STYLE) as u32 & WS_VSCROLL.0, 0);
 	}
+}
+
+#[test]
+fn a_scroll_view_scrolls_to_an_offset_and_to_a_revealed_row() {
+	use leptoskit_native::RevealRequest;
+	use leptoskit_native::ScrollAlign;
+	use leptoskit_native::ScrollOffset;
+
+	// A 96-tall view of ten 48-tall rows.
+	let rows = |offset: Option<f32>, reveal: Option<RevealRequest>| {
+		let view = ScrollView().class("w-48 h-24").children((0..10).map(|row| {
+			View()
+				.class("h-12 shrink-0")
+				.with_props(|props| props.reveal = reveal.filter(|_| row == 6))
+		}));
+
+		View().child(match offset {
+			Some(offset) => view.scroll_offset(ScrollOffset::new(0.0, offset)),
+			None => view,
+		})
+	};
+	let (window, mut surface) = mount(rows(None, None));
+	let id = child(&surface, 0);
+	let view = surface.backend().view(id).unwrap();
+	let document = surface.backend().scroll_document(id).unwrap();
+	// How far the document has moved up inside its viewport, in the
+	// surface's units.
+	let position = || {
+		let mut origin = POINT::default();
+		// SAFETY: Mapping from the document's origin into its viewport is
+		// valid, and the DPI query receives a live window.
+		let scale = unsafe {
+			MapWindowPoints(
+				Some(document),
+				Some(view),
+				std::slice::from_mut(&mut origin),
+			);
+			GetDpiForWindow(view) as f32 / 96.0
+		};
+
+		(-origin.y as f32 / scale).round()
+	};
+	assert_eq!(position(), 0.0);
+
+	surface.set_root(&rows(Some(120.0), None));
+	window.pump_messages();
+	assert_eq!(position(), 120.0);
+
+	// Row 6 starts at 288, and its end comes to the view's end.
+	let reveal = RevealRequest {
+		serial: 1,
+		align: ScrollAlign::Nearest,
+	};
+	surface.set_root(&rows(Some(120.0), Some(reveal)));
+	window.pump_messages();
+	assert_eq!(position(), 240.0);
 }
 
 #[test]

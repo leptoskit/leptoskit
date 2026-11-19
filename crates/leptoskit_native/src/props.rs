@@ -539,6 +539,14 @@ pub struct NativeProps {
 	/// after each batch and leaves focus alone otherwise.
 	#[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
 	pub focus_request: Option<u64>,
+	/// The latest one-shot request to scroll this widget into view, set by
+	/// [`Element::reveal_on`](crate::Element::reveal_on) from a
+	/// [`Reveal`](crate::Reveal). [`NativeSurface`](crate::NativeSurface)
+	/// answers it itself, by giving the scroll view that holds the widget a
+	/// [`scroll_offset`](Self::scroll_offset), and never sends it to a
+	/// backend. The web renderer hands it to the browser.
+	#[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
+	pub reveal: Option<crate::RevealRequest>,
 	/// Where a scroll view's content is scrolled to, set by
 	/// [`Element::scroll_offset`](crate::Element::scroll_offset). A backend
 	/// scrolls there when the value changes, and leaves the person's own

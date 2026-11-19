@@ -98,4 +98,6 @@ The core is axis-agnostic arithmetic and the container is the shared `ScrollView
 
 The window only moves when the platform reports scrolling. The web, the apps `leptoskit new` generates, and every native backend crate report it; HarmonyOS doesn't yet, so there a `VirtualList` stays on its first window.
 
-`scroll_offset` moves the list on the web and in the generated macOS, iOS, and Android apps. The native backend crates, and so the generated Windows and Linux apps, HarmonyOS, and the terminal don't apply it yet: there the list stays where the person scrolled it.
+`scroll_offset` moves the list on the web, in the generated macOS, iOS, Android, Windows, and Linux apps, and in the AppKit, UIKit, GTK, and Windows backend crates. GTK, Windows, and the AppKit crate jump even when the offset asks for an animation. HarmonyOS and the terminal don't apply it yet: there the list stays where the person scrolled it.
+
+To scroll to an element rather than a number, such as a notice in an ordinary `ScrollView`, see [scroll an element into view](07-shared-components.md#scroll-an-element-into-view).

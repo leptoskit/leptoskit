@@ -50,6 +50,7 @@ pub mod overlay;
 pub mod props;
 pub mod reactive;
 pub mod remember;
+pub mod reveal;
 pub mod store;
 pub mod surface;
 pub mod tailwind;
@@ -130,6 +131,9 @@ pub use props::TextContent;
 pub use props::TextMeasurer;
 pub use props::TextSpan;
 pub use props::TextStyle;
+pub use reveal::Reveal;
+pub use reveal::RevealRequest;
+pub use reveal::ScrollAlign;
 pub use surface::Frame;
 pub use surface::NativeSurface;
 #[cfg(all(feature = "rive", not(target_arch = "wasm32")))]

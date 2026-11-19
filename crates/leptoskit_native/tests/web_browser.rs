@@ -2285,3 +2285,80 @@ fn vector_paths_map_their_view_box_onto_the_frame() {
 	drop(mount);
 	parent.remove();
 }
+
+#[wasm_bindgen_test]
+async fn a_reveal_scrolls_the_element_into_view_once() {
+	use leptoskit_native::Reveal;
+	use leptoskit_native::ScrollAlign;
+	use leptoskit_native::components::ScrollView;
+
+	let parent = container();
+	let revision = ArcRwSignal::new(0);
+	let handle = Arc::new(Mutex::new(None));
+	let mount = mount_to(parent.clone(), {
+		let (revision, handle) = (revision.clone(), Arc::clone(&handle));
+		move || {
+			let to_row = Reveal::new();
+			*handle.lock().unwrap() = Some(to_row);
+
+			move || {
+				render(
+					ScrollView()
+						.id("rows")
+						.class("h-[100px]")
+						.child(Text(format!("Step {}", revision.get())))
+						.children((0..10).map(|row| {
+							let text = Text(format!("Row {row}")).class("h-[50px] shrink-0");
+
+							if row == 6 {
+								text.reveal_on(to_row, ScrollAlign::Start)
+							} else {
+								text
+							}
+						})),
+				)
+			}
+		}
+	});
+	tick().await;
+	next_frame().await;
+	let to_row = handle.lock().unwrap().expect("the screen built");
+	let view: web_sys::HtmlElement = find(&parent, "#rows");
+	assert_eq!(view.scroll_top(), 0, "nothing asked yet");
+
+	// Scrolling is animated, so it lands some frames later.
+	to_row.request();
+	tick().await;
+
+	for _ in 0..240 {
+		next_frame().await;
+
+		if view.scroll_top() >= 300 {
+			break;
+		}
+	}
+
+	assert!(
+		view.scroll_top() >= 300,
+		"row 6 is at the top: {}",
+		view.scroll_top()
+	);
+
+	// The person scrolls away; a later render for another reason leaves them.
+	view.set_scroll_top(0);
+	revision.update(|revision| *revision += 1);
+	tick().await;
+
+	for _ in 0..30 {
+		next_frame().await;
+	}
+
+	assert_eq!(
+		view.scroll_top(),
+		0,
+		"the view stays where the person left it"
+	);
+
+	drop(mount);
+	parent.remove();
+}

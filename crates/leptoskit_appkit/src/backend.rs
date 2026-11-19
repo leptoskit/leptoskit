@@ -127,6 +127,9 @@ pub struct AppKitBackend {
 	scroll_views: Vec<NodeId>,
 	/// Modals and popovers, shown and taken down after each batch.
 	overlays: Vec<NodeId>,
+	/// The scroll views given a new offset, scrolled once the batch's
+	/// layout says how far each one can go.
+	scrolls: Vec<NodeId>,
 	sink: Rc<EventSink>,
 	measurer: SharedTextMeasurer,
 	applying: bool,
@@ -162,6 +165,9 @@ struct Widget {
 	/// The live-region text announced for this widget, if any, so changes
 	/// post exactly one announcement.
 	announced: Option<String>,
+	/// The offset a scroll view was last told to scroll to. It scrolls when
+	/// the offset changes, and not again while it holds the same one.
+	scroll_offset: Option<leptoskit_native::ScrollOffset>,
 }
 
 impl Widget {
@@ -309,6 +315,7 @@ impl AppKitBackend {
 			widgets: Vec::new(),
 			scroll_views: Vec::new(),
 			overlays: Vec::new(),
+			scrolls: Vec::new(),
 			sink: Rc::new(EventSink::default()),
 			measurer: Arc::new(AppKitTextMeasurer::new()),
 			applying: false,
@@ -498,6 +505,7 @@ impl AppKitBackend {
 			name: None,
 			overlay: None,
 			announced: None,
+			scroll_offset: None,
 		}
 	}
 
@@ -626,6 +634,49 @@ impl AppKitBackend {
 			}
 
 			document.setFrame(NSRect::new(NSPoint::ZERO, extent));
+		}
+	}
+
+	/// Notes a scroll view's new offset, to scroll to once layout is in.
+	fn note_scroll_offset(&mut self, id: NodeId, props: &NativeProps) {
+		let widget = self.expect_widget_mut(id);
+
+		if !matches!(widget.control, Control::Scroll { .. }) {
+			return;
+		}
+
+		let changed = props.scroll_offset.is_some() && props.scroll_offset != widget.scroll_offset;
+		widget.scroll_offset = props.scroll_offset;
+
+		if changed {
+			self.scrolls.push(id);
+		}
+	}
+
+	/// Scrolls each scroll view that was given a new offset, as far as its
+	/// document allows. This backend does not animate the scroll.
+	fn scroll_to_offsets(&mut self) {
+		for id in std::mem::take(&mut self.scrolls) {
+			let Some(widget) = self.widget(id) else {
+				continue;
+			};
+			let (
+				Some(offset),
+				Control::Scroll {
+					scroll, document, ..
+				},
+			) = (widget.scroll_offset, &widget.control)
+			else {
+				continue;
+			};
+			let visible = scroll.contentSize();
+			let extent = document.frame().size;
+			let clip = scroll.contentView();
+			clip.scrollToPoint(NSPoint::new(
+				f64::from(offset.x).clamp(0.0, (extent.width - visible.width).max(0.0)),
+				f64::from(offset.y).clamp(0.0, (extent.height - visible.height).max(0.0)),
+			));
+			scroll.reflectScrolledClipView(&clip);
 		}
 	}
 
@@ -1474,6 +1525,8 @@ impl NativeBackend for AppKitBackend {
 				self.refresh_scroll_documents();
 			}
 
+			self.scroll_to_offsets();
+
 			self.refresh_radios();
 			self.refresh_animations();
 			self.refresh_overlays();
@@ -1500,6 +1553,7 @@ impl NativeBackend for AppKitBackend {
 		}
 
 		self.widgets[id.index()] = Some(widget);
+		self.note_scroll_offset(id, props);
 
 		self.refresh_controls_if_unbatched();
 	}
@@ -1523,7 +1577,12 @@ impl NativeBackend for AppKitBackend {
 			widget.announced = announced;
 		}
 
+		self.note_scroll_offset(id, props);
 		self.refresh_controls_if_unbatched();
+
+		if !self.applying {
+			self.scroll_to_offsets();
+		}
 	}
 
 	fn update_layout(&mut self, id: NodeId, x: f32, y: f32, width: f32, height: f32) {

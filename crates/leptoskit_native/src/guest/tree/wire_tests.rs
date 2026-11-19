@@ -215,6 +215,10 @@ fn every_prop() -> NativeProps {
 		direction: Some(leptoskit_yoga::Direction::Rtl),
 		focused: Some(true),
 		focus_request: Some(11),
+		reveal: Some(crate::RevealRequest {
+			serial: 12,
+			align: crate::ScrollAlign::Center,
+		}),
 		overlay: Some(crate::Overlay {
 			open: true,
 			anchor: Some("me".into()),

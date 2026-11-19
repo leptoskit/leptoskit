@@ -167,7 +167,7 @@ The third part of G1, for Linux. GTK has no Swift or Kotlin renderer: generated 
 - **Run here:** `tests/overlays.rs`, four tests on real windows under Xvfb with `xdotool` presses and keys, and all of `tests/widgets.rs`. `test:widgets:gtk` now runs both files. Xvfb has no window manager, so nothing here shows where a window manager puts the dialog.
 - **Known limits:** GTK does not dim the window behind a modal. Arrow keys in a `Menu` do nothing, because the backend delivers `on_key` only for radios and sliders. A host that never calls `open_window` or commits after its window maps does not show an overlay that was already open.
 
-### `feat/overlays-windows`: stacked on `feat/overlays-gtk`
+### `feat/overlays-windows` (#910): stacked on `feat/overlays-gtk`
 
 The last part of G1. Every backend now returns `true` from `presents_overlays`, except the recording backend the bridge uses for hosts with no overlay support of their own.
 
@@ -179,6 +179,16 @@ The last part of G1. Every backend now returns `true` from `presents_overlays`, 
 - **Compiled here:** cross-linted for `x86_64-pc-windows-msvc` with clippy, tests included. **Run here:** nothing.
 - **Tests that CI's Windows runner will be the first to run:** `crates/leptoskit_windows/tests/overlays.rs`, three tests on real windows. The assertions most likely to need adjusting are `GetFocus()` after a shell is shown, and the exact pixel equality of the shell's and the panel's corners at a fractional DPI scale.
 - **Known limits:** Windows does not dim the owner. The shell is a plain rectangle, so a panel with round corners shows the modal's background in the corners. A shell does not follow its owner if the owner moves. Arrow keys in a `Menu` do nothing, because the backend delivers `on_key` only for radios.
+
+### `feat/scroll-into-view`: stacked on `feat/overlays-windows`
+
+G4. `Reveal`, `ScrollAlign` and `Element::reveal_on` in `leptoskit_native` (`reveal.rs`), exported from the `leptoskit` prelude. In `view!` the attribute is `reveal_on=(handle, ScrollAlign::Center)`, because a tuple spreads into two arguments.
+
+- **Web:** `reveal_after_render` in `web/mod.rs` works as the focus request does: the element carries `data-lk-reveal="<serial> <align>"`, a microtask finds the newest serial above the one last answered, and calls `scrollIntoView` with `block` set to the alignment and `inline: nearest`. It is smooth unless `prefers-reduced-motion` matches.
+- **Native:** `NativeProps.reveal` never reaches a backend. `props_to_send` strips it and queues each serial above `reveal_answered`. After layout, `scroll_to_reveals` (`surface/layout.rs`) finds the nearest `ScrollView` ancestor, works out the offset from the hit areas, and sends that view two `UpdateProps`: one with `scroll_offset` cleared, then one with the animated offset. The first exists because renderers scroll only when the offset differs from the last one they were sent, and a second reveal of the same place after the person scrolled away must still scroll.
+- **Where the view is now:** the surface keeps the last `Scroll` event per view in `scrolled`, set in `dispatch_event`. A host that does not forward scroll events leaves it at the last offset the app or a reveal set, so `Nearest` can misjudge there.
+- **Backends that now apply `scroll_offset`:** GTK (`scroll_to_offsets`, sets the adjustments after the batch, raising `upper` to the new extent first), Windows (`Widget::update_props` sets the scroll cell and the batch-end `refresh_scroll` clamps it), AppKit (`scrollToPoint` and `reflectScrolledClipView` after the documents are sized) and UIKit (`setContentOffset:animated:`). Each scrolls when the offset changes and not while it holds the same one. GTK, Windows and AppKit do not animate.
+- **Not done:** the terminal and HarmonyOS apply neither. Only the nearest scroll view moves, where the web scrolls every ancestor.
 
 ### `feat/public-demo`: no pull request
 
