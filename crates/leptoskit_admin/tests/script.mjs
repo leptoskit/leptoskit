@@ -1096,7 +1096,9 @@ Deno.test("People and a person are the pages' own Rust: search, export, and a de
 
 		await open(page, `${site.origin}${BASE}/analytics/people/someone`);
 		await hydrated("the person hydrates");
-		const name = await page.evaluate("document.querySelector('h1').textContent");
+		const name = await page.evaluate(
+			"document.querySelector('h1').textContent",
+		);
 
 		// Export is a download the browser makes once the person agrees.
 		const downloads = await Deno.makeTempDir({ prefix: "admin-downloads-" });
@@ -1121,7 +1123,8 @@ Deno.test("People and a person are the pages' own Rust: search, export, and a de
 		await page.click('[data-testid="confirm-yes"]');
 		for (
 			let tries = 0;
-			!site.posted.some((entry) => entry.path.endsWith("/export")) && tries < 100;
+			!site.posted.some((entry) => entry.path.endsWith("/export")) &&
+			tries < 100;
 			tries++
 		) {
 			await new Promise((resolve) => setTimeout(resolve, 50));

@@ -214,6 +214,10 @@ pub struct BillingState {
 	pub plans: QueryHandle<PlanList, FnError>,
 	/// This month's usage, priced.
 	pub usage: QueryHandle<UsageReport, FnError>,
+	/// The organisation the typed cap, the last action and its link
+	/// belong to: the page shows them only on that organisation's billing,
+	/// so a checkout made for one is never offered on another.
+	pub owner: RwSignal<Option<String>>,
 	/// The spend cap, as typed, in the currency's major unit.
 	pub cap: RwSignal<String>,
 	/// Setting the spend cap.
@@ -269,6 +273,7 @@ impl BillingState {
 				},
 				QueryObserverOptions::default(),
 			),
+			owner: RwSignal::new(None),
 			cap: RwSignal::new(String::new()),
 			set_cap: use_mutation(
 				mutation_scope::<SetSpendCap>().with_on_success_async(|args| {

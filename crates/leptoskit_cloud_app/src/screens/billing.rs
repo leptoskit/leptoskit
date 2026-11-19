@@ -9,6 +9,7 @@
 
 use leptoskit::native::Role;
 use leptoskit::prelude::*;
+use leptoskit::query::MutateCallbacks;
 use leptoskit_cloud::access::Permission;
 use leptoskit_cloud::account::OrganizationSummary;
 use leptoskit_cloud::billing::Checkout;
@@ -110,26 +111,39 @@ impl BillingPage {
 				}
 
 				let billing = console.billing;
+				// What was typed and asked for belongs to one organisation;
+				// on any other, the page starts clean.
+				let ours = billing.owner.get().as_deref() == Some(organization.slug.as_str());
 				let link = billing
 					.checkout
 					.data()
 					.or_else(|| billing.portal.data())
-					.map(|link| link.url);
+					.map(|link| link.url)
+					.filter(|url| ours && url.starts_with("https://"));
 				Self::Billing(Box::new(Billing {
 					organization: organization.clone(),
 					manage: organization.role.allows(Permission::ManageBilling),
 					subscription: Load::of(&billing.subscription, rpc_problem),
 					plans: Load::of(&billing.plans, rpc_problem),
 					usage: Load::of(&billing.usage, rpc_problem),
-					cap: billing.cap.get(),
-					setting_cap: billing.set_cap.is_pending(),
-					cap_problem: billing.set_cap.error().map(|error| rpc_problem(&error)),
+					cap: if ours {
+						billing.cap.get()
+					} else {
+						String::new()
+					},
+					setting_cap: ours && billing.set_cap.is_pending(),
+					cap_problem: billing
+						.set_cap
+						.error()
+						.filter(|_| ours)
+						.map(|error| rpc_problem(&error)),
 					provider_link: link,
-					opening: billing.checkout.is_pending() || billing.portal.is_pending(),
+					opening: ours && (billing.checkout.is_pending() || billing.portal.is_pending()),
 					provider_problem: billing
 						.checkout
 						.error()
 						.or_else(|| billing.portal.error())
+						.filter(|_| ours)
 						.map(|error| rpc_problem(&error)),
 				}))
 			}
@@ -289,6 +303,7 @@ fn plan(console: &Console, billing: &Billing) -> Element {
 			"billing-portal",
 			plain_button(Kind::Secondary, "Payment and invoices", busy, move || {
 				console.billing.checkout.reset();
+				console.billing.owner.set(Some(organization.clone()));
 				portal.mutate(Portal {
 					organization: organization.clone(),
 				});
@@ -312,6 +327,7 @@ fn plan(console: &Console, billing: &Billing) -> Element {
 					busy,
 					move || {
 						console.billing.portal.reset();
+						console.billing.owner.set(Some(organization.clone()));
 						checkout.mutate(Checkout {
 							organization: organization.clone(),
 							plan: plan.clone(),
@@ -466,7 +482,18 @@ fn cap(console: &Console, billing: &Billing) -> Element {
 		.value(billing.cap.clone())
 		.placeholder(major(bill.spend_cap.unwrap_or(0), &bill.currency))
 		.autocomplete("off")
-		.on_change(move |text: &str| state.cap.set(text.to_owned()))
+		.on_change({
+			let organization = billing.organization.slug.clone();
+			move |text: &str| {
+				if state.owner.get_untracked().as_deref() != Some(organization.as_str()) {
+					state.set_cap.reset();
+					state.checkout.reset();
+					state.portal.reset();
+					state.owner.set(Some(organization.clone()));
+				}
+				state.cap.set(text.to_owned());
+			}
+		})
 		.on(NativeEventSlot::Focus, move |_| {
 			typing.set(true);
 			EventOutcome::Unhandled
@@ -482,16 +509,21 @@ fn cap(console: &Console, billing: &Billing) -> Element {
 			bill.currency.to_uppercase()
 		)
 	});
+	let preview = typed.map(|cap| format!("The cap will be {}.", money(&bill.currency, cap)));
 	let organization = billing.organization.slug.clone();
 	let busy = billing.setting_cap.then_some("Saving…");
 	let mut set = plain_button(Kind::Secondary, "Set cap", busy, {
 		let organization = organization.clone();
 		move || {
 			if let Some(cap) = typed {
-				state.set_cap.mutate(SetSpendCap {
-					organization: organization.clone(),
-					cap: Some(cap),
-				});
+				state.owner.set(Some(organization.clone()));
+				state.set_cap.mutate_with(
+					SetSpendCap {
+						organization: organization.clone(),
+						cap: Some(cap),
+					},
+					MutateCallbacks::new().on_success(move |_| state.cap.set(String::new())),
+				);
 			}
 		}
 	});
@@ -507,6 +539,7 @@ fn cap(console: &Console, billing: &Billing) -> Element {
 			console.focus,
 			"billing-cap-plan",
 			plain_button(Kind::Quiet, "Use the plan's cap", busy, move || {
+				state.owner.set(Some(organization.clone()));
 				state.set_cap.mutate(SetSpendCap {
 					organization: organization.clone(),
 					cap: None,
@@ -521,6 +554,7 @@ fn cap(console: &Console, billing: &Billing) -> Element {
 		input,
 		typed_problem.as_deref(),
 	))
+	.children(preview.map(|preview| Text(preview).class(style::SECONDARY)))
 	.child(
 		View()
 			.class("flex-row flex-wrap items-center gap-3")
@@ -704,12 +738,26 @@ fn count(value: u64) -> String {
 	out
 }
 
+/// How many decimal places `currency`'s minor unit has, as the payment
+/// provider counts them.
+fn decimals(currency: &str) -> u32 {
+	match currency.to_ascii_lowercase().as_str() {
+		"bif" | "clp" | "djf" | "gnf" | "isk" | "jpy" | "kmf" | "krw" | "mga" | "pyg" | "rwf"
+		| "ugx" | "vnd" | "vuv" | "xaf" | "xof" | "xpf" => 0,
+		"bhd" | "iqd" | "jod" | "kwd" | "lyd" | "omr" | "tnd" => 3,
+		_ => 2,
+	}
+}
+
 /// How many minor units a major unit of `currency` has.
 fn scale(currency: &str) -> u64 {
-	match currency.to_ascii_lowercase().as_str() {
-		"jpy" | "krw" | "vnd" | "clp" | "isk" | "ugx" | "xaf" | "xof" => 1,
-		_ => 100,
-	}
+	10_u64.pow(decimals(currency))
+}
+
+/// The part after the point, padded to `currency`'s decimal places.
+fn fraction(minor: u64, currency: &str) -> String {
+	let places = decimals(currency) as usize;
+	format!("{:0places$}", minor % scale(currency))
 }
 
 /// An amount in minor units, as people write it: `$20.00`, `€9.12`,
@@ -721,7 +769,7 @@ pub fn money(currency: &str, minor: u64) -> String {
 	let amount = if scale == 1 {
 		whole
 	} else {
-		format!("{whole}.{:02}", minor % scale)
+		format!("{whole}.{}", fraction(minor, currency))
 	};
 
 	match currency.to_ascii_lowercase().as_str() {
@@ -739,42 +787,56 @@ fn major(minor: u64, currency: &str) -> String {
 	if minor.is_multiple_of(scale) {
 		(minor / scale).to_string()
 	} else {
-		format!("{}.{:02}", minor / scale, minor % scale)
+		format!("{}.{}", minor / scale, fraction(minor, currency))
 	}
 }
 
 /// What was typed, in major units, as minor units: `50` is 5000 cents.
+///
+/// A comma counts only as a thousands separator, between groups of three
+/// digits before the point: `50,00`, meaning fifty in much of Europe, is
+/// refused rather than read as five thousand.
 #[must_use]
 pub fn parse_major(text: &str, currency: &str) -> Option<u64> {
-	let text = text
-		.trim()
-		.trim_start_matches(['$', '€', '£'])
-		.replace(',', "");
-	let scale = scale(currency);
-	let (whole, fraction) = text.split_once('.').unwrap_or((&text, ""));
+	let text = text.trim();
+	let (whole, fraction) = text.split_once('.').unwrap_or((text, ""));
+	let mut groups = whole.split(',');
+	let first = groups.next()?;
+	let rest: Vec<&str> = groups.collect();
 
-	if whole.is_empty() || !whole.bytes().all(|byte| byte.is_ascii_digit()) {
+	if first.is_empty()
+		|| (!rest.is_empty() && first.len() > 3)
+		|| rest.iter().any(|group| group.len() != 3)
+	{
 		return None;
 	}
 
-	let fraction = match (scale, fraction.len()) {
-		(_, 0) => 0,
-		(1, _) => return None,
-		(_, 1 | 2) if fraction.bytes().all(|byte| byte.is_ascii_digit()) => {
-			let value: u64 = fraction.parse().ok()?;
-			if fraction.len() == 1 {
-				value * 10
-			} else {
-				value
-			}
-		}
-		_ => return None,
+	let digits: String = std::iter::once(first).chain(rest).collect();
+
+	if !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+		return None;
+	}
+
+	let places = decimals(currency) as usize;
+
+	if fraction.len() > places
+		|| (text.contains('.') && fraction.is_empty())
+		|| !fraction.bytes().all(|byte| byte.is_ascii_digit())
+	{
+		return None;
+	}
+
+	let padded = format!("{fraction:0<places$}");
+	let fraction: u64 = if padded.is_empty() {
+		0
+	} else {
+		padded.parse().ok()?
 	};
 
-	whole
+	digits
 		.parse::<u64>()
 		.ok()?
-		.checked_mul(scale)?
+		.checked_mul(scale(currency))?
 		.checked_add(fraction)
 }
 
@@ -789,13 +851,25 @@ mod tests {
 		assert_eq!(money("eur", 123_456), "€1,234.56");
 		assert_eq!(money("jpy", 1200), "1,200 JPY");
 		assert_eq!(money("chf", 5), "0.05 CHF");
+		assert_eq!(money("kwd", 1234), "1.234 KWD");
+		assert_eq!(money("pyg", 50000), "50,000 PYG");
 	}
 
 	#[test]
 	fn a_typed_cap_is_read_in_major_units() {
 		assert_eq!(parse_major("50", "usd"), Some(5000));
-		assert_eq!(parse_major(" $12.5 ", "usd"), Some(1250));
+		assert_eq!(parse_major(" 12.5 ", "usd"), Some(1250));
 		assert_eq!(parse_major("1,000.05", "usd"), Some(100_005));
+		assert_eq!(parse_major("12,345,678", "usd"), Some(1_234_567_800));
+		// A decimal comma is refused, never read as thousands.
+		assert_eq!(parse_major("50,00", "eur"), None);
+		assert_eq!(parse_major("12,5", "eur"), None);
+		assert_eq!(parse_major("1,0,0", "usd"), None);
+		assert_eq!(parse_major("1000,000", "usd"), None);
+		assert_eq!(parse_major("$50", "usd"), None);
+		assert_eq!(parse_major("50.", "usd"), None);
+		assert_eq!(parse_major("1.234", "kwd"), Some(1234));
+		assert_eq!(parse_major("50000", "pyg"), Some(50000));
 		assert_eq!(parse_major("1200", "jpy"), Some(1200));
 		assert_eq!(parse_major("12.5", "jpy"), None);
 		assert_eq!(parse_major("12.345", "usd"), None);
@@ -804,6 +878,7 @@ mod tests {
 		assert_eq!(parse_major("ten", "usd"), None);
 		assert_eq!(major(5000, "usd"), "50");
 		assert_eq!(major(1250, "usd"), "12.50");
+		assert_eq!(major(1005, "kwd"), "1.005");
 	}
 
 	#[test]
