@@ -530,6 +530,9 @@ pub(crate) struct Signature {
 	/// The function's first parameter is `&rpc::*Cx`. When false, the body
 	/// pulls that context with `rpc::cx()` or `rpc::mutation_cx()`.
 	pub(crate) takes_context: bool,
+	/// That parameter is a stream's `&rpc::StreamCx`: who is calling, and
+	/// no database.
+	pub(crate) caller_context: bool,
 	/// `T` in `-> rpc::Result<T>`.
 	pub(crate) output: Type,
 	/// The span of the return type, for errors about the body's result.
@@ -546,6 +549,12 @@ pub(crate) fn signature(kind: OperationKind, function: &ItemFn) -> syn::Result<S
 		Some(first) => takes_context_arg(kind, first)?,
 		None => false,
 	};
+	let caller_context = takes_context
+		&& matches!(
+			inputs.peek(),
+			Some(FnArg::Typed(typed))
+				if context_type_name(&typed.ty).as_deref() == Some(STREAM_CONTEXT)
+		);
 
 	if takes_context {
 		inputs.next();
@@ -563,6 +572,7 @@ pub(crate) fn signature(kind: OperationKind, function: &ItemFn) -> syn::Result<S
 	Ok(Signature {
 		arguments,
 		takes_context,
+		caller_context,
 		output,
 		output_span,
 	})
@@ -696,12 +706,15 @@ fn takes_context_arg(kind: OperationKind, first: &FnArg) -> syn::Result<bool> {
 	let Some(name) = context_type_name(&typed.ty) else {
 		return Ok(false);
 	};
-	let Some(other) = OperationKind::ALL
+	// A stream may take the caller alone, where it reads no database.
+	let caller_only = name == STREAM_CONTEXT;
+	let other = OperationKind::ALL
 		.into_iter()
-		.find(|other| other.context() == name)
-	else {
+		.find(|other| other.context() == name);
+
+	if other.is_none() && !caller_only {
 		return Ok(false);
-	};
+	}
 
 	let Type::Reference(reference) = &*typed.ty else {
 		return Err(syn::Error::new_spanned(
@@ -723,21 +736,30 @@ fn takes_context_arg(kind: OperationKind, first: &FnArg) -> syn::Result<bool> {
 		));
 	}
 
+	if caller_only && kind == OperationKind::Stream {
+		return Ok(true);
+	}
+
 	if name != context {
+		let (theirs, owner) = other.map_or((STREAM_CONTEXT, "stream"), |other| {
+			(other.context(), other.attribute())
+		});
+
 		return Err(syn::Error::new_spanned(
 			&reference.elem,
 			format!(
-				"#[rpc::{attribute}]'s context is `&rpc::{context}`, which {}; `&rpc::{}` belongs \
-				 to #[rpc::{}]",
+				"#[rpc::{attribute}]'s context is `&rpc::{context}`, which {}; `&rpc::{theirs}` \
+				 belongs to #[rpc::{owner}]",
 				kind.context_does(),
-				other.context(),
-				other.attribute()
 			),
 		));
 	}
 
 	Ok(true)
 }
+
+/// The context a stream takes when it reads no database: who is calling.
+const STREAM_CONTEXT: &str = "StreamCx";
 
 /// `QueryCx` in `QueryCx`, `&QueryCx`, or `&mut QueryCx`.
 fn context_type_name(ty: &Type) -> Option<String> {
@@ -1419,34 +1441,65 @@ fn stream_items(
 		}
 	}
 
-	// The body reads the same context through its argument, and
-	// `rpc::cx()` sees it too.
-	let context_binding = if signature.takes_context {
-		quote! {
-			let cx: &#krate::QueryCx = &scope;
+	let run = quote! {
+		match #call.await {
+			::core::result::Result::Ok(items) => sink.drive(items, #encode).await,
+			::core::result::Result::Err(error) => sink.fail(&error),
 		}
-	} else {
-		TokenStream::new()
 	};
 
-	let scope_body = quote! {
-		let scope = ::std::sync::Arc::new(cx);
-		#context_binding
-		let Self { #(#bindings),* } = self;
+	// What the body runs in, and what the build needs for it.
+	let (scope_body, requires) = if signature.caller_context {
+		// The caller alone: any live server opens it, with or without a
+		// database.
+		(
+			quote! {
+				let scope = cx.stream_cx();
+				let cx: &#krate::StreamCx = &scope;
+				let Self { #(#bindings),* } = self;
 
-		// The whole body runs inside the context's task: constructing the
-		// stream, and driving its items, so a stream that reads
-		// `rpc::cx()` while it is polled sees the same context.
-		#krate::__private::query_scope(
-			::std::sync::Arc::clone(&scope),
-			async move {
-				match #call.await {
-					::core::result::Result::Ok(items) => sink.drive(items, #encode).await,
-					::core::result::Result::Err(error) => sink.fail(&error),
-				}
+				#run
 			},
+			quote!(#krate::__require_streams!();),
 		)
-		.await
+	} else if signature.takes_context {
+		// The body reads the same context through its argument, and
+		// `rpc::cx()` sees it too. The whole body runs inside the context's
+		// task: constructing the stream, and driving its items, so a
+		// stream that reads `rpc::cx()` while it is polled sees the same
+		// context.
+		(
+			quote! {
+				let scope = match cx.query_cx() {
+					::core::result::Result::Ok(cx) => ::std::sync::Arc::new(cx),
+					::core::result::Result::Err(error) => {
+						sink.fail(&error);
+
+						return;
+					}
+				};
+				let cx: &#krate::QueryCx = &scope;
+				let Self { #(#bindings),* } = self;
+
+				#krate::__private::query_scope(
+					::std::sync::Arc::clone(&scope),
+					async move { #run },
+				)
+				.await
+			},
+			quote!(#krate::__require_db!();),
+		)
+	} else {
+		// No context argument: `rpc::cx()` works where the server that
+		// opened the stream has a database.
+		(
+			quote! {
+				let Self { #(#bindings),* } = self;
+
+				#krate::__private::stream_scope(cx, async move { #run }).await
+			},
+			quote!(#krate::__require_streams!();),
+		)
 	};
 
 	let items = quote! {
@@ -1461,14 +1514,14 @@ fn stream_items(
 
 			fn pump(
 				self,
-				cx: #krate::QueryCx,
+				cx: #krate::server::StreamOpen,
 				sink: #krate::server::StreamSink,
 			) -> impl ::core::future::Future<Output = ()> + ::core::marker::Send {
 				async move { #scope_body }
 			}
 		}
 
-		#krate::__require_db!();
+		#requires
 
 		#[allow(deprecated)]
 		const _: () = {

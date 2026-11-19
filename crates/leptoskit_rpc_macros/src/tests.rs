@@ -53,7 +53,7 @@ fn pretty(tokens: TokenStream) -> String {
 		};
 		let path = registration.mac.path.to_token_stream().to_string();
 
-		if path.ends_with("__require_db") {
+		if path.ends_with("__require_db") || path.ends_with("__require_streams") {
 			continue;
 		}
 
@@ -1447,6 +1447,84 @@ mod jobs {
 			.expect("expands"),
 		);
 		assert!(published.contains("ApiKind::Action"), "{published}");
+	}
+
+	#[test]
+	fn a_stream_takes_the_caller_alone_or_no_context() {
+		// The caller alone: no database is asked for, and none is read.
+		let caller = expanded(
+			OperationKind::Stream,
+			TokenStream::new(),
+			quote! {
+				pub async fn progress(cx: &rpc::StreamCx, id: String) -> rpc::Result<impl Stream<Item = Step>> {
+					Ok(steps(cx, id))
+				}
+			},
+			true,
+		);
+		assert!(caller.contains("cx.stream_cx()"), "{caller}");
+		assert!(!caller.contains("query_cx"), "{caller}");
+		assert!(!caller.contains("pub cx"), "{caller}");
+		insta::assert_snapshot!("stream_caller_server", caller);
+
+		// No context: `rpc::cx()` works where the server has a database.
+		let ambient = expanded(
+			OperationKind::Stream,
+			TokenStream::new(),
+			quote! {
+				pub async fn ticks() -> rpc::Result<impl Stream<Item = u32>> {
+					Ok(count())
+				}
+			},
+			true,
+		);
+		assert!(ambient.contains("stream_scope"), "{ambient}");
+
+		// Neither asks the build for a database; a stream that takes
+		// `QueryCx` does.
+		let needs = |item: TokenStream| {
+			let tokens = expand(OperationKind::Stream, TokenStream::new(), item, build(true))
+				.expect("expands")
+				.to_string();
+			(
+				tokens.contains("__require_streams"),
+				tokens.contains("__require_db"),
+			)
+		};
+		assert_eq!(
+			needs(quote! {
+				pub async fn a(cx: &rpc::StreamCx) -> rpc::Result<impl Stream<Item = u32>> { Ok(x()) }
+			}),
+			(true, false)
+		);
+		assert_eq!(
+			needs(quote! {
+				pub async fn b() -> rpc::Result<impl Stream<Item = u32>> { Ok(x()) }
+			}),
+			(true, false)
+		);
+		assert_eq!(
+			needs(quote! {
+				pub async fn c(cx: &rpc::QueryCx) -> rpc::Result<impl Stream<Item = u32>> { Ok(x()) }
+			}),
+			(false, true)
+		);
+
+		// Only a stream takes it.
+		let (message, underlined) = error(
+			OperationKind::Query,
+			"",
+			"async fn f(cx: &rpc::StreamCx) -> rpc::Result<()> {}",
+		);
+		assert!(message.contains("belongs to #[rpc::stream]"), "{message}");
+		assert_eq!(underlined, "rpc::StreamCx");
+
+		let (message, _) = error(
+			OperationKind::Stream,
+			"",
+			"async fn f(cx: rpc::StreamCx) -> rpc::Result<impl Stream<Item = u32>> {}",
+		);
+		assert!(message.contains("by reference"), "{message}");
 	}
 
 	#[test]

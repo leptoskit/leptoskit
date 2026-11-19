@@ -537,9 +537,18 @@ impl WireError {
 			retry_after: error.retry_after().map(crate::operation::whole_seconds),
 		}
 	}
+}
 
+// What a session says about a frame or a stream it can't serve: with the
+// stream machinery, which a database driver or `live-streams` builds.
+#[cfg(any(feature = "live-streams", feature = "postgres", feature = "sqlite"))]
+impl WireError {
 	/// A failure that isn't an operation's, such as a frame that doesn't
 	/// parse.
+	#[cfg_attr(
+		not(feature = "live-streams"),
+		allow(dead_code, reason = "only a live session opens streams")
+	)]
 	pub(crate) fn invalid(message: impl Into<String>) -> Self {
 		Self {
 			status: 400,

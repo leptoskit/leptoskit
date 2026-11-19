@@ -1,0 +1,64 @@
+---
+source: crates/leptoskit_rpc_macros/src/tests.rs
+expression: caller
+---
+#[derive(
+    ::core::clone::Clone,
+    ::leptoskit_rpc::__private::serde::Serialize,
+    ::leptoskit_rpc::__private::serde::Deserialize,
+    ::leptoskit_rpc::__private::schemars::JsonSchema,
+)]
+#[serde(crate = ":: leptoskit_rpc :: __private :: serde")]
+#[schemars(crate = ":: leptoskit_rpc :: __private :: schemars")]
+pub struct Progress {
+    pub id: String,
+}
+const _: () = {
+    #[allow(dead_code)]
+    fn __check() {
+        ::leptoskit_rpc::__private::assert_argument::<String>();
+        ::leptoskit_rpc::__private::assert_stream_item::<Step>();
+    }
+};
+#[allow(clippy::unused_async)]
+pub async fn progress(
+    cx: &rpc::StreamCx,
+    id: String,
+) -> rpc::Result<impl Stream<Item = Step>> {
+    Ok(steps(cx, id))
+}
+#[allow(deprecated)]
+impl ::leptoskit_rpc::StreamOperation for Progress {
+    const NAME: &'static str = "progress";
+    const RESUMABLE: bool = false;
+    type Item = Step;
+    fn pump(
+        self,
+        cx: ::leptoskit_rpc::server::StreamOpen,
+        sink: ::leptoskit_rpc::server::StreamSink,
+    ) -> impl ::core::future::Future<Output = ()> + ::core::marker::Send {
+        async move {
+            let scope = cx.stream_cx();
+            let cx: &::leptoskit_rpc::StreamCx = &scope;
+            let Self { id } = self;
+            match progress(&cx, id).await {
+                ::core::result::Result::Ok(items) => {
+                    sink.drive(items, ::leptoskit_rpc::__private::stream_plain::<Step>)
+                        .await
+                }
+                ::core::result::Result::Err(error) => sink.fail(&error),
+            }
+        }
+    }
+}
+::leptoskit_rpc::__require_streams!();
+#[allow(deprecated)]
+const _: () = {
+    ::leptoskit_rpc::__private::inventory::submit! {
+        ::leptoskit_rpc::server::StreamRegistration { name : < Progress as
+        ::leptoskit_rpc::StreamOperation > ::NAME, resumable : < Progress as
+        ::leptoskit_rpc::StreamOperation > ::RESUMABLE, open :
+        ::leptoskit_rpc::__private::open_stream:: < Progress >, service : < Progress as
+        ::leptoskit_rpc::StreamOperation > ::SERVICE, }
+    }
+};

@@ -672,7 +672,7 @@ const _: () = {
 
 /// Whether `identity` is one of the app's services calling, as
 /// [`ServiceCallers::for_app`] names them.
-#[cfg(any(feature = "live", test))]
+#[cfg(any(feature = "live-streams", test))]
 pub(crate) fn is_service(identity: &Identity) -> bool {
 	identity
 		.caller

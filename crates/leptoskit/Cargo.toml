@@ -122,6 +122,10 @@ rpc-axum = ["rpc-ssr", "leptoskit_rpc/axum"]
 ## Live queries over a WebSocket: `leptoskit::rpc::Live` on the server and
 ## `leptoskit::rpc::use_live` in the app. Needs a database driver too.
 rpc-live = ["rpc", "leptoskit_rpc/live"]
+## Streams over the same socket without the live queries, for a server that
+## has no database: `leptoskit::rpc::server::LiveStreams`, and `#[rpc::stream]`
+## bodies that take `rpc::StreamCx`. `rpc-live` includes it.
+rpc-live-streams = ["rpc", "leptoskit_rpc/live-streams"]
 ## The live relay over NATS JetStream, for live queries and channels across
 ## several servers: `leptoskit::rpc::server::Relay`.
 rpc-relay = ["rpc-live", "leptoskit_rpc/relay"]

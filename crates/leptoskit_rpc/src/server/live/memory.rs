@@ -20,11 +20,11 @@ use super::INCOMING;
 use super::Incoming;
 use super::Live;
 use super::OUTGOING;
+use super::Opened;
 use super::Outbound;
-use super::session::Opened;
-use super::socket::read;
 use crate::client::live::Connection;
 use crate::client::live::Transport;
+use crate::server::transport::socket::read;
 
 /// Opens in-memory sessions on a [`Live`].
 #[derive(Clone)]
