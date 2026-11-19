@@ -6,12 +6,14 @@
 pub mod client;
 mod credentials;
 pub(crate) mod deploy;
+mod external;
 pub(crate) mod ship;
 mod stores;
 #[cfg(test)]
 mod tests;
 mod transport;
 
+use std::ffi::OsString;
 use std::io::IsTerminal as _;
 use std::path::Path;
 use std::path::PathBuf;
@@ -40,6 +42,11 @@ pub const DEFAULT_URL: &str = "https://cloud.leptoskit.dev";
 
 /// Connects to a cloud and manages its accounts and projects.
 #[derive(Debug, Args)]
+#[command(
+	after_help = "External subcommands:\n  Any `leptoskit-cloud-<name>` executable beside `lk` or \
+	              on PATH (such as `platform`, `worker`, or `control`) can be invoked as `lk \
+	              cloud <name> [ARGS]...`."
+)]
 pub struct CloudArgs {
 	/// Cloud origin; overrides `LEPTOSKIT_CLOUD_URL` and [cloud].url.
 	#[arg(long, global = true)]
@@ -210,6 +217,10 @@ pub enum CloudCommand {
 		#[arg(long)]
 		force: bool,
 	},
+	/// Cargo-style external subcommand: invokes `leptoskit-cloud-<name>` beside
+	/// `lk` or on `PATH`.
+	#[command(external_subcommand)]
+	External(Vec<OsString>),
 }
 
 /// Organization operations. Membership changes require a person signed in.
@@ -508,6 +519,9 @@ pub(crate) fn execute_json(args: &CloudArgs) -> Result<Value> {
 /// Invalid configuration, authentication, permissions, network or server
 /// errors.
 pub fn run(args: &CloudArgs) -> Result<()> {
+	if let CloudCommand::External(argv) = &args.command {
+		return external::run_external(args, argv);
+	}
 	let context = Context::load(args)?;
 	let result = execute(args, &context)?;
 	if args.json {
@@ -633,6 +647,9 @@ fn execute(args: &CloudArgs, context: &Context) -> Result<Value> {
 		} => stores::publish(args, context, stores, *submit, *detach),
 		CloudCommand::Publications { command } => stores::publications(command, args, context),
 		CloudCommand::Usage { period } => stores::usage(args, context, period.clone()),
+		CloudCommand::External(_) => {
+			anyhow::bail!("External cloud subcommands cannot run through JSON RPC execution.")
+		}
 	}
 }
 

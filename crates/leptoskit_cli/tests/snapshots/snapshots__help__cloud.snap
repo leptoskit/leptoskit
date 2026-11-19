@@ -41,3 +41,6 @@ Options:
   -e, --environment <ENVIRONMENT>  Environment name, for the commands about one; defaults to production
   -h, --help                       Print help
   -V, --version                    Print version
+
+External subcommands:
+  Any `leptoskit-cloud-<name>` executable beside `lk` or on PATH (such as `platform`, `worker`, or `control`) can be invoked as `lk cloud <name> [ARGS]...`.

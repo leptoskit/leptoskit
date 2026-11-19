@@ -50,3 +50,6 @@ Options:
 
   -h, --help
           Print help
+
+External subcommands:
+  Any `leptoskit-cloud-<name>` executable beside `lk` or on PATH (such as `platform`, `worker`, or `control`) can be invoked as `lk cloud <name> [ARGS]...`.
