@@ -790,8 +790,17 @@ fn configure_android_toolchain(
 	)?;
 	// C dependencies of the host (ring, through the code push transport's
 	// TLS) compile with cc-rs, which needs the NDK compiler and archiver
-	// too.
+	// too. Builds that run a Makefile, such as a vendored OpenSSL, also ask
+	// cc-rs for ranlib; without `llvm-ranlib` on `PATH` it falls back to a
+	// GNU-style `aarch64-linux-android-ranlib` that no current NDK ships.
 	let target_key = target.rust().replace('-', "_");
+	let llvm = |tool: &str| {
+		tools.join(if cfg!(windows) {
+			format!("{tool}.exe")
+		} else {
+			tool.to_owned()
+		})
+	};
 	host.env(
 		format!(
 			"CARGO_TARGET_{}_LINUX_ANDROID_LINKER",
@@ -804,14 +813,8 @@ fn configure_android_toolchain(
 		format!("CXX_{target_key}"),
 		tools.join(format!("{clang_target}-clang++{NDK_LAUNCHER_SUFFIX}")),
 	)
-	.env(
-		format!("AR_{target_key}"),
-		tools.join(if cfg!(windows) {
-			"llvm-ar.exe"
-		} else {
-			"llvm-ar"
-		}),
-	);
+	.env(format!("AR_{target_key}"), llvm("llvm-ar"))
+	.env(format!("RANLIB_{target_key}"), llvm("llvm-ranlib"));
 	// A compiler cache can hide the launcher's name from cc-rs, which then
 	// adds the Rust target without its API level. Keep the selected NDK API
 	// explicit in the final C and C++ flags, preserving the caller's flags.
@@ -2621,6 +2624,17 @@ mod tests {
 		assert!(
 			value("AR_aarch64_linux_android").is_some_and(|archiver| archiver.starts_with(&tools)),
 			"the NDK's llvm-ar archives: {environment:?}"
+		);
+		assert!(
+			value("RANLIB_aarch64_linux_android").is_some_and(|ranlib| {
+				ranlib.starts_with(&tools)
+					&& ranlib.ends_with(if cfg!(windows) {
+						"llvm-ranlib.exe"
+					} else {
+						"llvm-ranlib"
+					})
+			}),
+			"the NDK's llvm-ranlib indexes archives: {environment:?}"
 		);
 
 		assert_eq!(
