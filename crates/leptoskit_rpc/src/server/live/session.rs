@@ -44,6 +44,7 @@ use super::mailbox;
 use super::run_query;
 use crate::Kind;
 use crate::live::ClientFrame;
+use crate::live::EndReason;
 use crate::live::HEARTBEAT_SECONDS;
 use crate::live::MAX_ACTIONS;
 use crate::live::MAX_CHANNEL_KEY_BYTES;
