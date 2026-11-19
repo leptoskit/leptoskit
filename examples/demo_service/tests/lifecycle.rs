@@ -482,11 +482,11 @@ fn assert_no_descriptors_into(old_generation: &Path, pid: u32) {
 		.expect("the live process's descriptors are listable");
 	for entry in descriptors.filter_map(Result::ok) {
 		let target = std::fs::read_link(entry.path()).unwrap_or_default();
-		let target = target.to_string_lossy();
 		assert!(
-			!target.starts_with(&old_generation.to_string_lossy()),
-			"descriptor {} still points into the retired generation: {target}",
-			entry.path().display()
+			!target.starts_with(old_generation),
+			"descriptor {} still points into the retired generation: {}",
+			entry.path().display(),
+			target.display()
 		);
 	}
 }
