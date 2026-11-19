@@ -442,7 +442,7 @@ pub(crate) async fn schedule(
 			round: 0,
 		})
 		.at(becomes_visible(spec))
-		.key(format!("push:{send_key}:0"))
+		.key(super::job_key("push", send_key, 0))
 		.await?;
 	}
 
@@ -524,18 +524,21 @@ pub(crate) fn becomes_visible(spec: &crate::SendSpec) -> leptoskit_db::Timestamp
 		.map_or(now, |visible_at| visible_at.max(now))
 }
 
-/// Enqueues the send's round-zero push job, after a fanout batch
-/// committed its deliveries: outside the mutation's transaction, with
-/// the same idempotency key [`schedule`] uses, so a replayed step never
-/// doubles it and a crashed one enqueues it on its retry.
+/// Starts the send's push rounds after a fanout batch committed
+/// deliveries: outside any transaction, at the notification's visibility,
+/// under one key per send (`what` is `fanout`). One kick is enough for
+/// the whole walk: a round that finds its send still fanning out keeps
+/// the rounds going until the walk is over, so every later batch's
+/// deliveries are found by a round that is already coming.
 ///
 /// # Errors
 ///
 /// Whatever the enqueue fails with.
-pub(crate) async fn enqueue_round(
+pub(crate) async fn kick(
 	db: &Db,
 	send_key: &str,
 	spec: &crate::SendSpec,
+	what: &str,
 ) -> rpc::Result<()> {
 	rpc::enqueue(
 		db,
@@ -545,28 +548,72 @@ pub(crate) async fn enqueue_round(
 		},
 	)
 	.at(becomes_visible(spec))
-	.key(format!("push:{send_key}:0"))
-	.await
-	.map(|_| ())
+	.key(super::job_key("push", send_key, what))
+	.await?;
+
+	Ok(())
 }
 
-/// One round of the send's push job: the due deliveries, attempted in
-/// bounded batches, and — while anything still waits — the next round,
-/// at the earliest moment one of them may run again. The round number
-/// keeps the job keys apart, so a round enqueues its successor even
-/// while a previous round's row lingers until the retention prunes it.
-///
-/// The job framework leases each round to one worker; the deliveries'
-/// own writes are fenced regardless (see [`write_outcome`]), so a lease
-/// that expires and replays a round while its first run is still in
-/// flight can at worst send a delivery twice — which at-least-once
-/// already allows — and can never regress a delivery that ended.
+/// The fanout's last kick, as it completes: a round of its own whenever a
+/// delivery of the send is still queued, so a batch whose kick was lost to
+/// a crash, or a round chain that gave up, still has its deliveries
+/// attempted.
 ///
 /// # Errors
 ///
-/// Whatever a read, a write, or the successor's enqueue fails with. The
-/// job framework retries the round; the deliveries already written are
-/// skipped by their state on the retry.
+/// Whatever the read or the enqueue fails with.
+pub(crate) async fn kick_final(db: &Db, send_key: &str, spec: &crate::SendSpec) -> rpc::Result<()> {
+	if PushDelivery::query()
+		.filter(|delivery| queued(delivery, send_key))
+		.exists(db)
+		.await?
+	{
+		kick(db, send_key, spec, "final").await?;
+	}
+
+	Ok(())
+}
+
+/// How many deliveries one round attempts at most before it hands the
+/// rest to its successor.
+const ROUND_DELIVERIES: usize = 1_000;
+
+/// How long one round keeps starting attempts. Attempts already started
+/// finish within their requests' own timeouts, so a round ends well
+/// inside its job's five-minute timeout however slow a provider is.
+const ROUND_BUDGET: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// While a send still fans out, how soon a round looks again for the
+/// deliveries later batches add, in seconds.
+const FANOUT_POLL_SECS: i64 = 5;
+
+/// One round of the send's push job: the due deliveries, a page of
+/// [`DELIVERY_CONCURRENCY`](crate::push::DELIVERY_CONCURRENCY) at a time,
+/// until none is due or the round has done its share — at most
+/// [`ROUND_DELIVERIES`] attempts, started within [`ROUND_BUDGET`] — and
+/// then, while anything still waits, the next round.
+///
+/// The next round comes at once when this one stopped short; at the
+/// earliest moment a waiting delivery may run again otherwise; and every
+/// few seconds while the send still fans out — for at most a day — because
+/// its later batches add deliveries no round has seen. Its key is that moment,
+/// so two chains of rounds that meet at the same moment become one, and a
+/// moment still ahead is never a key a finished round holds.
+///
+/// The job framework runs one round of a send at a time. The deliveries'
+/// own writes are fenced regardless (see [`write_outcome`]), so a lease
+/// that expires and replays a round while its first run is still in
+/// flight can at worst send a delivery twice — which at-least-once
+/// already allows — and can never regress a delivery that ended. One
+/// delivery that fails inside the service — a read or write the database
+/// refused, an attempt that panicked — is put off for a minute on its own
+/// row, never failing the round or holding its peers.
+///
+/// # Errors
+///
+/// Whatever a page read, the bookkeeping reads, or the successor's enqueue
+/// fails with. The job framework retries the round; the deliveries
+/// already written are skipped by their state on the retry.
 #[doc(hidden)]
 pub async fn round(cx: &rpc::JobCx, send_key: &str, round: u32, push: &Push) -> rpc::Result<()> {
 	let Some(runtime) = push.runtime.as_ref() else {
@@ -576,76 +623,203 @@ pub async fn round(cx: &rpc::JobCx, send_key: &str, round: u32, push: &Push) -> 
 		return Ok(());
 	};
 
-	let now = leptoskit_db::now();
-	let mut due = PushDelivery::query()
-		.filter(|delivery| {
-			delivery.send_key.eq(send_key.to_owned())
-				& delivery.state.in_list([
-					DeliveryState::Enqueued.as_str(),
-					DeliveryState::Retrying.as_str(),
-				])
-				& (delivery.next_attempt_at.is_null() | delivery.next_attempt_at.lte(now))
-		})
-		.order_by(|delivery| delivery.id.asc())
-		.all(cx.db())
-		.await?;
+	let db = cx.db();
+	let started = std::time::Instant::now();
+	// A send cancelled mid-fanout pushes nothing more, whatever its rows
+	// say yet: a large one's rows are cancelled in batches after it.
+	let cancelled = super::find_send(db, send_key)
+		.await?
+		.is_some_and(|send| send.state == crate::SendState::Cancelled.as_str());
+	let mut after: Option<Uuid> = None;
+	let mut attempted = 0_usize;
 
-	// Bounded batches: at most DELIVERY_CONCURRENCY attempts in flight,
-	// each owning its row.
-	while !due.is_empty() {
-		let take = due.len().min(crate::push::DELIVERY_CONCURRENCY);
-		let batch: Vec<PushDelivery> = due.drain(..take).collect();
-		let mut attempts = tokio::task::JoinSet::new();
-
-		for row in batch {
-			let db = cx.db().clone();
-			let runtime = Arc::clone(runtime);
-			attempts.spawn(try_delivery(db, runtime, row));
+	let stopped_short = loop {
+		if attempted >= ROUND_DELIVERIES || started.elapsed() >= ROUND_BUDGET {
+			break true;
 		}
 
-		while let Some(finished) = attempts.join_next().await {
-			// An attempt writes its own outcome; one that failed or
-			// panicked fails the round, and the framework retries it.
-			finished.map_err(|error| {
-				rpc::Error::server(format!("a delivery attempt failed: {error}"))
-			})??;
+		let now = leptoskit_db::now();
+		let take = crate::push::DELIVERY_CONCURRENCY.min(ROUND_DELIVERIES - attempted);
+		let page = PushDelivery::query()
+			.filter(|delivery| {
+				let mut condition = due(delivery, send_key, now);
+				if let Some(after) = after {
+					condition = condition & delivery.id.gt(after);
+				}
+				condition
+			})
+			.order_by(|delivery| delivery.id.asc())
+			.limit(u64::try_from(take).unwrap_or(u64::MAX))
+			.all(db)
+			.await?;
+
+		let Some(last) = page.last() else {
+			break false;
+		};
+
+		after = Some(last.id);
+		attempted += page.len();
+		attempt_page(db, runtime, page, cancelled).await;
+	};
+
+	next_round(cx, send_key, round, stopped_short).await
+}
+
+/// Attempts one page of deliveries at once, each owning its row, and puts
+/// off any whose attempt failed inside the service.
+async fn attempt_page(
+	db: &Db,
+	runtime: &Arc<PushRuntime>,
+	page: Vec<PushDelivery>,
+	cancelled: bool,
+) {
+	let attempts: Vec<_> = page
+		.into_iter()
+		.map(|row| {
+			let fence = (row.id, row.attempts, row.generation);
+			let attempt = tokio::spawn(try_delivery(
+				db.clone(),
+				Arc::clone(runtime),
+				row,
+				cancelled,
+			));
+			(fence, attempt)
+		})
+		.collect();
+
+	for (fence, attempt) in attempts {
+		if !matches!(attempt.await, Ok(Ok(()))) {
+			defer(db, fence).await;
 		}
 	}
+}
 
-	// While anything still waits — a retry whose time hasn't come, or an
-	// attempt pushed out by a Retry-After — the next round runs at the
-	// earliest of those moments.
-	let waiting = PushDelivery::query()
-		.filter(|delivery| {
-			delivery.send_key.eq(send_key.to_owned())
-				& delivery.state.in_list([
-					DeliveryState::Enqueued.as_str(),
-					DeliveryState::Retrying.as_str(),
-				])
-		})
-		.all(cx.db())
-		.await?;
+/// Enqueues the round after this one, when anything is left for it.
+///
+/// # Errors
+///
+/// Whatever the reads or the enqueue fail with.
+async fn next_round(
+	cx: &rpc::JobCx,
+	send_key: &str,
+	round: u32,
+	stopped_short: bool,
+) -> rpc::Result<()> {
+	let db = cx.db();
+	let now = leptoskit_db::now();
+	let next = PushSend {
+		send_key: send_key.to_owned(),
+		round: round.saturating_add(1),
+	};
 
-	// NULL ordering differs between SQLite and Postgres. A fenced stale
-	// response can leave immediately runnable work with no timestamp.
-	if let Some(at) = waiting
-		.iter()
-		.map(|row| row.next_attempt_at.unwrap_or(now))
-		.min()
+	if stopped_short {
+		// The rest is due already: the next round starts at once, under a
+		// key of this run's own, so a retried run starts one of its own.
+		rpc::enqueue(db, next)
+			.at(now)
+			.key(super::job_key(
+				"push",
+				send_key,
+				format!("after:{}:{}", cx.id(), cx.attempt()),
+			))
+			.await?;
+
+		return Ok(());
+	}
+
+	// Read first: a fanout that completes after this read committed its
+	// last deliveries before it, so the queue reads below see them. A
+	// fanout still walking a day after its send was made has died, and
+	// keeps no round looking for it: what it delivered is still queued,
+	// and that alone keeps the rounds coming.
+	let horizon = chrono::Duration::seconds(crate::push::DELIVERY_HORIZON_SECS);
+	let fanning = super::find_send(db, send_key).await?.is_some_and(|send| {
+		send.state == crate::SendState::FanningOut.as_str() && now < send.created_at + horizon
+	});
+
+	let waiting = if PushDelivery::query()
+		.filter(|delivery| due(delivery, send_key, now))
+		.exists(db)
+		.await?
 	{
-		rpc::enqueue(
-			cx.db(),
-			PushSend {
-				send_key: send_key.to_owned(),
-				round: round.saturating_add(1),
-			},
-		)
-		.at(at.max(leptoskit_db::now()))
-		.key(format!("push:{send_key}:{}", round.saturating_add(1)))
-		.await?;
+		Some(now)
+	} else {
+		// NULL orders first on SQLite and last on Postgres; the due read
+		// above took every row without a time, so this one reads only
+		// rows with one, and only the earliest.
+		PushDelivery::query()
+			.filter(|delivery| queued(delivery, send_key) & delivery.next_attempt_at.is_not_null())
+			.order_by(|delivery| delivery.next_attempt_at.asc())
+			.first(db)
+			.await?
+			.and_then(|delivery| delivery.next_attempt_at)
+	};
+	let poll = now + chrono::Duration::seconds(FANOUT_POLL_SECS);
+	let at = match (waiting, fanning) {
+		(Some(at), true) => Some(at.min(poll)),
+		(None, true) => Some(poll),
+		(waiting, false) => waiting,
+	};
+
+	if let Some(at) = at {
+		// A whole second at least one past both `at` and now: a key that
+		// names a moment still ahead can't belong to a round that already
+		// ran, even across a little clock skew between workers.
+		let second = at.max(now).timestamp().saturating_add(2);
+		let at = chrono::DateTime::from_timestamp(second, 0).unwrap_or(at);
+
+		rpc::enqueue(db, next)
+			.at(at)
+			.key(super::job_key("push", send_key, format!("at:{second}")))
+			.await?;
 	}
 
 	Ok(())
+}
+
+/// A delivery of `send_key` still in the queue.
+fn queued(
+	delivery: &<PushDelivery as leptoskit_db::Table>::Columns,
+	send_key: &str,
+) -> leptoskit_db::Expr {
+	delivery.send_key.eq(send_key.to_owned())
+		& delivery.state.in_list([
+			DeliveryState::Enqueued.as_str(),
+			DeliveryState::Retrying.as_str(),
+		])
+}
+
+/// A delivery of `send_key` in the queue whose time has come at `now`.
+fn due(
+	delivery: &<PushDelivery as leptoskit_db::Table>::Columns,
+	send_key: &str,
+	now: leptoskit_db::Timestamp,
+) -> leptoskit_db::Expr {
+	queued(delivery, send_key)
+		& (delivery.next_attempt_at.is_null() | delivery.next_attempt_at.lte(now))
+}
+
+/// Puts a delivery off for a minute after its attempt failed inside the
+/// service, without spending an attempt: the outcome it records, so the
+/// next round tries it again rather than this one failing for it. Fenced
+/// like every outcome, on the attempts and generation it was read with,
+/// and best effort: when even this write fails, the row stays due and the
+/// next round finds it.
+async fn defer(db: &Db, (id, attempts, generation): (Uuid, i64, i64)) {
+	let later = leptoskit_db::now() + chrono::Duration::seconds(STALLED_RETRY_SECS);
+	let _ = PushDelivery::update()
+		.filter(|row| {
+			row.id.eq(id)
+				& row.state.in_list([
+					DeliveryState::Enqueued.as_str(),
+					DeliveryState::Retrying.as_str(),
+				])
+				& row.attempts.eq(attempts)
+				& row.generation.eq(generation)
+		})
+		.set(|row| row.next_attempt_at, Some(later))
+		.run(db)
+		.await;
 }
 
 /// Marks every queued delivery of a send skipped, for the reason that
@@ -675,18 +849,19 @@ async fn skip_all(db: &Db, send_key: &str, reason: DeliveryReason) -> rpc::Resul
 
 /// Attempts one delivery: the checks at the moment of the attempt, the
 /// network call with nothing else held across it, and the outcome's
-/// fenced write.
+/// fenced write. `cancelled` says the send itself was cancelled.
 ///
 /// # Errors
 ///
-/// A read or a write that fails: the round stops and the framework
-/// retries it.
+/// A read or a write that fails: the round puts this delivery off and
+/// goes on with the rest.
 async fn try_delivery(
 	db: Db,
 	runtime: Arc<PushRuntime>,
 	delivery: PushDelivery,
+	cancelled: bool,
 ) -> rpc::Result<()> {
-	let outcome = attempt(&db, &runtime, &delivery).await?;
+	let outcome = attempt(&db, &runtime, &delivery, cancelled).await?;
 	write_outcome(&db, &delivery, outcome).await
 }
 
@@ -694,8 +869,14 @@ async fn try_delivery(
 ///
 /// # Errors
 ///
-/// A read that fails: the round stops and the framework retries it.
-async fn attempt(db: &Db, runtime: &PushRuntime, delivery: &PushDelivery) -> rpc::Result<Outcome> {
+/// A read that fails: the round puts this delivery off and goes on with
+/// the rest.
+async fn attempt(
+	db: &Db,
+	runtime: &PushRuntime,
+	delivery: &PushDelivery,
+	cancelled: bool,
+) -> rpc::Result<Outcome> {
 	let now = leptoskit_db::now();
 
 	// The endpoint, live: revoked rows are deleted, invalidated rows
@@ -756,7 +937,7 @@ async fn attempt(db: &Db, runtime: &PushRuntime, delivery: &PushDelivery) -> rpc
 		return Ok(Outcome::WaitUntil(notification.visible_at));
 	}
 
-	if notification.cancelled_at.is_some() {
+	if cancelled || notification.cancelled_at.is_some() {
 		return Ok(Outcome::Ended {
 			reason: DeliveryReason::Cancelled,
 			invalidate: false,
@@ -829,9 +1010,15 @@ async fn attempt(db: &Db, runtime: &PushRuntime, delivery: &PushDelivery) -> rpc
 	let options: crate::MessageOptions = match notification.options.as_deref() {
 		None => crate::MessageOptions::default(),
 		Some(stored) => {
-			serde_json::from_str(stored).map_err(|error| {
-				rpc::Error::server(format!("a stored options value no longer parses: {error}"))
-			})?
+			let Ok(options) = serde_json::from_str(stored) else {
+				// Options this build can't read were written by another —
+				// a newer one, before a rollback. Pushing without them
+				// would push something else, so the delivery waits at the
+				// operator's pace, as a configuration stall, for a build
+				// that reads them, until its window closes.
+				return Ok(Outcome::Stalled { after: None });
+			};
+			options
 		}
 	};
 	let badge = match options.badge {
@@ -959,10 +1146,17 @@ async fn apply_outcome(
 				outcome,
 				Outcome::Stalled { .. } | Outcome::AuthRejected { .. }
 			);
-			let notification = crate::Notification::query()
+			let notification = match crate::Notification::query()
 				.filter(|row| row.id.eq(delivery.notification))
 				.one(tx)
-				.await?;
+				.await
+			{
+				Ok(notification) => notification,
+				Err(leptoskit_db::DbError::NotFound { .. }) => {
+					return end_gone(tx, delivery, attempts, attempted_at).await;
+				}
+				Err(error) => return Err(error.into()),
+			};
 			let delay = retry_delay(delivery, outcome, attempts, after);
 			let plan = if attempts >= i64::from(crate::push::MAX_DELIVERY_ATTEMPTS) {
 				Err(DeliveryReason::AttemptsExhausted)
@@ -1064,32 +1258,63 @@ async fn apply_outcome(
 	Ok(())
 }
 
-/// Provider minimums and deterministic per-delivery jitter for local backoff.
+/// Ends a delivery whose inbox row went between its attempt and this
+/// write, which nothing the service does explains: the way an attempt that
+/// finds the row gone ends it, as cancelled, with the request it made
+/// counted. Fenced like every outcome.
+///
+/// # Errors
+///
+/// Whatever the write fails with.
+async fn end_gone(
+	tx: &leptoskit_db::Tx,
+	delivery: &PushDelivery,
+	attempts: i64,
+	attempted_at: Option<leptoskit_db::Timestamp>,
+) -> rpc::Result<()> {
+	PushDelivery::update()
+		.filter(|row| {
+			row.id.eq(delivery.id)
+				& row.state.in_list([
+					DeliveryState::Enqueued.as_str(),
+					DeliveryState::Retrying.as_str(),
+				])
+				& row.attempts.eq(delivery.attempts)
+				& row.generation.eq(delivery.generation)
+		})
+		.set(|row| row.state, DeliveryState::Skipped.as_str())
+		.set(|row| row.reason, DeliveryReason::Cancelled.as_str())
+		.set(|row| row.attempts, attempts)
+		.set(|row| row.attempted_at, attempted_at)
+		.set(|row| row.finished_at, Some(leptoskit_db::now()))
+		.set(|row| row.next_attempt_at, None)
+		.run(tx)
+		.await?;
+
+	Ok(())
+}
+
+/// The wait before a delivery tries again: an operator-side stall waits a
+/// minute; anything else waits the engine's backoff — one minute, doubled
+/// for every attempt spent, so the eight attempts span about two hours and
+/// an hour's outage loses nothing — plus up to a quarter more of jitter
+/// that differs from delivery to delivery and attempt to attempt. A
+/// provider's own `Retry-After` is honored whenever it is longer, and
+/// never shortened.
 fn retry_delay(
 	delivery: &PushDelivery,
 	outcome: Outcome,
 	attempts: i64,
 	after: Option<std::time::Duration>,
 ) -> std::time::Duration {
-	let transient = matches!(outcome, Outcome::Transient { .. });
-	let backoff = retry_backoff_seconds(attempts)
-		* if delivery.platform == "fcm" && transient {
-			60
-		} else {
-			1
-		};
-	let jitter = u64::from(delivery.id.as_bytes()[0]) % (backoff / 4 + 1);
-	let fallback = if matches!(outcome, Outcome::Stalled { .. }) {
-		STALLED_RETRY_SECS as u64
+	let wait = if matches!(outcome, Outcome::Stalled { .. }) {
+		std::time::Duration::from_secs(STALLED_RETRY_SECS.unsigned_abs())
 	} else {
-		backoff + jitter
+		let backoff = retry_backoff(attempts);
+		backoff + retry_jitter(delivery.id, attempts, backoff / 4)
 	};
 
-	match after {
-		Some(delay) if delivery.platform != "fcm" => delay.max(std::time::Duration::from_secs(1)),
-		Some(delay) => delay.max(std::time::Duration::from_secs(fallback)),
-		None => std::time::Duration::from_secs(fallback),
-	}
+	after.map_or(wait, |after| after.max(wait))
 }
 
 /// The earlier of notification expiry and the finite delivery horizon.
@@ -1127,32 +1352,167 @@ fn retry_time(
 	Ok(at.min(deadline))
 }
 
-/// Exponential backoff, capped at five minutes before jitter.
-fn retry_backoff_seconds(attempt: i64) -> u64 {
-	let doublings = u32::try_from(attempt.saturating_sub(1).max(0))
-		.unwrap_or(16)
-		.min(16);
-	let seconds = u64::checked_shl(1, doublings).unwrap_or(u64::MAX).min(300);
+/// The first retry's wait, before jitter: what doubles from there.
+const RETRY_BACKOFF_FIRST: std::time::Duration = std::time::Duration::from_secs(60);
 
-	seconds.max(1)
+/// The longest wait between two attempts, before jitter. Eight attempts
+/// never reach it; it keeps the arithmetic bounded.
+const RETRY_BACKOFF_MOST: std::time::Duration = std::time::Duration::from_hours(6);
+
+/// The engine's backoff after `attempts` spent: one minute after the
+/// first, doubling after each one since.
+fn retry_backoff(attempts: i64) -> std::time::Duration {
+	let doublings = u32::try_from(attempts.saturating_sub(1).max(0))
+		.unwrap_or(u32::MAX)
+		.min(16);
+
+	RETRY_BACKOFF_FIRST
+		.saturating_mul(1_u32 << doublings)
+		.min(RETRY_BACKOFF_MOST)
+}
+
+/// Up to `most` of jitter, from the delivery's id and the attempts it has
+/// spent: stable for one retry, different from delivery to delivery — the
+/// hash covers the id's random bits, not just its timestamp — so a burst
+/// of failures doesn't come back as a burst.
+fn retry_jitter(id: Uuid, attempts: i64, most: std::time::Duration) -> std::time::Duration {
+	let digest = Sha256::new()
+		.chain_update(id.as_bytes())
+		.chain_update(attempts.to_le_bytes())
+		.finalize();
+	let mut seed = [0_u8; 8];
+	seed.copy_from_slice(&digest[..8]);
+	let millis = u64::try_from(most.as_millis()).unwrap_or(u64::MAX);
+
+	std::time::Duration::from_millis(u64::from_le_bytes(seed) % millis.saturating_add(1))
 }
 
 #[cfg(test)]
 mod retry_tests {
+	use std::time::Duration;
+
 	use super::*;
+
+	/// A queued delivery to `platform`, under an id minted now.
+	fn delivery(platform: &str) -> PushDelivery {
+		PushDelivery {
+			id: Uuid::now_v7(),
+			notification: Uuid::nil(),
+			send_key: "retried".to_owned(),
+			endpoint: Uuid::nil(),
+			generation: 1,
+			person: Uuid::nil(),
+			platform: platform.to_owned(),
+			state: DeliveryState::Retrying.as_str().to_owned(),
+			reason: None,
+			attempts: 0,
+			next_attempt_at: None,
+			attempted_at: None,
+			finished_at: None,
+			created_at: leptoskit_db::now(),
+		}
+	}
+
+	/// Seven transient failures in a row wait long enough between them that
+	/// the eighth attempt comes after an hour's outage, and all of it ends
+	/// well inside the delivery horizon, on every platform.
+	#[test]
+	fn retries_outlast_an_hours_outage_inside_the_horizon() {
+		for platform in ["apns", "fcm", "web_push"] {
+			let delivery = delivery(platform);
+			let waited: Duration = (1..i64::from(crate::push::MAX_DELIVERY_ATTEMPTS))
+				.map(|attempts| {
+					retry_delay(
+						&delivery,
+						Outcome::Transient { after: None },
+						attempts,
+						None,
+					)
+				})
+				.sum();
+
+			assert!(
+				waited > Duration::from_hours(1),
+				"{platform}: the last attempt comes {waited:?} after the first"
+			);
+			assert!(
+				waited < Duration::from_secs(crate::push::DELIVERY_HORIZON_SECS.unsigned_abs()),
+				"{platform}: and inside the horizon"
+			);
+		}
+	}
+
+	/// Deliveries minted in the same moment — whose ids share their
+	/// timestamp bytes — wait different lengths, so a burst of failures
+	/// doesn't come back as a burst.
+	#[test]
+	fn jitter_differs_from_delivery_to_delivery() {
+		let waits: std::collections::BTreeSet<Duration> = (0..64)
+			.map(|_| {
+				retry_delay(
+					&delivery("apns"),
+					Outcome::Transient { after: None },
+					3,
+					None,
+				)
+			})
+			.collect();
+
+		assert!(
+			waits.len() > 32,
+			"64 deliveries waited only {} different lengths",
+			waits.len()
+		);
+	}
+
+	/// A provider's `Retry-After` lengthens a wait and never shortens one,
+	/// and an operator-side stall waits a minute.
+	#[test]
+	fn a_provider_delay_lengthens_a_wait_and_never_shortens_it() {
+		let delivery = delivery("apns");
+		let backoff = retry_delay(&delivery, Outcome::Transient { after: None }, 1, None);
+		let short = Duration::from_secs(30);
+		let long = Duration::from_hours(2);
+
+		assert!(backoff >= Duration::from_mins(1), "{backoff:?}");
+		assert_eq!(
+			retry_delay(
+				&delivery,
+				Outcome::Transient { after: Some(short) },
+				1,
+				Some(short)
+			),
+			backoff,
+			"a shorter Retry-After waits the backoff"
+		);
+		assert_eq!(
+			retry_delay(
+				&delivery,
+				Outcome::Transient { after: Some(long) },
+				1,
+				Some(long)
+			),
+			long,
+			"a longer one is honored"
+		);
+		assert_eq!(
+			retry_delay(&delivery, Outcome::Stalled { after: None }, 0, None),
+			Duration::from_mins(1)
+		);
+	}
 
 	#[test]
 	fn explicit_clock_bounds_all_waits_including_broken_auth_without_expiry() {
 		let now = chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap();
 		let hour = chrono::Duration::hours(1);
-		let delay = std::time::Duration::from_hours(7);
+		let delay = Duration::from_hours(7);
 		assert_eq!(retry_time(now, now, None, delay), Ok(now + hour * 7));
 		assert_eq!(
 			retry_time(now, now, Some(now + hour), delay),
 			Ok(now + hour)
 		);
 		assert_eq!(
-			retry_time(now, now, None, std::time::Duration::from_hours(48)),
+			retry_time(now, now, None, Duration::from_hours(48)),
 			Ok(now + hour * 24)
 		);
 		assert_eq!(
@@ -1164,7 +1524,7 @@ mod retry_tests {
 			Err(DeliveryReason::Expired)
 		);
 		assert_eq!(
-			retry_time(now, now, None, std::time::Duration::MAX),
+			retry_time(now, now, None, Duration::MAX),
 			Err(DeliveryReason::RetryOverflow)
 		);
 		assert_eq!(

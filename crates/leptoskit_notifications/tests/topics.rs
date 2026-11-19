@@ -39,6 +39,9 @@ const BOB: Uuid = Uuid::from_u128(0xB0B0_0000_0000_0000_0000_0000_0000_0002);
 /// a test-fast poll, but a loaded machine can be slower.
 const SETTLES: Duration = Duration::from_secs(20);
 
+#[path = "support/engine.rs"]
+mod engine;
+
 struct Service {
 	address: std::net::SocketAddr,
 	db: Db,
@@ -94,7 +97,7 @@ impl Service {
 		use leptoskit_rpc::Job as _;
 
 		let cx = rpc::JobCx::new(
-			self.db.clone(),
+			self.db.system("run a fanout step in a test"),
 			rpc::server::Identity::anonymous(),
 			format!("test:{send_key}:{step}"),
 			1,
@@ -425,10 +428,10 @@ async fn a_replayed_fanout_writes_no_duplicates() {
 	assert_eq!(progress.delivered, 700);
 
 	// Stop the workers, wind the bookkeeping back as a crash between the
-	// rows and the cursor would leave it, and walk the steps again. A
-	// real replay re-runs the job rows the crash left, under their own
-	// keys; the test re-walks under fresh step numbers so the successor
-	// keys never collide with the first walk's finished jobs.
+	// rows and the cursor would leave it, and walk the steps again, under
+	// the first walk's own step numbers: a step's successor is keyed by
+	// the cursor it starts from, so nothing here collides with the first
+	// walk's finished jobs.
 	service.stop_jobs().await;
 	service
 		.db
@@ -441,7 +444,7 @@ async fn a_replayed_fanout_writes_no_duplicates() {
 		.await
 		.expect("the reset");
 
-	for step in 100..104 {
+	for step in 0..4 {
 		service.run_step("replayed", step).await;
 	}
 
@@ -928,4 +931,214 @@ async fn a_topic_send_is_idempotent_by_key_and_intent() {
 	)
 	.await;
 	assert_eq!(text(&stored[0][0]), "2", "nothing was written twice");
+}
+
+/// A step that finds its batch taken by a replay of an earlier step never
+/// ends the fanout: the send completes with its whole audience once each.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_lost_batch_never_ends_the_fanout() {
+	let service = idle().await;
+	engine::a_lost_batch_keeps_the_fanout_going(service.address, &service.db).await;
+}
+
+/// A dry run over a large audience walks it with no transaction open, so a
+/// write that comes after it started finishes before it does.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_dry_run_holds_up_no_write() {
+	let service = idle().await;
+	engine::a_dry_run_holds_up_no_write(service.address, &service.db).await;
+}
+
+/// A large fanout send's cancel stops the send at once and cancels its
+/// rows in batches of their own.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_large_cancel_is_batched() {
+	let service = idle().await;
+	engine::a_large_cancel_is_batched(service.address, &service.db).await;
+}
+
+/// Each fanout step wakes only the people its own batch reached, so the
+/// wake writes for a send grow with its audience, not its square: three
+/// batches write each person's wake at most twice — once for their batch
+/// and once for the send's own wake — where waking everyone reached so far
+/// at every step wrote the first batch three times over.
+#[tokio::test(flavor = "multi_thread")]
+async fn each_step_wakes_only_its_own_batch() {
+	let service = idle().await;
+	let audience = group(10, 1_100);
+	subscribe(&service, "news.wakes", &audience[..1_000]).await;
+	subscribe(&service, "news.wakes", &audience[1_000..]).await;
+	send(&service, "woken", json!({ "topic": "news.wakes" })).await;
+
+	engine::drain(&service.db).await;
+
+	let progress = settled(&service, "woken").await;
+	assert_eq!(progress.delivered, 1_100, "{progress:?}");
+	assert_eq!(
+		engine::count(&service.db, "SELECT count(*) FROM wakes").await,
+		1_100,
+		"everyone the send reached is woken"
+	);
+	let writes = engine::count(
+		&service.db,
+		"SELECT count(*) FROM live_changes WHERE table_name = 'wakes'",
+	)
+	.await;
+	assert!(
+		writes <= 2 * 1_100,
+		"at most two wake writes per person, not one per step reached so far: {writes}"
+	);
+}
+
+/// What a send stores is bounded where it's checked: options and a spec
+/// that pass every field's own bound, but not the column they're stored
+/// in, and a condition that grows past its column once escaped, are all
+/// refused when the send is made — on every target, and in a dry run —
+/// with a message that says so, and nothing is written.
+#[tokio::test(flavor = "multi_thread")]
+async fn stored_values_that_would_overflow_are_refused_up_front() {
+	let service = service().await;
+	subscribe(&service, "news.big", &[ALICE]).await;
+
+	// Every field within its own bound, about five kilobytes together.
+	let options = json!({
+		"image": format!("https://cdn.example.test/{}", "i".repeat(990)),
+		"link": format!("/{}", "l".repeat(1_000)),
+		"android": { "icon": "a".repeat(512), "tag": "t".repeat(256) },
+		"apple": { "subtitle": "s".repeat(200) },
+		"web": {
+			"icon": format!("/{}", "w".repeat(1_000)),
+			"badge_icon": format!("/{}", "b".repeat(1_000)),
+			"actions": [],
+		},
+	});
+	// Valid data within its four kilobytes whose every quote is escaped,
+	// so it doubles inside the stored spec.
+	let data = format!("{{\"k\":\"{}\"}}", "\\\"".repeat(2_040));
+	assert!(data.len() <= leptoskit_notifications::MAX_DATA_LEN);
+	// A valid condition whose quoted values grow by escaping.
+	let quotes = "\"".repeat(250);
+	let condition = format!("user.a == '{quotes}' || user.b == '{quotes}' || user.c == '{quotes}'");
+
+	let cases = [
+		(
+			"options to a topic",
+			json!({ "category": "news", "title": "Big", "options": options }),
+			json!({ "topic": "news.big" }),
+		),
+		(
+			"options to recipients",
+			json!({ "category": "news", "title": "Big", "options": options }),
+			json!({ "recipients": [ALICE] }),
+		),
+		(
+			"a spec to a topic",
+			json!({ "category": "news", "title": "Big", "data": data }),
+			json!({ "topic": "news.big" }),
+		),
+		(
+			"a spec to recipients",
+			json!({ "category": "news", "title": "Big", "data": data }),
+			json!({ "recipients": [ALICE] }),
+		),
+		(
+			"a condition",
+			json!({ "category": "news", "title": "Big" }),
+			json!({ "condition": condition }),
+		),
+	];
+
+	for (name, spec, target) in cases {
+		for validate_only in [false, true] {
+			let (status, body) = post(
+				&service,
+				"send",
+				json!({
+					"idempotency_key": format!("overflow-{name}-{validate_only}"),
+					"spec": spec,
+					"target": target,
+					"validate_only": validate_only,
+				}),
+				Some(TOKEN),
+			)
+			.await;
+			assert_eq!(status, 400, "{name} (dry run: {validate_only}): {body}");
+			assert!(
+				body.contains("once stored as JSON"),
+				"{name}: the refusal says why: {body}"
+			);
+		}
+	}
+
+	for table in ["notifications", "sends"] {
+		let stored = rows(&service, &format!("SELECT count(*) FROM {table}")).await;
+		assert_eq!(text(&stored[0][0]), "0", "{table} stayed empty");
+	}
+}
+
+/// An idempotency key of the full 255 bytes works on every target, scheduled
+/// and expiring: the jobs a send enqueues name it by its hash when their own
+/// prefixes would push their keys past the job table's column.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_longest_key_works_on_every_target() {
+	let service = service().await;
+	subscribe(&service, "news.long", &[ALICE]).await;
+	let (status, body) = post(
+		&service,
+		"set_person_attributes",
+		json!({ "persons": [BOB], "set": { "plan": "pro" } }),
+		Some(TOKEN),
+	)
+	.await;
+	assert_eq!(status, 200, "{body}");
+
+	let visible_at = (chrono::Utc::now() + chrono::Duration::seconds(1)).to_rfc3339();
+	let expires_at = (chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339();
+
+	for (name, target) in [
+		("recipients", json!({ "recipients": [ALICE, BOB] })),
+		("topic", json!({ "topic": "news.long" })),
+		("condition", json!({ "condition": "user.plan == 'pro'" })),
+		("everyone", json!("everyone")),
+	] {
+		let key = format!("{name}-{}", "k".repeat(254 - name.len()));
+		assert_eq!(key.len(), leptoskit_notifications::MAX_KEY_LEN);
+
+		let (status, body) = post(
+			&service,
+			"send",
+			json!({
+				"idempotency_key": key,
+				"spec": {
+					"category": "news",
+					"title": format!("Long {name}"),
+					"visible_at": visible_at,
+					"expires_at": expires_at,
+				},
+				"target": target,
+			}),
+			Some(TOKEN),
+		)
+		.await;
+		assert_eq!(status, 200, "{name}: {body}");
+
+		let progress = settled(&service, &key).await;
+		assert_eq!(progress.state, SendState::Complete, "{name}: {progress:?}");
+		assert!(progress.delivered >= 1, "{name}: {progress:?}");
+	}
+
+	tokio::time::sleep(Duration::from_millis(1_200)).await;
+
+	let page = inbox(&service, &signed_in(ALICE)).await;
+	assert_eq!(
+		page["items"].as_array().map(Vec::len),
+		Some(3),
+		"recipients, topic, and everyone reach alice: {page}"
+	);
+	let page = inbox(&service, &signed_in(BOB)).await;
+	assert_eq!(
+		page["items"].as_array().map(Vec::len),
+		Some(3),
+		"recipients, condition, and everyone reach bob: {page}"
+	);
 }

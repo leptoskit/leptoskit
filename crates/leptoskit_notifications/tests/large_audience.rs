@@ -25,6 +25,7 @@ use leptoskit_db::Dialect;
 use leptoskit_db::Read as _;
 use leptoskit_db::Statement;
 use leptoskit_db::Value;
+use leptoskit_notifications::CancelRows;
 use leptoskit_notifications::FANOUT_BATCH;
 use leptoskit_notifications::FanoutSend;
 use leptoskit_notifications::SERVICE;
@@ -250,6 +251,25 @@ impl Service {
 		.await
 	}
 
+	/// Runs the `cancel_rows` job of `send_key` once, as a worker would.
+	async fn run_cancel_rows(&self, send_key: &str) {
+		use leptoskit_rpc::Job as _;
+
+		let cx = rpc::JobCx::new(
+			self.db.system("a test cancelling a send's rows"),
+			rpc::server::Identity::anonymous(),
+			format!("test:cancel:{send_key}"),
+			1,
+		);
+
+		CancelRows {
+			send_key: send_key.to_owned(),
+		}
+		.run(&cx)
+		.await
+		.unwrap_or_else(|error| panic!("cancelling the rows of `{send_key}` failed: {error}"));
+	}
+
 	async fn run_step(&self, send_key: &str, step: u32) {
 		self.try_step(send_key, step)
 			.await
@@ -425,8 +445,11 @@ impl Service {
 		assert_eq!(live, 0, "{key}: a completed send cancels nothing");
 	}
 
-	/// How many fanout steps and per-batch wakes the send enqueued: one of
-	/// each per batch of the audience, and no step walking an empty page.
+	/// How many fanout steps the send enqueued — one per batch of the
+	/// audience, and no step walking an empty page — and how its people
+	/// were woken: an immediate send's step wakes its own batch in its own
+	/// transaction, so it enqueues no wake job per batch, and everyone it
+	/// reached holds a wake row.
 	async fn assert_walked_in_batches(&self, key: &str, audience: usize) {
 		let steps = self
 			.count(format!(
@@ -434,19 +457,27 @@ impl Service {
 				self.jobs_table()
 			))
 			.await;
-		let wakes = self
+		let batch_wakes = self
 			.count(format!(
-				"SELECT count(*) FROM {} WHERE key LIKE 'wake:{key}:fanout:%'",
+				"SELECT count(*) FROM {} WHERE key LIKE 'wake:{key}:batch:%'",
 				self.jobs_table()
 			))
 			.await;
 
 		assert_eq!(
-			(steps, wakes),
-			(batches(audience), batches(audience)),
-			"{key}: {audience} people walk in {} batches of {FANOUT_BATCH}",
+			(steps, batch_wakes),
+			(batches(audience), 0),
+			"{key}: {audience} people walk in {} batches of {FANOUT_BATCH}, each waking its own",
 			batches(audience)
 		);
+
+		let unwoken = self
+			.count(format!(
+				"SELECT count(*) FROM notifications n WHERE n.send_key = '{key}' AND NOT EXISTS \
+				 (SELECT 1 FROM wakes w WHERE w.person = n.person)"
+			))
+			.await;
+		assert_eq!(unwoken, 0, "{key}: people reached and never woken");
 	}
 
 	/// The people at `positions` open their inbox and find nothing.
@@ -579,7 +610,10 @@ async fn everyone_send_reaches_each_once(service: Service, count: usize) {
 }
 
 /// A fanout step that runs twice for the same send and step — a duplicated
-/// or retried job — doubles no row, no count, and no job.
+/// or retried job — doubles no row, no count, and no job. Steps walk from
+/// the stored cursor, so the second run claims the next batch, never the
+/// one the first already wrote, and each batch enqueues exactly one
+/// successor, keyed by the cursor it leaves.
 async fn a_duplicated_step_doubles_nothing(service: Service) {
 	let audience = people(UNEVEN);
 	service.subscribe("news.all", &audience, |_| true).await;
@@ -593,6 +627,13 @@ async fn a_duplicated_step_doubles_nothing(service: Service) {
 
 	// The same step again, as a retried job would run it.
 	service.run_step("twice", 0).await;
+	let after_two = service
+		.count("SELECT count(*) FROM notifications WHERE send_key = 'twice'")
+		.await;
+	assert_eq!(
+		after_two, 1_000,
+		"the rerun walks on from the stored cursor: one more batch, not the same one"
+	);
 
 	let rows = service
 		.count("SELECT count(*) FROM notifications WHERE send_key = 'twice'")
@@ -609,25 +650,39 @@ async fn a_duplicated_step_doubles_nothing(service: Service) {
 		"the counts are the rows: {progress:?}"
 	);
 
-	let (successors, wakes) = (
+	let (successors, distinct_successors, batch_wakes) = (
 		service
 			.count(format!(
-				"SELECT count(*) FROM {} WHERE key = 'fanout:twice:1'",
+				"SELECT count(*) FROM {} WHERE key LIKE 'fanout:twice:after:%'",
 				service.jobs_table()
 			))
 			.await,
 		service
 			.count(format!(
-				"SELECT count(*) FROM {} WHERE key = 'wake:twice:fanout:0'",
+				"SELECT count(DISTINCT key) FROM {} WHERE key LIKE 'fanout:twice:after:%'",
+				service.jobs_table()
+			))
+			.await,
+		service
+			.count(format!(
+				"SELECT count(*) FROM {} WHERE key LIKE 'wake:twice:batch:%'",
 				service.jobs_table()
 			))
 			.await,
 	);
 	assert_eq!(
-		(successors, wakes),
-		(1, 1),
-		"one successor and one wake per step key, run twice or not"
+		(successors, distinct_successors, batch_wakes),
+		(2, 2, 0),
+		"one successor per claimed batch, and the batches wake their own people in their own \
+		 transactions"
 	);
+	let woken = service
+		.count(
+			"SELECT count(*) FROM wakes WHERE person IN (SELECT person FROM notifications WHERE \
+			 send_key = 'twice')",
+		)
+		.await;
+	assert_eq!(woken, rows, "everyone reached so far is woken once");
 
 	// Walk the rest: the audience still ends complete, once each.
 	for step in 1..20 {
@@ -838,7 +893,11 @@ async fn cancelling_mid_fanout_cancels_every_row_written(service: Service) {
 		.post("cancel", json!({ "idempotency_key": "stopped" }), TOKEN)
 		.await;
 	assert_eq!(status, 200, "a fanning send cancels: {body}");
-	assert_eq!(body, "2000", "every row written so far was cancelled");
+	assert_eq!(body, "2000", "every row written so far is cancelled");
+
+	// More than a batch of rows: the cancel's own transaction stops the
+	// send, and the `cancel_rows` job cancels the rows a batch at a time.
+	service.run_cancel_rows("stopped").await;
 
 	assert_eq!(
 		service

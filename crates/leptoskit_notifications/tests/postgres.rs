@@ -40,6 +40,9 @@ const BOB: Uuid = Uuid::from_u128(0xB0B0_0000_0000_0000_0000_0000_0000_0002);
 mod postgres;
 use postgres::Postgres;
 
+#[path = "support/engine.rs"]
+mod engine;
+
 struct Service {
 	address: std::net::SocketAddr,
 	db: Db,
@@ -708,4 +711,218 @@ async fn concurrent_enrollments_of_one_credential_land_on_one_endpoint() {
 	}
 
 	let _ = DeadBoundary;
+}
+
+/// A migrated database on `postgres` behind a pool of one connection, and
+/// the service over it with its workers stopped: the engine checks hand
+/// that one connection out in turn, and run their jobs themselves.
+async fn one_connection(postgres: &Postgres) -> Service {
+	let db = Db::connect_with(
+		&postgres.database(),
+		leptoskit_db::PoolOptions { max_connections: 1 },
+	)
+	.await
+	.expect("the database opens");
+	db.migrate(POSTGRES_MIGRATIONS)
+		.await
+		.expect("migrations apply");
+	let mut service = service(db).await;
+
+	if let Some(jobs) = service.jobs.take() {
+		jobs.shutdown().await;
+	}
+
+	service
+}
+
+/// A step that finds its batch taken by a replay of an earlier step never
+/// ends the fanout on Postgres either.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_lost_batch_never_ends_the_fanout_on_postgres() {
+	let Some(postgres) = Postgres::start() else {
+		return;
+	};
+	let service = one_connection(&postgres).await;
+	engine::a_lost_batch_keeps_the_fanout_going(service.address, &service.db).await;
+}
+
+/// A dry run walks its audience with no transaction open on Postgres too.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_dry_run_holds_up_no_write_on_postgres() {
+	let Some(postgres) = Postgres::start() else {
+		return;
+	};
+	let service = one_connection(&postgres).await;
+	engine::a_dry_run_holds_up_no_write(service.address, &service.db).await;
+}
+
+/// A large fanout send's rows are cancelled in batches on Postgres too.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_large_cancel_is_batched_on_postgres() {
+	let Some(postgres) = Postgres::start() else {
+		return;
+	};
+	let service = one_connection(&postgres).await;
+	engine::a_large_cancel_is_batched(service.address, &service.db).await;
+}
+
+/// A test send holds no transaction — and so no connection — while a
+/// provider answers: over a pool of one, a write made while its request is
+/// in flight finishes before the provider answers it.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_test_send_holds_up_no_write_on_postgres() {
+	use std::sync::Arc;
+	use std::sync::atomic::AtomicUsize;
+	use std::sync::atomic::Ordering;
+
+	use leptoskit_notifications::service::config;
+	use leptoskit_notifications::service::push;
+	use leptoskit_notifications::service::transport::Boundary;
+	use leptoskit_notifications::service::transport::PushRuntime;
+	use leptoskit_notifications::service::transport::WireError;
+	use leptoskit_notifications::service::transport::WireRequest;
+	use leptoskit_notifications::service::transport::WireResponse;
+
+	/// A provider that holds every request until the test lets it go, and
+	/// then takes the message.
+	#[derive(Default)]
+	struct Held {
+		gate: tokio::sync::Notify,
+		holding: AtomicUsize,
+	}
+
+	impl Boundary for Held {
+		fn post(
+			&self,
+			_request: WireRequest,
+		) -> std::pin::Pin<Box<dyn Future<Output = Result<WireResponse, WireError>> + Send + '_>>
+		{
+			Box::pin(async move {
+				let released = self.gate.notified();
+				tokio::pin!(released);
+				released.as_mut().enable();
+				self.holding.fetch_add(1, Ordering::SeqCst);
+				released.await;
+
+				Ok(WireResponse {
+					status: 200,
+					headers: Vec::new(),
+					body: Vec::new(),
+				})
+			})
+		}
+	}
+
+	let Some(postgres) = Postgres::start() else {
+		return;
+	};
+	let db = Db::connect_with(
+		&postgres.database(),
+		leptoskit_db::PoolOptions { max_connections: 1 },
+	)
+	.await
+	.expect("the database opens");
+	db.migrate(POSTGRES_MIGRATIONS)
+		.await
+		.expect("migrations apply");
+
+	let key_p8 = {
+		let rng = ring::rand::SystemRandom::new();
+		let document = ring::signature::EcdsaKeyPair::generate_pkcs8(
+			&ring::signature::ECDSA_P256_SHA256_FIXED_SIGNING,
+			&rng,
+		)
+		.expect("a key");
+		format!(
+			"-----BEGIN PRIVATE KEY-----\n{}\n-----END PRIVATE KEY-----\n",
+			base64::Engine::encode(
+				&base64::engine::general_purpose::STANDARD,
+				document.as_ref()
+			)
+		)
+	};
+	let config = config::PushConfig {
+		apns: Some(config::ApnsConfig {
+			key_p8,
+			key_id: "KEY".into(),
+			team_id: "TEAM".into(),
+			topic: "dev.leptoskit.app".into(),
+			environment: config::ApnsEnvironment::Sandbox,
+		}),
+		fcm: None,
+		web: None,
+	};
+	let provider = Arc::new(Held::default());
+	let runtime = PushRuntime::build_over(&config, provider.clone()).expect("the runtime builds");
+	let callers = ServiceCallers::new(Anonymous)
+		.caller(TOKEN, rpc::server::APP_CALLER)
+		.forwarded_identity(SERVICE, TOKEN);
+	let (router, live) = leptoskit_notifications::service::routes_with_push(
+		db.clone(),
+		Some(ORIGIN),
+		callers,
+		push::Push {
+			runtime: Some(Arc::new(runtime)),
+		},
+	);
+	live.start().await.expect("live starts");
+	let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+	let address = listener.local_addr().unwrap();
+	tokio::spawn(async move {
+		leptoskit_axum::axum::serve(listener, router).await.unwrap();
+	});
+	let service = Service {
+		address,
+		db,
+		jobs: None,
+	};
+
+	let (status, body) = post(
+		&service,
+		"register_push_endpoint",
+		json!({ "credential": { "apns": { "device_token": "0".repeat(64) } } }),
+		Some(&signed_in(ALICE)),
+	)
+	.await;
+	assert_eq!(status, 200, "{body}");
+
+	let probe = tokio::spawn(async move {
+		engine::call(
+			address,
+			"send_test",
+			json!({ "spec": { "category": "news", "title": "Test" }, "person": ALICE }),
+		)
+		.await
+	});
+
+	for _ in 0..400 {
+		if provider.holding.load(Ordering::SeqCst) > 0 {
+			break;
+		}
+
+		tokio::time::sleep(Duration::from_millis(25)).await;
+	}
+	assert_eq!(
+		provider.holding.load(Ordering::SeqCst),
+		1,
+		"the test send is in flight"
+	);
+
+	let (status, body) = tokio::time::timeout(
+		Duration::from_secs(10),
+		engine::call(
+			address,
+			"subscribe_to_topic",
+			json!({ "topic": "news.meanwhile", "persons": [BOB] }),
+		),
+	)
+	.await
+	.expect("the write finishes while the provider still holds the test send");
+	assert_eq!(status, 200, "{body}");
+
+	provider.gate.notify_waiters();
+	let (status, body) = probe.await.expect("the test send answers");
+	assert_eq!(status, 200, "{body}");
+	let outcomes: Value = serde_json::from_str(&body).unwrap();
+	assert_eq!(outcomes[0]["state"], "accepted", "{outcomes}");
 }

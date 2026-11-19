@@ -784,7 +784,10 @@ pub async fn push_deliveries(
 
 /// Attempts the due push deliveries of one send, in bounded batches: the
 /// job every send with enrolled endpoints enqueues when its notification
-/// becomes visible, and again whenever attempts are waiting to retry.
+/// becomes visible, and again whenever attempts are waiting to retry, or
+/// its fanout is still adding deliveries. One round does a bounded share
+/// — at most a thousand attempts, started within a minute — and leaves the
+/// rest to the next, and one send's rounds run one at a time.
 /// Each attempt re-reads the notification's schedule, cancellation,
 /// expiry, and the person's latest opt-out at the moment it fires, and
 /// never holds a database transaction across the network call. The workers
@@ -801,7 +804,9 @@ pub async fn push_deliveries(
 #[rpc::job(
 	service = "notifications",
 	queue = "push",
-	timeout = 5m
+	retries = 20,
+	timeout = 5m,
+	serialize_by = send_key
 )]
 pub async fn push_send(cx: &rpc::JobCx, send_key: String, round: u32) -> rpc::Result<()> {
 	let push = cx

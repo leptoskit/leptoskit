@@ -59,6 +59,11 @@ pub const MAX_ACTION_TITLE_LEN: usize = 100;
 /// The longest web language tag, in bytes: BCP 47's own ceiling.
 pub const MAX_LANG_LEN: usize = 35;
 
+/// The most bytes a send's options take as the JSON every one of its
+/// rows stores. Each field's own bound passes options larger than this
+/// together, so the whole is bounded too.
+pub const MAX_OPTIONS_LEN: usize = 4_096;
+
 /// How a send arrives on a device.
 ///
 /// [`Notification`](Self::Notification) is the default: a visible
@@ -467,6 +472,13 @@ pub fn check_options(options: &MessageOptions) -> Result<(), String> {
 				 `pt-BR`"
 			));
 		}
+	}
+
+	if crate::stored_len(options) > MAX_OPTIONS_LEN {
+		return Err(format!(
+			"options are at most {MAX_OPTIONS_LEN} bytes once stored as JSON: drop or shorten \
+			 some of them"
+		));
 	}
 
 	Ok(())
