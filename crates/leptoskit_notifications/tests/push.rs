@@ -5667,3 +5667,576 @@ async fn an_earlier_visible_at_is_now() {
 	let page: Value = serde_json::from_str(&body).unwrap();
 	assert_eq!(page["items"][0]["title"], "Backdated", "{page}");
 }
+
+// Previews.
+
+/// One case of [`a_preview_is_the_bytes_each_provider_is_sent`]: a spec,
+/// and what the preview should say was trimmed on each platform — APNs,
+/// FCM, Web Push — or `None` where the push never goes out.
+struct PreviewCase {
+	name: &'static str,
+	spec: Value,
+	/// The locale the person reads variants in, set as their attribute.
+	locale: Option<&'static str>,
+	trimmed: [Option<&'static [&'static str]>; 3],
+}
+
+#[expect(
+	clippy::too_many_lines,
+	reason = "one case for each option a push can carry"
+)]
+fn preview_cases() -> Vec<PreviewCase> {
+	const NONE: Option<&[&str]> = Some(&[]);
+	const ONE: Option<&[&str]> = Some(&["platform_and_image"]);
+	const TWO: Option<&[&str]> = Some(&["platform_and_image", "sound_badge_link"]);
+	const ALL: Option<&[&str]> = Some(&["platform_and_image", "sound_badge_link", "data"]);
+
+	vec![
+		PreviewCase {
+			name: "plain",
+			spec: spec(),
+			locale: None,
+			trimmed: [NONE, NONE, NONE],
+		},
+		PreviewCase {
+			name: "data-and-priority",
+			spec: json!({
+				"category": "news",
+				"title": "It ships",
+				"body": "Push is here.",
+				"data": json!({ "order": "42", "nested": { "a": [1, 2] } }).to_string(),
+				"options": { "priority": "high" },
+			}),
+			locale: None,
+			trimmed: [NONE, NONE, NONE],
+		},
+		PreviewCase {
+			name: "every-option",
+			spec: json!({
+				"category": "billing",
+				"title": "Invoice paid",
+				"body": "See the attachment.",
+				"data": json!({ "invoice": "42" }).to_string(),
+				"options": {
+					"priority": "normal",
+					"image": "https://cdn.example.test/paid.png",
+					"sound": { "named": "chime" },
+					"badge": { "set": 7 },
+					"link": "/invoice/42",
+					"apple": {
+						"subtitle": "Invoice #42",
+						"thread_id": "billing",
+						"category": "BILLING",
+						"interruption_level": "time_sensitive",
+						"relevance_score": 0.9,
+					},
+					"android": {
+						"channel_id": "inbox",
+						"color": "#10b981",
+						"icon": "ic_income",
+						"tag": "billing",
+					},
+					"web": {
+						"icon": "https://cdn.example.test/icon.png",
+						"badge_icon": "/badge.png",
+						"actions": [{ "action": "open", "title": "Open" }],
+						"require_interaction": true,
+						"dir": "rtl",
+						"lang": "de",
+					},
+				},
+			}),
+			locale: None,
+			trimmed: [NONE, NONE, NONE],
+		},
+		PreviewCase {
+			name: "silent-sound-and-unread-badge",
+			spec: json!({
+				"category": "news",
+				"title": "Quietly",
+				"body": "Nothing rings.",
+				"options": { "sound": "silent", "badge": "unread" },
+			}),
+			locale: None,
+			trimmed: [NONE, NONE, NONE],
+		},
+		PreviewCase {
+			name: "default-sound",
+			spec: json!({
+				"category": "news",
+				"title": "Ding",
+				"options": { "sound": "default" },
+			}),
+			locale: None,
+			trimmed: [NONE, NONE, NONE],
+		},
+		PreviewCase {
+			name: "silent-data-message",
+			spec: json!({
+				"category": "sync",
+				"title": "sync",
+				"data": json!({ "refresh": "orders" }).to_string(),
+				"options": { "kind": "data", "badge": { "set": 3 }, "priority": "high" },
+			}),
+			locale: None,
+			// A data message is never pushed to a browser.
+			trimmed: [NONE, NONE, None],
+		},
+		PreviewCase {
+			name: "a-variant",
+			spec: json!({
+				"category": "news",
+				"title": "It ships",
+				"body": "Push is here.",
+				"options": {
+					"apple": { "subtitle": "Today" },
+					"web": { "actions": [{ "action": "open", "title": "Open" }] },
+				},
+				"variants": {
+					"fr": {
+						"title": "C'est parti",
+						"body": "Les notifications sont là.",
+						"subtitle": "Aujourd'hui",
+						"actions": { "open": "Ouvrir" },
+					},
+				},
+			}),
+			locale: Some("fr-CA"),
+			trimmed: [NONE, NONE, NONE],
+		},
+		PreviewCase {
+			name: "expiring",
+			spec: spec_expiring(),
+			locale: None,
+			trimmed: [NONE, NONE, NONE],
+		},
+		// Past Apple's 4 KiB until the platform options, the image, the
+		// sound, the badge, and the link have all gone; the data stays.
+		PreviewCase {
+			name: "trimmed-twice-on-apns",
+			spec: json!({
+				"category": "billing",
+				"title": "T",
+				"body": "x".repeat(600),
+				"data": json!({ "k": "d".repeat(3_300) }).to_string(),
+				"options": {
+					"image": "https://cdn.example.test/i.png",
+					"sound": "default",
+					"badge": { "set": 7 },
+					"link": format!("/l/{}", "x".repeat(900)),
+					"apple": { "subtitle": "s".repeat(100) },
+				},
+			}),
+			locale: None,
+			trimmed: [TWO, TWO, ALL],
+		},
+		// Past FCM's count until the platform options and the image go,
+		// and not after.
+		PreviewCase {
+			name: "trimmed-once-on-fcm",
+			spec: json!({
+				"category": "billing",
+				"title": "T",
+				"body": "y".repeat(1_050),
+				"data": json!({ "k": "d".repeat(2_840) }).to_string(),
+				"options": {
+					"image": "https://cdn.example.test/i.png",
+					"badge": { "set": 7 },
+					"link": "/l",
+					"android": { "channel_id": "inbox", "tag": "billing" },
+				},
+			}),
+			locale: None,
+			trimmed: [NONE, ONE, ALL],
+		},
+		// Only the id-only envelope fits anywhere.
+		PreviewCase {
+			name: "only-the-envelope-fits",
+			spec: json!({
+				"category": "news",
+				"title": "It ships",
+				"body": "x".repeat(1_900),
+				"data": json!({ "x": "x".repeat(4_000) }).to_string(),
+				"options": { "sound": "default", "badge": { "set": 7 } },
+			}),
+			locale: None,
+			trimmed: [ALL, ALL, ALL],
+		},
+	]
+}
+
+/// The preview of `spec` for the notification `id`.
+async fn preview(service: &Service, spec: &Value, sample: Value) -> Vec<Value> {
+	let (status, body) = post(
+		service,
+		"preview_push",
+		json!({ "spec": spec, "sample": sample }),
+		Some(TOKEN),
+	)
+	.await;
+	assert_eq!(status, 200, "{body}");
+	serde_json::from_str(&body).unwrap()
+}
+
+/// A preview's headers, as the pairs a request carries.
+fn preview_headers(preview: &Value) -> Vec<(String, String)> {
+	preview["headers"]
+		.as_array()
+		.unwrap()
+		.iter()
+		.map(|header| {
+			(
+				header["name"].as_str().unwrap().to_owned(),
+				header["value"].as_str().unwrap().to_owned(),
+			)
+		})
+		.collect()
+}
+
+/// A posted request's headers, without the ones a preview leaves out: the
+/// authorization, and the APNs topic that names the app.
+fn posted_headers(seen: &Seen) -> Vec<(String, String)> {
+	seen.headers
+		.iter()
+		.filter(|(name, _)| name != "authorization" && name != "apns-topic")
+		.cloned()
+		.collect()
+}
+
+/// For every options case — plain, every option at once, each sound, a
+/// badge set and a badge resolved from the unread count, a silent data
+/// message, a translated variant, an expiry, and payloads trimmed once,
+/// twice, and down to the envelope — the preview's body is byte for byte
+/// the body the provider was posted through the injected boundary, its
+/// headers are the posted headers without the credentials, the bytes it
+/// counts are the bytes that went, and what it says was trimmed is the
+/// documented order's prefix.
+///
+/// The only stand-ins are the ones a preview documents: the notification's
+/// id (read from the posted request and passed as the sample), the FCM
+/// token (the placeholder, replaced here by the real one), and for Web
+/// Push the encryption, which this test opens with the receiver's own key.
+#[expect(
+	clippy::too_many_lines,
+	reason = "one send per case, followed to each of the three providers"
+)]
+#[tokio::test(flavor = "multi_thread")]
+async fn a_preview_is_the_bytes_each_provider_is_sent() {
+	let mock = Mock::new();
+	let mut service = service(&mock, &all_transports()).await;
+	mock.scripted(passing_exchange());
+	service.resume();
+
+	for (index, case) in preview_cases().into_iter().enumerate() {
+		let n = u8::try_from(index).unwrap() + 1;
+		let who = Uuid::from_u128(0x9E11_0000_0000_0000_0000_0000_0000_0000 | u128::from(n));
+		let apns_token = device_token(100 + n);
+		let fcm_token = format!("fcm-preview-{n}");
+		let web_endpoint = format!("https://{WEB_HOST}/push/preview{n:06}");
+		let (receiver, web, auth_secret, public) = web_subscription(&web_endpoint);
+		let name = case.name;
+
+		for credential in [
+			apns_credential(&apns_token),
+			fcm_credential(&fcm_token),
+			web,
+		] {
+			let (status, body) = enroll(&service, who, credential).await;
+			assert_eq!(status, 200, "{name}: {body}");
+		}
+
+		if let Some(locale) = case.locale {
+			let (status, body) = post(
+				&service,
+				"set_person_attributes",
+				json!({ "persons": [who], "set": { "locale": locale }, "remove": [] }),
+				Some(TOKEN),
+			)
+			.await;
+			assert_eq!(status, 200, "{name}: {body}");
+		}
+
+		let key = format!("preview-{name}");
+		let (status, body) = send(&service, &key, case.spec.clone(), &[who]).await;
+		assert_eq!(status, 200, "{name}: {body}");
+		let outcomes = settled(&service, &key).await;
+		assert_eq!(outcomes.len(), 3, "{name}: {outcomes:?}");
+
+		// What went out, found by this case's own destinations.
+		let apns = mock
+			.requests_to(APNS_HOST)
+			.into_iter()
+			.find(|seen| seen.url.ends_with(&apns_token));
+		let fcm = mock
+			.requests_to(FCM_HOST)
+			.into_iter()
+			.find(|seen| seen.json()["message"]["token"] == fcm_token.as_str());
+		let web = mock
+			.requests_to(WEB_HOST)
+			.into_iter()
+			.find(|seen| seen.url == web_endpoint);
+		let id = apns
+			.as_ref()
+			.and_then(|seen| seen.header("apns-id"))
+			.unwrap_or_else(|| panic!("{name}: the APNs push went out"))
+			.to_owned();
+
+		// The person has exactly this one unread notification, which is
+		// what an unread badge resolved to when the push went.
+		let mut sample = json!({ "notification": id, "unread": 1 });
+
+		if let Some(locale) = case.locale {
+			sample["locale"] = json!(locale);
+		}
+
+		let previews = preview(&service, &case.spec, sample).await;
+		assert_eq!(
+			previews
+				.iter()
+				.map(|preview| preview["platform"].as_str().unwrap())
+				.collect::<Vec<_>>(),
+			["apns", "fcm", "web_push"],
+			"{name}"
+		);
+
+		for (preview, trimmed) in previews.iter().zip(case.trimmed) {
+			let platform = preview["platform"].as_str().unwrap();
+
+			if let Some(trimmed) = trimmed {
+				assert_eq!(
+					preview.get("trimmed").unwrap_or(&json!([])),
+					&json!(trimmed),
+					"{name} on {platform}"
+				);
+				assert_eq!(preview["fits"], true, "{name} on {platform}");
+				assert!(preview.get("skipped").is_none(), "{name} on {platform}");
+			} else {
+				assert_eq!(
+					preview["skipped"], "platform_unsupported",
+					"{name} on {platform}"
+				);
+				assert_eq!(preview["body"], "", "{name} on {platform}");
+			}
+		}
+
+		// APNs: the body and the headers, exactly.
+		let apns = apns.expect("checked above");
+		assert_eq!(
+			previews[0]["body"].as_str().unwrap().as_bytes(),
+			apns.body.as_slice(),
+			"{name}: the APNs body"
+		);
+		assert_eq!(
+			preview_headers(&previews[0]),
+			posted_headers(&apns),
+			"{name}"
+		);
+		assert_eq!(
+			previews[0]["bytes"],
+			apns.body.len(),
+			"{name}: Apple counts the encoded payload"
+		);
+		assert_eq!(previews[0]["limit"], 4_096, "{name}");
+
+		// FCM: the same body once the placeholder is the device's token.
+		// An expiry rides as the seconds left, measured a moment apart.
+		let fcm = fcm.unwrap_or_else(|| panic!("{name}: the FCM push went out"));
+		let previewed = previews[1]["body"].as_str().unwrap();
+		assert!(
+			previewed.contains("\"token\":\"<device token>\""),
+			"{name}: {previewed}"
+		);
+		let previewed = previewed.replace("<device token>", &fcm_token);
+
+		if case.spec.get("expires_at").is_some() {
+			let seconds = |body: &Value| {
+				body["message"]["android"]["ttl"]
+					.as_str()
+					.and_then(|ttl| ttl.strip_suffix('s'))
+					.and_then(|ttl| ttl.parse::<i64>().ok())
+					.unwrap_or_else(|| panic!("{name}: a ttl in {body}"))
+			};
+			let mut previewed: Value = serde_json::from_str(&previewed).unwrap();
+			let mut posted = fcm.json();
+			assert!(
+				(0..=120).contains(&(seconds(&posted) - seconds(&previewed))),
+				"{name}: the preview was made after the push"
+			);
+
+			for body in [&mut previewed, &mut posted] {
+				body["message"]["android"]["ttl"] = json!("");
+				body["message"]["apns"]["headers"]["apns-expiration"] = json!("");
+			}
+
+			assert_eq!(
+				previewed, posted,
+				"{name}: the FCM body, apart from the time left"
+			);
+		} else {
+			assert_eq!(
+				previewed.as_bytes(),
+				fcm.body.as_slice(),
+				"{name}: the FCM body"
+			);
+		}
+
+		assert_eq!(
+			preview_headers(&previews[1]),
+			posted_headers(&fcm),
+			"{name}"
+		);
+
+		// Web Push: the envelope the browser decrypts, and the headers.
+		match (web, case.trimmed[2]) {
+			(Some(web), Some(_)) => {
+				let point = URL_SAFE_NO_PAD.decode(&public).unwrap();
+				let opened = open_aes128gcm(&web.body, receiver, &point, &auth_secret);
+				assert_eq!(
+					previews[2]["body"].as_str().unwrap().as_bytes(),
+					opened.as_slice(),
+					"{name}: the Web Push envelope"
+				);
+				assert_eq!(
+					previews[2]["bytes"],
+					web.body.len(),
+					"{name}: the push service counts the encrypted body"
+				);
+
+				let (mut previewed, mut posted) =
+					(preview_headers(&previews[2]), posted_headers(&web));
+
+				if case.spec.get("expires_at").is_some() {
+					for headers in [&mut previewed, &mut posted] {
+						headers.retain(|(name, _)| name != "ttl");
+					}
+				}
+
+				assert_eq!(previewed, posted, "{name}");
+			}
+			(None, None) => {}
+			(web, expected) => {
+				panic!(
+					"{name}: a Web Push request {} and the preview {}",
+					if web.is_some() {
+						"went out"
+					} else {
+						"did not go out"
+					},
+					if expected.is_some() {
+						"says one would"
+					} else {
+						"says none would"
+					},
+				);
+			}
+		}
+	}
+}
+
+/// A push that fits nowhere is previewed as one that would not be sent:
+/// `fits` is false after every trim, as the delivery ends `oversized`
+/// with no request.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_preview_says_when_nothing_would_be_sent() {
+	let mock = Mock::new();
+	let mut service = service(&mock, &all_transports()).await;
+	assert_eq!(
+		enroll(&service, ALICE, apns_credential(&device_token(1)))
+			.await
+			.0,
+		200
+	);
+	service.resume();
+
+	// A body of backslashes doubles when it is encoded: past 4 KiB with
+	// nothing left to trim.
+	let spec = json!({
+		"category": "news",
+		"title": "\\".repeat(200),
+		"body": "\\".repeat(2_000),
+	});
+	let (status, body) = send(&service, "fits-nowhere", spec.clone(), &[ALICE]).await;
+	assert_eq!(status, 200, "{body}");
+	assert_eq!(
+		settled(&service, "fits-nowhere").await,
+		vec![("rejected".to_owned(), Some("oversized".to_owned()))]
+	);
+	assert!(mock.requests_to(APNS_HOST).is_empty(), "nothing was posted");
+
+	let previews = preview(&service, &spec, json!({})).await;
+	let apns = &previews[0];
+	assert_eq!(apns["fits"], false, "{apns}");
+	assert_eq!(
+		apns["trimmed"],
+		json!(["platform_and_image", "sound_badge_link", "data"])
+	);
+	assert!(apns["bytes"].as_u64().unwrap() > 4_096, "{apns}");
+}
+
+/// A preview needs no push configuration and no endpoint, reads nothing
+/// about anyone, answers only the app, and refuses what a send would.
+#[tokio::test(flavor = "multi_thread")]
+async fn only_the_app_previews_and_a_bad_spec_is_refused() {
+	let service = start_push(db().await, None).await;
+
+	let previews = preview(&service, &spec(), json!({})).await;
+	assert_eq!(previews.len(), 3, "with no transport configured");
+	let apns: Value = serde_json::from_str(previews[0]["body"].as_str().unwrap()).unwrap();
+	assert_eq!(apns["aps"]["alert"]["title"], "It ships");
+	assert_eq!(
+		apns["lkn"], "00000000-0000-0000-0000-000000000000",
+		"the nil id stands in for the notification's"
+	);
+
+	// Leaving the sample out is the same as an empty one.
+	let (status, body) = post(
+		&service,
+		"preview_push",
+		json!({ "spec": spec() }),
+		Some(TOKEN),
+	)
+	.await;
+	assert_eq!(status, 200, "{body}");
+	assert_eq!(
+		serde_json::from_str::<Value>(&body).unwrap(),
+		json!(previews)
+	);
+
+	for token in [None, Some(signed_in(ALICE))] {
+		let (status, body) = post(
+			&service,
+			"preview_push",
+			json!({ "spec": spec() }),
+			token.as_deref(),
+		)
+		.await;
+		assert_eq!(status, 403, "{body}");
+	}
+
+	for (bad, names) in [
+		(json!({ "category": "news", "title": "" }), "title"),
+		(
+			json!({ "category": "news", "title": "t", "options": { "link": "javascript:alert(1)" } }),
+			"link",
+		),
+	] {
+		let (status, body) = post(
+			&service,
+			"preview_push",
+			json!({ "spec": bad }),
+			Some(TOKEN),
+		)
+		.await;
+		assert_eq!(status, 400, "{body}");
+		assert!(body.contains(names), "{body}");
+	}
+
+	let (status, body) = post(
+		&service,
+		"preview_push",
+		json!({ "spec": spec(), "sample": { "locale": "not a locale" } }),
+		Some(TOKEN),
+	)
+	.await;
+	assert_eq!(status, 400, "{body}");
+}

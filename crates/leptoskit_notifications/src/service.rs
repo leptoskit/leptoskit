@@ -11,8 +11,11 @@
 //! header or an argument on the recipient's side, so there is nothing to
 //! forge.
 
+pub(crate) mod catalogue;
 pub mod config;
+pub(crate) mod history;
 pub(crate) mod local;
+pub(crate) mod preview;
 pub mod push;
 pub mod retention;
 pub mod transport;
@@ -341,7 +344,9 @@ pub(crate) async fn find_send(
 }
 
 /// Writes the send row a recipients send holds: complete from the start,
-/// with its audience count, and nothing stored to fan out later.
+/// with its audience count and its spec — the content, for the send
+/// history — and no target, because nothing is left to fan out and the
+/// people it named are never stored.
 ///
 /// # Errors
 ///
@@ -351,7 +356,7 @@ pub(crate) async fn write_send(
 	key: &str,
 	intent: &str,
 	targeted: u32,
-	label: Option<&str>,
+	spec: &crate::SendSpec,
 ) -> leptoskit_db::Result<()> {
 	NewAppSend {
 		idempotency_key: key.to_owned(),
@@ -360,10 +365,14 @@ pub(crate) async fn write_send(
 		skipped_opted_out: 0,
 		targeted: i64::from(targeted),
 		state: crate::SendState::Complete.as_str().to_owned(),
+		// No target: the recipients were named, never stored, and a
+		// missing target is how a retry knows this was a recipients send.
 		target: None,
-		spec: None,
+		spec: Some(serde_json::to_string(spec).expect("the spec is plain JSON")),
 		cursor: None,
-		label: label.map(str::to_owned),
+		label: spec.label.clone(),
+		history_id: Some(Uuid::now_v7()),
+		category: Some(spec.category.clone()),
 	}
 	.insert(tx)
 	.await
@@ -395,6 +404,8 @@ pub(crate) async fn write_fanout_send(
 		spec: Some(serde_json::to_string(spec).expect("the spec is plain JSON")),
 		cursor: None,
 		label: spec.label.clone(),
+		history_id: Some(Uuid::now_v7()),
+		category: Some(spec.category.clone()),
 	}
 	.insert(tx)
 	.await
@@ -1107,7 +1118,7 @@ fn condition_of(target: &crate::SendTarget) -> rpc::Result<Condition> {
 /// walk the topic index — a bounded, cheap set. Everything else walks
 /// the whole person registry: an unanchored condition, which can match a
 /// person holding none of its topics, and everyone.
-enum Walk {
+pub(crate) enum Walk {
 	/// The distinct subscribers of the condition's topics, evaluated
 	/// against it.
 	Topics(Condition),
@@ -1118,7 +1129,7 @@ enum Walk {
 
 impl Walk {
 	/// The condition to evaluate, if any.
-	fn condition(&self) -> Option<&Condition> {
+	pub(crate) fn condition(&self) -> Option<&Condition> {
 		match self {
 			Walk::Topics(condition) => Some(condition),
 			Walk::Registry(condition) => condition.as_ref(),
@@ -1132,7 +1143,7 @@ impl Walk {
 /// # Errors
 ///
 /// [`rpc::Error::server`] when a stored condition no longer parses.
-fn walk_of(target: &crate::SendTarget) -> rpc::Result<Walk> {
+pub(crate) fn walk_of(target: &crate::SendTarget) -> rpc::Result<Walk> {
 	match target {
 		crate::SendTarget::Recipients(_) => {
 			Err(rpc::Error::server("a recipients send has no fanout"))
@@ -1152,7 +1163,7 @@ fn walk_of(target: &crate::SendTarget) -> rpc::Result<Walk> {
 
 /// How many people one fanout page reads past its batch, to see whether
 /// more follow without asking for them twice.
-const FANOUT_PAGE: usize = crate::FANOUT_BATCH;
+pub(crate) const FANOUT_PAGE: usize = crate::FANOUT_BATCH;
 
 /// The people one fanout page evaluates next, ordered by person id,
 /// after `cursor`, at most `limit`. Raw SQL because the page is one
@@ -1173,7 +1184,7 @@ const FANOUT_PAGE: usize = crate::FANOUT_BATCH;
 /// # Errors
 ///
 /// Whatever a read fails with.
-async fn candidates(
+pub(crate) async fn candidates(
 	db: &impl leptoskit_db::Read,
 	walk: &Walk,
 	cursor: Option<Uuid>,
@@ -1297,11 +1308,11 @@ impl Facts {
 
 /// Which of a page's people a walk matches, and what it read to decide.
 #[derive(Debug, Default)]
-struct Verdict {
+pub(crate) struct Verdict {
 	/// The matching people, in the page's order.
-	matching: Vec<Uuid>,
+	pub(crate) matching: Vec<Uuid>,
 	/// What the condition read about the page.
-	facts: Facts,
+	pub(crate) facts: Facts,
 }
 
 /// Which of `people` the walk matches, evaluated against the topics and
@@ -1316,7 +1327,7 @@ struct Verdict {
 /// # Errors
 ///
 /// Whatever the read fails with.
-async fn evaluate(
+pub(crate) async fn evaluate(
 	db: &impl leptoskit_db::Read,
 	walk: &Walk,
 	people: &[Uuid],
@@ -2728,8 +2739,16 @@ pub(crate) async fn send_test(
 	Ok(outcomes)
 }
 
+/// A count column's value, saturating.
+pub(crate) fn count_of(value: Option<&leptoskit_db::Value>) -> u32 {
+	match value {
+		Some(leptoskit_db::Value::Int(count)) => u32::try_from(*count).unwrap_or(u32::MAX),
+		_ => 0,
+	}
+}
+
 /// The `number`th placeholder for the dialect.
-fn placeholder(dialect: leptoskit_db::Dialect, number: usize) -> String {
+pub(crate) fn placeholder(dialect: leptoskit_db::Dialect, number: usize) -> String {
 	match dialect {
 		leptoskit_db::Dialect::Postgres => format!("${number}"),
 		leptoskit_db::Dialect::Sqlite => format!("?{number}"),
@@ -2788,6 +2807,97 @@ pub mod plans {
 	#[must_use]
 	pub fn send_counts(dialect: leptoskit_db::Dialect, send_key: &str) -> leptoskit_db::Statement {
 		super::send_counts_read(dialect, send_key)
+	}
+
+	/// The read behind a report's push breakdown, exactly as
+	/// [`send_report`](crate::send_report) issues it.
+	#[must_use]
+	pub fn push_counts(dialect: leptoskit_db::Dialect, send_key: &str) -> leptoskit_db::Statement {
+		super::history::push_counts_read(dialect, send_key)
+	}
+
+	/// The read behind a report's reads by hour, exactly as
+	/// [`send_report`](crate::send_report) issues it.
+	#[must_use]
+	pub fn reads_by_hour(
+		dialect: leptoskit_db::Dialect,
+		send_key: &str,
+	) -> leptoskit_db::Statement {
+		super::history::reads_by_hour_read(dialect, send_key)
+	}
+
+	/// A list of distinct names the catalogue walks.
+	#[derive(Clone, Copy, Debug)]
+	pub enum Names<'a> {
+		/// The topics anyone subscribes to.
+		Topics,
+		/// The attribute keys anyone holds.
+		AttributeKeys,
+		/// The values anyone holds for this key.
+		AttributeValues(&'a str),
+		/// The categories of sends and of preferences.
+		Categories,
+	}
+
+	/// The read of up to `most` distinct `names` after `after`, starting
+	/// at `from` when the walk is of one prefix, exactly as the catalogue
+	/// issues it.
+	#[must_use]
+	pub fn names(
+		dialect: leptoskit_db::Dialect,
+		names: Names<'_>,
+		after: Option<&str>,
+		from: Option<&str>,
+		most: u32,
+	) -> leptoskit_db::Statement {
+		use super::catalogue::Names as Walked;
+
+		let walked = match names {
+			Names::Topics => Walked::topics(),
+			Names::AttributeKeys => Walked::attribute_keys(),
+			Names::AttributeValues(key) => Walked::attribute_values(key),
+			Names::Categories => Walked::categories(),
+		};
+
+		super::catalogue::names_read(dialect, &walked, after, from, most)
+	}
+
+	/// The capped count of a topic's subscribers, as the catalogue issues
+	/// it.
+	#[must_use]
+	pub fn topic_count(dialect: leptoskit_db::Dialect, topic: &str) -> leptoskit_db::Statement {
+		super::catalogue::topic_count_read(dialect, topic)
+	}
+
+	/// The capped count of the people holding `key`, or `value` for it,
+	/// as the catalogue issues it.
+	#[must_use]
+	pub fn attribute_count(
+		dialect: leptoskit_db::Dialect,
+		key: &str,
+		value: Option<&str>,
+	) -> leptoskit_db::Statement {
+		super::catalogue::attribute_count_read(dialect, key, value)
+	}
+
+	/// The capped count of the people opted out of `category`, as the
+	/// catalogue issues it.
+	#[must_use]
+	pub fn opted_out_count(
+		dialect: leptoskit_db::Dialect,
+		category: &str,
+	) -> leptoskit_db::Statement {
+		super::catalogue::opted_out_count_read(dialect, category)
+	}
+
+	/// The capped count of the people with a live endpoint on `platform`,
+	/// as the overview issues it.
+	#[must_use]
+	pub fn platform_people(
+		dialect: leptoskit_db::Dialect,
+		platform: crate::push::PushPlatform,
+	) -> leptoskit_db::Statement {
+		super::catalogue::platform_people_read(dialect, platform)
 	}
 }
 

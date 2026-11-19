@@ -7,3 +7,4 @@
 20261118T200806_scale_indexes
 20261118T210110_endpoint_seen
 20261118T223142_open_tracking
+20261118T234132_send_history

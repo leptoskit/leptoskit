@@ -85,6 +85,19 @@ required-features = ["service"]
 name = "opens"
 required-features = ["service"]
 
+# The history tests exercise the list of sends and a send's full report:
+# its spec, its audience, its push deliveries by state, its reads by hour.
+[[test]]
+name = "history"
+required-features = ["service"]
+
+# The catalogue tests exercise what an audience is built from: the
+# overview, topics, attributes, categories, the audience estimate, and a
+# person's endpoints for the app.
+[[test]]
+name = "catalogue"
+required-features = ["service"]
+
 # The Postgres races need the Postgres service; they start a private
 # Postgres from local binaries and skip without them.
 [[test]]

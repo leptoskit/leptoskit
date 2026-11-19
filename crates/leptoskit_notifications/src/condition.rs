@@ -70,8 +70,14 @@
 //! [`MAX_TOPIC_LEN`](crate::MAX_TOPIC_LEN) bytes of the characters FCM
 //! accepts. Attribute keys are `[a-z0-9_]` — 1 to
 //! [`MAX_ATTRIBUTE_KEY_LEN`](crate::MAX_ATTRIBUTE_KEY_LEN) bytes — and
-//! values are 1 to
-//! [`MAX_ATTRIBUTE_VALUE_LEN`](crate::MAX_ATTRIBUTE_VALUE_LEN) bytes.
+//! values are at most
+//! [`MAX_ATTRIBUTE_VALUE_LEN`](crate::MAX_ATTRIBUTE_VALUE_LEN) bytes;
+//! the empty value is `''`.
+//!
+//! A parsed condition renders back to text: [`Condition`] implements
+//! [`Display`](std::fmt::Display), and the text it writes parses to the
+//! same tree, so a screen that builds a condition from parts can show —
+//! and store — the text the service will read.
 //!
 //! [`PushPlatform::as_str`]: crate::push::PushPlatform::as_str
 
@@ -638,6 +644,148 @@ impl Condition {
 			}
 			Condition::Not(inner) => inner.depth() + 1,
 		}
+	}
+}
+
+/// How tightly an operator binds, for [`Condition`]'s rendering: `||`
+/// loosest, then `&&`, then `!` and the predicates.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Binding {
+	Or,
+	And,
+	Unary,
+}
+
+impl Condition {
+	/// How tightly this node's own operator binds.
+	fn binding(&self) -> Binding {
+		match self {
+			Condition::Or(..) => Binding::Or,
+			Condition::And(..) => Binding::And,
+			Condition::Topic(_)
+			| Condition::Attribute { .. }
+			| Condition::Device { .. }
+			| Condition::Not(_) => Binding::Unary,
+		}
+	}
+
+	/// Writes the node, in parentheses when its operator binds more
+	/// loosely than `least`.
+	fn write_within(&self, least: Binding, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		if self.binding() < least {
+			write!(f, "({self})")
+		} else {
+			write!(f, "{self}")
+		}
+	}
+}
+
+/// The condition as text [`Condition::parse`] reads back to this same
+/// tree: `Condition::parse(&parsed.to_string())` equals `parsed` for every
+/// tree `parse` produced.
+///
+/// The text is canonical, not the text that was parsed: one space around
+/// every operator, parentheses only where the tree needs them — around an
+/// `||` under an `&&`, around the right-hand side of an operator that
+/// repeats (the parser groups `a && b && c` to the left), and around
+/// everything a `!` negates — values quoted as [`quoted`] writes them, and
+/// a numeric bound as the number it parsed to (`'010'` renders `'10'`).
+/// Two texts that mean the same tree render alike.
+///
+/// The rendering always stays inside the nesting bounds, but it can be
+/// longer than the text it came from: a condition written with no spaces
+/// at all, close to [`MAX_CONDITION_LEN`], may render past that bound,
+/// and the rendered text is then refused like any other text that long.
+///
+/// ```
+/// use leptoskit_notifications::condition::Condition;
+///
+/// let parsed = Condition::parse("user.plan=='pro'&&('a' in topics||!'b' in topics)").unwrap();
+/// let text = parsed.to_string();
+/// assert_eq!(
+/// 	text,
+/// 	"user.plan == 'pro' && ('a' in topics || !('b' in topics))"
+/// );
+/// assert_eq!(Condition::parse(&text).unwrap(), parsed);
+/// ```
+impl std::fmt::Display for Condition {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		match self {
+			Condition::Topic(topic) => write!(f, "'{topic}' in topics"),
+			Condition::Attribute { key, test } => write_predicate(f, "user", key, test),
+			Condition::Device { key, test } => write_predicate(f, "device", key.as_str(), test),
+			// The parser groups a repeated operator to the left, so the
+			// left side may be the same operator bare and the right side
+			// may not.
+			Condition::And(left, right) => {
+				left.write_within(Binding::And, f)?;
+				f.write_str(" && ")?;
+				right.write_within(Binding::Unary, f)
+			}
+			Condition::Or(left, right) => {
+				left.write_within(Binding::Or, f)?;
+				f.write_str(" || ")?;
+				right.write_within(Binding::And, f)
+			}
+			// Always parenthesized, the way FCM writes it, and so that
+			// `!` never reads as part of a predicate.
+			Condition::Not(inner) => write!(f, "!({inner})"),
+		}
+	}
+}
+
+/// Writes one `user.` or `device.` predicate.
+fn write_predicate(
+	f: &mut std::fmt::Formatter<'_>,
+	subject: &str,
+	key: &str,
+	test: &Test,
+) -> std::fmt::Result {
+	let order = |op: NumericOp| {
+		match op {
+			NumericOp::Less => "<",
+			NumericOp::LessEq => "<=",
+			NumericOp::Greater => ">",
+			NumericOp::GreaterEq => ">=",
+		}
+	};
+
+	match test {
+		Test::Equals(value) => write!(f, "{subject}.{key} == {}", quoted(value)),
+		Test::NotEquals(value) => write!(f, "{subject}.{key} != {}", quoted(value)),
+		Test::AnyOf(values) => {
+			write!(f, "{subject}.{key} in [")?;
+
+			for (index, value) in values.iter().enumerate() {
+				if index > 0 {
+					f.write_str(", ")?;
+				}
+
+				f.write_str(&quoted(value))?;
+			}
+
+			f.write_str("]")
+		}
+		Test::Has => write!(f, "has({subject}.{key})"),
+		Test::Numeric { op, bound } => {
+			write!(f, "{subject}.{key} {} '{}'", order(*op), number(*bound))
+		}
+		Test::Version { op, bound } => {
+			write!(f, "{subject}.{key} {} {}", order(*op), quoted(bound))
+		}
+	}
+}
+
+/// A numeric bound as the shortest text that parses back to it: plain
+/// digits, or exponent form once plain digits would be long enough to
+/// pass a value's length bound (`1e300` is 301 digits written out).
+fn number(bound: f64) -> String {
+	let plain = bound.to_string();
+
+	if plain.len() <= 24 {
+		plain
+	} else {
+		format!("{bound:e}")
 	}
 }
 
@@ -2408,5 +2556,380 @@ mod tests {
 			.expect("FCM's documented example");
 		Condition::parse("'Topic A' in topics").expect_err("no spaces in a topic");
 		Condition::parse("'Topic''A' in topics").expect_err("no quotes in a topic");
+	}
+
+	/// Every string literal in `source` that parses as a condition: the
+	/// fixtures the tests of this crate already use.
+	fn fixtures(source: &str) -> Vec<String> {
+		let bytes = source.as_bytes();
+		let mut found = Vec::new();
+		let mut at = 0;
+
+		while at < bytes.len() {
+			if bytes[at] != b'"' {
+				at += 1;
+				continue;
+			}
+
+			let raw = at > 0 && bytes[at - 1] == b'r';
+			let mut text = String::new();
+			let mut clean = true;
+			let mut end = at + 1;
+
+			while end < bytes.len() && bytes[end] != b'"' {
+				if bytes[end] == b'\\' && !raw {
+					// A line continuation joins; any other escape is not
+					// worth decoding for a fixture.
+					if bytes.get(end + 1) == Some(&b'\n') {
+						end += 2;
+						end += bytes[end..]
+							.iter()
+							.take_while(|byte| byte.is_ascii_whitespace())
+							.count();
+						continue;
+					}
+
+					clean = false;
+					end += 2;
+					continue;
+				}
+
+				text.push(char::from(bytes[end]));
+				end += 1;
+			}
+
+			if clean && source.is_char_boundary(at + 1) && source.is_char_boundary(end) && !raw {
+				// Take the literal's own text, so multi-byte characters
+				// survive; continuations were rare enough to rebuild.
+				if !source[at + 1..end].contains('\\') {
+					text = source[at + 1..end].to_owned();
+				}
+			}
+
+			if clean && Condition::parse(&text).is_ok() {
+				found.push(text);
+			}
+
+			at = end + 1;
+		}
+
+		found
+	}
+
+	/// Rendering a parsed condition gives text that parses back to the
+	/// same tree, for every condition the tests of this crate use.
+	#[test]
+	fn every_fixture_renders_to_text_that_parses_back() {
+		let mut checked = 0;
+
+		for source in [
+			include_str!("condition.rs"),
+			include_str!("../tests/topics.rs"),
+			include_str!("../tests/segments.rs"),
+			include_str!("../tests/devices.rs"),
+			include_str!("../tests/large_audience.rs"),
+		] {
+			for text in fixtures(source) {
+				let parsed = Condition::parse(&text).expect("a fixture parses");
+				let rendered = parsed.to_string();
+				let again = Condition::parse(&rendered)
+					.unwrap_or_else(|error| panic!("`{text}` rendered `{rendered}`: {error}"));
+
+				assert_eq!(again, parsed, "`{text}` rendered `{rendered}`");
+				assert_eq!(again.to_string(), rendered, "rendering is stable");
+				checked += 1;
+			}
+		}
+
+		assert!(checked >= 100, "the scan found only {checked} fixtures");
+	}
+
+	/// The canonical text: spaces around operators, parentheses only where
+	/// the tree needs them, FCM's parenthesized negation, and values as
+	/// `quoted` writes them.
+	#[test]
+	fn rendering_is_canonical() {
+		for (text, rendered) in [
+			("'a'  in   topics", "'a' in topics"),
+			(
+				"'a' in topics&&'b' in topics&&'c' in topics",
+				"'a' in topics && 'b' in topics && 'c' in topics",
+			),
+			(
+				"'a' in topics && ('b' in topics && 'c' in topics)",
+				"'a' in topics && ('b' in topics && 'c' in topics)",
+			),
+			(
+				"('a' in topics || 'b' in topics) && 'c' in topics",
+				"('a' in topics || 'b' in topics) && 'c' in topics",
+			),
+			(
+				"'a' in topics || ('b' in topics && 'c' in topics)",
+				"'a' in topics || 'b' in topics && 'c' in topics",
+			),
+			(
+				"'a' in topics || ('b' in topics || 'c' in topics)",
+				"'a' in topics || ('b' in topics || 'c' in topics)",
+			),
+			(
+				"'a' in topics && !'b' in topics",
+				"'a' in topics && !('b' in topics)",
+			),
+			(
+				"'a' in topics && !!('b' in topics)",
+				"'a' in topics && !(!('b' in topics))",
+			),
+			("user.city=='New York'", "user.city == 'New York'"),
+			("user.name != 'O''Brien'", "user.name != 'O''Brien'"),
+			(
+				"user.plan in ['pro','team' , 'it''s']",
+				"user.plan in ['pro', 'team', 'it''s']",
+			),
+			("has( user.plan )", "has(user.plan)"),
+			("has(device.locale)", "has(device.locale)"),
+			("user.age>='018.50'", "user.age >= '18.5'"),
+			("user.score < '-0.25'", "user.score < '-0.25'"),
+			("user.big > '1e300'", "user.big > '1e300'"),
+			("user.small <= '1e-7'", "user.small <= '0.0000001'"),
+			(
+				"device.app_version<'2.1.0-beta'",
+				"device.app_version < '2.1.0-beta'",
+			),
+			(
+				"device.platform in ['apns','fcm'] && device.language == 'FR'",
+				"device.platform in ['apns', 'fcm'] && device.language == 'FR'",
+			),
+		] {
+			let parsed = Condition::parse(text).unwrap_or_else(|error| panic!("{text}: {error}"));
+			assert_eq!(parsed.to_string(), rendered, "{text}");
+			assert_eq!(
+				Condition::parse(rendered).expect("the rendering parses"),
+				parsed,
+				"{text}"
+			);
+		}
+	}
+
+	/// A small deterministic generator, so the generated trees are the
+	/// same on every run.
+	struct Generator(u64);
+
+	impl Generator {
+		fn next(&mut self, below: usize) -> usize {
+			// xorshift64*.
+			self.0 ^= self.0 >> 12;
+			self.0 ^= self.0 << 25;
+			self.0 ^= self.0 >> 27;
+			let value = self.0.wrapping_mul(0x2545_F491_4F6C_DD1D) >> 33;
+
+			usize::try_from(value).expect("31 bits fit") % below
+		}
+
+		fn pick<'a>(&mut self, from: &[&'a str]) -> &'a str {
+			from[self.next(from.len())]
+		}
+
+		fn value(&mut self) -> String {
+			self.pick(&[
+				"pro",
+				"New York",
+				"O'Brien",
+				"''",
+				" lead and trail ",
+				"a\\b",
+				"é ü 漢字",
+				"]', '",
+				"&& || !",
+				"1",
+			])
+			.to_owned()
+		}
+
+		fn op(&mut self) -> super::NumericOp {
+			[
+				super::NumericOp::Less,
+				super::NumericOp::LessEq,
+				super::NumericOp::Greater,
+				super::NumericOp::GreaterEq,
+			][self.next(4)]
+		}
+
+		fn test(&mut self) -> super::Test {
+			match self.next(5) {
+				0 => super::Test::Equals(self.value()),
+				1 => super::Test::NotEquals(self.value()),
+				2 => {
+					let count = 1 + self.next(3);
+					super::Test::AnyOf((0..count).map(|_| self.value()).collect())
+				}
+				3 => super::Test::Has,
+				_ => {
+					let bound =
+						[0.0, -1.5, 18.0, 1e300, 1e-7, 0.1 + 0.2, 4_096.0, -2.5e-9][self.next(8)];
+					super::Test::Numeric {
+						op: self.op(),
+						bound,
+					}
+				}
+			}
+		}
+
+		fn device(&mut self) -> Condition {
+			use super::DeviceKey;
+			use super::Test;
+
+			let (key, test) = match self.next(6) {
+				0 => {
+					(
+						DeviceKey::Platform,
+						Test::Equals(self.pick(&["apns", "fcm", "web_push"]).to_owned()),
+					)
+				}
+				1 => {
+					(
+						DeviceKey::Platform,
+						Test::AnyOf(vec!["apns".to_owned(), "fcm".to_owned()]),
+					)
+				}
+				2 => {
+					(
+						DeviceKey::AppVersion,
+						Test::Version {
+							op: self.op(),
+							bound: self.pick(&["2.1", "10.0.3-beta", "1"]).to_owned(),
+						},
+					)
+				}
+				3 => (DeviceKey::Language, Test::NotEquals("fr".to_owned())),
+				4 => (DeviceKey::TimeZone, Test::Has),
+				_ => (DeviceKey::Locale, Test::Equals("en-GB".to_owned())),
+			};
+
+			Condition::Device { key, test }
+		}
+
+		/// A tree at most `depth` deep, spending `predicates` on its
+		/// attribute and device predicates.
+		fn tree(&mut self, depth: usize, predicates: &mut usize) -> Condition {
+			let leaf = depth <= 1 || self.next(4) == 0;
+
+			if leaf {
+				let kind = if *predicates == 0 { 0 } else { self.next(3) };
+
+				return match kind {
+					0 => Condition::Topic(self.pick(&["news", "a.b-c_d~e%20", "T"]).to_owned()),
+					1 => {
+						*predicates -= 1;
+						Condition::Attribute {
+							key: self.pick(&["plan", "city", "age_2"]).to_owned(),
+							test: self.test(),
+						}
+					}
+					_ => {
+						*predicates -= 1;
+						self.device()
+					}
+				};
+			}
+
+			match self.next(5) {
+				0 => Condition::Not(Box::new(self.tree(depth - 1, predicates))),
+				1 | 2 => {
+					Condition::And(
+						Box::new(self.tree(depth - 1, predicates)),
+						Box::new(self.tree(depth - 1, predicates)),
+					)
+				}
+				_ => {
+					Condition::Or(
+						Box::new(self.tree(depth - 1, predicates)),
+						Box::new(self.tree(depth - 1, predicates)),
+					)
+				}
+			}
+		}
+	}
+
+	/// Two thousand generated trees — every operator, every test, values
+	/// with spaces, quotes, brackets, and operators inside them, nesting
+	/// up to the bound — each render to text that parses back to exactly
+	/// the tree that was rendered.
+	#[test]
+	fn generated_trees_render_to_text_that_parses_back() {
+		let mut generator = Generator(0x9E37_79B9_7F4A_7C15);
+		let mut checked = 0;
+		let mut deepest = 0;
+
+		for _ in 0..2_000 {
+			let depth = 1 + generator.next(MAX_CONDITION_DEPTH - 1);
+			let mut predicates = super::MAX_CONDITION_ATTRIBUTES;
+			let mut tree = generator.tree(depth, &mut predicates);
+
+			// A tree that holds for a person with nothing is refused by
+			// the parser; anchor it on a topic, as a caller would.
+			if tree.matches(|_| false) {
+				tree = Condition::And(
+					Box::new(Condition::Topic("anchor".to_owned())),
+					Box::new(tree),
+				);
+			}
+
+			let rendered = tree.to_string();
+
+			// Rendering never makes a tree too long on its own; a tree
+			// this generator made too long is not one a caller could have
+			// parsed either.
+			if rendered.len() > MAX_CONDITION_LEN {
+				continue;
+			}
+
+			let parsed = Condition::parse(&rendered)
+				.unwrap_or_else(|error| panic!("`{rendered}` from {tree:?}: {error}"));
+			assert_eq!(parsed, tree, "`{rendered}`");
+			checked += 1;
+			deepest = deepest.max(tree.depth());
+		}
+
+		assert!(checked >= 1_500, "only {checked} trees were small enough");
+		assert_eq!(
+			deepest, MAX_CONDITION_DEPTH,
+			"the deepest trees are covered"
+		);
+	}
+
+	/// Every value an attribute can hold has a literal: `quoted` writes
+	/// it, the parser reads it back, and it compares equal to the value —
+	/// the empty value included. So a value picker never has to mark a
+	/// stored value as one no condition can name.
+	#[test]
+	fn every_storable_value_has_a_literal() {
+		use super::quoted;
+
+		let longest = "x".repeat(crate::MAX_ATTRIBUTE_VALUE_LEN);
+
+		for value in [
+			"",
+			" ",
+			"pro",
+			"New York",
+			"O'Brien",
+			"''",
+			"'",
+			"é ü 漢字",
+			"a\\b",
+			"]', '",
+			longest.as_str(),
+		] {
+			crate::check_attribute_value(value).expect("a value an attribute can hold");
+
+			let text = format!("user.k == {}", quoted(value));
+			let parsed = Condition::parse(&text).unwrap_or_else(|error| panic!("{text}: {error}"));
+			assert!(parsed.matches_over(|_| false, |_| Some(value)), "{text}");
+			assert_eq!(parsed.to_string(), text, "the rendering is the literal");
+		}
+
+		// What an attribute cannot hold, a condition cannot name either.
+		assert!(crate::check_attribute_value("line\nbreak").is_err());
+		assert!(Condition::parse("user.k == 'line\nbreak'").is_err());
 	}
 }

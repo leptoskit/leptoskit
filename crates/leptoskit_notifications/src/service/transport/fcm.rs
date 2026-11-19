@@ -43,6 +43,7 @@ use crate::service::config::FcmConfig;
 use crate::service::transport::Boundary;
 use crate::service::transport::Message;
 use crate::service::transport::Outcome;
+use crate::service::transport::Shaped;
 use crate::service::transport::Transport;
 use crate::service::transport::WireRequest;
 use crate::service::transport::WireResponse;
@@ -293,10 +294,12 @@ impl Fcm {
 	async fn post(&self, access_token: &str, body: &[u8]) -> (u16, Outcome) {
 		let request = WireRequest {
 			url: format!("{SEND_HOST}/{}/messages:send", self.account.project),
-			headers: vec![
-				("authorization".to_owned(), format!("Bearer {access_token}")),
-				("content-type".to_owned(), "application/json".to_owned()),
-			],
+			headers: std::iter::once((
+				"authorization".to_owned(),
+				format!("Bearer {access_token}"),
+			))
+			.chain(headers())
+			.collect(),
 			body: body.to_vec(),
 			pinned: None,
 		};
@@ -328,35 +331,18 @@ impl Transport for Fcm {
 	) -> Pin<Box<dyn Future<Output = Outcome> + Send + 'a>> {
 		let send = async move {
 			// Size is checked on the payload before any network work,
-			// trimming the optional extras in the shared order — platform
-			// overrides and the image, then sound, badge, and link —
-			// before falling back to the id-only envelope, and past it a
-			// terminal clear result with nothing sent.
-			let mut body_message = fcm_message(credential, message, Include::All);
+			// trimmed in the shared order; past the id-only envelope it
+			// is a terminal clear result with nothing sent.
+			let shaped = shape(credential, message, leptoskit_db::now());
 
-			for trim in [
-				trim_platform_and_image as Trim,
-				trim_sound_badge_link,
-				trim_minimal,
-			] {
-				if payload_size(&body_message) <= PAYLOAD_LIMIT {
-					return self
-						.send_encoded(serde_json::to_vec(&body_message).unwrap_or_default())
-						.await;
-				}
-
-				trim(&mut body_message, credential, message);
-			}
-
-			if payload_size(&body_message) > PAYLOAD_LIMIT {
+			if !shaped.fits {
 				return Outcome::Ended {
 					reason: DeliveryReason::Oversized,
 					invalidate: false,
 				};
 			}
 
-			self.send_encoded(serde_json::to_vec(&body_message).unwrap_or_default())
-				.await
+			self.send_encoded(shaped.body).await
 		};
 
 		Box::pin(send)
@@ -406,7 +392,46 @@ impl Fcm {
 /// message in place: first the platform overrides and the image, then
 /// the sound, the badge, and the link, then — the id-only envelope — the
 /// send's `data` and everything else optional.
-type Trim = fn(&mut serde_json::Value, &str, &Message);
+type Trim = fn(&mut serde_json::Value, &str, &Message, leptoskit_db::Timestamp);
+
+/// The headers every FCM request carries beside its authorization.
+fn headers() -> Vec<(String, String)> {
+	vec![("content-type".to_owned(), "application/json".to_owned())]
+}
+
+/// What FCM is sent for `message` to the registration token `credential`,
+/// as of `now` — which the remaining life it names as the TTL is measured
+/// from: the encoded message, trimmed in the shared order — platform
+/// overrides and the image, then sound, badge, and link, then the id-only
+/// envelope — until what FCM counts fits its limit ([`payload_size`]).
+pub(crate) fn shape(credential: &str, message: &Message, now: leptoskit_db::Timestamp) -> Shaped {
+	let mut body_message = fcm_message(credential, message, Include::All, now);
+	let mut trims = 0;
+
+	for trim in [
+		trim_platform_and_image as Trim,
+		trim_sound_badge_link,
+		trim_minimal,
+	] {
+		if payload_size(&body_message) <= PAYLOAD_LIMIT {
+			break;
+		}
+
+		trim(&mut body_message, credential, message, now);
+		trims += 1;
+	}
+
+	let bytes = payload_size(&body_message);
+
+	Shaped {
+		headers: headers(),
+		body: serde_json::to_vec(&body_message).unwrap_or_default(),
+		bytes,
+		limit: PAYLOAD_LIMIT,
+		trims,
+		fits: bytes <= PAYLOAD_LIMIT,
+	}
+}
 
 /// The platform overrides and the image go first. The Android
 /// notification block stays — the sound and the badge it also carries
@@ -415,6 +440,7 @@ fn trim_platform_and_image(
 	message: &mut serde_json::Value,
 	_credential: &str,
 	_original: &Message,
+	_now: leptoskit_db::Timestamp,
 ) {
 	if let Some(root) = message
 		.get_mut("message")
@@ -460,7 +486,12 @@ fn trim_platform_and_image(
 }
 
 /// The sound, the badge, and the link go next.
-fn trim_sound_badge_link(message: &mut serde_json::Value, _credential: &str, _original: &Message) {
+fn trim_sound_badge_link(
+	message: &mut serde_json::Value,
+	_credential: &str,
+	_original: &Message,
+	_now: leptoskit_db::Timestamp,
+) {
 	if let Some(root) = message
 		.get_mut("message")
 		.and_then(|message| message.as_object_mut())
@@ -522,8 +553,13 @@ fn drop_empty_aps(root: &mut serde_json::Map<String, serde_json::Value>) {
 /// The id-only envelope: today's minimal message, which for a data
 /// message keeps the background shape and its id, because a silent push
 /// must stay silent.
-fn trim_minimal(message: &mut serde_json::Value, credential: &str, original: &Message) {
-	*message = fcm_message(credential, original, Include::Minimal);
+fn trim_minimal(
+	message: &mut serde_json::Value,
+	credential: &str,
+	original: &Message,
+	now: leptoskit_db::Timestamp,
+) {
+	*message = fcm_message(credential, original, Include::Minimal, now);
 }
 
 /// What a message carries beside its ids: everything, or the id-only
@@ -552,12 +588,15 @@ enum Include {
 /// same notification stack banners the full payload would have replaced.
 /// Collapse is best-effort deduplication, though — a provider that never
 /// coalesces, or a device that was offline, can still show two.
-fn fcm_message(credential: &str, message: &Message, include: Include) -> serde_json::Value {
-	let ttl = message.expires_at.map(|expires_at| {
-		(expires_at - leptoskit_db::now())
-			.num_seconds()
-			.clamp(0, MAX_TTL_SECS)
-	});
+fn fcm_message(
+	credential: &str,
+	message: &Message,
+	include: Include,
+	now: leptoskit_db::Timestamp,
+) -> serde_json::Value {
+	let ttl = message
+		.expires_at
+		.map(|expires_at| (expires_at - now).num_seconds().clamp(0, MAX_TTL_SECS));
 
 	let mut root = serde_json::Map::new();
 	root.insert("token".to_owned(), serde_json::json!(credential));

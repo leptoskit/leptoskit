@@ -24,6 +24,7 @@ use crate::service::config::ApnsConfig;
 use crate::service::transport::Boundary;
 use crate::service::transport::Message;
 use crate::service::transport::Outcome;
+use crate::service::transport::Shaped;
 use crate::service::transport::Transport;
 use crate::service::transport::WireRequest;
 use crate::service::transport::WireResponse;
@@ -204,47 +205,14 @@ impl Apns {
 		}
 	}
 
-	/// Posts one payload and classifies the answer.
-	async fn post(
-		&self,
-		credential: &str,
-		token: &str,
-		payload: Vec<u8>,
-		message: &Message,
-	) -> Outcome {
-		// A silent data message is a background push: Apple requires the
-		// background push type, and priority 5 with it. A visible
-		// notification keeps the alert type and — as before options
-		// existed — priority 10 unless the send said otherwise.
-		let background = message.options.is_data();
-		let priority = if background {
-			"5"
-		} else {
-			match message.options.priority {
-				Some(crate::options::SendPriority::Normal) => "5",
-				Some(crate::options::SendPriority::High) | None => "10",
-			}
-		};
-
+	/// Posts one shaped payload and classifies the answer.
+	async fn post(&self, credential: &str, token: &str, shaped: Shaped) -> Outcome {
 		let mut headers = vec![
 			("authorization".to_owned(), format!("Bearer {token}")),
 			("apns-topic".to_owned(), self.topic.clone()),
-			(
-				"apns-push-type".to_owned(),
-				if background { "background" } else { "alert" }.to_owned(),
-			),
-			("apns-priority".to_owned(), priority.to_owned()),
-			("apns-id".to_owned(), message.id.to_string()),
-			// The stable collapse id: a repeat replaces, not stacks.
-			("apns-collapse-id".to_owned(), message.id.to_string()),
 		];
-
-		if let Some(expires_at) = message.expires_at {
-			headers.push((
-				"apns-expiration".to_owned(),
-				expires_at.timestamp().max(0).to_string(),
-			));
-		}
+		headers.extend(shaped.headers);
+		let payload = shaped.body;
 
 		let request = WireRequest {
 			url: format!("{}/3/device/{credential}", self.host),
@@ -285,36 +253,89 @@ impl Transport for Apns {
 				return Outcome::Transient { after: None };
 			};
 
-			// Size is checked on the encoded payload, trimming the
-			// optional extras in the shared order — platform overrides,
-			// then image, then sound, badge, and link — before falling
-			// back to the id-only envelope, and past it a terminal clear
-			// result.
-			let mut payload = apns_payload(message);
+			// Size is checked on the encoded payload, trimmed in the
+			// shared order; past the id-only envelope it is a terminal
+			// clear result with no request.
+			let shaped = shape(message);
 
-			for trim in [Trim::PlatformAndImage, Trim::SoundBadgeLink, Trim::Minimal] {
-				let encoded = serde_json::to_vec(&payload).unwrap_or_default();
-
-				if encoded.len() <= PAYLOAD_LIMIT {
-					return self.post(credential, &token, encoded, message).await;
-				}
-
-				trim.apply(&mut payload, message);
-			}
-
-			let minimal = serde_json::to_vec(&payload).unwrap_or_default();
-
-			if minimal.len() > PAYLOAD_LIMIT {
+			if !shaped.fits {
 				return Outcome::Ended {
 					reason: DeliveryReason::Oversized,
 					invalidate: false,
 				};
 			}
 
-			self.post(credential, &token, minimal, message).await
+			self.post(credential, &token, shaped).await
 		};
 
 		Box::pin(send)
+	}
+}
+
+/// The headers every push of `message` carries, whoever it goes to: the
+/// push type and priority, the notification's id as the request id and
+/// the collapse id, and the expiry when the send names one.
+fn headers(message: &Message) -> Vec<(String, String)> {
+	// A silent data message is a background push: Apple requires the
+	// background push type, and priority 5 with it. A visible
+	// notification keeps the alert type and — as before options
+	// existed — priority 10 unless the send said otherwise.
+	let background = message.options.is_data();
+	let priority = if background {
+		"5"
+	} else {
+		match message.options.priority {
+			Some(crate::options::SendPriority::Normal) => "5",
+			Some(crate::options::SendPriority::High) | None => "10",
+		}
+	};
+	let mut headers = vec![
+		(
+			"apns-push-type".to_owned(),
+			if background { "background" } else { "alert" }.to_owned(),
+		),
+		("apns-priority".to_owned(), priority.to_owned()),
+		("apns-id".to_owned(), message.id.to_string()),
+		// The stable collapse id: a repeat replaces, not stacks.
+		("apns-collapse-id".to_owned(), message.id.to_string()),
+	];
+
+	if let Some(expires_at) = message.expires_at {
+		headers.push((
+			"apns-expiration".to_owned(),
+			expires_at.timestamp().max(0).to_string(),
+		));
+	}
+
+	headers
+}
+
+/// What APNs is sent for `message`: the encoded payload, trimmed in the
+/// shared order — platform overrides and the image, then sound, badge,
+/// and link, then the id-only envelope — until it fits the limit, which
+/// Apple counts on the encoded JSON.
+pub(crate) fn shape(message: &Message) -> Shaped {
+	let mut payload = apns_payload(message);
+	let mut trims = 0;
+
+	for trim in [Trim::PlatformAndImage, Trim::SoundBadgeLink, Trim::Minimal] {
+		if serde_json::to_vec(&payload).unwrap_or_default().len() <= PAYLOAD_LIMIT {
+			break;
+		}
+
+		trim.apply(&mut payload, message);
+		trims += 1;
+	}
+
+	let body = serde_json::to_vec(&payload).unwrap_or_default();
+
+	Shaped {
+		headers: headers(message),
+		bytes: body.len(),
+		limit: PAYLOAD_LIMIT,
+		trims,
+		fits: body.len() <= PAYLOAD_LIMIT,
+		body,
 	}
 }
 

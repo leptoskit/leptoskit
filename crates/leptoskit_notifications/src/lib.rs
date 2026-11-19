@@ -58,9 +58,12 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 
+pub mod catalogue;
 pub mod condition;
+pub mod history;
 pub mod local;
 pub mod options;
+pub mod preview;
 
 #[cfg(feature = "browser")]
 pub mod browser;
@@ -76,6 +79,16 @@ pub mod service;
 
 pub mod push;
 
+pub use history::HourCount;
+pub use history::ListSends;
+pub use history::PushCounts;
+pub use history::ReasonCount;
+pub use history::SendEntry;
+pub use history::SendFilter;
+pub use history::TargetKind;
+pub use history::TargetSummary;
+#[cfg(feature = "service")]
+pub use history::list_sends;
 pub use local::LocalTime;
 pub use local::Variant;
 pub use options::AndroidOptions;
@@ -258,7 +271,11 @@ pub struct Notification {
 /// retried send is recognised after a restart: the same key with the same
 /// intent answers the stored result, and the same key with a different one
 /// is a conflict.
-#[table(name = "sends")]
+///
+/// A send made since the service kept a history also holds a
+/// [`history_id`](Self::history_id), which is the order [`list_sends`]
+/// pages in, and its category, which [`categories`] reads.
+#[table(name = "sends", index(history_id), index(category, history_id))]
 pub struct AppSend {
 	#[db(key, min_len = 1, max_len = 255)]
 	pub idempotency_key: String,
@@ -301,6 +318,16 @@ pub struct AppSend {
 	/// a recipients send too, which stores no spec.
 	#[db(max_len = 64)]
 	pub label: Option<String>,
+	/// A UUID v7 the service assigns when the send is made: the order
+	/// [`list_sends`] pages in, newest first, and its cursor. `None` for
+	/// a send made before the service kept a history, which the list
+	/// leaves out.
+	pub history_id: Option<uuid::Uuid>,
+	/// The send's category, copied from its spec so [`categories`] can
+	/// find each category's latest send through an index. `None` for a
+	/// send made before the service kept a history.
+	#[db(max_len = 64)]
+	pub category: Option<String>,
 }
 
 /// One person's subscription to one topic. Topics are per person, not per
@@ -336,7 +363,12 @@ pub struct TopicSubscription {
 /// The table is live: setting a preference re-runs the open inbox and
 /// badge subscriptions of the person who set it, and the preferences
 /// query they may be watching, without any other write.
-#[table(name = "category_preferences", live, unique(person, category))]
+#[table(
+	name = "category_preferences",
+	live,
+	unique(person, category),
+	index(category, opted_out)
+)]
 pub struct Preference {
 	pub id: leptoskit_db::Id<Self>,
 	pub person: uuid::Uuid,
@@ -379,7 +411,7 @@ pub struct AudienceMember {
 /// `[a-z0-9_]{1,64}` and values at most
 /// [`MAX_ATTRIBUTE_VALUE_LEN`] bytes, checked everywhere an attribute is
 /// named, the condition grammar included.
-#[table(name = "person_attributes", unique(person, key))]
+#[table(name = "person_attributes", unique(person, key), index(key, value))]
 pub struct PersonAttribute {
 	pub id: leptoskit_db::Id<Self>,
 	pub person: uuid::Uuid,
@@ -636,7 +668,7 @@ pub struct SendProgress {
 ///
 /// More will be reported here over time, so the type cannot be built or
 /// matched exhaustively outside this crate: read the fields you need.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[non_exhaustive]
 pub struct SendSummary {
 	/// What [`send_status`] answers for the same send: its state and what
@@ -652,6 +684,25 @@ pub struct SendSummary {
 	/// them now.
 	#[serde(default)]
 	pub inbox: InboxCounts,
+	/// The send as it was made: its content, schedule, options, and
+	/// variants. `None` only for a recipients send made before the
+	/// service kept a history, which stored none.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub spec: Option<SendSpec>,
+	/// Who the send was for, without naming anyone.
+	#[serde(default)]
+	pub target: TargetSummary,
+	/// The send's push deliveries, by platform and by where they stand,
+	/// counted over the deliveries the service still stores. Empty for a
+	/// send that reached nobody with an enrolled device, and on a server
+	/// with no push configured.
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub push: Vec<PushCounts>,
+	/// When the send's rows were read, by the hour: the earliest
+	/// [`MAX_REPORT_HOURS`](history::MAX_REPORT_HOURS) hours in which any
+	/// was, oldest first. An hour nobody read in is left out.
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub reads_by_hour: Vec<HourCount>,
 }
 
 /// What became of one send's inbox rows, counted over the rows the service
@@ -819,7 +870,26 @@ pub fn check_send_shape(
 ) -> Result<(), String> {
 	check_key(idempotency_key)?;
 	check_spec(spec)?;
+	check_target(target)?;
 
+	if let (Some(visible_at), Some(expires_at)) = (spec.visible_at, spec.expires_at)
+		&& expires_at <= visible_at
+	{
+		return Err("an expiry must be after the notification becomes visible".into());
+	}
+
+	Ok(())
+}
+
+/// Checks a target on its own, the way [`check_send_shape`] checks a
+/// send's: the recipient bound, the topic name, or the whole condition
+/// grammar, and the stored length of a topic, condition, or everyone
+/// target.
+///
+/// # Errors
+///
+/// A message naming what's wrong.
+pub fn check_target(target: &SendTarget) -> Result<(), String> {
 	match target {
 		SendTarget::Recipients(recipients) => {
 			if recipients.is_empty() || recipients.len() > MAX_RECIPIENTS {
@@ -839,12 +909,6 @@ pub fn check_send_shape(
 		return Err(format!(
 			"a target is at most {MAX_TARGET_LEN} bytes once stored as JSON: shorten the condition"
 		));
-	}
-
-	if let (Some(visible_at), Some(expires_at)) = (spec.visible_at, spec.expires_at)
-		&& expires_at <= visible_at
-	{
-		return Err("an expiry must be after the notification becomes visible".into());
 	}
 
 	Ok(())
@@ -1284,15 +1348,7 @@ pub(crate) async fn send_write(
 		let recipients: std::collections::BTreeSet<uuid::Uuid> = named.iter().copied().collect();
 		let targeted = recipients.len().try_into().unwrap_or(u32::MAX);
 
-		match service::write_send(
-			cx.tx(),
-			&idempotency_key,
-			&intent,
-			targeted,
-			spec.label.as_deref(),
-		)
-		.await
-		{
+		match service::write_send(cx.tx(), &idempotency_key, &intent, targeted, &spec).await {
 			Ok(()) => {}
 			// Another send with this key committed between the read and
 			// the write. On Postgres the unique violation ends this
@@ -1414,14 +1470,18 @@ pub async fn send_status(cx: &rpc::QueryCx, idempotency_key: String) -> rpc::Res
 }
 
 /// What became of a send: its [progress](SendProgress), as
-/// [`send_status`] answers it, its label, when it was made, and how many
-/// of the rows it wrote were read, opened, dismissed, and cancelled
-/// ([`InboxCounts`]).
+/// [`send_status`] answers it, its label, when it was made, the send as
+/// it was made and who it was for ([`TargetSummary`]), how many of the
+/// rows it wrote were read, opened, dismissed, and cancelled
+/// ([`InboxCounts`]), its push deliveries by platform and state
+/// ([`PushCounts`]), and when its rows were read, by the hour
+/// ([`HourCount`]).
 ///
-/// The counts are one read over the send's own rows, found through the
-/// `(send_key, person)` index — work in step with the size of the send,
-/// never with the size of the table — so ask for a report when someone
-/// looks at it, not on a timer for every send. They count the rows the
+/// The counts are three reads over the send's own rows and deliveries,
+/// each found through an index that leads with the send's key — work in
+/// step with the size of the send, never with the size of the table — so
+/// ask for a report when someone looks at it, not on a timer for every
+/// send. They count the rows the
 /// service still stores: after retention has pruned a send's rows they
 /// shrink, down to zero, while the progress stays as it was; and once the
 /// send's own record is pruned the send is not found.
@@ -1453,6 +1513,10 @@ pub async fn send_report(cx: &rpc::QueryCx, idempotency_key: String) -> rpc::Res
 	Ok(SendSummary {
 		progress: service::progress_of(&send),
 		inbox: service::inbox_counts(cx.db(), &idempotency_key).await?,
+		spec: service::history::spec_of(&send),
+		target: service::history::target_of(&send),
+		push: service::history::push_counts(cx.db(), &idempotency_key).await?,
+		reads_by_hour: service::history::reads_by_hour(cx.db(), &idempotency_key).await?,
 		created_at: send.created_at,
 		label: send.label,
 	})
