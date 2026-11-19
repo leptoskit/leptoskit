@@ -33,9 +33,10 @@
 //!   [`push_deliveries`], and
 //!   [`import_push_endpoints`](push::import_push_endpoints) answer only the
 //!   app's server, signed with the service's token
-//!   ([`rpc::client::call_as_app`]). A recipient has no operation that sends,
-//!   steers a push, or describes anyone with attributes — segments must not be
-//!   forgeable from the client side.
+//!   ([`rpc::client::call_as_app`]). So do the [`recurrence`] operations, which
+//!   make a send that repeats on a schedule. A recipient has no operation that
+//!   sends, steers a push, or describes anyone with attributes — segments must
+//!   not be forgeable from the client side.
 //! - [`inbox`], [`unread_count`], [`category_preferences`], [`mark_read`],
 //!   [`mark_opened`], [`mark_dismissed`], [`set_category_preference`],
 //!   [`register_push_endpoint`], [`push_endpoints`], [`revoke_push_endpoint`],
@@ -67,6 +68,7 @@ pub mod history;
 pub mod local;
 pub mod options;
 pub mod preview;
+pub mod recurrence;
 
 #[cfg(feature = "browser")]
 pub mod browser;
@@ -1632,6 +1634,13 @@ pub async fn forget_rows(
 #[rpc::cron("17 * * * *")]
 #[rpc::job(service = "notifications", queue = "prune", timeout = 5m)]
 pub async fn prune(cx: &rpc::JobCx) -> rpc::Result<()> {
+	// Ended recurrences first: a handful of rows, in one write.
+	let retention = cx
+		.state::<service::config::Retention>()
+		.copied()
+		.unwrap_or_default();
+	service::recurrence::sweep(cx.db(), &retention, leptoskit_db::now()).await?;
+
 	service::retention::step(
 		cx,
 		leptoskit_db::now().timestamp(),
@@ -1639,6 +1648,36 @@ pub async fn prune(cx: &rpc::JobCx) -> rpc::Result<()> {
 		None,
 	)
 	.await
+}
+
+/// Makes the send of every [recurrence](recurrence) occurrence that is
+/// due: one send per occurrence, exactly once, however many workers run
+/// this at once and however often it is retried. A recurrence enqueues
+/// this job for the moment its next send is due, each time that moment is
+/// set; the hourly run is what finds an occurrence whose own job failed
+/// for good. After the service was down, a recurrence sends at most its
+/// latest missed occurrence, and only within
+/// [`recurrence::CATCH_UP_SECS`] of its time.
+///
+/// Only the service's own workers run it; the app never enqueues it.
+#[rpc::cron("47 * * * *")]
+#[rpc::job(service = "notifications", queue = "recur", retries = 8, timeout = 5m)]
+pub async fn recur(cx: &rpc::JobCx) -> rpc::Result<()> {
+	let ran = service::recurrence::run(
+		cx.db(),
+		cx.state::<service::push::Push>(),
+		leptoskit_db::now(),
+	)
+	.await?;
+
+	if !ran.is_empty() {
+		cx.progress(format!(
+			"made {} occurrences, skipped {}, paused {} recurrences, ended {}",
+			ran.sent, ran.skipped, ran.paused, ran.ended
+		));
+	}
+
+	Ok(())
 }
 
 /// Goes on with a pruning sweep where the step before it stopped: `stage`

@@ -42,6 +42,7 @@ So the token table in your own database goes away, after you [import it once](#m
 | `validate_only` / `dryRun`                           | [`validate_only`](sending.md#track-a-large-send)                                              | checks and counts inside the service; does not contact a provider                                                                                     |
 | "Send test message" in the console                   | [`send_test`](troubleshooting.md#test-on-a-device)                                            | by person, not by token                                                                                                                               |
 | Scheduled campaign                                   | `visible_at`                                                                                  | up to 366 days ahead                                                                                                                                  |
+| Recurring campaign                                   | a [recurrence](sending.md#a-send-that-repeats)                                                | daily, weekly, or monthly at a wall-clock time in a named time zone; at most once a day                                                               |
 | "Recipient time zone" scheduling                     | [`local_time`](audiences.md#send-at-each-persons-local-time)                                  |                                                                                                                                                       |
 | `title_loc_key`, `loc-key`                           | [variants](shaping-messages.md#say-it-in-each-persons-language)                               | the server picks the text per person; devices do not resolve keys from their own string tables                                                        |
 | The console composer                                 | [campaigns](campaigns.md)                                                                     | the calls exist; a screen does not yet                                                                                                                |
@@ -292,7 +293,6 @@ Check this list against what your app uses before you start. None of these has a
 
 **Sending**
 
-- **No recurring sends.** A send that repeats daily is a send your server makes each day, from its own scheduler: see [a send that repeats](sending.md#a-send-that-repeats).
 - **No batch of different messages in one call**, like `sendEach`. Each send is one call.
 - **No send to a raw token.** `send_test` reaches one device by its endpoint id, for testing only.
 - **No localization keys.** [Variants](shaping-messages.md#say-it-in-each-persons-language) cover translated text; a device cannot resolve a key from its own string tables.

@@ -2,6 +2,8 @@
 
 A send from code is finished the moment it is written. A notification a person composes on a screen is not: it is drafted, tried out, corrected by someone else, scheduled, and only then sent. A campaign is the service's record of that work. This page is for you if you are building a compose screen for your own staff. leptoskit's admin does not have that screen yet, so today a campaign is something your own server and your own interface drive through the calls below. Like every send, a launched campaign reaches whatever platforms its audience uses.
 
+A campaign is one send. For a message that goes out again and again on a schedule, use a [recurrence](sending.md#a-send-that-repeats) instead.
+
 ## Write a campaign before you send it
 
 `send` is one call from your code: the message and the audience go in and the send is made. A person writing a notification on a screen doesn't work that way. They write half of it and go to lunch. They try it on their own phone. Someone else fixes the wording. They pick a time. Then they press send, sometimes twice. A campaign is where that work lives until it becomes a send:

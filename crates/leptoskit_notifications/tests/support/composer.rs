@@ -20,6 +20,7 @@ use leptoskit_db::Statement;
 use leptoskit_notifications::SERVICE;
 use leptoskit_notifications::service::config;
 use leptoskit_notifications::service::push;
+use leptoskit_notifications::service::recurrence;
 use leptoskit_notifications::service::retention;
 use leptoskit_notifications::service::transport::Boundary;
 use leptoskit_notifications::service::transport::PushRuntime;
@@ -2713,4 +2714,1008 @@ pub async fn racing_saves_keep_one(service: &Service) {
 	assert_eq!(now["draft"]["spec"]["title"], format!("Title {n}"));
 	assert_eq!(now["draft"]["note"], format!("Note {n}"));
 	assert_eq!(now["updated_by"], format!("editor-{n}"));
+}
+
+// ── Recurring sends ───────────────────────────────────────────────────
+
+/// A recurrence that can be created as it is: a reminder for
+/// `recipients`, every day at 09:00 UTC.
+fn daily(name: &str, recipients: &[Uuid]) -> Value {
+	json!({
+		"name": name,
+		"spec": { "category": "reminders", "title": name, "body": "Again." },
+		"target": { "recipients": recipients },
+		"rule": { "repeat": { "daily": {} }, "at": "09:00", "time_zone": "UTC" },
+	})
+}
+
+async fn recur(service: &Service, recurrence: Value) -> Value {
+	app(
+		service,
+		"create_recurrence",
+		json!({ "recurrence": recurrence, "by": ADA }),
+	)
+	.await
+}
+
+/// The instant `value[name]` holds.
+fn instant(value: &Value, name: &str) -> chrono::DateTime<chrono::Utc> {
+	value[name]
+		.as_str()
+		.and_then(|text| chrono::DateTime::parse_from_rfc3339(text).ok())
+		.unwrap_or_else(|| panic!("an instant in `{name}` of {value}"))
+		.to_utc()
+}
+
+/// Makes whatever is due as of `now`, the way the service's job does
+/// when the clock says `now`.
+async fn due(service: &Service, now: chrono::DateTime<chrono::Utc>) -> recurrence::Ran {
+	recurrence::run(&service.db, Some(&push::Push { runtime: None }), now)
+		.await
+		.expect("the run makes what is due")
+}
+
+/// The key of the send recurrence `id` makes for the occurrence at `at`.
+fn occurrence(id: &str, at: chrono::DateTime<chrono::Utc>) -> String {
+	format!("recurrence:{id}:{}", at.timestamp())
+}
+
+/// How many sends carry recurrence `id`'s label.
+async fn sends_of(service: &Service, id: &str) -> i64 {
+	counted(
+		&service.db,
+		format!("SELECT count(*) FROM sends WHERE label = 'recurrence.{id}'"),
+	)
+	.await
+}
+
+async fn rows_of(service: &Service, key: &str) -> i64 {
+	counted(
+		&service.db,
+		format!("SELECT count(*) FROM notifications WHERE send_key = '{key}'"),
+	)
+	.await
+}
+
+async fn read_recurrence(service: &Service, id: &str) -> Value {
+	app(service, "recurrence", json!({ "id": id })).await
+}
+
+fn days(count: i64) -> chrono::Duration {
+	chrono::Duration::days(count)
+}
+
+/// Nothing goes out before an occurrence's time; at its time one send is
+/// made, like any other send — its opt-outs skipped, its rows written,
+/// listed with the recurrence's label — and the recurrence moves on to
+/// the next day, where the same happens again.
+#[expect(
+	clippy::cognitive_complexity,
+	reason = "one recurrence, followed through two occurrences"
+)]
+pub async fn an_occurrence_is_one_send_when_its_time_comes(service: &Service) {
+	let people = [person(801), person(802), person(803)];
+	as_person(
+		service,
+		people[2],
+		"set_category_preference",
+		json!({ "category": "reminders", "opted_out": true }),
+	)
+	.await;
+
+	let saved = recur(service, daily("Morning check-in", &people)).await;
+	let id = id_of(&saved).to_owned();
+	assert_eq!(saved["state"], "active");
+	assert_eq!(saved["sent"], 0);
+	assert_eq!(saved["created_by"], ADA);
+	assert!(
+		saved["rule"]["starts_on"].is_string(),
+		"the start date is filled in: {saved}"
+	);
+	let first = instant(&saved, "next_at");
+	assert!(
+		first > chrono::Utc::now(),
+		"the first one is ahead: {saved}"
+	);
+	assert_eq!(first.format("%H:%M:%S").to_string(), "09:00:00");
+	assert_eq!(sends_of(service, &id).await, 0, "creating it sends nothing");
+
+	// A second before its time, nothing is due.
+	assert_eq!(
+		due(service, first - chrono::Duration::seconds(1)).await,
+		recurrence::Ran::default()
+	);
+	assert_eq!(sends_of(service, &id).await, 0);
+
+	// At its time, one send.
+	let ran = due(service, first).await;
+	assert_eq!(ran.sent, 1, "{ran:?}");
+	assert_eq!(ran.skipped, 0, "{ran:?}");
+	let key = occurrence(&id, first);
+	assert_eq!(sends_of(service, &id).await, 1);
+	assert_eq!(rows_of(service, &key).await, 2, "two rows, one opted out");
+	let status = app(service, "send_status", json!({ "idempotency_key": key })).await;
+	assert_eq!(status["delivered"], 2, "{status}");
+	assert_eq!(status["skipped_opted_out"], 1, "{status}");
+
+	// It is listed like any send, with the recurrence's label.
+	let (sends, _) = every(service, "list_sends", json!({}), 50).await;
+	let listed = sends
+		.iter()
+		.find(|send| send["key"] == key.as_str())
+		.unwrap_or_else(|| panic!("the occurrence's send is listed: {sends:?}"));
+	assert_eq!(listed["label"], format!("recurrence.{id}"));
+	assert_eq!(listed["title"], "Morning check-in");
+
+	// The recurrence moved on by a day.
+	let now = read_recurrence(service, &id).await;
+	assert_eq!(now["sent"], 1);
+	assert_eq!(now["skipped"], 0);
+	assert_eq!(now["last_send_key"], key.as_str());
+	assert_eq!(instant(&now, "last_at"), first);
+	assert_eq!(instant(&now, "next_at"), first + days(1));
+	assert_eq!(now["state"], "active");
+
+	// Asked again at the same moment, nothing more is due.
+	assert_eq!(due(service, first).await, recurrence::Ran::default());
+	assert_eq!(sends_of(service, &id).await, 1);
+
+	// The next day's occurrence is its own send.
+	let ran = due(service, first + days(1)).await;
+	assert_eq!(ran.sent, 1, "{ran:?}");
+	assert_eq!(sends_of(service, &id).await, 2);
+	assert_eq!(rows_of(service, &occurrence(&id, first + days(1))).await, 2);
+	assert_eq!(read_recurrence(service, &id).await["sent"], 2);
+}
+
+/// Eight workers find the same occurrence due at once: one send is made,
+/// with one set of rows, and the recurrence counts it once. A worker
+/// that still held the occurrence as due after that — the recurrence put
+/// back by hand to where it was — makes no second send either: the
+/// occurrence's key answers the first.
+pub async fn racing_runs_make_one_send_per_occurrence(service: &Service) {
+	let people: Vec<Uuid> = (811..816).map(person).collect();
+	let saved = recur(service, daily("All at once, daily", &people)).await;
+	let id = id_of(&saved).to_owned();
+	let first = instant(&saved, "next_at");
+
+	let runs = futures::future::join_all(
+		(0..8).map(|_| recurrence::run(&service.db, Some(&push::Push { runtime: None }), first)),
+	)
+	.await;
+	let made: u32 = runs
+		.iter()
+		.map(|ran| ran.as_ref().expect("every run ends well").sent)
+		.sum();
+	assert_eq!(made, 1, "exactly one run made the send: {runs:?}");
+
+	let key = occurrence(&id, first);
+	assert_eq!(sends_of(service, &id).await, 1);
+	assert_eq!(rows_of(service, &key).await, 5);
+	let now = read_recurrence(service, &id).await;
+	assert_eq!(now["sent"], 1, "{now}");
+	assert_eq!(instant(&now, "next_at"), first + days(1));
+
+	// The recurrence as a stale worker saw it: still at the first
+	// occurrence. The claim is bypassed; the key is not.
+	let sql = Sql(service.db.dialect());
+	run(
+		&service.db,
+		format!(
+			"UPDATE recurrences SET next_on = '{}', due_at = {} WHERE id = {}",
+			first.format("%Y-%m-%d"),
+			sql.timestamp(&first.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)),
+			sql.uuid(id.parse().unwrap()),
+		),
+	)
+	.await;
+	due(service, first).await;
+	assert_eq!(sends_of(service, &id).await, 1, "no second send");
+	assert_eq!(rows_of(service, &key).await, 5, "and no second set of rows");
+}
+
+/// After the service was down, a recurrence sends its latest missed
+/// occurrence and no backlog: three days behind, a daily recurrence makes
+/// one send and counts three skipped. An occurrence more than a day late
+/// is not sent at all.
+#[expect(
+	clippy::cognitive_complexity,
+	reason = "one outage, followed through every way a recurrence can be behind"
+)]
+pub async fn a_recurrence_catches_up_with_its_latest_occurrence_only(service: &Service) {
+	let people = [person(821), person(822)];
+	let saved = recur(service, daily("Daily, after an outage", &people)).await;
+	let id = id_of(&saved).to_owned();
+	let first = instant(&saved, "next_at");
+
+	// Nobody ran anything for three days and an hour.
+	let ran = due(service, first + days(3) + chrono::Duration::hours(1)).await;
+	assert_eq!(ran.sent, 1, "{ran:?}");
+	assert_eq!(ran.skipped, 3, "{ran:?}");
+	assert_eq!(sends_of(service, &id).await, 1, "one send, not four");
+	assert_eq!(
+		rows_of(service, &occurrence(&id, first + days(3))).await,
+		2,
+		"and it is the latest occurrence's"
+	);
+	let now = read_recurrence(service, &id).await;
+	assert_eq!(now["sent"], 1);
+	assert_eq!(now["skipped"], 3);
+	assert_eq!(instant(&now, "next_at"), first + days(4));
+	// Out of the way of the next part, which has a clock of its own.
+	app(service, "end_recurrence", json!({ "id": id, "by": ADA })).await;
+
+	// A weekly recurrence found 25 hours late: too late to send.
+	let weekday = match chrono::Datelike::weekday(&(chrono::Utc::now() + days(2))) {
+		chrono::Weekday::Mon => "monday",
+		chrono::Weekday::Tue => "tuesday",
+		chrono::Weekday::Wed => "wednesday",
+		chrono::Weekday::Thu => "thursday",
+		chrono::Weekday::Fri => "friday",
+		chrono::Weekday::Sat => "saturday",
+		chrono::Weekday::Sun => "sunday",
+	};
+	let mut weekly = daily("Weekly, after an outage", &people);
+	weekly["rule"]["repeat"] = json!({ "weekly": { "on": [weekday] } });
+	let saved = recur(service, weekly).await;
+	let id = id_of(&saved).to_owned();
+	let first = instant(&saved, "next_at");
+
+	let ran = due(service, first + chrono::Duration::hours(25)).await;
+	assert_eq!(ran.sent, 0, "{ran:?}");
+	assert_eq!(ran.skipped, 1, "{ran:?}");
+	assert_eq!(sends_of(service, &id).await, 0, "a day late is too late");
+	let now = read_recurrence(service, &id).await;
+	assert_eq!(now["skipped"], 1);
+	assert_eq!(now["state"], "active");
+	assert_eq!(instant(&now, "next_at"), first + days(7));
+
+	// 23 hours late is still sent.
+	let ran = due(service, first + days(7) + chrono::Duration::hours(23)).await;
+	assert_eq!(ran.sent, 1, "{ran:?}");
+	assert_eq!(rows_of(service, &occurrence(&id, first + days(7))).await, 2);
+}
+
+/// A rule that ends after two sends ends with its second; a rule that
+/// ends on a date ends with that date's occurrence; and an ended
+/// recurrence sends nothing more. A rule with nothing ahead is refused.
+pub async fn a_recurrence_ends_by_count_and_by_date(service: &Service) {
+	let people = [person(831)];
+	let mut twice = daily("Twice", &people);
+	twice["rule"]["ends"] = json!({ "after": 2 });
+	let saved = recur(service, twice).await;
+	let id = id_of(&saved).to_owned();
+	let first = instant(&saved, "next_at");
+
+	let ran = due(service, first).await;
+	assert_eq!((ran.sent, ran.ended), (1, 0), "{ran:?}");
+	let ran = due(service, first + days(1)).await;
+	assert_eq!((ran.sent, ran.ended), (1, 1), "{ran:?}");
+	let now = read_recurrence(service, &id).await;
+	assert_eq!(now["state"], "ended", "{now}");
+	assert_eq!(now["sent"], 2);
+	assert!(now["next_at"].is_null(), "{now}");
+	assert!(now["ended_at"].is_string(), "{now}");
+	assert_eq!(
+		due(service, first + days(2)).await,
+		recurrence::Ran::default()
+	);
+	assert_eq!(sends_of(service, &id).await, 2);
+
+	// Starts tomorrow, ends tomorrow: one occurrence.
+	let tomorrow = (chrono::Utc::now() + days(1))
+		.format("%Y-%m-%d")
+		.to_string();
+	let mut once = daily("Until tomorrow", &people);
+	once["rule"]["starts_on"] = json!(tomorrow);
+	once["rule"]["ends"] = json!({ "on": tomorrow });
+	let saved = recur(service, once).await;
+	let id = id_of(&saved).to_owned();
+	let first = instant(&saved, "next_at");
+	assert_eq!(first.format("%Y-%m-%d").to_string(), tomorrow);
+	let ran = due(service, first).await;
+	assert_eq!((ran.sent, ran.ended), (1, 1), "{ran:?}");
+	assert_eq!(read_recurrence(service, &id).await["state"], "ended");
+
+	// Started and ended yesterday: nothing is ahead.
+	let yesterday = (chrono::Utc::now() - days(1))
+		.format("%Y-%m-%d")
+		.to_string();
+	let mut over = daily("Already over", &people);
+	over["rule"]["starts_on"] = json!(yesterday);
+	over["rule"]["ends"] = json!({ "on": yesterday });
+	let (status, body) = call(
+		service,
+		"create_recurrence",
+		json!({ "recurrence": over, "by": ADA }),
+		As::App,
+	)
+	.await;
+	assert_eq!(status, 400, "{body}");
+	assert!(body.contains("no occurrence ahead"), "{body}");
+}
+
+/// A paused recurrence sends nothing, however due; resumed, it goes on
+/// from the first occurrence still ahead; ended, it is over for good.
+/// Each is safe to ask twice, and who did it is recorded.
+#[expect(
+	clippy::cognitive_complexity,
+	reason = "one recurrence, through every state"
+)]
+pub async fn a_recurrence_is_paused_resumed_and_ended(service: &Service) {
+	let people = [person(841)];
+	let saved = recur(service, daily("Stop and go", &people)).await;
+	let id = id_of(&saved).to_owned();
+	let first = instant(&saved, "next_at");
+	let act = |operation: &'static str, by: &'static str| {
+		let id = id.clone();
+
+		async move { call(service, operation, json!({ "id": id, "by": by }), As::App).await }
+	};
+	let answer = |(status, body): (u16, String)| -> Value {
+		assert_eq!(status, 200, "{body}");
+		serde_json::from_str(&body).unwrap()
+	};
+
+	let paused = answer(act("pause_recurrence", GRACE).await);
+	assert_eq!(paused["state"], "paused");
+	assert!(paused["next_at"].is_null(), "{paused}");
+	assert_eq!(paused["updated_by"], GRACE);
+	assert_eq!(
+		answer(act("pause_recurrence", ADA).await),
+		paused,
+		"asked twice"
+	);
+
+	// Its time comes and goes while it is paused.
+	assert_eq!(
+		due(service, first + days(5)).await,
+		recurrence::Ran::default()
+	);
+	assert_eq!(sends_of(service, &id).await, 0);
+
+	let resumed = answer(act("resume_recurrence", ADA).await);
+	assert_eq!(resumed["state"], "active");
+	assert_eq!(resumed["updated_by"], ADA);
+	assert_eq!(
+		instant(&resumed, "next_at"),
+		first,
+		"the first occurrence still ahead of the clock"
+	);
+	assert_eq!(
+		answer(act("resume_recurrence", GRACE).await),
+		resumed,
+		"asked twice"
+	);
+	let ran = due(service, first).await;
+	assert_eq!(ran.sent, 1, "{ran:?}");
+
+	let ended = answer(act("end_recurrence", GRACE).await);
+	assert_eq!(ended["state"], "ended");
+	assert!(ended["next_at"].is_null(), "{ended}");
+	assert!(ended["ended_at"].is_string(), "{ended}");
+	assert_eq!(ended["updated_by"], GRACE);
+	assert_eq!(
+		answer(act("end_recurrence", ADA).await),
+		ended,
+		"asked twice"
+	);
+	assert_eq!(
+		due(service, first + days(9)).await,
+		recurrence::Ran::default()
+	);
+	assert_eq!(sends_of(service, &id).await, 1);
+
+	// Over is over.
+	for operation in ["pause_recurrence", "resume_recurrence"] {
+		let (status, body) = act(operation, ADA).await;
+		assert_eq!(status, 409, "{operation}: {body}");
+		assert!(body.contains("ended"), "{body}");
+	}
+
+	let (status, body) = call(
+		service,
+		"pause_recurrence",
+		json!({ "id": Uuid::now_v7(), "by": ADA }),
+		As::App,
+	)
+	.await;
+	assert_eq!(status, 404, "{body}");
+}
+
+/// An occurrence whose send is refused is not retried forever and not
+/// dropped silently: the recurrence is paused with the refusal, nothing
+/// is sent, and resuming it clears the reason. Both refusals are tried:
+/// a message `send` would refuse outright, and a key already used for a
+/// different send.
+#[expect(
+	clippy::cognitive_complexity,
+	reason = "one refusal, followed from the pause through the resume"
+)]
+pub async fn a_refused_occurrence_pauses_the_recurrence(service: &Service) {
+	let people = [person(845)];
+	let sql = Sql(service.db.dialect());
+
+	// A stored message that a send refuses: its title emptied by hand.
+	let saved = recur(service, daily("Broken later", &people)).await;
+	let id = id_of(&saved).to_owned();
+	let first = instant(&saved, "next_at");
+	run(
+		&service.db,
+		format!(
+			"UPDATE recurrences SET spec = '{}' WHERE id = {}",
+			json!({ "category": "reminders", "title": "" }),
+			sql.uuid(id.parse().unwrap()),
+		),
+	)
+	.await;
+
+	// A day late, so one occurrence was missed before the refused one:
+	// both are counted as skipped.
+	let ran = due(service, first + days(1)).await;
+	assert_eq!((ran.sent, ran.skipped, ran.paused), (0, 2, 1), "{ran:?}");
+	assert_eq!(sends_of(service, &id).await, 0);
+	let now = read_recurrence(service, &id).await;
+	assert_eq!(now["state"], "paused", "{now}");
+	assert!(now["error"].as_str().unwrap().contains("title"), "{now}");
+	assert_eq!(now["sent"], 0);
+	assert_eq!(now["skipped"], 2);
+	assert_eq!(
+		due(service, first + days(3)).await,
+		recurrence::Ran::default(),
+		"paused, it is not tried again"
+	);
+
+	let resumed = app(service, "resume_recurrence", json!({ "id": id, "by": ADA })).await;
+	assert_eq!(resumed["state"], "active");
+	assert!(resumed["error"].is_null(), "{resumed}");
+	app(service, "end_recurrence", json!({ "id": id, "by": ADA })).await;
+
+	// A key the app's server already used for another send.
+	let saved = recur(service, daily("Key taken", &people)).await;
+	let id = id_of(&saved).to_owned();
+	let first = instant(&saved, "next_at");
+	let key = occurrence(&id, first);
+	send(
+		service,
+		&key,
+		news("Not the recurrence's"),
+		json!({ "recipients": people }),
+	)
+	.await;
+
+	let ran = due(service, first).await;
+	assert_eq!((ran.sent, ran.skipped, ran.paused), (0, 1, 1), "{ran:?}");
+	let now = read_recurrence(service, &id).await;
+	assert_eq!(now["state"], "paused", "{now}");
+	assert!(now["error"].is_string(), "{now}");
+	assert_eq!(now["sent"], 0, "{now}");
+	assert!(now["last_send_key"].is_null(), "{now}");
+	assert!(now["ended_at"].is_null(), "{now}");
+	assert_eq!(rows_of(service, &key).await, 1, "only the app's own send");
+	assert_eq!(sends_of(service, &id).await, 0);
+}
+
+/// Only the app's server creates, reads, lists, pauses, resumes, or ends
+/// a recurrence: a signed-in person and an anonymous caller are refused.
+pub async fn only_the_app_touches_recurrences(service: &Service) {
+	let saved = recur(service, daily("Not yours", &[person(851)])).await;
+	let id = id_of(&saved).to_owned();
+	let calls = [
+		(
+			"create_recurrence",
+			json!({ "recurrence": daily("Mine", &[person(851)]), "by": ADA }),
+		),
+		("recurrence", json!({ "id": id })),
+		("recurrences", json!({ "page": { "limit": 10 } })),
+		("pause_recurrence", json!({ "id": id, "by": ADA })),
+		("resume_recurrence", json!({ "id": id, "by": ADA })),
+		("end_recurrence", json!({ "id": id, "by": ADA })),
+	];
+
+	for (operation, args) in calls {
+		for caller in [As::Person(person(851)), As::Nobody] {
+			let (status, body) = call(service, operation, args.clone(), caller).await;
+			assert_eq!(status, 403, "{operation}: {body}");
+		}
+	}
+
+	assert_eq!(read_recurrence(service, &id).await["state"], "active");
+	assert_eq!(
+		counted(&service.db, "SELECT count(*) FROM recurrences".to_owned()).await,
+		1
+	);
+}
+
+/// What a recurrence may be is refused by name: an everyone audience
+/// without `broadcast`, a rule out of its bounds, a time zone the service
+/// doesn't have, a message with a schedule or a label of its own, a name
+/// or a note too long. At most a hundred may be open at once, and a page
+/// of the list holds at most fifty.
+#[expect(
+	clippy::cognitive_complexity,
+	reason = "one table of refusals, then the caps"
+)]
+#[expect(clippy::too_many_lines, reason = "one refusal per limit, each named")]
+pub async fn recurrences_are_bounded_and_refused_by_name(service: &Service) {
+	let people = [person(861)];
+	let refused = |change: Box<dyn Fn(&mut Value) + Send>, status: u16, names: &'static str| {
+		let mut recurrence = daily("Bounded", &people);
+		change(&mut recurrence);
+
+		async move {
+			let (got, body) = call(
+				service,
+				"create_recurrence",
+				json!({ "recurrence": recurrence, "by": ADA }),
+				As::App,
+			)
+			.await;
+			assert_eq!(got, status, "`{names}`: {body}");
+			assert!(body.contains(names), "`{names}` in {body}");
+		}
+	};
+
+	refused(
+		Box::new(|r| r["target"] = json!("everyone")),
+		403,
+		"broadcast",
+	)
+	.await;
+	refused(
+		Box::new(|r| r["rule"]["repeat"] = json!({ "daily": { "every": 0 } })),
+		400,
+		"once a day",
+	)
+	.await;
+	refused(
+		Box::new(|r| r["rule"]["repeat"] = json!({ "weekly": { "on": [] } })),
+		400,
+		"repeat.weekly.on",
+	)
+	.await;
+	refused(
+		Box::new(|r| r["rule"]["repeat"] = json!({ "monthly": { "day": 32 } })),
+		400,
+		"repeat.monthly.day",
+	)
+	.await;
+	refused(Box::new(|r| r["rule"]["at"] = json!("9am")), 400, "HH:MM").await;
+	refused(
+		Box::new(|r| r["rule"]["time_zone"] = json!("Mars/Olympus")),
+		400,
+		"Mars/Olympus",
+	)
+	.await;
+	refused(
+		Box::new(|r| r["rule"]["starts_on"] = json!("2099-01-01")),
+		400,
+		"starts_on",
+	)
+	.await;
+	refused(
+		Box::new(|r| r["rule"]["ends"] = json!({ "after": 0 })),
+		400,
+		"ends.after",
+	)
+	.await;
+	refused(
+		Box::new(|r| r["spec"]["visible_at"] = json!(hours_from_now(2))),
+		400,
+		"visible_at",
+	)
+	.await;
+	refused(
+		Box::new(|r| r["spec"]["expires_at"] = json!(hours_from_now(2))),
+		400,
+		"expires_at",
+	)
+	.await;
+	refused(
+		Box::new(|r| r["spec"]["label"] = json!("mine")),
+		400,
+		"label",
+	)
+	.await;
+	refused(Box::new(|r| r["spec"]["title"] = json!("")), 400, "title").await;
+	refused(
+		Box::new(|r| r["target"] = json!({ "condition": "user.plan ==" })),
+		400,
+		"",
+	)
+	.await;
+	refused(
+		Box::new(|r| r["name"] = json!("n".repeat(121))),
+		400,
+		"name",
+	)
+	.await;
+	refused(
+		Box::new(|r| r["note"] = json!("n".repeat(1_001))),
+		400,
+		"note",
+	)
+	.await;
+	assert_eq!(
+		counted(&service.db, "SELECT count(*) FROM recurrences".to_owned()).await,
+		0,
+		"a refused recurrence is not stored"
+	);
+
+	// With `broadcast`, everyone is an audience like any other.
+	let mut everyone = daily("To everyone", &people);
+	everyone["target"] = json!("everyone");
+	let saved = app(
+		service,
+		"create_recurrence",
+		json!({ "recurrence": everyone, "by": ADA, "broadcast": true }),
+	)
+	.await;
+	assert_eq!(saved["target"], "everyone");
+	let id = id_of(&saved).to_owned();
+
+	// 99 more that have not ended, written directly, some of them paused:
+	// the hundredth is the last.
+	let sql = Sql(service.db.dialect());
+	let now = sql.timestamp(&chrono::Utc::now().to_rfc3339());
+	let spec = json!({ "category": "news", "title": "Seeded" });
+	let target = json!({ "topic": "news.daily" });
+	let rule = json!({
+		"repeat": { "daily": { "every": 1 } },
+		"at": "09:00",
+		"time_zone": "UTC",
+		"starts_on": "2027-01-01",
+	});
+	let rows: Vec<String> = (0..99)
+		.map(|n| {
+			format!(
+				"({}, '{}', 'seeded {n}', '{spec}', '{target}', '{rule}', 0, 0, 'seed', 'seed', \
+				 {now}, {now})",
+				sql.new_id(),
+				if n % 3 == 0 { "paused" } else { "active" },
+			)
+		})
+		.collect();
+	run(
+		&service.db,
+		format!(
+			"INSERT INTO recurrences (id, state, name, spec, target, rule, sent, skipped, \
+			 created_by, updated_by, created_at, updated_at) VALUES {}",
+			rows.join(", ")
+		),
+	)
+	.await;
+
+	let (status, body) = call(
+		service,
+		"create_recurrence",
+		json!({ "recurrence": daily("One too many", &people), "by": ADA }),
+		As::App,
+	)
+	.await;
+	assert_eq!(status, 400, "{body}");
+	assert!(body.contains("100 recurrences"), "{body}");
+
+	// Ending one makes room for one.
+	app(service, "end_recurrence", json!({ "id": id, "by": ADA })).await;
+	recur(service, daily("Room for one", &people)).await;
+
+	// A page of the list holds at most 50, however many are asked for,
+	// and the whole list is every recurrence once, newest first.
+	let asked = page(service, "recurrences", json!({}), json!({ "limit": 500 })).await;
+	assert_eq!(asked["items"].as_array().unwrap().len(), 50);
+	assert_eq!(asked["has_more"], true);
+	let (all, pages) = every(service, "recurrences", json!({}), 50).await;
+	assert_eq!(all.len(), 101);
+	assert_eq!(pages, 3);
+	let newest = all
+		.iter()
+		.find(|entry| entry["name"] == "Room for one")
+		.expect("the one just created is listed");
+	assert_eq!(newest["target"]["kind"], "recipients");
+	assert_eq!(newest["target"]["recipients"], 1);
+	assert_eq!(newest["category"], "reminders");
+	assert_eq!(newest["state"], "active");
+	assert!(newest["next_at"].is_string(), "{newest}");
+	let mut ids = field(&all, "id");
+	ids.sort_unstable();
+	ids.dedup();
+	assert_eq!(ids.len(), 101, "each recurrence once");
+
+	let (ended, _) = every(
+		service,
+		"recurrences",
+		json!({ "filter": { "state": "ended" } }),
+		50,
+	)
+	.await;
+	assert_eq!(field(&ended, "name"), ["To everyone"]);
+	let (paused, _) = every(
+		service,
+		"recurrences",
+		json!({ "filter": { "state": "paused" } }),
+		50,
+	)
+	.await;
+	assert_eq!(paused.len(), 33);
+}
+
+/// A rule that goes out at each person's own time makes its send
+/// fourteen hours before the wall-clock time read as UTC, as a local-time
+/// send: each person's row waits for the time where they are, and a
+/// person with no known time zone is read in the rule's.
+pub async fn a_local_time_recurrence_arrives_at_each_persons_own_time(service: &Service) {
+	let (tokyo, unknown) = (person(871), person(872));
+	attributes(service, &[tokyo], json!({ "time_zone": "Asia/Tokyo" })).await;
+
+	let mut local = daily("Nine o'clock, wherever you are", &[tokyo, unknown]);
+	local["rule"]["time_zone"] = json!("America/New_York");
+	local["rule"]["local_time"] = json!(true);
+	let saved = recur(service, local).await;
+	let id = id_of(&saved).to_owned();
+	// 09:00 in New York, which is the same date in UTC.
+	let first = instant(&saved, "next_at");
+	let date = first.date_naive();
+	let wall = date.and_hms_opt(9, 0, 0).unwrap().and_utc();
+	let send_due = wall - chrono::Duration::hours(14);
+	assert!(send_due > chrono::Utc::now(), "its send is still ahead");
+
+	assert_eq!(
+		due(service, send_due - chrono::Duration::seconds(1)).await,
+		recurrence::Ran::default()
+	);
+	let ran = due(service, send_due).await;
+	assert_eq!(ran.sent, 1, "{ran:?}");
+
+	let key = occurrence(&id, first);
+	let stored = run(
+		&service.db,
+		format!("SELECT spec FROM sends WHERE idempotency_key = '{key}'"),
+	)
+	.await;
+	let leptoskit_db::Value::Text(spec) = &stored[0][0] else {
+		panic!("the send's stored message: {stored:?}");
+	};
+	let spec: Value = serde_json::from_str(spec).unwrap();
+	assert_eq!(
+		spec["local_time"],
+		json!({ "at": format!("{date}T09:00"), "default_time_zone": "America/New_York" }),
+		"{spec}"
+	);
+
+	let visible_at = |person: Uuid| {
+		let key = key.clone();
+
+		async move {
+			leptoskit_notifications::Notification::query()
+				.filter(|row| row.send_key.eq(key) & row.person.eq(person))
+				.one(&service.db.system("read a row in a test"))
+				.await
+				.expect("the person's row")
+				.visible_at
+		}
+	};
+	assert_eq!(
+		visible_at(tokyo).await,
+		wall - chrono::Duration::hours(9),
+		"09:00 in Tokyo"
+	);
+	assert_eq!(
+		visible_at(unknown).await,
+		first,
+		"09:00 in the rule's own zone"
+	);
+
+	// The next occurrence is a day on, and its send is due a day on.
+	let now = read_recurrence(service, &id).await;
+	assert_eq!(
+		instant(&now, "next_at").date_naive(),
+		date + days(1),
+		"{now}"
+	);
+	assert_eq!(
+		due(service, send_due + days(1) - chrono::Duration::seconds(1))
+			.await
+			.sent,
+		0
+	);
+	assert_eq!(due(service, send_due + days(1)).await.sent, 1);
+}
+
+/// Forgetting a person takes them out of every stored recurrence that
+/// names them: the stored audience no longer holds their id, the next
+/// occurrence goes to whoever is left, and a recurrence left with nobody
+/// ends.
+pub async fn forgetting_a_person_takes_them_out_of_a_recurrence(service: &Service) {
+	let (leaving, staying) = (person(881), person(882));
+	let shared = recur(service, daily("For two", &[leaving, staying])).await;
+	let alone = recur(service, daily("For one", &[leaving])).await;
+	let first = instant(&shared, "next_at");
+
+	app(service, "forget_person", json!({ "person": leaving })).await;
+
+	assert_eq!(
+		counted(
+			&service.db,
+			format!("SELECT count(*) FROM recurrences WHERE target LIKE '%{leaving}%'")
+		)
+		.await,
+		0,
+		"no stored recurrence names the person"
+	);
+
+	let shared = read_recurrence(service, id_of(&shared)).await;
+	assert_eq!(shared["target"]["recipients"], json!([staying]));
+	assert_eq!(shared["state"], "active");
+	let alone = read_recurrence(service, id_of(&alone)).await;
+	assert_eq!(alone["target"]["recipients"], json!([]));
+	assert_eq!(alone["state"], "ended", "{alone}");
+	assert!(
+		alone["error"].as_str().unwrap().contains("forgotten"),
+		"{alone}"
+	);
+
+	let ran = due(service, first).await;
+	assert_eq!(ran.sent, 1, "only the one with someone left: {ran:?}");
+	assert_eq!(
+		counted(
+			&service.db,
+			format!(
+				"SELECT count(*) FROM notifications WHERE person = {}",
+				Sql(service.db.dialect()).uuid(leaving)
+			)
+		)
+		.await,
+		0,
+		"nothing was sent to the forgotten person"
+	);
+	assert_eq!(
+		rows_of(service, &occurrence(id_of(&shared), first)).await,
+		1
+	);
+}
+
+/// An ended recurrence is deleted with the send records: after
+/// `SENDS_DAYS`, not before, and never when that is `off`. One that has
+/// not ended stays whatever its age.
+pub async fn ended_recurrences_are_swept_with_send_records(service: &Service) {
+	let people = [person(891)];
+	let ended = recur(service, daily("Over", &people)).await;
+	let going = recur(service, daily("Going", &people)).await;
+	app(
+		service,
+		"end_recurrence",
+		json!({ "id": id_of(&ended), "by": ADA }),
+	)
+	.await;
+	let left = || counted(&service.db, "SELECT count(*) FROM recurrences".to_owned());
+	let now = chrono::Utc::now();
+
+	retention::prune(&service.db, &config::Retention::default(), now + days(89))
+		.await
+		.expect("a sweep");
+	assert_eq!(left().await, 2, "89 days after it ended, it is kept");
+
+	retention::prune(&service.db, &config::Retention::forever(), now + days(400))
+		.await
+		.expect("a sweep");
+	assert_eq!(left().await, 2, "`off` keeps it forever");
+
+	assert_eq!(
+		recurrence::sweep(&service.db, &config::Retention::default(), now + days(91))
+			.await
+			.expect("a sweep"),
+		1,
+		"91 days after it ended, it goes"
+	);
+	assert_eq!(left().await, 1);
+	assert_eq!(
+		read_recurrence(service, id_of(&going)).await["state"],
+		"active"
+	);
+
+	// The whole sweep takes an ended one too.
+	app(
+		service,
+		"end_recurrence",
+		json!({ "id": id_of(&going), "by": ADA }),
+	)
+	.await;
+	retention::prune(&service.db, &config::Retention::default(), now + days(400))
+		.await
+		.expect("a sweep");
+	assert_eq!(left().await, 0);
+}
+
+/// The service's own jobs find what is due. Creating a recurrence leaves
+/// a job waiting for the moment its first send is due; the hourly run
+/// makes an occurrence whose time has come, once; and the occurrence
+/// leaves a job waiting for the next one. The service has no workers
+/// here: the jobs run on the test's clock.
+#[expect(
+	clippy::cognitive_complexity,
+	reason = "one recurrence, followed through the job and its queue"
+)]
+pub async fn the_job_makes_what_is_due_and_schedules_the_next(service: &Service) {
+	let db = &service.db;
+	let people = [person(901), person(902)];
+	// Two minutes ago, to the minute, as today's time of day.
+	let time = chrono::Utc::now() - chrono::Duration::minutes(2);
+	let mut soon = daily("Run by the job", &people);
+	soon["rule"]["at"] = json!(time.format("%H:%M").to_string());
+	let saved = recur(service, soon).await;
+	let id = id_of(&saved).to_owned();
+	// Today's occurrence has passed, so the first one is tomorrow's.
+	let first = instant(&saved, "next_at");
+	let waiting = || {
+		async {
+			rpc::server::jobs::JobRow::query()
+				.filter(|job| {
+					job.name.eq("recur".to_owned())
+						& job.state.eq(rpc::server::jobs::JobState::Pending)
+				})
+				.all(&db.system("read the pending jobs in a test"))
+				.await
+				.expect("the jobs read")
+		}
+	};
+	let jobs = waiting().await;
+	assert_eq!(jobs.len(), 1, "one job, for the first occurrence: {jobs:?}");
+	assert_eq!(jobs[0].run_at, first);
+
+	// The recurrence as it would stand had it been created yesterday:
+	// today's occurrence is due, two minutes ago.
+	let sql = Sql(db.dialect());
+	let today = first - days(1);
+	run(
+		db,
+		format!(
+			"UPDATE recurrences SET next_on = '{}', due_at = {} WHERE id = {}",
+			today.format("%Y-%m-%d"),
+			sql.timestamp(&today.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)),
+			sql.uuid(id.parse().unwrap()),
+		),
+	)
+	.await;
+
+	let test_jobs = rpc::testing::TestJobs::new(db).service(Some(SERVICE));
+	test_jobs.run_jobs_until_idle().await;
+	assert_eq!(sends_of(service, &id).await, 0, "no job is due yet");
+
+	// An hour of the job clock brings the hourly run.
+	test_jobs.advance(Duration::from_secs(3_600)).await;
+	let ticks: Vec<_> = test_jobs
+		.all()
+		.await
+		.into_iter()
+		.filter(|job| {
+			job.name == "recur"
+				&& job
+					.key
+					.as_deref()
+					.is_some_and(|key| key.starts_with("cron:"))
+		})
+		.collect();
+	assert_eq!(ticks.len(), 1, "one tick an hour: {ticks:?}");
+	test_jobs.run_jobs_until_idle().await;
+
+	let key = occurrence(&id, today);
+	assert_eq!(sends_of(service, &id).await, 1, "the hourly run made it");
+	assert_eq!(rows_of(service, &key).await, 2);
+	let now = read_recurrence(service, &id).await;
+	assert_eq!(now["sent"], 1, "{now}");
+	assert_eq!(instant(&now, "next_at"), first);
+
+	// The occurrence left its own job for the next one, beside the one
+	// creating it left.
+	let jobs = waiting().await;
+	assert_eq!(jobs.len(), 2, "{jobs:?}");
+	assert!(jobs.iter().all(|job| job.run_at == first), "{jobs:?}");
+
+	// Their time comes on the job clock, but not on the service's: they
+	// find nothing due and make nothing.
+	test_jobs.advance(Duration::from_hours(25)).await;
+	test_jobs.run_jobs_until_idle().await;
+	assert_eq!(sends_of(service, &id).await, 1);
+	assert!(waiting().await.is_empty(), "every job ran");
 }

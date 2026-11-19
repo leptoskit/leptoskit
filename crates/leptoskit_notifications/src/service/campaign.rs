@@ -103,7 +103,7 @@ fn saved(row: &CampaignRow) -> rpc::Result<SavedCampaign> {
 }
 
 /// Who a draft's target is for, as a list shows it.
-fn summary_of(target: &SendTarget) -> TargetSummary {
+pub(crate) fn summary_of(target: &SendTarget) -> TargetSummary {
 	match target {
 		SendTarget::Recipients(recipients) => {
 			TargetSummary {

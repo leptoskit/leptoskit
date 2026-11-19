@@ -11,3 +11,4 @@
 20261119T002619_campaigns
 20261119T021018_endpoint_import
 20261119T022623_endpoint_apns_environment
+20261119T030236_recurring_sends

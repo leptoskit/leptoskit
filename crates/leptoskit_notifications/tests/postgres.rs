@@ -1913,3 +1913,148 @@ async fn racing_saves_keep_one_on_postgres() {
 	};
 	composer::racing_saves_keep_one(&composer_service(&postgres, false).await).await;
 }
+
+/// An occurrence is one send when its time comes on Postgres too.
+#[tokio::test(flavor = "multi_thread")]
+#[cfg(feature = "service")]
+async fn an_occurrence_is_one_send_when_its_time_comes_on_postgres() {
+	let Some(postgres) = Postgres::start() else {
+		return;
+	};
+	composer::an_occurrence_is_one_send_when_its_time_comes(
+		&composer_service(&postgres, false).await,
+	)
+	.await;
+}
+
+/// Racing runs make one send per occurrence on Postgres too.
+#[tokio::test(flavor = "multi_thread")]
+#[cfg(feature = "service")]
+async fn racing_runs_make_one_send_per_occurrence_on_postgres() {
+	let Some(postgres) = Postgres::start() else {
+		return;
+	};
+	composer::racing_runs_make_one_send_per_occurrence(&composer_service(&postgres, false).await)
+		.await;
+}
+
+/// A recurrence catches up with its latest occurrence only on Postgres too.
+#[tokio::test(flavor = "multi_thread")]
+#[cfg(feature = "service")]
+async fn a_recurrence_catches_up_with_its_latest_occurrence_only_on_postgres() {
+	let Some(postgres) = Postgres::start() else {
+		return;
+	};
+	composer::a_recurrence_catches_up_with_its_latest_occurrence_only(
+		&composer_service(&postgres, false).await,
+	)
+	.await;
+}
+
+/// A recurrence ends by count and by date on Postgres too.
+#[tokio::test(flavor = "multi_thread")]
+#[cfg(feature = "service")]
+async fn a_recurrence_ends_by_count_and_by_date_on_postgres() {
+	let Some(postgres) = Postgres::start() else {
+		return;
+	};
+	composer::a_recurrence_ends_by_count_and_by_date(&composer_service(&postgres, false).await)
+		.await;
+}
+
+/// A recurrence is paused, resumed, and ended on Postgres too.
+#[tokio::test(flavor = "multi_thread")]
+#[cfg(feature = "service")]
+async fn a_recurrence_is_paused_resumed_and_ended_on_postgres() {
+	let Some(postgres) = Postgres::start() else {
+		return;
+	};
+	composer::a_recurrence_is_paused_resumed_and_ended(&composer_service(&postgres, false).await)
+		.await;
+}
+
+/// Only the app touches recurrences on Postgres too.
+#[tokio::test(flavor = "multi_thread")]
+#[cfg(feature = "service")]
+async fn only_the_app_touches_recurrences_on_postgres() {
+	let Some(postgres) = Postgres::start() else {
+		return;
+	};
+	composer::only_the_app_touches_recurrences(&composer_service(&postgres, false).await).await;
+}
+
+/// Recurrences are bounded and refused by name on Postgres too.
+#[tokio::test(flavor = "multi_thread")]
+#[cfg(feature = "service")]
+async fn recurrences_are_bounded_and_refused_by_name_on_postgres() {
+	let Some(postgres) = Postgres::start() else {
+		return;
+	};
+	composer::recurrences_are_bounded_and_refused_by_name(
+		&composer_service(&postgres, false).await,
+	)
+	.await;
+}
+
+/// A local-time recurrence arrives at each person's own time on Postgres too.
+#[tokio::test(flavor = "multi_thread")]
+#[cfg(feature = "service")]
+async fn a_local_time_recurrence_arrives_at_each_persons_own_time_on_postgres() {
+	let Some(postgres) = Postgres::start() else {
+		return;
+	};
+	composer::a_local_time_recurrence_arrives_at_each_persons_own_time(
+		&composer_service(&postgres, false).await,
+	)
+	.await;
+}
+
+/// Forgetting a person takes them out of a recurrence on Postgres too.
+#[tokio::test(flavor = "multi_thread")]
+#[cfg(feature = "service")]
+async fn forgetting_a_person_takes_them_out_of_a_recurrence_on_postgres() {
+	let Some(postgres) = Postgres::start() else {
+		return;
+	};
+	composer::forgetting_a_person_takes_them_out_of_a_recurrence(
+		&composer_service(&postgres, false).await,
+	)
+	.await;
+}
+
+/// Ended recurrences are swept with send records on Postgres too.
+#[tokio::test(flavor = "multi_thread")]
+#[cfg(feature = "service")]
+async fn ended_recurrences_are_swept_with_send_records_on_postgres() {
+	let Some(postgres) = Postgres::start() else {
+		return;
+	};
+	composer::ended_recurrences_are_swept_with_send_records(
+		&composer_service(&postgres, false).await,
+	)
+	.await;
+}
+
+/// The job makes what is due and schedules the next on Postgres too.
+#[tokio::test(flavor = "multi_thread")]
+#[cfg(feature = "service")]
+async fn the_job_makes_what_is_due_and_schedules_the_next_on_postgres() {
+	let Some(postgres) = Postgres::start() else {
+		return;
+	};
+	composer::the_job_makes_what_is_due_and_schedules_the_next(
+		&composer_service(&postgres, false).await,
+	)
+	.await;
+}
+
+/// A refused occurrence pauses the recurrence on Postgres too.
+#[tokio::test(flavor = "multi_thread")]
+#[cfg(feature = "service")]
+async fn a_refused_occurrence_pauses_the_recurrence_on_postgres() {
+	let Some(postgres) = Postgres::start() else {
+		return;
+	};
+	composer::a_refused_occurrence_pauses_the_recurrence(&composer_service(&postgres, false).await)
+		.await;
+}

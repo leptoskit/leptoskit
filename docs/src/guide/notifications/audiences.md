@@ -215,7 +215,7 @@ When someone deletes their account or withdraws consent, you need the service to
 call_as_app(leptoskit_notifications::ForgetPerson { person: alice_id }).await?;
 ```
 
-That removes their inbox, their enrolled devices and the push credentials stored for them, the record of what was pushed to those devices, their category preferences, their topic subscriptions, their attributes, and their place in the registry. Nothing more is pushed to their devices, no audience reaches them, and their inbox is empty. It is safe to call twice, and for someone the service never knew.
+That removes their inbox, their enrolled devices and the push credentials stored for them, the record of what was pushed to those devices, their category preferences, their topic subscriptions, their attributes, their place in the registry, and their place in any [recurrence](sending.md#a-send-that-repeats)'s list of recipients. Nothing more is pushed to their devices, no audience reaches them, and their inbox is empty. It is safe to call twice, and for someone the service never knew.
 
 A long inbox is erased in the background, a batch at a time, so the call returns quickly whatever the person's history; the rest follows within moments. A send's own totals are not rewritten — "delivered to 1,204 people" stays 1,204.
 

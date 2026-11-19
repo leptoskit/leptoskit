@@ -1126,6 +1126,153 @@ async fn the_campaign_lists_use_their_indexes(db: &Db) {
 	);
 }
 
+/// The recurrence reads go through their indexes: the job's read of what
+/// is due, earliest first; a page of recurrences newest first; a page of
+/// one state; and the count of the ones that have not ended, behind the
+/// cap. 3,000 recurrences as a service that has run for years holds
+/// them: a hundred active, each with a time to be due at, sixty paused,
+/// and the rest ended. The typed queries are mirrored here as SQL.
+/// On Postgres the reads of the active and the paused are found through
+/// their index and sorted afterwards; see the loop below.
+async fn the_recurrence_reads_use_their_indexes(db: &Db) {
+	let dialect = db.dialect();
+	let sql = Sql(dialect);
+	let base = Utc::now() - Duration::hours(2);
+	let at = |n: u128| base + Duration::seconds(i64::try_from(n).unwrap());
+	let stamp =
+		|at: DateTime<Utc>| sql.timestamp(&at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true));
+	let mut recurrences = Vec::new();
+
+	for n in 0..3_000_u128 {
+		let (state, next_on, due_at) = if n % 30 == 0 {
+			("active", "'2027-01-01'".to_owned(), stamp(at(n)))
+		} else if n % 50 == 1 {
+			("paused", "NULL".to_owned(), "NULL".to_owned())
+		} else {
+			("ended", "NULL".to_owned(), "NULL".to_owned())
+		};
+		recurrences.push(format!(
+			"({}, '{state}', 'recurrence {n}', '{{}}', '{{}}', '{{}}', {next_on}, {due_at}, 0, 0, \
+			 'seed', 'seed', {created}, {created})",
+			sql.uuid(id_at(at(n), 120_000 + n)),
+			created = stamp(base),
+		));
+	}
+
+	insert(
+		db,
+		"recurrences",
+		"id, state, name, spec, target, rule, next_on, due_at, sent, skipped, created_by, \
+		 updated_by, created_at, updated_at",
+		&recurrences,
+	)
+	.await;
+	run(db, "ANALYZE").await;
+
+	let text = |text: &str| Value::Text(text.to_owned());
+	let primary = match dialect {
+		Dialect::Sqlite => "sqlite_autoindex_recurrences_1",
+		Dialect::Postgres => "recurrences_pkey",
+	};
+	// Half of the active ones are due.
+	let now = Value::Timestamp(at(1_495));
+	let cases = [
+		(
+			"the recurrences that are due",
+			Statement::new(
+				numbered(
+					dialect,
+					"SELECT id FROM recurrences WHERE state = {} AND due_at <= {} ORDER BY due_at \
+					 ASC LIMIT {}",
+				),
+				vec![text("active"), now, Value::Int(200)],
+			),
+			"recurrences_state_due_at_idx",
+			50,
+			true,
+		),
+		(
+			"a page of recurrences",
+			Statement::new(
+				numbered(
+					dialect,
+					"SELECT id FROM recurrences ORDER BY id DESC LIMIT {}",
+				),
+				vec![Value::Int(51)],
+			),
+			primary,
+			51,
+			false,
+		),
+		(
+			"a page of the paused ones",
+			Statement::new(
+				numbered(
+					dialect,
+					"SELECT id FROM recurrences WHERE state = {} ORDER BY id DESC LIMIT {}",
+				),
+				vec![text("paused"), Value::Int(51)],
+			),
+			"recurrences_state_id_idx",
+			51,
+			true,
+		),
+		(
+			"the count of the ones that have not ended",
+			Statement::new(
+				numbered(
+					dialect,
+					"SELECT count(*) FROM recurrences WHERE state IN ({}, {})",
+				),
+				vec![text("active"), text("paused")],
+			),
+			"recurrences_state_",
+			1,
+			false,
+		),
+	];
+
+	for (what, statement, index, rows, few) in cases {
+		let plan = explain(db, &statement).await;
+
+		assert!(
+			plan.contains(index),
+			"{what} should read through {index}:\n{plan}"
+		);
+
+		for step in ["TEMP B-TREE", "Seq Scan", "Sort"] {
+			// The active and the paused are at most a hundred together,
+			// and for a set that small Postgres finds the rows through the
+			// index's condition and sorts them itself rather than walk the
+			// index in order. What it sorts is bounded by that cap, so the
+			// sort is let be; SQLite reads them in order.
+			if step == "Sort" && few && dialect == Dialect::Postgres {
+				continue;
+			}
+
+			assert!(
+				!plan.contains(step),
+				"{what} should come out of {index} with no `{step}` step:\n{plan}"
+			);
+		}
+
+		assert_eq!(
+			db.fetch(statement).await.expect("the read runs").len(),
+			rows,
+			"{what}"
+		);
+	}
+
+	assert_eq!(
+		count(
+			db,
+			"SELECT count(*) FROM recurrences WHERE state IN ('active', 'paused')"
+		)
+		.await,
+		160
+	);
+}
+
 /// A walk over two topics reads each topic's subscribers on its own, in
 /// person order straight from `(topic, person)`: one statement per topic,
 /// none of them sorting or de-duplicating.
@@ -1841,6 +1988,11 @@ async fn sqlite_the_campaign_lists_use_their_indexes() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn sqlite_the_recurrence_reads_use_their_indexes() {
+	the_recurrence_reads_use_their_indexes(&on_sqlite().await).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn sqlite_a_walk_over_several_topics_reads_each_in_index_order() {
 	a_walk_over_several_topics_reads_each_in_index_order(&on_sqlite().await).await;
 }
@@ -1955,6 +2107,15 @@ mod on_postgres {
 		};
 
 		the_campaign_lists_use_their_indexes(&connect(&postgres).await).await;
+	}
+
+	#[tokio::test(flavor = "multi_thread")]
+	async fn postgres_the_recurrence_reads_use_their_indexes() {
+		let Some(postgres) = Postgres::start() else {
+			return;
+		};
+
+		the_recurrence_reads_use_their_indexes(&connect(&postgres).await).await;
 	}
 
 	#[tokio::test(flavor = "multi_thread")]
