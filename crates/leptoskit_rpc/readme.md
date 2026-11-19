@@ -41,7 +41,7 @@ Leptos server functions are already typed, isomorphic RPC. This crate adds the l
 
 - `query` — a retrying, reactive read with an error type that keeps loading and failure in one value;
 - `mutation` / `mutation_with_retry` — leptos actions with unified errors; mutations only retry when you say so, because blindly re-sending a POST is usually wrong;
-- `FnError` — failures classified as network, invalid, server, or decode, so "offline" and "your input was rejected" stop looking identical in the UI; only network failures are retried, because a server error is also how a function says "not found";
+- `FnError` — failures classified as network, invalid, server, or decode, so "offline" and "your input was rejected" stop looking identical in the UI; only network failures are retried, because a server error is also how a function says "not found"; an operation can also refuse with a code and a wait (`Error::refused`, `Error::rate_limited`), which arrive as `FnError::Refused`;
 - `RetryPolicy` — exponential backoff with a cap, tuned defaults for reads and flaky mobile networks, waited out on `leptoskit_query`'s timer in the browser, on a Tokio runtime, or without one.
 - the `devtools` feature — every retry attempt recorded with its error class, for leptoskit's devtools calls timeline.
 

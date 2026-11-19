@@ -89,6 +89,16 @@ pub async fn notes_here(#[serde(default)] starting: Option<String>) -> rpc::Resu
 	notes(&cx, starting).await
 }
 
+/// Turns the caller down in the way `how` names.
+#[rpc::query]
+pub async fn knock(how: String) -> rpc::Result<bool> {
+	match how.as_str() {
+		"often" => Err(rpc::Error::rate_limited(Duration::from_millis(1500))),
+		"full" => Err(rpc::Error::refused("notes_full", "Your notebook is full")),
+		_ => Ok(true),
+	}
+}
+
 /// What `after_commit` saw, in order.
 static COMMITTED: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
@@ -389,6 +399,56 @@ async fn pod_content_type_is_rejected() {
 	assert_eq!(status, StatusCode::BAD_REQUEST);
 	let body = String::from_utf8_lossy(&bytes);
 	assert!(body.contains("JSON"), "{body}");
+}
+
+#[tokio::test]
+async fn refusals_carry_their_code_and_wait() {
+	let db = sqlite().await;
+	let router = Server::new(db.clone()).identify(Header).router::<()>();
+	let knock = async |how: &str| {
+		let response = router
+			.clone()
+			.oneshot(
+				Request::post("/rpc/knock")
+					.header("content-type", "application/json")
+					.body(Body::from(json!({ "how": how }).to_string()))
+					.unwrap(),
+			)
+			.await
+			.unwrap();
+		let status = response.status();
+		let wait = response
+			.headers()
+			.get("retry-after")
+			.map(|wait| wait.to_str().unwrap().to_owned());
+		let bytes = response.into_body().collect().await.unwrap().to_bytes();
+
+		(
+			status,
+			wait,
+			rpc::FnError::from_wire(std::str::from_utf8(&bytes).unwrap()),
+		)
+	};
+
+	// A wait is rounded up to whole seconds, in the header and the body.
+	let (status, wait, error) = knock("often").await;
+	assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+	assert_eq!(wait.as_deref(), Some("2"));
+	assert_eq!(error.code(), Some(rpc::RATE_LIMITED));
+	assert_eq!(error.retry_after(), Some(Duration::from_secs(2)));
+
+	let (status, wait, error) = knock("full").await;
+	assert_eq!(status, StatusCode::CONFLICT);
+	assert_eq!(wait, None);
+	assert_eq!(
+		error,
+		rpc::FnError::Refused {
+			status: 409,
+			code: "notes_full".to_owned(),
+			message: "Your notebook is full".to_owned(),
+			retry_after: None,
+		}
+	);
 }
 
 async fn failures_arrive_classified(db: &Db) {
@@ -822,6 +882,7 @@ fn published_operations_join_the_spec_with_their_kind() {
 			"add_two",
 			"bump",
 			"bump_once",
+			"knock",
 			"note_count",
 			"notes",
 			"notes_here",

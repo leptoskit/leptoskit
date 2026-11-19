@@ -138,6 +138,7 @@ pub use leptoskit_rpc_macros::stream;
 pub use operation::Error;
 pub use operation::Kind;
 pub use operation::Operation;
+pub use operation::RATE_LIMITED;
 pub use operation::Result;
 pub use page::MAX_PAGE_ROWS;
 pub use page::MAX_PINNED_ROWS;
@@ -407,6 +408,40 @@ pub enum FnError {
 	Decode(String),
 	/// Everything else.
 	Other(String),
+	/// The server understood the request and turned it down for a reason
+	/// it names: [`Error::refused`] or [`Error::rate_limited`]. Match on
+	/// `code` to choose what to say.
+	///
+	/// ```
+	/// use leptoskit_rpc::FnError;
+	///
+	/// fn words(error: &FnError) -> String {
+	/// 	match error {
+	/// 		FnError::Refused {
+	/// 			code,
+	/// 			retry_after: Some(wait),
+	/// 			..
+	/// 		} if code == "rate_limited" => {
+	/// 			format!("Try again in {} seconds.", wait.as_secs())
+	/// 		}
+	/// 		FnError::Refused { code, .. } if code == "notes_full" => {
+	/// 			"Your notebook is full. Delete a note to make room.".to_owned()
+	/// 		}
+	/// 		other => other.message().to_owned(),
+	/// 	}
+	/// }
+	/// # let _ = words;
+	/// ```
+	Refused {
+		/// The HTTP status the server answered with.
+		status: u16,
+		/// The reason's name, such as `rate_limited` or one the app chose.
+		code: String,
+		/// What a person can read.
+		message: String,
+		/// How long to wait before asking again, when the server says.
+		retry_after: Option<Duration>,
+	},
 }
 
 impl FnError {
@@ -423,8 +458,27 @@ impl FnError {
 		matches!(self, Self::Network(_))
 	}
 
-	/// The error's class: `network`, `invalid`, `server`, `decode`, or
-	/// `other`.
+	/// The reason a [`Refused`](Self::Refused) call names, such as
+	/// `rate_limited`.
+	#[must_use]
+	pub fn code(&self) -> Option<&str> {
+		match self {
+			Self::Refused { code, .. } => Some(code),
+			_ => None,
+		}
+	}
+
+	/// How long the server asked the caller to wait before trying again.
+	#[must_use]
+	pub const fn retry_after(&self) -> Option<Duration> {
+		match self {
+			Self::Refused { retry_after, .. } => *retry_after,
+			_ => None,
+		}
+	}
+
+	/// The error's class: `network`, `invalid`, `server`, `decode`,
+	/// `refused`, or `other`.
 	///
 	/// ```
 	/// use leptoskit_rpc::FnError;
@@ -439,6 +493,7 @@ impl FnError {
 			Self::Server(_) => "server",
 			Self::Decode(_) => "decode",
 			Self::Other(_) => "other",
+			Self::Refused { .. } => "refused",
 		}
 	}
 
@@ -450,7 +505,8 @@ impl FnError {
 			| Self::Invalid(message)
 			| Self::Server(message)
 			| Self::Decode(message)
-			| Self::Other(message) => message,
+			| Self::Other(message)
+			| Self::Refused { message, .. } => message,
 		}
 	}
 
@@ -471,6 +527,22 @@ impl FnError {
 	/// 	FnError::Other("plain text".to_owned())
 	/// );
 	/// ```
+	///
+	/// A refusal is `Refused|` and a JSON object, as
+	/// [`Error::to_wire`] writes it:
+	///
+	/// ```
+	/// use std::time::Duration;
+	///
+	/// use leptoskit_rpc::FnError;
+	///
+	/// let refused = FnError::from_wire(
+	/// 	r#"Refused|{"status":429,"code":"rate_limited","message":"slow down","retry_after":30}"#,
+	/// );
+	/// assert_eq!(refused.code(), Some("rate_limited"));
+	/// assert_eq!(refused.retry_after(), Some(Duration::from_secs(30)));
+	/// assert!(!refused.retryable());
+	/// ```
 	#[must_use]
 	pub fn from_wire(text: &str) -> Self {
 		let Some((kind, message)) = text.split_once('|') else {
@@ -484,8 +556,34 @@ impl FnError {
 			"ServerError" | "MiddlewareError" | "WrappedServerFn" => Self::Server(message),
 			"Deserialization" | "Serialization" => Self::Decode(message),
 			"Registration" | "Response" => Self::Other(message),
+			operation::REFUSED => {
+				Self::refusal(&message).unwrap_or_else(|| Self::Other(text.to_owned()))
+			}
 			_ => Self::Other(text.to_owned()),
 		}
+	}
+}
+
+impl FnError {
+	/// Reads the JSON object a refusal travels as.
+	fn refusal(json: &str) -> Option<Self> {
+		#[derive(serde::Deserialize)]
+		struct Refusal {
+			status: u16,
+			code: String,
+			message: String,
+			#[serde(default)]
+			retry_after: Option<u64>,
+		}
+
+		let refusal: Refusal = serde_json::from_str(json).ok()?;
+
+		Some(Self::Refused {
+			status: refusal.status,
+			code: refusal.code,
+			message: refusal.message,
+			retry_after: refusal.retry_after.map(Duration::from_secs),
+		})
 	}
 }
 

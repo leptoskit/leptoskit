@@ -1242,7 +1242,7 @@ Object? _requiredValue(Map<String, dynamic> json, String key) {
 
 /// How a failed call is classified, mirroring `leptoskit_rpc::FnError`.
 class FnError implements Exception {
-  /// One of `network`, `invalid`, `server`, `decode`, or `other`.
+  /// One of `network`, `invalid`, `server`, `decode`, `refused`, or `other`.
   final String kind;
 
   /// The human-readable message.
@@ -1254,7 +1254,15 @@ class FnError implements Exception {
   /// The response body, when a response arrived.
   final String? raw;
 
-  FnError(this.kind, this.message, {this.status, this.raw});
+  /// The stable name of the reason, such as `rate_limited`, when the server
+  /// refused the call and said why.
+  final String? code;
+
+  /// How long to wait before trying again, when the server said.
+  final Duration? retryAfter;
+
+  FnError(this.kind, this.message,
+      {this.status, this.raw, this.code, this.retryAfter});
 
   /// Whether retrying the call could plausibly succeed: only when no answer
   /// arrived. Server errors are final, because the server reports a refusal
@@ -1279,6 +1287,24 @@ class FnError implements Exception {
       return FnError('other', text, status: status, raw: body);
     }
     final variant = body.substring(0, separator);
+    if (variant == 'Refused') {
+      try {
+        final refusal = jsonDecode(body.substring(separator + 1));
+        if (refusal is Map && refusal['code'] is String) {
+          final wait = refusal['retry_after'];
+          return FnError(
+            'refused',
+            refusal['message'] is String ? refusal['message'] as String : '',
+            status: status,
+            raw: body,
+            code: refusal['code'] as String,
+            retryAfter: wait is num ? Duration(seconds: wait.toInt()) : null,
+          );
+        }
+      } on FormatException {
+        // Not a refusal this client knows: it stays `other`, below.
+      }
+    }
     return FnError(
       kinds[variant] ?? 'other',
       body.substring(separator + 1),

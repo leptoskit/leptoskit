@@ -30,6 +30,12 @@ type LiveError struct {
 	Status int `json:"status"`
 	// Message is the human-readable message.
 	Message string `json:"message"`
+	// Code is the stable name of the reason, such as "rate_limited", when
+	// the server refused the request and said why.
+	Code string `json:"code,omitempty"`
+	// RetryAfter is how many seconds to wait before trying again, when the
+	// server said; zero otherwise.
+	RetryAfter int64 `json:"retry_after,omitempty"`
 }
 
 // Error implements error.

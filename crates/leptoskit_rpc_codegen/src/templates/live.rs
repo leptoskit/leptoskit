@@ -52,6 +52,11 @@ pub struct LiveError {
 	pub status: u16,
 	/// The human-readable message.
 	pub message: String,
+	/// The stable name of the reason, such as `rate_limited`, when the
+	/// server refused the request and said why.
+	pub code: Option<String>,
+	/// How long to wait before trying again, when the server said.
+	pub retry_after: Option<Duration>,
 }
 
 impl std::fmt::Display for LiveError {
@@ -1247,6 +1252,8 @@ fn wire_error(error: &Value) -> LiveError {
 			.as_str()
 			.unwrap_or("the server failed")
 			.to_owned(),
+		code: error["code"].as_str().map(str::to_owned),
+		retry_after: number(&error["retry_after"]).map(Duration::from_secs),
 	}
 }
 
@@ -1254,6 +1261,8 @@ fn decode_error(error: serde_json::Error) -> LiveError {
 	LiveError {
 		status: 0,
 		message: format!("the value didn't decode: {error}"),
+		code: None,
+		retry_after: None,
 	}
 }
 
@@ -1261,6 +1270,8 @@ fn closed() -> LiveError {
 	LiveError {
 		status: 0,
 		message: "the live connection closed".to_owned(),
+		code: None,
+		retry_after: None,
 	}
 }
 

@@ -414,6 +414,8 @@ impl EndReason {
 				Self::Failed(WireError {
 					status: 500,
 					message: format!("the stream ended: {other}"),
+					code: None,
+					retry_after: None,
 				})
 			}
 		}
@@ -512,6 +514,13 @@ pub struct WireError {
 	pub status: u16,
 	/// The message the caller reads.
 	pub message: String,
+	/// The reason's name, when the failure is a refusal the server names:
+	/// `rate_limited`, or a code the app chose.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub code: Option<String>,
+	/// How many seconds to wait before asking again, when the server says.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub retry_after: Option<u64>,
 }
 
 // The constructors compile with the server's live module, which the `live`
@@ -524,6 +533,8 @@ impl WireError {
 		Self {
 			status: error.status(),
 			message: error.message().to_owned(),
+			code: error.code().map(str::to_owned),
+			retry_after: error.retry_after().map(crate::operation::whole_seconds),
 		}
 	}
 
@@ -533,6 +544,8 @@ impl WireError {
 		Self {
 			status: 400,
 			message: message.into(),
+			code: None,
+			retry_after: None,
 		}
 	}
 }
@@ -817,6 +830,8 @@ mod tests {
 			EndReason::Failed(WireError {
 				status: 500,
 				message: "gone".into(),
+				code: None,
+				retry_after: None,
 			})
 			.frame(5),
 			EndReason::Done.frame(5),
@@ -989,6 +1004,8 @@ mod tests {
 			&Update::Err(WireError {
 				status: 500,
 				message: "no connection".to_owned(),
+				code: None,
+				retry_after: None,
 			}),
 		);
 		assert_eq!(value, kept);

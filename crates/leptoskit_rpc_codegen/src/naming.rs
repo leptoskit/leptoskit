@@ -318,6 +318,7 @@ pub(crate) const GO_RESERVED: &[&str] = &[
 	"KindInvalid",
 	"KindNetwork",
 	"KindOther",
+	"KindRefused",
 	"KindServer",
 	"LiveChannel",
 	"LiveChannelKey",

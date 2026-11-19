@@ -17,7 +17,7 @@ const String liveSubprotocol = 'leptoskit.live.v1.json';
 /// A failure the server reported over the live connection.
 class LiveError implements Exception {
   /// Creates an error with the HTTP [status] the same failure would carry.
-  LiveError(this.status, this.message);
+  LiveError(this.status, this.message, {this.code, this.retryAfter});
 
   /// The HTTP status the same failure would carry; `0` when the connection
   /// closed or a value didn't decode.
@@ -25,6 +25,13 @@ class LiveError implements Exception {
 
   /// The human-readable message.
   final String message;
+
+  /// The stable name of the reason, such as `rate_limited`, when the server
+  /// refused the request and said why.
+  final String? code;
+
+  /// How long to wait before trying again, when the server said.
+  final Duration? retryAfter;
 
   @override
   String toString() => 'LiveError($status): $message';
@@ -1071,8 +1078,12 @@ Object? _applyRows(Object? value, Map<dynamic, dynamic> patch) {
 
 LiveError _wireError(Object? err) {
   final error = err is Map ? err : const <String, Object?>{};
+  final code = error['code'];
+  final wait = error['retry_after'];
   return LiveError(
-      _int(error['status'], 500), '${error['message'] ?? 'the server failed'}');
+      _int(error['status'], 500), '${error['message'] ?? 'the server failed'}',
+      code: code is String ? code : null,
+      retryAfter: wait is num ? Duration(seconds: wait.toInt()) : null);
 }
 
 int _int(Object? value, int fallback) =>

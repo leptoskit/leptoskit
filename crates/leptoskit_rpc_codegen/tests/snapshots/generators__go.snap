@@ -72,6 +72,7 @@ import "net/http"
 import "net/url"
 import "sort"
 import "strings"
+import "time"
 
 // DefaultServerURL is the server origin baked in at generation time.
 const DefaultServerURL = "https://todos.example"
@@ -87,6 +88,7 @@ const (
 	KindInvalid FnErrorKind = "invalid"
 	KindServer  FnErrorKind = "server"
 	KindDecode  FnErrorKind = "decode"
+	KindRefused FnErrorKind = "refused"
 	KindOther   FnErrorKind = "other"
 )
 
@@ -100,6 +102,12 @@ type FnError struct {
 	Status int
 	// Raw is the response body, when a response arrived.
 	Raw string
+	// Code is the stable name of the reason, such as "rate_limited", when
+	// the server refused the call and said why.
+	Code string
+	// RetryAfter is how long to wait before trying again, when the server
+	// said; zero otherwise.
+	RetryAfter time.Duration
 }
 
 // Error implements error.
@@ -122,6 +130,19 @@ func fnErrorFromResponse(status int, body string) *FnError {
 			text = fmt.Sprintf("HTTP %d", status)
 		}
 		return &FnError{Kind: KindOther, Message: text, Status: status, Raw: body}
+	}
+	if variant == "Refused" {
+		var refusal map[string]any
+		if err := json.Unmarshal([]byte(message), &refusal); err == nil {
+			if code, ok := refusal["code"].(string); ok {
+				text, _ := refusal["message"].(string)
+				failure := &FnError{Kind: KindRefused, Message: text, Status: status, Raw: body, Code: code}
+				if wait, ok := refusal["retry_after"].(float64); ok {
+					failure.RetryAfter = time.Duration(wait) * time.Second
+				}
+				return failure
+			}
+		}
 	}
 	kind := KindOther
 	switch variant {
@@ -519,6 +540,12 @@ type LiveError struct {
 	Status int `json:"status"`
 	// Message is the human-readable message.
 	Message string `json:"message"`
+	// Code is the stable name of the reason, such as "rate_limited", when
+	// the server refused the request and said why.
+	Code string `json:"code,omitempty"`
+	// RetryAfter is how many seconds to wait before trying again, when the
+	// server said; zero otherwise.
+	RetryAfter int64 `json:"retry_after,omitempty"`
 }
 
 // Error implements error.
@@ -2313,7 +2340,7 @@ if err != nil {
 }
 ```
 
-`FnError.Kind` is one of `KindNetwork`, `KindInvalid`, `KindServer`, `KindDecode`, or `KindOther`, mirroring the server's classification; `Retryable` is true only for network failures. Shapes Go cannot model yet (tagged unions) appear as `any` holding the decoded JSON.
+`FnError.Kind` is one of `KindNetwork`, `KindInvalid`, `KindServer`, `KindDecode`, `KindRefused`, or `KindOther`, mirroring the server's classification; `Retryable` is true only for network failures. Shapes Go cannot model yet (tagged unions) appear as `any` holding the decoded JSON.
 
 Optional arguments and model fields use pointers: `nil` omits the value; a pointer to `false`, `0`, or an empty string sends that value. JSON and live calls also preserve empty collections; form and query encoding cannot express an empty collection. When regenerating an older client, pass the address of values you previously supplied directly. Optional nullable fields can still collapse JSON null into absence; strict schema diagnostics report that limitation.
 

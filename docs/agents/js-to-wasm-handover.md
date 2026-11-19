@@ -43,7 +43,7 @@ One pull request per item. Every backend is kept in step, with AppKit as the ref
 | 6  | `Modal` and `Popover`                                       | G1       | #896, open  |
 | 7  | Scroll into view                                            | G4       | #913, open  |
 | 8  | A clock hook                                                | G6       | #914, open  |
-| 9  | Typed refusals in the rpc client (status, code, retry time) | G8       | not started |
+| 9  | Typed refusals in the rpc client (status, code, retry time) | G8       | PRNUM, open |
 | 10 | Streams without a database                                  | G3       | not started |
 | 11 | The ⌘ key on the web                                        | G7a      | not started |
 | 12 | New-tab and download links                                  | G14, G15 | not started |
@@ -198,6 +198,16 @@ G6. `leptoskit_use::use_clock(interval)` returns a `Clock` that advances by itse
 - **Run here:** `tests/clock.rs` on tokio, and `tests/web_clock.rs` in headless Chrome. `test:browser` in `devenv.nix` now runs the browser one.
 - **Not run:** a native guest. There the loop uses the timer plugin through `leptoskit_query`'s `guest` feature, which the query cache already relies on.
 - **Limit to know for the conversions:** the timer stops on owner cleanup. A leptos component on the web has an owner that is cleaned when it leaves. A native guest keeps its owner for as long as it runs, so a clock made in a screen there keeps ticking after the screen leaves; make one for the app. A view function that rebuilds starts a new clock on each run, and `remember(|| use_clock(…))` does not fix that on the web, because the closure runs under the owner of the first build, which is cleaned on the next. A clock that a rebuilt screen can keep would be a new API, and has not been asked for.
+
+### `feat/rpc-typed-refusals` (PRNUM): stacked on `feat/clock-hook`
+
+G8. `rpc::Error::rate_limited(wait)` (429) and `rpc::Error::refused(code, message)` (409, or any status through the variant) reach the caller as `FnError::Refused { status, code, message, retry_after }`.
+
+- **The wire:** a failure with a code is `Refused|` followed by a JSON object (`status`, `code`, `message`, `retry_after` in whole seconds, rounded up). It is in the body, so it needs no CORS header to be read, and the in-process path uses the same text. HTTP also sends `Retry-After`. Live and stream frames carry `code` and `retry_after` as optional fields of `WireError`, left out when empty, so older frames still parse.
+- **Generated clients:** Rust, TypeScript, Dart, Go, and Python each read the `Refused` kind and the two live fields. The snapshots in `crates/leptoskit_rpc_codegen/tests/snapshots` were reviewed line by line.
+- **Run here:** `leptoskit_rpc` and `leptoskit_rpc_codegen` tests. **Not run:** the generated TypeScript, Dart, Go, and Python were not compiled or executed against a server here, only snapshotted.
+- **Limit to know for the demo:** only a rate limit carries a wait. The demo's "full, opens in N seconds" (503 with a countdown, DM-14) can't put its countdown in `Error::Refused`, which has no `retry_after` in the audit's API. Use `rate_limited` for it, return the countdown as data, or ask the owner for a wait on `Refused`.
+- **Old clients:** one built before this reads a refusal as `Other` with the raw body.
 
 ### `feat/public-demo`: no pull request
 

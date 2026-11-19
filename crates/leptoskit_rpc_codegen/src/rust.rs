@@ -1160,8 +1160,9 @@ let api = {crate_ident}::Client::with_server_url({server_url});
 
 Errors are [`Error::Fn`] carrying an `FnErrorKind` of `Network`, `Invalid`, `Server`, `Decode`, or \
 		 `Other`, mirroring the server's classification; `retryable` is true only for network \
-		 failures. Shapes the generator cannot model (unrecognized unions) appear as \
-		 `serde_json::Value`.\n{live}{skipped}",
+		 failures. A call the server refused with a reason is [`Error::Refused`], with the \
+		 reason's `code` and, for a rate limit, the `retry_after` to wait. Shapes the generator \
+		 cannot model (unrecognized unions) appear as `serde_json::Value`.\n{live}{skipped}",
 		live = live_readme(context),
 		name = context.options.package_name,
 		crate_ident = context.options.package_name.replace('-', "_"),
@@ -1275,6 +1276,19 @@ pub enum Error {
 	/// The transport failed before or after the call.
 	#[error("transport error: {0}")]
 	Transport(#[source] reqwest::Error),
+	/// The server refused the call and said why: a rate limit, or a refusal
+	/// the app named.
+	#[error("{message}")]
+	Refused {
+		/// The HTTP status.
+		status: u16,
+		/// The stable name of the reason, such as `rate_limited`.
+		code: String,
+		/// The human-readable message.
+		message: String,
+		/// How long to wait before trying again, when the server said.
+		retry_after: Option<std::time::Duration>,
+	},
 	/// The response was not the JSON the schema promised.
 	#[error("decode error: {0}")]
 	Decode(#[source] serde_json::Error),
@@ -1478,7 +1492,18 @@ impl Client {
 }
 
 /// Parses the server's `Kind|message` error text.
-fn classify(_status: u16, body: &str) -> Error {
+fn classify(status: u16, body: &str) -> Error {
+	if let Some(("Refused", refusal)) = body.split_once('|') {
+		let refusal = serde_json::from_str::<serde_json::Value>(refusal).unwrap_or_default();
+		if let Some(code) = refusal["code"].as_str() {
+			return Error::Refused {
+				status,
+				code: code.to_owned(),
+				message: refusal["message"].as_str().unwrap_or_default().to_owned(),
+				retry_after: refusal["retry_after"].as_u64().map(std::time::Duration::from_secs),
+			};
+		}
+	}
 	let (kind, message) = match body.split_once('|') {
 		Some(("Request", message)) => (FnErrorKind::Network, message.to_owned()),
 		Some(("Args" | "MissingArg", message)) => (FnErrorKind::Invalid, message.to_owned()),

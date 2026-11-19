@@ -129,6 +129,8 @@ async fn changes_while_blocked_coalesce_into_the_latest_error_snapshot() {
 	let error = WireError {
 		status: 403,
 		message: "no longer available".to_owned(),
+		code: None,
+		retry_after: None,
 	};
 	let update = session
 		.subscriptions

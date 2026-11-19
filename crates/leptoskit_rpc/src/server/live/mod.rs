@@ -632,6 +632,8 @@ async fn run_query(
 				"`{name}` returned {size} bytes, more than the {MAX_RESULT_BYTES}-byte live \
 				 limit; paginate it"
 			),
+			code: None,
+			retry_after: None,
 		});
 	}
 

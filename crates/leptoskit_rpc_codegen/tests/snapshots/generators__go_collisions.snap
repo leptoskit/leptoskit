@@ -1,6 +1,5 @@
 ---
 source: crates/leptoskit_rpc_codegen/tests/generators.rs
-assertion_line: 1112
 expression: code
 ---
 ===== models.go =====
@@ -54,6 +53,7 @@ import "net/http"
 import "net/url"
 import "sort"
 import "strings"
+import "time"
 
 // DefaultServerURL is the server origin baked in at generation time.
 const DefaultServerURL = "https://example.com"
@@ -69,6 +69,7 @@ const (
 	KindInvalid FnErrorKind = "invalid"
 	KindServer  FnErrorKind = "server"
 	KindDecode  FnErrorKind = "decode"
+	KindRefused FnErrorKind = "refused"
 	KindOther   FnErrorKind = "other"
 )
 
@@ -82,6 +83,12 @@ type FnError struct {
 	Status int
 	// Raw is the response body, when a response arrived.
 	Raw string
+	// Code is the stable name of the reason, such as "rate_limited", when
+	// the server refused the call and said why.
+	Code string
+	// RetryAfter is how long to wait before trying again, when the server
+	// said; zero otherwise.
+	RetryAfter time.Duration
 }
 
 // Error implements error.
@@ -104,6 +111,19 @@ func fnErrorFromResponse(status int, body string) *FnError {
 			text = fmt.Sprintf("HTTP %d", status)
 		}
 		return &FnError{Kind: KindOther, Message: text, Status: status, Raw: body}
+	}
+	if variant == "Refused" {
+		var refusal map[string]any
+		if err := json.Unmarshal([]byte(message), &refusal); err == nil {
+			if code, ok := refusal["code"].(string); ok {
+				text, _ := refusal["message"].(string)
+				failure := &FnError{Kind: KindRefused, Message: text, Status: status, Raw: body, Code: code}
+				if wait, ok := refusal["retry_after"].(float64); ok {
+					failure.RetryAfter = time.Duration(wait) * time.Second
+				}
+				return failure
+			}
+		}
 	}
 	kind := KindOther
 	switch variant {
