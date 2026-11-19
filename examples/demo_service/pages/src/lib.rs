@@ -95,9 +95,14 @@ fn seconds_after(context: &Context, elapsed: Duration) -> i64 {
 	context.seconds_to_reset_after(i64::try_from(elapsed.as_millis()).unwrap_or(i64::MAX))
 }
 
-/// Runs `task` on the page's own thread.
-pub(crate) fn spawn(task: impl Future<Output = ()> + 'static) {
-	leptos::task::spawn_local(task);
+/// Runs `task` on the page's executor.
+///
+/// The browser is one thread, and the service is a multi-thread Tokio
+/// runtime. `leptos::task::spawn` picks the one that matches: a local task
+/// on Wasm, and a Send task on the server. `spawn_local` on the server
+/// panics, because that runtime is not a `LocalSet`.
+pub(crate) fn spawn(task: impl Future<Output = ()> + Send + 'static) {
+	leptos::task::spawn(task);
 }
 
 /// Leaves this page for `address`, as a full page load. On the server there
@@ -246,7 +251,9 @@ fn watch_generation(shell: &Shell) {
 	let reset_open = shell.reset_open;
 	let told = RwSignal::new(false);
 
-	Effect::new(move |_| {
+	// `new_sync` runs on the multi-thread server runtime. `Effect::new`
+	// calls `spawn_local`, which panics there.
+	Effect::new_sync(move |_| {
 		let another = watch
 			.items()
 			.with(|days| days.last().is_some_and(|latest| latest.day != day));

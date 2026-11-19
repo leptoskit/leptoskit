@@ -651,7 +651,9 @@ pub(crate) fn open(shell: &Shell, view: &Arc<SignIn>, state: &State) {
 		view: Arc::clone(view),
 		state: *state,
 	};
-	Effect::new(move |_| {
+	// `new_sync` runs on the multi-thread server runtime. `Effect::new`
+	// calls `spawn_local`, which panics there.
+	Effect::new_sync(move |_| {
 		let page = page.clone();
 		crate::spawn(async move {
 			page.load_inbox().await;
