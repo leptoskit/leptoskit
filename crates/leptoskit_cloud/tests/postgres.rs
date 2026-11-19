@@ -403,3 +403,51 @@ mod config {
 		}
 	}
 }
+
+/// Custom domains (`support/domains.rs`), on Postgres.
+mod domains {
+	use super::app;
+	use super::support::domains;
+
+	#[tokio::test]
+	async fn a_verified_domain_reaches_the_release() {
+		if let Some((_postgres, app)) = app().await {
+			domains::a_verified_domain_reaches_the_release(&app).await;
+		}
+	}
+
+	#[tokio::test]
+	async fn domains_are_checked_and_the_tenants_alone() {
+		if let Some((_postgres, app)) = app().await {
+			domains::domains_are_checked_and_the_tenants_alone(&app).await;
+		}
+	}
+
+	#[tokio::test]
+	async fn a_hostname_is_one_environments() {
+		if let Some((_postgres, app)) = app().await {
+			domains::a_hostname_is_one_environments(&app).await;
+		}
+	}
+
+	#[tokio::test]
+	async fn verifying_races_to_one_holder() {
+		if let Some((_postgres, app)) = app().await {
+			domains::verifying_races_to_one_holder(&app).await;
+		}
+	}
+
+	#[tokio::test]
+	async fn a_detached_domain_is_held_until_it_stops_serving() {
+		if let Some((_postgres, app)) = app().await {
+			domains::a_detached_domain_is_held_until_it_stops_serving(&app).await;
+		}
+	}
+
+	#[tokio::test]
+	async fn a_hostname_is_held_while_the_cluster_may_route_it() {
+		if let Some((_postgres, app)) = app().await {
+			domains::a_hostname_is_held_while_the_cluster_may_route_it(&app).await;
+		}
+	}
+}

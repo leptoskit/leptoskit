@@ -23,6 +23,8 @@ mod authorize;
 pub(crate) mod config;
 mod control;
 pub(crate) mod deployments;
+mod dns;
+pub(crate) mod domains;
 mod identity;
 mod jobs;
 mod lifecycle;
@@ -53,6 +55,11 @@ pub use control::OAuthApp;
 pub use control::RPC_PATH;
 pub use control::SharedMailer;
 pub use control::catalogue_from_json;
+pub use dns::DnsOverHttps;
+pub use dns::Lookup;
+pub use dns::ResolveError;
+pub use dns::Resolver;
+pub use dns::SharedResolver;
 pub use identity::Caller;
 pub use identity::ClientDescription;
 pub use identity::CloudIdentify;
@@ -107,6 +114,8 @@ pub(crate) struct Shipping {
 	pub(crate) redactions: Arc<[String]>,
 	/// Where secrets are kept.
 	pub(crate) vault: vault::Vault,
+	/// What reads a domain's challenge record.
+	pub(crate) resolver: SharedResolver,
 }
 
 /// How long leases and addresses last, how long things are kept, and how

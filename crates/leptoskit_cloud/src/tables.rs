@@ -614,6 +614,44 @@ pub struct Secret {
 	pub updated_at: Timestamp,
 }
 
+/// A custom domain of an environment. It routes nothing until it is
+/// verified, and a verified hostname is one environment's in the whole
+/// cloud: `claim` holds it, uniquely.
+#[table(name = "domains", unique(environment_id, hostname), index(hostname))]
+pub struct Domain {
+	pub id: Id<Self>,
+	/// Not a foreign key: a hostname the cluster may still route outlives
+	/// its environment's row, until the cluster's worker has removed it.
+	#[db(no_foreign_key)]
+	pub environment_id: Id<Environment>,
+	#[db(min_len = 3, max_len = 253)]
+	pub hostname: String,
+	/// What the challenge record must hold. It isn't a secret: it is
+	/// published in DNS.
+	#[db(min_len = 32, max_len = 64)]
+	pub token: String,
+	/// The hostname again, from when it is verified until the row goes:
+	/// unique, so two environments never hold one hostname, whoever races
+	/// to verify it.
+	#[db(unique, max_len = 253)]
+	pub claim: Option<String>,
+	pub verified_at: Option<Timestamp>,
+	/// Whether a release that routes it has been handed to the cluster,
+	/// applied or not: the cluster may answer on it. Cleared only when a
+	/// release without it is applied.
+	pub routed: bool,
+	/// Detached, or its environment deleted, while the cluster may still
+	/// route it. The row, and its claim, go when a release without it is
+	/// applied or the environment is removed from the cluster.
+	pub removing: bool,
+	#[db(no_foreign_key)]
+	pub created_by: Id<Account>,
+	#[db(created_at)]
+	pub created_at: Timestamp,
+	#[db(updated_at)]
+	pub updated_at: Timestamp,
+}
+
 /// That a job was given a secret's value: which secret, and which version,
 /// written in the transaction that leases the job, before the value leaves.
 /// Kept after the secret and the job are gone, as the record of where a

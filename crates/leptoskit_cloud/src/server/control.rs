@@ -121,6 +121,8 @@ pub struct ControlConfig {
 	pub vault: Keys,
 	/// How mail is sent.
 	pub mailer: SharedMailer,
+	/// What reads a custom domain's challenge record from DNS.
+	pub resolver: super::dns::SharedResolver,
 	/// GitHub sign-in, when configured.
 	pub github: Option<OAuthApp>,
 	/// Google sign-in, when configured.
@@ -233,6 +235,7 @@ impl Control {
 			Shipping {
 				redactions: store.secrets().into(),
 				vault: super::vault::Vault::new(config.vault.clone()),
+				resolver: config.resolver.clone(),
 				store: store.clone(),
 				apps_domain: config.apps_domain.clone(),
 				registry: config.registry.trim_end_matches('/').to_owned(),

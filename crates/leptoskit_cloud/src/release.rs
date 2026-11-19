@@ -353,8 +353,13 @@ pub fn plan(
 			.map(|domain| format!("`{domain}`"))
 			.collect();
 		fine_print.push(format!(
-			"It won't serve {} yet: custom domains arrive with the domains slice.",
-			domains.join(", ")
+			"It serves {} only once {} attached to the environment and verified.",
+			domains.join(", "),
+			if domains.len() == 1 {
+				"it is"
+			} else {
+				"each is"
+			}
 		));
 	}
 
@@ -452,6 +457,9 @@ pub struct SpecTarget<'a> {
 	/// with. The values never come here: a cluster worker is given them
 	/// with the release it claims.
 	pub secrets: &'a [String],
+	/// The environment's verified custom domains. Each serves what the
+	/// hostname does, with a certificate issued for it.
+	pub domains: &'a [String],
 }
 
 /// The spec for `plan`, built as `output` says, checked with
@@ -548,6 +556,19 @@ pub fn spec(
 				strip_cookies: false,
 				tls: Tls::Wildcard,
 			});
+
+			for domain in target.domains {
+				routes.push(Route {
+					hostname: domain.clone(),
+					path_prefix: match planned.kind {
+						ProcessKind::App => "/".to_owned(),
+						ProcessKind::Service => service_prefix(&planned.name),
+					},
+					process: planned.name.clone(),
+					strip_cookies: false,
+					tls: Tls::Issued,
+				});
+			}
 		}
 	}
 
@@ -669,6 +690,7 @@ mod tests {
 				cluster: &cluster,
 				variables: &BTreeMap::new(),
 				secrets: &[],
+				domains: &[],
 			},
 		)
 		.expect("a spec");
@@ -874,6 +896,7 @@ mod tests {
 				cluster: &WAKES,
 				variables: &BTreeMap::new(),
 				secrets: &[],
+				domains: &[],
 			},
 		)
 		.unwrap_err();

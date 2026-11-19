@@ -814,7 +814,13 @@ pub(crate) async fn finish(
 		JobOutcome::Release(outcome) => {
 			super::deployments::release_finished(tx, &row, outcome).await?;
 		}
-		JobOutcome::DestroyEnvironment(_) => {}
+		JobOutcome::DestroyEnvironment(DestroyOutcome::Destroyed) => {
+			// Off the cluster: the hostnames it held are free.
+			if let Some(environment) = row.environment_id {
+				super::domains::environment_destroyed(tx, environment).await?;
+			}
+		}
+		JobOutcome::DestroyEnvironment(DestroyOutcome::Failed { .. }) => {}
 	}
 
 	let waker = services.clone();

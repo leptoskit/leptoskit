@@ -235,7 +235,8 @@ pub enum Permission {
 	DeleteEnvironment,
 	/// Ship an environment: upload archives, deploy, cancel, and roll back.
 	Deploy,
-	/// Set and remove an environment's variables and secrets.
+	/// Set and remove an environment's variables and secrets, and attach,
+	/// verify, and detach its domains.
 	ManageConfig,
 }
 
@@ -466,6 +467,19 @@ pub const OPERATIONS: &[(&str, Requirement)] = &[
 	("set_secret", Requirement::Project(Permission::ManageConfig)),
 	(
 		"unset_secret",
+		Requirement::Project(Permission::ManageConfig),
+	),
+	("domains", Requirement::Project(Permission::ViewProjects)),
+	(
+		"attach_domain",
+		Requirement::Project(Permission::ManageConfig),
+	),
+	(
+		"verify_domain",
+		Requirement::Project(Permission::ManageConfig),
+	),
+	(
+		"detach_domain",
 		Requirement::Project(Permission::ManageConfig),
 	),
 	("pair", Requirement::Pairing),
