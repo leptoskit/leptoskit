@@ -147,9 +147,24 @@ fn find_binaries() -> Option<(PathBuf, PathBuf)> {
 	let from_path = std::env::var_os("PATH")
 		.into_iter()
 		.flat_map(|path| std::env::split_paths(&path).collect::<Vec<_>>());
+	// Debian and Ubuntu, CI's runners among them, keep each version's
+	// binaries off `PATH`, in `/usr/lib/postgresql/<version>/bin`: the
+	// newest is used.
+	let mut debian: Vec<PathBuf> = std::fs::read_dir("/usr/lib/postgresql")
+		.into_iter()
+		.flatten()
+		.filter_map(|entry| Some(entry.ok()?.path().join("bin")))
+		.collect();
+	debian.sort_by_key(|path| {
+		path.parent()
+			.and_then(|version| version.file_name()?.to_str()?.parse::<u32>().ok())
+			.unwrap_or(0)
+	});
+	debian.reverse();
 
 	let directory = from_env
 		.chain(from_path)
+		.chain(debian)
 		.find(|directory| has_initdb(directory))?;
 	let server = std::fs::canonicalize(directory.join("postgres")).ok()?;
 	let binaries = std::fs::canonicalize(directory.join("initdb"))

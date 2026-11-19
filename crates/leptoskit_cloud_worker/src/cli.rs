@@ -1,14 +1,20 @@
 //! `leptoskit-cloud-worker`'s commands.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 
 use leptoskit_cloud::workers::WorkerRole;
+use leptoskit_cloud_runtime::DatabaseAccess;
 use tokio::sync::watch;
 
 use crate::client::Control;
 use crate::client::Key;
+use crate::cluster::Bounds;
+use crate::cluster::ClusterRole;
+use crate::cluster::Kubernetes;
 use crate::command::CommandBuilder;
+use crate::postgres::Postgres;
 use crate::run::Settings;
 use crate::run::Worker;
 use crate::state::Identity;
@@ -69,9 +75,10 @@ pub struct Run {
 	#[arg(long, env = "LEPTOSKIT_CLOUD_WORKER_WORKSPACE")]
 	pub workspace: Option<PathBuf>,
 	/// The program that builds: run once for each build, in the unpacked
-	/// source. The worker doesn't isolate it; see the readme.
+	/// source. The worker doesn't isolate it; see the readme. A build
+	/// worker needs one.
 	#[arg(long, env = "LEPTOSKIT_CLOUD_WORKER_BUILD_COMMAND")]
-	pub build_command: PathBuf,
+	pub build_command: Option<PathBuf>,
 	/// An argument for the build command. Repeat it for more.
 	#[arg(long = "build-arg")]
 	pub build_arguments: Vec<String>,
@@ -82,7 +89,78 @@ pub struct Run {
 	/// How long one build may run, in minutes.
 	#[arg(long, default_value_t = 60)]
 	pub build_timeout_minutes: u64,
+	/// For a cluster's worker: the kubeconfig file to reach the cluster
+	/// with, while developing. Without it the worker uses the service
+	/// account of the pod it runs in.
+	#[arg(long, env = "LEPTOSKIT_CLOUD_WORKER_KUBECONFIG")]
+	pub kubeconfig: Option<PathBuf>,
+	/// For a cluster's worker: the shared Postgres server's administrator,
+	/// as `postgres://…`. Without it, a release that needs a managed
+	/// database fails. Give it in the environment: an argument is seen by
+	/// anyone who lists the machine's processes.
+	#[arg(
+		long,
+		env = "LEPTOSKIT_CLOUD_WORKER_POSTGRES_URL",
+		hide_env_values = true
+	)]
+	pub postgres_url: Option<Hidden>,
+	/// For a cluster's worker: a PEM file of certificates to trust for the
+	/// Postgres server's, besides the webpki roots, when a private
+	/// authority signed it.
+	#[arg(long, env = "LEPTOSKIT_CLOUD_WORKER_POSTGRES_CA")]
+	pub postgres_ca: Option<PathBuf>,
+	/// For a cluster's worker: the namespace the Postgres server runs in,
+	/// the only one a release's processes may reach a database in. Needed
+	/// with `--postgres-url`.
+	#[arg(long, env = "LEPTOSKIT_CLOUD_WORKER_POSTGRES_NAMESPACE")]
+	pub postgres_namespace: Option<String>,
+	/// For a cluster's worker: the Postgres server's port.
+	#[arg(
+		long,
+		env = "LEPTOSKIT_CLOUD_WORKER_POSTGRES_PORT",
+		default_value_t = 5432
+	)]
+	pub postgres_port: u16,
+	/// For a cluster's worker: the `RuntimeClass` every release must run
+	/// under, such as a sandboxed one. Without it a release may keep the
+	/// cluster's default.
+	#[arg(long, env = "LEPTOSKIT_CLOUD_WORKER_RUNTIME_CLASS")]
+	pub runtime_class: Option<String>,
+	/// For a cluster's worker: how long a release may take to become
+	/// ready, in minutes, a day at most.
+	#[arg(long, default_value_t = 10)]
+	pub rollout_timeout_minutes: u64,
 }
+
+/// A value that is never printed, such as an address with a password in
+/// it.
+#[derive(Clone)]
+pub struct Hidden(String);
+
+impl Hidden {
+	/// The value itself.
+	#[must_use]
+	pub fn expose(&self) -> &str {
+		&self.0
+	}
+}
+
+impl std::fmt::Debug for Hidden {
+	fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		formatter.write_str("[hidden]")
+	}
+}
+
+impl std::str::FromStr for Hidden {
+	type Err = std::convert::Infallible;
+
+	fn from_str(value: &str) -> Result<Self, Self::Err> {
+		Ok(Self(value.to_owned()))
+	}
+}
+
+/// The longest a rollout may be given, in minutes: a day.
+const MOST_ROLLOUT_MINUTES: u64 = 24 * 60;
 
 #[derive(Debug, clap::Args)]
 pub struct Forget {
@@ -102,8 +180,6 @@ pub enum CommandError {
 	Pair(crate::client::CallError),
 	#[error(transparent)]
 	Run(#[from] crate::run::RunError),
-	#[error("this worker is paired as a cluster worker, and the cluster role isn't built yet")]
-	ClusterRole,
 	#[error("{0}")]
 	Usage(String),
 }
@@ -135,36 +211,102 @@ async fn pair(arguments: Pair) -> Result<(), CommandError> {
 }
 
 async fn run(arguments: Run, shutdown: watch::Receiver<bool>) -> Result<(), CommandError> {
-	if arguments.build_timeout_minutes == 0 {
+	if arguments.build_timeout_minutes == 0 || arguments.rollout_timeout_minutes == 0 {
 		return Err(CommandError::Usage(
-			"--build-timeout-minutes is a minute or more".to_owned(),
+			"a timeout is a minute or more".to_owned(),
 		));
+	}
+
+	if arguments.rollout_timeout_minutes > MOST_ROLLOUT_MINUTES {
+		return Err(CommandError::Usage(format!(
+			"a rollout may take {MOST_ROLLOUT_MINUTES} minutes at most"
+		)));
 	}
 
 	let state = State::open(&arguments.state)?;
 	let identity = state.identity()?;
-
-	if identity.role != WorkerRole::Build {
-		return Err(CommandError::ClusterRole);
-	}
-
 	let control = Control::new(
 		&identity.origin,
 		&identity.rpc,
 		Some(Key::new(identity.key)),
 	)?;
-	let builder = CommandBuilder::new(arguments.build_command, arguments.build_arguments)
-		.pass(arguments.build_environment)
-		.timeout(Duration::from_secs(
-			arguments.build_timeout_minutes.saturating_mul(60),
-		));
 	let workspace = arguments
 		.workspace
 		.unwrap_or_else(|| arguments.state.join("workspace"));
-	let worker = Worker::new(control, state, builder, Settings::new(workspace))?;
+
+	let worker = match identity.role {
+		WorkerRole::Build => {
+			let Some(program) = arguments.build_command else {
+				return Err(CommandError::Usage(
+					"a build worker needs --build-command".to_owned(),
+				));
+			};
+			let builder = CommandBuilder::new(program, arguments.build_arguments)
+				.pass(arguments.build_environment)
+				.timeout(Duration::from_secs(
+					arguments.build_timeout_minutes.saturating_mul(60),
+				));
+			Worker::new(control, state, builder, Settings::new(workspace))?
+		}
+		WorkerRole::Cluster => {
+			let deadline =
+				Duration::from_secs(arguments.rollout_timeout_minutes.saturating_mul(60));
+			let profile = leptoskit_cloud_runtime::ClusterProfile::platform_defaults();
+			let place = match arguments.kubeconfig {
+				Some(path) => Kubernetes::from_kubeconfig(path, profile, deadline),
+				None => Kubernetes::in_cluster(profile, deadline),
+			};
+			let mut bounds = Bounds {
+				runtime_class: arguments.runtime_class,
+				database: None,
+			};
+			let mut databases = None;
+
+			if let Some(address) = arguments.postgres_url {
+				let Some(namespace) = arguments.postgres_namespace else {
+					return Err(CommandError::Usage(
+						"a database server needs --postgres-namespace".to_owned(),
+					));
+				};
+				let mut postgres = Postgres::new(address.expose())
+					.map_err(|error| CommandError::Usage(error.to_string()))?;
+
+				if let Some(path) = arguments.postgres_ca {
+					let pem = std::fs::read(&path).map_err(|error| {
+						CommandError::Usage(format!("{}: {error}", path.display()))
+					})?;
+					postgres = postgres
+						.trust(&pem)
+						.map_err(|error| CommandError::Usage(error.to_string()))?;
+				}
+
+				bounds.database = Some(DatabaseAccess {
+					namespace,
+					port: arguments.postgres_port,
+				});
+				databases = Some(Arc::new(postgres));
+			}
+
+			let mut cluster = ClusterRole::new(Arc::new(place)).bounds(bounds);
+
+			if let Some(postgres) = databases {
+				cluster = cluster.databases(postgres);
+			}
+
+			// A cluster's worker is never given a build: this builder is
+			// never run.
+			let builder = CommandBuilder::new("false", Vec::new());
+			Worker::new(control, state, builder, Settings::new(workspace))?.with_cluster(cluster)
+		}
+	};
 	eprintln!(
-		"leptoskit-cloud-worker: {} is asking {} for builds",
-		identity.name, identity.origin
+		"leptoskit-cloud-worker: {} is asking {} for {} jobs",
+		identity.name,
+		identity.origin,
+		match identity.role {
+			WorkerRole::Build => "build",
+			WorkerRole::Cluster => "cluster",
+		}
 	);
 	Ok(worker.run(shutdown).await?)
 }

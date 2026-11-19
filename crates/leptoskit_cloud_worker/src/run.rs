@@ -120,9 +120,47 @@ pub struct Worker<B> {
 	control: Control,
 	state: State,
 	builder: B,
+	/// What a cluster's worker does with its jobs, when this is one.
+	cluster: Option<crate::cluster::ClusterRole>,
 	/// For presigned addresses: no key, and no redirects.
 	downloads: reqwest::Client,
 	settings: Settings,
+}
+
+/// What a job does.
+#[derive(Clone, Copy)]
+enum Work<'a> {
+	Build(&'a BuildServerInput),
+	Cluster(&'a crate::cluster::ClusterRole),
+}
+
+/// A cluster job's outcome, in a few words for the operator.
+fn summary(outcome: &JobOutcome) -> String {
+	use leptoskit_cloud::workers::BackupOutcome;
+	use leptoskit_cloud::workers::DestroyOutcome;
+	use leptoskit_cloud::workers::ReleaseOutcome;
+	use leptoskit_cloud::workers::RestoreOutcome;
+
+	match outcome {
+		JobOutcome::Release(ReleaseOutcome::Applied) => "applied".to_owned(),
+		JobOutcome::Release(ReleaseOutcome::NotReady { process, reason }) => {
+			format!("{process} never became ready: {reason}")
+		}
+		JobOutcome::Release(ReleaseOutcome::MigrationsFailed { reason }) => {
+			format!("migrations failed: {reason}")
+		}
+		JobOutcome::DestroyEnvironment(DestroyOutcome::Destroyed) => "removed".to_owned(),
+		JobOutcome::DestroyEnvironment(DestroyOutcome::Failed { reason })
+		| JobOutcome::BackupDatabase(BackupOutcome::Failed { reason })
+		| JobOutcome::RestoreDatabase(RestoreOutcome::Failed { reason })
+		| JobOutcome::BuildServer(BuildOutcome::Failed { reason, .. }) => {
+			format!("failed: {reason}")
+		}
+		JobOutcome::BackupDatabase(BackupOutcome::Taken(_)) => "backed up".to_owned(),
+		JobOutcome::RestoreDatabase(RestoreOutcome::Restored { .. }) => "restored".to_owned(),
+		JobOutcome::BuildServer(BuildOutcome::Succeeded(_)) => "built".to_owned(),
+		JobOutcome::BuildServer(BuildOutcome::Stopped) => "stopped".to_owned(),
+	}
 }
 
 /// Tells the operator `text`, which may hold a build's words: no control
@@ -266,9 +304,17 @@ impl<B: Builder> Worker<B> {
 			control,
 			state,
 			builder,
+			cluster: None,
 			downloads,
 			settings,
 		})
+	}
+
+	/// Takes a cluster's jobs with `cluster`: releases and removals.
+	#[must_use]
+	pub fn with_cluster(mut self, cluster: crate::cluster::ClusterRole) -> Self {
+		self.cluster = Some(cluster);
+		self
 	}
 
 	/// The worker's state directory.
@@ -351,11 +397,28 @@ impl<B: Builder> Worker<B> {
 			Err(error) => return Err(RunError::Call(error)),
 		};
 		let job = assignment.job;
-		let ended = match &assignment.input {
-			JobInput::BuildServer(input) => self.build(&assignment, input).await?,
+		let ended = match (&assignment.input, &self.cluster) {
+			(JobInput::BuildServer(input), None) => {
+				note(&format!(
+					"job {job}: building {}/{} #{} (attempt {})",
+					input.deployment.organization,
+					input.deployment.project,
+					input.deployment.number,
+					assignment.attempt
+				));
+				self.job(&assignment, Work::Build(input)).await?
+			}
+			(input, Some(cluster)) if !matches!(input, JobInput::BuildServer(_)) => {
+				note(&format!(
+					"job {job}: {:?} (attempt {})",
+					kind_of(input),
+					assignment.attempt
+				));
+				self.job(&assignment, Work::Cluster(cluster)).await?
+			}
 			// Nothing is started, so nothing needs reconciling: the lease
 			// runs out and says the job never began.
-			other => {
+			(other, _) => {
 				let kind = kind_of(other);
 				note(&format!("job {job}: this worker doesn't run {kind:?} jobs"));
 				Ended::Abandoned(format!("this worker doesn't run {kind:?} jobs"))
@@ -431,11 +494,8 @@ impl<B: Builder> Worker<B> {
 		outcome
 	}
 
-	async fn build(
-		&self,
-		assignment: &Assignment,
-		input: &BuildServerInput,
-	) -> Result<Ended, RunError> {
+	/// Runs a job from its marker to its reported outcome.
+	async fn job(&self, assignment: &Assignment, work: Work<'_>) -> Result<Ended, RunError> {
 		let job = assignment.job;
 		let attempt = assignment.attempt;
 		// Before anything runs: a worker that dies from here on knows on
@@ -443,12 +503,8 @@ impl<B: Builder> Worker<B> {
 		self.state.start(&Marker {
 			job,
 			attempt,
-			kind: JobKind::BuildServer,
+			kind: kind_of(&assignment.input),
 		})?;
-		note(&format!(
-			"job {job}: building {}/{} #{} (attempt {attempt})",
-			input.deployment.organization, input.deployment.project, input.deployment.number
-		));
 		let lease = Duration::from_secs(u64::from(assignment.lease_seconds.max(3)));
 		let every = self.settings.renew_every.unwrap_or(lease / 3);
 		let fate = Arc::new(AtomicU8::new(RUNNING));
@@ -462,11 +518,22 @@ impl<B: Builder> Worker<B> {
 			stopper,
 		));
 		let (log, shipping) = logs::ship(self.control.clone(), job, attempt);
-		let built = self.build_in(input, &log, &stop).await;
-		let outcome = match (fate.load(Ordering::SeqCst), built) {
+		let done = match work {
+			Work::Build(input) => {
+				self.build_in(input, &log, &stop)
+					.await
+					.map(JobOutcome::BuildServer)
+			}
+			Work::Cluster(cluster) => Ok(cluster.run(assignment, &log).await),
+		};
+		let outcome = match (fate.load(Ordering::SeqCst), done) {
 			(LOST, _) => Err("its lease ran out".to_owned()),
-			(CANCELLED, _) => Ok(BuildOutcome::Stopped),
-			(_, built) => built,
+			// Only a build stops when its deployment is cancelled; a
+			// cluster's job runs to its end.
+			(CANCELLED, _) if matches!(work, Work::Build(_)) => {
+				Ok(JobOutcome::BuildServer(BuildOutcome::Stopped))
+			}
+			(_, done) => done,
 		};
 		// Every sink is dropped, so the log's task ends once it has sent
 		// what it holds.
@@ -478,7 +545,7 @@ impl<B: Builder> Worker<B> {
 					note(&format!("job {job}: reporting without the end of its log"));
 				}
 
-				JobOutcome::BuildServer(outcome)
+				outcome
 			}
 			Err(reason) => {
 				shipping.abort();
@@ -524,7 +591,10 @@ impl<B: Builder> Worker<B> {
 			Ended::Reported(JobOutcome::BuildServer(BuildOutcome::Failed { reason, .. })) => {
 				note(&format!("job {job}: failed: {reason}"));
 			}
-			Ended::Reported(_) => note(&format!("job {job}: stopped")),
+			Ended::Reported(JobOutcome::BuildServer(BuildOutcome::Stopped)) => {
+				note(&format!("job {job}: stopped"));
+			}
+			Ended::Reported(outcome) => note(&format!("job {job}: {}", summary(outcome))),
 			Ended::Abandoned(reason) => note(&format!("job {job}: {reason}")),
 		}
 

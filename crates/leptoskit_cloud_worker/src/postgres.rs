@@ -1,0 +1,490 @@
+//! Environments' managed databases on the cluster's shared Postgres
+//! server, as [`DatabaseStep`] sets out.
+//!
+//! The worker connects as an administrator the operator names. Every name
+//! is quoted as an identifier and every literal with `postgres-protocol`'s
+//! escaping, never spliced in as it came, and a role's password is sent
+//! only as a SCRAM verifier made here: the server, its logs, and the
+//! network never see it in plain text.
+//!
+//! Each step checks that it took: a `REVOKE` the server answers with only a
+//! warning, such as on a managed server where the administrator isn't the
+//! owner, fails the step instead of passing as done.
+
+use std::sync::Arc;
+use std::time::Duration;
+
+use leptoskit_cloud::workers::DatabaseStep;
+use postgres_protocol::escape::escape_identifier;
+use postgres_protocol::escape::escape_literal;
+use rustls::pki_types::CertificateDer;
+use rustls::pki_types::pem::PemObject as _;
+use tokio::sync::Mutex;
+
+use crate::cluster::Databases;
+use crate::cluster::Pending;
+
+/// How many connections an environment's role may hold at once.
+pub const CONNECTION_LIMIT: u32 = 20;
+
+/// How long one statement, or connecting, may take.
+const TIMEOUT: Duration = Duration::from_secs(30);
+
+/// The databases, other than the environments', that are still open to
+/// every role: ones that take connections and that `PUBLIC` may connect
+/// to or make temporary tables in. A database with no ACL at all has the
+/// defaults, which let `PUBLIC` do both.
+const STILL_OPEN: &str = "SELECT datname FROM pg_database AS d WHERE datallowconn AND datname !~ \
+                          '^env_[0-9a-f]{32}$' AND (datacl IS NULL OR EXISTS (SELECT 1 FROM \
+                          aclexplode(d.datacl) AS acl WHERE acl.grantee = 0 AND \
+                          acl.privilege_type IN ('CONNECT', 'TEMPORARY'))) ORDER BY datname";
+
+/// The cluster's Postgres server, reached as an administrator.
+pub struct Postgres {
+	config: tokio_postgres::Config,
+	tls: bool,
+	/// Certificates trusted besides the webpki roots, for a server with a
+	/// private authority.
+	authorities: Vec<CertificateDer<'static>>,
+	/// Whether the server's other databases are closed to everyone yet:
+	/// once per worker is enough, and doing it again is harmless.
+	prepared: Arc<Mutex<bool>>,
+}
+
+impl std::fmt::Debug for Postgres {
+	fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		formatter
+			.debug_struct("Postgres")
+			.field("tls", &self.tls)
+			.field("authorities", &self.authorities.len())
+			.finish_non_exhaustive()
+	}
+}
+
+/// Why the administrator's address can't be used.
+#[derive(Debug, thiserror::Error)]
+#[error(
+	"the Postgres administrator's address isn't one: it must be `postgres://…`, with `sslmode` \
+	 `disable`, `prefer`, or `require` if at all"
+)]
+pub struct AddressError;
+
+/// Why the certificates given for the server can't be used.
+#[derive(Debug, thiserror::Error)]
+#[error("the Postgres server's certificate authority isn't a PEM file of certificates")]
+pub struct AuthorityError;
+
+impl Postgres {
+	/// The server at `address`, a `postgres://` URL with an administrator's
+	/// name and password.
+	///
+	/// `sslmode=disable` connects without TLS, which is for a server on the
+	/// same machine only. Any other mode, or none, requires TLS with a
+	/// certificate the webpki roots, or an authority given to
+	/// [`trust`](Self::trust), vouch for: `prefer` never falls back to
+	/// plain text here.
+	///
+	/// # Errors
+	///
+	/// [`AddressError`] when `address` isn't a Postgres URL.
+	pub fn new(address: &str) -> Result<Self, AddressError> {
+		let mut config: tokio_postgres::Config = address.parse().map_err(|_| AddressError)?;
+		let tls = config.get_ssl_mode() != tokio_postgres::config::SslMode::Disable;
+
+		if tls {
+			config.ssl_mode(tokio_postgres::config::SslMode::Require);
+		}
+
+		config.connect_timeout(TIMEOUT);
+		Ok(Self {
+			config,
+			tls,
+			authorities: Vec::new(),
+			prepared: Arc::default(),
+		})
+	}
+
+	/// Also trusts the certificates in `pem` for the server's: for a server
+	/// whose certificate a private authority signed.
+	///
+	/// # Errors
+	///
+	/// [`AuthorityError`] when `pem` holds no certificate, or one that
+	/// can't be read.
+	pub fn trust(mut self, pem: &[u8]) -> Result<Self, AuthorityError> {
+		let certificates = CertificateDer::pem_slice_iter(pem)
+			.collect::<Result<Vec<_>, _>>()
+			.map_err(|_| AuthorityError)?;
+
+		if certificates.is_empty() {
+			return Err(AuthorityError);
+		}
+
+		self.authorities.extend(certificates);
+		Ok(self)
+	}
+
+	async fn connect(&self) -> Result<tokio_postgres::Client, String> {
+		let unreachable = |_| "the server couldn't be reached".to_owned();
+
+		let client = if self.tls {
+			let (client, connection) = self
+				.config
+				.connect(tls(&self.authorities)?)
+				.await
+				.map_err(unreachable)?;
+			tokio::spawn(connection);
+			client
+		} else {
+			let (client, connection) = self
+				.config
+				.connect(tokio_postgres::NoTls)
+				.await
+				.map_err(unreachable)?;
+			tokio::spawn(connection);
+			client
+		};
+
+		// No statement waits for ever on a lock a tenant's session holds.
+		client
+			.batch_execute(&format!(
+				"SET statement_timeout = {}; SET lock_timeout = {}",
+				TIMEOUT.as_millis(),
+				TIMEOUT.as_millis()
+			))
+			.await
+			.map_err(|error| said(&error))?;
+		Ok(client)
+	}
+
+	/// Closes every database that isn't an environment's, `template1` and
+	/// `postgres` among them, to everyone the administrator didn't let in
+	/// by name, and checks that it took.
+	async fn prepare(&self, client: &tokio_postgres::Client) -> Result<(), String> {
+		let mut prepared = self.prepared.lock().await;
+
+		if *prepared {
+			return Ok(());
+		}
+
+		for row in client
+			.query(STILL_OPEN, &[])
+			.await
+			.map_err(|error| said(&error))?
+		{
+			let name: String = row.get(0);
+			client
+				.batch_execute(&format!(
+					"REVOKE CONNECT, TEMPORARY ON DATABASE {} FROM PUBLIC",
+					escape_identifier(&name)
+				))
+				.await
+				.map_err(|error| said(&error))?;
+		}
+
+		let open: Vec<String> = client
+			.query(STILL_OPEN, &[])
+			.await
+			.map_err(|error| said(&error))?
+			.iter()
+			.map(|row| row.get(0))
+			.collect();
+
+		if !open.is_empty() {
+			return Err(format!(
+				"the server's {} database is still open to every role, and the administrator \
+				 couldn't close it",
+				open.join(", ")
+			));
+		}
+
+		*prepared = true;
+		Ok(())
+	}
+
+	async fn ensure_step(&self, step: &DatabaseStep, password: &str) -> Result<(), String> {
+		ours(&step.name)?;
+
+		if step.role != step.name {
+			return Err("its role isn't named as its database is".to_owned());
+		}
+
+		let client = self.connect().await?;
+		self.prepare(&client).await?;
+		let role = escape_identifier(&step.role);
+		let database = escape_identifier(&step.name);
+		let verifier = escape_literal(&postgres_protocol::password::scram_sha_256(
+			password.as_bytes(),
+		));
+		let attributes = format!(
+			"LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS NOINHERIT \
+			 CONNECTION LIMIT {CONNECTION_LIMIT} VALID UNTIL 'infinity' PASSWORD {verifier}"
+		);
+
+		let has_role = client
+			.query_opt("SELECT 1 FROM pg_roles WHERE rolname = $1", &[&step.role])
+			.await
+			.map_err(|error| said(&error))?
+			.is_some();
+
+		if has_role {
+			// Whatever it was, it is this again: no settings of its own and
+			// no memberships either way.
+			client
+				.batch_execute(&format!("ALTER ROLE {role} WITH {attributes}"))
+				.await
+				.map_err(|_| "its role couldn't be updated".to_owned())?;
+			reset_role(&client, &step.role).await?;
+		} else {
+			client
+				.batch_execute(&format!("CREATE ROLE {role} WITH {attributes}"))
+				.await
+				.map_err(|_| "its role couldn't be made".to_owned())?;
+		}
+
+		let owner: Option<String> = client
+			.query_opt(
+				"SELECT pg_get_userbyid(datdba) FROM pg_database WHERE datname = $1",
+				&[&step.name],
+			)
+			.await
+			.map_err(|error| said(&error))?
+			.map(|row| row.get(0));
+
+		match owner {
+			None => {
+				client
+					.batch_execute(&format!(
+						"CREATE DATABASE {database} OWNER {role} TEMPLATE template0"
+					))
+					.await
+					.map_err(|error| said(&error))?;
+			}
+			// Made by an earlier run of this step.
+			Some(owner) if owner == step.role => {}
+			// Never adopted: what is in it isn't known.
+			Some(_) => {
+				return Err("its database is there already, owned by another role".to_owned());
+			}
+		}
+
+		client
+			.batch_execute(&format!(
+				"ALTER DATABASE {database} RESET ALL; REVOKE ALL ON DATABASE {database} FROM \
+				 PUBLIC"
+			))
+			.await
+			.map_err(|error| said(&error))?;
+
+		let open = client
+			.query_one(
+				"SELECT EXISTS (SELECT 1 FROM pg_database AS d, aclexplode(d.datacl) AS acl WHERE \
+				 d.datname = $1 AND acl.grantee = 0) OR (SELECT datacl IS NULL FROM pg_database \
+				 WHERE datname = $1)",
+				&[&step.name],
+			)
+			.await
+			.map_err(|error| said(&error))?
+			.get::<_, bool>(0);
+
+		if open {
+			return Err("its database is still open to every role".to_owned());
+		}
+
+		Ok(())
+	}
+
+	async fn remove_named(&self, name: &str) -> Result<(), String> {
+		ours(name)?;
+		let client = self.connect().await?;
+		let quoted = escape_identifier(name);
+		client
+			.batch_execute(&format!("DROP DATABASE IF EXISTS {quoted} WITH (FORCE)"))
+			.await
+			.map_err(|error| said(&error))?;
+		client
+			.batch_execute(&format!("DROP ROLE IF EXISTS {quoted}"))
+			.await
+			.map_err(|error| said(&error))
+	}
+}
+
+/// Clears `role`'s settings, everywhere, and every membership it has or
+/// gives, then checks that none is left.
+async fn reset_role(client: &tokio_postgres::Client, name: &str) -> Result<(), String> {
+	let role = escape_identifier(name);
+	let mut statements = vec![format!("ALTER ROLE {role} RESET ALL")];
+
+	for row in client
+		.query(
+			"SELECT datname FROM pg_db_role_setting JOIN pg_roles ON pg_roles.oid = setrole JOIN \
+			 pg_database ON pg_database.oid = setdatabase WHERE rolname = $1",
+			&[&name],
+		)
+		.await
+		.map_err(|error| said(&error))?
+	{
+		let database: String = row.get(0);
+		statements.push(format!(
+			"ALTER ROLE {role} IN DATABASE {} RESET ALL",
+			escape_identifier(&database)
+		));
+	}
+
+	for row in client
+		.query(MEMBERSHIPS, &[&name])
+		.await
+		.map_err(|error| said(&error))?
+	{
+		let (parent, child): (String, String) = (row.get(0), row.get(1));
+		statements.push(format!(
+			"REVOKE {} FROM {}",
+			escape_identifier(&parent),
+			escape_identifier(&child)
+		));
+	}
+
+	for statement in statements {
+		client
+			.batch_execute(&statement)
+			.await
+			.map_err(|error| said(&error))?;
+	}
+
+	let left = client
+		.query_one(
+			&format!(
+				"SELECT (SELECT count(*) FROM ({MEMBERSHIPS}) AS m) + (SELECT count(*) FROM \
+				 pg_db_role_setting JOIN pg_roles ON pg_roles.oid = setrole WHERE rolname = $1)"
+			),
+			&[&name],
+		)
+		.await
+		.map_err(|error| said(&error))?
+		.get::<_, i64>(0);
+
+	if left == 0 {
+		Ok(())
+	} else {
+		Err(
+			"its role still has settings or memberships the administrator couldn't remove"
+				.to_owned(),
+		)
+	}
+}
+
+/// The memberships `$1` has in other roles, and other roles have in it, as
+/// (parent, member).
+const MEMBERSHIPS: &str = "SELECT parent.rolname, child.rolname FROM pg_auth_members AS member \
+                           JOIN pg_roles AS parent ON parent.oid = member.roleid JOIN pg_roles AS \
+                           child ON child.oid = member.member WHERE child.rolname = $1 OR \
+                           parent.rolname = $1";
+
+impl Databases for Postgres {
+	fn ensure<'a>(
+		&'a self,
+		step: &'a DatabaseStep,
+		password: &'a str,
+	) -> Pending<'a, Result<(), String>> {
+		Box::pin(self.ensure_step(step, password))
+	}
+
+	fn remove<'a>(&'a self, name: &'a str) -> Pending<'a, Result<(), String>> {
+		Box::pin(self.remove_named(name))
+	}
+}
+
+/// Refuses a name that isn't an environment's, `env_` and 32 lower-case
+/// hex digits: whatever the control plane says, the worker never alters,
+/// or drops, the administrator or anything else on the server that isn't
+/// an environment's.
+fn ours(name: &str) -> Result<(), String> {
+	let hex = name.strip_prefix("env_").unwrap_or_default();
+
+	if hex.len() == 32
+		&& hex
+			.bytes()
+			.all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+	{
+		Ok(())
+	} else {
+		Err("its name isn't an environment's".to_owned())
+	}
+}
+
+/// What the server said, by its SQLSTATE: a statement's text is never
+/// repeated.
+fn said(error: &tokio_postgres::Error) -> String {
+	match error.code() {
+		Some(code) => format!("the server refused a statement ({})", code.code()),
+		None => "the server couldn't be reached".to_owned(),
+	}
+}
+
+/// TLS with the webpki roots and `authorities`.
+fn tls(
+	authorities: &[CertificateDer<'static>],
+) -> Result<tokio_postgres_rustls::MakeRustlsConnect, String> {
+	let mut roots = rustls::RootCertStore::empty();
+	roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+
+	for authority in authorities {
+		roots
+			.add(authority.clone())
+			.map_err(|_| "the server's certificate authority couldn't be trusted".to_owned())?;
+	}
+
+	let config = rustls::ClientConfig::builder_with_provider(Arc::new(
+		rustls::crypto::ring::default_provider(),
+	))
+	.with_safe_default_protocol_versions()
+	.map_err(|_| "TLS couldn't be set up".to_owned())?
+	.with_root_certificates(roots)
+	.with_no_client_auth();
+
+	Ok(tokio_postgres_rustls::MakeRustlsConnect::new(config))
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn tls_is_required_unless_it_is_turned_off() {
+		use tokio_postgres::config::SslMode;
+
+		for (address, mode, tls) in [
+			(
+				"postgres://admin:pw@db.internal/postgres",
+				SslMode::Require,
+				true,
+			),
+			(
+				"postgres://admin:pw@db.internal/postgres?sslmode=prefer",
+				SslMode::Require,
+				true,
+			),
+			(
+				"postgres://admin:pw@db.internal/postgres?sslmode=require",
+				SslMode::Require,
+				true,
+			),
+			(
+				"postgres://admin:pw@localhost/postgres?sslmode=disable",
+				SslMode::Disable,
+				false,
+			),
+		] {
+			let postgres = Postgres::new(address).expect("an address");
+			assert_eq!(postgres.config.get_ssl_mode(), mode, "{address}");
+			assert_eq!(postgres.tls, tls, "{address}");
+		}
+	}
+
+	#[test]
+	fn an_authority_must_be_certificates() {
+		let postgres =
+			Postgres::new("postgres://admin:pw@db.internal/postgres").expect("an address");
+		assert!(postgres.trust(b"not a certificate").is_err());
+	}
+}

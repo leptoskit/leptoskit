@@ -22,18 +22,25 @@ clap = { workspace = true, features = ["derive", "env"] }
 hex = { workspace = true }
 # The worker protocol's types, and unpacking a source archive.
 leptoskit_cloud = { workspace = true, features = ["archive"] }
+leptoskit_cloud_runtime = { workspace = true, features = ["kube"] }
 leptoskit_rpc = { workspace = true, features = ["client"] }
+# The cluster's shared Postgres server, reached as its administrator.
+postgres-protocol = { workspace = true }
 reqwest = { workspace = true, features = ["json", "rustls-tls", "stream"] }
 # The state directory's lock, and stopping a build's whole process group.
 rustix = { workspace = true, features = ["fs", "process"] }
+rustls = { workspace = true, features = ["ring", "std"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
 tempfile = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["fs", "io-util", "macros", "process", "rt-multi-thread", "signal", "sync", "time"] }
+tokio-postgres = { workspace = true, features = ["runtime"] }
+tokio-postgres-rustls = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true, features = ["serde"] }
+webpki-roots = { workspace = true }
 
 [target.'cfg(unix)'.dev-dependencies]
 chrono = { workspace = true }
@@ -41,6 +48,7 @@ futures = { workspace = true }
 leptoskit_auth = { workspace = true }
 leptoskit_axum = { workspace = true }
 leptoskit_cloud = { workspace = true, features = ["archive", "server"] }
+leptoskit_cloud_runtime = { workspace = true, features = ["kube", "testing"] }
 leptoskit_db = { workspace = true, features = ["sqlite"] }
 leptoskit_idp = { workspace = true }
 tokio = { workspace = true, features = ["net"] }

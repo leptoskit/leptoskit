@@ -2,7 +2,7 @@
 
 `leptoskit-cloud-worker` is LeptosKit Cloud's worker. It pairs with a control plane, asks it for jobs, runs one at a time under a lease, sends the job's log, and reports how it ended.
 
-This crate holds the loop every role shares and the `build` role. The `cluster` role, native builds and store publishing aren't built yet.
+This crate holds the loop every role shares, the `build` role and the `cluster` role. Native builds and store publishing aren't built yet, and a cluster's worker doesn't take backups yet.
 
 ## Pairing
 
@@ -78,6 +78,37 @@ What the command prints, on either stream, is the build's log. It writes one of 
 A command that exits with a failure and writes nothing fails the build with its exit status. When the command ends, when its deployment is cancelled, and when it runs past its time, the worker stops it and whatever it started in its own process group (`TERM`, then `KILL` ten seconds later). A worker stopped at once by a second signal kills it on its way out. A process that leaves the group, by `setsid` or because a daemon such as Docker's started it, is not stopped: a command that starts one must stop it when it is asked to end.
 
 **The worker doesn't isolate the build.** The command runs as the worker's own user, so it can read the worker's key and reach the network. A process it leaves running can reach the next build's files and output, and every variable named with `--build-env` reaches every build: never name a credential there that one organisation must not use on another's behalf, such as one registry login for every tenant. Lines in a build's log that start `worker:` may be the build's own. To build other people's code, the command has to do the work inside a sandbox of its own, a virtual machine or a container that is thrown away afterwards and is given only the source directory. No such command ships with this crate.
+
+## A cluster's worker
+
+A worker paired for a cluster applies that cluster's releases and removes its environments. It reaches Kubernetes with the service account of the pod it runs in, or with `--kubeconfig` while developing, and describes the cluster with the platform's defaults (`ClusterProfile::platform_defaults`: Traefik in `kube-system` and KEDA's HTTP add-on in `keda`).
+
+```sh
+LEPTOSKIT_CLOUD_WORKER_POSTGRES_URL=postgres://admin:…@postgres.internal/postgres \
+LEPTOSKIT_CLOUD_WORKER_POSTGRES_NAMESPACE=postgres \
+LEPTOSKIT_CLOUD_WORKER_RUNTIME_CLASS=gvisor \
+	leptoskit-cloud-worker run --state /var/lib/leptoskit-cloud-worker
+```
+
+| Option                      | Variable                                    | What it sets                                                                                           |
+| --------------------------- | ------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| `--kubeconfig`              | `LEPTOSKIT_CLOUD_WORKER_KUBECONFIG`         | A kubeconfig file to reach the cluster with. The pod's service account when not set.                   |
+| `--postgres-url`            | `LEPTOSKIT_CLOUD_WORKER_POSTGRES_URL`       | The shared Postgres server's administrator. Without it, a release that needs a managed database fails. |
+| `--postgres-namespace`      | `LEPTOSKIT_CLOUD_WORKER_POSTGRES_NAMESPACE` | The namespace the Postgres server runs in. Needed with `--postgres-url`.                               |
+| `--postgres-port`           | `LEPTOSKIT_CLOUD_WORKER_POSTGRES_PORT`      | The Postgres server's port. 5432 when not set.                                                         |
+| `--postgres-ca`             | `LEPTOSKIT_CLOUD_WORKER_POSTGRES_CA`        | A PEM file of certificates to trust for the Postgres server's, besides the webpki roots.               |
+| `--runtime-class`           | `LEPTOSKIT_CLOUD_WORKER_RUNTIME_CLASS`      | The `RuntimeClass` every release must run under. Without it a release may keep the cluster's default.  |
+| `--rollout-timeout-minutes` |                                             | How long a release may take to become ready, a day at most. 10 when not set.                           |
+
+The worker trusts the control plane only so far. A release whose pods wouldn't run under `--runtime-class`, or that opens its network to any database server but the one `--postgres-namespace` and `--postgres-port` name, is refused before anything is applied. A database it is told to make or drop must be the one named for the job's own environment (`env_` and the environment's ID in hex).
+
+Before a release that has a managed database, the worker makes sure of its role and database on the shared server: a login role that is nothing more (no superuser, database or role creation, replication or row-security bypass, no settings of its own, a member of no role and with no members, 20 connections at most), whose password is the one leased with the release, sent only as a SCRAM verifier, and a database it owns, made from `template0`, that no one else may connect to. A database of that name that another role owns is never adopted. Every other database on the server that takes connections, `template1` and `postgres` among them, is closed to `PUBLIC`: roles of the operator's that need one must be let in by name. Each of these is checked afterwards, and a step the administrator couldn't make (a managed server where it doesn't own `template1`, say) fails the release. Removing an environment removes its processes from the cluster, then drops its database and role.
+
+`sslmode=disable` in the administrator's address connects without TLS, for a server on the same machine only. Any other mode, or none, requires TLS, with no fallback to plain text, and a certificate that the webpki roots or `--postgres-ca` vouch for.
+
+The shared server has no disk quota per environment, and 20 connections for each environment can use up its `max_connections`. Every environment's role can see the names of the others' databases and roles, and who is connected. Keep the administrator's `pg_hba.conf` entry to the worker's address: every environment's pods can reach the server.
+
+A release whose processes never become ready, or that the cluster refuses, is reported as not ready; the previous release keeps serving. A failed migration shows as the new server never becoming ready: the worker doesn't tell the two apart. Dedicated database sizes (`s`, `m`, `l`) aren't run yet, and a release that asks for one fails. A backup or a restore is answered as failed, which leaves the database as it was.
 
 ## Crashes
 
