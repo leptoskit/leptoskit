@@ -47,7 +47,12 @@ fn a_directory_server_module_is_not_shadowed_by_a_generated_file() {
 	let before = files(path);
 	let config = LeptoskitConfig::load_from(path).unwrap();
 	let error = generate(path, &config, false, true).unwrap_err();
-	assert!(error.to_string().contains("sign_in/mod.rs"));
+	// With the host's separator: Windows joins onto a verbatim path with `\\`.
+	let module = std::path::Path::new("sign_in").join("mod.rs");
+	assert!(
+		error.to_string().contains(&module.display().to_string()),
+		"{error}"
+	);
 	assert_eq!(files(path), before);
 }
 

@@ -25,6 +25,10 @@ fn tunnel(config: &mut LeptoskitConfig) {
 }
 
 #[test]
+#[cfg_attr(
+	not(unix),
+	ignore = "edge paths are a Unix host's, checked by the operator host's path rules"
+)]
 fn tunnel_edges_keep_host_ownership_and_loopback_ingress() {
 	let mut config = website();
 	tunnel(&mut config);
@@ -52,6 +56,10 @@ fn tunnel_edges_keep_host_ownership_and_loopback_ingress() {
 }
 
 #[test]
+#[cfg_attr(
+	not(unix),
+	ignore = "edge paths are a Unix host's, checked by the operator host's path rules"
+)]
 fn https_needs_ranges_and_explicit_certificate_files() {
 	let config = website();
 	let plan = leptoskit_config::deployment::compile(&config)
@@ -74,6 +82,10 @@ fn https_needs_ranges_and_explicit_certificate_files() {
 }
 
 #[test]
+#[cfg_attr(
+	not(unix),
+	ignore = "edge paths are a Unix host's, checked by the operator host's path rules"
+)]
 fn public_services_require_deliberate_ambient_cookie_trust() {
 	let mut config = website();
 	tunnel(&mut config);
