@@ -22,7 +22,6 @@ use leptos::html;
 use leptos::prelude::*;
 use leptos::tachys::html::attribute::Attribute;
 use leptos::tachys::html::attribute::custom::custom_attribute;
-use leptos::tachys::html::element::custom;
 use leptos::tachys::html::event::on;
 use sha2::Digest;
 use sha2::Sha256;
@@ -1033,6 +1032,50 @@ fn rive_canvas(props: NativeProps, attrs: impl Attribute + 'static) -> AnyView {
 	panic!("enable leptoskit_native's rive feature before rendering a Rive element")
 }
 
+/// The element for a semantic tag, with `inner` as its content.
+///
+/// Each tag has its own typed element, so a rebuild patches it in place. A
+/// custom element built from the tag's name would be replaced on every
+/// rebuild instead: tachys compares the name with the document's upper-case
+/// `tagName`, and a field inside, with its focus and selection, would go with
+/// it.
+fn semantic_element(
+	tag: Tag,
+	inner: impl IntoView + 'static,
+	attrs: impl Attribute + 'static,
+) -> AnyView {
+	macro_rules! typed {
+		($element:expr) => {
+			$element.child(inner).add_any_attr(attrs).into_any()
+		};
+	}
+
+	match tag {
+		Tag::Div => typed!(html::div()),
+		Tag::Span => typed!(html::span()),
+		Tag::Heading(1) => typed!(html::h1()),
+		Tag::Heading(2) => typed!(html::h2()),
+		Tag::Heading(3) => typed!(html::h3()),
+		Tag::Heading(4) => typed!(html::h4()),
+		Tag::Heading(5) => typed!(html::h5()),
+		Tag::Heading(_) => typed!(html::h6()),
+		Tag::List => typed!(html::ul()),
+		Tag::ListItem => typed!(html::li()),
+		Tag::Nav => typed!(html::nav()),
+		Tag::Main => typed!(html::main()),
+		Tag::Header => typed!(html::header()),
+		Tag::Footer => typed!(html::footer()),
+		Tag::Aside => typed!(html::aside()),
+		Tag::Article => typed!(html::article()),
+		Tag::Section => typed!(html::section()),
+		Tag::Search => typed!(html::search()),
+		Tag::Paragraph => typed!(html::p()),
+		Tag::Label => typed!(html::label()),
+		// A rule is empty: it has no content to keep.
+		Tag::Rule => html::hr().add_any_attr(attrs).into_any(),
+	}
+}
+
 fn typed_element(parts: NodeParts, attrs: impl Attribute + 'static) -> AnyView {
 	let NodeParts {
 		kind,
@@ -1056,23 +1099,12 @@ fn typed_element(parts: NodeParts, attrs: impl Attribute + 'static) -> AnyView {
 						.add_any_attr(attrs)
 						.into_any()
 				}
-				Tag::Rule => html::hr().add_any_attr(attrs).into_any(),
-				semantic => {
-					custom(semantic.name())
-						.child((content, children))
-						.add_any_attr(attrs)
-						.into_any()
-				}
+				semantic => semantic_element(semantic, (content, children), attrs),
 			}
 		}
 		NativeKind::Text | NativeKind::TextRun => {
 			match tag {
-				Tag::Heading(_) | Tag::Label => {
-					custom(tag.name())
-						.child((content, children))
-						.add_any_attr(attrs)
-						.into_any()
-				}
+				Tag::Heading(_) | Tag::Label => semantic_element(tag, (content, children), attrs),
 				_ => {
 					html::span()
 						.child((content, children))

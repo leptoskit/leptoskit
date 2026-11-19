@@ -525,6 +525,62 @@ async fn reactive_controls_preserve_focus_and_deliver_native_events() {
 }
 
 #[wasm_bindgen_test]
+async fn a_rebuild_keeps_landmarks_headings_and_the_focus_inside_them() {
+	use leptoskit_native::components::Heading;
+	use leptoskit_native::components::TextInput;
+
+	let parent = container();
+	let revision = ArcRwSignal::new(0);
+	let mount = mount_to(parent.clone(), {
+		let revision = revision.clone();
+		move || {
+			move || {
+				let count = revision.get();
+				render(
+					View().role(Role::Main).test_id("main").children([
+						Heading(2, format!("Revision {count}")).test_id("title"),
+						View()
+							.role(Role::Article)
+							.test_id("article")
+							.child(TextInput().aria_label("Code").test_id("code")),
+					]),
+				)
+			}
+		}
+	});
+	tick().await;
+	let main: web_sys::HtmlElement = find(&parent, "[data-testid=main]");
+	let title: web_sys::HtmlElement = find(&parent, "[data-testid=title]");
+	let article: web_sys::HtmlElement = find(&parent, "[data-testid=article]");
+	let code: web_sys::HtmlElement = find(&parent, "[data-testid=code]");
+	assert_eq!(main.tag_name(), "MAIN");
+	assert_eq!(title.tag_name(), "H2");
+	assert_eq!(article.tag_name(), "ARTICLE");
+	code.focus().expect("focus the field");
+
+	revision.set(1);
+	tick().await;
+	for (before, id) in [
+		(&main, "main"),
+		(&title, "title"),
+		(&article, "article"),
+		(&code, "code"),
+	] {
+		let after: web_sys::HtmlElement = find(&parent, &format!("[data-testid={id}]"));
+		assert!(after.is_same_node(Some(before)), "the rebuild keeps {id}");
+	}
+	assert_eq!(title.text_content().as_deref(), Some("Revision 1"));
+	assert_eq!(
+		document().active_element().as_ref(),
+		Some(code.as_ref()),
+		"the field keeps focus"
+	);
+
+	drop(mount);
+	parent.remove();
+}
+
+#[wasm_bindgen_test]
 async fn handled_events_stop_bubbling_and_disabled_buttons_do_not_press() {
 	let parent = container();
 	let outer = Arc::new(AtomicUsize::new(0));
