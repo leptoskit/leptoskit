@@ -1,5 +1,6 @@
 //! The pages this crate builds, each framed by the [`Shell`].
 
+mod analytics;
 mod glossary;
 mod infra;
 mod insight;
@@ -74,7 +75,9 @@ pub(crate) fn screen_of(shell: &Shell) -> Box<dyn Fn() -> Element + Send + Sync>
 				shell.frame(live::page(live, Some(watch)))
 			})
 		}
-		Page::Insight(_) => {
+		// The pages that read themselves again as events arrive, and the
+		// builders, which also change in place.
+		Page::Insight(_) | Page::Dashboard(_) | Page::Notice(_) => {
 			let swap = crate::analytics::swap::Swap::new(
 				shell.page,
 				shell.workings,
@@ -112,5 +115,8 @@ pub fn content(page: &Page) -> Element {
 		Page::Person(person) => people::person(person, None),
 		Page::Insight(insight) => insight::page(insight, None),
 		Page::Live(live) => live::page(live, None),
+		Page::Dashboard(dashboard) => analytics::dashboard(dashboard),
+		Page::Actors(actors) => analytics::actors(actors),
+		Page::Notice(notice) => analytics::notice(notice),
 	}
 }

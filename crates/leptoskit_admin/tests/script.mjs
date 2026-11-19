@@ -282,6 +282,16 @@ function serve(directory, clientDirectory) {
 					if (url.pathname.startsWith(`${BASE}/analytics/people/`)) {
 						return page("person.html");
 					}
+					if (url.pathname.startsWith(`${BASE}/analytics/dashboards/`)) {
+						if (request.headers.get("x-admin-page") === "json") {
+							models.push(url.pathname + url.search);
+							return new Response(
+								await Deno.readFile(`${directory}/dashboard.json`),
+								{ headers: { "content-type": "application/json" } },
+							);
+						}
+						return page("dashboard.html");
+					}
 					if (url.pathname.startsWith(`${BASE}/infra/operations/`)) {
 						return page(
 							url.searchParams.get("workings") === "operation"
@@ -748,6 +758,52 @@ Deno.test("a builder reads itself again when newer events arrive, at most every 
 		pulse(1_000_001);
 		await wait(1_000);
 		assert(site.models.length === 1, `nothing newer: ${site.models}`);
+	});
+});
+
+Deno.test("a dashboard is the pages' own Rust, and reads itself again as events arrive", async () => {
+	await withBrowser(async (page, site) => {
+		await open(page, `${site.origin}${BASE}/analytics/dashboards/d1`);
+		await hydrated(page, "the dashboard");
+		assert(
+			await page.evaluate(
+				"!document.querySelector('script[src$=\"admin.mjs\"]')",
+			),
+			"the page loads no hand-written script",
+		);
+		const cards = () =>
+			page.evaluate(
+				`document.querySelectorAll('[data-testid="dashboard-tile"]').length`,
+			);
+		assert(await cards() === 1, "the dashboard shows its card");
+		await following(site, false);
+		const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+		// Ten seconds after it was read, newer events read it again, in place.
+		await page.evaluate("window.stayed = true");
+		await wait(10_500);
+		site.send({
+			Pulse: {
+				per_second: 1,
+				per_minute: 60,
+				seconds: Array(60).fill(1),
+				live: true,
+				latest: 1_000_000,
+			},
+		});
+		for (let tries = 0; site.models.length === 0 && tries < 100; tries++) {
+			await wait(50);
+		}
+		assert(
+			site.models.length === 1 &&
+				site.models[0].endsWith("/analytics/dashboards/d1"),
+			`one re-read of the dashboard: ${site.models}`,
+		);
+		await wait(500);
+		assert(
+			await page.evaluate("window.stayed === true") && await cards() === 1,
+			"the dashboard changed in place, without loading again",
+		);
 	});
 });
 

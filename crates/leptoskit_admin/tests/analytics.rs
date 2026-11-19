@@ -856,9 +856,13 @@ async fn export_and_delete_need_a_confirmation_and_the_role() {
 
 /// Writes real pages, as the admin renders them, into the directory
 /// `LEPTOSKIT_ADMIN_PAGES` names, for `tests/script.mjs` to drive the
-/// admin's script against in a browser. It runs from there.
+/// admin's pages against in a browser. It runs from there.
 #[tokio::test]
 #[ignore = "tests/script.mjs runs it"]
+#[expect(
+	clippy::too_many_lines,
+	reason = "one world, every page written from it"
+)]
 async fn pages_for_the_script() {
 	let directory = std::path::PathBuf::from(
 		std::env::var_os("LEPTOSKIT_ADMIN_PAGES").expect("set LEPTOSKIT_ADMIN_PAGES"),
@@ -929,6 +933,40 @@ async fn pages_for_the_script() {
 	.await;
 	let person = attribute_of(&html, "person-row", "href");
 
+	// A dashboard with one card, as a page and as its model.
+	let saved = ada
+		.post_json(
+			&world.admin,
+			ADMIN,
+			&format!("{BASE}/api/analytics/insights"),
+			json!({
+				"kind": "trends",
+				"name": "Notes, weekly",
+				"params": { "from": "2026-10-05", "to": "2026-11-02", "interval": "week" },
+			}),
+		)
+		.await;
+	assert_eq!(saved.status(), StatusCode::OK);
+	let saved = json_body(saved).await;
+	let added = ada
+		.post_json(
+			&world.admin,
+			ADMIN,
+			&format!("{BASE}/api/analytics/dashboards"),
+			json!({
+				"kind": "trends",
+				"insight": saved["insight"],
+				"name": "Notes, weekly",
+				"dashboard_name": "Product",
+			}),
+		)
+		.await;
+	assert_eq!(added.status(), StatusCode::OK);
+	let dashboard = json_body(added).await["href"].as_str().unwrap().to_owned();
+	let (status, json) = page_model(&world, &mut ada, &dashboard).await;
+	assert_eq!(status, StatusCode::OK, "{dashboard}");
+	std::fs::write(directory.join("dashboard.json"), json).unwrap();
+
 	let project = format!("{BASE}/infra/projects/notes-production");
 	for (file, path) in [
 		(
@@ -953,6 +991,7 @@ async fn pages_for_the_script() {
 		("library.html", format!("{BASE}/analytics/library")),
 		("people.html", format!("{BASE}/analytics/people")),
 		("person.html", person),
+		("dashboard.html", dashboard),
 		("glossary.html", format!("{BASE}/learn/glossary")),
 		("learn.html", format!("{BASE}/learn")),
 		("overview.html", format!("{project}/overview")),

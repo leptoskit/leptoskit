@@ -12,6 +12,7 @@ use leptoskit_analytics::query::TrendsQuery;
 use leptoskit_analytics::query::WebOverviewResult;
 
 use super::Context;
+use super::Shown;
 use super::draw;
 use super::format;
 use super::insights;
@@ -118,14 +119,15 @@ fn table_card(
 
 /// The overview page.
 #[expect(clippy::too_many_lines, reason = "one page, top to bottom")]
-pub(crate) async fn page(cx: &Context<'_>) -> Screen {
+pub(crate) async fn page(cx: &Context<'_>) -> Shown {
 	if !super::has_events(cx.facts) {
 		return super::listening(
 			"Web analytics",
 			Section::Overview,
 			"Visitors, pageviews, sessions, and bounce rate for your site, with the top pages, \
 			 referrers, and devices beside them.",
-		);
+		)
+		.into();
 	}
 
 	let web = params::web(cx.params);
@@ -154,7 +156,7 @@ pub(crate) async fn page(cx: &Context<'_>) -> Screen {
 			Err(failure) => failure.clone(),
 			Ok(_) => super::Failure("The service answered a different kind of query.".into()),
 		};
-		return super::unreachable("Web analytics", Section::Overview, &failure);
+		return super::unreachable("Web analytics", Section::Overview, &failure).into();
 	};
 	// What the deltas compare with: the same length of time just before.
 	let versus = match web.range.last_days {
@@ -495,4 +497,5 @@ pub(crate) async fn page(cx: &Context<'_>) -> Screen {
 		drawers,
 		open: None,
 	}
+	.into()
 }

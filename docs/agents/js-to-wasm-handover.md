@@ -348,6 +348,13 @@ The builders (Trends, Funnels, Retention, a saved insight) are `Page::Insight`, 
 - **Tests:** `pages_for_the_script` writes each trends variant's model as JSON and two `-workings.html` pages; `script.mjs` serves the JSON for the header, fakes the dashboards and insights endpoints, and checks the in-place change (marks, status, reveal, focus, Back), the breakdown colours, Save and Add to dashboard, and the phone stations. The trends, funnel and retention snapshots only gained the menus' roles and the station toggles' ▾.
 - **Next (5d):** dashboards (their cards and live refresh), Live with a G3 stream, the web overview and the actors page, Health's fleet charts, the sign-in page; then delete `admin.mjs` and the attribute rules in `shell_css`.
 
+### `feat/admin-analytics-rest`: admin conversion, part 5e (dashboards, actors, notices)
+
+- **Models:** `model::analytics::{Dashboard, Card, Actors, Actor, Notice, Why}`. The server runs each card's saved insight (`library::dashboard`) and each actors query (`insights::actors`); `analytics::{not_configured, unreachable, listening}` now return `Page::Notice`. `pages/analytics.rs` draws all three, with the connect and first-event code that used to live in the server's `analytics/mod.rs`.
+- **Re-reading:** `screen_of` sends `Insight`, `Dashboard` and `Notice` through the same arm, which makes a `Swap` and draws whatever page `shell.page` holds. `Swap::reread` only acts on a page that `rereads` (a builder, a dashboard, a `Why::Listening` notice), and `Swap::go` puts a re-read `Dashboard` or `Notice` in place (or the builder a listening page turns into) instead of loading the address.
+- **Tests:** `pages_for_the_script` saves an insight onto a dashboard and writes `dashboard.html` and `dashboard.json`; `script.mjs` serves any `/analytics/dashboards/…` from them and checks the dashboard hydrates without the script and re-reads in place. The actors snapshot only gained the station toggles' ▾.
+- **Next:** the web overview (`web::page` still returns a `Screen`), Health's fleet charts, the sign-in and refusal pages; then delete `admin.mjs`, the SSE route and the attribute rules in `shell_css`.
+
 ### `feat/admin-analytics-live`: admin conversion, part 5d (Live)
 
 Live is `Page::Live` (`model::live::Live`: the latest events as `Arrival`s, the drawer, whether the Pause note shows), which the server's `analytics/tail.rs` builds from an Events query and `pages/live.rs` draws.

@@ -11,8 +11,3 @@ pub(crate) fn person_name(person: &PersonSummary) -> String {
 		.find_map(|key| person.properties.get(*key)?.as_str().map(str::to_owned))
 		.unwrap_or_else(|| person.id.to_string()[..8].to_owned())
 }
-
-/// Two letters for an avatar.
-pub(crate) fn initials(name: &str) -> String {
-	crate::components::initials(name)
-}
