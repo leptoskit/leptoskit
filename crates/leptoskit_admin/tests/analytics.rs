@@ -914,6 +914,7 @@ async fn pages_for_the_script() {
 		),
 		("live.html", format!("{BASE}/analytics/live")),
 		("glossary.html", format!("{BASE}/learn/glossary")),
+		("learn.html", format!("{BASE}/learn")),
 		("overview.html", format!("{project}/overview")),
 		("changes.html", format!("{project}/changes")),
 	] {

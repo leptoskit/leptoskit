@@ -1,6 +1,7 @@
 //! The pages this crate builds, each framed by the [`Shell`].
 
 mod glossary;
+mod learn;
 
 use leptoskit::prelude::Element;
 
@@ -12,9 +13,7 @@ use crate::shell::Shell;
 pub(crate) fn screen_of(shell: &Shell) -> Box<dyn Fn() -> Element + Send + Sync> {
 	let shell = shell.clone();
 
-	match shell.model.page {
-		Page::Glossary => Box::new(move || shell.frame(glossary::content())),
-	}
+	Box::new(move || shell.frame(content(&shell.model.page)))
 }
 
 /// The content of `page`, without the frame, for a page that has no state
@@ -24,5 +23,7 @@ pub(crate) fn screen_of(shell: &Shell) -> Box<dyn Fn() -> Element + Send + Sync>
 pub fn content(page: &Page) -> Element {
 	match page {
 		Page::Glossary => glossary::content(),
+		Page::Learn(learn) => learn::hub(learn),
+		Page::Lesson(lesson) => learn::lesson(lesson),
 	}
 }

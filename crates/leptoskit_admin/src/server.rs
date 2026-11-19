@@ -23,6 +23,7 @@ use axum::response::sse::Sse;
 use axum::routing::get;
 use axum::routing::post;
 use futures::StreamExt as _;
+use leptoskit_admin_pages::model::Page;
 use leptoskit_auth::SignedIn;
 use leptoskit_deploy_console::control::Action;
 use leptoskit_deploy_console::control::EnqueueError;
@@ -356,7 +357,7 @@ async fn hydrated_screen(
 	admin: &Admin,
 	me: Option<SignedIn>,
 	headers: &HeaderMap,
-	page: leptoskit_admin_pages::model::Page,
+	page: impl FnOnce(&learn::Proof<'_>) -> Option<Page>,
 ) -> Response {
 	let gate = match gate(admin, me, headers).await {
 		Ok(gate) => gate,
@@ -373,6 +374,9 @@ async fn hydrated_screen(
 		facts: facts.as_ref(),
 		preferences: &gate.preferences,
 		simulated: admin.inner().simulated_infrastructure,
+	};
+	let Some(page) = page(&proof) else {
+		return not_found();
 	};
 	let model = leptoskit_admin_pages::Model {
 		viewer: viewer(admin, &gate, headers, &proof),
@@ -798,7 +802,10 @@ async fn learn_hub(
 	me: Option<SignedIn>,
 	headers: HeaderMap,
 ) -> Response {
-	signed_in_screen(&admin, me, &headers, |proof| Some(learn::hub(proof))).await
+	hydrated_screen(&admin, me, &headers, |proof| {
+		Some(Page::Learn(learn::hub(proof)))
+	})
+	.await
 }
 
 async fn glossary(
@@ -806,13 +813,7 @@ async fn glossary(
 	me: Option<SignedIn>,
 	headers: HeaderMap,
 ) -> Response {
-	hydrated_screen(
-		&admin,
-		me,
-		&headers,
-		leptoskit_admin_pages::model::Page::Glossary,
-	)
-	.await
+	hydrated_screen(&admin, me, &headers, |_| Some(Page::Glossary)).await
 }
 
 async fn lesson(
@@ -821,8 +822,8 @@ async fn lesson(
 	headers: HeaderMap,
 	Path((track, lesson)): Path<(String, String)>,
 ) -> Response {
-	signed_in_screen(&admin, me, &headers, |proof| {
-		learn::lesson(&track, &lesson, proof)
+	hydrated_screen(&admin, me, &headers, |proof| {
+		learn::lesson(&track, &lesson, proof).map(Page::Lesson)
 	})
 	.await
 }
