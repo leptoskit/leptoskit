@@ -1,0 +1,9 @@
+---
+source: crates/leptoskit_cli/src/cloud/tests.rs
+expression: human(&output)
+---
+backup: 00000000-0000-0000-0000-000000000001
+failure: Done.
+requested_at: 2026-11-18T00:00:00Z
+state: pending
+updated_at: 2026-11-18T00:00:00Z

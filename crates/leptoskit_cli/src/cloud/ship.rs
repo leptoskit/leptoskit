@@ -1,0 +1,370 @@
+//! An environment's configuration and history: variables, secrets, domains,
+//! deployments, rollback and the database (CLI 2).
+
+use std::io::IsTerminal as _;
+use std::io::Read as _;
+
+use anyhow::Context as _;
+use anyhow::Result;
+use anyhow::bail;
+use anyhow::ensure;
+use clap::Subcommand;
+use leptoskit_cloud::config;
+use leptoskit_cloud::databases;
+use leptoskit_cloud::deployments;
+use leptoskit_cloud::domains;
+use serde_json::Value;
+
+use super::CloudArgs;
+use super::Context;
+use super::confirm;
+use super::value;
+
+/// Variables: plain values the app reads from its environment.
+#[derive(Debug, Subcommand)]
+pub enum VarCommand {
+	/// Lists the environment's variables, with their values.
+	List,
+	/// Sets a variable. It applies at the environment's next deployment.
+	Set { name: String, value: String },
+	/// Removes a variable at the environment's next deployment.
+	Unset { name: String },
+}
+
+/// Secrets: values the cloud keeps sealed and never shows again.
+#[derive(Debug, Subcommand)]
+pub enum SecretCommand {
+	/// Lists the environment's secrets: names and versions, never values.
+	List,
+	/// Stores a secret, read from standard input or from a variable of
+	/// this shell, never from the command line. It applies at the
+	/// environment's next deployment.
+	Set {
+		name: String,
+		/// Reads the value from this environment variable instead of
+		/// standard input.
+		#[arg(long, value_name = "VARIABLE")]
+		from_env: Option<String>,
+	},
+	/// Removes a secret at the environment's next deployment.
+	Unset { name: String },
+}
+
+/// Custom domains.
+#[derive(Debug, Subcommand)]
+pub enum DomainCommand {
+	/// Lists the environment's domains and the DNS records each needs.
+	List,
+	/// Attaches a domain and shows the DNS records to publish.
+	Add { hostname: String },
+	/// Looks for the domain's challenge record and marks it verified.
+	Verify { hostname: String },
+	/// Detaches a domain; requires the hostname again as confirmation.
+	Remove {
+		hostname: String,
+		#[arg(long)]
+		confirm: String,
+	},
+}
+
+/// The environment's managed Postgres database.
+#[derive(Debug, Subcommand)]
+pub enum DbCommand {
+	/// Shows the environment's database, if it has one.
+	Show,
+	/// Lists the database's backups and its latest restore.
+	Backups,
+	/// Asks for a backup of the database now.
+	Backup,
+	/// Puts a backup back over the database, replacing everything written
+	/// since; requires `<project>/<environment>` as confirmation.
+	Restore {
+		backup: uuid::Uuid,
+		#[arg(long)]
+		confirm: String,
+	},
+}
+
+/// The environment `--environment` names, production without one.
+pub(super) fn environment(args: &CloudArgs) -> String {
+	args.environment
+		.clone()
+		.unwrap_or_else(|| leptoskit_cloud::projects::PRODUCTION.to_owned())
+}
+
+/// Organization, project and environment, as every command here needs.
+struct Target {
+	organization: String,
+	project: String,
+	environment: String,
+}
+
+impl Target {
+	fn of(args: &CloudArgs, context: &Context) -> Result<Self> {
+		Ok(Self {
+			organization: context.organization(args)?,
+			project: context.project(args)?,
+			environment: environment(args),
+		})
+	}
+}
+
+pub(super) fn var(command: &VarCommand, args: &CloudArgs, context: &Context) -> Result<Value> {
+	let Target {
+		organization,
+		project,
+		environment,
+	} = Target::of(args, context)?;
+	let client = &context.client;
+	match command {
+		VarCommand::List => {
+			value(client.variables(config::Variables {
+				organization,
+				project,
+				environment,
+			})?)
+		}
+		VarCommand::Set { name, value: text } => {
+			value(client.set_variable(config::SetVariable {
+				organization,
+				project,
+				environment,
+				name: name.clone(),
+				value: text.clone(),
+			})?)
+		}
+		VarCommand::Unset { name } => {
+			client.unset_variable(config::UnsetVariable {
+				organization,
+				project,
+				environment,
+				name: name.clone(),
+			})?;
+			Ok(Value::Null)
+		}
+	}
+}
+
+pub(super) fn secret(
+	command: &SecretCommand,
+	args: &CloudArgs,
+	context: &Context,
+	stdin: &mut dyn FnMut() -> Result<SecretInput>,
+) -> Result<Value> {
+	let Target {
+		organization,
+		project,
+		environment,
+	} = Target::of(args, context)?;
+	let client = &context.client;
+	match command {
+		SecretCommand::List => {
+			value(client.secrets(config::Secrets {
+				organization,
+				project,
+				environment,
+			})?)
+		}
+		SecretCommand::Set { name, from_env } => {
+			let text = match from_env {
+				Some(variable) => {
+					std::env::var(variable).with_context(|| {
+						format!("${variable} isn't set, or isn't text. Export it, then retry.")
+					})?
+				}
+				None => {
+					match stdin()? {
+						SecretInput::Text(text) => text,
+						SecretInput::Terminal => {
+							bail!(
+								"Pipe the value in, such as `printf %s \"$VALUE\" | lk cloud \
+								 secret set {name}`, or pass --from-env <VARIABLE>. A value on \
+								 the command line would stay in your shell's history."
+							)
+						}
+					}
+				}
+			};
+			ensure!(
+				!text.is_empty(),
+				"The value is empty. Pipe in the value to store."
+			);
+			value(client.set_secret(&config::SetSecret {
+				organization,
+				project,
+				environment,
+				name: name.clone(),
+				value: config::SecretValue::new(text),
+			})?)
+		}
+		SecretCommand::Unset { name } => {
+			client.unset_secret(config::UnsetSecret {
+				organization,
+				project,
+				environment,
+				name: name.clone(),
+			})?;
+			Ok(Value::Null)
+		}
+	}
+}
+
+/// What standard input holds for `secret set`.
+pub(super) enum SecretInput {
+	/// A terminal: nothing was piped in.
+	Terminal,
+	/// What was piped in, without one trailing line break.
+	Text(String),
+}
+
+/// Reads a piped secret, at most 64 KiB, dropping one trailing line break
+/// so `echo` works as well as `printf`.
+pub(super) fn read_stdin() -> Result<SecretInput> {
+	let stdin = std::io::stdin();
+	if stdin.is_terminal() {
+		return Ok(SecretInput::Terminal);
+	}
+	let mut bytes = Vec::new();
+	stdin
+		.lock()
+		.take(64 * 1024 + 1)
+		.read_to_end(&mut bytes)
+		.context("Could not read the value from standard input.")?;
+	ensure!(
+		bytes.len() <= 64 * 1024,
+		"The value is over 64 KiB. Store a smaller value."
+	);
+	let mut text = String::from_utf8(bytes)
+		.map_err(|_| anyhow::anyhow!("The value isn't UTF-8 text. Encode it as base64 first."))?;
+	if text.ends_with('\n') {
+		text.pop();
+		if text.ends_with('\r') {
+			text.pop();
+		}
+	}
+	Ok(SecretInput::Text(text))
+}
+
+pub(super) fn domain(
+	command: &DomainCommand,
+	args: &CloudArgs,
+	context: &Context,
+) -> Result<Value> {
+	let Target {
+		organization,
+		project,
+		environment,
+	} = Target::of(args, context)?;
+	let client = &context.client;
+	match command {
+		DomainCommand::List => {
+			value(client.domains(domains::Domains {
+				organization,
+				project,
+				environment,
+			})?)
+		}
+		DomainCommand::Add { hostname } => {
+			value(client.attach_domain(domains::AttachDomain {
+				organization,
+				project,
+				environment,
+				hostname: hostname.clone(),
+			})?)
+		}
+		DomainCommand::Verify { hostname } => {
+			value(client.verify_domain(domains::VerifyDomain {
+				organization,
+				project,
+				environment,
+				hostname: hostname.clone(),
+			})?)
+		}
+		DomainCommand::Remove {
+			hostname,
+			confirm: confirmation,
+		} => {
+			confirm(hostname, confirmation)?;
+			client.detach_domain(domains::DetachDomain {
+				organization,
+				project,
+				environment,
+				hostname: hostname.clone(),
+			})?;
+			Ok(Value::Null)
+		}
+	}
+}
+
+pub(super) fn deployments(
+	args: &CloudArgs,
+	context: &Context,
+	limit: Option<u32>,
+) -> Result<Value> {
+	value(context.client.deployments(deployments::Deployments {
+		organization: context.organization(args)?,
+		project: context.project(args)?,
+		environment: Some(environment(args)),
+		before: None,
+		limit,
+	})?)
+}
+
+pub(super) fn rollback(args: &CloudArgs, context: &Context, to: u64) -> Result<Value> {
+	let Target {
+		organization,
+		project,
+		environment,
+	} = Target::of(args, context)?;
+	value(context.client.rollback(deployments::Rollback {
+		organization,
+		project,
+		environment,
+		to,
+	})?)
+}
+
+pub(super) fn db(command: &DbCommand, args: &CloudArgs, context: &Context) -> Result<Value> {
+	let Target {
+		organization,
+		project,
+		environment,
+	} = Target::of(args, context)?;
+	let client = &context.client;
+	match command {
+		DbCommand::Show => {
+			value(client.database(databases::Database {
+				organization,
+				project,
+				environment,
+			})?)
+		}
+		DbCommand::Backups => {
+			value(client.database_backups(databases::DatabaseBackups {
+				organization,
+				project,
+				environment,
+			})?)
+		}
+		DbCommand::Backup => {
+			value(client.create_backup(databases::CreateBackup {
+				organization,
+				project,
+				environment,
+			})?)
+		}
+		DbCommand::Restore {
+			backup,
+			confirm: confirmation,
+		} => {
+			confirm(&format!("{project}/{environment}"), confirmation)?;
+			value(client.restore_backup(databases::RestoreBackup {
+				organization,
+				project,
+				environment,
+				backup: *backup,
+				confirm: confirmation.clone(),
+			})?)
+		}
+	}
+}

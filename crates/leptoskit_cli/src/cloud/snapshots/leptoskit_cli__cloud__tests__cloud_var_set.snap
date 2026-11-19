@@ -1,0 +1,33 @@
+---
+source: crates/leptoskit_cli/src/cloud/tests.rs
+expression: help
+---
+Sets a variable. It applies at the environment's next deployment
+
+Usage: set [OPTIONS] <NAME> <VALUE>
+
+Arguments:
+  <NAME>
+          
+
+  <VALUE>
+          
+
+Options:
+      --url <URL>
+          Cloud origin; overrides `LEPTOSKIT_CLOUD_URL` and [cloud].url
+
+      --json
+          Prints the documented JSON result
+
+      --org <ORG>
+          Organization slug; defaults to [cloud].organization or your personal one
+
+      --project <PROJECT>
+          Project slug; defaults to [cloud].project
+
+  -e, --environment <ENVIRONMENT>
+          Environment name, for the commands about one; defaults to production
+
+  -h, --help
+          Print help

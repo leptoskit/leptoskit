@@ -1,0 +1,11 @@
+---
+source: crates/leptoskit_cli/src/cloud/tests.rs
+expression: human(&output)
+---
+cost: kind: unpriced
+reason: This cloud has no prices.
+period: 2026-11
+plan: hobby
+projects: None.
+quantities: meter: build_minutes_linux
+quantity: 3

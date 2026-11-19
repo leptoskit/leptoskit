@@ -1,0 +1,30 @@
+---
+source: crates/leptoskit_cli/src/cloud/tests.rs
+expression: help
+---
+Shows one publish, and its report once it has ended
+
+Usage: show [OPTIONS] <ID>
+
+Arguments:
+  <ID>
+          
+
+Options:
+      --url <URL>
+          Cloud origin; overrides `LEPTOSKIT_CLOUD_URL` and [cloud].url
+
+      --json
+          Prints the documented JSON result
+
+      --org <ORG>
+          Organization slug; defaults to [cloud].organization or your personal one
+
+      --project <PROJECT>
+          Project slug; defaults to [cloud].project
+
+  -e, --environment <ENVIRONMENT>
+          Environment name, for the commands about one; defaults to production
+
+  -h, --help
+          Print help

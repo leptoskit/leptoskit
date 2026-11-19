@@ -5,6 +5,7 @@ use std::sync::Mutex;
 
 use axum::response::IntoResponse as _;
 use axum::response::Response;
+use leptoskit_cloud::archive;
 
 use super::credentials::Session;
 use super::credentials::Store;
@@ -58,7 +59,7 @@ fn server(answer: impl Fn(&str, &str, &str) -> Response + Send + Sync + 'static)
 				async move {
 					if uri.path() == "/.well-known/leptoskit-cloud" { return axum::Json(discovery).into_response(); }
 					if uri.path() == "/.well-known/openid-configuration" { return axum::Json(oauth).into_response(); }
-					answer(uri.path(), headers.get("authorization").and_then(|value| value.to_str().ok()).unwrap_or_default(), std::str::from_utf8(&body).unwrap())
+					answer(uri.path(), headers.get("authorization").and_then(|value| value.to_str().ok()).unwrap_or_default(), &String::from_utf8_lossy(&body))
 				}
 			});
 			tokio::select! {
@@ -518,10 +519,157 @@ fn command_cases() -> Vec<(Vec<&'static str>, &'static str, Value, Value)> {
 	]
 }
 
+/// CLI 2 and 3: an environment's configuration, history, publishes and
+/// usage.
+fn environment_cases() -> Vec<(Vec<&'static str>, &'static str, Value, Value)> {
+	let id = "00000000-0000-0000-0000-000000000001";
+	let time = "2026-11-18T00:00:00Z";
+	let variable =
+		json!({"name": "API_URL", "value": "https://api.example.com", "updated_at": time});
+	let domain = json!({"hostname": "app.example.com", "status": "pending", "records": [{"kind": "TXT", "name": "_leptoskit-challenge.app.example.com", "value": "leptoskit-verify=abc"}], "verified_at": null, "created_at": time});
+	let deployment = json!({"id": id, "project": "notes", "environment": "production", "number": 3, "state": {"state": "queued"}, "source": {"kind": "rollback", "deployment": id}, "rollback_of": 1, "signer": {"by": {"kind": "person", "account": id, "email": "person@example.com"}, "via": "cli", "host": null}, "unknown": false, "created_at": time, "updated_at": time});
+	let backup = json!({"id": id, "kind": "manual", "state": "pending", "bytes": null, "failure": null, "created_at": time, "completed_at": null, "expires_at": time});
+	let publication = publication_fixture("queued", &Value::Null);
+	vec![
+		(
+			vec!["var", "list", "-e", "staging"],
+			"variables",
+			json!({"organization": "team", "project": "notes", "environment": "staging"}),
+			json!([variable.clone()]),
+		),
+		(
+			vec!["var", "set", "API_URL", "https://api.example.com"],
+			"set_variable",
+			json!({"organization": "team", "project": "notes", "environment": "production", "name": "API_URL", "value": "https://api.example.com"}),
+			variable,
+		),
+		(
+			vec!["var", "unset", "API_URL"],
+			"unset_variable",
+			json!({"organization": "team", "project": "notes", "environment": "production", "name": "API_URL"}),
+			Value::Null,
+		),
+		(
+			vec!["secret", "list"],
+			"secrets",
+			json!({"organization": "team", "project": "notes", "environment": "production"}),
+			json!([{"name": "STRIPE_KEY", "version": 2, "updated_at": time}]),
+		),
+		(
+			vec!["secret", "unset", "STRIPE_KEY"],
+			"unset_secret",
+			json!({"organization": "team", "project": "notes", "environment": "production", "name": "STRIPE_KEY"}),
+			Value::Null,
+		),
+		(
+			vec!["domain", "list"],
+			"domains",
+			json!({"organization": "team", "project": "notes", "environment": "production"}),
+			json!([domain.clone()]),
+		),
+		(
+			vec!["domain", "add", "app.example.com"],
+			"attach_domain",
+			json!({"organization": "team", "project": "notes", "environment": "production", "hostname": "app.example.com"}),
+			domain.clone(),
+		),
+		(
+			vec!["domain", "verify", "app.example.com"],
+			"verify_domain",
+			json!({"organization": "team", "project": "notes", "environment": "production", "hostname": "app.example.com"}),
+			domain,
+		),
+		(
+			vec![
+				"domain",
+				"remove",
+				"app.example.com",
+				"--confirm",
+				"app.example.com",
+			],
+			"detach_domain",
+			json!({"organization": "team", "project": "notes", "environment": "production", "hostname": "app.example.com"}),
+			Value::Null,
+		),
+		(
+			vec!["deployments", "--limit", "5"],
+			"deployments",
+			json!({"organization": "team", "project": "notes", "environment": "production", "before": null, "limit": 5}),
+			json!([deployment.clone()]),
+		),
+		(
+			vec!["rollback", "1"],
+			"rollback",
+			json!({"organization": "team", "project": "notes", "environment": "production", "to": 1}),
+			deployment,
+		),
+		(
+			vec!["db", "show"],
+			"database",
+			json!({"organization": "team", "project": "notes", "environment": "production"}),
+			json!({"name": "notes_production", "size": "shared", "backups": "daily", "ready": true, "created_at": time}),
+		),
+		(
+			vec!["db", "backups"],
+			"database_backups",
+			json!({"organization": "team", "project": "notes", "environment": "production"}),
+			json!({"backups": [backup.clone()], "restore": null}),
+		),
+		(
+			vec!["db", "backup"],
+			"create_backup",
+			json!({"organization": "team", "project": "notes", "environment": "production"}),
+			backup,
+		),
+		(
+			vec!["db", "restore", id, "--confirm", "notes/production"],
+			"restore_backup",
+			json!({"organization": "team", "project": "notes", "environment": "production", "backup": id, "confirm": "notes/production"}),
+			json!({"backup": id, "state": "pending", "failure": null, "requested_at": time, "updated_at": time}),
+		),
+		(
+			vec!["publications", "list"],
+			"publications",
+			json!({"organization": "team", "project": "notes", "environment": "production", "limit": null}),
+			json!([publication.clone()]),
+		),
+		(
+			vec!["publications", "show", id],
+			"publication",
+			json!({"organization": "team", "project": "notes", "environment": "production", "id": id}),
+			publication,
+		),
+		(
+			vec!["usage", "--period", "2026-11"],
+			"usage",
+			json!({"organization": "team", "period": "2026-11"}),
+			json!({"period": "2026-11", "plan": "hobby", "quantities": [{"meter": "build_minutes_linux", "quantity": 3}], "cost": {"kind": "unpriced", "reason": "This cloud has no prices."}, "projects": []}),
+		),
+	]
+}
+
+fn publication_fixture(state: &str, outcome: &Value) -> Value {
+	json!({
+		"id": "00000000-0000-0000-0000-000000000001",
+		"environment": "production",
+		"stores": ["play"],
+		"submit": false,
+		"digest": format!("sha256:{}", "a".repeat(64)),
+		"credentials": ["LEPTOSKIT_PLAY_SERVICE_ACCOUNT_JSON"],
+		"requirements": [],
+		"state": state,
+		"outcome": outcome,
+		"created_at": "2026-11-18T00:00:00Z",
+		"updated_at": "2026-11-18T00:00:00Z",
+	})
+}
+
 #[test]
 fn cloud_commands_send_named_arguments_and_render_results() {
 	use clap::Parser as _;
-	for (args, operation, expected, response) in command_cases() {
+	for (args, operation, expected, response) in
+		command_cases().into_iter().chain(environment_cases())
+	{
 		let environment = command_cases()
 			.into_iter()
 			.find(|(_, name, ..)| *name == "create_environment")
@@ -680,5 +828,256 @@ fn cloud_person_only_commands_and_destructive_confirmations_fail_before_rpc() {
 		],
 	] {
 		assert!(crate::cli::Cli::try_parse_from(args).is_err());
+	}
+}
+
+fn parsed(arguments: &[&str]) -> CloudArgs {
+	use clap::Parser as _;
+	let mut all = vec!["lk", "cloud", "--org", "team", "--project", "notes"];
+	all.extend_from_slice(arguments);
+	let cli = crate::cli::Cli::try_parse_from(all).unwrap();
+	let crate::cli::Command::Cloud(args) = cli.command else {
+		panic!("cloud command")
+	};
+	args
+}
+
+fn signed_in(server: &Server, directory: &tempfile::TempDir, file: Option<PathBuf>) -> Context {
+	Store::new(directory.path(), &server.url)
+		.save(&session(u64::MAX))
+		.unwrap();
+	Context {
+		client: Client::new(&server.url, directory.path(), None).unwrap(),
+		url: server.url.clone(),
+		config: leptoskit_config::cloud::CloudConfig::default(),
+		file,
+	}
+}
+
+#[test]
+fn cloud_secret_values_come_from_a_pipe_or_a_variable_and_are_never_echoed() {
+	let calls = Arc::new(Mutex::new(Vec::new()));
+	let seen = Arc::clone(&calls);
+	let server = server(move |path, _, body| {
+		seen.lock()
+			.unwrap()
+			.push((path.to_owned(), body.to_owned()));
+		(
+			axum::http::StatusCode::BAD_REQUEST,
+			"ServerError|value_too_long: refused known-secret-value".to_owned(),
+		)
+			.into_response()
+	});
+	let directory = private_directory();
+	let context = signed_in(&server, &directory, None);
+	let args = parsed(&["secret", "set", "STRIPE_KEY"]);
+	let CloudCommand::Secret { command } = &args.command else {
+		panic!("secret")
+	};
+
+	// A terminal: nothing is sent, and the error says how to pipe it in.
+	let error = ship::secret(command, &args, &context, &mut || {
+		Ok(ship::SecretInput::Terminal)
+	})
+	.unwrap_err()
+	.to_string();
+	assert!(error.contains("--from-env"), "{error}");
+	assert!(calls.lock().unwrap().is_empty());
+
+	// An empty pipe: nothing is sent either.
+	assert!(
+		ship::secret(command, &args, &context, &mut || {
+			Ok(ship::SecretInput::Text(String::new()))
+		})
+		.is_err()
+	);
+	assert!(calls.lock().unwrap().is_empty());
+
+	// A piped value is sent once, as `value`, and the refusal that repeats
+	// it is redacted.
+	let error = ship::secret(command, &args, &context, &mut || {
+		Ok(ship::SecretInput::Text("known-secret-value".into()))
+	})
+	.unwrap_err();
+	let calls = calls.lock().unwrap();
+	assert_eq!(calls.len(), 1);
+	assert_eq!(calls[0].0, "/rpc/set_secret");
+	assert_eq!(
+		serde_json::from_str::<Value>(&calls[0].1).unwrap(),
+		json!({"organization": "team", "project": "notes", "environment": "production", "name": "STRIPE_KEY", "value": "known-secret-value"})
+	);
+	assert!(!format!("{error:?}").contains("known-secret-value"));
+	assert!(!error.to_string().contains("known-secret-value"));
+}
+
+#[test]
+fn cloud_destructive_environment_commands_need_their_confirmation() {
+	let directory = private_directory();
+	let server = server(|path, _, _| panic!("no call expected, got {path}"));
+	let context = signed_in(&server, &directory, None);
+	for arguments in [
+		vec![
+			"domain",
+			"remove",
+			"app.example.com",
+			"--confirm",
+			"other.example.com",
+		],
+		vec![
+			"db",
+			"restore",
+			"00000000-0000-0000-0000-000000000001",
+			"--confirm",
+			"notes/staging",
+		],
+	] {
+		assert!(execute(&parsed(&arguments), &context).is_err());
+	}
+	for arguments in [
+		vec!["lk", "cloud", "domain", "remove", "app.example.com"],
+		vec![
+			"lk",
+			"cloud",
+			"db",
+			"restore",
+			"00000000-0000-0000-0000-000000000001",
+		],
+		vec!["lk", "cloud", "publish"],
+		vec!["lk", "cloud", "publish", "macos"],
+		vec!["lk", "cloud", "publish", "steam"],
+	] {
+		use clap::Parser as _;
+		assert!(crate::cli::Cli::try_parse_from(arguments).is_err());
+	}
+}
+
+#[test]
+fn cloud_publish_uploads_the_project_once_follows_the_log_and_prints_the_report() {
+	let project = tempfile::tempdir().unwrap();
+	std::fs::write(
+		project.path().join("leptoskit.toml"),
+		"[app]\nname = \"notes\"\n",
+	)
+	.unwrap();
+	std::fs::create_dir(project.path().join("src")).unwrap();
+	std::fs::write(project.path().join("src/main.rs"), "fn main() {}\n").unwrap();
+	let expected = archive::pack(project.path(), &archive::PackOptions::default()).unwrap();
+
+	let calls = Arc::new(Mutex::new(Vec::<String>::new()));
+	let seen = Arc::clone(&calls);
+	let origin = Arc::new(Mutex::new(String::new()));
+	let host = Arc::clone(&origin);
+	let digest = expected.digest.as_str().to_owned();
+	let polls = Arc::new(Mutex::new(0));
+	let server = server(move |path, authorization, body| {
+		seen.lock().unwrap().push(path.to_owned());
+		if path == "/upload" {
+			// The store gets the bytes, and never the cloud's credential.
+			assert_eq!(authorization, "");
+			return axum::http::StatusCode::OK.into_response();
+		}
+		assert_eq!(authorization, "Bearer known-access");
+		let body: Value = serde_json::from_str(body).unwrap();
+		match path {
+			"/rpc/begin_upload" => {
+				assert_eq!(body["digest"], digest.as_str());
+				json_response(json!({"status": "upload", "ticket": {
+					"url": format!("{}/upload", host.lock().unwrap()),
+					"method": "PUT",
+					"headers": {"x-amz-checksum-sha256": "abc"},
+					"expires_at": "2026-11-18T00:00:00Z",
+				}}))
+			}
+			"/rpc/complete_upload" => {
+				json_response(
+					json!({"digest": digest, "size": 1, "verified_at": "2026-11-18T00:00:00Z", "expires_at": "2026-11-18T00:00:00Z"}),
+				)
+			}
+			"/rpc/publish" => {
+				assert_eq!(
+					body,
+					json!({"organization": "team", "project": "notes", "environment": "production", "archive": digest, "stores": ["play"], "submit": true})
+				);
+				json_response(publication_fixture("queued", &Value::Null))
+			}
+			"/rpc/publication" => {
+				let mut count = polls.lock().unwrap();
+				*count += 1;
+				if *count == 1 {
+					json_response(publication_fixture("leased", &Value::Null))
+				} else {
+					json_response(publication_fixture(
+						"done",
+						&json!({"result": "published", "stores": [{"store": "play", "summary": "uploaded to internal"}], "steps": []}),
+					))
+				}
+			}
+			"/rpc/publication_log" => {
+				if body["after"].is_null() {
+					json_response(
+						json!({"lines": [{"n": 0, "at": "2026-11-18T00:00:00Z", "attempt": null, "process": null, "pod": null, "text": "uploading\u{1b}]0;title\u{7}"}], "next": 0, "retention_days": 30}),
+					)
+				} else {
+					json_response(json!({"lines": [], "next": 0, "retention_days": 30}))
+				}
+			}
+			other => panic!("unexpected {other}"),
+		}
+	});
+	*origin.lock().unwrap() = server.url.clone();
+	let directory = private_directory();
+	let context = signed_in(
+		&server,
+		&directory,
+		Some(project.path().join("leptoskit.toml")),
+	);
+	let args = parsed(&["--json", "publish", "play", "--submit"]);
+	let output = execute(&args, &context).unwrap();
+	assert_eq!(output["state"], "done");
+	let calls = calls.lock().unwrap();
+	assert_eq!(
+		calls[..4],
+		[
+			"/rpc/begin_upload",
+			"/upload",
+			"/rpc/complete_upload",
+			"/rpc/publish"
+		]
+	);
+	assert_eq!(
+		calls
+			.iter()
+			.filter(|call| *call == "/rpc/publication")
+			.count(),
+		2
+	);
+
+	// The report reads as `lk publish`'s own, and terminal controls from the
+	// organization's program never reach the screen.
+	let report = serde_json::from_value::<leptoskit_cloud::workers::PublishReport>(
+		json!({"stores": [{"store": "play", "summary": "uploaded\u{1b}[2J"}], "steps": []}),
+	)
+	.unwrap();
+	let text = stores::report_text(&report);
+	assert!(text.starts_with("What to do next"));
+	assert!(!text.contains('\u{1b}'));
+	assert_eq!(stores::printable("a\u{1b}]0;x\u{7}b\nc"), "a ]0;x b\nc");
+}
+
+#[test]
+fn cloud_publish_refuses_an_upload_address_that_is_not_secure() {
+	let ticket = |url: &str| {
+		serde_json::from_value::<leptoskit_cloud::deployments::UploadTicket>(json!({
+			"url": url, "method": "PUT", "headers": {}, "expires_at": "2026-11-18T00:00:00Z"
+		}))
+		.unwrap()
+	};
+	for refused in [
+		"http://store.example/upload",
+		"https://user:pass@store.example/upload",
+		"file:///etc/passwd",
+	] {
+		let error = transport::put(&ticket(refused), b"bytes").unwrap_err();
+		assert!(!format!("{error:?}").contains("store.example"), "{error:?}");
 	}
 }

@@ -1,7 +1,11 @@
-//! Cloud account commands. Deployment remains a separate CLI slice.
+//! `lk cloud`: accounts and projects (CLI 1), an environment's
+//! configuration and history (CLI 2), and store publishing and usage
+//! (CLI 3). `launch`, `deploy`, `status`, `logs` and `open` aren't built.
 
 pub mod client;
 mod credentials;
+mod ship;
+mod stores;
 #[cfg(test)]
 mod tests;
 mod transport;
@@ -48,11 +52,15 @@ pub struct CloudArgs {
 	/// Project slug; defaults to [cloud].project.
 	#[arg(long, global = true)]
 	pub project: Option<String>,
+	/// Environment name, for the commands about one; defaults to
+	/// production.
+	#[arg(long, short = 'e', global = true)]
+	pub environment: Option<String>,
 	#[command(subcommand)]
 	pub command: CloudCommand,
 }
 
-/// Account operations available before deployment support.
+/// The cloud's commands. Every one takes `--json`.
 #[derive(Debug, Subcommand)]
 pub enum CloudCommand {
 	/// Signs in through your browser with a short code.
@@ -79,6 +87,62 @@ pub enum CloudCommand {
 	Env {
 		#[command(subcommand)]
 		command: EnvCommand,
+	},
+	/// Manages an environment's variables.
+	Var {
+		#[command(subcommand)]
+		command: ship::VarCommand,
+	},
+	/// Manages an environment's secrets.
+	Secret {
+		#[command(subcommand)]
+		command: ship::SecretCommand,
+	},
+	/// Manages an environment's custom domains.
+	Domain {
+		#[command(subcommand)]
+		command: ship::DomainCommand,
+	},
+	/// Lists an environment's deployments, newest first.
+	Deployments {
+		#[arg(long)]
+		limit: Option<u32>,
+	},
+	/// Returns an environment to an earlier deployment that was live,
+	/// reusing its image.
+	Rollback {
+		/// The deployment's number, from `lk cloud deployments`.
+		to: u64,
+	},
+	/// Manages an environment's database and its backups.
+	Db {
+		#[command(subcommand)]
+		command: ship::DbCommand,
+	},
+	/// Builds the project on a build worker and uploads it to stores, as
+	/// `lk publish` does, with the environment's secrets as credentials.
+	Publish {
+		/// The stores to publish to.
+		#[arg(required = true, value_parser = stores::store)]
+		stores: Vec<String>,
+		/// Also sends each upload for review or release, which reaches
+		/// users.
+		#[arg(long)]
+		submit: bool,
+		/// Answers once the publish is queued instead of following it.
+		#[arg(long)]
+		detach: bool,
+	},
+	/// Shows an environment's publishes and what they printed.
+	Publications {
+		#[command(subcommand)]
+		command: stores::PublicationCommand,
+	},
+	/// Shows what the organization used in a month, and its cost.
+	Usage {
+		/// The month, such as 2026-11; defaults to this month.
+		#[arg(long)]
+		period: Option<String>,
 	},
 	/// Manages scoped API tokens for CI.
 	Token {
@@ -356,6 +420,7 @@ fn execute(args: &CloudArgs, context: &Context) -> Result<Value> {
 	let client = &context.client;
 	let requirement = match &args.command {
 		CloudCommand::Token { .. } => Requirement::Organization(Permission::ManageTokens),
+		CloudCommand::Usage { .. } => Requirement::Organization(Permission::ViewBilling),
 		CloudCommand::Org { command } => {
 			match command {
 				OrgCommand::List => Requirement::SignedIn,
@@ -408,6 +473,21 @@ fn execute(args: &CloudArgs, context: &Context) -> Result<Value> {
 		CloudCommand::Env { command } => environment(command, args, context),
 		CloudCommand::Token { command } => token(command, args, context),
 		CloudCommand::Link { force } => link(args, context, *force),
+		CloudCommand::Var { command } => ship::var(command, args, context),
+		CloudCommand::Secret { command } => {
+			ship::secret(command, args, context, &mut ship::read_stdin)
+		}
+		CloudCommand::Domain { command } => ship::domain(command, args, context),
+		CloudCommand::Deployments { limit } => ship::deployments(args, context, *limit),
+		CloudCommand::Rollback { to } => ship::rollback(args, context, *to),
+		CloudCommand::Db { command } => ship::db(command, args, context),
+		CloudCommand::Publish {
+			stores,
+			submit,
+			detach,
+		} => stores::publish(args, context, stores, *submit, *detach),
+		CloudCommand::Publications { command } => stores::publications(command, args, context),
+		CloudCommand::Usage { period } => stores::usage(args, context, period.clone()),
 	}
 }
 

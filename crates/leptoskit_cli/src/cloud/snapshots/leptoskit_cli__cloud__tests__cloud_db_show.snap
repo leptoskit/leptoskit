@@ -1,0 +1,26 @@
+---
+source: crates/leptoskit_cli/src/cloud/tests.rs
+expression: help
+---
+Shows the environment's database, if it has one
+
+Usage: show [OPTIONS]
+
+Options:
+      --url <URL>
+          Cloud origin; overrides `LEPTOSKIT_CLOUD_URL` and [cloud].url
+
+      --json
+          Prints the documented JSON result
+
+      --org <ORG>
+          Organization slug; defaults to [cloud].organization or your personal one
+
+      --project <PROJECT>
+          Project slug; defaults to [cloud].project
+
+  -e, --environment <ENVIRONMENT>
+          Environment name, for the commands about one; defaults to production
+
+  -h, --help
+          Print help

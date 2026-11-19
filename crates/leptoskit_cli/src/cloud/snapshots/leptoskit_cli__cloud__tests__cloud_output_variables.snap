@@ -1,0 +1,7 @@
+---
+source: crates/leptoskit_cli/src/cloud/tests.rs
+expression: human(&output)
+---
+name: API_URL
+updated_at: 2026-11-18T00:00:00Z
+value: https://api.example.com
