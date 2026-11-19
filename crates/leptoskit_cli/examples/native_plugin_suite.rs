@@ -9,6 +9,10 @@
 //! ```
 //! Then run `./gradlew :app:connectedDebugAndroidTest` in the generated
 //! project's `android` directory with `ANDROID_SERIAL` set.
+//!
+//! With `--push` it builds the push-enabled companion instead: the scaffold
+//! with only the notifications plugin, `[native.android] push` on, a fake
+//! `google-services.json`, and `NotificationsPushTest` as its one test.
 
 use std::path::Path;
 use std::path::PathBuf;
@@ -171,6 +175,22 @@ const ANDROID_TESTS: &[&str] = &[
 	"leptoskit_plugin_age_range/tests/android/AgeRangeWireTest.kt",
 	"leptoskit_plugin_recorder/tests/android/RecorderWireTest.kt",
 ];
+
+/// The push-enabled app's only instrumentation test. It drives the messaging
+/// service generation writes, which exists only while push is on, and so
+/// cannot run in the suite app: that app is push-off, as
+/// `NotificationsPluginTest` requires.
+const PUSH_TEST: &str = "leptoskit_plugin_notifications/tests/android/NotificationsPushTest.kt";
+
+/// The Firebase project the fake `google-services.json` names. Nothing about
+/// it is real: Google services' Gradle plugin only parses the file into
+/// resources, and the test reads these values back from `FirebaseApp`.
+const FAKE_FIREBASE_PROJECT: &str = "leptoskit-ci-fake";
+const FAKE_FIREBASE_PROJECT_NUMBER: &str = "000000000000";
+const FAKE_FIREBASE_APP_ID: &str = "1:000000000000:android:0000000000000000000000";
+/// Shaped like a Google API key (`A` and 38 more), so the Firebase SDK's
+/// format check passes, but it is no key at all.
+const FAKE_FIREBASE_API_KEY: &str = "AIza-leptoskit-ci-fake-not-a-real-key00";
 
 /// Instrumentation wrappers that call each plugin test file's `main`.
 const WRAPPERS: &[(&str, &str)] = &[
@@ -512,6 +532,11 @@ struct Args {
 	/// Android native architecture, matching the eventual test emulator.
 	#[arg(long, value_parser = ["android", "android-x86_64"], default_value = "android-x86_64")]
 	target: String,
+	/// Builds the push-enabled companion app instead of the plugin suite:
+	/// `[native.android] push` on, a fake Firebase configuration, and only
+	/// the push test.
+	#[arg(long)]
+	push: bool,
 }
 
 fn main() -> Result<()> {
@@ -522,19 +547,24 @@ fn main() -> Result<()> {
 		.canonicalize()
 		.context("locate SDK checkout")?;
 	let destination = std::path::absolute(&args.destination)?;
+	// Its own name, and so its own package id, so the two apps never replace
+	// each other on the emulator they share.
+	let name = if args.push {
+		"native_push_suite"
+	} else {
+		"native_plugin_suite"
+	};
 	run(Command::new(&cli)
 		.args(["generate", "app"])
 		.arg(&destination)
-		.args([
-			"--name",
-			"native_plugin_suite",
-			"--platform",
-			"android",
-			"--sdk-path",
-		])
+		.args(["--name", name, "--platform", "android", "--sdk-path"])
 		.arg(&sdk))?;
 
-	configure(&destination, &sdk)?;
+	if args.push {
+		configure_push(&destination, &sdk)?;
+	} else {
+		configure(&destination, &sdk)?;
+	}
 	run(Command::new(&cli)
 		.current_dir(&destination)
 		.args(["native", "prepare", &args.target]))?;
@@ -674,6 +704,71 @@ fn configure(destination: &Path, sdk: &Path) -> Result<()> {
 		);
 		std::fs::write(wrapper, source)?;
 	}
+	Ok(())
+}
+
+/// The push-enabled companion: the scaffold as generated, plus the
+/// notifications plugin, `[native.android] push`, the fake Firebase
+/// configuration push requires, and the push test as the app's only
+/// instrumentation test. Nothing else from the suite: its tests expect push
+/// off, and one plugin keeps this second app's build small.
+fn configure_push(destination: &Path, sdk: &Path) -> Result<()> {
+	edit_toml(&destination.join("android/Cargo.toml"), |manifest| {
+		add_dependency(manifest, sdk, "leptoskit_plugin_notifications", Side::Host)
+	})?;
+	edit_toml(&destination.join("leptoskit.toml"), |manifest| {
+		let native = manifest
+			.get_mut("native")
+			.and_then(toml::Value::as_table_mut)
+			.context("scaffold lacks native table")?;
+		native
+			.entry("plugins")
+			.or_insert_with(|| toml::Value::Array(Vec::new()))
+			.as_array_mut()
+			.context("native.plugins must be an array")?
+			.push("notifications".into());
+		native
+			.entry("android")
+			.or_insert_with(|| toml::Value::Table(toml::Table::new()))
+			.as_table_mut()
+			.context("native.android must be a table")?
+			.insert("push".into(), true.into());
+		Ok(())
+	})?;
+
+	// Google services' Gradle plugin refuses a file without a client for the
+	// app's own package, so it names the package the scaffold gave the app.
+	let config = leptoskit_config::LeptoskitConfig::load_from(destination)?;
+	let google_services = serde_json::json!({
+		"project_info": {
+			"project_number": FAKE_FIREBASE_PROJECT_NUMBER,
+			"project_id": FAKE_FIREBASE_PROJECT,
+			"storage_bucket": format!("{FAKE_FIREBASE_PROJECT}.firebasestorage.app"),
+		},
+		"client": [{
+			"client_info": {
+				"mobilesdk_app_id": FAKE_FIREBASE_APP_ID,
+				"android_client_info": { "package_name": config.native.package_id },
+			},
+			"oauth_client": [],
+			"api_key": [{ "current_key": FAKE_FIREBASE_API_KEY }],
+			"services": { "appinvite_service": { "other_platform_oauth_client": [] } },
+		}],
+		"configuration_version": "1",
+	});
+	std::fs::write(
+		destination.join("android/app/google-services.json"),
+		serde_json::to_string_pretty(&google_services)?,
+	)?;
+
+	let tests = destination.join("android/app/src/androidTest/java");
+	// The scaffold's own app test runs in CI's universal app already.
+	std::fs::remove_file(tests.join("NativeAppTest.kt"))
+		.context("remove the scaffold's NativeAppTest.kt")?;
+	let source = sdk.join("crates").join(PUSH_TEST);
+	let name = source.file_name().context("test source lacks a filename")?;
+	std::fs::copy(&source, tests.join(name))
+		.with_context(|| format!("copy Android test {}", source.display()))?;
 	Ok(())
 }
 

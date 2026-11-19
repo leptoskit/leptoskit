@@ -502,12 +502,14 @@ fn generated_app_swift_typechecks_with_and_without_the_notifications_module() {
 	let app = root.join(".leptoskit/macos/Sources");
 
 	// Build the plugin package (and, through it, the bridge) for this Mac:
-	// the modules the conditional import names.
+	// the modules the conditional import names. Targets, not products:
+	// `--product` cannot name an automatic library, and SwiftPM then builds
+	// the package's default targets instead.
 	let plugin_build = root.join("plugin-build");
 	swift(&[
 		"build".into(),
 		package_flag(&packages.join("leptoskit_plugin_notifications")),
-		"--product=LeptosKitNotifications".into(),
+		"--target=LeptosKitNotifications".into(),
 		format!("--build-path={}", plugin_build.display()),
 	]);
 	let plugin_modules = modules(&plugin_build, "LeptosKitNotifications");
@@ -531,7 +533,7 @@ fn generated_app_swift_typechecks_with_and_without_the_notifications_module() {
 	swift(&[
 		"build".into(),
 		package_flag(&packages.join("leptoskit_bridge_ffi")),
-		"--product=LeptosKitBridge".into(),
+		"--target=LeptosKitBridge".into(),
 		format!("--build-path={}", bridge_build.display()),
 	]);
 	let bridge_modules = modules(&bridge_build, "LeptosKitBridge");
@@ -571,10 +573,13 @@ fn swift(arguments: &[String]) {
 		.args(arguments)
 		.output()
 		.expect("swift runs");
+	// The compiler's diagnostics go to stdout under `swift build`; stderr
+	// carries only SwiftPM's own warnings.
 	assert!(
 		output.status.success(),
-		"swift {} failed:\n{}",
+		"swift {} failed:\nstdout:\n{}\nstderr:\n{}",
 		arguments.join(" "),
+		String::from_utf8_lossy(&output.stdout),
 		String::from_utf8_lossy(&output.stderr)
 	);
 }
