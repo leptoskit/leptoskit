@@ -63,11 +63,96 @@ A send to a topic, a condition, or everyone can have far more rows than one writ
 
 ### A send that repeats
 
-The service has no recurring send. A send happens once, at `visible_at` or now. For a message that goes out every morning or every Monday, your server makes one send each time, from whatever scheduler it already runs: a cron job, or a queue worker.
+A message that goes out every morning, every Monday, or on the first of each month is a **recurrence**: a schedule the service keeps, which makes one send each time it comes round. You create it once, and there is no scheduler of your own to run.
 
-- Give each occurrence its own idempotency key that names the occurrence, like `daily-digest-2026-11-19`. A job that runs twice for the same day then sends once, and tomorrow's run is a new send.
+```rust
+use leptoskit_notifications::recurrence::{
+    CreateRecurrence, NewRecurrence, RecurrenceRule, Repeat, Weekday,
+};
+
+let saved = call_as_app(CreateRecurrence {
+    recurrence: NewRecurrence {
+        name: "Weekly digest".into(),
+        spec: SendSpec {
+            category: "digest".into(),
+            title: "Your week".into(),
+            body: "See what happened this week.".into(),
+            ..SendSpec::default()
+        },
+        target: SendTarget::Topic("digest".into()),
+        rule: RecurrenceRule {
+            repeat: Repeat::Weekly { every: 1, on: vec![Weekday::Monday] },
+            at: "09:00".into(),
+            time_zone: "Europe/London".into(),
+            starts_on: None,
+            ends: None,
+            local_time: false,
+        },
+        note: None,
+    },
+    by: admin_name.clone(),
+    broadcast: false,
+})
+.await?;
+
+// `saved.next_at` is the instant of the first occurrence.
+```
+
+The rule's fields:
+
+| Field        | What it says                                                                                                                                                          |
+| ------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `repeat`     | `Daily { every }` for every day or every few days, `Weekly { every, on }` for chosen weekdays, or `Monthly { every, day }` for a day of the month                     |
+| `at`         | the time of day as `HH:MM`, read in `time_zone`                                                                                                                       |
+| `time_zone`  | an IANA time zone such as `Europe/London`                                                                                                                             |
+| `starts_on`  | the first date an occurrence may fall on, as `YYYY-MM-DD`; today when left out. "Every other week" and "every third month" are counted from here                      |
+| `ends`       | `RecurrenceEnd::On(date)` for a last date, or `RecurrenceEnd::After(count)` for a number of sends; when left out, it goes on until you end it                         |
+| `local_time` | `true` to deliver each occurrence when `at` arrives in [each person's own time zone](audiences.md#send-at-each-persons-local-time), instead of at one instant for all |
+
+A recurrence goes out at most once a day. Four rules decide the edge cases:
+
+- **The time is a wall-clock time.** 09:00 in London is 09:00 in London in winter and in summer. The service follows the time zone's daylight saving changes.
+- **A time the clocks skip goes out when the gap ends.** On the night the clocks jump from 02:00 to 03:00, an occurrence at 02:30 goes out at 03:30.
+- **A time the clocks repeat goes out the first time only.** On the night the clocks fall back from 02:00 to 01:00, an occurrence at 01:30 goes out once, the first time it is 01:30.
+- **A day the month does not have is the month's last day.** Day 31 goes out on 30 April and on 28 or 29 February.
+
+**Each occurrence is an ordinary send.** It passes the same checks as `send`, respects category opt-outs, and reaches the same platforms. Its idempotency key is `recurrence:<id>:<the occurrence's instant in Unix seconds>`, so one occurrence is one send, however many copies of the service find it due at once. Every occurrence's send carries the label `recurrence.<id>`, which is how you find them in [`list_sends`](#browse-the-sends-you-made), and `saved.last_send_key` is the key that [`send_report`](#see-what-a-send-came-to) takes for the latest one. Because the service sets the label and the timing, the message you store has no `label`, `visible_at`, `expires_at`, or `local_time` of its own; a recurrence that carries one is refused.
+
+**The first occurrence is the next one still ahead.** Create a 09:00 recurrence at 10:00 and it first goes out tomorrow.
+
+**After an outage, at most one send is made up.** If the service was down when occurrences were due, it sends only the latest one it missed, and only if that one is less than 24 hours late. Everything else it missed is counted in `skipped` and never sent. Three days of downtime does not become three notifications.
+
+**Pause, resume, and end:**
+
+```rust
+use leptoskit_notifications::recurrence::{EndRecurrence, PauseRecurrence, ResumeRecurrence};
+
+// Nothing more goes out until it is resumed.
+call_as_app(PauseRecurrence { id: saved.id, by: admin_name.clone() }).await?;
+
+// It picks up at the next occurrence still ahead. What passed while it was
+// paused is not sent.
+call_as_app(ResumeRecurrence { id: saved.id, by: admin_name.clone() }).await?;
+
+// For good. An ended recurrence cannot be resumed.
+call_as_app(EndRecurrence { id: saved.id, by: admin_name }).await?;
+```
+
+`recurrence` reads one by id, and `recurrences` lists them a page at a time, optionally in one state. None of these touches a send that was already made: to stop one of those, [cancel it](#cancel-a-scheduled-send) by its key.
+
+A few more things to know:
+
+- **A recurrence cannot be edited.** To change its message, audience, or rule, end it and create a new one.
+- **A refused occurrence pauses the recurrence.** If the service refuses an occurrence's send, it sends nothing, pauses the recurrence, and stores the reason in `error`. It does not try again by itself. Resume the recurrence once the cause is gone, or end it and create a corrected one.
+- **An audience of everyone must be asked for.** `SendTarget::Everyone` is refused unless `broadcast` is `true`.
+- **There can be 100 recurrences that have not ended.** The 101st is refused until you end one. The other limits are in the [reference](reference.md#limits).
+- **Only your app's server can call these.**
+
+**When the rule cannot say it.** A rule has no "last weekday of the month", no "twice a day", and no list of holidays to skip. For those, make the sends from your own scheduler:
+
+- Give each occurrence its own idempotency key that names the occurrence, like `daily-digest-2026-11-19`. A job that runs twice for the same day then sends once.
 - Give every occurrence the same [`label`](#browse-the-sends-you-made), so you can list them together.
-- For "9:00 in each person's own time zone", make the day's send a [local-time send](audiences.md#send-at-each-persons-local-time). Your scheduler still runs once a day.
+- For "9:00 in each person's own time zone", make each one a [local-time send](audiences.md#send-at-each-persons-local-time).
 
 ## Track a large send
 

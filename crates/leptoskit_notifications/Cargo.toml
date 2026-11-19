@@ -102,6 +102,12 @@ required-features = ["service"]
 name = "catalogue"
 required-features = ["service"]
 
+# The recurring tests exercise recurring sends: one send per occurrence,
+# exactly once, with the clock in the test's hands.
+[[test]]
+name = "recurring"
+required-features = ["service"]
+
 # The Postgres races need the Postgres service; they start a private
 # Postgres from local binaries and skip without them.
 [[test]]

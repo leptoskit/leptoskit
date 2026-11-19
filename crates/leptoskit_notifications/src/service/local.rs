@@ -28,7 +28,7 @@ use crate::push::PushEndpoint;
 /// The time zone `name` names, when this build's database knows it. The
 /// lookup ignores case. `Etc/Unknown`, the name a device reports when it
 /// doesn't know its own zone, is not one.
-fn zone(name: &str) -> Option<jiff::tz::TimeZone> {
+pub(crate) fn zone(name: &str) -> Option<jiff::tz::TimeZone> {
 	let name = name.trim();
 
 	if name.is_empty() || name.len() > crate::push::MAX_TIME_ZONE_LEN {
@@ -47,7 +47,7 @@ fn zone(name: &str) -> Option<jiff::tz::TimeZone> {
 /// 02:30 on a night that jumps from 02:00 to 03:00 arrives at 03:30. A
 /// time the clocks repeat — the hour an autumn fold replays — arrives the
 /// first time.
-fn arrives_in(
+pub(crate) fn arrives_in(
 	zone: &jiff::tz::TimeZone,
 	wall: chrono::NaiveDateTime,
 ) -> Option<leptoskit_db::Timestamp> {

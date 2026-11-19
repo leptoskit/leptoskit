@@ -4,7 +4,7 @@ This page lists everything in one place for when you know what you are looking f
 
 ## Operations
 
-Every operation is a struct you pass to a call function. The struct's name is the operation's name in upper camel case: `send_status` is `leptoskit_notifications::SendStatus`. Operations in a module are under that module: `push::PushDeliveries`, `campaign::LaunchCampaign`, `catalogue::Topics`, `preview::PreviewPush`.
+Every operation is a struct you pass to a call function. The struct's name is the operation's name in upper camel case: `send_status` is `leptoskit_notifications::SendStatus`. Operations in a module are under that module: `push::PushDeliveries`, `campaign::LaunchCampaign`, `recurrence::CreateRecurrence`, `catalogue::Topics`, `preview::PreviewPush`.
 
 There are two kinds of caller, and no operation serves both:
 
@@ -13,41 +13,47 @@ There are two kinds of caller, and no operation serves both:
 
 ### Called by your server
 
-| Operation                 | Module      | What it does                                                         | Explained in                                                        |
-| ------------------------- | ----------- | -------------------------------------------------------------------- | ------------------------------------------------------------------- |
-| `send`                    | root        | makes a send, or with `validate_only` counts its audience            | [Sending](sending.md#send-from-your-server)                         |
-| `cancel`                  | root        | cancels a send that is not yet visible                               | [Sending](sending.md#cancel-a-scheduled-send)                       |
-| `send_status`             | root        | a send's state and counts                                            | [Sending](sending.md#track-a-large-send)                            |
-| `send_report`             | root        | what became of a send: inbox counts, push counts, reads by hour      | [Sending](sending.md#see-what-a-send-came-to)                       |
-| `list_sends`              | root        | the sends that were made, newest first                               | [Sending](sending.md#browse-the-sends-you-made)                     |
-| `send_test`               | root        | pushes a spec to one person's devices once, writing nothing          | [Troubleshooting](troubleshooting.md#test-on-a-device)              |
-| `preview_push`            | `preview`   | the request each provider would be sent, and its size                | [Shaping messages](shaping-messages.md#preview-a-push)              |
-| `subscribe_to_topic`      | root        | subscribes up to 1,000 people to a topic                             | [Audiences](audiences.md#send-to-a-topic)                           |
-| `unsubscribe_from_topic`  | root        | unsubscribes up to 1,000 people from a topic                         | [Audiences](audiences.md#send-to-a-topic)                           |
-| `set_person_attributes`   | root        | sets and removes attributes for up to 1,000 people                   | [Audiences](audiences.md#describe-people-with-attributes)           |
-| `person_attributes`       | root        | one person's attributes                                              | [Audiences](audiences.md#describe-people-with-attributes)           |
-| `forget_person`           | root        | erases everything stored about one person                            | [Audiences](audiences.md#erase-a-person)                            |
-| `notifications_overview`  | `catalogue` | how many people, devices per platform, and topics the service knows  | [Audiences](audiences.md#know-your-audience-before-you-send)        |
-| `topics`                  | `catalogue` | topics with their subscriber counts                                  | [Audiences](audiences.md#know-your-audience-before-you-send)        |
-| `attribute_keys`          | `catalogue` | attribute keys with how many people hold each                        | [Audiences](audiences.md#know-your-audience-before-you-send)        |
-| `attribute_values`        | `catalogue` | one key's values with how many people hold each                      | [Audiences](audiences.md#know-your-audience-before-you-send)        |
-| `categories`              | `catalogue` | categories with their opt-out counts and last send                   | [Audiences](audiences.md#know-your-audience-before-you-send)        |
-| `estimate_audience`       | `catalogue` | about how many people a target would reach                           | [Audiences](audiences.md#know-your-audience-before-you-send)        |
-| `person_endpoints`        | `push`      | one person's devices, without credentials                            | [Audiences](audiences.md#know-your-audience-before-you-send)        |
-| `revoke_person_endpoints` | `push`      | removes every device a person enrolled                               | [Push setup](push-setup.md#when-the-server-revokes-a-device)        |
-| `import_push_endpoints`   | `push`      | imports up to 500 FCM or APNs tokens your server already holds       | [Coming from Firebase](coming-from-firebase.md#moving-step-by-step) |
-| `push_deliveries`         | `push`      | a send's deliveries, one by one, with state and reason               | [Troubleshooting](troubleshooting.md#read-what-happened-to-a-send)  |
-| `create_campaign`         | `campaign`  | saves a new draft                                                    | [Campaigns](campaigns.md)                                           |
-| `update_campaign`         | `campaign`  | saves a change to a draft, from a named revision                     | [Campaigns](campaigns.md)                                           |
-| `campaign`                | `campaign`  | reads one campaign                                                   | [Campaigns](campaigns.md)                                           |
-| `campaigns`               | `campaign`  | lists campaigns, newest first                                        | [Campaigns](campaigns.md)                                           |
-| `campaign_events`         | `campaign`  | a campaign's history: created, tested, launched, cancelled, archived | [Campaigns](campaigns.md)                                           |
-| `test_campaign`           | `campaign`  | pushes a draft to one person's devices                               | [Campaigns](campaigns.md)                                           |
-| `launch_campaign`         | `campaign`  | makes the draft's send, once                                         | [Campaigns](campaigns.md)                                           |
-| `cancel_campaign`         | `campaign`  | cancels a launched campaign's send                                   | [Campaigns](campaigns.md)                                           |
-| `archive_campaign`        | `campaign`  | puts a campaign away                                                 | [Campaigns](campaigns.md)                                           |
-| `duplicate_campaign`      | `campaign`  | copies a campaign into a new draft                                   | [Campaigns](campaigns.md)                                           |
-| `duplicate_send`          | `campaign`  | makes a new draft from a send                                        | [Campaigns](campaigns.md)                                           |
+| Operation                 | Module       | What it does                                                         | Explained in                                                        |
+| ------------------------- | ------------ | -------------------------------------------------------------------- | ------------------------------------------------------------------- |
+| `send`                    | root         | makes a send, or with `validate_only` counts its audience            | [Sending](sending.md#send-from-your-server)                         |
+| `cancel`                  | root         | cancels a send that is not yet visible                               | [Sending](sending.md#cancel-a-scheduled-send)                       |
+| `send_status`             | root         | a send's state and counts                                            | [Sending](sending.md#track-a-large-send)                            |
+| `send_report`             | root         | what became of a send: inbox counts, push counts, reads by hour      | [Sending](sending.md#see-what-a-send-came-to)                       |
+| `list_sends`              | root         | the sends that were made, newest first                               | [Sending](sending.md#browse-the-sends-you-made)                     |
+| `send_test`               | root         | pushes a spec to one person's devices once, writing nothing          | [Troubleshooting](troubleshooting.md#test-on-a-device)              |
+| `preview_push`            | `preview`    | the request each provider would be sent, and its size                | [Shaping messages](shaping-messages.md#preview-a-push)              |
+| `subscribe_to_topic`      | root         | subscribes up to 1,000 people to a topic                             | [Audiences](audiences.md#send-to-a-topic)                           |
+| `unsubscribe_from_topic`  | root         | unsubscribes up to 1,000 people from a topic                         | [Audiences](audiences.md#send-to-a-topic)                           |
+| `set_person_attributes`   | root         | sets and removes attributes for up to 1,000 people                   | [Audiences](audiences.md#describe-people-with-attributes)           |
+| `person_attributes`       | root         | one person's attributes                                              | [Audiences](audiences.md#describe-people-with-attributes)           |
+| `forget_person`           | root         | erases everything stored about one person                            | [Audiences](audiences.md#erase-a-person)                            |
+| `notifications_overview`  | `catalogue`  | how many people, devices per platform, and topics the service knows  | [Audiences](audiences.md#know-your-audience-before-you-send)        |
+| `topics`                  | `catalogue`  | topics with their subscriber counts                                  | [Audiences](audiences.md#know-your-audience-before-you-send)        |
+| `attribute_keys`          | `catalogue`  | attribute keys with how many people hold each                        | [Audiences](audiences.md#know-your-audience-before-you-send)        |
+| `attribute_values`        | `catalogue`  | one key's values with how many people hold each                      | [Audiences](audiences.md#know-your-audience-before-you-send)        |
+| `categories`              | `catalogue`  | categories with their opt-out counts and last send                   | [Audiences](audiences.md#know-your-audience-before-you-send)        |
+| `estimate_audience`       | `catalogue`  | about how many people a target would reach                           | [Audiences](audiences.md#know-your-audience-before-you-send)        |
+| `person_endpoints`        | `push`       | one person's devices, without credentials                            | [Audiences](audiences.md#know-your-audience-before-you-send)        |
+| `revoke_person_endpoints` | `push`       | removes every device a person enrolled                               | [Push setup](push-setup.md#when-the-server-revokes-a-device)        |
+| `import_push_endpoints`   | `push`       | imports up to 500 FCM or APNs tokens your server already holds       | [Coming from Firebase](coming-from-firebase.md#moving-step-by-step) |
+| `push_deliveries`         | `push`       | a send's deliveries, one by one, with state and reason               | [Troubleshooting](troubleshooting.md#read-what-happened-to-a-send)  |
+| `create_campaign`         | `campaign`   | saves a new draft                                                    | [Campaigns](campaigns.md)                                           |
+| `update_campaign`         | `campaign`   | saves a change to a draft, from a named revision                     | [Campaigns](campaigns.md)                                           |
+| `campaign`                | `campaign`   | reads one campaign                                                   | [Campaigns](campaigns.md)                                           |
+| `campaigns`               | `campaign`   | lists campaigns, newest first                                        | [Campaigns](campaigns.md)                                           |
+| `campaign_events`         | `campaign`   | a campaign's history: created, tested, launched, cancelled, archived | [Campaigns](campaigns.md)                                           |
+| `test_campaign`           | `campaign`   | pushes a draft to one person's devices                               | [Campaigns](campaigns.md)                                           |
+| `launch_campaign`         | `campaign`   | makes the draft's send, once                                         | [Campaigns](campaigns.md)                                           |
+| `cancel_campaign`         | `campaign`   | cancels a launched campaign's send                                   | [Campaigns](campaigns.md)                                           |
+| `archive_campaign`        | `campaign`   | puts a campaign away                                                 | [Campaigns](campaigns.md)                                           |
+| `duplicate_campaign`      | `campaign`   | copies a campaign into a new draft                                   | [Campaigns](campaigns.md)                                           |
+| `duplicate_send`          | `campaign`   | makes a new draft from a send                                        | [Campaigns](campaigns.md)                                           |
+| `create_recurrence`       | `recurrence` | saves a send that repeats on a schedule                              | [Sending](sending.md#a-send-that-repeats)                           |
+| `recurrence`              | `recurrence` | reads one recurrence                                                 | [Sending](sending.md#a-send-that-repeats)                           |
+| `recurrences`             | `recurrence` | lists recurrences, a page at a time                                  | [Sending](sending.md#a-send-that-repeats)                           |
+| `pause_recurrence`        | `recurrence` | stops a recurrence from sending until it is resumed                  | [Sending](sending.md#a-send-that-repeats)                           |
+| `resume_recurrence`       | `recurrence` | starts a paused recurrence again at its next occurrence              | [Sending](sending.md#a-send-that-repeats)                           |
+| `end_recurrence`          | `recurrence` | ends a recurrence for good                                           | [Sending](sending.md#a-send-that-repeats)                           |
 
 ### Called by the signed-in person
 
@@ -151,7 +157,7 @@ The checks the service runs are public functions of the crate, so a form can run
 | List                                                  | Largest page |
 | ----------------------------------------------------- | ------------ |
 | `inbox`, `my_topics`, `list_sends`, `campaign_events` | 100          |
-| `campaigns` and the catalogue lists                   | 50           |
+| `campaigns`, `recurrences`, and the catalogue lists   | 50           |
 
 **Campaigns**
 
@@ -162,6 +168,23 @@ The checks the service runs are public functions of the crate, so a form can run
 | `by`                        | 1 to 128 bytes |
 | Drafts at one time          | 1,000          |
 | Recorded tests per campaign | 100            |
+
+**Recurrences**
+
+| What                                                | Limit                  |
+| --------------------------------------------------- | ---------------------- |
+| Name                                                | 1 to 120 bytes         |
+| Note                                                | 1,000 bytes            |
+| `by`                                                | 1 to 128 bytes         |
+| Recurrences that have not ended (active and paused) | 100                    |
+| How often                                           | at most once a day     |
+| `Daily { every }`                                   | 1 to 365 days          |
+| `Weekly { every }`                                  | 1 to 52 weeks          |
+| `Monthly { every }`                                 | 1 to 12 months         |
+| `ends: After(count)`                                | 1 to 10,000 sends      |
+| `starts_on`                                         | at most 366 days ahead |
+| How late a missed occurrence is still sent          | 24 hours               |
+| The stored `error`                                  | 256 bytes              |
 
 **Counts in the catalogue** stop at 100,000 for a topic, attribute, or category, at 1,000,000 for the overview's people, and at 1,000 for the overview's topics. `estimate_audience` walks at most 5,000 people.
 
@@ -232,7 +255,7 @@ A new version of the service can change its tables, and it makes those changes w
 | `send_history` (the send list and the audience catalogue)         | builds two small indexes over send records and one each over attributes, category preferences, and devices; writes wait, reads go on | the same five builds; writes to those tables wait, reads go on. You can build them ahead with no waiting, as below         |
 | `scale_indexes` (indexes for the unread count and the push queue) | builds one index over every notification and two over every push record; writes wait, reads go on                                    | the same three builds; writes to those two tables wait, reads go on. You can build them ahead with no waiting, as below    |
 
-The other changes add empty tables or empty columns and take no measurable time at any size. That includes `campaigns`, which adds two empty tables, and `endpoint_seen`, which adds one empty column recording when each device was last heard from.
+The other changes add empty tables or empty columns and take no measurable time at any size. That includes `campaigns`, which adds two empty tables, `recurring_sends`, which adds one, and `endpoint_seen`, which adds one empty column recording when each device was last heard from.
 
 On Postgres you can take the wait out of `scale_indexes` and `send_history` by building their indexes yourself before you upgrade, while the old version is still running. Build each with `CREATE INDEX CONCURRENTLY`, under exactly the name and columns the migration file uses, and check that each one finished valid. The migration then finds them and only has a moment's work left. Each migration file's own comment has the details.
 

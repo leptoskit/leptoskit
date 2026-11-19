@@ -133,7 +133,7 @@ Nothing so far shows a banner on a device whose app is closed. That is push, and
 
 | Page                                                   | What it answers                                                                                 |
 | ------------------------------------------------------ | ----------------------------------------------------------------------------------------------- |
-| [Sending](sending.md)                                  | Sends, idempotency, schedules, cancel, progress, dry runs, reports, and the list of sends       |
+| [Sending](sending.md)                                  | Sends, idempotency, schedules, cancel, repeating sends, progress, dry runs, reports, send list  |
 | [The inbox](inbox.md)                                  | Reading the inbox, the unread badge, read and dismissed state, categories, local banners        |
 | [Audiences](audiences.md)                              | Topics, conditions, attributes, segments, everyone, device targeting, local time, the catalogue |
 | [Shaping messages](shaping-messages.md)                | Options per platform, silent data messages, badges, translated variants, payload size, previews |
@@ -152,7 +152,7 @@ Nothing so far shows a banner on a device whose app is closed. That is push, and
 - **Action buttons are web and Apple only, and Apple's aren't registered yet.** `web.actions` buttons work today. An Apple notification shows buttons only for a category the app registered with the system, which leptoskit doesn't do yet; the receiver already reports a pressed button's id when an app registers its own. Android sends carry no buttons.
 - **No delivery receipts.** The service knows what it stored and what the provider accepted; it doesn't track who saw a banner. `accepted` is as far as status goes.
 - **No per-device state.** Read, dismissed, and cancelled state is per person, shared across their devices by design.
-- **Translations are yours to write.** [Variants](shaping-messages.md#say-it-in-each-persons-language) pick the right text for each person, but the service does not translate anything, and it has no localization keys that a device resolves from its own string tables. [Local time](audiences.md#send-at-each-persons-local-time) is a single date and time; a send that repeats every morning is a send your server makes each day.
+- **Translations are yours to write.** [Variants](shaping-messages.md#say-it-in-each-persons-language) pick the right text for each person, but the service does not translate anything, and it has no localization keys that a device resolves from its own string tables.
 - **Person attributes are the app's own statements.** Segments read what your server set — plan, country, spend. Attributes are set in batches by the app's server only; a person cannot describe themselves into an audience.
 - **Device details are what the device reports.** The platform, locale, time zone, and app version are taken as each client sends them, checked for shape and never verified, and a device's time zone is not checked against a time zone database when it enrolls (a [local-time send](audiences.md#send-at-each-persons-local-time) skips one it does not know). There is no OS version or device model, `'apns'` doesn't tell an iPhone from a Mac, and a web app has a version only if you pass one. Windows and Linux devices can't enroll, so device conditions never reach them.
 

@@ -11,6 +11,8 @@
 //! - **Finished deliveries** go `deliveries_days` after they finished.
 //! - **Send records** go `sends_days` after the send was made, once no
 //!   notification or delivery of the send is left.
+//! - **Ended recurrences** go `sends_days` after they ended
+//!   ([`recurrence::sweep`](super::recurrence::sweep)).
 //!
 //! What never goes, whatever its age:
 //!
@@ -142,6 +144,11 @@ impl Stage {
 /// Whatever a read or a write fails with. What was deleted before it stays
 /// deleted; running it again picks up what is left.
 pub async fn prune(db: &Db, retention: &Retention, now: Timestamp) -> rpc::Result<Pruned> {
+	// Ended recurrences go with the send records, by the same setting.
+	// They are not counted in the answer, which counts the three tables a
+	// sweep walks.
+	super::recurrence::sweep(db, retention, now).await?;
+
 	let mut pruned = Pruned::default();
 	let mut stage = Some(Stage::FIRST);
 	let mut after: Option<String> = None;

@@ -17,6 +17,7 @@ All of it is in the service's own database, which you host. Nothing is sent to l
 | Attributes           | the person's id and each key and value your server set                                                                                    | your server only                                                                         |
 | The person registry  | the id of each person the service knows, and when it first heard of them                                                                  | your server sees counts                                                                  |
 | Campaigns            | each draft's message and audience, and the name your server passed as `by` for each event                                                 | your server                                                                              |
+| Recurrences          | each recurrence's message, audience, and rule, and the name your server passed as `by` when it was created and last changed               | your server                                                                              |
 
 The service identifies a person only by the id your app gives it. It holds no name, email address, or session. What a title, a body, `data`, an attribute value, or a condition contains is up to you, so that is where personal data enters: think before putting an email address in a condition or a diagnosis in a title.
 
@@ -58,6 +59,7 @@ A few rules hold whatever you set:
 - **A push record never outlives its notification.** When a notification goes, its push records go with it, whatever their age.
 - **A person's inbox simply gets shorter.** Deleted rows leave the inbox and the unread count the same way a dismissed one does. Nothing on an open screen breaks.
 - **Campaigns are kept.** A [campaign](campaigns.md#write-a-campaign-before-you-send-it) and its events are not deleted on a timer. Once a launched campaign's send record has been deleted, the campaign can still be read and copied, and launching it again is refused instead of sending twice.
+- **An ended recurrence is deleted with send records.** A [recurrence](sending.md#a-send-that-repeats) that has ended is deleted `SENDS_DAYS` after it ended, and kept forever when that setting is `off`. An active or paused recurrence is never deleted. The sends it made are send records like any other.
 - **The send list is the send records.** A send is in [`list_sends`](sending.md#browse-the-sends-you-made) for as long as its record is kept, and a report's push counts and reads by hour are counted over the rows still stored.
 - **A send's report counts what is left.** The read, opened, and dismissed counts in a [send's report](sending.md#see-what-a-send-came-to) are counted over the rows still stored, so they shrink as rows are deleted. What the send delivered is kept on the send's own record and does not change.
 
@@ -73,8 +75,10 @@ Four things it does not remove, because they are not rows about that person:
 
 - **A send's totals.** "Delivered to 1,204 people" stays 1,204.
 - **Campaign drafts.** A draft whose audience is a list of recipients keeps a forgotten person's id until you edit or archive the draft. After erasing someone, remove them from any draft that names them. Campaigns are not removed by retention either.
-- **Personal values inside a condition.** A condition such as `user.email == '…'` is stored as text with its send's record, and in a draft that uses it, until that record is deleted. Prefer attributes that do not identify one person.
+- **Personal values inside a condition.** A condition such as `user.email == '…'` is stored as text with its send's record, and in a draft or a recurrence that uses it, until that record is deleted. Prefer attributes that do not identify one person.
 - **Your own records.** Whatever your app's database holds about the person is yours to delete.
+
+It also takes the person out of every [recurrence](sending.md#a-send-that-repeats) that lists them as a recipient, so no later occurrence names them. A recurrence that then has nobody left is ended, and its `error` says why.
 
 The service keeps no list of people it was told to forget. If your server names the person again in a send, a subscription, an attribute call, or an [import of their device tokens](coming-from-firebase.md#moving-step-by-step), or the person turns notifications on again, the service knows them again from that moment. Erasing someone is therefore also a change to your own code: stop naming them.
 

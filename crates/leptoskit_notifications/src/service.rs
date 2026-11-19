@@ -18,6 +18,7 @@ pub(crate) mod history;
 pub(crate) mod local;
 pub(crate) mod preview;
 pub mod push;
+pub mod recurrence;
 pub mod retention;
 pub mod transport;
 
@@ -2491,6 +2492,9 @@ pub(crate) async fn forget_person(cx: &rpc::MutationCx, person: Uuid) -> rpc::Re
 		.delete(tx)
 		.await?;
 	push::revoke_all(tx, person).await?;
+	// A stored recurrence that names the person as a recipient stops
+	// naming them, so no later occurrence is sent to them.
+	recurrence::forget(tx, person).await?;
 
 	// Row ids are UUID v7, so one made now sorts after every row that
 	// exists and before the rows of any later send.
