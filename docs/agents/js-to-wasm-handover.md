@@ -33,20 +33,20 @@ Do not reopen these. If one turns out to be unworkable, stop and ask.
 
 One pull request per item. Every backend is kept in step, with AppKit as the reference. The gap numbers refer to [js-to-wasm-audit.md](js-to-wasm-audit.md), which has the proposed API and the per-backend table for each.
 
-| #  | Change                                                      | Gap      | State        |
-| -- | ----------------------------------------------------------- | -------- | ------------ |
-| 1  | Text input hints                                            | G9       | #852, open   |
-| 2  | `TextArea`                                                  | G12      | #877, open   |
-| 3  | Labels that focus their fields                              | G13      | #879, open   |
-| 4  | One-shot focus requests                                     | G2       | #887, open   |
-| 5  | Arrow-key navigation for tabs, radio groups and menus       | G5       | #892, open   |
-| 6  | `Modal` and `Popover`                                       | G1       | #896, open   |
-| 7  | Scroll into view                                            | G4       | #913, open   |
-| 8  | A clock hook                                                | G6       | #914, open   |
-| 9  | Typed refusals in the rpc client (status, code, retry time) | G8       | #918, open   |
-| 10 | Streams without a database                                  | G3       | #923, open   |
-| 11 | The ⌘ key on the web                                        | G7a      | #924, open   |
-| 12 | New-tab and download links                                  | G14, G15 | #PRNUM, open |
+| #  | Change                                                      | Gap      | State      |
+| -- | ----------------------------------------------------------- | -------- | ---------- |
+| 1  | Text input hints                                            | G9       | #852, open |
+| 2  | `TextArea`                                                  | G12      | #877, open |
+| 3  | Labels that focus their fields                              | G13      | #879, open |
+| 4  | One-shot focus requests                                     | G2       | #887, open |
+| 5  | Arrow-key navigation for tabs, radio groups and menus       | G5       | #892, open |
+| 6  | `Modal` and `Popover`                                       | G1       | #896, open |
+| 7  | Scroll into view                                            | G4       | #913, open |
+| 8  | A clock hook                                                | G6       | #914, open |
+| 9  | Typed refusals in the rpc client (status, code, retry time) | G8       | #918, open |
+| 10 | Streams without a database                                  | G3       | #923, open |
+| 11 | The ⌘ key on the web                                        | G7a      | #924, open |
+| 12 | New-tab and download links                                  | G14, G15 | #925, open |
 
 After those: convert the demo (3–4 pull requests), then app shortcuts with native key delivery (G7b), `prompt=login` on provider sign-in (G16) and document titles (G10), then convert the admin page by page (5–7 pull requests).
 
@@ -229,7 +229,7 @@ G7a. `KeyPress` has a `meta` field and `KeyPress::meta()`, and `KeyPress::is_pri
 - **Not run:** Safari or any browser on a Mac, so ⌘ as the primary modifier is only covered by the unit test of the platform names.
 - **For G7b:** the native backends still deliver no `on_key`. When they do, each must fill `meta` (⌘ on AppKit and UIKit, the Windows key on Win32, Super on GTK, Meta on Android). A Wasm guest in a native host is built for `wasm32` without `web`, so `is_primary` there asks for Ctrl even on a Mac or an iPhone; G7b needs to settle that, probably by having the host say which modifier is primary. The terminal can never see ⌘, so `is_primary` is never true in a terminal on a Mac.
 
-### `feat/link-targets` (#PRNUM): stacked on `feat/key-meta`
+### `feat/link-targets` (#925): stacked on `feat/key-meta`
 
 G14 and G15. `Pressable().href(url).target(LinkTarget::NewTab)` and `.download("name.json")`. The web renders `target="_blank" rel="noopener noreferrer"` with an "Opens in a new tab" `aria-description`, and `<a href download>`. Both are stored in `NativeProps::extra` beside `href`, so no element hash changes for trees that don't use them.
 
