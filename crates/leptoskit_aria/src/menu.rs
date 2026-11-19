@@ -227,7 +227,7 @@ impl From<Menu> for Element {
 					close();
 				})
 				.on_key(move |key| {
-					if key.key == "Tab" && !key.ctrl && !key.alt {
+					if key.key == "Tab" && !key.ctrl && !key.alt && !key.meta {
 						leave();
 
 						return EventOutcome::Handled;

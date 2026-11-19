@@ -1784,6 +1784,88 @@ async fn key_handlers_hear_keys_first_and_focused_fields_take_focus() {
 }
 
 #[wasm_bindgen_test]
+async fn command_keys_reach_handlers_and_the_rest_stay_the_browsers() {
+	let parent = container();
+	let saves = Arc::new(AtomicUsize::new(0));
+	let primaries = Arc::new(AtomicUsize::new(0));
+	let mount = mount_to(parent.clone(), {
+		let saves = Arc::clone(&saves);
+		let primaries = Arc::clone(&primaries);
+		move || {
+			let saves = Arc::clone(&saves);
+			let primaries = Arc::clone(&primaries);
+			render(
+				View()
+					.on_key(move |key| {
+						if key.is_primary() {
+							primaries.fetch_add(1, Ordering::SeqCst);
+						}
+
+						if key.key == "Enter" && key.meta && !key.ctrl {
+							saves.fetch_add(1, Ordering::SeqCst);
+							EventOutcome::Handled
+						} else {
+							EventOutcome::Unhandled
+						}
+					})
+					.child(
+						leptoskit_native::components::TextArea()
+							.aria_label("Note")
+							.focused(true),
+					),
+			)
+		}
+	});
+	tick().await;
+	next_frame().await;
+	let field: web_sys::HtmlTextAreaElement = find(&parent, "textarea");
+
+	let press = |key: &str, meta: bool, ctrl: bool| {
+		let options = web_sys::KeyboardEventInit::new();
+		options.set_key(key);
+		options.set_meta_key(meta);
+		options.set_ctrl_key(ctrl);
+		options.set_bubbles(true);
+		options.set_cancelable(true);
+		field
+			.dispatch_event(
+				&web_sys::KeyboardEvent::new_with_keyboard_event_init_dict("keydown", &options)
+					.unwrap(),
+			)
+			.unwrap()
+	};
+	assert!(
+		!press("Enter", true, false),
+		"the handled ⌘ key is prevented"
+	);
+	assert_eq!(saves.load(Ordering::SeqCst), 1);
+	// ⌘+R reloads and ⌘+L goes to the address bar: no handler took them,
+	// so the browser still does.
+	assert!(
+		press("r", true, false),
+		"an unhandled ⌘ key is the browser's"
+	);
+	assert!(press("l", true, false));
+	assert!(press("Enter", false, false), "a plain Enter is a new line");
+	assert_eq!(saves.load(Ordering::SeqCst), 1);
+
+	// The primary modifier follows the device: ⌘ on Apple, control elsewhere.
+	let apple = web_sys::window()
+		.unwrap()
+		.navigator()
+		.platform()
+		.is_ok_and(|platform| platform.starts_with("Mac") || platform.starts_with("iP"));
+	let before = primaries.load(Ordering::SeqCst);
+	press("k", apple, !apple);
+	assert_eq!(primaries.load(Ordering::SeqCst), before + 1);
+	press("k", !apple, apple);
+	assert_eq!(primaries.load(Ordering::SeqCst), before + 1);
+
+	drop(mount);
+	parent.remove();
+}
+
+#[wasm_bindgen_test]
 async fn a_focus_request_moves_focus_once_and_lets_the_person_move_on() {
 	use leptoskit_native::FocusRequest;
 	use leptoskit_native::components::TextInput;

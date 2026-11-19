@@ -1335,14 +1335,15 @@ fn on_keydown(
 
 	// Key handlers hear every key inside them, typing included, before
 	// the focused control acts on it. A handled key loses its browser
-	// meaning, so ctrl+p does not print. Command-key shortcuts
-	// stay the browser's.
-	if listens_for_keys && !event.is_composing() && !event.meta_key() {
+	// meaning, so ctrl+p does not print. A key no handler takes keeps
+	// it, so the browser's own command-key shortcuts still work.
+	if listens_for_keys && !event.is_composing() {
 		let native = NativeEvent::Key(crate::KeyPress {
 			key: event.key(),
 			ctrl: event.ctrl_key(),
 			alt: event.alt_key(),
 			shift: event.shift_key(),
+			meta: event.meta_key(),
 		});
 
 		if dispatch(handlers, &native, event.as_ref()) == EventOutcome::Handled {

@@ -16,7 +16,7 @@ pub(crate) fn target(
 	current: usize,
 	count: usize,
 ) -> Option<usize> {
-	if count == 0 || key.ctrl || key.alt || key.shift {
+	if count == 0 || key.ctrl || key.alt || key.shift || key.meta {
 		return None;
 	}
 
@@ -100,6 +100,8 @@ mod tests {
 		);
 		assert_eq!(target(&KeyPress::new("Home").shift(), None, 1, 3), None);
 		assert_eq!(target(&KeyPress::new("End").alt(), None, 1, 3), None);
+		// ⌘ with an arrow is the browser's back and forward on a Mac.
+		assert_eq!(target(&KeyPress::new("ArrowLeft").meta(), None, 1, 3), None);
 		assert_eq!(target(&KeyPress::new("ArrowRight"), None, 0, 0), None);
 	}
 }

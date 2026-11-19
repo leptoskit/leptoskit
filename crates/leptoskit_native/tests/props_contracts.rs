@@ -189,6 +189,14 @@ fn key_presses_carry_their_modifiers() {
 	);
 	assert!(shortcut.is("p", true, true, true));
 	assert!(!shortcut.is("p", true, false, true));
+
+	// The command key is its own modifier, and `is` never matches with it
+	// held, so a handler for ctrl+p leaves ⌘+ctrl+p alone.
+	let command = KeyPress::new("Enter").meta();
+	assert!(command.meta);
+	assert!(!command.ctrl);
+	assert!(!command.is("Enter", false, false, false));
+	assert!(!KeyPress::new("p").ctrl().meta().is("p", true, false, false));
 }
 
 #[test]

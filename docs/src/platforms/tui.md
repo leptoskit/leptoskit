@@ -109,6 +109,34 @@ To move focus once and then leave it alone, such as back to the button that open
 
 Both work in the terminal and in the browser, where a handled key also skips the browser's own meaning, such as printing on `Ctrl+P`. The other platforms do not deliver key presses or move focus for you yet.
 
+### Shortcuts that follow the platform
+
+People on a Mac save with ⌘+Enter and everyone else with Ctrl+Enter. Writing both checks in every handler is easy to get wrong, so a key press answers the question itself: `is_primary()` is true when ⌘ is held on a Mac, an iPhone or an iPad, and when Ctrl is held everywhere else.
+
+```rust
+use leptoskit::native::KeyPress;
+use leptoskit::prelude::*;
+
+let editor = view! {
+	<View on:key={move |key: &KeyPress| {
+		if key.is_primary() && key.key == "Enter" {
+			// save the note
+			EventOutcome::Handled
+		} else {
+			EventOutcome::Unhandled
+		}
+	}}>
+		<TextArea aria_label="Note" />
+	</View>
+};
+```
+
+A key press also says whether ⌘ was held on its own, as `key.meta`, beside `ctrl`, `alt` and `shift`. `key.is(...)` never matches while ⌘ is held, so a handler for `Ctrl+P` leaves ⌘+Ctrl+P alone.
+
+- **Browser:** ⌘ keys reach `on_key` like any other key. On a Mac `is_primary()` asks for ⌘, and on Windows, Linux, Android and ChromeOS it asks for Ctrl; it goes by the device the browser is running on. A ⌘ key your handler returns `Unhandled` for stays the browser's, so ⌘+R still reloads and ⌘+L still goes to the address bar. Return `Handled` only for the shortcuts you mean to take. The browser keeps a few for itself whatever the page does, such as ⌘+W and ⌘+T.
+- **Terminal:** a terminal is never told about ⌘, so `meta` is always false there, and on a Mac `is_primary()` is never true. Check `key.ctrl` for a terminal app's shortcuts.
+- **macOS, iOS, Android, Windows and Linux (GTK):** these do not deliver key presses to `on_key` yet.
+
 A screen that needs the terminal's size, such as a list that shows half the rows, can read it with `leptoskit::guest::viewport()` once the runner has reported it; layout and responsive classes such as `min-[968px]:flex` already follow the size on their own.
 
 ## A whole app

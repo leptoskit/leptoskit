@@ -45,7 +45,7 @@ One pull request per item. Every backend is kept in step, with AppKit as the ref
 | 8  | A clock hook                                                | G6       | #914, open  |
 | 9  | Typed refusals in the rpc client (status, code, retry time) | G8       | #918, open  |
 | 10 | Streams without a database                                  | G3       | #923, open  |
-| 11 | The ⌘ key on the web                                        | G7a      | not started |
+| 11 | The ⌘ key on the web                                        | G7a      | #924, open  |
 | 12 | New-tab and download links                                  | G14, G15 | not started |
 
 After those: convert the demo (3–4 pull requests), then app shortcuts with native key delivery (G7b), `prompt=login` on provider sign-in (G16) and document titles (G10), then convert the admin page by page (5–7 pull requests).
@@ -218,6 +218,16 @@ G3. A `#[rpc::stream]` body can take `rpc::StreamCx` (the caller, no database), 
 - **Run here:** `tests/live_streams.rs` with only `live-streams` on (no driver), over the WebSocket and over server-sent events, and again with every feature on, where it also opens both kinds of stream on the full `Live`. The existing SQLite live suites still pass after the refactor.
 - **Not run:** the Postgres suites (`initdb` won't run as root here), a browser or native client against `LiveStreams`, and `#[rpc::stream(resumable)]` on `LiveStreams` (the same `StreamSet` path as `Live`, which the SQLite suites cover).
 - **For the demo:** its three feeds become `#[rpc::stream]` bodies taking `StreamCx`, served by `LiveStreams` beside the demo's own routes. The bounded-window reconnect maps onto `resumable`.
+
+### `feat/key-meta` (#924): stacked on `feat/streams-without-db`
+
+G7a. `KeyPress` has a `meta` field and `KeyPress::meta()`, and `KeyPress::is_primary()` is ⌘ on Apple and Ctrl elsewhere. The web no longer drops ⌘ keys before `on_key`; a key no handler takes is not prevented, so the browser's own ⌘ shortcuts still work.
+
+- **How `is_primary` decides:** in a browser build (`wasm32` with the `web` feature) it reads `navigator.platform` once and looks for `Mac`, `iPhone`, `iPad` or `iPod`. Everywhere else it is `cfg!(target_vendor = "apple")`.
+- **Changed on purpose:** `KeyPress::is` is false while ⌘ is held, and the roving groups and `Menu` ignore ⌘ with an arrow or Tab, so no existing handler starts taking the browser's ⌘ shortcuts now that they arrive. `meta` is `#[serde(default)]`, so a guest and host built on either side of this change still read each other's key presses.
+- **Run here:** the `leptoskit_native` unit, contract and Chrome tests (a ⌘ key is heard and prevented when handled, left alone when not, and the primary modifier follows the device), `leptoskit_aria`, `leptoskit_tui` and `leptoskit_wasm` tests.
+- **Not run:** Safari or any browser on a Mac, so ⌘ as the primary modifier is only covered by the unit test of the platform names.
+- **For G7b:** the native backends still deliver no `on_key`. When they do, each must fill `meta` (⌘ on AppKit and UIKit, the Windows key on Win32, Super on GTK, Meta on Android). A Wasm guest in a native host is built for `wasm32` without `web`, so `is_primary` there asks for Ctrl even on a Mac or an iPhone; G7b needs to settle that, probably by having the host say which modifier is primary. The terminal can never see ⌘, so `is_primary` is never true in a terminal on a Mac.
 
 ### `feat/public-demo`: no pull request
 
