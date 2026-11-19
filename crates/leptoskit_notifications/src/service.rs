@@ -11,6 +11,7 @@
 //! header or an argument on the recipient's side, so there is nothing to
 //! forge.
 
+pub(crate) mod campaign;
 pub(crate) mod catalogue;
 pub mod config;
 pub(crate) mod history;

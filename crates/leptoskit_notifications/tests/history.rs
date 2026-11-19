@@ -13,7 +13,7 @@ use leptoskit_notifications::MIGRATIONS;
 #[path = "support/composer.rs"]
 #[allow(
 	dead_code,
-	reason = "the catalogue's checks are in the same file and run from tests/catalogue.rs"
+	reason = "the other checks in the same file run from their own test files"
 )]
 mod composer;
 #[path = "support/sql.rs"]
