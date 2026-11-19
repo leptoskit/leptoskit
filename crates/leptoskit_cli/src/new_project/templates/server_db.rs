@@ -73,7 +73,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 	// the JSON routes also kept on `/api`), and the live socket at
 	// `live_path`, or `{path}/live`, where a screen or a generated client
 	// subscribes to a query and receives every change to its result.
-	let rpc = leptoskit::LeptoskitConfig::from_toml(
+	let rpc = leptoskit::config::LeptoskitConfig::from_toml(
 		include_str!("../leptoskit.toml"),
 		std::path::Path::new(env!("CARGO_MANIFEST_DIR")),
 	)?
