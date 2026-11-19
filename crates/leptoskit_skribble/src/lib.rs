@@ -1,9 +1,9 @@
 //! <!-- {=skribbleSummary|trim|linePrefix:"//! ":true} -->
 //!
-//! It turns the drawings of [skribble](https://openbudgetfun.github.io/skribble/),
-//! a hand-drawn design system, into leptoskit components. `skribble_core`
-//! decides what to draw; this crate lays the ink out as `Vector` elements, so
-//! the same rough strokes render on the web and every native backend.
+//! It turns the drawings of [skribble](https://openbudgetfun.github.io/skribble/), a hand-drawn
+//! design system, into leptoskit components. `skribble_core` decides what to
+//! draw; this crate lays the ink out as `Vector` elements, so the same rough
+//! strokes render on the web and every native backend.
 //!
 //! <!-- {/skribbleSummary} -->
 //!
