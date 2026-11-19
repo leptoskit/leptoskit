@@ -635,7 +635,7 @@ impl Fixture {
 					"confirm": "doomed-env",
 				})
 			}
-			"environment_status" | "runtime_logs" | "preview_release" => {
+			"environment_status" | "runtime_logs" | "preview_release" | "publications" => {
 				json!({ "organization": organization, "project": "web", "environment": "production" })
 			}
 			"begin_upload" => {
@@ -673,9 +673,6 @@ impl Fixture {
 					"environment": "production",
 					"id": self.publication,
 				})
-			}
-			"publications" => {
-				json!({ "organization": organization, "project": "web", "environment": "production" })
 			}
 			// Whoever may cancel may deploy, and deployed staging #1 just now.
 			"cancel_deployment" => {

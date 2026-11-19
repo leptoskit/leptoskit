@@ -344,16 +344,19 @@ mod tests {
 
 	#[tokio::test]
 	async fn a_publish_gets_its_stores_and_credentials_and_answers_with_a_report() {
-		let script = format!(
-			"test \"$PWD\" = \"$LEPTOSKIT_PUBLISH_SOURCE\" && test \"$LEPTOSKIT_PUBLISH_STORES\" \
-			 = 'chrome firefox' && test \"$LEPTOSKIT_PUBLISH_SUBMIT\" = 0 && ! grep -q \
-			 secret-address \"$LEPTOSKIT_PUBLISH_INPUT\" && echo \"signing with ${KEY}\" && cat > \
-			 \"$LEPTOSKIT_PUBLISH_OUTPUT\" \
-			 <<JSON\n{{\"stores\":[{{\"store\":\"firefox\",\"summary\":\"uploaded with \
-			 ${KEY}\"}},{{\"store\":\"steam\",\"summary\":\"not \
-			 asked\"}}],\"steps\":[{{\"store\":\"firefox\",\"by\":\"person\",\"what\":\"Accept\",\\
-			 "why\":\"policy\",\"done_when\":\"listed\"}}]}}\nJSON"
+		let report = format!(
+			r#"{{"stores":[{{"store":"firefox","summary":"uploaded with ${KEY}"}},{{"store":"steam","summary":"not asked"}}],"steps":[{{"store":"firefox","by":"person","what":"Accept","why":"policy","done_when":"listed"}}]}}"#
 		);
+		let script = [
+			r#"test "$PWD" = "$LEPTOSKIT_PUBLISH_SOURCE""#,
+			r#"test "$LEPTOSKIT_PUBLISH_STORES" = 'chrome firefox'"#,
+			r#"test "$LEPTOSKIT_PUBLISH_SUBMIT" = 0"#,
+			r#"test "$LEPTOSKIT_PUBLISH_CONTENTS_ONLY" = 1"#,
+			r#"! grep -q secret-address "$LEPTOSKIT_PUBLISH_INPUT""#,
+			&format!(r#"echo "signing with ${KEY}""#),
+			&format!("cat > \"$LEPTOSKIT_PUBLISH_OUTPUT\" <<JSON\n{report}\nJSON"),
+		]
+		.join(" && ");
 		let (outcome, log, _directory) = publish(&script, &[(KEY, SECRET)]).await;
 		let PublishOutcome::Published(report) = outcome else {
 			panic!("{outcome:?} {log:?}");
