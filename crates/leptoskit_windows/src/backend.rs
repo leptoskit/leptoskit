@@ -41,6 +41,7 @@ use crate::drawing::WindowsTextMeasurer;
 use crate::events::EventListener;
 use crate::events::EventSink;
 use crate::events::install_subclass;
+use crate::overlay::Shell;
 
 const FRAME_CLASS: PCWSTR = w!("Leptoskit.NativeFrame");
 pub(crate) const SLIDER_TICKS: i32 = 1_000_000;
@@ -116,6 +117,11 @@ pub(crate) struct Widget {
 	/// its own redirection surface.
 	repaint_group: Cell<bool>,
 	accessibility: Rc<Accessibility>,
+	/// Set for a `Modal` or `Popover`: its windows show in a popup window
+	/// of their own, not in its parent's.
+	pub shell: Option<Shell>,
+	/// This widget, for the callbacks of the windows it owns.
+	this: Weak<Self>,
 }
 
 struct Accessibility(Option<IAccPropServices>);
@@ -171,6 +177,7 @@ impl WindowsBackend {
 
 	fn initialize() -> windows::core::Result<Self> {
 		crate::vector::start()?;
+		crate::overlay::register()?;
 		// SAFETY: The static class procedure never accesses uninitialized
 		// state.
 		unsafe {
@@ -249,6 +256,18 @@ impl WindowsBackend {
 		self.widget(id)
 			.filter(|widget| widget.alive.get())
 			.map(|widget| widget.composition)
+	}
+
+	/// Whether a `Modal`'s or a `Popover`'s window is on screen. `None` for
+	/// any other node.
+	pub fn overlay_shown(&self, id: NodeId) -> Option<bool> {
+		self.widget(id)?.shell.as_ref().map(Shell::is_shown)
+	}
+
+	/// The popup window a `Modal` or a `Popover` shows in, once it has been
+	/// shown, for native testing.
+	pub fn overlay_window(&self, id: NodeId) -> Option<HWND> {
+		self.widget(id)?.shell.as_ref()?.window()
 	}
 
 	/// The document HWND used by a scroll viewport.
@@ -358,8 +377,66 @@ impl Widget {
 
 		self.update_composition_region();
 		self.refresh_scroll();
+		self.present_overlay();
 
 		self.repaint_layer();
+	}
+
+	/// Shows this overlay's window if it is open and takes it down
+	/// otherwise, now that the windows inside are placed, and moves focus
+	/// into one that has just opened.
+	fn present_overlay(&self) {
+		let Some(shell) = &self.shell else {
+			return;
+		};
+
+		if !shell.present(self) {
+			return;
+		}
+
+		let named = self
+			.props
+			.borrow()
+			.overlay
+			.as_ref()
+			.and_then(|overlay| overlay.initial_focus.clone())
+			.and_then(|name| self.named(&name))
+			.and_then(|target| target.control.filter(|_| target.control_alive.get()));
+		shell.focus(named);
+	}
+
+	/// The widget in this tree whose `id` is `name`.
+	pub(crate) fn named(&self, name: &str) -> Option<Rc<Self>> {
+		let mut root = self.this.upgrade()?;
+
+		loop {
+			let parent = root.parent.borrow().upgrade();
+			let Some(parent) = parent else {
+				break;
+			};
+			root = parent;
+		}
+
+		root.find(name)
+	}
+
+	fn find(self: &Rc<Self>, name: &str) -> Option<Rc<Self>> {
+		if self.props.borrow().id.as_deref() == Some(name) {
+			return Some(Rc::clone(self));
+		}
+
+		self.children
+			.borrow()
+			.iter()
+			.find_map(|child| child.find(name))
+	}
+
+	/// Places the tree again once its host is visible, so that an overlay
+	/// that was already open shows.
+	pub(crate) fn show_overlays(&self) {
+		let _suppressed = self.sink.suppress();
+		self.update_composition_bounds();
+		self.place_tree();
 	}
 
 	/// Paints a layered group's placed subtree into its own redirection
@@ -488,7 +565,8 @@ impl Widget {
 		for child in self.children.borrow().iter() {
 			child.update_composition_bounds();
 
-			if self.clips() || !child.visible() {
+			// An overlay's windows are in a popup of their own.
+			if self.clips() || !child.visible() || child.shell.is_some() {
 				continue;
 			}
 
@@ -566,6 +644,21 @@ impl Widget {
 			self.parking
 		} else {
 			physical_parent
+		};
+		// An overlay's own frame goes in its popup window while it is open,
+		// and waits in the parking window while it is not.
+		let physical_parent = match (&self.shell, self.this.upgrade()) {
+			(Some(shell), Some(this)) => {
+				match shell.arrange(&this) {
+					Some((window, offset_x, offset_y)) => {
+						x = offset_x + left;
+						y = offset_y + top;
+						window
+					}
+					None => self.parking,
+				}
+			}
+			_ => physical_parent,
 		};
 
 		let scale = self.scale();
@@ -1509,6 +1602,10 @@ impl Widget {
 				DestroyWindow(self.composition).expect("owned widget group can be destroyed");
 			}
 		}
+
+		if let Some(shell) = &self.shell {
+			shell.close();
+		}
 	}
 }
 
@@ -1645,45 +1742,49 @@ impl NativeBackend for WindowsBackend {
 	fn create(&mut self, id: NodeId, kind: NativeKind, props: &NativeProps) {
 		let _suppressed = self.sink.suppress();
 		let (composition, frame, control, document) = create_windows(self.parking, kind);
-		let widget = Rc::new(Widget {
-			id,
-			kind,
-			frame,
-			composition,
-			control,
-			document,
-			props: RefCell::default(),
-			parent: RefCell::default(),
-			children: RefCell::default(),
-			layout: Cell::new([0.0; 4]),
-			composition_bounds: Cell::new([0.0; 4]),
-			scroll: Cell::new([0; 2]),
-			extent: Cell::new([0; 2]),
-			animating: Cell::new(false),
-			phase: Cell::new(0),
-			pushed: Cell::new(false),
-			alive: Cell::new(true),
-			frame_alive: Cell::new(true),
-			control_alive: Cell::new(control.is_some()),
-			document_alive: Cell::new(document.is_some()),
-			composition_alive: Cell::new(true),
-			destroying: Cell::new(false),
-			detached: Cell::new(false),
-			dark: Cell::new(self.dark),
-			font: RefCell::new(Font::new(props.text_style(), self.dpi.get() as f32 / 96.0)),
-			brush: RefCell::new(Brush::new(Color::rgba(255, 255, 255, 255))),
-			image: RefCell::default(),
-			rive: RefCell::default(),
-			image_error: RefCell::default(),
-			vector: RefCell::default(),
-			sink: Rc::clone(&self.sink),
-			host: Rc::clone(&self.host),
-			dpi: Rc::clone(&self.dpi),
-			parking: self.parking,
-			decorative_annotation: Cell::new(false),
-			group_annotated: Cell::new(false),
-			repaint_group: Cell::new(false),
-			accessibility: self.accessibility.clone(),
+		let widget = Rc::new_cyclic(|this| {
+			Widget {
+				id,
+				kind,
+				frame,
+				composition,
+				control,
+				document,
+				props: RefCell::default(),
+				parent: RefCell::default(),
+				children: RefCell::default(),
+				layout: Cell::new([0.0; 4]),
+				composition_bounds: Cell::new([0.0; 4]),
+				scroll: Cell::new([0; 2]),
+				extent: Cell::new([0; 2]),
+				animating: Cell::new(false),
+				phase: Cell::new(0),
+				pushed: Cell::new(false),
+				alive: Cell::new(true),
+				frame_alive: Cell::new(true),
+				control_alive: Cell::new(control.is_some()),
+				document_alive: Cell::new(document.is_some()),
+				composition_alive: Cell::new(true),
+				destroying: Cell::new(false),
+				detached: Cell::new(false),
+				dark: Cell::new(self.dark),
+				font: RefCell::new(Font::new(props.text_style(), self.dpi.get() as f32 / 96.0)),
+				brush: RefCell::new(Brush::new(Color::rgba(255, 255, 255, 255))),
+				image: RefCell::default(),
+				rive: RefCell::default(),
+				image_error: RefCell::default(),
+				vector: RefCell::default(),
+				sink: Rc::clone(&self.sink),
+				host: Rc::clone(&self.host),
+				dpi: Rc::clone(&self.dpi),
+				parking: self.parking,
+				decorative_annotation: Cell::new(false),
+				group_annotated: Cell::new(false),
+				repaint_group: Cell::new(false),
+				accessibility: self.accessibility.clone(),
+				shell: matches!(kind, NativeKind::Modal | NativeKind::Popover).then(Shell::new),
+				this: this.clone(),
+			}
 		});
 		install_subclass(&widget, frame, false);
 		install_subclass(&widget, composition, false);
@@ -1751,6 +1852,11 @@ impl NativeBackend for WindowsBackend {
 			*child.parent.borrow_mut() = Weak::new();
 			child.detached.set(true);
 
+			// An overlay comes down now that it has no parent to show over.
+			if let Some(shell) = &child.shell {
+				shell.hide();
+			}
+
 			// Closing a host destroys its mounted HWNDs before the guest
 			// commits the removal, so only a live group is parked.
 			if child.composition_alive.get() {
@@ -1772,6 +1878,10 @@ impl NativeBackend for WindowsBackend {
 		if let Some(widget) = self.widgets.get_mut(id.index()).and_then(Option::take) {
 			widget.destroy();
 		}
+	}
+
+	fn presents_overlays(&self) -> bool {
+		true
 	}
 
 	fn text_measurer(&self) -> SharedTextMeasurer {

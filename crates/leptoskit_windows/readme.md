@@ -43,6 +43,8 @@ Every element has a Yoga-sized frame inside a composition window. The compositio
 
 Editors use standard `EDIT` controls. Buttons, switches, checkboxes, radios, and Pressables use standard `BUTTON` controls. Sliders use a standard trackbar whose pointer coordinates map into the shared `f64` domain. Its UI Automation RangeValue provider exposes the actual bounds, value, and step. Progress bars use common controls, and activity indicators use a UI-thread timer. All programmatic commits suppress input callbacks, and native proposals restore application-owned values after callbacks.
 
+A `Modal` and a `Popover` each show in a popup window owned by the top-level window their parent is in, so their windows are never children of their parent's. A modal's popup is as large as what the modal holds and disables its owner while it is up. `WM_CLOSE`, the dialog manager's cancel command (Escape) and, for a popover, losing activation dispatch `NativeEvent::Dismiss` and leave the popup up: the next tree closes it. `overlay_shown` and `overlay_window` let tests check this. `WindowsWindow`'s message loops hand Tab and Escape to the popup a message belongs to; an overlay that is open before the host is shown appears from `WindowsWindow::show`.
+
 Images load ordinary local paths and file URLs through Windows path decoding. PNG, JPEG, GIF, WebP, BMP, and ICO files are supported. Rendering preserves image alpha. Missing or invalid sources produce an `image_error` diagnostic without exposing the source path. The backend does not fetch remote URLs.
 
 Run the native checks on Windows with an interactive desktop.

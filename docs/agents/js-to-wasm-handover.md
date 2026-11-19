@@ -40,7 +40,7 @@ One pull request per item. Every backend is kept in step, with AppKit as the ref
 | 3  | Labels that focus their fields                              | G13      | #879, open  |
 | 4  | One-shot focus requests                                     | G2       | #887, open  |
 | 5  | Arrow-key navigation for tabs, radio groups and menus       | G5       | #892, open  |
-| 6  | `Modal` and `Popover` (Windows still to come)               | G1       | #896, open  |
+| 6  | `Modal` and `Popover`                                       | G1       | #896, open  |
 | 7  | Scroll into view                                            | G4       | not started |
 | 8  | A clock hook                                                | G6       | not started |
 | 9  | Typed refusals in the rpc client (status, code, retry time) | G8       | not started |
@@ -156,7 +156,7 @@ The third part of G1, for Android: both hosts.
 - **Tests that CI's Android jobs will be the first to run:** `verifyOverlays` in `android-tests/ProbeActivity.kt` (a real Activity: dialog size and place, popup place, Back and outside touches ask, a removed popover comes down) and `anOverlayKeepsItsPlaceAndWaitsForAWindow` in the bridge's `NativeControlsTest.kt`, which has no window and so checks only the tree.
 - **Known limits:** arrow keys in a `Menu` do nothing, because neither host delivers `on_key`. A dialog needs an Activity. A modal's own background is not drawn.
 
-### `feat/overlays-gtk`: stacked on `feat/overlays-android`
+### `feat/overlays-gtk` (#909): stacked on `feat/overlays-android`
 
 The third part of G1, for Linux. GTK has no Swift or Kotlin renderer: generated Linux apps use this backend.
 
@@ -166,6 +166,19 @@ The third part of G1, for Linux. GTK has no Swift or Kotlin renderer: generated 
 - **Focus** moves on an idle, to `initial_focus` or the popover's first control (a dialog's window focuses its own first control). A popover remembers what had focus and gives it back when it closes with focus inside.
 - **Run here:** `tests/overlays.rs`, four tests on real windows under Xvfb with `xdotool` presses and keys, and all of `tests/widgets.rs`. `test:widgets:gtk` now runs both files. Xvfb has no window manager, so nothing here shows where a window manager puts the dialog.
 - **Known limits:** GTK does not dim the window behind a modal. Arrow keys in a `Menu` do nothing, because the backend delivers `on_key` only for radios and sliders. A host that never calls `open_window` or commits after its window maps does not show an overlay that was already open.
+
+### `feat/overlays-windows`: stacked on `feat/overlays-gtk`
+
+The last part of G1. Every backend now returns `true` from `presents_overlays`, except the recording backend the bridge uses for hosts with no overlay support of their own.
+
+- **`leptoskit_windows`**: `overlay.rs` holds `Shell`, one `WS_POPUP` window of class `Leptoskit.NativeOverlay` per `Modal` or `Popover`, owned by the top-level window the overlay's parent is in (the host, or the shell of an overlay it is inside). `Widget::place` asks `Shell::arrange` where the widget's composition window goes: into the shell while the overlay is open, into the parking window while it is not. `place_tree` calls `present_overlay` after the children are placed, which shows or hides the shell and moves focus. A parent's composition bounds skip overlay children.
+- **Placement** is the frame layout already worked out, turned into screen pixels from the corner of the host's client area. A modal's shell covers the union of its visible children.
+- **A modal** disables its owner (`EnableWindow`) while shown and enables it again before hiding, so activation returns to it. **A popover** leaves the owner alone and reports `Dismiss` from `WM_ACTIVATE` with `WA_INACTIVE`, unless activation went to a popup it owns or the primary button is down over its anchor.
+- **Escape and Tab:** `WindowsWindow::run` and `pump_messages` now pass each message to `IsDialogMessageW` for the shell it belongs to (`overlay::dialog_for`, by class atom) and for the host otherwise. The dialog manager turns Escape into `WM_COMMAND` with `IDCANCEL`, which the shell reports as `Dismiss`. `WM_CLOSE` does the same.
+- **An overlay open before the host is visible** shows from `WindowsWindow::show`, which places the tree again (`Widget::show_overlays`).
+- **Compiled here:** cross-linted for `x86_64-pc-windows-msvc` with clippy, tests included. **Run here:** nothing.
+- **Tests that CI's Windows runner will be the first to run:** `crates/leptoskit_windows/tests/overlays.rs`, three tests on real windows. The assertions most likely to need adjusting are `GetFocus()` after a shell is shown, and the exact pixel equality of the shell's and the panel's corners at a fractional DPI scale.
+- **Known limits:** Windows does not dim the owner. The shell is a plain rectangle, so a panel with round corners shows the modal's background in the corners. A shell does not follow its owner if the owner moves. Arrow keys in a `Menu` do nothing, because the backend delivers `on_key` only for radios.
 
 ### `feat/public-demo`: no pull request
 
