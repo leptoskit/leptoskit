@@ -54,6 +54,29 @@ impl Boundary for DeadBoundary {
 /// Serves the notifications routes over `db`, already migrated, with an
 /// APNs transport and no workers, and answers where.
 pub async fn serve(db: &Db) -> std::net::SocketAddr {
+	serve_over(db, None).await
+}
+
+/// [`serve`], with an FCM transport as well: what an import of Android
+/// tokens needs. The service account is a made-up one over a test-only
+/// key, and the boundary still reaches nothing.
+pub async fn serve_with_fcm(db: &Db) -> std::net::SocketAddr {
+	serve_over(
+		db,
+		Some(config::FcmConfig {
+			service_account_json: json!({
+				"project_id": "leptoskit-push",
+				"private_key": include_str!("../fixtures/test-only-rsa-key.pem"),
+				"client_email": "push@leptoskit-push.iam.gserviceaccount.com",
+				"token_uri": "https://oauth2.googleapis.com/token",
+			})
+			.to_string(),
+		}),
+	)
+	.await
+}
+
+async fn serve_over(db: &Db, fcm: Option<config::FcmConfig>) -> std::net::SocketAddr {
 	let key_p8 = {
 		let rng = ring::rand::SystemRandom::new();
 		let document = ring::signature::EcdsaKeyPair::generate_pkcs8(
@@ -77,7 +100,7 @@ pub async fn serve(db: &Db) -> std::net::SocketAddr {
 			topic: "dev.leptoskit.app".into(),
 			environment: config::ApnsEnvironment::Sandbox,
 		}),
-		fcm: None,
+		fcm,
 		web: None,
 	};
 	let callers = ServiceCallers::new(Anonymous)
@@ -895,4 +918,363 @@ pub async fn an_attribute_call_names_a_bounded_number_of_keys(
 	)
 	.await;
 	assert_eq!(status, 400, "a hundred and one: {body}");
+}
+
+/// An FCM credential, as an app's server exported it from its own table.
+fn fcm(token: &str) -> Value {
+	json!({ "fcm": { "registration_token": token } })
+}
+
+/// The app imports `endpoints`.
+async fn import(address: std::net::SocketAddr, endpoints: Value) -> (u16, String) {
+	call(
+		address,
+		"import_push_endpoints",
+		json!({ "endpoints": endpoints }),
+		None,
+	)
+	.await
+}
+
+/// What the app's server reads about `person`'s endpoints.
+async fn person_endpoints(address: std::net::SocketAddr, person: Uuid) -> Vec<Value> {
+	ok(
+		address,
+		"person_endpoints",
+		json!({ "person": person, "page": { "limit": 50 } }),
+		None,
+	)
+	.await["items"]
+		.as_array()
+		.unwrap()
+		.clone()
+}
+
+/// Tokens an app's server exported from its Firebase-era table are
+/// imported in one app-only call and are pushed to from the next send on,
+/// before any device has updated. Importing again changes nothing. When
+/// the real app later enrolls the same token, the endpoint keeps its id
+/// and its queued deliveries, takes the details the device reports, and
+/// stops counting as imported. An import never moves a token between
+/// people, while a person who holds the device still takes it over, and
+/// no answer carries a credential.
+#[expect(
+	clippy::cognitive_complexity,
+	reason = "one scenario told in order: each step stands on the last"
+)]
+pub async fn imported_endpoints_work_until_the_app_enrolls(address: std::net::SocketAddr, db: &Db) {
+	let alices_iphone = apns(0xC1);
+	let batch = json!([
+		{
+			"person": ALICE,
+			"credential": fcm("fcm-exported-alice-android"),
+			"device": { "locale": "en_gb", "app_version": "2.9.0" },
+		},
+		{ "person": ALICE, "credential": alices_iphone },
+		{ "person": BOB, "credential": fcm("fcm-exported-bob-android") },
+	]);
+
+	// Only the app imports.
+	for person in [ALICE, BOB] {
+		let (status, body) = call(
+			address,
+			"import_push_endpoints",
+			json!({ "endpoints": batch }),
+			Some(person),
+		)
+		.await;
+		assert_eq!(status, 403, "{body}");
+	}
+	assert_eq!(held(db, "push_endpoints", ALICE).await, 0);
+
+	let (status, body) = import(address, batch.clone()).await;
+	assert_eq!(status, 200, "{body}");
+	assert_eq!(
+		serde_json::from_str::<Value>(&body).unwrap(),
+		json!({ "imported": 3, "unchanged": 0, "skipped": [] })
+	);
+	assert!(
+		!body.contains("fcm-exported") && !body.contains("c1c1"),
+		"no credential is answered: {body}"
+	);
+
+	let listed = person_endpoints(address, ALICE).await;
+	assert_eq!(listed.len(), 2, "{listed:?}");
+	let android = listed
+		.iter()
+		.find(|endpoint| endpoint["platform"] == "fcm")
+		.expect("the Android token");
+	let iphone = listed
+		.iter()
+		.find(|endpoint| endpoint["platform"] == "apns")
+		.expect("the iPhone token");
+	assert_eq!(android["imported"], true, "{android}");
+	assert_eq!(
+		android["device"],
+		json!({ "locale": "en-GB", "app_version": "2.9.0" }),
+		"an import states what the server knows about the device"
+	);
+	assert_eq!(iphone["imported"], true, "{iphone}");
+	assert_eq!(
+		iphone["device"],
+		json!({}),
+		"and nothing where it knows none"
+	);
+	assert!(
+		!serde_json::to_string(&listed)
+			.unwrap()
+			.contains("fcm-exported"),
+		"{listed:?}"
+	);
+	// The person sees them in their own device list too.
+	assert_eq!(endpoints_of(address, ALICE).await.len(), 2);
+
+	// Day one: a send reaches the imported endpoints.
+	send_to(address, "after-the-import", &[ALICE]).await;
+	assert_eq!(
+		deliveries_of(db, ALICE).await,
+		vec![("enqueued".to_owned(), String::new()); 2]
+	);
+
+	// Importing the same export again is no change at all.
+	let (status, body) = import(address, batch).await;
+	assert_eq!(status, 200, "{body}");
+	assert_eq!(
+		serde_json::from_str::<Value>(&body).unwrap(),
+		json!({ "imported": 0, "unchanged": 3, "skipped": [] })
+	);
+	assert_eq!(person_endpoints(address, ALICE).await, listed);
+
+	// The updated app runs on the iPhone and enrolls the token it holds:
+	// the same endpoint, now the device's own.
+	let enrolled = ok(
+		address,
+		"register_push_endpoint",
+		json!({
+			"credential": alices_iphone,
+			"device": { "locale": "fr-FR", "app_version": "3.0.0" },
+		}),
+		Some(ALICE),
+	)
+	.await;
+	assert_eq!(enrolled["id"], iphone["id"], "the endpoint keeps its id");
+	let listed = person_endpoints(address, ALICE).await;
+	let iphone = listed
+		.iter()
+		.find(|endpoint| endpoint["platform"] == "apns")
+		.unwrap();
+	assert_eq!(
+		iphone.get("imported").unwrap_or(&json!(false)),
+		false,
+		"{iphone}"
+	);
+	assert_eq!(
+		iphone["device"],
+		json!({ "locale": "fr-FR", "app_version": "3.0.0" })
+	);
+	assert_eq!(
+		deliveries_of(db, ALICE).await,
+		vec![("enqueued".to_owned(), String::new()); 2],
+		"what was queued for the imported endpoint still goes to the device"
+	);
+
+	// A later import of that token leaves the device's own enrollment as
+	// it is.
+	let (status, body) = import(
+		address,
+		json!([{ "person": ALICE, "credential": alices_iphone, "device": { "locale": "de" } }]),
+	)
+	.await;
+	assert_eq!(status, 200, "{body}");
+	assert_eq!(person_endpoints(address, ALICE).await, listed);
+
+	// An import proves nothing about who holds a device: a token another
+	// person has stays theirs, and the entry is reported by its place in
+	// the call.
+	let (status, body) = import(
+		address,
+		json!([
+			{ "person": BOB, "credential": alices_iphone },
+			{ "person": BOB, "credential": fcm("fcm-exported-alice-android") },
+			{ "person": BOB, "credential": fcm("fcm-exported-bob-tablet") },
+		]),
+	)
+	.await;
+	assert_eq!(status, 200, "{body}");
+	assert_eq!(
+		serde_json::from_str::<Value>(&body).unwrap(),
+		json!({
+			"imported": 1,
+			"unchanged": 0,
+			"skipped": [
+				{ "index": 0, "reason": "held_by_another" },
+				{ "index": 1, "reason": "held_by_another" },
+			],
+		})
+	);
+	assert_eq!(person_endpoints(address, ALICE).await, listed);
+
+	// Bob signs in on the Android phone Alice's export named and turns
+	// notifications on: holding the token is holding the device, imported
+	// or not.
+	let bobs = enroll(address, BOB, &fcm("fcm-exported-alice-android")).await;
+	assert_ne!(json!(bobs), android["id"]);
+	assert_eq!(person_endpoints(address, ALICE).await.len(), 1);
+	let bobs_now = person_endpoints(address, BOB).await;
+	assert_eq!(bobs_now.len(), 3, "{bobs_now:?}");
+	let taken = bobs_now
+		.iter()
+		.find(|endpoint| endpoint["id"] == json!(bobs))
+		.unwrap();
+	assert_eq!(taken.get("imported").unwrap_or(&json!(false)), false);
+}
+
+/// An import is checked whole before anything is written and bounded per
+/// call and per person, and what it made is revoked and erased like any
+/// other endpoint.
+#[expect(
+	clippy::cognitive_complexity,
+	reason = "each refusal and each bound, one after another"
+)]
+pub async fn an_import_is_bounded_and_ends_like_any_endpoint(
+	address: std::net::SocketAddr,
+	db: &Db,
+) {
+	// One bad entry refuses the call by its place, and nothing is written.
+	for (endpoints, names) in [
+		(json!([]), "1 to 500"),
+		(
+			Value::Array(
+				(0..501)
+					.map(
+						|n| json!({ "person": ALICE, "credential": fcm(&format!("fcm-many-{n}")) }),
+					)
+					.collect(),
+			),
+			"1 to 500",
+		),
+		(
+			json!([
+				{ "person": ALICE, "credential": fcm("fcm-fine") },
+				{ "person": ALICE, "credential": { "apns": { "device_token": "not hex" } } },
+			]),
+			"endpoints[1]",
+		),
+		(
+			json!([{
+				"person": ALICE,
+				"credential": { "web_push": {
+					"endpoint": "https://updates.push.services.mozilla.com/push/1",
+					"keys": { "p256dh": "BQUF", "auth": "BwcH" },
+				} },
+			}]),
+			"endpoints[0]",
+		),
+		(
+			json!([{
+				"person": ALICE,
+				"credential": fcm("fcm-fine"),
+				"device": { "time_zone": "/not a zone" },
+			}]),
+			"endpoints[0]",
+		),
+	] {
+		let (status, body) = import(address, endpoints).await;
+		assert_eq!(status, 400, "{names}: {body}");
+		assert!(body.contains(names), "{names}: {body}");
+	}
+	assert_eq!(held(db, "push_endpoints", ALICE).await, 0);
+
+	// A person holds ten live endpoints however they came to be: the
+	// eleventh and twelfth are reported, and the rest of the call stands.
+	let twelve = Value::Array(
+		(0..12)
+			.map(|n| json!({ "person": ALICE, "credential": fcm(&format!("fcm-alice-{n}")) }))
+			.chain([json!({ "person": BOB, "credential": apns(0xD1) })])
+			.collect(),
+	);
+	let (status, body) = import(address, twelve).await;
+	assert_eq!(status, 200, "{body}");
+	assert_eq!(
+		serde_json::from_str::<Value>(&body).unwrap(),
+		json!({
+			"imported": 11,
+			"unchanged": 0,
+			"skipped": [
+				{ "index": 10, "reason": "person_full" },
+				{ "index": 11, "reason": "person_full" },
+			],
+		})
+	);
+	assert_eq!(held(db, "push_endpoints", ALICE).await, 10);
+
+	// A provider invalidates one; importing its stale token again does
+	// not bring it back.
+	let sql = Sql(db.dialect());
+	rows(
+		db,
+		format!(
+			"UPDATE push_endpoints SET invalidated_at = created_at WHERE person = {}",
+			sql.uuid(BOB)
+		),
+	)
+	.await;
+	let (status, body) = import(
+		address,
+		json!([{ "person": BOB, "credential": apns(0xD1) }]),
+	)
+	.await;
+	assert_eq!(status, 200, "{body}");
+	assert_eq!(
+		serde_json::from_str::<Value>(&body).unwrap(),
+		json!({ "imported": 0, "unchanged": 1, "skipped": [] })
+	);
+	let bobs = person_endpoints(address, BOB).await;
+	assert!(!bobs[0]["invalidated_at"].is_null(), "{bobs:?}");
+
+	// The server revokes what it imported, and a person is erased with
+	// their imported endpoints.
+	send_to(address, "to-imported", &[ALICE]).await;
+	let revoked = ok(
+		address,
+		"revoke_person_endpoints",
+		json!({ "person": ALICE }),
+		None,
+	)
+	.await;
+	assert_eq!(revoked, json!(10));
+	assert!(
+		endpoints_of(address, ALICE).await.is_empty(),
+		"the imported endpoints are revoked"
+	);
+	assert_eq!(
+		deliveries_of(db, ALICE).await,
+		vec![("skipped".to_owned(), "endpoint_revoked".to_owned()); 10]
+	);
+
+	ok(address, "forget_person", json!({ "person": BOB }), None).await;
+	super::engine::drain(db).await;
+	assert_eq!(held(db, "push_endpoints", BOB).await, 0);
+}
+
+/// An import names only platforms this server can push to.
+pub async fn an_import_needs_the_platforms_transport(address: std::net::SocketAddr, db: &Db) {
+	let (status, body) = import(
+		address,
+		json!([
+			{ "person": ALICE, "credential": apns(0xE1) },
+			{ "person": ALICE, "credential": fcm("fcm-without-a-transport") },
+		]),
+	)
+	.await;
+	assert_eq!(status, 400, "{body}");
+	assert!(
+		body.contains("push for fcm is not configured"),
+		"the refusal names the platform: {body}"
+	);
+	assert_eq!(
+		held(db, "push_endpoints", ALICE).await,
+		0,
+		"nothing was written"
+	);
 }

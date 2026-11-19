@@ -76,6 +76,6 @@ Four things it does not remove, because they are not rows about that person:
 - **Personal values inside a condition.** A condition such as `user.email == '…'` is stored as text with its send's record, and in a draft that uses it, until that record is deleted. Prefer attributes that do not identify one person.
 - **Your own records.** Whatever your app's database holds about the person is yours to delete.
 
-The service keeps no list of people it was told to forget. If your server names the person again in a send, a subscription, or an attribute call, or the person turns notifications on again, the service knows them again from that moment. Erasing someone is therefore also a change to your own code: stop naming them.
+The service keeps no list of people it was told to forget. If your server names the person again in a send, a subscription, an attribute call, or an [import of their device tokens](coming-from-firebase.md#moving-step-by-step), or the person turns notifications on again, the service knows them again from that moment. Erasing someone is therefore also a change to your own code: stop naming them.
 
 If you only need a person's notifications to stop arriving on devices they are signed out of, and not their data removed, use [`revoke_person_endpoints`](push-setup.md#when-the-server-revokes-a-device) instead.

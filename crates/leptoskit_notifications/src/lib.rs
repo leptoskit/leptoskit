@@ -29,11 +29,13 @@
 //!
 //! - [`send`], [`cancel`], [`send_status`], [`send_report`],
 //!   [`subscribe_to_topic`], [`unsubscribe_from_topic`],
-//!   [`set_person_attributes`], [`person_attributes`], [`forget_person`], and
-//!   [`push_deliveries`] answer only the app's server, signed with the
-//!   service's token ([`rpc::client::call_as_app`]). A recipient has no
-//!   operation that sends, steers a push, or describes anyone with attributes —
-//!   segments must not be forgeable from the client side.
+//!   [`set_person_attributes`], [`person_attributes`], [`forget_person`],
+//!   [`push_deliveries`], and
+//!   [`import_push_endpoints`](push::import_push_endpoints) answer only the
+//!   app's server, signed with the service's token
+//!   ([`rpc::client::call_as_app`]). A recipient has no operation that sends,
+//!   steers a push, or describes anyone with attributes — segments must not be
+//!   forgeable from the client side.
 //! - [`inbox`], [`unread_count`], [`category_preferences`], [`mark_read`],
 //!   [`mark_opened`], [`mark_dismissed`], [`set_category_preference`],
 //!   [`register_push_endpoint`], [`push_endpoints`], [`revoke_push_endpoint`],

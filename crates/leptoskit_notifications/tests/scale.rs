@@ -454,6 +454,74 @@ async fn the_reads_that_grew_use_their_indexes(db: &Db) {
 	);
 }
 
+/// An import reads two things for each of its entries, and each comes
+/// from an index however many endpoints the service holds: who holds a
+/// token, through the unique fingerprint, and how many live endpoints a
+/// person has, through the person index. 6,000 endpoints of 600 people
+/// stand in for the table.
+async fn an_imports_reads_use_their_indexes(db: &Db) {
+	let sql = Sql(db.dialect());
+	let base = Utc::now() - Duration::days(1);
+	let stamp = sql.timestamp(&base.to_rfc3339_opts(chrono::SecondsFormat::Millis, true));
+	let endpoints = (0..6_000_u128)
+		.map(|n| {
+			format!(
+				"({}, {}, 'fcm', 'sealed', 1, '{n:064}', NULL, {stamp}, {stamp})",
+				sql.uuid(id_at(base, 300_000 + n)),
+				sql.uuid(person(n % 600)),
+			)
+		})
+		.collect::<Vec<_>>();
+	insert(
+		db,
+		"push_endpoints",
+		"id, person, platform, credential, generation, fingerprint, invalidated_at, created_at, \
+		 imported_at",
+		&endpoints,
+	)
+	.await;
+	run(db, "ANALYZE").await;
+
+	for (what, statement, index, counted) in [
+		(
+			"who holds an imported token",
+			Statement::new(
+				numbered(
+					db.dialect(),
+					"SELECT count(*) FROM \"push_endpoints\" WHERE \"fingerprint\" = {}",
+				),
+				vec![Value::Text(format!("{:064}", 4_321))],
+			),
+			"push_endpoints_fingerprint_key",
+			1,
+		),
+		(
+			"how many live endpoints a person has",
+			Statement::new(
+				numbered(
+					db.dialect(),
+					"SELECT count(*) FROM \"push_endpoints\" WHERE \"person\" = {} AND \
+					 \"invalidated_at\" IS NULL",
+				),
+				vec![Value::Uuid(person(321))],
+			),
+			"push_endpoints_person_idx",
+			10,
+		),
+	] {
+		let plan = explain(db, &statement).await;
+		assert!(
+			plan.contains(index),
+			"{what} should read through {index}:\n{plan}"
+		);
+		assert_eq!(
+			db.fetch(statement).await.expect("a count")[0][0],
+			Value::Int(counted),
+			"{what}"
+		);
+	}
+}
+
 /// A send's report counts the send's own rows, found through the
 /// `(send_key, person)` unique index, and reads nobody else's: one send of
 /// 300 rows among 1,170 small ones in a table of 12,000. The statement is
@@ -1753,6 +1821,11 @@ async fn sqlite_the_reads_that_grew_use_their_indexes() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn sqlite_an_imports_reads_use_their_indexes() {
+	an_imports_reads_use_their_indexes(&on_sqlite().await).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn sqlite_a_send_report_counts_only_the_sends_own_rows() {
 	a_send_report_counts_only_the_sends_own_rows(&on_sqlite().await).await;
 }
@@ -1837,6 +1910,15 @@ mod on_postgres {
 			.await
 			.expect("migrations apply");
 		db
+	}
+
+	#[tokio::test(flavor = "multi_thread")]
+	async fn postgres_an_imports_reads_use_their_indexes() {
+		let Some(postgres) = Postgres::start() else {
+			return;
+		};
+
+		an_imports_reads_use_their_indexes(&connect(&postgres).await).await;
 	}
 
 	#[tokio::test(flavor = "multi_thread")]

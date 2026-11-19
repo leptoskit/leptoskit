@@ -206,6 +206,11 @@ pub(crate) async fn register(
 			// provider had invalidated, keeping the endpoint's id, its
 			// owner, and its queued deliveries. Nothing about the
 			// destination changed.
+			// An endpoint the app's server imported becomes the device's
+			// own at its first enrollment: the mark goes, and what the
+			// device says about itself replaces what the import said.
+			let imported = existing.imported_at.is_some();
+
 			if existing.credential != canonical || existing.invalidated_at.is_some() {
 				let generation = existing
 					.generation
@@ -216,6 +221,7 @@ pub(crate) async fn register(
 					.set(|endpoint| endpoint.generation, generation)
 					.set(|endpoint| endpoint.credential, canonical)
 					.set(|endpoint| endpoint.invalidated_at, None)
+					.set(|endpoint| endpoint.imported_at, None)
 					.set(|endpoint| endpoint.locale, device.locale.clone())
 					.set(|endpoint| endpoint.time_zone, device.time_zone.clone())
 					.set(|endpoint| endpoint.app_version, device.app_version.clone())
@@ -236,13 +242,15 @@ pub(crate) async fn register(
 					.set(|row| row.next_attempt_at, Some(leptoskit_db::now()))
 					.run(cx.tx())
 					.await?;
-			} else if existing.device_details() != device {
+			} else if imported || existing.device_details() != device {
 				// Only what the device says about itself changed — an app
-				// update, a new language, a move across time zones. The
-				// credential and its generation stay, so queued deliveries
-				// and in-flight attempts never notice.
+				// update, a new language, a move across time zones — or
+				// this is the device's first word about an imported
+				// endpoint. The credential and its generation stay, so
+				// queued deliveries and in-flight attempts never notice.
 				PushEndpoint::update()
 					.filter(|endpoint| endpoint.id.eq(existing.id))
+					.set(|endpoint| endpoint.imported_at, None)
 					.set(|endpoint| endpoint.locale, device.locale.clone())
 					.set(|endpoint| endpoint.time_zone, device.time_zone.clone())
 					.set(|endpoint| endpoint.app_version, device.app_version.clone())
@@ -273,6 +281,7 @@ pub(crate) async fn register(
 				created_at: existing.created_at,
 				invalidated_at: None,
 				device,
+				imported: false,
 			});
 		}
 
@@ -313,6 +322,7 @@ pub(crate) async fn register(
 		time_zone: device.time_zone.clone(),
 		app_version: device.app_version.clone(),
 		seen_at: Some(leptoskit_db::now()),
+		imported_at: None,
 	}
 	.insert(cx.tx())
 	.await
@@ -339,7 +349,139 @@ pub(crate) async fn register(
 		created_at: leptoskit_db::now(),
 		invalidated_at: None,
 		device,
+		imported: false,
 	})
+}
+
+/// The body of [`import_push_endpoints`](crate::push::import_push_endpoints):
+/// each entry becomes an endpoint of its person unless that person
+/// already holds the token (unchanged), another person does (skipped:
+/// an import never moves a device), or the person is at the live-endpoint
+/// bound (skipped). Imported endpoints are marked, carry the details the
+/// entry states, and have no `seen_at`: no device has said anything yet.
+///
+/// # Errors
+///
+/// [`rpc::Error::Invalid`] for an import that fails the shared check or
+/// names a platform with no transport, and [`rpc::Error::Contended`] when
+/// one of its tokens enrolls at the same moment.
+pub(crate) async fn import(
+	tx: &leptoskit_db::Tx,
+	push: &Push,
+	endpoints: &[crate::push::ImportEndpoint],
+) -> rpc::Result<crate::push::ImportedEndpoints> {
+	crate::push::check_import(endpoints).map_err(rpc::Error::invalid)?;
+	let runtime = push.runtime.as_ref().ok_or_else(push_unconfigured)?;
+
+	// Everything that can refuse the call is settled before the first
+	// write: a bad entry leaves nothing behind on either engine.
+	let mut entries = Vec::with_capacity(endpoints.len());
+
+	for (index, entry) in endpoints.iter().enumerate() {
+		let platform = entry.credential.platform();
+
+		if !runtime.configured(platform) {
+			return Err(rpc::Error::invalid(format!(
+				"endpoints[{index}]: push for {} is not configured on this server",
+				platform.as_str()
+			)));
+		}
+
+		let named = |complaint| rpc::Error::invalid(format!("endpoints[{index}]: {complaint}"));
+		let device = entry.device.normalized().map_err(named)?;
+		let destination = entry.credential.destination().map_err(named)?;
+		let canonical = entry.credential.canonical().map_err(named)?;
+
+		entries.push((
+			entry.person,
+			platform,
+			fingerprint(platform, &destination),
+			canonical,
+			device,
+		));
+	}
+
+	let mut report = crate::push::ImportedEndpoints::default();
+	let mut persons = std::collections::BTreeSet::new();
+	let now = leptoskit_db::now();
+
+	for (index, (person, platform, fingerprint, canonical, device)) in
+		entries.into_iter().enumerate()
+	{
+		let index = u32::try_from(index).unwrap_or(u32::MAX);
+		let holder = match PushEndpoint::query()
+			.filter(|endpoint| endpoint.fingerprint.eq(fingerprint.clone()))
+			.one(tx)
+			.await
+		{
+			Ok(existing) => Some(existing.person),
+			Err(leptoskit_db::DbError::NotFound { .. }) => None,
+			Err(error) => return Err(error.into()),
+		};
+
+		match holder {
+			Some(holder) if holder == person => {
+				report.unchanged += 1;
+				continue;
+			}
+			Some(_) => {
+				report.skipped.push(crate::push::SkippedImport {
+					index,
+					reason: crate::push::ImportSkip::HeldByAnother,
+				});
+				continue;
+			}
+			None => {}
+		}
+
+		let held = PushEndpoint::query()
+			.filter(|endpoint| endpoint.person.eq(person) & endpoint.invalidated_at.is_null())
+			.count(tx)
+			.await?;
+
+		if held >= u64::try_from(crate::push::MAX_ENDPOINTS).unwrap_or(u64::MAX) {
+			report.skipped.push(crate::push::SkippedImport {
+				index,
+				reason: crate::push::ImportSkip::PersonFull,
+			});
+			continue;
+		}
+
+		let inserted = NewPushEndpoint {
+			id: Uuid::now_v7(),
+			person,
+			platform: platform.as_str().to_owned(),
+			credential: canonical,
+			generation: 1,
+			fingerprint,
+			invalidated_at: None,
+			locale: device.locale,
+			time_zone: device.time_zone,
+			app_version: device.app_version,
+			seen_at: None,
+			imported_at: Some(now),
+		}
+		.insert(tx)
+		.await;
+
+		match inserted {
+			Ok(_) => {}
+			// The device enrolled this token itself between the read and
+			// the write: the call runs again and finds it.
+			Err(leptoskit_db::DbError::Conflict { .. }) => return Err(rpc::Error::Contended),
+			Err(error) => return Err(error.into()),
+		}
+
+		report.imported += 1;
+		persons.insert(person);
+	}
+
+	// Someone push can reach is someone the service knows.
+	if !persons.is_empty() {
+		super::register_persons(tx, &persons).await?;
+	}
+
+	Ok(report)
 }
 
 /// How often an unchanged re-enrollment moves an endpoint's `seen_at`, in
@@ -494,6 +636,7 @@ fn summary(endpoint: &PushEndpoint) -> EndpointSummary {
 		created_at: endpoint.created_at,
 		invalidated_at: endpoint.invalidated_at,
 		device: endpoint.device_details(),
+		imported: endpoint.imported_at.is_some(),
 	}
 }
 

@@ -1242,6 +1242,55 @@ async fn ownership_service(postgres: &Postgres) -> (std::net::SocketAddr, Db) {
 	(address, db)
 }
 
+/// [`ownership_service`], over a service that also speaks FCM.
+#[cfg(feature = "service")]
+async fn ownership_service_with_fcm(postgres: &Postgres) -> (std::net::SocketAddr, Db) {
+	let db = Db::connect(&postgres.database())
+		.await
+		.expect("the database opens");
+	db.migrate(POSTGRES_MIGRATIONS)
+		.await
+		.expect("migrations apply");
+	let address = ownership::serve_with_fcm(&db).await;
+
+	(address, db)
+}
+
+/// Imported tokens are pushed to, re-imported without change, and become
+/// the device's own enrollment on Postgres too.
+#[tokio::test(flavor = "multi_thread")]
+#[cfg(feature = "service")]
+async fn imported_endpoints_work_until_the_app_enrolls_on_postgres() {
+	let Some(postgres) = Postgres::start() else {
+		return;
+	};
+	let (address, db) = ownership_service_with_fcm(&postgres).await;
+	ownership::imported_endpoints_work_until_the_app_enrolls(address, &db).await;
+}
+
+/// An import's refusals and bounds hold on Postgres, where a refused
+/// call's transaction writes nothing either.
+#[tokio::test(flavor = "multi_thread")]
+#[cfg(feature = "service")]
+async fn an_import_is_bounded_and_ends_like_any_endpoint_on_postgres() {
+	let Some(postgres) = Postgres::start() else {
+		return;
+	};
+	let (address, db) = ownership_service_with_fcm(&postgres).await;
+	ownership::an_import_is_bounded_and_ends_like_any_endpoint(address, &db).await;
+}
+
+/// An import of a platform without a transport is refused on Postgres.
+#[tokio::test(flavor = "multi_thread")]
+#[cfg(feature = "service")]
+async fn an_import_needs_the_platforms_transport_on_postgres() {
+	let Some(postgres) = Postgres::start() else {
+		return;
+	};
+	let (address, db) = ownership_service(&postgres).await;
+	ownership::an_import_needs_the_platforms_transport(address, &db).await;
+}
+
 /// A device passes to the next person who enrolls on it on Postgres too:
 /// the previous owner's row is deleted and the new one inserted under the
 /// same unique fingerprint, in one transaction.
