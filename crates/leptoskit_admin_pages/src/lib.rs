@@ -12,6 +12,7 @@
 //! the old way, with the pieces this crate shares ([`style`],
 //! [`components`], [`workings`], [`charts`], and the rail).
 
+pub mod analytics;
 pub mod charts;
 pub mod components;
 pub mod confirm;
