@@ -11,7 +11,13 @@ use anyhow::Result;
 use anyhow::bail;
 use anyhow::ensure;
 use leptoskit_cloud::account;
+use leptoskit_cloud::billing;
+use leptoskit_cloud::config;
+use leptoskit_cloud::databases;
+use leptoskit_cloud::deployments;
+use leptoskit_cloud::domains;
 use leptoskit_cloud::projects;
+use leptoskit_cloud::publishing;
 use leptoskit_cloud::tokens;
 use serde::Deserialize;
 use serde::Serialize;
@@ -100,6 +106,19 @@ impl Client {
 			store: Store::new(directory, &origin),
 			origin,
 			api_token,
+		})
+	}
+
+	/// Whether the cloud is on this machine, as in tests and a local stack.
+	#[must_use]
+	pub fn is_loopback(&self) -> bool {
+		url::Url::parse(&self.origin).is_ok_and(|url| {
+			match url.host() {
+				Some(url::Host::Domain(host)) => host == "localhost",
+				Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+				Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+				None => false,
+			}
 		})
 	}
 
@@ -309,6 +328,17 @@ impl Client {
 	}
 
 	fn call<A: Serialize, T: DeserializeOwned>(&self, name: &str, args: &A) -> Result<T> {
+		self.call_hiding(name, args, &[])
+	}
+
+	/// Calls `name`, hiding `hidden` as well as the credential in what a
+	/// refusal says: for arguments that carry a value nothing may echo.
+	fn call_hiding<A: Serialize, T: DeserializeOwned>(
+		&self,
+		name: &str,
+		args: &A,
+		hidden: &[&Secret],
+	) -> Result<T> {
 		let discovery = self.discovery()?;
 		let token = self.access(None)?;
 		let send = |token: &Secret| {
@@ -336,9 +366,23 @@ impl Client {
 		let reply = send(&token)?;
 		if reply.status == 401 && self.api_token.is_none() {
 			let fresh = self.access(Some(&token))?;
-			return send(&fresh)?.result(&[&token, &fresh]);
+			let mut secrets = vec![&token, &fresh];
+			secrets.extend_from_slice(hidden);
+			return send(&fresh)?.result(&secrets);
 		}
-		reply.result(&[&token])
+		let mut secrets = vec![&token];
+		secrets.extend_from_slice(hidden);
+		reply.result(&secrets)
+	}
+
+	/// Calls `set_secret`, hiding the value in what a refusal says as well
+	/// as the credential.
+	///
+	/// # Errors
+	/// Network, authentication, or a typed [`Rejected`] control-plane error.
+	pub fn set_secret(&self, args: &config::SetSecret) -> Result<config::SecretSummary> {
+		let value = Secret::new(args.value.expose().to_owned());
+		self.call_hiding("set_secret", args, &[&value])
 	}
 }
 
@@ -378,4 +422,26 @@ operations! {
 	tokens: tokens::Tokens => Vec<tokens::TokenSummary>,
 	create_token: tokens::CreateToken => tokens::CreatedToken,
 	revoke_token: tokens::RevokeToken => (),
+	variables: config::Variables => Vec<config::Variable>,
+	set_variable: config::SetVariable => config::Variable,
+	unset_variable: config::UnsetVariable => (),
+	secrets: config::Secrets => Vec<config::SecretSummary>,
+	unset_secret: config::UnsetSecret => (),
+	domains: domains::Domains => Vec<domains::DomainSummary>,
+	attach_domain: domains::AttachDomain => domains::DomainSummary,
+	verify_domain: domains::VerifyDomain => domains::DomainSummary,
+	detach_domain: domains::DetachDomain => (),
+	deployments: deployments::Deployments => Vec<deployments::DeploymentSummary>,
+	rollback: deployments::Rollback => deployments::DeploymentSummary,
+	begin_upload: deployments::BeginUpload => deployments::BeganUpload,
+	complete_upload: deployments::CompleteUpload => deployments::ArchiveSummary,
+	database: databases::Database => Option<databases::DatabaseSummary>,
+	database_backups: databases::DatabaseBackups => databases::BackupList,
+	create_backup: databases::CreateBackup => databases::BackupSummary,
+	restore_backup: databases::RestoreBackup => databases::RestoreSummary,
+	publish: publishing::Publish => publishing::PublicationSummary,
+	publication: publishing::Publication => publishing::PublicationSummary,
+	publications: publishing::Publications => Vec<publishing::PublicationSummary>,
+	publication_log: publishing::PublicationLog => deployments::LogPage,
+	usage: billing::Usage => billing::UsageReport,
 }

@@ -1,0 +1,15 @@
+---
+source: crates/leptoskit_cli/src/cloud/tests.rs
+expression: human(&output)
+---
+created_at: 2026-11-18T00:00:00Z
+credentials: LEPTOSKIT_PLAY_SERVICE_ACCOUNT_JSON
+digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+environment: production
+id: 00000000-0000-0000-0000-000000000001
+outcome: Done.
+requirements: None.
+state: queued
+stores: play
+submit: false
+updated_at: 2026-11-18T00:00:00Z

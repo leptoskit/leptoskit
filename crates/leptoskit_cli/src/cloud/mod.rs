@@ -1,7 +1,11 @@
-//! Cloud account commands. Deployment remains a separate CLI slice.
+//! `lk cloud`: accounts and projects (CLI 1), an environment's
+//! configuration and history (CLI 2), and store publishing and usage
+//! (CLI 3). `launch`, `deploy`, `status`, `logs` and `open` aren't built.
 
 pub mod client;
 mod credentials;
+mod ship;
+mod stores;
 #[cfg(test)]
 mod tests;
 mod transport;
@@ -48,11 +52,15 @@ pub struct CloudArgs {
 	/// Project slug; defaults to [cloud].project.
 	#[arg(long, global = true)]
 	pub project: Option<String>,
+	/// Environment name, for the commands about one; defaults to
+	/// production.
+	#[arg(long, short = 'e', global = true)]
+	pub environment: Option<String>,
 	#[command(subcommand)]
 	pub command: CloudCommand,
 }
 
-/// Account operations available before deployment support.
+/// The cloud's commands. Every one takes `--json`.
 #[derive(Debug, Subcommand)]
 pub enum CloudCommand {
 	/// Signs in through your browser with a short code.
@@ -79,6 +87,62 @@ pub enum CloudCommand {
 	Env {
 		#[command(subcommand)]
 		command: EnvCommand,
+	},
+	/// Manages an environment's variables.
+	Var {
+		#[command(subcommand)]
+		command: ship::VarCommand,
+	},
+	/// Manages an environment's secrets.
+	Secret {
+		#[command(subcommand)]
+		command: ship::SecretCommand,
+	},
+	/// Manages an environment's custom domains.
+	Domain {
+		#[command(subcommand)]
+		command: ship::DomainCommand,
+	},
+	/// Lists an environment's deployments, newest first.
+	Deployments {
+		#[arg(long)]
+		limit: Option<u32>,
+	},
+	/// Returns an environment to an earlier deployment that was live,
+	/// reusing its image.
+	Rollback {
+		/// The deployment's number, from `lk cloud deployments`.
+		to: u64,
+	},
+	/// Manages an environment's database and its backups.
+	Db {
+		#[command(subcommand)]
+		command: ship::DbCommand,
+	},
+	/// Builds the project on a build worker and uploads it to stores, as
+	/// `lk publish` does, with the environment's secrets as credentials.
+	Publish {
+		/// The stores to publish to.
+		#[arg(required = true, value_parser = stores::store)]
+		stores: Vec<String>,
+		/// Also sends each upload for review or release, which reaches
+		/// users.
+		#[arg(long)]
+		submit: bool,
+		/// Answers once the publish is queued instead of following it.
+		#[arg(long)]
+		detach: bool,
+	},
+	/// Shows an environment's publishes and what they printed.
+	Publications {
+		#[command(subcommand)]
+		command: stores::PublicationCommand,
+	},
+	/// Shows what the organization used in a month, and its cost.
+	Usage {
+		/// The month, such as 2026-11; defaults to this month.
+		#[arg(long)]
+		period: Option<String>,
 	},
 	/// Manages scoped API tokens for CI.
 	Token {
@@ -276,14 +340,10 @@ impl Context {
 			leptoskit_config::cloud::CloudConfig::default()
 		};
 		let environment_url = std::env::var("LEPTOSKIT_CLOUD_URL").ok();
-		let url = transport::origin(
-			args.url
-				.as_deref()
-				.or(environment_url.as_deref())
-				.or(config.url.as_deref())
-				.unwrap_or(DEFAULT_URL),
-		)?;
+		let explicit = args.url.as_deref().or(environment_url.as_deref());
+		let url = transport::origin(explicit.or(config.url.as_deref()).unwrap_or(DEFAULT_URL))?;
 		let token = std::env::var("LEPTOSKIT_CLOUD_TOKEN").ok().map(Secret::new);
+		check_token_origin(token.is_some(), explicit, &url)?;
 		let client = Client::new(&url, &credentials::Store::default_root()?, token)?;
 		Ok(Self {
 			client,
@@ -316,6 +376,24 @@ impl Context {
 			.or_else(|| self.config.project.as_ref().map(ToString::to_string))
 			.context("Choose a project with --project, or run `lk cloud link`.")
 	}
+}
+
+/// A token from the environment goes only to the hosted cloud, or to an
+/// origin named outside the project: by `--url` or `LEPTOSKIT_CLOUD_URL`.
+/// A `[cloud].url` in a cloned repository must not be able to collect a
+/// CI token, the secrets set with it, or the source archive.
+fn check_token_origin(token: bool, explicit: Option<&str>, url: &str) -> Result<()> {
+	let named = explicit
+		.map(transport::origin)
+		.transpose()?
+		.is_some_and(|origin| origin == url);
+	ensure!(
+		!token || named || url == DEFAULT_URL,
+		"leptoskit.toml points [cloud].url at {}, and LEPTOSKIT_CLOUD_TOKEN only goes to an \
+		 origin you name. Pass --url or set LEPTOSKIT_CLOUD_URL to send it there.",
+		printable(url)
+	);
+	Ok(())
 }
 
 fn value(value: impl Serialize) -> Result<Value> {
@@ -356,6 +434,7 @@ fn execute(args: &CloudArgs, context: &Context) -> Result<Value> {
 	let client = &context.client;
 	let requirement = match &args.command {
 		CloudCommand::Token { .. } => Requirement::Organization(Permission::ManageTokens),
+		CloudCommand::Usage { .. } => Requirement::Organization(Permission::ViewBilling),
 		CloudCommand::Org { command } => {
 			match command {
 				OrgCommand::List => Requirement::SignedIn,
@@ -408,6 +487,21 @@ fn execute(args: &CloudArgs, context: &Context) -> Result<Value> {
 		CloudCommand::Env { command } => environment(command, args, context),
 		CloudCommand::Token { command } => token(command, args, context),
 		CloudCommand::Link { force } => link(args, context, *force),
+		CloudCommand::Var { command } => ship::var(command, args, context),
+		CloudCommand::Secret { command } => {
+			ship::secret(command, args, context, &mut ship::read_stdin)
+		}
+		CloudCommand::Domain { command } => ship::domain(command, args, context),
+		CloudCommand::Deployments { limit } => ship::deployments(args, context, *limit),
+		CloudCommand::Rollback { to } => ship::rollback(args, context, *to),
+		CloudCommand::Db { command } => ship::db(command, args, context),
+		CloudCommand::Publish {
+			stores,
+			submit,
+			detach,
+		} => stores::publish(args, context, stores, *submit, *detach),
+		CloudCommand::Publications { command } => stores::publications(command, args, context),
+		CloudCommand::Usage { period } => stores::usage(args, context, period.clone()),
 	}
 }
 
@@ -725,6 +819,29 @@ fn set_link_value(document: &mut toml_edit::DocumentMut, key: &str, value: &str)
 	document["cloud"][key] = toml_edit::Item::Value(replacement);
 }
 
+/// Text from the cloud or the organization's own program, safe for a
+/// terminal: control characters other than a line break, and the format
+/// characters that reorder or hide text (bidi overrides and isolates,
+/// zero-width characters, line and paragraph separators), become spaces.
+/// A value can't move the cursor, write the clipboard, retitle the window,
+/// or show itself reversed.
+pub(super) fn printable(text: &str) -> String {
+	text.chars()
+		.map(|c| {
+			let hidden = (c.is_control() && c != '\n')
+				|| matches!(
+					c,
+					'\u{061C}'
+						| '\u{180E}' | '\u{200B}'..='\u{200F}'
+						| '\u{2028}'..='\u{202E}'
+						| '\u{2060}'..='\u{206F}'
+						| '\u{FEFF}' | '\u{FFF9}'..='\u{FFFB}'
+				);
+			if hidden { ' ' } else { c }
+		})
+		.collect()
+}
+
 fn human(value: &Value) -> String {
 	match value {
 		Value::Null => "Done.".into(),
@@ -733,11 +850,11 @@ fn human(value: &Value) -> String {
 		Value::Object(fields) => {
 			fields
 				.iter()
-				.map(|(key, value)| format!("{key}: {}", human(value)))
+				.map(|(key, value)| format!("{}: {}", printable(key), human(value)))
 				.collect::<Vec<_>>()
 				.join("\n")
 		}
-		Value::String(value) => value.clone(),
-		other => other.to_string(),
+		Value::String(value) => printable(value),
+		other => printable(&other.to_string()),
 	}
 }
