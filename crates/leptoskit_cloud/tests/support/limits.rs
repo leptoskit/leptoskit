@@ -22,6 +22,7 @@ fn an_hour(max: u32) -> Rate {
 pub fn slow(config: &mut ControlConfig) {
 	config.rate_limits.person = an_hour(12);
 	config.rate_limits.token = an_hour(3);
+	config.rate_limits.organization_tokens = an_hour(4);
 	config.rate_limits.anonymous = an_hour(2);
 }
 
@@ -43,10 +44,15 @@ async fn until_refused(app: &App, caller: As<'_>, most: u32) -> u32 {
 /// Each caller has a rate of their own: a person over every way they are
 /// signed in, a token, and an address nobody is signed in from. One of
 /// them using theirs up slows nobody else.
+#[expect(
+	clippy::cognitive_complexity,
+	reason = "a scenario is one story, read top to bottom; its asserts are what count"
+)]
 pub async fn a_caller_who_asks_too_often_waits(app: &App) {
 	let ana = app.sign_in("ana@example.com").await;
 	let bob = app.sign_in("bob@example.com").await;
 	let org = app.personal(As::Session(&ana)).await;
+	let theirs = app.personal(As::Session(&bob)).await;
 	let (token, _) = app.token(As::Session(&ana), &org, &["read"], None).await;
 
 	// Ana has asked a few times already, and may ask twelve times in all.
@@ -79,6 +85,25 @@ pub async fn a_caller_who_asks_too_often_waits(app: &App) {
 	}
 
 	projects().await.refused(429, "rate_limited");
+
+	// A second token doesn't bring three more: the organisation's tokens
+	// have four between them.
+	let (second, _) = app.token(As::Session(&bob), &theirs, &["read"], None).await;
+	let (third, _) = app.token(As::Session(&bob), &theirs, &["read"], None).await;
+	let listed = |token| {
+		app.call(
+			"projects",
+			json!({ "organization": theirs }),
+			As::Bearer(token),
+		)
+	};
+
+	for _ in 0..3 {
+		listed(&second).await.expect(200);
+	}
+
+	listed(&third).await.expect(200);
+	listed(&third).await.refused(429, "rate_limited");
 
 	// Nobody, and a credential that is nobody's, share the address's two.
 	app.call("whoami", json!({}), As::Nobody).await.expect(401);

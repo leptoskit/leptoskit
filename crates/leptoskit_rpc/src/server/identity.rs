@@ -163,6 +163,21 @@ pub trait Identify: Send + Sync + 'static {
 			self.identify(&parts).await
 		})
 	}
+
+	/// Whether `identity` may send one more operation over a connection it
+	/// already holds. An HTTP request is identified each time, so a limit
+	/// on how often a caller asks can live in [`identify`](Self::identify);
+	/// a live connection is identified once and then sends many
+	/// subscriptions, mutations, actions and streams, and this is asked
+	/// before each of them. The default admits everything.
+	///
+	/// # Errors
+	///
+	/// Usually [`Error::TooMany`], which answers that one frame and leaves
+	/// the connection open.
+	fn admit(&self, _identity: &Identity) -> Result<(), Error> {
+		Ok(())
+	}
 }
 
 impl<I: Identify> Identify for Arc<I> {
@@ -179,6 +194,10 @@ impl<I: Identify> Identify for Arc<I> {
 
 	fn identify_token<'a>(&'a self, token: &'a str) -> BoxFuture<'a, Result<Identity, Error>> {
 		(**self).identify_token(token)
+	}
+
+	fn admit(&self, identity: &Identity) -> Result<(), Error> {
+		(**self).admit(identity)
 	}
 }
 

@@ -274,6 +274,21 @@ impl std::fmt::Debug for Services {
 	}
 }
 
+/// The longest piece of a caller's own text an error repeats to them.
+const MAX_SHOWN: usize = 100;
+
+/// `text` as an error repeats it: its first [`MAX_SHOWN`] bytes, so an
+/// answer is never as long as whatever was sent.
+pub(crate) fn shown(text: &str) -> &str {
+	let mut end = text.len().min(MAX_SHOWN);
+
+	while !text.is_char_boundary(end) {
+		end -= 1;
+	}
+
+	&text[..end]
+}
+
 /// The services a caller's context carries.
 ///
 /// # Errors

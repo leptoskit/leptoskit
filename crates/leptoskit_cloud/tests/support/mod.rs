@@ -279,6 +279,7 @@ pub fn unlimited() -> RateLimits {
 	RateLimits {
 		person: rate,
 		token: rate,
+		organization_tokens: rate,
 		worker: rate,
 		anonymous: rate,
 		payment_pages: rate,

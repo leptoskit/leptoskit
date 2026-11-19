@@ -71,8 +71,11 @@ pub const REGISTRY: &str = "LEPTOSKIT_CLOUD_REGISTRY";
 pub const PRICE_CATALOGUE: &str = "LEPTOSKIT_CLOUD_PRICE_CATALOGUE";
 /// The header the proxy in front of the control plane puts the client's
 /// address in, such as `x-real-ip`: one the proxy sets itself, whatever the
-/// client sent. Rate limits count by it. Without it they count by the
-/// connection's address, which behind a proxy is the proxy's.
+/// client sent, to one address. `x-forwarded-for` and `forwarded` are
+/// refused: they are lists the client writes the start of. Rate limits
+/// count by it. Without it, and for a request the header is missing from,
+/// they count by the connection's address, which behind a proxy is the
+/// proxy's.
 pub const CLIENT_IP_HEADER: &str = "LEPTOSKIT_CLOUD_CLIENT_IP_HEADER";
 /// A restricted Stripe key, to take payment for plans: it writes customers,
 /// checkout sessions and customer portal sessions, and reads subscriptions
@@ -532,7 +535,21 @@ fn client_ip_header(vars: Vars<'_>) -> Result<Option<String>, ConfigError> {
 		));
 	}
 
-	Ok(Some(header.to_ascii_lowercase()))
+	let header = header.to_ascii_lowercase();
+
+	// These are lists a client starts and each proxy adds to, so part of
+	// their value is whatever the client sent.
+	if matches!(header.as_str(), "x-forwarded-for" | "forwarded") {
+		return Err(invalid(
+			CLIENT_IP_HEADER,
+			format!(
+				"is a header holding one address that the proxy sets itself, such as `x-real-ip`; \
+				 `{header}` is a list the client can write the start of"
+			),
+		));
+	}
+
+	Ok(Some(header))
 }
 
 /// How payment is taken: [`STRIPE_KEY`], [`STRIPE_WEBHOOK_SECRET`] and
@@ -878,6 +895,17 @@ mod tests {
 		pairs.push((CLIENT_IP_HEADER, "x-real-ip: 1.2.3.4"));
 		let refused = error(&pairs, false);
 		assert!(refused.starts_with(CLIENT_IP_HEADER), "{refused}");
+
+		// A list the client writes the start of is nobody's word.
+		for list in ["X-Forwarded-For", "forwarded"] {
+			pairs.pop();
+			pairs.push((CLIENT_IP_HEADER, list));
+			let refused = error(&pairs, false);
+			assert!(
+				refused.starts_with(CLIENT_IP_HEADER) && refused.contains("is a list"),
+				"{refused}"
+			);
+		}
 	}
 
 	#[tokio::test]

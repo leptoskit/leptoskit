@@ -44,6 +44,11 @@ const LEASE: Duration = Duration::from_mins(1);
 /// How often a worker's `last_seen_at` is written.
 const LAST_SEEN_PRECISION: chrono::TimeDelta = chrono::TimeDelta::minutes(1);
 
+/// The address a caller's request came from, kept with their identity so
+/// what they send later over the same connection is counted against it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Origin(Option<std::net::IpAddr>);
+
 /// The longest description of a client the audit log keeps.
 const MAX_CLIENT_LEN: usize = 300;
 
@@ -382,31 +387,40 @@ impl CloudIdentify {
 		Ok(self.nobody())
 	}
 
-	/// Counts `request` against whoever it is from, once that is known: a
-	/// person by their account, a token and a worker by their own ID, and
-	/// nobody by the address it came from. A credential that is nobody's
-	/// counts against the address too, so guessing them is slowed.
+	/// Counts one operation against `identity`: a person by their account,
+	/// a worker by its own ID, a token by its own ID and with its
+	/// organisation's other tokens, and nobody by the address their
+	/// request came from. A credential that is nobody's counts against the
+	/// address too, so guessing them is slowed.
 	///
 	/// # Errors
 	///
 	/// `TooMany` (`rate_limited`) once the caller has used up their rate.
-	fn count(&self, request: &http::request::Parts, identity: &Identity) -> rpc::Result<()> {
+	fn count(&self, identity: &Identity) -> rpc::Result<()> {
 		let shipping = self.services.shipping();
 		let rates = shipping.rates;
-		let (key, rate) = if let Some(worker) = identity.context.get::<WorkerCaller>() {
-			(format!("worker:{}", worker.id), rates.worker)
-		} else {
-			match identity.context.get::<Caller>() {
-				Some(Caller::Person { account, .. }) => (format!("person:{account}"), rates.person),
-				Some(Caller::Token(token)) => (format!("token:{}", token.id), rates.token),
-				None => {
-					let address =
-						super::throttle::address(request, shipping.client_ip_header.as_deref());
-					(super::throttle::address_key(address), rates.anonymous)
-				}
+		let throttle = &shipping.throttle;
+
+		if let Some(worker) = identity.context.get::<WorkerCaller>() {
+			return throttle.hit(&format!("worker:{}", worker.id), rates.worker);
+		}
+
+		match identity.context.get::<Caller>() {
+			Some(Caller::Person { account, .. }) => {
+				throttle.hit(&format!("person:{account}"), rates.person)
 			}
-		};
-		shipping.throttle.hit(&key, rate)
+			Some(Caller::Token(token)) => {
+				throttle.hit(&format!("token:{}", token.id), rates.token)?;
+				throttle.hit(
+					&format!("tokens:{}", token.organization),
+					rates.organization_tokens,
+				)
+			}
+			None => {
+				let origin = identity.context.get::<Origin>().and_then(|origin| origin.0);
+				throttle.hit_address(origin, rates.anonymous)
+			}
+		}
 	}
 }
 
@@ -416,10 +430,20 @@ impl Identify for CloudIdentify {
 		request: &'a http::request::Parts,
 	) -> Pin<Box<dyn Future<Output = rpc::Result<Identity>> + Send + 'a>> {
 		Box::pin(async move {
-			let identity = self.who(request).await?;
-			self.count(request, &identity)?;
+			let mut identity = self.who(request).await?;
+			let header = self.services.shipping().client_ip_header.as_deref();
+			identity.context = identity
+				.context
+				.with(Origin(super::throttle::address(request, header)));
+			self.count(&identity)?;
 			Ok(identity)
 		})
+	}
+
+	/// An operation sent over a live connection is counted as one sent
+	/// alone is.
+	fn admit(&self, identity: &Identity) -> rpc::Result<()> {
+		self.count(identity)
 	}
 
 	fn lease<'a>(

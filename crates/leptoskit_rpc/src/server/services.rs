@@ -329,6 +329,10 @@ impl<I: Identify> Identify for ServiceCallers<I> {
 			_ => self.inner.lease(identity),
 		}
 	}
+
+	fn admit(&self, identity: &Identity) -> Result<(), Error> {
+		self.inner.admit(identity)
+	}
 }
 
 impl<I> std::fmt::Debug for ServiceCallers<I> {

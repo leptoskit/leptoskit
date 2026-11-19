@@ -186,17 +186,102 @@ pub fn app_config(facts: &AppFacts) -> LeptoskitConfig {
 #[error("invalid_config: {0}")]
 pub struct ResolveError(String);
 
+/// The most environments a `[cloud]` table may have.
+pub const MAX_ENVIRONMENTS: usize = 50;
+
+/// The most services an app may report, and the most one environment may
+/// size.
+pub const MAX_SERVICES: usize = 50;
+
+/// The most custom hostnames one environment may answer on.
+pub const MAX_DOMAINS: usize = 50;
+
+/// The longest name of an environment or a service.
+pub const MAX_NAME_LEN: usize = 100;
+
+/// The longest custom hostname: DNS's own limit.
+pub const MAX_DOMAIN_LEN: usize = 253;
+
+/// Checks `config` is no bigger than any real one before anything is made
+/// of it: resolving copies every service into every environment, so a
+/// table of thousands of each would cost the control plane their product.
+fn bounded(config: &DeployConfig) -> Result<(), ResolveError> {
+	fn count(what: &str, found: usize, most: usize) -> Result<(), ResolveError> {
+		if found > most {
+			return Err(ResolveError(format!(
+				"{what} has {found} entries, and {most} is the most"
+			)));
+		}
+
+		Ok(())
+	}
+
+	fn name<'a>(
+		what: &str,
+		names: impl IntoIterator<Item = &'a String>,
+		longest: usize,
+	) -> Result<(), ResolveError> {
+		if names.into_iter().any(|name| name.len() > longest) {
+			return Err(ResolveError(format!(
+				"{what} has a name longer than {longest} characters"
+			)));
+		}
+
+		Ok(())
+	}
+
+	count("`[services]`", config.app.services.len(), MAX_SERVICES)?;
+	name("`[services]`", config.app.services.keys(), MAX_NAME_LEN)?;
+	count(
+		"`[cloud.environments]`",
+		config.cloud.environments.len(),
+		MAX_ENVIRONMENTS,
+	)?;
+	name(
+		"`[cloud.environments]`",
+		config.cloud.environments.keys(),
+		MAX_NAME_LEN,
+	)?;
+
+	for environment in config.cloud.environments.values() {
+		count(
+			"an environment's `domains`",
+			environment.domains.len(),
+			MAX_DOMAINS,
+		)?;
+		name(
+			"an environment's `domains`",
+			&environment.domains,
+			MAX_DOMAIN_LEN,
+		)?;
+		count(
+			"an environment's `services`",
+			environment.services.len(),
+			MAX_SERVICES,
+		)?;
+		name(
+			"an environment's `services`",
+			environment.services.keys(),
+			MAX_NAME_LEN,
+		)?;
+	}
+
+	Ok(())
+}
+
 /// The environment `environment` as `config` resolves it, with
 /// [`app_config`]'s facts. An environment the table doesn't list gets the
 /// defaults, as production does.
 ///
 /// # Errors
 ///
-/// [`ResolveError`], naming the table and key.
+/// [`ResolveError`], naming the table and key, or saying what `config`
+/// has too many of.
 pub fn resolve(
 	config: &DeployConfig,
 	environment: &str,
 ) -> Result<ResolvedEnvironment, ResolveError> {
+	bounded(config)?;
 	let app = app_config(&config.app);
 	let mut cloud: CloudConfig = config.cloud.clone();
 	cloud
@@ -219,10 +304,12 @@ pub fn resolve(
 ///
 /// # Errors
 ///
-/// [`ResolveError`], naming the table and key.
+/// [`ResolveError`], naming the table and key, or saying what `config`
+/// has too many of.
 pub fn resolve_all(
 	config: &DeployConfig,
 ) -> Result<leptoskit_config::cloud::ResolvedCloud, ResolveError> {
+	bounded(config)?;
 	config
 		.cloud
 		.resolved(&app_config(&config.app))
@@ -1176,6 +1263,82 @@ mod tests {
 			app: facts,
 		};
 		(resolve(toml), config)
+	}
+
+	#[test]
+	fn a_table_bigger_than_any_real_one_is_refused_before_it_is_resolved() {
+		let refused = |config: &DeployConfig| {
+			let all = resolve_all(config).expect_err("too big").to_string();
+			let one = super::resolve(config, "production")
+				.expect_err("too big")
+				.to_string();
+			assert_eq!(all, one);
+			all
+		};
+		let fits = |config: &DeployConfig| {
+			resolve_all(config).expect("resolves");
+		};
+
+		let mut config = DeployConfig::default();
+
+		for number in 0..MAX_SERVICES {
+			config
+				.app
+				.services
+				.insert(format!("service-{number}"), ServiceFacts::default());
+		}
+
+		for number in 0..MAX_ENVIRONMENTS {
+			config.cloud.environments.insert(
+				format!("preview-{number}"),
+				leptoskit_config::cloud::CloudEnvironment::default(),
+			);
+		}
+
+		fits(&config);
+		let mut more = config.clone();
+		more.app
+			.services
+			.insert("one-more".to_owned(), ServiceFacts::default());
+		assert_eq!(
+			refused(&more),
+			"invalid_config: `[services]` has 51 entries, and 50 is the most"
+		);
+		let mut more = config.clone();
+		more.cloud.environments.insert(
+			"one-more".to_owned(),
+			leptoskit_config::cloud::CloudEnvironment::default(),
+		);
+		assert!(
+			refused(&more).contains("`[cloud.environments]` has 51 entries"),
+			"{}",
+			refused(&more)
+		);
+		let mut long = config.clone();
+		long.cloud.environments.insert(
+			"e".repeat(MAX_NAME_LEN + 1),
+			leptoskit_config::cloud::CloudEnvironment::default(),
+		);
+		long.cloud.environments.remove("preview-0");
+		assert!(
+			refused(&long).contains("a name longer than 100 characters"),
+			"{}",
+			refused(&long)
+		);
+		let mut domains = DeployConfig::default();
+		domains
+			.cloud
+			.environments
+			.entry("production".to_owned())
+			.or_default()
+			.domains = (0..=MAX_DOMAINS)
+			.map(|number| format!("site-{number}.example.com"))
+			.collect();
+		assert!(
+			refused(&domains).contains("an environment's `domains` has 51 entries"),
+			"{}",
+			refused(&domains)
+		);
 	}
 
 	#[test]

@@ -386,16 +386,17 @@ impl Auth {
 	}
 
 	fn client_ip(&self, headers: &HeaderMap, peer: Option<SocketAddr>) -> Option<std::net::IpAddr> {
-		match &self.inner.client_ip_header {
-			Some(name) => {
-				headers
-					.get(name.as_str())
-					.and_then(|value| value.to_str().ok())
-					.and_then(|value| value.split(',').next())
-					.and_then(|value| value.trim().parse().ok())
-			}
-			None => peer.map(|peer| peer.ip()),
-		}
+		// A request the proxy's header is missing from, or one whose header
+		// isn't an address, still came from somewhere: the limits kept per
+		// address count it by its connection instead of not at all.
+		self.inner
+			.client_ip_header
+			.as_ref()
+			.and_then(|name| headers.get(name.as_str()))
+			.and_then(|value| value.to_str().ok())
+			.and_then(|value| value.split(',').next())
+			.and_then(|value| value.trim().parse().ok())
+			.or_else(|| peer.map(|peer| peer.ip()))
 	}
 
 	/// Whether a request may change anything: safe methods always may;
