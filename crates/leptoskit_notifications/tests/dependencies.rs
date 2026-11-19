@@ -57,20 +57,10 @@ fn the_browser_client_build_compiles_none_of_the_banned_crates() {
 /// `browser`.
 #[test]
 fn the_native_client_build_compiles_the_plugin_guest_alone() {
-	let output = Command::new(env!("CARGO"))
-		.arg("tree")
-		.args(["--no-default-features", "--features", "native"])
-		.args(TREE_ARGS)
-		.args(["--format", "{p} [{f}]"])
-		.current_dir(env!("CARGO_MANIFEST_DIR"))
-		.output()
-		.expect("cargo runs");
-	assert!(
-		output.status.success(),
-		"{}",
-		String::from_utf8_lossy(&output.stderr)
+	let tree = tree(
+		&["--no-default-features", "--features", "native"],
+		"{p} [{f}]",
 	);
-	let tree = String::from_utf8(output.stdout).unwrap();
 	assert_banned_absent(&tree);
 
 	let plugin = tree
@@ -91,7 +81,6 @@ fn the_native_client_build_compiles_the_plugin_guest_alone() {
 /// The arguments every tree read shares: the package under check, the
 /// guest's own target, and no dev or build edges.
 const TREE_ARGS: &[&str] = &[
-	"--offline",
 	"--package",
 	"leptoskit_notifications",
 	"--target",
@@ -102,21 +91,44 @@ const TREE_ARGS: &[&str] = &[
 	"none",
 ];
 
-fn check(extra: &[&str], absent: &[&str]) {
-	let output = Command::new(env!("CARGO"))
-		.arg("tree")
-		.args(extra)
-		.args(TREE_ARGS)
-		.args(["--format", "{p}"])
-		.current_dir(env!("CARGO_MANIFEST_DIR"))
-		.output()
-		.expect("cargo runs");
+/// The resolved tree for one build of the crate, a line per package.
+///
+/// Read offline first, so a test run makes no request when cargo already
+/// holds every package. A run that has only built for the host does not:
+/// the wasm-only packages of the guest's target were never downloaded, and
+/// cargo refuses to read the tree without them. Only that refusal is
+/// answered by reading again with the network; any other failure stands.
+fn tree(extra: &[&str], format: &str) -> String {
+	let read = |offline: bool| {
+		let mut command = Command::new(env!("CARGO"));
+		command.arg("tree");
+		if offline {
+			command.arg("--offline");
+		}
+		command
+			.args(extra)
+			.args(TREE_ARGS)
+			.args(["--format", format])
+			.current_dir(env!("CARGO_MANIFEST_DIR"))
+			.output()
+			.expect("cargo runs")
+	};
+
+	let mut output = read(true);
+	if !output.status.success() && String::from_utf8_lossy(&output.stderr).contains("--offline") {
+		output = read(false);
+	}
 	assert!(
 		output.status.success(),
 		"{}",
 		String::from_utf8_lossy(&output.stderr)
 	);
-	let tree = String::from_utf8(output.stdout).unwrap();
+
+	String::from_utf8(output.stdout).unwrap()
+}
+
+fn check(extra: &[&str], absent: &[&str]) {
+	let tree = tree(extra, "{p}");
 	assert_banned_absent(&tree);
 	let strays: Vec<&str> = tree
 		.lines()
