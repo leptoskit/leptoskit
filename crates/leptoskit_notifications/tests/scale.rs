@@ -454,6 +454,73 @@ async fn the_reads_that_grew_use_their_indexes(db: &Db) {
 	);
 }
 
+/// A send's report counts the send's own rows, found through the
+/// `(send_key, person)` unique index, and reads nobody else's: one send of
+/// 300 rows among 1,170 small ones in a table of 12,000. The statement is
+/// the service's own, from `service::plans`, and it counts what was
+/// seeded.
+async fn a_send_report_counts_only_the_sends_own_rows(db: &Db) {
+	let sql = Sql(db.dialect());
+	let base = Utc::now() - Duration::hours(2);
+	let stamp = sql.timestamp(&base.to_rfc3339_opts(chrono::SecondsFormat::Millis, true));
+	let set = |holds: bool| if holds { stamp.as_str() } else { "NULL" };
+	let mut notifications = Vec::new();
+
+	for n in 0..12_000_u128 {
+		// The campaign's rows arrive among everyone else's, as a fanout's
+		// do: every fortieth row is one of its 300.
+		let (key, who) = if n % 40 == 0 {
+			("campaign".to_owned(), person(n / 40))
+		} else {
+			(format!("small-{}", n % 1_170), person(1_000 + n))
+		};
+		// Of the campaign's rows: half read, a third opened, a tenth
+		// dismissed, none cancelled. Every other row is read and opened,
+		// so a count that strayed outside the send would show.
+		let mine = n % 40 == 0;
+		let index = n / 40;
+		notifications.push(format!(
+			"({}, '{key}', {}, 'news', 't', '', '{{}}', {stamp}, {}, {}, {}, {stamp})",
+			sql.uuid(id_at(base, 50_000 + n)),
+			sql.uuid(who),
+			set(!mine || index % 2 == 0),
+			set(!mine || index % 3 == 0),
+			set(mine && index % 10 == 0),
+		));
+	}
+
+	insert(
+		db,
+		"notifications",
+		"id, send_key, person, category, title, body, data, visible_at, read_at, opened_at, \
+		 dismissed_at, created_at",
+		&notifications,
+	)
+	.await;
+	run(db, "ANALYZE").await;
+
+	let statement = leptoskit_notifications::service::plans::send_counts(db.dialect(), "campaign");
+	let plan = explain(db, &statement).await;
+
+	assert!(
+		plan.contains("notifications_send_key_person_key"),
+		"a report should find its send's rows through the (send_key, person) index:\n{plan}"
+	);
+
+	for step in ["SCAN notifications", "Seq Scan"] {
+		assert!(
+			!plan.contains(step),
+			"a report should not walk the table (`{step}`):\n{plan}"
+		);
+	}
+
+	assert_eq!(
+		db.fetch(statement).await.expect("the counts")[0],
+		[300, 150, 100, 30, 0].map(Value::Int),
+		"rows, read, opened, dismissed, cancelled"
+	);
+}
+
 /// A walk over two topics reads each topic's subscribers on its own, in
 /// person order straight from `(topic, person)`: one statement per topic,
 /// none of them sorting or de-duplicating.
@@ -1149,6 +1216,11 @@ async fn sqlite_the_reads_that_grew_use_their_indexes() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn sqlite_a_send_report_counts_only_the_sends_own_rows() {
+	a_send_report_counts_only_the_sends_own_rows(&on_sqlite().await).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn sqlite_a_walk_over_several_topics_reads_each_in_index_order() {
 	a_walk_over_several_topics_reads_each_in_index_order(&on_sqlite().await).await;
 }
@@ -1227,6 +1299,15 @@ mod on_postgres {
 		};
 
 		the_reads_that_grew_use_their_indexes(&connect(&postgres).await).await;
+	}
+
+	#[tokio::test(flavor = "multi_thread")]
+	async fn postgres_a_send_report_counts_only_the_sends_own_rows() {
+		let Some(postgres) = Postgres::start() else {
+			return;
+		};
+
+		a_send_report_counts_only_the_sends_own_rows(&connect(&postgres).await).await;
 	}
 
 	#[tokio::test(flavor = "multi_thread")]

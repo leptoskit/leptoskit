@@ -308,6 +308,26 @@ async fn run_scenario(scenario: u32) {
 			let mut receiver = native::Receiver::new();
 			send(STEP, received_line(receiver.next().await).as_bytes()).await;
 		}
+		// Each tap is recorded as an open with one call, as the signed-in
+		// person: a tap with an id, the same tap again, a tap the service
+		// refuses, and a local notification's tap, which calls nothing.
+		13 => {
+			let mut receiver = native::Receiver::new();
+
+			for _ in 0..4 {
+				let line = match receiver.next().await {
+					Ok(Received::Opened(opened)) => {
+						match opened.mark_opened().await {
+							Ok(true) => "marked=ok:recorded".to_owned(),
+							Ok(false) => "marked=ok:nothing".to_owned(),
+							Err(error) => format!("marked=err:{}", class(&error)),
+						}
+					}
+					other => received_line(other),
+				};
+				send(STEP, line.as_bytes()).await;
+			}
+		}
 		other => report(PANICKED, format!("unknown scenario {other}").as_bytes()),
 	}
 }

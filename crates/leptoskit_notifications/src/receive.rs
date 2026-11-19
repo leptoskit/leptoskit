@@ -78,6 +78,40 @@ impl Opened {
 			None => inbox_route.to_owned(),
 		}
 	}
+
+	/// Tells the service the person opened this notification, so the
+	/// send's report counts it and the notification is marked read on
+	/// every device. Call it where you handle the tap:
+	///
+	/// ```rust,ignore
+	/// if let Received::Opened(opened) = received {
+	///     navigate(&opened.route("/inbox"));
+	///     let _ = opened.mark_opened().await;
+	/// }
+	/// ```
+	///
+	/// It is one call to [`mark_opened`](crate::mark_opened) as the
+	/// signed-in person, the same on every platform. Answers `true` when
+	/// the service recorded it — the first time or again — and `false`
+	/// without calling anything when there is nothing to record: a local
+	/// notification, or a push whose payload carried no readable id. A tap
+	/// on an action button counts as an open too.
+	///
+	/// # Errors
+	///
+	/// What the call failed with: nobody is signed in, the notification is
+	/// not this person's or is no longer stored, or the service could not
+	/// be reached. Nothing is retried for you; an open that could not be
+	/// recorded is safe to drop, and safe to send again.
+	pub async fn mark_opened(&self) -> Result<bool, leptoskit_rpc::FnError> {
+		let Some(notification) = self.notification else {
+			return Ok(false);
+		};
+
+		leptoskit_rpc::client::call(crate::MarkOpened { notification }).await?;
+
+		Ok(true)
+	}
 }
 
 /// A notification that arrived while the app was open.
@@ -662,6 +696,33 @@ mod tests {
 		] {
 			assert_eq!(from_address(plain), None, "{plain}");
 		}
+	}
+
+	/// Recording an open is one typed call naming the notification and
+	/// nothing else — the person is the forwarded identity, never an
+	/// argument — and a tap with no id to name makes no call at all. The
+	/// call itself runs in a compiled guest and in a browser, in
+	/// `crates/leptoskit_wasm/tests/notifications_guest.rs` and
+	/// `tests/browser.rs`.
+	#[test]
+	#[cfg(not(target_arch = "wasm32"))]
+	fn an_open_is_one_call_naming_the_notification_or_none_at_all() {
+		assert_eq!(
+			serde_json::to_value(crate::MarkOpened { notification: id() }).unwrap(),
+			json!({ "notification": ID })
+		);
+
+		// No id: a local notification, or a payload nobody could read.
+		// Nothing here can reach a service, so an answer at all — and this
+		// one — says no call was attempted.
+		let local = Opened {
+			local: Some("reminder-1".into()),
+			..Opened::default()
+		};
+		assert_eq!(
+			futures::executor::block_on(local.mark_opened()).ok(),
+			Some(false)
+		);
 	}
 
 	#[test]

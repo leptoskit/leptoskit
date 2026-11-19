@@ -108,6 +108,8 @@ struct Service {
 	/// The device details each `register_push_endpoint` call carried, in
 	/// order.
 	details: Vec<serde_json::Value>,
+	/// The notifications the signed-in person holds, for `mark_opened`.
+	inbox: Vec<Uuid>,
 }
 
 #[derive(Clone, Copy)]
@@ -130,6 +132,36 @@ impl Service {
 			receipts: BTreeMap::new(),
 			log: Vec::new(),
 			details: Vec::new(),
+			inbox: Vec::new(),
+		}
+	}
+
+	/// One `mark_opened` call: recorded for a notification the person
+	/// holds, and the real service's not-found for any other.
+	fn opened(&mut self, body: &str, key: Option<&str>) -> (u16, String) {
+		let body = body_json(body);
+		let notification = body["notification"].as_str().unwrap_or_default().to_owned();
+		assert_eq!(
+			body,
+			serde_json::json!({ "notification": notification }),
+			"an open names the notification and nothing else"
+		);
+		self.log.push(format!(
+			"mark_opened {notification} key={}",
+			if key.is_some() { "fresh" } else { "none" }
+		));
+
+		if self
+			.inbox
+			.iter()
+			.any(|held| held.to_string() == notification)
+		{
+			(200, "null".to_owned())
+		} else {
+			(
+				404,
+				"ServerError|no notification with this id is in your inbox".to_owned(),
+			)
 		}
 	}
 
@@ -516,6 +548,7 @@ fn http_reply(service: &mut Service, payload: &[u8]) -> Result<Bytes, Error> {
 		"push_endpoints" => service.list(),
 		"push_endpoint_standing" => service.standing(&body),
 		"revoke_push_endpoint" => service.revoke(&body, key.as_deref()),
+		"mark_opened" => service.opened(&body, key.as_deref()),
 		other => panic!("the guest addressed an unexpected operation {other}"),
 	};
 
@@ -1181,4 +1214,51 @@ fn a_host_that_predates_receiving_answers_unavailable() {
 
 	assert_eq!(run.steps, vec!["received=err:unavailable".to_owned()]);
 	assert!(run.waits.is_empty());
+}
+
+#[test]
+#[ignore = "run by test:plugins:guest, which compiles the wasm fixture"]
+fn each_tap_is_recorded_as_an_open_with_one_call() {
+	let held = "0190a1b2-0000-7000-8000-000000000011";
+	let pruned = "0190a1b2-0000-7000-8000-000000000012";
+	let mut service = Service::new();
+	service.inbox.push(held.parse().unwrap());
+
+	let tap = |payload: serde_json::Value| item(ReceivedKind::Opened, "", &payload);
+	let run = run_receiving(
+		&guest(),
+		13,
+		Vec::new(),
+		Vec::new(),
+		Some(vec![vec![
+			tap(serde_json::json!({ "lkn": held })),
+			// The same notification's push tapped on a second surface.
+			tap(serde_json::json!({ "lkn": held })),
+			// A notification the service no longer holds for this person.
+			tap(serde_json::json!({ "lkn": pruned })),
+			// A local notification: no id, so nothing to record.
+			ReceivedItem::new(ReceivedKind::Opened, "", "reminder-1", "{}".to_owned())
+				.expect("an item in bounds"),
+		]]),
+		service,
+	);
+
+	assert_eq!(
+		run.steps,
+		vec![
+			"marked=ok:recorded".to_owned(),
+			"marked=ok:recorded".to_owned(),
+			"marked=err:server".to_owned(),
+			"marked=ok:nothing".to_owned(),
+		]
+	);
+	assert_eq!(
+		run.service.log,
+		vec![
+			format!("mark_opened {held} key=fresh"),
+			format!("mark_opened {held} key=fresh"),
+			format!("mark_opened {pruned} key=fresh"),
+		],
+		"one signed call per tap that names a notification, and none for the local one"
+	);
 }
