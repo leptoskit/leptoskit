@@ -47,6 +47,7 @@ Every setting comes from the environment. Nothing secret has a default, and an e
 | `LEPTOSKIT_CLOUD_S3_SECRET_ACCESS_KEY` | with the endpoint       |                                                                                                                                                                             |
 | `LEPTOSKIT_CLOUD_S3_PATH_STYLE`        | no; `false`             | `true` addresses buckets as `endpoint/bucket`, as `MinIO` needs.                                                                                                            |
 | `LEPTOSKIT_CLOUD_STORAGE_DIR`          | `--dev` only            | Where `--dev` keeps objects instead of a store; by default a directory under the system's temporary directory.                                                              |
+| `LEPTOSKIT_CLOUD_SITE`                 | no                      | With `ssr`: the directory holding the console's client build in `pkg/`. Without it the console's pages render but don't hydrate.                                            |
 
 Sign-in offers email codes, passkeys, and Solana wallets always, and GitHub and Google when configured. Passwords are off.
 
@@ -73,3 +74,10 @@ Sign-in offers email codes, passkeys, and Solana wallets always, and GitHub and 
 | `GET /openapi.json`                | The operations' OpenAPI document.                                                       |
 | `GET /healthz`, `GET /readyz`      | Liveness, and readiness (which fails once shutdown starts).                             |
 | `PUT`, `GET /_leptoskit/storage/…` | In `--dev` without a store, uploads and downloads at the addresses the operations sign. |
+| `GET /sign-in`, `/welcome`, …      | With `ssr`: the console's pages, rendered and then hydrated.                            |
+| `GET /_leptoskit/pkg/…`            | With `ssr` and `LEPTOSKIT_CLOUD_SITE`: the console's client.                            |
+| `GET /_leptoskit/fonts/…`          | With `ssr`: the console's two faces.                                                    |
+
+## The console
+
+Built with `ssr`, the server also renders the console: leptoskit components in file routes under `src/routes/`, hydrated in the browser by the library built with `hydrate` for `wasm32-unknown-unknown`. There is no hand-written JavaScript; the only script on a page is leptos's loader for the Wasm. `docs/agents/cloud.md` says how to build the client and run both.

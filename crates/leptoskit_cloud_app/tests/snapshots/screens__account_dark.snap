@@ -1,0 +1,36 @@
+---
+source: crates/leptoskit_cloud_app/tests/screens.rs
+expression: "readable(desktop.palette(Appearance::Dark))"
+---
+"ana"                                        #f4efe8 on #1d1726 15.26
+"Hobby"                                      #c9c0d0 on #1d1726  9.92
+"A"                                          #f4efe8 on #251e30 14.05
+"ana"                                        #f4efe8 on #1d1726 15.26
+"Filter projects"                            #9d93a8 on #1d1726  5.96
+"/"                                          #9d93a8 on #1d1726  5.96
+"Projects"                                   #c9c0d0 on #1d1726  9.92
+"New project"                                #c9c0d0 on #1d1726  9.92
+"Account"                                    #f4efe8 on #16111f 16.19
+"You"                                        #f4efe8 on #1d1726 15.26
+"ana@example.com"                            #f4efe8 on #1d1726 15.26
+"Sign-in methods"                            #f4efe8 on #1d1726 15.26
+"Email codes"                                #f4efe8 on #1d1726 15.26
+"ana@example.com"                            #9d93a8 on #1d1726  5.96
+"✓ On"                                       #5fd08a on #1d1726  9.04
+"GitHub"                                     #f4efe8 on #1d1726 15.26
+"Link GitHub"                                #f4efe8 on #1d1726 15.26
+"Google"                                     #f4efe8 on #1d1726 15.26
+"Link Google"                                #f4efe8 on #1d1726 15.26
+"Passkeys"                                   #f4efe8 on #1d1726 15.26
+"No passkeys yet. A passkey signs you in "   #c9c0d0 on #1d1726  9.92
+"Signed in on"                               #f4efe8 on #1d1726 15.26
+"Firefox on macOS"                           #f4efe8 on #1d1726 15.26
+"Used 18 Nov 2026"                           #9d93a8 on #1d1726  5.96
+"• This device"                              #c9c0d0 on #1d1726  9.92
+"Appearance"                                 #f4efe8 on #1d1726 15.26
+"✓"                                          #f4efe8 on #1d1726 15.26
+"System"                                     #f4efe8 on #1d1726 15.26
+"Light"                                      #c9c0d0 on #1d1726  9.92
+"Dark"                                       #c9c0d0 on #1d1726  9.92
+"Lasts until the page reloads."              #9d93a8 on #1d1726  5.96
+"Sign out"                                   #ff8a9e on #1d1726  7.80

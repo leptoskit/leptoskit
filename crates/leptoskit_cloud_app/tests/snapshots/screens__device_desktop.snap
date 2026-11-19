@@ -1,0 +1,44 @@
+---
+source: crates/leptoskit_cloud_app/tests/screens.rs
+expression: desktop.tree()
+---
+scroll_view text=None label=None value=None frame=(0.0,0.0,1280.0,1600.0) visible=true enabled=true
+  view text=None label=None value=None frame=(0.0,0.0,1280.0,1600.0) visible=true enabled=true
+    view text=None label=None value=None frame=(416.0,64.0,448.0,607.3) visible=true enabled=true
+      view text=None label=None value=None frame=(416.0,64.0,448.0,607.3) visible=true enabled=true
+      view text=None label=None value=None frame=(416.0,64.0,448.0,607.3) visible=true enabled=true
+        view text=None label=None value=None frame=(449.0,97.0,382.0,20.0) visible=true enabled=true
+          view text=None label=None value=None frame=(449.0,97.0,20.0,20.0) visible=true enabled=true
+            view text=None label=None value=None frame=(449.0,99.9,7.9,17.1) visible=true enabled=true
+            view text=None label=None value=None frame=(459.0,109.1,7.9,7.9) visible=true enabled=true
+            view text=None label=None value=None frame=(459.7,97.0,7.9,7.9) visible=true enabled=true
+          text text=Some("LeptosKit Cloud") label=None value=None frame=(477.0,99.0,120.0,16.0) visible=true enabled=true
+        text text=Some("CONNECT A TERMINAL") label=None value=None frame=(449.0,137.0,382.0,13.7) visible=true enabled=true
+        view text=None label=None value=None frame=(449.0,170.7,382.0,46.0) visible=true enabled=true
+          view text=None label=None value=None frame=(461.0,182.7,3.0,22.0) visible=true enabled=true
+          text text=Some("Your account is ready.") label=None value=None frame=(476.0,182.7,343.0,22.0) visible=true enabled=true
+        text text=Some("Does your terminal show this code?") label=None value=None frame=(449.0,236.7,382.0,18.3) visible=true enabled=true
+        text text=Some("WDJB-MJHT") label=Some("W D J B, M J H T") value=None frame=(562.9,275.0,154.3,34.3) visible=true enabled=true
+        view text=None label=None value=None frame=(449.0,329.3,382.0,1.0) visible=true enabled=true
+        text text=Some("LeptosKit CLI asks to act as ana@example.com:") label=None value=None frame=(449.0,350.3,382.0,21.0) visible=true enabled=true
+        view text=None label=Some("What it can do") value=None frame=(449.0,391.3,382.0,96.0) visible=true enabled=true
+          view text=None label=None value=None frame=(453.0,391.3,378.0,21.0) visible=true enabled=true
+            text text=Some("•") label=None value=None frame=(453.0,391.3,8.0,21.0) visible=true enabled=true
+            text text=Some("Know who you are.") label=None value=None frame=(469.0,391.3,362.0,21.0) visible=true enabled=true
+          view text=None label=None value=None frame=(453.0,418.3,378.0,21.0) visible=true enabled=true
+            text text=Some("•") label=None value=None frame=(453.0,418.3,8.0,21.0) visible=true enabled=true
+            text text=Some("See your email address.") label=None value=None frame=(469.0,418.3,362.0,21.0) visible=true enabled=true
+          view text=None label=None value=None frame=(453.0,445.3,378.0,42.0) visible=true enabled=true
+            text text=Some("•") label=None value=None frame=(453.0,445.3,8.0,21.0) visible=true enabled=true
+            text text=Some("See your organisations and projects, ship releases and change settings.") label=None value=None frame=(469.0,445.3,362.0,42.0) visible=true enabled=true
+        view text=None label=None value=None frame=(449.0,507.3,382.0,1.0) visible=true enabled=true
+        text text=Some("Only approve a code you started yourself, just now.") label=None value=None frame=(449.0,528.3,382.0,42.0) visible=true enabled=true
+        view text=None label=None value=None frame=(449.0,590.3,382.0,48.0) visible=true enabled=true
+          view text=None label=None value=None frame=(449.0,590.3,206.0,48.0) visible=true enabled=true
+            view text=None label=None value=None frame=(451.0,592.3,202.0,44.0) visible=true enabled=true
+              view text=None label=None value=None frame=(451.0,592.3,202.0,44.0) visible=true enabled=true
+              pressable text=None label=Some("Approve this terminal") value=None frame=(451.0,592.3,202.0,44.0) visible=true enabled=true
+                text text=Some("Approve this terminal") label=None value=None frame=(468.0,606.3,168.0,16.0) visible=true enabled=true
+          view text=None label=None value=None frame=(667.0,590.3,124.0,48.0) visible=true enabled=true
+            pressable text=None label=Some("Not me, deny") value=None frame=(669.0,592.3,120.0,44.0) visible=true enabled=true
+              text text=Some("Not me, deny") label=None value=None frame=(681.0,606.3,96.0,16.0) visible=true enabled=true

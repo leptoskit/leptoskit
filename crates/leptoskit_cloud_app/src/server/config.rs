@@ -42,6 +42,9 @@ pub const GOOGLE_CLIENT_ID: &str = "LEPTOSKIT_CLOUD_GOOGLE_CLIENT_ID";
 pub const GOOGLE_CLIENT_SECRET: &str = "LEPTOSKIT_CLOUD_GOOGLE_CLIENT_SECRET";
 /// The address to listen on.
 pub const BIND: &str = "LEPTOSKIT_CLOUD_BIND";
+/// The directory the console's client build wrote, holding `pkg/`. Without
+/// it the console's pages render but don't hydrate.
+pub const SITE: &str = "LEPTOSKIT_CLOUD_SITE";
 /// Where projects run when they don't say.
 pub const DEFAULT_REGION_VAR: &str = "LEPTOSKIT_CLOUD_DEFAULT_REGION";
 /// The domain environments are served under, such as `apps.example.com`.
@@ -176,6 +179,8 @@ pub struct ServeConfig {
 	/// The control plane's configuration, before the origin follows the
 	/// bound port: use [`control_for`](Self::control_for).
 	pub control: ControlConfig,
+	/// The console's client build: [`SITE`].
+	pub site: Option<std::path::PathBuf>,
 	/// Whether the origin is the bind address, which `--dev` uses when
 	/// [`ORIGIN`] isn't set: then a bind to port 0 is reached at the port it
 	/// gets.
@@ -278,6 +283,7 @@ impl ServeConfig {
 				shipping: ShippingSettings::default(),
 				dev: mailbox.map(|mailbox| DevMode { mailbox }),
 			},
+			site: read(vars, SITE).map(std::path::PathBuf::from),
 			origin_from_bind,
 		})
 	}

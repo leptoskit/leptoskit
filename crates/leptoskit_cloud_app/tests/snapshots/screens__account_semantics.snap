@@ -1,0 +1,48 @@
+---
+source: crates/leptoskit_cloud_app/tests/screens.rs
+expression: desktop.semantics()
+---
+banner
+  button "LeptosKit Cloud: your projects"
+  button "ana: projects"
+  status "Plan: Hobby. Spend isn't available yet." live=polite atomic
+  button "Your account" [current=page]
+navigation "Console"
+  text "ana"
+  textbox "Filter projects"
+  button "Projects"
+  button "New project"
+main
+  heading(1) "Account"
+  region "You"
+    heading(2) "You"
+    text "ana@example.com"
+  region "Sign-in methods"
+    heading(2) "Sign-in methods"
+    text "Email codes"
+    text "ana@example.com"
+    text "✓ On"
+    text "GitHub"
+    button "Link GitHub"
+    text "Google"
+    button "Link Google"
+    heading(3) "Passkeys"
+    text "No passkeys yet. A passkey signs you in with your fingerprint, face or screen lock."
+  region "Signed in on"
+    heading(2) "Signed in on"
+    list "Where you're signed in"
+      listitem
+        text "Firefox on macOS"
+        text "Used 18 Nov 2026"
+        text "• This device"
+  region "Appearance"
+    heading(2) "Appearance"
+    radiogroup "Appearance"
+      radio "System" [checked=true]
+      radio "Light" [checked=false]
+      radio "Dark" [checked=false]
+    text "Lasts until the page reloads."
+  button "Sign out"
+navigation "Sections"
+  button "Apps"
+  button "You" [current=page]

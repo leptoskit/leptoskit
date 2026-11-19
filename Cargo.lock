@@ -6043,19 +6043,32 @@ dependencies = [
 name = "leptoskit_cloud_app"
 version = "0.0.0"
 dependencies = [
+ "any_spawner",
  "clap",
+ "console_error_panic_hook",
  "getrandom 0.4.3",
+ "http-body-util",
+ "insta",
+ "leptos",
+ "leptoskit",
  "leptoskit_auth",
  "leptoskit_axum",
  "leptoskit_cli",
  "leptoskit_cloud",
  "leptoskit_db",
+ "leptoskit_plugin_clipboard",
+ "leptoskit_router",
+ "leptoskit_router_codegen",
+ "leptoskit_testing",
  "reqwest 0.12.28",
  "serde_json",
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
+ "tower",
  "url",
+ "wasm-bindgen",
+ "web-sys",
 ]
 
 [[package]]

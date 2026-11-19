@@ -1,0 +1,19 @@
+---
+source: crates/leptoskit_cloud_app/tests/screens.rs
+expression: "readable(desktop.palette(Appearance::Dark))"
+---
+"LeptosKit Cloud"                            #f4efe8 on #221b2c 14.56
+"CONNECT A TERMINAL"                         #9d93a8 on #221b2c  5.69
+"Your account is ready."                     #c9c0d0 on #11302a  8.06
+"Does your terminal show this code?"         #f4efe8 on #221b2c 14.56
+"WDJB-MJHT"                                  #f4efe8 on #221b2c 14.56
+"LeptosKit CLI asks to act as ana@example"   #f4efe8 on #221b2c 14.56
+"•"                                          #c9c0d0 on #221b2c  9.46
+"Know who you are."                          #c9c0d0 on #221b2c  9.46
+"•"                                          #c9c0d0 on #221b2c  9.46
+"See your email address."                    #c9c0d0 on #221b2c  9.46
+"•"                                          #c9c0d0 on #221b2c  9.46
+"See your organisations and projects, shi"   #c9c0d0 on #221b2c  9.46
+"Only approve a code you started yourself"   #f4efe8 on #221b2c 14.56
+"Approve this terminal"                      #16111f on #f4efe8 16.19
+"Not me, deny"                               #c9c0d0 on #221b2c  9.46

@@ -1,0 +1,33 @@
+---
+source: crates/leptoskit_cloud_app/tests/screens.rs
+expression: phone.tree()
+---
+scroll_view text=None label=None value=None frame=(0.0,0.0,400.0,1600.0) visible=true enabled=true
+  view text=None label=None value=None frame=(0.0,0.0,400.0,1600.0) visible=true enabled=true
+    view text=None label=None value=None frame=(16.0,32.0,368.0,495.8) visible=true enabled=true
+      view text=None label=None value=None frame=(16.0,32.0,368.0,495.8) visible=true enabled=true
+      view text=None label=None value=None frame=(16.0,32.0,368.0,495.8) visible=true enabled=true
+        view text=None label=None value=None frame=(37.0,57.0,326.0,20.0) visible=true enabled=true
+          view text=None label=None value=None frame=(37.0,57.0,20.0,20.0) visible=true enabled=true
+            view text=None label=None value=None frame=(37.0,59.9,7.9,17.1) visible=true enabled=true
+            view text=None label=None value=None frame=(47.0,69.1,7.9,7.9) visible=true enabled=true
+            view text=None label=None value=None frame=(47.7,57.0,7.9,7.9) visible=true enabled=true
+          text text=Some("LeptosKit Cloud") label=None value=None frame=(65.0,59.0,120.0,16.0) visible=true enabled=true
+        view text=None label=None value=None frame=(37.0,97.0,326.0,132.2) visible=true enabled=true
+          text text=Some("Hello, ana.") label=None value=None frame=(37.0,97.0,326.0,32.2) visible=true enabled=true
+          text text=Some("Your projects live at cloud.example.test/ana.") label=None value=None frame=(37.0,137.2,326.0,42.0) visible=true enabled=true
+          text text=Some("You're on Hobby, and nothing here can charge you until you add a card.") label=None value=None frame=(37.0,187.2,326.0,42.0) visible=true enabled=true
+        view text=None label=None value=None frame=(37.0,249.2,326.0,1.0) visible=true enabled=true
+        text text=Some("Do you have a leptoskit app already?") label=None value=None frame=(37.0,270.2,326.0,36.6) visible=true enabled=true
+        view text=None label=Some("Do you have a leptoskit app already?") value=None frame=(37.0,326.8,326.0,108.0) visible=true enabled=true
+          view text=None label=None value=None frame=(37.0,326.8,270.0,48.0) visible=true enabled=true
+            view text=None label=None value=None frame=(39.0,328.8,266.0,44.0) visible=true enabled=true
+              view text=None label=None value=None frame=(39.0,328.8,266.0,44.0) visible=true enabled=true
+              pressable text=None label=Some("Yes, ship it from my terminal") value=None frame=(39.0,328.8,266.0,44.0) visible=true enabled=true
+                text text=Some("Yes, ship it from my terminal") label=None value=None frame=(56.0,342.8,232.0,16.0) visible=true enabled=true
+          view text=None label=None value=None frame=(37.0,386.8,222.0,48.0) visible=true enabled=true
+            pressable text=None label=Some("Not yet, ship a starter") value=None frame=(39.0,388.8,218.0,44.0) visible=true enabled=true
+              text text=Some("Not yet, ship a starter") label=None value=None frame=(56.0,402.8,184.0,16.0) visible=true enabled=true
+        view text=None label=None value=None frame=(37.0,454.8,164.0,48.0) visible=true enabled=true
+          pressable text=None label=Some("Look around first") value=None frame=(39.0,456.8,160.0,44.0) visible=true enabled=true
+            text text=Some("Look around first") label=None value=None frame=(51.0,470.8,136.0,16.0) visible=true enabled=true

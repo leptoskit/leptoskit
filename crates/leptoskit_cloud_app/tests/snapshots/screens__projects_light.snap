@@ -1,0 +1,27 @@
+---
+source: crates/leptoskit_cloud_app/tests/screens.rs
+expression: "readable(desktop.palette(Appearance::Light))"
+---
+"ana"                                        #16111f on #fffdf8 18.22
+"Hobby"                                      #4d4558 on #fffdf8  8.95
+"A"                                          #16111f on #f3ede4 15.91
+"ana"                                        #16111f on #fffdf8 18.22
+"Filter projects"                            #6e6578 on #fffdf8  5.44
+"/"                                          #6e6578 on #fffdf8  5.44
+"Projects"                                   #16111f on #f3ede4 15.91
+"PROJECTS"                                   #6e6578 on #fffdf8  5.44
+"N"                                          #4d4558 on #f3ede4  7.82
+"notes"                                      #4d4558 on #fffdf8  8.95
+"B"                                          #4d4558 on #f3ede4  7.82
+"Blog"                                       #4d4558 on #fffdf8  8.95
+"New project"                                #4d4558 on #fffdf8  8.95
+"Projects"                                   #16111f on #faf6f0 17.20
+"New project"                                #faf6f0 on #16111f 17.20
+"notes"                                      #16111f on #fffdf8 18.22
+"Workings"                                   #0a6e59 on #e3f6ee  5.52
+"ana/notes"                                  #4d4558 on #fffdf8  8.95
+"Region eu-central · since 2 Nov 2026"       #6e6578 on #fffdf8  5.44
+"Blog"                                       #16111f on #fffdf8 18.22
+"Workings"                                   #0a6e59 on #e3f6ee  5.52
+"ana/blog"                                   #4d4558 on #fffdf8  8.95
+"Region eu-central · since 2 Nov 2026"       #6e6578 on #fffdf8  5.44

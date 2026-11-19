@@ -1,0 +1,9 @@
+---
+source: crates/leptoskit_cloud_app/tests/screens.rs
+expression: screen.semantics()
+---
+main
+  text "LeptosKit Cloud"
+  heading(1) "Not here."
+  text "There's no page at this address, or you can't see it."
+  button "Your organisations →"

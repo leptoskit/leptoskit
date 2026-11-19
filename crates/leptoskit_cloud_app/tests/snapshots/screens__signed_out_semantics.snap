@@ -1,0 +1,8 @@
+---
+source: crates/leptoskit_cloud_app/tests/screens.rs
+expression: screen.semantics()
+---
+main
+  heading(1) "You've been signed out."
+  text "Sign in and we'll bring you back here."
+  button "Sign in"

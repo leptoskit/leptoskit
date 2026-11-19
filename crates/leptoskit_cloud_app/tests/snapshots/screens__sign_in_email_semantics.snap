@@ -1,0 +1,12 @@
+---
+source: crates/leptoskit_cloud_app/tests/screens.rs
+expression: desktop.semantics()
+---
+main
+  text "LeptosKit Cloud"
+  heading(1) "Check your email."
+  text "We sent a code to ana@example.com."
+  textbox "Code from the email"
+  button "Continue"
+  button "Use a different email"
+  button "Send another code"

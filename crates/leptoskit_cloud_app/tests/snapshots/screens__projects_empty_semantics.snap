@@ -1,0 +1,27 @@
+---
+source: crates/leptoskit_cloud_app/tests/screens.rs
+expression: desktop.semantics()
+---
+banner
+  button "LeptosKit Cloud: your projects"
+  button "ana: projects"
+  status "Plan: Hobby. Spend isn't available yet." live=polite atomic
+  button "Your account"
+navigation "Console"
+  text "ana"
+  textbox "Filter projects"
+  button "Projects" [current=page]
+  button "New project"
+main
+  heading(1) "Ship your first app"
+  text "Three ways in. Each ends the same way: a signed release sheet and a live URL."
+  list "Ways to ship"
+    listitem
+      button "From your terminal"
+    listitem
+      button "A starter, in one press"
+    listitem
+      button "From GitHub"
+navigation "Sections"
+  button "Apps" [current=page]
+  button "You"

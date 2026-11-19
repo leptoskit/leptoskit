@@ -1,0 +1,27 @@
+---
+source: crates/leptoskit_cloud_app/tests/screens.rs
+expression: "readable(desktop.palette(Appearance::Dark))"
+---
+"ana"                                        #f4efe8 on #1d1726 15.26
+"Hobby"                                      #c9c0d0 on #1d1726  9.92
+"A"                                          #f4efe8 on #251e30 14.05
+"ana"                                        #f4efe8 on #1d1726 15.26
+"Switch"                                     #f4efe8 on #251e30 14.05
+"Filter projects"                            #9d93a8 on #1d1726  5.96
+"/"                                          #9d93a8 on #1d1726  5.96
+"Projects"                                   #c9c0d0 on #1d1726  9.92
+"New project"                                #c9c0d0 on #1d1726  9.92
+"Organisations"                              #f4efe8 on #16111f 16.19
+"Create an organisation"                     #f4efe8 on #1d1726 15.26
+"ana"                                        #f4efe8 on #1d1726 15.26
+"/ana"                                       #9d93a8 on #1d1726  5.96
+"Owner"                                      #c9c0d0 on #1d1726  9.92
+"·"                                          #9d93a8 on #1d1726  5.96
+"Hobby"                                      #c9c0d0 on #1d1726  9.92
+"·"                                          #9d93a8 on #1d1726  5.96
+"Personal"                                   #c9c0d0 on #1d1726  9.92
+"Acme"                                       #f4efe8 on #1d1726 15.26
+"/acme"                                      #9d93a8 on #1d1726  5.96
+"Developer"                                  #c9c0d0 on #1d1726  9.92
+"·"                                          #9d93a8 on #1d1726  5.96
+"Hobby"                                      #c9c0d0 on #1d1726  9.92
