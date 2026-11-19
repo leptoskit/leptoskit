@@ -1,3 +1,4 @@
 # The migrations, in the order they apply. `leptoskit db migration create` adds to it.
 20261118T101341_init
 20261118T192650_shipping
+20261118T210552_config

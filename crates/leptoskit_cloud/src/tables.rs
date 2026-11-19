@@ -2,7 +2,9 @@
 //! invitations, API tokens, projects, environments, operators, and the
 //! audit log; source archives, deployments and their events, clusters and
 //! where environments are placed on them, workers and their pairing codes,
-//! jobs, log chunks, and what clusters report.
+//! jobs, log chunks, and what clusters report; variables, secrets and the
+//! keys they are sealed with, and the leases that say where a secret's
+//! value went.
 //!
 //! Every key is a UUID v7, so rows order by creation. People are
 //! `Id<Account>`s from `leptoskit_auth`, stored without a foreign key: a
@@ -553,4 +555,87 @@ pub struct StatusReport {
 	pub cluster_id: Id<Cluster>,
 	pub observed: Json<leptoskit_cloud_runtime::Observed>,
 	pub reported_at: Timestamp,
+}
+
+/// A variable an environment's processes start with: a name and a value
+/// anyone who can see the project can read. What mustn't be read is a
+/// [`Secret`].
+#[table(name = "variables", unique(environment_id, name))]
+pub struct Variable {
+	pub id: Id<Self>,
+	#[db(on_delete = cascade)]
+	pub environment_id: Id<Environment>,
+	#[db(min_len = 1, max_len = 128)]
+	pub name: String,
+	#[db(max_len = 32_768)]
+	pub value: String,
+	#[db(no_foreign_key)]
+	pub updated_by: Id<Account>,
+	#[db(created_at)]
+	pub created_at: Timestamp,
+	#[db(updated_at)]
+	pub updated_at: Timestamp,
+}
+
+/// An organisation's data key, wrapped by a master key: what its secrets
+/// are sealed with. One row per organisation, made by its first secret.
+#[table(name = "vault_data_keys")]
+pub struct DataKey {
+	pub id: Id<Self>,
+	#[db(unique, on_delete = cascade)]
+	pub organization_id: Id<Organization>,
+	/// The key, sealed to this organisation by the master key its header
+	/// names.
+	#[db(secret)]
+	pub wrapped: Vec<u8>,
+	#[db(created_at)]
+	pub created_at: Timestamp,
+}
+
+/// A secret an environment's processes start with. The value is sealed with
+/// the organisation's data key, bound to this row's organisation, project,
+/// environment, name, and version, and no operation returns it.
+#[table(name = "secrets", unique(environment_id, name))]
+pub struct Secret {
+	pub id: Id<Self>,
+	#[db(on_delete = cascade)]
+	pub environment_id: Id<Environment>,
+	#[db(min_len = 1, max_len = 128)]
+	pub name: String,
+	/// Counts the values this name has had here, from 1.
+	pub version: i64,
+	#[db(secret)]
+	pub sealed: Vec<u8>,
+	#[db(no_foreign_key)]
+	pub updated_by: Id<Account>,
+	#[db(created_at)]
+	pub created_at: Timestamp,
+	#[db(updated_at)]
+	pub updated_at: Timestamp,
+}
+
+/// That a job was given a secret's value: which secret, and which version,
+/// written in the transaction that leases the job, before the value leaves.
+/// Kept after the secret and the job are gone, as the record of where a
+/// value went.
+#[table(name = "secret_leases", index(job_id), index(environment_id))]
+pub struct SecretLease {
+	pub id: Id<Self>,
+	#[db(no_foreign_key)]
+	pub job_id: Id<Job>,
+	/// Which run of the job, from 1.
+	pub attempt: i64,
+	#[db(no_foreign_key)]
+	pub worker_id: Id<Worker>,
+	#[db(no_foreign_key)]
+	pub organization_id: Id<Organization>,
+	#[db(no_foreign_key)]
+	pub environment_id: Id<Environment>,
+	#[db(no_foreign_key)]
+	pub secret_id: Id<Secret>,
+	#[db(max_len = 128)]
+	pub name: String,
+	pub version: i64,
+	#[db(created_at)]
+	pub created_at: Timestamp,
 }

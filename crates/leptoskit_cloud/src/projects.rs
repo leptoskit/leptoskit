@@ -207,7 +207,7 @@ fn is_target(name: &str) -> bool {
 }
 
 /// Whether `name` looks like an environment variable's name.
-fn is_variable_name(name: &str) -> bool {
+pub(crate) fn is_variable_name(name: &str) -> bool {
 	(1..=MAX_VARIABLE_LEN).contains(&name.len())
 		&& name.starts_with(|first: char| first.is_ascii_uppercase() || first == '_')
 		&& name.chars().all(|character| {

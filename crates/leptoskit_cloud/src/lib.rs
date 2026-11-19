@@ -48,6 +48,7 @@
 pub mod access;
 pub mod account;
 pub mod archive;
+pub mod config;
 pub mod deployment;
 pub mod deployments;
 pub mod operator;

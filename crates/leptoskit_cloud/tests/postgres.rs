@@ -341,3 +341,65 @@ mod review {
 		review::build_logs_are_capped(&app).await;
 	}
 }
+
+/// Variables and the secrets vault (`support/config.rs`), on Postgres.
+mod config {
+	use super::app;
+	use super::support::config;
+
+	#[tokio::test]
+	async fn variables_and_secrets_reach_the_release() {
+		if let Some((_postgres, app)) = app().await {
+			config::variables_and_secrets_reach_the_release(&app).await;
+		}
+	}
+
+	#[tokio::test]
+	async fn names_and_values_are_checked() {
+		if let Some((_postgres, app)) = app().await {
+			config::names_and_values_are_checked(&app).await;
+		}
+	}
+
+	#[tokio::test]
+	async fn configuration_is_the_tenants_alone() {
+		if let Some((_postgres, app)) = app().await {
+			config::configuration_is_the_tenants_alone(&app).await;
+		}
+	}
+
+	#[tokio::test]
+	async fn a_release_always_finds_its_secrets() {
+		if let Some((_postgres, app)) = app().await {
+			config::a_release_always_finds_its_secrets(&app).await;
+		}
+	}
+
+	#[tokio::test]
+	async fn a_copied_secret_opens_nowhere_else() {
+		if let Some((_postgres, app)) = app().await {
+			config::a_copied_secret_opens_nowhere_else(&app).await;
+		}
+	}
+
+	#[tokio::test]
+	async fn first_secrets_race_to_one_key() {
+		if let Some((_postgres, app)) = app().await {
+			config::first_secrets_race_to_one_key(&app).await;
+		}
+	}
+
+	#[tokio::test]
+	async fn configuration_has_a_size() {
+		if let Some((_postgres, app)) = app().await {
+			config::configuration_has_a_size(&app).await;
+		}
+	}
+
+	#[tokio::test]
+	async fn a_removed_secret_never_comes_back() {
+		if let Some((_postgres, app)) = app().await {
+			config::a_removed_secret_never_comes_back(&app).await;
+		}
+	}
+}

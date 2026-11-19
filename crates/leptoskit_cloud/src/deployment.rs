@@ -244,6 +244,9 @@ pub enum Blocker {
 	/// The worker stopped mid-job, and the cluster's state was confirmed
 	/// afterwards.
 	Interrupted,
+	/// A secret the release starts with couldn't be read: the environment
+	/// no longer has it, or the vault couldn't open it.
+	SecretUnavailable,
 }
 
 /// A string that isn't a [`Blocker`] code.
@@ -253,7 +256,7 @@ pub struct UnknownBlocker(String);
 
 impl Blocker {
 	/// Every blocker.
-	pub const ALL: [Self; 10] = [
+	pub const ALL: [Self; 11] = [
 		Self::BuildFailed,
 		Self::BuilderUnavailable,
 		Self::SchemaIncompatible,
@@ -264,6 +267,7 @@ impl Blocker {
 		Self::PaymentRequired,
 		Self::ClusterUnavailable,
 		Self::Interrupted,
+		Self::SecretUnavailable,
 	];
 
 	/// Whether this stops a deployment before any work starts, so a queued
@@ -294,6 +298,7 @@ impl Blocker {
 			Self::PaymentRequired => "payment_required",
 			Self::ClusterUnavailable => "cluster_unavailable",
 			Self::Interrupted => "interrupted",
+			Self::SecretUnavailable => "secret_unavailable",
 		}
 	}
 }
@@ -608,7 +613,7 @@ mod tests {
 		.into_iter()
 		.collect();
 		let states = every_state();
-		assert_eq!(states.len(), 7 + 4 * 10);
+		assert_eq!(states.len(), 7 + 4 * 11);
 		let mut seen = BTreeSet::new();
 
 		for from in &states {
@@ -767,6 +772,7 @@ mod tests {
 				"payment_required",
 				"cluster_unavailable",
 				"interrupted",
+				"secret_unavailable",
 			]
 		);
 

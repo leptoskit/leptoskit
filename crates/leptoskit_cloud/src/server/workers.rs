@@ -392,6 +392,28 @@ async fn claim_job(cx: &rpc::MutationCx) -> rpc::Result<Option<Assignment>> {
 	job.attempt += 1;
 	job.claimed_at = Some(now);
 	job.lease_expires_at = Some(lease_until(&job, now, &settings));
+	// A release's secrets: leased to this job, in this transaction, so no
+	// value is sent unless the lease and its record commit.
+	let secrets = if job.kind == JobKind::Release {
+		match super::deployments::release_secrets(tx, services, &job, worker_id).await? {
+			Ok(secrets) => secrets,
+			Err(why) => {
+				// A release whose secrets can't be read never starts: it
+				// fails here, so it doesn't sit at the head of its
+				// cluster's queue for good, and this worker asks again.
+				job.state = JobState::Abandoned;
+				job.worker_id = None;
+				job.attempt -= 1;
+				job.claimed_at = None;
+				job.lease_expires_at = None;
+				job.save(tx).await?;
+				super::deployments::release_unstartable(tx, &job, &why).await?;
+				return Ok(None);
+			}
+		}
+	} else {
+		crate::workers::LeasedSecrets::default()
+	};
 	job.save(tx).await?;
 	let attempt = u32::try_from(job.attempt).unwrap_or(u32::MAX);
 
@@ -407,6 +429,7 @@ async fn claim_job(cx: &rpc::MutationCx) -> rpc::Result<Option<Assignment>> {
 		lease_expires_at: job.lease_expires_at.unwrap_or(now),
 		lease_seconds: settings.lease_seconds(),
 		input: jobs::assignment_input(services, &job.input.0, settings.download)?,
+		secrets,
 	}))
 }
 

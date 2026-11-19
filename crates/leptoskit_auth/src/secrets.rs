@@ -136,6 +136,19 @@ impl Keys {
 		})
 	}
 
+	/// Whether any key here is also one of `other`'s, whatever its ID,
+	/// compared in constant time. Two sets kept for different jobs, such as
+	/// sessions and a vault, shouldn't share one: a single leak would then
+	/// open both.
+	#[must_use]
+	pub fn shares_key_with(&self, other: &Self) -> bool {
+		self.keys.iter().fold(false, |found, mine| {
+			other.keys.iter().fold(found, |found, theirs| {
+				found | bool::from(mine.secret.ct_eq(&theirs.secret))
+			})
+		})
+	}
+
 	/// Encrypts `plaintext` under the newest key with AES-256-GCM-SIV, bound
 	/// to `context`: decrypting needs the same context, so a value copied to
 	/// another row or purpose doesn't open. The result names the key, so
@@ -143,7 +156,12 @@ impl Keys {
 	///
 	/// Layout: a format byte (`1`), the key ID's length and bytes, a 96-bit
 	/// random nonce, then the ciphertext and its tag.
-	pub(crate) fn seal(&self, context: &[&[u8]], plaintext: &[u8]) -> Result<Vec<u8>, AuthError> {
+	///
+	/// # Errors
+	///
+	/// [`AuthError::Config`] when the system has no randomness, or the
+	/// value can't be encrypted.
+	pub fn seal(&self, context: &[&[u8]], plaintext: &[u8]) -> Result<Vec<u8>, AuthError> {
 		let key = &self.keys[0];
 		let nonce = random::<NONCE_LENGTH>()?;
 		let aad = associated_data(context);
@@ -198,7 +216,7 @@ impl Keys {
 	/// [`AuthError::Config`] when the key it names is no longer listed, or
 	/// it doesn't decrypt: tampered with, truncated, or sealed for another
 	/// context. The message never includes the value.
-	pub(crate) fn open(&self, context: &[&[u8]], sealed: &[u8]) -> Result<Vec<u8>, AuthError> {
+	pub fn open(&self, context: &[&[u8]], sealed: &[u8]) -> Result<Vec<u8>, AuthError> {
 		let unreadable = || AuthError::Config("a stored secret couldn't be decrypted".into());
 		let (&format, rest) = sealed.split_first().ok_or_else(unreadable)?;
 		let (&id_length, rest) = rest.split_first().ok_or_else(unreadable)?;

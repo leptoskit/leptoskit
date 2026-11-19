@@ -640,6 +640,27 @@ impl Fixture {
 					"number": 1,
 				})
 			}
+			"variables" | "secrets" => {
+				json!({ "organization": organization, "project": "web", "environment": "staging" })
+			}
+			// Whoever may unset may set, and set these just before.
+			"set_variable" | "set_secret" => {
+				json!({
+					"organization": organization,
+					"project": "web",
+					"environment": "staging",
+					"name": if operation == "set_variable" { "MATRIX_VARIABLE" } else { "MATRIX_SECRET" },
+					"value": "matrix-value",
+				})
+			}
+			"unset_variable" | "unset_secret" => {
+				json!({
+					"organization": organization,
+					"project": "web",
+					"environment": "staging",
+					"name": if operation == "unset_variable" { "MATRIX_VARIABLE" } else { "MATRIX_SECRET" },
+				})
+			}
 			"pair" => json!({ "code": self.pairing_code, "name": "matrix-worker" }),
 			"renew" => json!({ "job": nothing }),
 			"append_log" => json!({ "job": nothing, "attempt": 1, "seq": 0, "lines": ["hi"] }),

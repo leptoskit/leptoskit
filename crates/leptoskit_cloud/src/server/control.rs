@@ -115,6 +115,10 @@ pub struct ControlConfig {
 	pub origin: String,
 	/// The keys sessions and codes are signed with.
 	pub keys: Keys,
+	/// The vault's master keys, newest first: each organisation's data key
+	/// is wrapped by the newest, and any of them unwraps one. Never the
+	/// sign-in keys.
+	pub vault: Keys,
 	/// How mail is sent.
 	pub mailer: SharedMailer,
 	/// GitHub sign-in, when configured.
@@ -228,6 +232,7 @@ impl Control {
 			config.default_region.clone(),
 			Shipping {
 				redactions: store.secrets().into(),
+				vault: super::vault::Vault::new(config.vault.clone()),
 				store: store.clone(),
 				apps_domain: config.apps_domain.clone(),
 				registry: config.registry.trim_end_matches('/').to_owned(),

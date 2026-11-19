@@ -42,6 +42,10 @@ fn production(path: &Path) -> Vec<(&'static str, String)> {
 		),
 		("LEPTOSKIT_CLOUD_AUTH_KEYS", KEYS.to_owned()),
 		(
+			"LEPTOSKIT_CLOUD_VAULT_KEYS",
+			"v1:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBA".to_owned(),
+		),
+		(
 			"LEPTOSKIT_CLOUD_SMTP_URL",
 			format!("smtp://cloud:{SMTP_PASSWORD}@127.0.0.1:2525"),
 		),

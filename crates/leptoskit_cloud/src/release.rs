@@ -446,6 +446,12 @@ pub struct SpecTarget<'a> {
 	pub deployment: u64,
 	pub hostname: &'a str,
 	pub cluster: &'a ClusterFacts,
+	/// The environment's variables, which every process starts with.
+	pub variables: &'a BTreeMap<String, String>,
+	/// The names of the environment's secrets, which every process starts
+	/// with. The values never come here: a cluster worker is given them
+	/// with the release it claims.
+	pub secrets: &'a [String],
 }
 
 /// The spec for `plan`, built as `output` says, checked with
@@ -475,7 +481,9 @@ pub fn spec(
 				}
 			})?;
 		let image = facts.image.as_ref().unwrap_or(&output.image);
-		let mut env = BTreeMap::new();
+		// What the cloud sets comes last, so nothing the environment holds
+		// stands in for it; `config::check_name` refuses those names too.
+		let mut env = target.variables.clone();
 		env.insert(
 			"LEPTOSKIT_ENVIRONMENT".to_owned(),
 			target.environment.environment.slug.clone(),
@@ -509,8 +517,13 @@ pub fn spec(
 				ready: facts.ready_path.clone(),
 				live: facts.live_path.clone(),
 			},
+			secret_env: target
+				.secrets
+				.iter()
+				.filter(|name| !env.contains_key(*name))
+				.map(|name| (name.clone(), name.clone()))
+				.collect(),
 			env,
-			secret_env: BTreeMap::new(),
 			resources: Resources {
 				cpu_request_millis: planned.size.cpu_request_millicores(),
 				cpu_limit_millis: planned.size.cpu_limit_millicores(),
@@ -654,6 +667,8 @@ mod tests {
 				deployment: 1,
 				hostname: "notes-acme.leptoskit.app",
 				cluster: &cluster,
+				variables: &BTreeMap::new(),
+				secrets: &[],
 			},
 		)
 		.expect("a spec");
@@ -857,6 +872,8 @@ mod tests {
 				deployment: 1,
 				hostname: "notes-acme.leptoskit.app",
 				cluster: &WAKES,
+				variables: &BTreeMap::new(),
+				secrets: &[],
 			},
 		)
 		.unwrap_err();
