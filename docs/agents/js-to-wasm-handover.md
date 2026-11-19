@@ -44,7 +44,7 @@ One pull request per item. Every backend is kept in step, with AppKit as the ref
 | 7  | Scroll into view                                            | G4       | #913, open  |
 | 8  | A clock hook                                                | G6       | #914, open  |
 | 9  | Typed refusals in the rpc client (status, code, retry time) | G8       | #918, open  |
-| 10 | Streams without a database                                  | G3       | PRNUM, open |
+| 10 | Streams without a database                                  | G3       | #923, open  |
 | 11 | The ⌘ key on the web                                        | G7a      | not started |
 | 12 | New-tab and download links                                  | G14, G15 | not started |
 
@@ -209,7 +209,7 @@ G8. `rpc::Error::rate_limited(wait)` (429) and `rpc::Error::refused(code, messag
 - **Limit to know for the demo:** only a rate limit carries a wait. The demo's "full, opens in N seconds" (503 with a countdown, DM-14) can't put its countdown in `Error::Refused`, which has no `retry_after` in the audit's API. Use `rate_limited` for it, return the countdown as data, or ask the owner for a wait on `Refused`.
 - **Old clients:** one built before this reads a refusal as `Other` with the raw body.
 
-### `feat/streams-without-db` (PRNUM): stacked on `feat/rpc-typed-refusals`
+### `feat/streams-without-db` (#923): stacked on `feat/rpc-typed-refusals`
 
 G3. A `#[rpc::stream]` body can take `rpc::StreamCx` (the caller, no database), and `rpc::server::LiveStreams` serves streams on a server that has none. Feature `live-streams` on `leptoskit_rpc`, `rpc-live-streams` on `leptoskit`; `live` includes it.
 
