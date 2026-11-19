@@ -290,6 +290,8 @@ final class MobileWidgetRenderer: NSObject, UIScrollViewDelegate, NativeRiveSink
         case "live_photo", "LivePhoto": widget = NativeLivePhotoView()
         case "modal", "Modal": widget = overlay(.sheet, item.id)
         case "popover", "Popover": widget = overlay(.popover, item.id)
+        // A canvist editor has no iOS host yet: an empty view holds its place.
+        case "canvist_editor", "CanvistEditor": widget = UIView()
         default: widget = try makeControl(item)
         }
         (widget as? NativeScene3dView)?.show(scene: item.props.scene3d)

@@ -77,6 +77,9 @@ pub enum NativeKind {
 	/// Content above the screen that hangs from another element; see
 	/// [`Popover`](crate::components::Popover).
 	Popover,
+	/// A host-owned canvist text editor surface; the editor comes from the
+	/// `canvist_editor` prop.
+	CanvistEditor,
 	/// A platform-defined widget referenced by registered name.
 	Custom(&'static str),
 }
@@ -120,6 +123,7 @@ impl NativeKind {
 			Self::TextArea => "text_area",
 			Self::Modal => "modal",
 			Self::Popover => "popover",
+			Self::CanvistEditor => "canvist_editor",
 			Self::Custom(name) => name,
 		}
 	}
@@ -166,6 +170,7 @@ impl<'de> serde::de::Visitor<'de> for NativeKindVisitor {
 			"text_area" | "TextArea" => Ok(NativeKind::TextArea),
 			"modal" | "Modal" => Ok(NativeKind::Modal),
 			"popover" | "Popover" => Ok(NativeKind::Popover),
+			"canvist_editor" | "CanvistEditor" => Ok(NativeKind::CanvistEditor),
 			"button" | "Button" => Ok(NativeKind::Button),
 			"switch" | "Switch" => Ok(NativeKind::Switch),
 			"checkbox" | "Checkbox" => Ok(NativeKind::Checkbox),
@@ -353,6 +358,11 @@ pub struct NativeProps {
 	/// props.
 	#[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
 	pub live_photo: Option<u32>,
+	/// The editor a `CanvistEditor` shows, by its id. The app owns the editor
+	/// through its state handle; the element only says where it shows, and the
+	/// document never travels through props.
+	#[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
+	pub canvist_editor: Option<u32>,
 	/// The text content of `Text`, `TextRun`, `TextInput`, and `Button`.
 	#[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
 	pub text: Option<String>,

@@ -447,8 +447,6 @@ impl AppKitBackend {
 		let target = || ActionTarget::new(mtm, id, Rc::clone(&self.sink));
 
 		let (view, control): (Retained<NSView>, Control) = match kind {
-			// A 3D scene draws in the generated hosts' Swift and Kotlin renderers;
-			// this backend holds its place as an empty view.
 			NativeKind::Modal => {
 				let view = Retained::into_super(FlippedView::new(mtm));
 				let sheet = Sheet::new(mtm, id, Rc::clone(&self.sink), &view);
@@ -461,13 +459,17 @@ impl AppKitBackend {
 
 				(view, Control::Popover(popover))
 			}
+			// A 3D scene draws in the generated hosts' Swift and Kotlin renderers,
+			// and a canvist editor has no native host yet; this backend holds
+			// their place as an empty view.
 			NativeKind::View
 			| NativeKind::Custom(_)
 			| NativeKind::Scene3d
 			| NativeKind::Video
 			| NativeKind::Camera
 			| NativeKind::Map
-			| NativeKind::LivePhoto => {
+			| NativeKind::LivePhoto
+			| NativeKind::CanvistEditor => {
 				(
 					Retained::into_super(FlippedView::new(mtm)),
 					Control::Container,

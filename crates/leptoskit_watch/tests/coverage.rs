@@ -109,6 +109,7 @@ fn refused_widget_kinds() {
 		("ScrollView", Element::scroll_view()),
 		("TextInput", Element::text_input()),
 		("TextArea", Element::text_area()),
+		("CanvistEditor", Element::canvist_editor(1)),
 		("PasswordInput", PasswordInput()),
 		("Checkbox", Checkbox(false)),
 		("Radio", Element::new(NativeKind::Radio)),

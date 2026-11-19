@@ -398,6 +398,50 @@ fn hydrates_existing_server_controls_and_attaches_handlers() {
 	parent.remove();
 }
 
+/// The server's editor and the page's have different ids: hydration keeps
+/// the server's container and names the page's editor on it, so the editor's
+/// host finds the one this page owns.
+#[wasm_bindgen_test]
+fn a_hydrated_canvist_editor_names_the_page_s_own_editor() {
+	let parent = container();
+	parent.set_inner_html(include_str!("fixtures/web_canvist_editor_hydration.html"));
+	let original: web_sys::HtmlElement = find(&parent, "[data-lk-canvist-editor]");
+	assert_eq!(
+		original.get_attribute("data-lk-canvist-editor").as_deref(),
+		Some("57")
+	);
+	let mount = hydrate_from(parent.clone(), move || {
+		render(
+			Element::view().child(
+				Element::canvist_editor(3)
+					.accessibility_label("Note")
+					.placeholder("Write a note…")
+					.class("w-full"),
+			),
+		)
+	});
+	let hydrated: web_sys::HtmlElement = find(&parent, "[data-lk-canvist-editor]");
+
+	assert_eq!(
+		original, hydrated,
+		"hydration must preserve the server's container"
+	);
+	assert_eq!(
+		hydrated.get_attribute("data-lk-canvist-editor").as_deref(),
+		Some("3")
+	);
+	assert_eq!(
+		hydrated.get_attribute("data-lk-placeholder").as_deref(),
+		Some("Write a note…")
+	);
+	assert_eq!(
+		hydrated.get_attribute("aria-label").as_deref(),
+		Some("Note")
+	);
+	drop(mount);
+	parent.remove();
+}
+
 #[wasm_bindgen_test]
 async fn hydrated_screens_refresh_stylesheets_when_classes_change() {
 	let parent = container();

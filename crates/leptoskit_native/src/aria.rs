@@ -394,9 +394,10 @@ impl Role {
 			| NativeKind::Camera
 			| NativeKind::Map
 			| NativeKind::LivePhoto => Some(Self::Img),
-			NativeKind::TextInput | NativeKind::TextArea | NativeKind::PasswordInput => {
-				Some(Self::TextBox)
-			}
+			NativeKind::TextInput
+			| NativeKind::TextArea
+			| NativeKind::PasswordInput
+			| NativeKind::CanvistEditor => Some(Self::TextBox),
 			NativeKind::Button | NativeKind::Pressable => Some(Self::Button),
 			NativeKind::Switch => Some(Self::Switch),
 			NativeKind::Checkbox => Some(Self::Checkbox),

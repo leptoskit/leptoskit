@@ -308,6 +308,23 @@ pub fn LivePhoto(session: u32) -> Element {
 
 tag!(LivePhoto => Element::new(crate::NativeKind::LivePhoto));
 
+/// Where a canvist text editor shows.
+///
+/// The app owns the editor through a state handle and gives this element the
+/// handle's id; the document, its changes and its selection stay with the
+/// handle and never pass through props. `placeholder`, `read_only`, and focus
+/// work as on a [`TextArea`]. Give it an accessible label, a labelling
+/// reference, or a placeholder, and a height or `min-h-*` to start from.
+///
+/// The editor itself comes from `leptoskit_canvist`, on the web only for now.
+/// Everywhere else the element holds its place as an empty view.
+#[track_caller]
+pub fn CanvistEditor(editor: u32) -> Element {
+	Element::canvist_editor(editor)
+}
+
+tag!(CanvistEditor => Element::new(crate::NativeKind::CanvistEditor));
+
 /// A container whose overflowing children can scroll.
 #[track_caller]
 pub fn ScrollView() -> Element {

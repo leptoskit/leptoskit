@@ -303,6 +303,7 @@ impl Element {
 					| NativeKind::TextInput
 					| NativeKind::TextArea
 					| NativeKind::PasswordInput
+					| NativeKind::CanvistEditor
 					| NativeKind::Switch
 					| NativeKind::Checkbox
 					| NativeKind::Radio
@@ -386,6 +387,10 @@ impl Element {
 			return Err(ControlTreeError::InvalidLivePhoto);
 		}
 
+		if (self.kind == NativeKind::CanvistEditor) != self.props.canvist_editor.is_some() {
+			return Err(ControlTreeError::InvalidCanvistEditor);
+		}
+
 		if self.kind == NativeKind::Rive
 			&& (self.props.rive.is_none()
 				|| self.props.source.is_some()
@@ -411,6 +416,7 @@ impl Element {
 				| NativeKind::TextInput
 				| NativeKind::TextArea
 				| NativeKind::PasswordInput
+				| NativeKind::CanvistEditor
 				| NativeKind::Switch
 				| NativeKind::Checkbox
 				| NativeKind::Radio
@@ -425,7 +431,10 @@ impl Element {
 
 		if matches!(
 			self.kind,
-			NativeKind::TextInput | NativeKind::TextArea | NativeKind::PasswordInput
+			NativeKind::TextInput
+				| NativeKind::TextArea
+				| NativeKind::PasswordInput
+				| NativeKind::CanvistEditor
 		) && !self.props.names_itself()
 			&& self
 				.props
@@ -755,6 +764,24 @@ impl Element {
 	#[must_use]
 	pub fn live_photo_session(mut self, session: u32) -> Self {
 		self.props.live_photo = Some(session);
+		self
+	}
+
+	/// A canvist text editor the app owns, by its id: where the editor shows.
+	/// The document, its changes and its selection stay with the editor's
+	/// state handle and never pass through this element. Give it an accessible
+	/// label, a labelling reference, or a placeholder, as for any text field.
+	#[track_caller]
+	pub fn canvist_editor(editor: u32) -> Self {
+		let mut element = Self::new(NativeKind::CanvistEditor);
+		element.props.canvist_editor = Some(editor);
+		element
+	}
+
+	/// Sets the editor a `CanvistEditor` view tag shows.
+	#[must_use]
+	pub fn editor(mut self, editor: u32) -> Self {
+		self.props.canvist_editor = Some(editor);
 		self
 	}
 
