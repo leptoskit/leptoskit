@@ -506,7 +506,12 @@ jobs:
           set -euo pipefail
           cli="$PWD/target/debug/leptoskit"
           sdk="$PWD"
-          npx --yes @puppeteer/browsers@2 install chrome@stable chromedriver@stable --path "$HOME/.cache/puppeteer"
+          # The installer takes one browser a run, and a chromedriver drives
+          # only the Chrome of its own major version: install the stable
+          # Chrome, then the chromedriver of that same build.
+          browsers="$HOME/.cache/puppeteer"
+          chrome="$(npx --yes @puppeteer/browsers@2 install chrome@stable --path "$browsers" --format '{{buildId}}')"
+          npx --yes @puppeteer/browsers@2 install "chromedriver@$chrome" --path "$browsers"
           (cd examples/commonplace && "$cli" test extension)
           (cd devtools && "$cli" test extension)
           "$cli" new "$RUNNER_TEMP/extension-app" --name extension_app --extension --sdk-path "$sdk"

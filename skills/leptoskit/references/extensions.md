@@ -47,7 +47,7 @@ leptoskit dev --platform extension                 # Chrome for Testing, reloade
 leptoskit test extension                           # every page, the worker, and each content script in a real browser
 ```
 
-- `dev` and `test` need Chrome for Testing and chromedriver: `npx @puppeteer/browsers install chrome@stable chromedriver@stable --path ~/.cache/puppeteer`, or `LEPTOSKIT_CHROME` and `LEPTOSKIT_CHROMEDRIVER`.
+- `dev` and `test` need Chrome for Testing and chromedriver: `npx @puppeteer/browsers install chrome@stable --path ~/.cache/puppeteer` and then the same with `chromedriver@stable` (the installer takes one browser a run), or `LEPTOSKIT_CHROME` and `LEPTOSKIT_CHROMEDRIVER`.
 - Safari's package goes inside the macOS and iOS apps, built with `leptoskit build --platform macos` and `ios`. People turn it on in Safari's settings.
 - Extension permissions come from `[extension].permissions`, from what the surfaces need, and from the plugins the app depends on (`extension-permissions` in their metadata).
 - Explain each permission in `store/permissions.toml`; `leptoskit publish` pastes those sentences into the store steps.
