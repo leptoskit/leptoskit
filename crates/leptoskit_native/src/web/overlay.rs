@@ -1,7 +1,7 @@
 //! Modals and popovers in the browser's top layer.
 //!
 //! A `Modal` is a `<dialog>` shown with `showModal()`, so the browser puts
-//! it above the page, makes the page behind it inert, keeps Tab inside it,
+//! it above the page, makes the page behind it inert, wraps Tab inside it,
 //! and gives focus back when it closes. A `Popover` is an element with the
 //! `popover` attribute shown with `showPopover()`, placed beside its anchor.
 //!
@@ -94,6 +94,14 @@ fn modal(
 			if closed_by_browser(&event, MODAL) {
 				dispatch(&close, &NativeEvent::Dismiss, &event);
 			}
+		})
+		// Tab past the last control comes back to the first, and Shift+Tab
+		// past the first goes to the last, instead of out to the browser.
+		.on(ev::keydown, move |event| {
+			#[cfg(target_arch = "wasm32")]
+			browser::keep_tab_inside(&event);
+			#[cfg(not(target_arch = "wasm32"))]
+			let _ = event;
 		})
 		// The dialog covers the viewport, so a press on the dialog itself,
 		// not on something inside it, is a press on the backdrop.
@@ -281,6 +289,61 @@ mod browser {
 		popover
 			.get_attribute("data-lk-anchor")
 			.and_then(|id| document.get_element_by_id(&id))
+	}
+
+	/// Wraps Tab inside a modal: from its last control to its first, and
+	/// with Shift from its first to its last. A focused element that is not
+	/// a stop itself, such as a heading given focus, counts by its place.
+	pub(super) fn keep_tab_inside(event: &web_sys::KeyboardEvent) {
+		if event.key() != "Tab" || event.alt_key() || event.ctrl_key() || event.meta_key() {
+			return;
+		}
+		let Some(dialog) = event
+			.current_target()
+			.and_then(|target| target.dyn_into::<web_sys::Element>().ok())
+		else {
+			return;
+		};
+		let Ok(found) = dialog.query_selector_all(FOCUSABLE) else {
+			return;
+		};
+		let stops = (0..found.length())
+			.filter_map(|index| found.item(index))
+			.filter_map(|node| node.dyn_into::<web_sys::HtmlElement>().ok())
+			.filter(|element| {
+				let size = element.get_bounding_client_rect();
+				size.width() > 0.0 || size.height() > 0.0
+			})
+			.collect::<Vec<_>>();
+		let (Some(first), Some(last)) = (stops.first(), stops.last()) else {
+			return;
+		};
+		let Some(active) = dialog
+			.owner_document()
+			.and_then(|document| document.active_element())
+		else {
+			return;
+		};
+
+		let target = if event.shift_key() {
+			let before = active.is_same_node(Some(first))
+				|| active.is_same_node(Some(&dialog))
+				|| active.compare_document_position(first)
+					& web_sys::Node::DOCUMENT_POSITION_FOLLOWING
+					!= 0;
+			before.then_some(last)
+		} else {
+			let after = active.is_same_node(Some(last))
+				|| active.compare_document_position(last)
+					& web_sys::Node::DOCUMENT_POSITION_PRECEDING
+					!= 0;
+			after.then_some(first)
+		};
+
+		if let Some(target) = target {
+			event.prevent_default();
+			let _ = target.focus();
+		}
 	}
 
 	/// Moves focus to the element the overlay names. A modal with no such

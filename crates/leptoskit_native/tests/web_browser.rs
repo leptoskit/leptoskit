@@ -2386,6 +2386,74 @@ async fn a_modal_opens_in_the_top_layer_and_gives_focus_back() {
 }
 
 #[wasm_bindgen_test]
+async fn tab_wraps_inside_an_open_modal() {
+	use leptoskit_native::components::Button;
+	use leptoskit_native::components::Heading;
+	use leptoskit_native::components::Modal;
+
+	let parent = container();
+	let mount = mount_to(parent.clone(), || {
+		|| {
+			render(
+				Modal(true)
+					.aria_label("A new day")
+					.initial_focus("title")
+					.child(
+						View()
+							.class("w-40 h-20")
+							.child(Heading(2, "A new day").id("title").tab_index(-1))
+							.child(Button("Start again").id("start"))
+							.child(Button("Keep looking").id("keep")),
+					),
+			)
+		}
+	});
+	tick().await;
+	next_frame().await;
+
+	let by_id = |id: &str| -> web_sys::HtmlElement {
+		document()
+			.get_element_by_id(id)
+			.unwrap_or_else(|| panic!("an element with the id {id}"))
+			.unchecked_into()
+	};
+	// Presses Tab on the focused element; true when the browser may move
+	// focus itself.
+	let tab = |shift: bool| {
+		let options = web_sys::KeyboardEventInit::new();
+		options.set_key("Tab");
+		options.set_shift_key(shift);
+		options.set_bubbles(true);
+		options.set_cancelable(true);
+		let event =
+			web_sys::KeyboardEvent::new_with_keyboard_event_init_dict("keydown", &options).unwrap();
+		document()
+			.active_element()
+			.expect("something has focus")
+			.dispatch_event(&event)
+			.unwrap()
+	};
+	let focused = || document().active_element();
+
+	assert_eq!(
+		focused(),
+		Some(by_id("title").into()),
+		"the title takes focus"
+	);
+	assert!(!tab(true), "Shift+Tab from the title wraps");
+	assert_eq!(focused(), Some(by_id("keep").into()));
+	assert!(!tab(false), "Tab from the last control wraps");
+	assert_eq!(focused(), Some(by_id("start").into()));
+	assert!(tab(false), "Tab between controls is the browser's");
+	assert_eq!(focused(), Some(by_id("start").into()));
+	assert!(!tab(true), "Shift+Tab from the first control wraps");
+	assert_eq!(focused(), Some(by_id("keep").into()));
+
+	drop(mount);
+	parent.remove();
+}
+
+#[wasm_bindgen_test]
 async fn a_popover_opens_beside_its_anchor_and_asks_before_it_closes() {
 	use leptoskit_native::Placement;
 	use leptoskit_native::components::Button;
