@@ -81,6 +81,10 @@ pub const STRIPE_PRICES: &str = "LEPTOSKIT_CLOUD_STRIPE_PRICES";
 /// `true` to have Stripe work out tax at checkout. It collects none until
 /// the Stripe account is registered where tax is owed.
 pub const STRIPE_AUTOMATIC_TAX: &str = "LEPTOSKIT_CLOUD_STRIPE_AUTOMATIC_TAX";
+/// `true` to take a Stripe test key (`rk_test_…`) outside `--dev`, for a
+/// staging control plane: nobody pays, and anyone with a test card gets a
+/// paid plan. Without it a test key is refused outside `--dev`.
+pub const STRIPE_TEST_MODE: &str = "LEPTOSKIT_CLOUD_STRIPE_TEST_MODE";
 /// The S3-compatible store source archives and logs are kept in, such as
 /// `https://<account>.r2.cloudflarestorage.com`.
 pub const S3_ENDPOINT: &str = "LEPTOSKIT_CLOUD_S3_ENDPOINT";
@@ -281,7 +285,7 @@ impl ServeConfig {
 			.or_else(|| dev.then(|| DEV_REGISTRY.to_owned()))
 			.ok_or(ConfigError::Missing(REGISTRY))?;
 		let catalogue = catalogue(vars)?;
-		let payments = payments(vars)?;
+		let payments = payments(vars, dev)?;
 		let resolver = resolver(vars, dev)?;
 		let (mailer, mailbox) = if dev {
 			let mailbox = Mailbox::new();
@@ -333,7 +337,7 @@ fn resolver(vars: Vars<'_>, dev: bool) -> Result<SharedResolver, ConfigError> {
 
 	let resolver = DnsOverHttps::new(&endpoint)
 		.map_err(|error| invalid(DNS_RESOLVER, format!("is unusable: {error}")))?;
-	Ok(std::sync::Arc::new(resolver))
+	Ok(Arc::new(resolver))
 }
 
 /// The public origin: `https` with no path, or in `--dev`, this machine
@@ -505,10 +509,17 @@ fn catalogue(vars: Vars<'_>) -> Result<Option<Catalogue>, ConfigError> {
 }
 
 /// How payment is taken: [`STRIPE_KEY`], [`STRIPE_WEBHOOK_SECRET`] and
-/// [`STRIPE_PRICES`] together, or none of them.
-fn payments(vars: Vars<'_>) -> Result<Option<PaymentsConfig>, ConfigError> {
+/// [`STRIPE_PRICES`] together, or none of them. A test key is taken in
+/// `--dev`, and elsewhere only with [`STRIPE_TEST_MODE`]: with one, a made
+/// up card buys a plan.
+fn payments(vars: Vars<'_>, dev: bool) -> Result<Option<PaymentsConfig>, ConfigError> {
 	let Some(key) = read(vars, STRIPE_KEY) else {
-		for name in [STRIPE_WEBHOOK_SECRET, STRIPE_PRICES, STRIPE_AUTOMATIC_TAX] {
+		for name in [
+			STRIPE_WEBHOOK_SECRET,
+			STRIPE_PRICES,
+			STRIPE_AUTOMATIC_TAX,
+			STRIPE_TEST_MODE,
+		] {
 			if read(vars, name).is_some() {
 				return Err(invalid(name, format!("is set without {STRIPE_KEY}")));
 			}
@@ -519,6 +530,29 @@ fn payments(vars: Vars<'_>) -> Result<Option<PaymentsConfig>, ConfigError> {
 	// The error never repeats the key.
 	let stripe =
 		Stripe::new(&key).map_err(|error| invalid(STRIPE_KEY, format!("is unusable: {error}")))?;
+	let livemode = Stripe::is_live_key(&key);
+	let test_mode = match read(vars, STRIPE_TEST_MODE).as_deref() {
+		None | Some("false") => false,
+		Some("true") => true,
+		Some(_) => return Err(invalid(STRIPE_TEST_MODE, "is `true` or `false`".to_owned())),
+	};
+
+	if livemode && test_mode {
+		return Err(invalid(
+			STRIPE_TEST_MODE,
+			format!("is `true`, and {STRIPE_KEY} is a live key"),
+		));
+	}
+
+	if !livemode && !test_mode && !dev {
+		return Err(invalid(
+			STRIPE_KEY,
+			format!(
+				"is a test key: with one, a made up card buys a plan. Use a live key, or set \
+				 {STRIPE_TEST_MODE}=true for a control plane nobody pays"
+			),
+		));
+	}
 	let webhook_secret = required(vars, STRIPE_WEBHOOK_SECRET)?;
 	let mut prices = BTreeMap::new();
 
@@ -554,6 +588,7 @@ fn payments(vars: Vars<'_>) -> Result<Option<PaymentsConfig>, ConfigError> {
 	Ok(Some(PaymentsConfig {
 		provider: Arc::new(stripe),
 		webhook_secret,
+		livemode,
 		prices,
 		automatic_tax,
 	}))
@@ -808,7 +843,7 @@ mod tests {
 			&path,
 			r#"{"currency": "usd", "plans": [
 				{"id": "hobby", "name": "Hobby", "monthly": 0},
-				{"id": "pro", "name": "Pro", "monthly": 100}
+				{"id": "pro", "name": "Pro", "monthly": 100, "spend_cap": 100}
 			]}"#,
 		)
 		.expect("written");
@@ -827,7 +862,7 @@ mod tests {
 		let key = (STRIPE_KEY, "rk_test_made_up"); // gitleaks:allow (fake key)
 		let no_secret = error(&with(&[key, (STRIPE_PRICES, "pro=price_1")]), false);
 		assert!(no_secret.contains(STRIPE_WEBHOOK_SECRET), "{no_secret}");
-		let secret = (STRIPE_WEBHOOK_SECRET, "whsec_made_up");
+		let secret = (STRIPE_WEBHOOK_SECRET, "whsec_made_up_for_the_tests");
 		let publishable = error(
 			&with(&[
 				(STRIPE_KEY, "pk_test_made_up"),
@@ -854,11 +889,28 @@ mod tests {
 			(STRIPE_PRICES, "pro=price_1"),
 			(STRIPE_AUTOMATIC_TAX, "true"),
 		]);
-		let config = ServeConfig::from_vars(&vars(&complete), false).expect("valid");
+		// A test key buys a plan with a made up card, so it is asked for.
+		let test_key = error(&complete, false);
+		assert!(
+			test_key.starts_with(STRIPE_KEY) && test_key.contains(STRIPE_TEST_MODE),
+			"{test_key}"
+		);
+		let mut staging = complete.clone();
+		staging.push((STRIPE_TEST_MODE, "true"));
+		let config = ServeConfig::from_vars(&vars(&staging), false).expect("valid");
 		let payments = config.control.payments.expect("payments");
 		assert_eq!(payments.prices["pro"], "price_1");
 		assert!(payments.automatic_tax);
+		assert!(!payments.livemode);
 		assert!(!format!("{payments:?}").contains("whsec_made_up"));
+
+		let live = (STRIPE_KEY, "rk_live_made_up"); // gitleaks:allow (fake key)
+		let mut paid = with(&[live, secret, (STRIPE_PRICES, "pro=price_1")]);
+		let config = ServeConfig::from_vars(&vars(&paid), false).expect("valid");
+		assert!(config.control.payments.expect("payments").livemode);
+		paid.push((STRIPE_TEST_MODE, "true"));
+		let mixed = error(&paid, false);
+		assert!(mixed.starts_with(STRIPE_TEST_MODE), "{mixed}");
 	}
 
 	#[tokio::test]

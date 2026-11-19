@@ -242,12 +242,11 @@ impl Control {
 				redactions: store
 					.secrets()
 					.into_iter()
-					.chain(
-						config
-							.payments
-							.as_ref()
-							.map(|payments| payments.webhook_secret.clone()),
-					)
+					.chain(config.payments.iter().flat_map(|payments| {
+						let mut secrets = payments.provider.secrets();
+						secrets.push(payments.webhook_secret.clone());
+						secrets
+					}))
 					.collect(),
 				payments: config.payments.clone(),
 				vault: super::vault::Vault::new(config.vault.clone()),
@@ -384,10 +383,14 @@ fn check_catalogue(catalogue: Option<&Catalogue>) -> Result<(), ControlError> {
 	}
 }
 
+/// The shortest secret for the provider's events that is taken.
+const MIN_WEBHOOK_SECRET_LEN: usize = 24;
+
 /// `Config` when payment is taken for something the catalogue doesn't
 /// sell: every price must be for a plan in the catalogue that costs money,
 /// or an organisation could pay its way onto a plan nothing prices, caps
-/// or limits.
+/// or limits. A plan that is sold has a monthly price and a spend cap,
+/// and the secret events are signed with is one nobody guesses.
 fn check_payments(
 	payments: Option<&super::payments::PaymentsConfig>,
 	catalogue: Option<&Catalogue>,
@@ -401,17 +404,35 @@ fn check_payments(
 		));
 	};
 
-	if payments.webhook_secret.trim().is_empty() {
-		return Err(ControlError::Config(
-			"payment needs the secret the provider signs its events with".to_owned(),
-		));
+	// Anyone who can guess the secret can sign an event.
+	if !payments.webhook_secret.starts_with("whsec_")
+		|| payments.webhook_secret.len() < MIN_WEBHOOK_SECRET_LEN
+		|| !payments
+			.webhook_secret
+			.bytes()
+			.all(|byte| byte.is_ascii_graphic())
+	{
+		return Err(ControlError::Config(format!(
+			"payment needs the secret the provider signs its events with: `whsec_…`, \
+			 {MIN_WEBHOOK_SECRET_LEN} characters or more"
+		)));
 	}
 
 	for (plan, price) in &payments.prices {
-		if !catalogue.plan(plan).is_some_and(|plan| !plan.is_free()) {
+		let Some(sold) = catalogue.plan(plan).filter(|plan| !plan.is_free()) else {
 			return Err(ControlError::Config(format!(
 				"the payment provider has a price for `{plan}`, which isn't a plan the catalogue \
 				 sells for money"
+			)));
+		};
+
+		// Usage beyond what a plan includes isn't invoiced yet, so a plan
+		// anyone can buy has a price to include usage in and a cap on the
+		// rest.
+		if sold.monthly.is_none() || sold.spend_cap.is_none() {
+			return Err(ControlError::Config(format!(
+				"the payment provider has a price for `{plan}`, which the catalogue gives no \
+				 `monthly` price or no `spend_cap`: a plan sold here needs both"
 			)));
 		}
 

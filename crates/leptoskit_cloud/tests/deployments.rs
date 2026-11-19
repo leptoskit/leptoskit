@@ -577,6 +577,14 @@ async fn a_plan_follows_the_providers_subscription() {
 }
 
 #[tokio::test]
+async fn a_missed_event_is_caught_up_with() {
+	let till = subscriptions::Till::default();
+	let db = leptoskit_db::testing::sqlite_migrated(leptoskit_cloud::MIGRATIONS).await;
+	let app = support::app_with(db, subscriptions::taking_payment(&till)).await;
+	subscriptions::a_missed_event_is_caught_up_with(&app, &till).await;
+}
+
+#[tokio::test]
 async fn without_payment_nothing_is_sold() {
 	subscriptions::without_payment_nothing_is_sold(&support::app().await).await;
 }

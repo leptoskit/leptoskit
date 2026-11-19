@@ -412,6 +412,9 @@ pub struct Swept {
 	pub log_chunks: u32,
 	/// Expired backups forgotten.
 	pub backups: u32,
+	/// Subscriptions the payment provider was asked about, because their
+	/// paid time ended and nothing was heard.
+	pub subscriptions: u32,
 }
 
 /// Runs `work` in a serializable transaction, again when another
@@ -533,6 +536,7 @@ pub(crate) async fn sweep(services: &Services) -> rpc::Result<Swept> {
 	swept.log_chunks = sweep_logs(services).await?;
 	swept.abandoned += backups::sweep_unclaimed(db, SWEEP_BATCH).await?;
 	swept.backups = backups::sweep(db, SWEEP_BATCH).await?;
+	swept.subscriptions = super::subscriptions::sweep(services).await?;
 	Ok(swept)
 }
 

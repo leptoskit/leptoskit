@@ -41,6 +41,7 @@ struct Drawer {
 	charges: HashMap<String, String>,
 	checkouts: Vec<(String, String)>,
 	portals: Vec<String>,
+	stale: Option<Subscription>,
 	down: bool,
 }
 
@@ -81,6 +82,19 @@ impl Till {
 
 	/// What the provider says the subscription `id` is from now on.
 	pub fn subscribe(&self, id: &str, customer: &str, status: SubscriptionStatus, price: &str) {
+		let period_end = chrono::DateTime::from_timestamp(1_800_000_000, 0).expect("a time");
+		self.subscribe_until(id, customer, status, price, period_end);
+	}
+
+	/// [`Self::subscribe`], paid up to `period_end`.
+	pub fn subscribe_until(
+		&self,
+		id: &str,
+		customer: &str,
+		status: SubscriptionStatus,
+		price: &str,
+		period_end: leptoskit_db::Timestamp,
+	) {
 		self.open().subscriptions.insert(
 			id.to_owned(),
 			Subscription {
@@ -88,10 +102,18 @@ impl Till {
 				customer: customer.to_owned(),
 				status,
 				price: Some(price.to_owned()),
-				period_end: chrono::DateTime::from_timestamp(1_800_000_000, 0),
+				period_end: Some(period_end),
 				cancel_at_period_end: false,
 			},
 		);
+	}
+
+	/// Has the next question about a subscription answered with what
+	/// `id` is now, however it changes meanwhile: an answer that was
+	/// already on its way when the subscription changed.
+	pub fn answer_late_once(&self, id: &str) {
+		let mut drawer = self.open();
+		drawer.stale = drawer.subscriptions.get(id).cloned();
 	}
 
 	/// A charge made to `customer`.
@@ -111,7 +133,7 @@ impl Till {
 }
 
 impl Payments for Till {
-	fn customer<'a>(&'a self, new: NewCustomer<'a>) -> Call<'a, String> {
+	fn customer(&self, new: NewCustomer) -> Call<'_, String> {
 		Box::pin(async move {
 			self.up()?;
 			let mut drawer = self.open();
@@ -156,7 +178,13 @@ impl Payments for Till {
 	fn subscription<'a>(&'a self, id: &'a str) -> Call<'a, Subscription> {
 		Box::pin(async move {
 			self.up()?;
-			self.open()
+			let mut drawer = self.open();
+
+			if let Some(stale) = drawer.stale.take_if(|stale| stale.id == id) {
+				return Ok(stale);
+			}
+
+			drawer
 				.subscriptions
 				.get(id)
 				.cloned()
@@ -181,6 +209,7 @@ pub fn taking_payment(till: &Till) -> impl FnOnce(&mut ControlConfig) + use<> {
 		config.payments = Some(PaymentsConfig {
 			provider: Arc::new(till),
 			webhook_secret: WEBHOOK_SECRET.to_owned(),
+			livemode: false,
 			prices: BTreeMap::from([("pro".to_owned(), PRO_PRICE.to_owned())]),
 			automatic_tax: false,
 		});
@@ -346,6 +375,10 @@ pub async fn a_plan_follows_the_providers_subscription(app: &App, till: &Till) {
 		.await
 		.expect("the server answers");
 	assert_eq!(unsigned.status().as_u16(), 400);
+	// So is one about live money, here where the key is a test one.
+	let mut real_money = created.clone();
+	real_money["livemode"] = json!(true);
+	assert_eq!(post(app, WEBHOOK_SECRET, &real_money).await, 400);
 	assert_eq!(subscription().await["plan"], "hobby");
 	assert_eq!(events(app).await, 0);
 
@@ -453,10 +486,15 @@ pub async fn a_plan_follows_the_providers_subscription(app: &App, till: &Till) {
 		.await,
 		200
 	);
-	assert_eq!(subscription().await["plan"], "hobby");
+	let unsold = subscription().await;
+	assert_eq!(
+		(&unsold["plan"], &unsold["status"]),
+		(&json!("hobby"), &json!("canceled"))
+	);
 	assert_eq!(audited(app, "billing.unknown_price").await, 1);
 
-	// Money coming back out is noted against the organisation.
+	// Money coming back out is noted against the organisation whose
+	// charge the provider says it was, whatever the event says.
 	till.charge("ch_1", "cus_1");
 	assert_eq!(
 		send(
@@ -469,6 +507,26 @@ pub async fn a_plan_follows_the_providers_subscription(app: &App, till: &Till) {
 		200
 	);
 	assert_eq!(audited(app, "billing.dispute").await, 1);
+	assert_eq!(
+		send(
+			app,
+			"evt_7b",
+			"charge.refunded",
+			json!({ "id": "ch_1", "customer": "cus_2" })
+		)
+		.await,
+		200
+	);
+	assert_eq!(audited(app, "billing.refund").await, 1);
+	// A note that can't be placed while the provider is away is let go:
+	// it would change nothing.
+	till.down(true);
+	assert_eq!(
+		send(app, "evt_7c", "charge.refunded", json!({ "id": "ch_1" })).await,
+		200
+	);
+	till.down(false);
+	assert_eq!(audited(app, "billing.refund").await, 1);
 
 	// Somebody else's customer, a subscription the provider doesn't have,
 	// and a kind of event nothing here follows: all dealt with, by doing
@@ -555,4 +613,185 @@ pub async fn without_payment_nothing_is_sold(app: &App) {
 		.refused(409, "payments_unavailable");
 	let event = json!({ "id": "evt_1", "type": "x", "data": { "object": {} } });
 	assert_eq!(post(app, WEBHOOK_SECRET, &event).await, 404);
+}
+
+/// What the provider says is caught up with when its events arrive out of
+/// order or not at all: an answer that was already old when it was written
+/// is replaced, the sweeper asks about a subscription whose paid time ran
+/// out in silence, and a second subscription beside a running one changes
+/// nothing.
+#[expect(
+	clippy::cognitive_complexity,
+	clippy::too_many_lines,
+	reason = "a scenario is one story, read top to bottom; its asserts are what count"
+)]
+pub async fn a_missed_event_is_caught_up_with(app: &App, till: &Till) {
+	let ana = app.sign_in("ana@example.com").await;
+	let org = app.personal(As::Session(&ana)).await;
+	let subscription = || {
+		let caller = As::Session(&ana);
+		let org = org.clone();
+		async move {
+			app.call("subscription", json!({ "organization": org }), caller)
+				.await
+				.expect(200)
+				.json()
+		}
+	};
+	app.call(
+		"checkout",
+		json!({ "organization": org, "plan": "pro" }),
+		As::Session(&ana),
+	)
+	.await
+	.expect(200);
+	// Paid up to two hours ago: the provider renews it, and here that
+	// event never arrives.
+	let lapsed = leptoskit_db::now() - chrono::TimeDelta::hours(2);
+	till.subscribe_until(
+		"sub_1",
+		"cus_1",
+		SubscriptionStatus::Active,
+		PRO_PRICE,
+		lapsed,
+	);
+	let about = |id: &str| json!({ "id": id });
+	assert_eq!(
+		send(
+			app,
+			"evt_1",
+			"customer.subscription.created",
+			about("sub_1")
+		)
+		.await,
+		200
+	);
+	assert_eq!(subscription().await["plan"], "pro");
+
+	// A second subscription beside the running one changes nothing, and
+	// is noted.
+	till.subscribe("sub_2", "cus_1", SubscriptionStatus::Active, PRO_PRICE);
+	assert_eq!(
+		send(
+			app,
+			"evt_2",
+			"customer.subscription.created",
+			about("sub_2")
+		)
+		.await,
+		200
+	);
+	assert_eq!(audited(app, "billing.second_subscription").await, 1);
+	let account = BillingAccount::query()
+		.one(&app.system())
+		.await
+		.expect("an account");
+	assert_eq!(account.subscription.as_deref(), Some("sub_1"));
+
+	// The renewal nobody told us about: the sweeper asks.
+	till.subscribe("sub_1", "cus_1", SubscriptionStatus::Active, PRO_PRICE);
+	let swept = app.control.sweep().await.expect("the sweep runs");
+	assert_eq!(swept.subscriptions, 1);
+	let renewed = subscription().await;
+	assert_eq!(
+		(&renewed["plan"], &renewed["period_end"]),
+		(&json!("pro"), &json!("2027-01-15T08:00:00Z"))
+	);
+	// Paid up, there is nothing to ask.
+	let swept = app.control.sweep().await.expect("the sweep runs");
+	assert_eq!(swept.subscriptions, 0);
+
+	// An answer already on its way when the subscription ended is written,
+	// and then put right: the provider is asked once more.
+	till.answer_late_once("sub_1");
+	till.subscribe("sub_1", "cus_1", SubscriptionStatus::Canceled, PRO_PRICE);
+	till.subscribe("sub_2", "cus_1", SubscriptionStatus::Canceled, PRO_PRICE);
+	assert_eq!(
+		send(
+			app,
+			"evt_3",
+			"customer.subscription.deleted",
+			about("sub_1")
+		)
+		.await,
+		200
+	);
+	let over = subscription().await;
+	assert_eq!(
+		(&over["plan"], &over["status"]),
+		(&json!("hobby"), &json!("canceled"))
+	);
+
+	// A cancellation nobody told us about, on a subscription whose paid
+	// time is over: the sweeper finds that too.
+	till.subscribe_until(
+		"sub_3",
+		"cus_1",
+		SubscriptionStatus::Active,
+		PRO_PRICE,
+		lapsed,
+	);
+	assert_eq!(
+		send(
+			app,
+			"evt_4",
+			"customer.subscription.created",
+			about("sub_3")
+		)
+		.await,
+		200
+	);
+	assert_eq!(subscription().await["plan"], "pro");
+	till.subscribe_until(
+		"sub_3",
+		"cus_1",
+		SubscriptionStatus::Canceled,
+		PRO_PRICE,
+		lapsed,
+	);
+	// The provider away, the plan stays until it can be asked.
+	till.down(true);
+	app.control.sweep().await.expect("the sweep runs");
+	assert_eq!(subscription().await["plan"], "pro");
+	till.down(false);
+	let swept = app.control.sweep().await.expect("the sweep runs");
+	assert_eq!(swept.subscriptions, 1);
+	assert_eq!(subscription().await["plan"], "hobby");
+
+	// A plan an operator put the organisation on by agreement isn't the
+	// provider's to take away.
+	till.subscribe("sub_4", "cus_1", SubscriptionStatus::Active, PRO_PRICE);
+	assert_eq!(
+		send(
+			app,
+			"evt_5",
+			"customer.subscription.created",
+			about("sub_4")
+		)
+		.await,
+		200
+	);
+	let slug = org.clone();
+	leptoskit_cloud::tables::Organization::update()
+		.filter(|organization| organization.slug.eq(slug.as_str()))
+		.set(|organization| organization.plan, "agreed".to_owned())
+		.run(&app.system())
+		.await
+		.expect("change the plan");
+	till.subscribe("sub_4", "cus_1", SubscriptionStatus::Canceled, PRO_PRICE);
+	assert_eq!(
+		send(
+			app,
+			"evt_6",
+			"customer.subscription.deleted",
+			about("sub_4")
+		)
+		.await,
+		200
+	);
+	let agreed = subscription().await;
+	assert_eq!(
+		(&agreed["plan"], &agreed["status"]),
+		(&json!("agreed"), &json!("canceled"))
+	);
 }

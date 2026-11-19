@@ -292,6 +292,10 @@ pub async fn usage_is_counted_priced_and_capped(app: &App) {
 	)
 	.await
 	.refused(403, "insufficient_role");
+	// Nobody raises their own cap past the plan's: nothing invoices it.
+	cap(json!(51), As::Session(&billing))
+		.await
+		.refused(403, "cap_above_plan");
 	let set = cap(json!(20), As::Session(&billing)).await;
 	assert_eq!(set.expect(200).json(), json!({ "cap": 20, "own": true }));
 	let capped = usage(&shop).await;

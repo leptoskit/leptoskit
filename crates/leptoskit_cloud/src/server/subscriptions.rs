@@ -6,6 +6,11 @@
 //! hand out a page at the provider; leaving that page changes nothing
 //! here. Each call to the provider is made outside any transaction, after
 //! a query or a mutation has checked who is asking.
+//!
+//! Events can arrive late, twice, out of order, or not at all. So what is
+//! written is checked against the provider once more after it is written
+//! ([`follow`]), and the sweeper asks again about every subscription whose
+//! paid time ran out without a word ([`sweep`]).
 
 use std::future::Future;
 
@@ -47,6 +52,17 @@ use crate::tables::PaymentEvent;
 
 /// Where the payment provider sends its events.
 pub const STRIPE_WEBHOOK_PATH: &str = "/webhooks/stripe";
+
+/// How many times in a row a subscription is asked about and written
+/// before the next event or sweep is left to catch up.
+const FOLLOW_ROUNDS: usize = 3;
+
+/// How long after a subscription's paid time ends the sweeper waits for
+/// the provider's own word before asking.
+const ASK_AFTER: chrono::TimeDelta = chrono::TimeDelta::hours(1);
+
+/// The most subscriptions one sweep asks the provider about.
+const ASK_BATCH: u64 = 20;
 
 fn unavailable() -> rpc::Error {
 	rpc::Error::conflict("payments_unavailable: this cloud doesn't take payment")
@@ -98,7 +114,7 @@ pub(crate) async fn subscription(
 	Ok(SubscriptionSummary {
 		plan: access.organization.plan.clone(),
 		payments: config.is_some(),
-		sold: config.map_or_else(Vec::new, |config| sold(&services, config)),
+		sold: config.map_or_else(Vec::new, |config| sold(services, config)),
 		status: account.as_ref().and_then(status),
 		period_end: account.as_ref().and_then(|account| account.period_end),
 		cancel_at_period_end: account
@@ -123,7 +139,6 @@ struct StartCheckout {
 struct Started {
 	organization: Uuid,
 	slug: String,
-	name: String,
 	/// The organisation's customer, or `None` when one must be made first.
 	customer: Option<String>,
 	price: String,
@@ -236,7 +251,6 @@ async fn start_checkout(cx: &rpc::MutationCx, args: StartCheckout) -> rpc::Resul
 	Ok(Started {
 		organization: organization_id.uuid(),
 		slug: access.organization.slug.clone(),
-		name: access.organization.name.clone(),
 		customer,
 		price,
 	})
@@ -274,8 +288,6 @@ pub(crate) async fn checkout(
 			.provider
 			.customer(NewCustomer {
 				organization: started.organization,
-				slug: &started.slug,
-				name: &started.name,
 			})
 			.await
 			.map_err(unreachable_provider)?;
@@ -297,8 +309,8 @@ pub(crate) async fn checkout(
 			customer,
 			price: &started.price,
 			organization: started.organization,
-			success_url: &return_url(&services, &started.slug, Some("done")),
-			cancel_url: &return_url(&services, &started.slug, Some("cancelled")),
+			success_url: &return_url(services, &started.slug, Some("done")),
+			cancel_url: &return_url(services, &started.slug, Some("cancelled")),
 			automatic_tax: config.automatic_tax,
 		})
 		.await
@@ -373,7 +385,7 @@ pub(crate) async fn portal(cx: &rpc::ActionCx, organization: String) -> rpc::Res
 	};
 	let url = config
 		.provider
-		.portal(&customer, &return_url(&services, &slug, None))
+		.portal(&customer, &return_url(services, &slug, None))
 		.await
 		.map_err(unreachable_provider)?;
 	Ok(BillingLink { url })
@@ -387,9 +399,7 @@ enum Reason {
 	/// Note, for the organisation's audit log, that money came back out.
 	Risk {
 		action: &'static str,
-		/// The customer, when the event's object names one.
-		customer: Option<String>,
-		/// The charge to ask the provider about, when it doesn't.
+		/// The charge to ask the provider whose it is.
 		charge: Option<String>,
 	},
 	/// Nothing.
@@ -420,21 +430,18 @@ fn reason(event: &Event) -> Reason {
 		"charge.refunded" => {
 			Reason::Risk {
 				action: "billing.refund",
-				customer: payments::reference(&object["customer"]),
-				charge: None,
+				charge: payments::reference(&object["id"]),
 			}
 		}
 		"charge.dispute.created" => {
 			Reason::Risk {
 				action: "billing.dispute",
-				customer: None,
 				charge: payments::reference(&object["charge"]),
 			}
 		}
 		"radar.early_fraud_warning.created" => {
 			Reason::Risk {
 				action: "billing.fraud_warning",
-				customer: None,
 				charge: payments::reference(&object["charge"]),
 			}
 		}
@@ -481,9 +488,15 @@ fn plan_for(
 }
 
 /// Makes the organisation whose customer `subscription` belongs to follow
-/// it, and answers that organisation. A subscription that is over never
-/// replaces another the organisation follows: an old one ending says
-/// nothing about the one that replaced it.
+/// it, and answers that organisation.
+///
+/// Another subscription than the one followed takes its place only when it
+/// pays for a plan sold here and the one followed no longer keeps one: an
+/// old one ending says nothing about the one that replaced it, and a
+/// second one beside a running one changes nothing. A subscription that is
+/// over puts the organisation back where everyone starts only from a plan
+/// that is sold: a plan an operator put it on by agreement isn't the
+/// provider's to take away.
 async fn apply(
 	tx: &leptoskit_db::Tx,
 	services: &Services,
@@ -503,9 +516,36 @@ async fn apply(
 		.subscription
 		.as_deref()
 		.is_some_and(|current| current != subscription.id);
+	let plan = plan_for(services, config, subscription);
+	let unknown_price = subscription.status.keeps_plan() && plan.is_none();
 
-	if follows_another && !subscription.status.keeps_plan() {
-		return Ok(Some(organization_id));
+	if unknown_price {
+		audit::record_provider(
+			tx,
+			"billing.unknown_price",
+			organization_id,
+			subscription.price.clone(),
+		)
+		.await?;
+	}
+
+	if follows_another {
+		let pays = subscription.status.keeps_plan() && plan.is_some();
+		let kept = status(&account).is_some_and(SubscriptionStatus::keeps_plan);
+
+		if pays && kept {
+			audit::record_provider(
+				tx,
+				"billing.second_subscription",
+				organization_id,
+				Some(subscription.id.clone()),
+			)
+			.await?;
+		}
+
+		if !pays || kept {
+			return Ok(Some(organization_id));
+		}
 	}
 
 	account.subscription = Some(subscription.id.clone());
@@ -518,28 +558,102 @@ async fn apply(
 		.one(tx)
 		.await?;
 
-	match plan_for(services, config, subscription) {
-		Some(plan) if plan != organization.plan => {
-			let target = format!("{} to {plan}", organization.plan);
-			organization.plan = plan;
-			organization.save(tx).await?;
-			audit::record_provider(tx, "billing.plan_changed", organization_id, Some(target))
-				.await?;
-		}
-		Some(_) => {}
-		None if subscription.status.keeps_plan() => {
-			audit::record_provider(
-				tx,
-				"billing.unknown_price",
-				organization_id,
-				subscription.price.clone(),
-			)
-			.await?;
-		}
-		None => {}
+	let sold = config.prices.contains_key(organization.plan.as_str());
+
+	if let Some(plan) = plan
+		&& plan != organization.plan
+		&& (sold || !subscription.status.is_over())
+	{
+		let target = format!("{} to {plan}", organization.plan);
+		organization.plan = plan;
+		organization.save(tx).await?;
+		audit::record_provider(tx, "billing.plan_changed", organization_id, Some(target)).await?;
 	}
 
 	Ok(Some(organization_id))
+}
+
+/// Writes what `subscription` is, by itself: no event is dealt with.
+async fn write(services: &Services, subscription: &Subscription) -> rpc::Result<()> {
+	let owned = (services.clone(), subscription.clone());
+	jobs::serializable(services.db(), move |tx| {
+		let (services, subscription) = owned.clone();
+		Box::pin(async move {
+			if let Some(config) = &services.shipping().payments {
+				apply(tx, &services, config, &subscription).await?;
+			}
+
+			Ok(())
+		})
+	})
+	.await
+}
+
+/// Asks the provider what the subscription `id` is and writes it, until
+/// what is written is what the provider still says: `written` is what was
+/// written last, if anything was. Two answers about one subscription can
+/// be written in either order, so the older could land last; asking once
+/// more after writing puts that right. Answers whether anything was
+/// written.
+async fn follow(
+	services: &Services,
+	config: &PaymentsConfig,
+	id: &str,
+	mut written: Option<Subscription>,
+) -> bool {
+	let mut wrote = false;
+
+	for _ in 0..FOLLOW_ROUNDS {
+		let Ok(now) = config.provider.subscription(id).await else {
+			break;
+		};
+
+		if written.as_ref() == Some(&now) || write(services, &now).await.is_err() {
+			break;
+		}
+
+		wrote = true;
+		written = Some(now);
+	}
+
+	wrote
+}
+
+/// Asks the provider about subscriptions whose paid time ended a while ago
+/// with nothing heard since, [`ASK_BATCH`] at most and the longest unheard
+/// of first: an event that never arrived can't keep a plan paid for, or keep
+/// one from being renewed. Answers how many were asked about.
+///
+/// # Errors
+///
+/// When the database fails.
+pub(crate) async fn sweep(services: &Services) -> rpc::Result<u32> {
+	let Some(config) = &services.shipping().payments else {
+		return Ok(0);
+	};
+	let due = leptoskit_db::now() - ASK_AFTER;
+	let unheard = BillingAccount::query()
+		.filter(|row| {
+			row.subscription.is_not_null()
+				& row.period_end.lt(due)
+				& (row.status.eq(SubscriptionStatus::Trialing.code())
+					| row.status.eq(SubscriptionStatus::Active.code())
+					| row.status.eq(SubscriptionStatus::PastDue.code()))
+		})
+		.order_by(|row| row.updated_at.asc())
+		.limit(ASK_BATCH)
+		.all(services.db())
+		.await?;
+	let mut asked = 0;
+
+	for account in unheard {
+		if let Some(id) = &account.subscription {
+			follow(services, config, id, None).await;
+			asked += 1;
+		}
+	}
+
+	Ok(asked)
 }
 
 /// Writes what an event came to, and that the event is dealt with, in one
@@ -612,21 +726,20 @@ async fn deal_with(services: &Services, config: &PaymentsConfig, event: &Event) 
 				Err(PaymentError::Unavailable) => return Err(()),
 			}
 		}
-		Reason::Risk {
-			action,
-			customer,
-			charge,
-		} => {
-			let customer = match (customer, charge) {
-				(Some(customer), _) => Some(customer),
-				(None, Some(charge)) => {
-					match config.provider.charge_customer(&charge).await {
-						Ok(customer) => customer,
-						Err(PaymentError::NotFound) => None,
-						Err(PaymentError::Unavailable) => return Err(()),
-					}
+		Reason::Risk { action, charge } => {
+			// Whose charge it was is the provider's to say, never the
+			// event's. A note that can't be placed isn't asked for again:
+			// it changes nothing, and the provider keeps its own record.
+			let customer = match charge {
+				Some(charge) => {
+					config
+						.provider
+						.charge_customer(&charge)
+						.await
+						.ok()
+						.flatten()
 				}
-				(None, None) => None,
+				None => None,
 			};
 			customer.map_or(Write::Nothing, |customer| Write::Note { action, customer })
 		}
@@ -634,7 +747,14 @@ async fn deal_with(services: &Services, config: &PaymentsConfig, event: &Event) 
 	};
 
 	match settle(services, event, &write).await {
-		Ok(()) => Ok(()),
+		Ok(()) => {
+			if let Write::Follow(subscription) = write {
+				let id = subscription.id.clone();
+				follow(services, config, &id, Some(subscription)).await;
+			}
+
+			Ok(())
+		}
 		// The same event, dealt with by another delivery meanwhile.
 		Err(rpc::Error::Conflict(_)) if seen(services, &event.id).await.unwrap_or(false) => Ok(()),
 		Err(_) => Err(()),
@@ -643,7 +763,8 @@ async fn deal_with(services: &Services, config: &PaymentsConfig, event: &Event) 
 
 /// The route the provider posts its events to. It answers 200 for an
 /// event that is dealt with, whatever it was; 400 for a body that isn't a
-/// signed event; and 503 when the event should be sent again.
+/// signed event, or is one from the other of the provider's test and live
+/// modes; and 503 when the event should be sent again.
 pub(crate) async fn stripe_webhook(
 	State(services): State<Services>,
 	headers: HeaderMap,
@@ -669,6 +790,10 @@ pub(crate) async fn stripe_webhook(
 		Err(EventError::Signature | EventError::Malformed) => return StatusCode::BAD_REQUEST,
 	};
 
+	if event.livemode != config.livemode {
+		return StatusCode::BAD_REQUEST;
+	}
+
 	match deal_with(&services, config, &event).await {
 		Ok(()) => StatusCode::OK,
 		Err(()) => StatusCode::SERVICE_UNAVAILABLE,
@@ -685,6 +810,7 @@ mod tests {
 		Event {
 			id: "evt_1".to_owned(),
 			kind: kind.to_owned(),
+			livemode: false,
 			object,
 		}
 	}
@@ -732,19 +858,18 @@ mod tests {
 			)),
 			Reason::Risk {
 				action: "billing.dispute",
-				customer: None,
 				charge: Some("ch_1".to_owned()),
 			}
 		);
+		// Whose a refunded charge was is asked, not read from the event.
 		assert_eq!(
 			reason(&event(
 				"charge.refunded",
-				json!({ "id": "ch_1", "customer": "cus_1" })
+				json!({ "id": "ch_1", "customer": "cus_someone_elses" })
 			)),
 			Reason::Risk {
 				action: "billing.refund",
-				customer: Some("cus_1".to_owned()),
-				charge: None,
+				charge: Some("ch_1".to_owned()),
 			}
 		);
 		assert_eq!(

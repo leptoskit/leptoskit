@@ -65,12 +65,11 @@ pub type Call<'a, T> = Pin<Box<dyn Future<Output = Result<T, PaymentError>> + Se
 
 /// An organisation, as the provider's customer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct NewCustomer<'a> {
-	/// The organisation's ID: the same customer is answered for it however
-	/// many times it is asked for.
+pub struct NewCustomer {
+	/// The organisation's ID, and all the provider is told about it: the
+	/// same customer is answered for it however many times it is asked for,
+	/// whatever the organisation is called by then.
 	pub organization: Uuid,
-	pub slug: &'a str,
-	pub name: &'a str,
 }
 
 /// A checkout page for one plan's subscription.
@@ -103,7 +102,7 @@ pub struct Subscription {
 /// Something that takes payment.
 pub trait Payments: Send + Sync + std::fmt::Debug {
 	/// The customer for an organisation, made if there is none: its ID.
-	fn customer<'a>(&'a self, new: NewCustomer<'a>) -> Call<'a, String>;
+	fn customer(&self, new: NewCustomer) -> Call<'_, String>;
 	/// A hosted page that starts a subscription: its address.
 	fn checkout<'a>(&'a self, checkout: Checkout<'a>) -> Call<'a, String>;
 	/// A hosted page where `customer` manages their subscription, payment
@@ -113,6 +112,10 @@ pub trait Payments: Send + Sync + std::fmt::Debug {
 	fn subscription<'a>(&'a self, id: &'a str) -> Call<'a, Subscription>;
 	/// The customer the charge `id` was made to, when it has one.
 	fn charge_customer<'a>(&'a self, id: &'a str) -> Call<'a, Option<String>>;
+	/// What it was configured with that must never reach a log: its key.
+	fn secrets(&self) -> Vec<String> {
+		Vec::new()
+	}
 }
 
 /// A [`Payments`] the control plane shares.
@@ -125,6 +128,10 @@ pub struct PaymentsConfig {
 	pub provider: SharedPayments,
 	/// The secret the provider signs its events with.
 	pub webhook_secret: String,
+	/// Whether the provider's key is a live one. An event from the other
+	/// mode is refused: a test event never changes what a live organisation
+	/// is on.
+	pub livemode: bool,
 	/// The provider's price for each plan that is sold, by the plan's slug.
 	/// A plan without one can't be subscribed to here.
 	pub prices: BTreeMap<String, String>,
@@ -138,6 +145,7 @@ impl std::fmt::Debug for PaymentsConfig {
 		formatter
 			.debug_struct("PaymentsConfig")
 			.field("provider", &self.provider)
+			.field("livemode", &self.livemode)
 			.field("prices", &self.prices)
 			.field("automatic_tax", &self.automatic_tax)
 			.finish_non_exhaustive()
@@ -193,18 +201,38 @@ impl Stripe {
 		Self::at("https://api.stripe.com", key)
 	}
 
+	/// Whether `key` is a live key, as Stripe names them (`rk_live_…`).
+	#[must_use]
+	pub fn is_live_key(key: &str) -> bool {
+		key.split('_').nth(1) == Some("live")
+	}
+
 	/// Stripe's API at another address, for a local stand-in.
 	///
 	/// # Errors
 	///
-	/// When `base` isn't an `http` or `https` address, or `key` isn't a
-	/// secret or restricted key.
+	/// When `base` isn't an `https` address, or an `http` one on this
+	/// machine; when it carries a user, a password or a query; or when
+	/// `key` isn't a secret or restricted key.
 	pub fn at(base: &str, key: &str) -> Result<Self, String> {
 		let base =
 			reqwest::Url::parse(base).map_err(|_| "Stripe's address isn't a URL".to_owned())?;
+		let local = matches!(
+			base.host(),
+			Some(
+				url::Host::Domain("localhost")
+					| url::Host::Ipv4(std::net::Ipv4Addr::LOCALHOST)
+					| url::Host::Ipv6(std::net::Ipv6Addr::LOCALHOST)
+			)
+		);
 
-		if !matches!(base.scheme(), "https" | "http") || base.query().is_some() {
-			return Err("Stripe's address must be http(s), with no query".to_owned());
+		// The key goes to this address with every call.
+		if !(base.scheme() == "https" || base.scheme() == "http" && local) {
+			return Err("Stripe's address must be https, or http on this machine".to_owned());
+		}
+
+		if base.query().is_some() || !base.username().is_empty() || base.password().is_some() {
+			return Err("Stripe's address can't carry a user, a password or a query".to_owned());
 		}
 
 		if !(key.starts_with("rk_") || key.starts_with("sk_"))
@@ -291,12 +319,14 @@ impl Stripe {
 		self.send(self.client.get(self.address(path)?)).await
 	}
 
-	async fn make_customer(&self, new: NewCustomer<'_>) -> Result<String, PaymentError> {
+	async fn make_customer(&self, new: NewCustomer) -> Result<String, PaymentError> {
 		let organization = new.organization.to_string();
+		// The key names the organisation and the form says nothing else,
+		// so the same key always carries the same form.
 		let answer = self
 			.post(
 				"/v1/customers",
-				&customer_form(&new, &organization),
+				&customer_form(&organization),
 				Some(&format!("leptoskit-cloud-customer-{organization}")),
 			)
 			.await?;
@@ -346,7 +376,7 @@ impl Stripe {
 }
 
 impl Payments for Stripe {
-	fn customer<'a>(&'a self, new: NewCustomer<'a>) -> Call<'a, String> {
+	fn customer(&self, new: NewCustomer) -> Call<'_, String> {
 		Box::pin(self.make_customer(new))
 	}
 
@@ -365,14 +395,14 @@ impl Payments for Stripe {
 	fn charge_customer<'a>(&'a self, id: &'a str) -> Call<'a, Option<String>> {
 		Box::pin(self.read_charge_customer(id))
 	}
+
+	fn secrets(&self) -> Vec<String> {
+		vec![self.key.clone()]
+	}
 }
 
-fn customer_form<'a>(new: &NewCustomer<'a>, organization: &'a str) -> Vec<(&'a str, &'a str)> {
-	vec![
-		("name", new.name),
-		("metadata[organization]", organization),
-		("metadata[slug]", new.slug),
-	]
+fn customer_form(organization: &str) -> [(&str, &str); 1] {
+	[("metadata[organization]", organization)]
 }
 
 /// A subscription checkout: one plan, once. No payment method types are
@@ -447,6 +477,9 @@ pub(crate) fn parse_subscription(answer: &Value) -> Option<Subscription> {
 pub(crate) struct Event {
 	pub(crate) id: String,
 	pub(crate) kind: String,
+	/// Whether it is about live money. An event that doesn't say is taken
+	/// as a test one.
+	pub(crate) livemode: bool,
 	/// The object the event is about.
 	pub(crate) object: Value,
 }
@@ -503,7 +536,7 @@ pub(crate) fn verify_event(
 	let timestamp = timestamp.ok_or(EventError::Signature)?;
 	let signed_at: i64 = timestamp.parse().map_err(|_| EventError::Signature)?;
 
-	if (now.timestamp() - signed_at).abs() > SIGNATURE_TOLERANCE {
+	if now.timestamp().abs_diff(signed_at) > SIGNATURE_TOLERANCE.unsigned_abs() {
 		return Err(EventError::Signature);
 	}
 
@@ -530,7 +563,12 @@ pub(crate) fn verify_event(
 		return Err(EventError::Malformed);
 	}
 
-	Ok(Event { id, kind, object })
+	Ok(Event {
+		id,
+		kind,
+		livemode: event["livemode"].as_bool().unwrap_or(false),
+		object,
+	})
 }
 
 #[cfg(test)]
@@ -566,6 +604,7 @@ mod tests {
 			("evt_1", "customer.subscription.updated")
 		);
 		assert_eq!(taken.object["id"], "sub_1");
+		assert!(!taken.livemode);
 		// A second signature beside the right one, as when a secret is rolled.
 		let rolled = format!("{header},v1={}", "0".repeat(64));
 		assert!(verify_event(SECRET, &rolled, &body, now).is_ok());
@@ -583,6 +622,8 @@ mod tests {
 			(SECRET, "", &body, now),
 			(SECRET, "t=,v1=", &body, now),
 			(SECRET, "v1=abc", &body, now),
+			// A time nothing can be subtracted from.
+			(SECRET, "t=-9223372036854775808,v1=abc", &body, now),
 		] {
 			assert_eq!(
 				verify_event(secret, header, body, now),
@@ -697,6 +738,31 @@ mod tests {
 		assert!(!format!("{stripe:?}").contains("rk_test_abc"));
 		assert!(Stripe::new("pk_test_abc").is_err());
 		assert!(Stripe::new("").is_err());
+		assert!(format!("{stripe:?}").contains("api.stripe.com"));
+		assert_eq!(stripe.secrets(), ["rk_test_abc"]);
+		assert!(!Stripe::is_live_key("rk_test_abc"));
+		assert!(Stripe::is_live_key("sk_live_abc"));
+		assert!(!Stripe::is_live_key("rk_abc_live"));
+
+		// The key only ever travels encrypted, or to this machine.
+		for base in [
+			"http://localhost:12111",
+			"http://127.0.0.1:12111",
+			"http://[::1]:1",
+		] {
+			assert!(Stripe::at(base, "rk_test_abc").is_ok(), "{base}");
+		}
+
+		for base in [
+			"http://stripe.example",
+			"ftp://localhost",
+			"https://user:pass@stripe.example",
+			"https://user@stripe.example",
+			"https://stripe.example?x=1",
+			"http://localhost.example",
+		] {
+			assert!(Stripe::at(base, "rk_test_abc").is_err(), "{base}");
+		}
 		assert!(is_id("sub_1AbC"));
 		assert!(!is_id("sub/1"));
 		assert!(!is_id(""));
