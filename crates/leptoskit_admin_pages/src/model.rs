@@ -12,6 +12,7 @@ use serde::Serialize;
 use crate::components::Tone;
 use crate::workings::Drawer;
 
+pub mod analytics;
 pub mod insight;
 pub mod library;
 pub mod live;
@@ -285,6 +286,12 @@ pub enum Page {
 	Insight(Box<insight::Insight>),
 	/// Events as they arrive.
 	Live(Box<live::Live>),
+	/// A dashboard's cards.
+	Dashboard(Box<analytics::Dashboard>),
+	/// The people behind one point of a chart.
+	Actors(Box<analytics::Actors>),
+	/// What an analytics page says when it has nothing to read.
+	Notice(Box<analytics::Notice>),
 }
 
 impl Page {
@@ -303,6 +310,9 @@ impl Page {
 			Self::Person(person) => &person.name,
 			Self::Insight(insight) => &insight.name,
 			Self::Live(_) => "Live",
+			Self::Dashboard(dashboard) => &dashboard.name,
+			Self::Actors(actors) => &actors.title,
+			Self::Notice(notice) => &notice.title,
 		}
 	}
 
@@ -315,7 +325,10 @@ impl Page {
 			| Self::Lesson(_)
 			| Self::Projects(_)
 			| Self::Library(_)
-			| Self::People(_) => &[],
+			| Self::People(_)
+			| Self::Dashboard(_)
+			| Self::Notice(_) => &[],
+			Self::Actors(actors) => std::slice::from_ref(&actors.drawer),
 			Self::Person(person) => std::slice::from_ref(&person.drawer),
 			Self::Insight(insight) => std::slice::from_ref(&insight.drawer),
 			Self::Live(live) => std::slice::from_ref(&live.drawer),
@@ -331,10 +344,12 @@ impl Page {
 			Self::Glossary => Section::Glossary,
 			Self::Learn(_) | Self::Lesson(_) => Section::Learn,
 			Self::Projects(_) => Section::Projects,
-			Self::Library(_) => Section::Library,
+			Self::Library(_) | Self::Dashboard(_) => Section::Library,
 			Self::People(_) | Self::Person(_) => Section::People,
 			Self::Insight(insight) => insight.kind.section(),
 			Self::Live(_) => Section::Live,
+			Self::Actors(actors) => actors.section.clone(),
+			Self::Notice(notice) => notice.section.clone(),
 			Self::Operation(operation) => Section::ProjectOperations(operation.project.clone()),
 			Self::Project(project) => {
 				match project.tab {

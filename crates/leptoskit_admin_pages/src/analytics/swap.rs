@@ -7,6 +7,9 @@
 //! drawer marks the lines of code the change changed. The browser's Back
 //! and Forward come back the same way. Without the page's Wasm, the links
 //! are plain links.
+//!
+//! A builder, a dashboard, and a page waiting for its first event also read
+//! themselves again when the analytics stream says there are newer events.
 
 use std::collections::HashSet;
 
@@ -103,6 +106,7 @@ impl Swap {
 			};
 
 			if latest <= before
+				|| !self.page.with_untracked(rereads)
 				|| self.busy.get_untracked()
 				|| now() - read_at.get_value() < EVERY_MS
 			{
@@ -172,7 +176,8 @@ impl Swap {
 
 	/// Fetches `href`'s page and puts it in place. `chosen` is a change the
 	/// person made: the address is pushed, and the open drawer shows what
-	/// changed. Anything but a builder's page is loaded the usual way.
+	/// changed. A dashboard or a notice reading itself again is put in place
+	/// too; anything else is loaded the usual way.
 	pub fn go(self, href: String, chosen: bool) {
 		if self.busy.get_untracked() {
 			return;
@@ -187,9 +192,23 @@ impl Swap {
 			let next = answer
 				.filter(|(ok, _)| *ok)
 				.and_then(|(_, data)| serde_json::from_value::<Page>(data).ok());
-			let Some(Page::Insight(mut next)) = next else {
-				crate::go(&href);
-				return;
+			let mut next = match next {
+				Some(Page::Insight(next)) => next,
+				// A page that only reads itself again.
+				Some(next @ (Page::Dashboard(_) | Page::Notice(_))) if !chosen => {
+					let title = format!(
+						"{} · {} admin",
+						next.title(),
+						self.app.with_value(Clone::clone)
+					);
+					self.page.set(next);
+					browser::show(&href, &title, false);
+					return;
+				}
+				_ => {
+					crate::go(&href);
+					return;
+				}
 			};
 
 			let tab = self.workings.ask.get_untracked();
@@ -224,6 +243,18 @@ impl Swap {
 				_ => self.workings.announce_change(None, None),
 			}
 		});
+	}
+}
+
+/// Whether `page` reads itself again when newer events arrive.
+#[cfg(feature = "hydrate")]
+fn rereads(page: &Page) -> bool {
+	match page {
+		Page::Insight(_) | Page::Dashboard(_) => true,
+		Page::Notice(notice) => {
+			matches!(notice.why, crate::model::analytics::Why::Listening { .. })
+		}
+		_ => false,
 	}
 }
 

@@ -6,9 +6,10 @@
 //! one's model in place, so the Workings drawer stays open and marks the
 //! lines of code that changed.
 
-use leptoskit::prelude::*;
 pub(crate) use leptoskit_admin_pages::analytics::insights::*;
 use leptoskit_admin_pages::model::Page;
+use leptoskit_admin_pages::model::analytics::Actor;
+use leptoskit_admin_pages::model::analytics::Actors;
 use leptoskit_admin_pages::model::insight::Insight;
 use leptoskit_admin_pages::model::insight::Saved;
 use leptoskit_analytics::query::ActorPoint;
@@ -32,12 +33,7 @@ use super::params::Params;
 use super::stations;
 use super::stations::Drawn;
 use crate::BASE;
-use crate::components;
-use crate::components::Kind as ButtonKind;
-use crate::components::Tone;
-use crate::shell::Screen;
 use crate::shell::Section;
-use crate::style;
 
 /// The latest event of `name`, for the Send station to weigh.
 pub(crate) async fn sample(connection: &Connection, name: Option<String>) -> Option<EventRow> {
@@ -164,8 +160,7 @@ pub(crate) async fn page(cx: &Context<'_>, kind: Kind, saved: Option<InsightView
 }
 
 /// The people behind a point.
-#[expect(clippy::too_many_lines, reason = "one page, top to bottom")]
-pub(crate) async fn actors(connection: &Connection, params: &Params) -> Option<Screen> {
+pub(crate) async fn actors(connection: &Connection, params: &Params) -> Option<Shown> {
 	let mut actors: ActorsQuery = serde_json::from_str(params.get("q")?).ok()?;
 	actors.limit = actors.limit.clamp(1, ActorsQuery::MAX_LIMIT);
 	let back = params
@@ -217,97 +212,50 @@ pub(crate) async fn actors(connection: &Connection, params: &Params) -> Option<S
 	let answer: Result<Answer, _> = connection
 		.run(Query::Actors(Box::new(actors.clone())))
 		.await;
-	let mut list = View().class("flex-col").test_id("actors");
-	let mut count = 0;
 	let mut next = None;
-
-	match &answer {
+	let people = match &answer {
 		Ok(Answer {
 			result: QueryResult::Actors(page),
 			..
 		}) => {
-			count = page.actors.len();
 			next = page.next;
-
-			for actor in &page.actors {
-				let name = ["email", "name"]
-					.iter()
-					.find_map(|key| actor.properties.get(*key)?.as_str().map(str::to_owned))
-					.or_else(|| actor.distinct_ids.first().cloned())
-					.unwrap_or_else(|| actor.id.clone());
-				list = list.child(
-					Pressable(name.clone())
-						.href(super::person_href(&actor.id))
-						.class("cursor-pointer rounded-lg hover:bg-[var(--admin-sunken)]")
-						.test_id("actor")
-						.child(
-							View()
-								.class(
-									"flex-row items-center gap-3 border-b \
-									 border-[var(--admin-line)] px-3 py-2.5",
-								)
-								.child(Text(format::initials(&name)).class(
-									"h-8 w-8 shrink-0 rounded-full bg-[var(--admin-sunken)] \
-									 text-center text-xs font-semibold leading-8 \
-									 text-[var(--admin-ink)]",
-								))
-								.child(
-									View()
-										.class("min-w-0 flex-1 flex-col")
-										.child(Text(name).class(
-											"truncate text-sm font-semibold \
-											 text-[var(--admin-ink)]",
-										))
-										.child(
-											Text(format!(
-												"{} · {} id{}",
-												if actor.is_identified {
-													"identified"
-												} else {
-													"anonymous"
-												},
-												actor.distinct_ids.len(),
-												if actor.distinct_ids.len() == 1 {
-													""
-												} else {
-													"s"
-												}
-											))
-											.class(style::LABEL),
-										),
-								)
-								.child(Text("→").class("text-sm text-[var(--admin-ink-3)]")),
+			Ok(page
+				.actors
+				.iter()
+				.map(|actor| {
+					let name = ["email", "name"]
+						.iter()
+						.find_map(|key| actor.properties.get(*key)?.as_str().map(str::to_owned))
+						.or_else(|| actor.distinct_ids.first().cloned())
+						.unwrap_or_else(|| actor.id.clone());
+					let ids = actor.distinct_ids.len();
+					Actor {
+						summary: format!(
+							"{} · {ids} id{}",
+							if actor.is_identified {
+								"identified"
+							} else {
+								"anonymous"
+							},
+							if ids == 1 { "" } else { "s" }
 						),
-				);
-			}
-
-			if page.actors.is_empty() {
-				list = list.child(Text("Nobody here.").class(style::MUTED));
-			}
+						href: super::person_href(&actor.id),
+						name,
+					}
+				})
+				.collect::<Vec<_>>())
 		}
-		Ok(_) => {
-			list = list
-				.child(Text("The service answered a different kind of query.").class(style::MUTED));
-		}
-		Err(failure) => {
-			list = list.child(components::status_word(Tone::Bad, failure.0.clone()));
-		}
-	}
-
-	let mut footer = View().class("flex-row gap-3");
-
-	if let Some(offset) = next {
+		Ok(_) => Err("The service answered a different kind of query.".to_owned()),
+		Err(failure) => Err(failure.0.clone()),
+	};
+	let count = people.as_ref().map_or(0, Vec::len);
+	let next = next.map(|offset| {
 		let mut more = actors.clone();
 		more.offset = offset;
 		let mut next_params = params.clone();
 		next_params.insert("q".into(), serde_json::to_string(&more).unwrap_or_default());
-		footer = footer.child(components::link_button(
-			ButtonKind::Secondary,
-			"Next page",
-			params::href(&format!("{BASE}/analytics/actors"), &next_params),
-		));
-	}
-
+		params::href(&format!("{BASE}/analytics/actors"), &next_params)
+	});
 	let drawer = stations::drawer(stations::Source {
 		id: "actors",
 		title: format!("{what} · actors query"),
@@ -324,35 +272,16 @@ pub(crate) async fn actors(connection: &Connection, params: &Params) -> Option<S
 			rows: Vec::new(),
 		},
 	});
-	let content = View()
-		.class("flex-col gap-5")
-		.child(components::link("← Back to the chart", back))
-		.child(super::header(
-			&what,
-			"Actors: the people behind one point of a query",
-			Vec::new(),
-		))
-		.child(
-			components::card(format!(
-				"{count} {}",
-				if count == 1 { "person" } else { "people" }
-			))
-			.aside(if next.is_some() {
-				"more on the next page"
-			} else {
-				""
-			})
-			.workings("actors", "Query::Actors")
-			.child(list)
-			.child(footer)
-			.build(),
-		);
 
-	Some(Screen {
-		title: what,
-		section,
-		content,
-		drawers: vec![drawer],
-		open: None,
-	})
+	Some(
+		Page::Actors(Box::new(Actors {
+			title: what,
+			back,
+			section,
+			people,
+			next,
+			drawer,
+		}))
+		.into(),
+	)
 }

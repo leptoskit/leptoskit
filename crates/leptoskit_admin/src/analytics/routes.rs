@@ -285,7 +285,7 @@ async fn saved_insight(
 				Ok(Some(saved)) => {
 					match Kind::of(&saved.query) {
 						Some(kind) => Some(insights::page(&cx, kind, Some(saved)).await),
-						None => Some(web::page(&cx).await.into()),
+						None => Some(web::page(&cx).await),
 					}
 				}
 				Ok(None) => None,
