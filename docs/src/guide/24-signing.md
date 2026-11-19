@@ -138,6 +138,39 @@ The rest comes from the environment:
 
 A device build without `--release` is still unsigned, for running from Xcode, and simulator builds are signed ad hoc, as before.
 
+## macOS apps that receive push
+
+A Mac app you build locally is signed ad hoc, with no certificate, and that is enough to run it on your own machine. Push changes this. Apple's push entitlement is a restricted one: macOS refuses to launch an app that claims it unless the app is signed with a real certificate and carries a provisioning profile that grants the entitlement. So a Mac app with `aps-environment` set needs two more things, on macOS only:
+
+```toml
+[native.macos]
+aps-environment = "development"
+provisioning-profile = "signing/Notes_Development.provisionprofile"
+```
+
+```bash
+export LEPTOSKIT_MACOS_IDENTITY="Apple Development: Your Name (TEAMID)"
+leptoskit build --platform macos
+```
+
+| Setting                             | What it is                                                                                                                                                 |
+| ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `native.macos.provisioning-profile` | A path under your project to the profile you downloaded from your Apple developer account for this app's bundle id, with the Push Notifications capability |
+| `LEPTOSKIT_MACOS_IDENTITY`          | The signing certificate's name, exactly as `security find-identity -v -p codesigning` lists it                                                             |
+
+What the build does with them:
+
+- With `aps-environment` set and no `provisioning-profile`, or a path with no file at it, the build stops before it writes anything and names the setting.
+- The build copies the profile into the app as `Contents/embedded.provisionprofile` and then signs the app with your identity and the push entitlement.
+- Without `LEPTOSKIT_MACOS_IDENTITY`, `leptoskit build --platform macos` and `leptoskit dev --platform macos` stop instead of signing ad hoc, because the app they would make could not launch.
+- `leptoskit build --release --platform macos --unsigned` still builds. The app is signed ad hoc **without** the push entitlement, so it launches and cannot register for push. Use it to measure size or test everything else.
+
+The profile is not a secret, but it names your team and devices, so decide whether it belongs in your repository. The identity stays in your keychain; the variable holds only its name.
+
+leptoskit checks that the profile file is there. It does not read what the profile grants. A profile for another bundle id, for the wrong environment, or without the push capability is reported by macOS when the app launches, not by the build. A development profile also runs only on the Macs listed in it.
+
+An app without `aps-environment` needs neither setting and is built exactly as before. [Enroll a macOS device](notifications/push-setup.md#enroll-a-macos-device) covers the rest of push on a Mac, and [publishing](24-publishing.md#a-notarized-macos-download) covers the build you distribute.
+
 ## An unsigned release, on purpose
 
 Measuring an app's size, or testing a release build on an emulator, doesn't need your key. `--unsigned` asks for an unsigned build, exactly as earlier versions made it:

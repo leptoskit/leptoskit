@@ -151,6 +151,8 @@ This runs on a Mac with Xcode and the Developer ID certificate in its keychain. 
 
 With `github_release` and `--submit`, the `.dmg` and `.zip` are attached to the GitHub release `v<app.version>`, which is made if it's missing; this uses the `gh` command, signed in. Without `github_release`, put the `.dmg` wherever people download your app; the steps after each run remind you.
 
+**An app that receives push** (`[native.macos] aps-environment`) also needs `[native.macos] provisioning-profile`, and for a download it must be a **Developer ID** profile for the app's bundle id with the Push Notifications capability, together with `aps-environment = "production"`. `leptoskit publish macos` checks that the profile file is there before it builds anything, copies it into the app as `Contents/embedded.provisionprofile`, and signs the app with the push entitlement and your `LEPTOSKIT_PUBLISH_MACOS_IDENTITY`. It does not read the profile, so one that does not match the bundle id or lacks the capability is reported by macOS when the notarized app is first launched: open the app once before you publish it. `LEPTOSKIT_MACOS_IDENTITY` is a different variable: it names the certificate for local builds only ([signing](24-signing.md#macos-apps-that-receive-push)). The notifications service that pushes to this build must run with `LEPTOSKIT_NOTIFICATIONS_APNS_ENVIRONMENT=production`.
+
 The Mac App Store isn't supported: it needs the app sandboxed, which the macOS host isn't yet.
 
 ## What to do next
