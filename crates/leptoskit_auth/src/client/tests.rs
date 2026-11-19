@@ -1481,6 +1481,7 @@ async fn server_rendering_reads_the_requests_session() {
 				StartProvider {
 					provider: "google".into(),
 					redirect_to: None,
+					prompt: None,
 				},
 				false,
 			)
@@ -1831,6 +1832,7 @@ async fn a_native_app_without_its_plugins_says_unsupported() {
 				StartProvider {
 					provider: "google".into(),
 					redirect_to: None,
+					prompt: None,
 				},
 				false,
 			)
@@ -1913,6 +1915,7 @@ async fn a_browser_goes_to_providers_and_reads_where_it_came_back() {
 			StartProvider {
 				provider: "google".into(),
 				redirect_to: None,
+				prompt: None,
 			},
 			false,
 		)
@@ -1970,6 +1973,7 @@ async fn a_browser_is_sent_to_the_provider_with_a_binding_cookie() {
 		StartProvider {
 			provider: "google".into(),
 			redirect_to: Some("/settings".into()),
+			prompt: None,
 		},
 		false,
 	)
@@ -1985,6 +1989,7 @@ async fn a_browser_is_sent_to_the_provider_with_a_binding_cookie() {
 		StartProvider {
 			provider: "google".into(),
 			redirect_to: None,
+			prompt: None,
 		},
 		true,
 	)
@@ -2037,12 +2042,14 @@ async fn the_passkey_and_provider_scopes_call_the_configured_client() {
 			.mutate_async(StartProvider {
 				provider: "google".into(),
 				redirect_to: None,
+				prompt: None,
 			})
 			.await,
 		use_mutation_in(client.clone(), link_provider())
 			.mutate_async(StartProvider {
 				provider: "google".into(),
 				redirect_to: None,
+				prompt: None,
 			})
 			.await,
 	] {
@@ -2655,6 +2662,7 @@ fn provider(id: &str) -> StartProvider {
 	StartProvider {
 		provider: id.into(),
 		redirect_to: None,
+		prompt: None,
 	}
 }
 

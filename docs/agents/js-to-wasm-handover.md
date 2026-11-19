@@ -250,6 +250,13 @@ Found while converting sign-in: on the web every screen rebuild replaced each la
 - **Tab in a modal.** Chrome lets Tab leave a modal `<dialog>` for its own toolbar after the last control (and in headless Chrome focus then stays on `<body>`). `Modal` now wraps Tab and Shift+Tab itself (`overlay::browser::keep_tab_inside`); a focused element that is not a stop, such as a dialog's heading, counts by its place. Browser test `tab_wraps_inside_an_open_modal`.
 - **Follow-up, not fixed:** on the web, an `Element::text_from` binding is read with tracking (`reactive.rs::read_binding`), so a ticking countdown rebuilds the whole screen once a second, not just its text. The audit's note that only the text updates is wrong. Rebuilds are now cheap and keep focus, but a binding that updates its own text node would be cheaper still.
 
+### `feat/auth-provider-prompt`: G16
+
+`StartProvider` has `prompt: Option<Prompt>` (`Login`, `SelectAccount`), sent as OpenID Connect's `prompt` on the provider's authorization page. The app's prompt replaces the account picker that connecting an account asks for on providers known to accept it (`oauth::prompt_for`). Every `StartProvider { … }` in the repository gained `prompt: None`, including the generated auth pages' templates.
+
+- **Run here:** `leptoskit_auth` unit tests for the parameter, a router test that `POST /auth/oauth/start` with `"prompt": "login"` puts `prompt=login` on the URL, clippy for `leptoskit_auth` with every feature, and the CLI's auth page template tests. The Postgres tests can't run here (the container is root).
+- **For the admin:** "Switch account" is `sign_in_with_provider()` with `prompt: Some(Prompt::Login)`, replacing `admin.mjs`'s edit of the returned URL.
+
 ### `feat/public-demo`: pull request #856 (draft)
 
 Twenty-three commits: the public demo service. One process serves one UTC day's generation, resets itself at midnight by re-executing in the same PID, gives each browser its own visitor pass, inbox and real sign-in, hands off to the admin, and lets visitors save private notes that emit one real `note_created` analytics event. [public-demo.md](public-demo.md) on that branch is the operator contract.

@@ -1584,6 +1584,51 @@ async fn plain_http_names_the_provider_cookie_without_the_prefix() {
 	assert!(cookies[0].starts_with("provider="), "{cookies:?}");
 }
 
+#[cfg(feature = "oauth")]
+#[tokio::test]
+async fn a_provider_start_carries_the_apps_prompt() {
+	let db = leptoskit_db::testing::sqlite().await;
+	let auth = Auth::builder(&db, Keys::single("test", [3; 32]))
+		.mailer(Mailbox::new())
+		.origin("http://localhost:3000")
+		.provider(leptoskit_auth::Provider::github("client", "secret"))
+		.build()
+		.unwrap();
+	let router = auth.router::<()>().layer(auth.layer());
+	let start = |body: Value| {
+		let router = router.clone();
+		async move {
+			let response = router
+				.oneshot(
+					Request::post("/auth/oauth/start")
+						.header(header::ORIGIN, "http://localhost:3000")
+						.header(header::CONTENT_TYPE, "application/json")
+						.body(Body::from(body.to_string()))
+						.unwrap(),
+				)
+				.await
+				.unwrap();
+			assert_eq!(response.status(), StatusCode::OK);
+			let bytes = response.into_body().collect().await.unwrap().to_bytes();
+			let redirect: Value = serde_json::from_slice(&bytes).unwrap();
+			let url = url::Url::parse(redirect["url"].as_str().unwrap()).unwrap();
+			url.query_pairs()
+				.filter(|(key, _)| key == "prompt")
+				.map(|(_, value)| value.into_owned())
+				.collect::<Vec<_>>()
+		}
+	};
+
+	assert_eq!(
+		start(json!({ "provider": "github", "prompt": "login" })).await,
+		["login"]
+	);
+	assert_eq!(
+		start(json!({ "provider": "github" })).await,
+		Vec::<String>::new()
+	);
+}
+
 #[cfg(feature = "solana")]
 #[tokio::test]
 async fn plain_http_names_the_wallet_cookie_without_the_prefix() {

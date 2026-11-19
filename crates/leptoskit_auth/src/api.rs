@@ -558,6 +558,34 @@ pub struct StartProvider {
 	/// else is refused. Defaults to `/`.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub redirect_to: Option<String>,
+	/// What the provider should ask the person before it answers, such as
+	/// [`Prompt::Login`] to switch accounts. `None` lets the provider
+	/// decide, which usually reuses whoever is signed in there.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub prompt: Option<Prompt>,
+}
+
+/// What a provider asks the person before it answers, sent as OpenID
+/// Connect's `prompt` parameter. A provider that doesn't know it ignores it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Prompt {
+	/// Sign in again, even when someone is signed in at the provider:
+	/// how a person switches to another account there.
+	Login,
+	/// Show the provider's account picker.
+	SelectAccount,
+}
+
+impl Prompt {
+	/// The parameter's value: `login` or `select_account`.
+	#[must_use]
+	pub const fn as_str(self) -> &'static str {
+		match self {
+			Self::Login => "login",
+			Self::SelectAccount => "select_account",
+		}
+	}
 }
 
 /// What the client sends `POST /auth/oauth/start` and `POST /auth/oauth/link`:
