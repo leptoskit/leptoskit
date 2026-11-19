@@ -6,7 +6,11 @@
 //! with one plain sentence of why, and says so when it can't explain
 //! something rather than guessing.
 
+use leptos::context::use_context;
+use leptoskit::native::FocusRequest;
 use leptoskit::prelude::*;
+use serde::Deserialize;
+use serde::Serialize;
 
 use crate::components;
 use crate::components::Line;
@@ -14,7 +18,7 @@ use crate::components::Tone;
 use crate::style;
 
 /// One drawer: the underside of one card.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Drawer {
 	/// The card it belongs to, used in `workings-tab:<id>` and
 	/// `#workings=<id>`.
@@ -26,10 +30,10 @@ pub struct Drawer {
 }
 
 /// One station on the rail.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Station {
 	/// The station's name: `Declare`, `Plan`, …
-	pub name: &'static str,
+	pub name: String,
 	/// Where its content comes from: `leptoskit.toml`, `what OpenTofu will do`.
 	pub source: String,
 	/// One plain sentence of why.
@@ -39,10 +43,10 @@ pub struct Station {
 }
 
 /// What a station shows.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Body {
 	/// Code, with Copy as the given format.
-	Code(Vec<Line>, &'static str),
+	Code(Vec<Line>, String),
 	/// A short checklist, each item with its state.
 	Checks(Vec<(Tone, String)>),
 	/// Nothing to show, and why: "can't explain" states are honest.
@@ -53,24 +57,24 @@ pub enum Body {
 }
 
 /// One tab of [`Body::Tabs`].
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Tab {
 	/// `Rust`, `SQL`, `HTTP`; lowercased, its test identifier.
-	pub name: &'static str,
+	pub name: String,
 	pub lines: Vec<Line>,
-	pub copy_as: &'static str,
+	pub copy_as: String,
 }
 
 impl Station {
 	/// A station.
 	pub fn new(
-		name: &'static str,
+		name: impl Into<String>,
 		source: impl Into<String>,
 		why: impl Into<String>,
 		body: Body,
 	) -> Self {
 		Self {
-			name,
+			name: name.into(),
 			source: source.into(),
 			why: why.into(),
 			body,
@@ -78,8 +82,219 @@ impl Station {
 	}
 }
 
+/// What a page's drawers are doing, while the page runs in the browser.
+///
+/// The shell provides one for a page this crate builds; the pieces that
+/// open and fill drawers (the mint tab, cards, code blocks, the panel) read
+/// it from context. A page `leptoskit_admin` still draws on its own has
+/// none, and those pieces render as they always have, for its script.
+#[derive(Clone, Copy, Debug)]
+pub struct Workings {
+	/// Whether mint tabs show their sources.
+	pub mode: RwSignal<bool>,
+	/// The open drawer's id.
+	pub open: RwSignal<Option<String>>,
+	/// The Ask stations' tab: `rust`, `sql`, or `http`.
+	pub ask: RwSignal<String>,
+	/// The stations opened on a phone, as `drawer|station`.
+	stations: RwSignal<Vec<String>>,
+	/// The text a Copy button just copied, while it says so.
+	copied: RwSignal<Option<String>>,
+	/// The open drawer's Close button.
+	close: FocusRequest,
+	/// The control that opened the drawer, which gets focus back.
+	opener: RwSignal<Option<FocusRequest>>,
+	/// The first drawer on the page, which W opens.
+	first: RwSignal<Option<String>>,
+}
+
+/// How long a Copy button says "Copied".
+const COPIED_FOR: std::time::Duration = std::time::Duration::from_millis(1200);
+
+impl Workings {
+	/// The drawers of a page, with `open` open and Workings mode `mode`.
+	#[must_use]
+	pub fn new(mode: bool, open: Option<String>, first: Option<String>) -> Self {
+		Self {
+			mode: RwSignal::new(mode),
+			open: RwSignal::new(open),
+			ask: RwSignal::new("rust".to_owned()),
+			stations: RwSignal::new(Vec::new()),
+			copied: RwSignal::new(None),
+			close: FocusRequest::new(),
+			opener: RwSignal::new(None),
+			first: RwSignal::new(first),
+		}
+	}
+
+	/// The page's drawers, when the page runs as this crate's.
+	#[must_use]
+	pub fn current() -> Option<Self> {
+		use_context::<Self>()
+	}
+
+	/// Whether drawer `id` is open. Reading it rebuilds the screen when that
+	/// changes.
+	#[must_use]
+	pub fn is_open(&self, id: &str) -> bool {
+		self.open.with(|open| open.as_deref() == Some(id))
+	}
+
+	/// Opens drawer `id` and moves focus to its Close button; `from` gets
+	/// focus back when it closes.
+	pub fn show(&self, id: &str, from: Option<FocusRequest>) {
+		self.open.set(Some(id.to_owned()));
+		self.opener.set(from);
+		self.close.request();
+	}
+
+	/// Closes the open drawer and gives focus back to what opened it.
+	pub fn hide(&self) {
+		if self.open.get_untracked().is_none() {
+			return;
+		}
+
+		self.open.set(None);
+
+		if let Some(opener) = self.opener.get_untracked() {
+			opener.request();
+		}
+
+		self.opener.set(None);
+	}
+
+	/// Opens drawer `id`, or closes it when it is the one open.
+	pub fn toggle(&self, id: &str, from: Option<FocusRequest>) {
+		if self.open.with_untracked(|open| open.as_deref() == Some(id)) {
+			self.hide();
+		} else {
+			self.show(id, from);
+		}
+	}
+
+	/// W: closes the open drawer, or opens the page's first.
+	pub fn toggle_first(&self) {
+		if self.open.get_untracked().is_some() {
+			self.hide();
+		} else if let Some(first) = self.first.get_untracked() {
+			self.show(&first, None);
+		}
+	}
+
+	/// Whether a station is open on a phone, where stations start as headers.
+	fn station_open(&self, key: &str) -> bool {
+		self.stations
+			.with(|open| open.iter().any(|station| station == key))
+	}
+
+	fn toggle_station(&self, key: &str) {
+		self.stations.update(|open| {
+			if let Some(index) = open.iter().position(|station| station == key) {
+				open.remove(index);
+			} else {
+				open.push(key.to_owned());
+			}
+		});
+	}
+
+	/// Shows `tab` in every Ask station, and notes that SQL was read.
+	fn select_ask(&self, tab: &str) {
+		self.ask.set(tab.to_owned());
+
+		if tab == "sql" {
+			crate::shell::preference(r#"{"kind":"use_note","note":"ask-sql"}"#);
+		}
+	}
+
+	/// Whether a Copy button for `text` says "Copied" now.
+	#[must_use]
+	pub fn copied(&self, text: &str) -> bool {
+		self.copied.with(|copied| copied.as_deref() == Some(text))
+	}
+
+	/// Copies `text`, then says so for a moment. When the browser refuses,
+	/// the notice says to select the text instead.
+	pub fn copy(&self, text: String, notice: Option<RwSignal<String>>) {
+		copy(text, self.copied, notice);
+	}
+}
+
+#[cfg(feature = "hydrate")]
+fn copy(text: String, copied: RwSignal<Option<String>>, notice: Option<RwSignal<String>>) {
+	crate::spawn(async move {
+		if leptoskit_plugin_clipboard::web::write_text(&text)
+			.await
+			.is_err()
+		{
+			if let Some(notice) = notice {
+				notice.set("The browser didn't allow copying. Select the text instead.".to_owned());
+			}
+			return;
+		}
+
+		copied.set(Some(text.clone()));
+		let reset = move || {
+			if copied.with_untracked(|copied| copied.as_deref() == Some(text.as_str())) {
+				copied.set(None);
+			}
+		};
+
+		if leptos::prelude::set_timeout(reset, COPIED_FOR).is_err() {
+			copied.set(None);
+		}
+	});
+}
+
+/// Off the browser there's no clipboard: the press only marks the text
+/// copied, which tests read.
+#[cfg(not(feature = "hydrate"))]
+fn copy(text: String, copied: RwSignal<Option<String>>, notice: Option<RwSignal<String>>) {
+	let _ = (notice, COPIED_FOR);
+	copied.set(Some(text));
+}
+
+/// The text Copy gives for `lines`.
+#[must_use]
+pub fn text_of(lines: &[Line]) -> String {
+	lines
+		.iter()
+		.map(|line| line.text.as_str())
+		.collect::<Vec<_>>()
+		.join("\n")
+}
+
+/// What Copy all gives for `drawer`: every code block, a blank line apart.
+fn all_text(drawer: &Drawer) -> String {
+	let mut blocks = Vec::new();
+
+	for station in &drawer.stations {
+		match &station.body {
+			Body::Code(lines, _) => blocks.push(text_of(lines)),
+			Body::Tabs(tabs) => blocks.extend(tabs.iter().map(|tab| text_of(&tab.lines))),
+			Body::Checks(_) | Body::Missing(_) => {}
+		}
+	}
+
+	blocks.join("\n\n")
+}
+
 /// The drawer's panel, hidden until its card's tab opens it.
 pub fn panel(drawer: &Drawer) -> Element {
+	let workings = Workings::current();
+	let mut close = Button("Close")
+		.aria_label("Close workings (W)")
+		.class(
+			"shrink-0 rounded-lg border border-[#4a3f58] px-2.5 py-1 text-xs text-[#c9c0d0] \
+			 cursor-pointer hover:text-white",
+		)
+		.test_id("workings-close");
+
+	if let Some(workings) = workings {
+		close = close
+			.focus_on(workings.close)
+			.on_press(move || workings.hide());
+	}
+
 	let header = View()
 		.class(
 			"shrink-0 flex-row items-start gap-3 border-b border-[var(--admin-underside-line)] \
@@ -95,22 +310,14 @@ pub fn panel(drawer: &Drawer) -> Element {
 				.class("min-w-0 flex-1 flex-col gap-0.5")
 				.child(Heading(2, "Workings").class("text-base font-semibold text-[#f4efe8]"))
 				.child(Text(drawer.title.clone()).class("text-xs text-[#9d93a8]"))
-				// What a builder change just changed: the script fills it.
+				// What a builder change just changed.
 				.child(
 					Status("")
 						.class("text-xs font-semibold text-[#5ef2c2]")
 						.test_id("drawer-changed"),
 				),
 		)
-		.child(
-			Button("Close")
-				.aria_label("Close workings (W)")
-				.class(
-					"shrink-0 rounded-lg border border-[#4a3f58] px-2.5 py-1 text-xs \
-					 text-[#c9c0d0] cursor-pointer hover:text-white",
-				)
-				.test_id("workings-close"),
-		);
+		.child(close);
 
 	let count = drawer.stations.len();
 	let analytics = drawer
@@ -123,9 +330,29 @@ pub fn panel(drawer: &Drawer) -> Element {
 		rail = rail.child(station_view(&drawer.id, station, index, count));
 	}
 
+	let text = all_text(drawer);
+	let mut copy_all = Button(if workings.is_some_and(|workings| workings.copied(&text)) {
+		"Copied"
+	} else {
+		"Copy all"
+	})
+	.class(
+		"rounded-lg border border-[#5ef2c2] bg-[#5ef2c2] px-3 py-1.5 text-xs font-semibold \
+		 text-[#0f0b16] cursor-pointer hover:opacity-90",
+	)
+	.test_id("copy-all");
+
+	if let Some(workings) = workings {
+		copy_all = copy_all.on_press(move || workings.copy(text.clone(), None));
+	}
+
 	// The header stays put; the stations scroll beneath it.
 	View()
 		.class("h-full flex-col")
+		.class(match workings {
+			Some(workings) if !workings.is_open(&drawer.id) => "hidden",
+			_ => "",
+		})
 		.test_id(format!("drawer:{}", drawer.id))
 		.aria_label(format!("Workings: {}", drawer.title))
 		.child(header)
@@ -137,15 +364,7 @@ pub fn panel(drawer: &Drawer) -> Element {
 				.child(
 					View()
 						.class("flex-row flex-wrap gap-2 px-5 pb-6 pl-12")
-						.child(
-							Button("Copy all")
-								.class(
-									"rounded-lg border border-[#5ef2c2] bg-[#5ef2c2] px-3 py-1.5 \
-									 text-xs font-semibold text-[#0f0b16] cursor-pointer \
-									 hover:opacity-90",
-								)
-								.test_id("copy-all"),
-						)
+						.child(copy_all)
 						.child(
 							Pressable(if analytics {
 								"Open the product analytics guide"
@@ -168,6 +387,9 @@ pub fn panel(drawer: &Drawer) -> Element {
 }
 
 fn station_view(drawer: &str, station: &Station, index: usize, count: usize) -> Element {
+	let workings = Workings::current();
+	let key = format!("{drawer}|{}", station.name.to_lowercase());
+	let open = workings.is_some_and(|workings| workings.station_open(&key));
 	// The rail runs from the first dot to the last.
 	let line = match (index, count) {
 		(_, 1) => None,
@@ -188,11 +410,21 @@ fn station_view(drawer: &str, station: &Station, index: usize, count: usize) -> 
 
 	// On phones the drawer is a bottom sheet and stations collapse to their
 	// headers; this covers the header so the whole row opens its station.
-	let toggle = Button("")
-		.aria_label(format!("{} station", station.name))
-		.aria_expanded(false)
-		.class("absolute inset-x-0 top-2 h-9 rounded-lg cursor-pointer sm:hidden")
-		.test_id("station-toggle");
+	let mut toggle = Button(match (workings, open) {
+		(None, _) => "",
+		(Some(_), true) => "▴",
+		(Some(_), false) => "▾",
+	})
+	.aria_label(format!("{} station", station.name))
+	.aria_expanded(open)
+	.class("absolute inset-x-0 top-2 h-9 rounded-lg cursor-pointer sm:hidden")
+	.test_id("station-toggle");
+
+	if let Some(workings) = workings {
+		toggle = toggle
+			.class("flex-row items-center justify-end pr-2 text-sm text-[#9d93a8]")
+			.on_press(move || workings.toggle_station(&key));
+	}
 
 	view = view
 		.child(
@@ -208,13 +440,20 @@ fn station_view(drawer: &str, station: &Station, index: usize, count: usize) -> 
 			View()
 				.class("flex-row flex-wrap items-end gap-2 max-sm:pr-8")
 				.test_id("station-head")
-				.child(Heading(3, station.name).class("text-sm font-semibold text-[#f4efe8]"))
+				.child(
+					Heading(3, station.name.clone()).class("text-sm font-semibold text-[#f4efe8]"),
+				)
 				.child(Text(station.source.clone()).class("text-xs text-[#9d93a8]")),
 		)
 		.child(toggle);
 
 	let body = View()
 		.class("flex-col gap-2")
+		.class(if workings.is_some() && !open {
+			"max-sm:hidden"
+		} else {
+			""
+		})
 		.test_id("station-body")
 		.child(components::prose(&station.why).class("text-[13px] leading-normal text-[#c9c0d0]"));
 
@@ -258,52 +497,7 @@ fn station_body(drawer: &str, station: &Station, view: Element) -> Element {
 
 			view.child(list)
 		}
-		Body::Tabs(tabs) => {
-			// The first tab shows until someone picks another; the script
-			// keeps `aria-selected` and the roving tab stop in step.
-			let mut row = View()
-				.class("flex-row gap-1.5")
-				.role(leptoskit::native::Role::TabList)
-				.aria_label(format!("{} as", station.name));
-			let id = |part: &str, tab: &Tab| {
-				format!("{part}-{drawer}-{}", tab.name.to_lowercase()).replace(
-					|character: char| !character.is_ascii_alphanumeric() && character != '-',
-					"-",
-				)
-			};
-
-			for (index, tab) in tabs.iter().enumerate() {
-				row = row.child(
-					Button(tab.name)
-						.role(leptoskit::native::Role::Tab)
-						.id(id("ask-tab", tab))
-						.aria_controls([id("ask-panel", tab)])
-						.aria_selected(index == 0)
-						.tab_index(if index == 0 { 0 } else { -1 })
-						.class(
-							"rounded-lg border border-[#4a3f58] px-3 py-1 text-[13px] \
-							 font-semibold text-[#c9c0d0] cursor-pointer hover:text-white",
-						)
-						.test_id(format!("ask-tab:{}", tab.name.to_lowercase())),
-				);
-			}
-
-			let mut panels = View().class("flex-col");
-
-			for tab in tabs {
-				panels = panels.child(
-					View()
-						.class("flex-col")
-						.role(leptoskit::native::Role::TabPanel)
-						.id(id("ask-panel", tab))
-						.aria_labelled_by([id("ask-tab", tab)])
-						.test_id(format!("ask-panel:{}", tab.name.to_lowercase()))
-						.child(components::code_block(&tab.lines, tab.copy_as)),
-				);
-			}
-
-			view.child(row).child(panels)
-		}
+		Body::Tabs(tabs) => view.children(ask_tabs(drawer, station, tabs)),
 		Body::Missing(reason) => {
 			view.child(components::prose(reason).class(
 				"rounded-[10px] border border-[var(--admin-underside-line)] px-3 py-2 text-[13px] \
@@ -313,10 +507,82 @@ fn station_body(drawer: &str, station: &Station, view: Element) -> Element {
 	}
 }
 
-/// The drawer column: every panel on the page, of which the script shows
-/// the open one.
+/// The Ask station's tabs and their panels. Every Ask station on the page
+/// shows the same tab; without [`Workings`], the first shows until the
+/// script picks another.
+fn ask_tabs(drawer: &str, station: &Station, tabs: &[Tab]) -> [Element; 2] {
+	let workings = Workings::current();
+	let selected = |index: usize, tab: &Tab| {
+		match workings {
+			Some(workings) => workings.ask.with(|ask| *ask == tab.name.to_lowercase()),
+			None => index == 0,
+		}
+	};
+	let mut row = View()
+		.class("flex-row gap-1.5")
+		.role(leptoskit::native::Role::TabList)
+		.aria_label(format!("{} as", station.name));
+	let id = |part: &str, tab: &Tab| {
+		format!("{part}-{drawer}-{}", tab.name.to_lowercase()).replace(
+			|character: char| !character.is_ascii_alphanumeric() && character != '-',
+			"-",
+		)
+	};
+
+	for (index, tab) in tabs.iter().enumerate() {
+		let on = selected(index, tab);
+		let mut button = Button(tab.name.clone())
+			.role(leptoskit::native::Role::Tab)
+			.id(id("ask-tab", tab))
+			.aria_controls([id("ask-panel", tab)])
+			.aria_selected(on)
+			.tab_index(if on { 0 } else { -1 })
+			.class(
+				"rounded-lg border px-3 py-1 text-[13px] font-semibold cursor-pointer \
+				 hover:text-white",
+			)
+			.class(if workings.is_some() && on {
+				"border-[#5ef2c2] text-[#5ef2c2]"
+			} else {
+				"border-[#4a3f58] text-[#c9c0d0]"
+			})
+			.test_id(format!("ask-tab:{}", tab.name.to_lowercase()));
+
+		if let Some(workings) = workings {
+			let name = tab.name.to_lowercase();
+			button = button.on_press(move || workings.select_ask(&name));
+		}
+
+		row = row.child(button);
+	}
+
+	let mut panels = View().class("flex-col");
+
+	for (index, tab) in tabs.iter().enumerate() {
+		panels = panels.child(
+			View()
+				.class("flex-col")
+				.class(if workings.is_some() && !selected(index, tab) {
+					"hidden"
+				} else {
+					""
+				})
+				.role(leptoskit::native::Role::TabPanel)
+				.id(id("ask-panel", tab))
+				.aria_labelled_by([id("ask-tab", tab)])
+				.test_id(format!("ask-panel:{}", tab.name.to_lowercase()))
+				.child(components::code_block(&tab.lines, &tab.copy_as)),
+		);
+	}
+
+	[row, panels]
+}
+
+/// The drawer column: every panel on the page, of which the open one shows.
 pub fn aside(drawers: &[Drawer]) -> Element {
-	let mut aside = View()
+	let hidden = Workings::current().is_some_and(|workings| workings.open.with(Option::is_none));
+
+	View()
 		.class(style::UNDERSIDE)
 		.class(
 			"absolute inset-y-0 right-0 w-[440px] max-w-full shrink-0 border-l border-black \
@@ -324,13 +590,9 @@ pub fn aside(drawers: &[Drawer]) -> Element {
 			 max-sm:rounded-2xl transition duration-200 ease-out starting:translate-x-6 \
 			 starting:opacity-40",
 		)
+		.class(if hidden { "hidden" } else { "" })
 		.test_id("drawer-aside")
 		.role(leptoskit::native::Role::Complementary)
-		.aria_label("Workings");
-
-	for drawer in drawers {
-		aside = aside.child(panel(drawer));
-	}
-
-	aside
+		.aria_label("Workings")
+		.children(drawers.iter().map(panel))
 }

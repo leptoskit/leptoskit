@@ -917,6 +917,15 @@ async fn pages_for_the_script() {
 		("learn.html", format!("{BASE}/learn")),
 		("overview.html", format!("{project}/overview")),
 		("changes.html", format!("{project}/changes")),
+		("projects.html", format!("{BASE}/infra/projects")),
+		(
+			"operation.html",
+			format!("{BASE}/infra/operations/{}", claimed.id),
+		),
+		(
+			"operation-workings.html",
+			format!("{BASE}/infra/operations/{}?workings=operation", claimed.id),
+		),
 	] {
 		let (status, html) = page(&world, &mut ada, &path).await;
 		assert_eq!(status, StatusCode::OK, "{path}");

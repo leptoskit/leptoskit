@@ -531,7 +531,7 @@ pub(crate) async fn person(cx: &Context<'_>, id: Uuid) -> Option<Screen> {
 						.iter()
 						.map(|distinct| Line::plain(format!("{distinct:<36} → {id}")))
 						.collect(),
-					"text",
+					"text".to_owned(),
 				),
 			),
 			Station::new(
@@ -555,7 +555,7 @@ pub(crate) async fn person(cx: &Context<'_>, id: Uuid) -> Option<Screen> {
 					.into_iter()
 					.map(Line::plain)
 					.collect(),
-					"Rust",
+					"Rust".to_owned(),
 				),
 			),
 		],

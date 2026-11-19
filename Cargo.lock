@@ -5646,8 +5646,11 @@ version = "0.3.0"
 dependencies = [
  "any_spawner",
  "console_error_panic_hook",
+ "futures",
  "leptos",
  "leptoskit",
+ "leptoskit_plugin_clipboard",
+ "schemars",
  "serde",
  "wasm-bindgen",
  "wasm-bindgen-futures",

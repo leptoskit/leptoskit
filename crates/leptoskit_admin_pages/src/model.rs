@@ -9,6 +9,9 @@
 use serde::Deserialize;
 use serde::Serialize;
 
+use crate::components::Tone;
+use crate::workings::Drawer;
+
 /// Which environment the admin acts on, shown as the pill in the top bar.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -122,6 +125,63 @@ pub enum Section {
 	Glossary,
 }
 
+/// A project on the Projects page.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectCard {
+	pub id: String,
+	pub environment: String,
+	/// `Serving v42 · 3 hours ago`, or that nothing is.
+	pub serving: String,
+	/// Its last health check, in a word.
+	pub health: (Tone, String),
+	/// Its newest operation and how it went.
+	pub last: String,
+}
+
+/// One step of an operation's timeline.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Step {
+	/// Steps count from 1, in the order they happened.
+	pub sequence: u64,
+	pub message: String,
+	pub tone: Tone,
+	/// The phase in a word: `Running`.
+	pub word: String,
+	/// `5 minutes ago`.
+	pub when: String,
+}
+
+/// One resource a plan changes.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChangeRow {
+	/// `+ create`.
+	pub label: String,
+	pub tone: Tone,
+	pub address: String,
+}
+
+/// One operation: what it is doing or did, step by step.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Operation {
+	pub id: String,
+	pub project: String,
+	/// What it does: `Deploy v42`.
+	pub title: String,
+	/// Its phase, in a word.
+	pub phase: (Tone, String),
+	/// `Started by ada · 5 minutes ago · took 2 minutes`.
+	pub started: String,
+	/// Whether it is still queued or running, so the page follows it.
+	pub running: bool,
+	pub steps: Vec<Step>,
+	/// How it ended, once it has.
+	pub result: String,
+	/// What its plan found, when it made one.
+	pub changes: Vec<ChangeRow>,
+	/// Its Workings.
+	pub drawer: Drawer,
+}
+
 /// A lesson as a row in its track on the Learn hub.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LessonRow {
@@ -193,6 +253,10 @@ pub enum Page {
 	Learn(Learn),
 	/// One lesson.
 	Lesson(Lesson),
+	/// Every registered project.
+	Projects(Vec<ProjectCard>),
+	/// One operation, followed live while it runs.
+	Operation(Box<Operation>),
 }
 
 impl Page {
@@ -203,15 +267,28 @@ impl Page {
 			Self::Glossary => "Glossary",
 			Self::Learn(_) => "Your progress",
 			Self::Lesson(lesson) => &lesson.title,
+			Self::Projects(_) => "Projects",
+			Self::Operation(operation) => &operation.title,
+		}
+	}
+
+	/// The page's Workings drawers, in the order its cards show them.
+	#[must_use]
+	pub fn drawers(&self) -> &[Drawer] {
+		match self {
+			Self::Glossary | Self::Learn(_) | Self::Lesson(_) | Self::Projects(_) => &[],
+			Self::Operation(operation) => std::slice::from_ref(&operation.drawer),
 		}
 	}
 
 	/// Where the page sits in the rail.
 	#[must_use]
-	pub const fn section(&self) -> Section {
+	pub fn section(&self) -> Section {
 		match self {
 			Self::Glossary => Section::Glossary,
 			Self::Learn(_) | Self::Lesson(_) => Section::Learn,
+			Self::Projects(_) => Section::Projects,
+			Self::Operation(operation) => Section::ProjectOperations(operation.project.clone()),
 		}
 	}
 }
@@ -223,6 +300,8 @@ pub struct Model {
 	pub viewer: Viewer,
 	/// Which page, with its data.
 	pub page: Page,
+	/// The drawer open when the page loads: `?workings=plan`.
+	pub open: Option<String>,
 }
 
 impl Model {

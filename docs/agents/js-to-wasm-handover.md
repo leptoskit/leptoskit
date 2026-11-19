@@ -33,20 +33,20 @@ Do not reopen these. If one turns out to be unworkable, stop and ask.
 
 One pull request per item. Every backend is kept in step, with AppKit as the reference. The gap numbers refer to [js-to-wasm-audit.md](js-to-wasm-audit.md), which has the proposed API and the per-backend table for each.
 
-| #  | Change                                                      | Gap      | State      |
-| -- | ----------------------------------------------------------- | -------- | ---------- |
-| 1  | Text input hints                                            | G9       | #852, open |
-| 2  | `TextArea`                                                  | G12      | #877, open |
-| 3  | Labels that focus their fields                              | G13      | #879, open |
-| 4  | One-shot focus requests                                     | G2       | #887, open |
-| 5  | Arrow-key navigation for tabs, radio groups and menus       | G5       | #892, open |
-| 6  | `Modal` and `Popover`                                       | G1       | #896, open |
-| 7  | Scroll into view                                            | G4       | #913, open |
-| 8  | A clock hook                                                | G6       | #914, open |
-| 9  | Typed refusals in the rpc client (status, code, retry time) | G8       | #918, open |
-| 10 | Streams without a database                                  | G3       | #923, open |
-| 11 | The ⌘ key on the web                                        | G7a      | #924, open |
-| 12 | New-tab and download links                                  | G14, G15 | #925, open |
+| #  | Change                                                      | Gap      | State        |
+| -- | ----------------------------------------------------------- | -------- | ------------ |
+| 1  | Text input hints                                            | G9       | #852, merged |
+| 2  | `TextArea`                                                  | G12      | #877, merged |
+| 3  | Labels that focus their fields                              | G13      | #879, merged |
+| 4  | One-shot focus requests                                     | G2       | #887, merged |
+| 5  | Arrow-key navigation for tabs, radio groups and menus       | G5       | #892, merged |
+| 6  | `Modal` and `Popover`                                       | G1       | #896, merged |
+| 7  | Scroll into view                                            | G4       | #913, merged |
+| 8  | A clock hook                                                | G6       | #914, merged |
+| 9  | Typed refusals in the rpc client (status, code, retry time) | G8       | #918, merged |
+| 10 | Streams without a database                                  | G3       | #923, merged |
+| 11 | The ⌘ key on the web                                        | G7a      | #924, merged |
+| 12 | New-tab and download links                                  | G14, G15 | #925, merged |
 
 After those: convert the demo (3–4 pull requests), then app shortcuts with native key delivery (G7b), `prompt=login` on provider sign-in (G16) and document titles (G10), then convert the admin page by page (5–7 pull requests).
 
@@ -285,12 +285,23 @@ The admin's pages move to `crates/leptoskit_admin_pages`, one crate built twice 
 - **Tests:** `script.mjs` builds the client with `leptoskit build --platform web` unless `LEPTOSKIT_ADMIN_CLIENT` names one, serves `glossary.html` from `pages_for_the_script`, and checks the theme, Shift+W, Ctrl+K and search, and signing out.
 - **Next:** see part 2.
 
-### `feat/admin-learn-pages`: admin conversion, part 2
+### `feat/admin-learn-pages`: admin conversion, part 2 (merged, #949)
 
 Learn's hub and lessons moved. The lessons and their checks stay in `leptoskit_admin/src/learn.rs`, because the checks read server-side state (projects, operations, analytics facts, preferences); it now builds `model::Learn` and `model::Lesson` values (rows with their evidence, the lesson up next, each lesson's target). `leptoskit_admin_pages/src/pages/learn.rs` draws them, with the same test ids. `server::hydrated_screen` takes a closure over the `Proof` so a page can be built from it, and answers 404 when it returns `None` (an unknown lesson).
 
 - **Tests:** the `learn` and `analytics_learn` snapshots didn't change, so the server's markup is the same as before. `script.mjs` serves `learn.html` and checks that it hydrates without `admin.mjs`, that the theme flips, and that a lesson row opens its lesson.
-- **Next:** infrastructure with its drawers and actions, the analytics builder, Live, People and the dialogs, and last delete `admin.mjs` and the attribute rules in `shell_css`.
+- **Next:** see part 3.
+
+### `feat/admin-infra-pages`: admin conversion, part 3
+
+Workings drawers, Projects and the Operation page moved.
+
+- **Drawers:** `workings::Workings` is the drawers' state (Workings mode, the open drawer, the Ask tab, the open stations on a phone, the "Copied" notice), provided as context by `shell::Shell`. The builders (`mint_tab`, `Card::build`, `code_block`, `paper_code`, `panel`, `station_view`, `ask_tabs`, `aside`) read it with `Workings::current()`; without one, on a page the server still draws, they render the old markup that `admin.mjs` drives. Opening a drawer focuses its Close button through a `FocusRequest`, closing it returns focus to the tab that opened it, `W` toggles the page's first drawer, Escape closes it, and Copy uses `leptoskit_plugin_clipboard`. `Drawer` and its parts are serde now, so a page's model carries them.
+- **Deep links:** a moved page takes `?workings=<id>` instead of `#workings=<id>`: the server sets `Model.open`, only to a drawer the page has. Opening a drawer doesn't rewrite the URL.
+- **Live progress:** the Operation page follows a running operation with the G3 rpc stream `ops::operation_progress`, served by `leptoskit_admin/src/live.rs` on `rpc::server::LiveStreams` nested under the admin's base path (`{BASE}/live`, `{BASE}/live/events`, `{BASE}/live/frames`), so a host site's own `/live` keeps working. The stream's `Identify` lets only a signed-in admin in. It sends the steps so far, each new one, then `Done`, and the page then loads itself again to show how it ended. The old `/infra/operations/{id}/events` SSE endpoint is gone.
+- **Tests:** `live::tests` follows an operation through the stream in Rust; `tests/admin.rs` checks that the page says it's following live, that `{BASE}/live/events` answers an admin and refuses a stranger. `script.mjs` serves `projects.html`, `operation.html` and `operation-workings.html` and checks the drawer: open, focus, Escape, focus return, `W`, and `?workings=`.
+- **Not tested:** the live stream end to end in a browser (the script's pages are static). The layout rules for an open drawer at extra-large widths (collapsed rail labels, one-column grid) are not reproduced yet.
+- **Next:** the project tabs with their actions and confirm dialogs (`Modal`), then the analytics builder, Live, People and the dialogs, and last delete `admin.mjs` and the attribute rules in `shell_css`.
 
 ### `feat/public-demo`: pull request #856 (merged)
 

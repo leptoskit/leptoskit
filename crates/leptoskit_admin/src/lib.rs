@@ -36,6 +36,7 @@ mod analytics;
 mod client;
 mod infra;
 mod learn;
+mod live;
 mod server;
 mod shell;
 mod signin;

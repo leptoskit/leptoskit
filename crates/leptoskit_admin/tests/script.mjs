@@ -144,6 +144,8 @@ function serve(directory, clientDirectory) {
 					return page("glossary.html");
 				case `${BASE}/learn`:
 					return page("learn.html");
+				case `${BASE}/infra/projects`:
+					return page("projects.html");
 				case `${BASE}/sign-in`:
 					return new Response("<!doctype html><title>Sign in</title>", {
 						headers: { "content-type": "text/html" },
@@ -174,6 +176,13 @@ function serve(directory, clientDirectory) {
 					posted.push({ path: url.pathname, body: await request.json() });
 					return Response.json({});
 				default: {
+					if (url.pathname.startsWith(`${BASE}/infra/operations/`)) {
+						return page(
+							url.searchParams.get("workings") === "operation"
+								? "operation-workings.html"
+								: "operation.html",
+						);
+					}
 					const file = url.pathname.startsWith(`${BASE}/pkg/`)
 						? url.pathname.slice(`${BASE}/pkg/`.length)
 						: null;
@@ -817,6 +826,89 @@ Deno.test("Learn is the pages' own Rust, and its lessons are links", async () =>
 			`() => location.pathname === "${BASE}/learn/analytics/first-typed-event"`,
 			"a lesson row opens its lesson",
 		);
+		assert(thrown.length === 0, `nothing threw: ${thrown.join("\n")}`);
+	});
+});
+
+Deno.test("Workings drawers are the pages' own Rust: open, close, focus, W, and a link that opens one", async () => {
+	await withBrowser(async (page, site) => {
+		const thrown = [];
+		page.on("Runtime.exceptionThrown", (event) => {
+			thrown.push(
+				event.exceptionDetails?.exception?.description ??
+					event.exceptionDetails?.text,
+			);
+		});
+		const shown = (id) =>
+			page.evaluate(
+				`(() => { const element = document.querySelector('[data-testid="${id}"]'); return !!element && element.getClientRects().length > 0; })()`,
+			);
+
+		await open(page, `${site.origin}${BASE}/infra/projects`);
+		await page.until(
+			"() => document.documentElement.hasAttribute('data-hydrated')",
+			"Projects hydrates",
+		);
+		assert(
+			await page.evaluate(
+				"document.querySelector('[data-testid=\"project:notes-production\"]') !== null",
+			),
+			"Projects lists the project",
+		);
+
+		await open(page, `${site.origin}${BASE}/infra/operations/plan`);
+		await page.until(
+			"() => document.documentElement.hasAttribute('data-hydrated')",
+			"the operation hydrates",
+		);
+		assert(
+			await page.evaluate(
+				"!document.querySelector('script[src$=\"admin.mjs\"]')",
+			),
+			"the page loads no hand-written script",
+		);
+		assert(!(await shown("drawer:operation")), "the drawer starts closed");
+
+		// The mint tab opens it and Close takes focus; Escape closes it and
+		// gives focus back to the tab.
+		await page.evaluate(
+			"document.querySelector('[data-testid=\"workings-tab:operation\"]').focus()",
+		);
+		await press(page, "Enter");
+		await page.until(
+			`() => document.activeElement?.getAttribute("data-testid") === "workings-close"`,
+			"Close takes focus",
+		);
+		assert(await shown("drawer:operation"), "the tab opens its drawer");
+		await press(page, "Escape");
+		await page.until(
+			`() => document.activeElement?.getAttribute("data-testid") === "workings-tab:operation"`,
+			"focus goes back to the tab",
+		);
+		assert(!(await shown("drawer:operation")), "Escape closes the drawer");
+
+		// W opens the page's first drawer and closes it again.
+		await press(page, "w");
+		await page.until(
+			`() => document.querySelector('[data-testid="drawer:operation"]')?.getClientRects().length > 0`,
+			"W opens the drawer",
+		);
+		await press(page, "w");
+		await page.until(
+			`() => !document.querySelector('[data-testid="drawer:operation"]')?.getClientRects().length`,
+			"W closes it",
+		);
+
+		// A link can open a card with its workings showing.
+		await open(
+			page,
+			`${site.origin}${BASE}/infra/operations/plan?workings=operation`,
+		);
+		await page.until(
+			"() => document.documentElement.hasAttribute('data-hydrated')",
+			"the linked page hydrates",
+		);
+		assert(await shown("drawer:operation"), "?workings= opens the drawer");
 		assert(thrown.length === 0, `nothing threw: ${thrown.join("\n")}`);
 	});
 });

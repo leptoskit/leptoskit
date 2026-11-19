@@ -8,6 +8,7 @@
 
 use std::sync::Arc;
 
+use leptos::context::provide_context;
 use leptoskit::aria::Menu;
 use leptoskit::auth::ErrorResponse;
 use leptoskit::auth::client::sign_out_mutation;
@@ -32,6 +33,8 @@ use crate::model::Model;
 use crate::model::Section;
 use crate::model::Viewer;
 use crate::style;
+use crate::workings;
+use crate::workings::Workings;
 
 /// An icon, drawn as strokes in the current text colour.
 pub fn icon(path: &str) -> Element {
@@ -536,8 +539,8 @@ pub fn matching(targets: &[Target], query: &str) -> Vec<Target> {
 pub struct Shell {
 	/// The page's model.
 	pub model: Arc<Model>,
-	/// Whether mint tabs show their sources.
-	pub workings: RwSignal<bool>,
+	/// Workings mode and the page's drawers.
+	pub workings: Workings,
 	/// `light` or `dark` once the person chose one.
 	appearance: RwSignal<Option<String>>,
 	/// Whether the account menu is open.
@@ -560,7 +563,11 @@ impl Shell {
 	#[must_use]
 	pub fn new(model: Model) -> Self {
 		let shell = Self {
-			workings: RwSignal::new(model.viewer.workings_mode),
+			workings: Workings::new(
+				model.viewer.workings_mode,
+				model.open.clone(),
+				model.page.drawers().first().map(|drawer| drawer.id.clone()),
+			),
 			appearance: RwSignal::new(model.viewer.appearance.clone()),
 			model: Arc::new(model),
 			menu_open: RwSignal::new(false),
@@ -577,6 +584,12 @@ impl Shell {
 		use_shortcut(Shortcut::key("w").shift().unless_typing(), move || {
 			workings.toggle_workings();
 		});
+		let drawers = shell.workings;
+		provide_context(drawers);
+		use_shortcut(Shortcut::key("w").unless_typing(), move || {
+			drawers.toggle_first();
+		});
+		use_shortcut(Shortcut::key("Escape"), move || drawers.hide());
 
 		shell
 	}
@@ -589,8 +602,8 @@ impl Shell {
 
 	/// Turns Workings mode on or off, and remembers it for the person.
 	fn toggle_workings(&self) {
-		let on = !self.workings.get_untracked();
-		self.workings.set(on);
+		let on = !self.workings.mode.get_untracked();
+		self.workings.mode.set(on);
 		browser::post(
 			&format!("{BASE}/api/preferences"),
 			&format!(r#"{{"kind":"workings_mode","on":{on}}}"#),
@@ -660,7 +673,11 @@ impl Shell {
 				View()
 					.class("relative min-h-0 flex-1 flex-row overflow-hidden")
 					.child(rail(viewer, &section))
-					.child(main),
+					.child(main)
+					.children({
+						let drawers = self.model.page.drawers();
+						(!drawers.is_empty()).then(|| workings::aside(drawers))
+					}),
 			)
 			.child(tab_bar(
 				&section,
@@ -781,7 +798,7 @@ impl Shell {
 	/// the words can go on a phone and the switch still reads "Show
 	/// workings" to a screen reader.
 	fn workings_switch(&self) -> Element {
-		let on = self.workings.get();
+		let on = self.workings.mode.get();
 		let shell = self.clone();
 
 		Pressable("Show workings")
@@ -917,6 +934,11 @@ pub fn stylesheet() -> String {
 }
 
 /// What only a browser can do. On the server, each is nothing.
+/// Remembers a preference for the signed-in admin, and lets it go.
+pub(crate) fn preference(body: &str) {
+	browser::post(&format!("{BASE}/api/preferences"), body);
+}
+
 mod browser {
 	/// Whether the device prefers dark.
 	pub(super) fn prefers_dark() -> bool {
@@ -1042,6 +1064,7 @@ mod tests {
 					..viewer(&["notes-production", "notes-staging"])
 				},
 				page: crate::model::Page::Glossary,
+				open: None,
 			});
 			// Search with and without matches, and the account menu open.
 			for query in ["", "trend", "zebra"] {

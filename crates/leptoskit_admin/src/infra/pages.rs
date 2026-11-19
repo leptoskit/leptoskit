@@ -2,6 +2,7 @@
 
 use leptoskit::native::TextSpan;
 use leptoskit::prelude::*;
+use leptoskit_admin_pages::model;
 use leptoskit_deploy_console::control::Fleet;
 use leptoskit_deploy_console::control::Operation;
 use leptoskit_deploy_console::control::Phase;
@@ -93,108 +94,54 @@ fn operation_href(id: &str) -> String {
 	format!("{BASE}/infra/operations/{id}")
 }
 
-fn page_header(title: &str, lead: Option<&str>) -> Element {
-	let mut header = View()
-		.class("flex-col gap-1")
-		.child(Heading(1, title.to_owned()).class(style::PAGE_TITLE));
-
-	if let Some(lead) = lead {
-		header = header.child(Text(lead.to_owned()).class(style::SECONDARY));
-	}
-
-	header
+/// Every registered project, as the Projects page shows it.
+pub(crate) fn projects(states: &[ProjectState], now: u64) -> Vec<model::ProjectCard> {
+	states
+		.iter()
+		.map(|state| {
+			model::ProjectCard {
+				id: state.project.id.clone(),
+				environment: state.project.environment.clone(),
+				serving: state.serving().map_or_else(
+					|| "Nothing deployed yet".to_owned(),
+					|operation| {
+						format!(
+							"Serving {} · {}",
+							short(super::version(operation).unwrap_or_default()),
+							ago(operation.updated, now)
+						)
+					},
+				),
+				health: health(state),
+				last: state.operations.first().map_or_else(
+					|| "No operations yet".to_owned(),
+					|operation| {
+						format!(
+							"{}: {}",
+							describe(&operation.intent.action),
+							phase_word(operation.phase).1.to_lowercase()
+						)
+					},
+				),
+			}
+		})
+		.collect()
 }
 
-/// Every registered project.
-pub(crate) fn projects(states: &[ProjectState], now: u64) -> Screen {
-	let mut content = View().class("flex-col gap-5").child(page_header(
-		"Projects",
-		Some("Every project the control service runs, and what each is serving."),
-	));
-
-	if states.is_empty() {
-		content = content.child(components::empty_state(
-			"No projects yet",
-			"A project is a repository with a managed [infra] table in its leptoskit.toml. Add \
-			 this to yours, then start the admin with --project pointing at the repository:",
-			Some((
-				"[infra]\nname = \"notes-production\"\ndomain = \"notes.example\"\nlocation = \
-				 \"hel1\"\nserver_type = \"cx23\"\ninstances = 1",
-				"TOML",
-			)),
-			"Plan changes appears on the project as soon as the admin can read the table.",
-		));
-	}
-
-	let mut grid = View()
-		.class("grid grid-cols-2 gap-4 max-md:grid-cols-1")
-		.test_id("grid-main");
-
-	for state in states {
-		let id = &state.project.id;
-		let serving = state.serving().map_or_else(
-			|| "Nothing deployed yet".to_owned(),
-			|operation| {
-				format!(
-					"Serving {} · {}",
-					short(super::version(operation).unwrap_or_default()),
-					ago(operation.updated, now)
-				)
-			},
-		);
-		let health = health_word(state);
-		let last = state.operations.first().map_or_else(
-			|| "No operations yet".to_owned(),
-			|operation| {
-				format!(
-					"{}: {}",
-					describe(&operation.intent.action),
-					phase_word(operation.phase).1.to_lowercase()
-				)
-			},
-		);
-
-		grid = grid.child(
-			Pressable(format!("Open {id}"))
-				.href(project_href(id, Tab::Overview))
-				.class("cursor-pointer rounded-xl hover:bg-[var(--admin-sunken)]")
-				.test_id(format!("project:{id}"))
-				.child(
-					View()
-						.class(style::CARD)
-						.child(
-							View()
-								.class("flex-row flex-wrap items-center gap-2")
-								.child(Heading(2, id.clone()).class(style::CARD_TITLE))
-								.child(Text(state.project.environment.clone()).class(style::CHIP)),
-						)
-						.child(Text(serving).class(style::BODY))
-						.child(health)
-						.child(Text(last).class(style::MUTED)),
-				),
-		);
-	}
-
-	Screen {
-		title: "Projects".to_owned(),
-		section: Section::Projects,
-		content: content.child(grid),
-		drawers: Vec::new(),
-		open: None,
-	}
+/// A project's last health check, in a word.
+fn health(state: &ProjectState) -> (Tone, String) {
+	let (tone, word) = match state.health() {
+		Some(operation) if operation.phase == Phase::Succeeded => (Tone::Good, "Healthy"),
+		Some(operation) if operation.phase == Phase::Failed => (Tone::Bad, "Unhealthy"),
+		Some(_) => (Tone::Warn, "Check interrupted"),
+		None => (Tone::Info, "Not checked"),
+	};
+	(tone, word.to_owned())
 }
 
 fn health_word(state: &ProjectState) -> Element {
-	match state.health() {
-		Some(operation) if operation.phase == Phase::Succeeded => {
-			components::status_word(Tone::Good, "Healthy")
-		}
-		Some(operation) if operation.phase == Phase::Failed => {
-			components::status_word(Tone::Bad, "Unhealthy")
-		}
-		Some(_) => components::status_word(Tone::Warn, "Check interrupted"),
-		None => components::status_word(Tone::Info, "Not checked"),
-	}
+	let (tone, word) = health(state);
+	components::status_word(tone, word)
 }
 
 fn active_banner(state: &ProjectState, now: u64) -> Option<Element> {
@@ -1239,9 +1186,8 @@ fn config(state: &ProjectState) -> Body {
 	)
 }
 
-/// One operation and its timeline.
-pub(crate) fn operation(state: &ProjectState, operation: &Operation, now: u64) -> Screen {
-	let (tone, word) = phase_word(operation.phase);
+/// One operation, as its page shows it.
+pub(crate) fn operation(state: &ProjectState, operation: &Operation, now: u64) -> model::Operation {
 	let running = matches!(operation.phase, Phase::Queued | Phase::Running);
 	let took = if running {
 		format!(
@@ -1254,137 +1200,47 @@ pub(crate) fn operation(state: &ProjectState, operation: &Operation, now: u64) -
 			duration(operation.updated.saturating_sub(operation.created))
 		)
 	};
+	let (tone, word) = phase_word(operation.phase);
 
-	let header = View()
-		.class("flex-col gap-2")
-		.child(
-			View()
-				.class("flex-row flex-wrap items-center gap-2")
-				.child(components::link(
-					state.project.id.clone(),
-					project_href(&state.project.id, Tab::Operations),
-				))
-				.child(Text("/").class(style::MUTED))
-				.child(
-					Text(operation.id.chars().take(8).collect::<String>()).class(style::SECONDARY),
-				),
-		)
-		.child(Heading(1, describe(&operation.intent.action)).class(style::PAGE_TITLE))
-		.child(
-			View()
-				.class("flex-row flex-wrap items-center gap-3")
-				.child(components::status_word(tone, word).test_id("phase"))
-				.child(
-					Text(format!(
-						"Started by {} · {} · {took}",
-						operation
-							.actor
-							.clone()
-							.unwrap_or_else(|| "the owner key".to_owned()),
-						ago(operation.created, now)
-					))
-					.class(style::SECONDARY),
-				),
-		);
-
-	let mut timeline = View().class("flex-col").test_id("timeline");
-
-	for (index, event) in operation.events.iter().enumerate() {
-		let (tone, word) = phase_word(event.phase);
-		let last = index + 1 == operation.events.len();
-		timeline = timeline.child(
-			View()
-				.class("relative flex-row gap-3 pb-4 pl-6")
-				.test_id("event")
-				.child(
-					View()
-						.class("absolute left-[5px] top-3 bottom-0 w-0.5 bg-[var(--admin-line)]")
-						.class(if last { "hidden" } else { "" })
-						.aria_hidden(true),
-				)
-				.child(
-					View()
-						.class(
-							"absolute left-0 top-1 h-3 w-3 rounded-full border-2 \
-							 border-[var(--admin-ink)]",
-						)
-						.class(if last && running {
-							"bg-[var(--admin-ember)] animate-pulse"
-						} else {
-							"bg-[var(--admin-surface)]"
-						})
-						.aria_hidden(true),
-				)
-				.child(
-					View()
-						.class("min-w-0 flex-1 flex-col gap-0.5")
-						.child(Text(event.message.clone()).class(style::BODY))
-						.child(
-							Text(format!("{word} · {}", ago(event.created, now)))
-								.class("text-xs")
-								.class(tone.text()),
-						),
-				),
-		);
-	}
-
-	let mut card = components::card("Timeline")
-		.workings("operation", "lk console status")
-		.child(timeline);
-
-	if running {
-		card = card.child(
-			Status("Following live. Closing this tab cancels nothing.")
-				.class("text-sm text-[var(--admin-ink-2)]")
-				.test_id("live"),
-		);
-	} else {
-		card = card.child(
-			Text(operation.message.clone())
-				.class(style::SECONDARY)
-				.test_id("result"),
-		);
-	}
-
-	let changes = super::changes(operation);
-	let mut body = vec![header, card.build()];
-
-	if !changes.is_empty() {
-		let mut list = View().class("flex-col gap-1.5");
-
-		for change in &changes {
-			list = list.child(
-				View()
-					.class("flex-row gap-3")
-					.child(
-						Text(format!("{} {}", change.symbol(), change.verb()))
-							.class("w-24 shrink-0 text-sm font-semibold")
-							.class(change.tone().text()),
-					)
-					.child(
-						Text(change.address.clone())
-							.class(style::CODE)
-							.class("truncate"),
-					),
-			);
-		}
-
-		body.push(
-			components::card("What the plan found")
-				.child(list)
-				.child(components::link(
-					"Review it under Changes",
-					project_href(&state.project.id, Tab::Changes),
-				))
-				.build(),
-		);
-	}
-
-	Screen {
+	model::Operation {
+		id: operation.id.clone(),
+		project: state.project.id.clone(),
 		title: describe(&operation.intent.action),
-		section: Section::ProjectOperations(state.project.id.clone()),
-		content: View().class("flex-col gap-5").children(body),
-		drawers: vec![drawers::operation_drawer(state, operation)],
-		open: None,
+		phase: (tone, word.to_owned()),
+		started: format!(
+			"Started by {} · {} · {took}",
+			operation
+				.actor
+				.clone()
+				.unwrap_or_else(|| "the owner key".to_owned()),
+			ago(operation.created, now)
+		),
+		running,
+		steps: operation
+			.events
+			.iter()
+			.map(|event| {
+				let (tone, word) = phase_word(event.phase);
+				model::Step {
+					sequence: event.sequence,
+					message: event.message.clone(),
+					tone,
+					word: word.to_owned(),
+					when: ago(event.created, now),
+				}
+			})
+			.collect(),
+		result: operation.message.clone(),
+		changes: super::changes(operation)
+			.iter()
+			.map(|change| {
+				model::ChangeRow {
+					label: format!("{} {}", change.symbol(), change.verb()),
+					tone: change.tone(),
+					address: change.address.clone(),
+				}
+			})
+			.collect(),
+		drawer: drawers::operation_drawer(state, operation),
 	}
 }
