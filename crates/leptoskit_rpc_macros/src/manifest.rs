@@ -1,10 +1,21 @@
-//! Whether the crate an attribute expands in declares a `service` feature.
+//! What the manifest of the crate an attribute expands in says about its
+//! features.
 //!
 //! A service's operations and channels keep their server items behind the
 //! declaring crate's own `service` feature. A crate that only calls a
 //! service, such as an app, has no such feature, and Cargo's check-cfg warns
 //! about `cfg(feature = "service")` there. Without the feature that `cfg` is
 //! always false, so the attributes give such a crate the stub directly.
+//!
+//! An app crate can also keep its own operations' server items behind one of
+//! its features, so that a crate which links it for the client only, while
+//! `leptoskit_rpc/server` is on for some other reason, neither compiles nor
+//! serves them. It names the feature in its manifest:
+//!
+//! ```toml
+//! [package.metadata.leptoskit.rpc]
+//! server-feature = "server"
+//! ```
 
 use std::path::Path;
 
@@ -40,6 +51,63 @@ fn declares_service(manifest: &str) -> bool {
 	})
 }
 
+/// The feature the crate being compiled keeps its own operations' server
+/// items behind, from `[package.metadata.leptoskit.rpc] server-feature`, or
+/// `None` when it names none. Cargo doesn't rebuild a crate when only its
+/// metadata changes, so `cargo clean -p <crate>` after adding or removing it.
+///
+/// # Errors
+///
+/// When the key isn't a string, or names a feature the manifest doesn't
+/// declare, so a typo can't silently leave the bodies in every build.
+pub(crate) fn server_feature() -> Result<Option<String>, String> {
+	let Some(directory) = std::env::var_os("CARGO_MANIFEST_DIR") else {
+		return Ok(None);
+	};
+
+	match std::fs::read_to_string(Path::new(&directory).join("Cargo.toml")) {
+		Ok(manifest) => server_feature_in(&manifest),
+		Err(_) => Ok(None),
+	}
+}
+
+/// [`server_feature`] for `manifest`, a `Cargo.toml`. A manifest that doesn't
+/// parse names none: Cargo has already rejected it.
+fn server_feature_in(manifest: &str) -> Result<Option<String>, String> {
+	let Ok(manifest) = manifest.parse::<toml::Table>() else {
+		return Ok(None);
+	};
+	let Some(value) = manifest
+		.get("package")
+		.and_then(|package| package.get("metadata"))
+		.and_then(|metadata| metadata.get("leptoskit"))
+		.and_then(|leptoskit| leptoskit.get("rpc"))
+		.and_then(|rpc| rpc.get("server-feature"))
+	else {
+		return Ok(None);
+	};
+	let Some(feature) = value.as_str() else {
+		return Err(
+			"`[package.metadata.leptoskit.rpc] server-feature` must name one of this crate's \
+			 features, as a string"
+				.to_owned(),
+		);
+	};
+	let declared = manifest
+		.get("features")
+		.and_then(toml::Value::as_table)
+		.is_some_and(|features| features.contains_key(feature));
+
+	if !declared {
+		return Err(format!(
+			"`[package.metadata.leptoskit.rpc] server-feature` names `{feature}`, which isn't in \
+			 this crate's `[features]`"
+		));
+	}
+
+	Ok(Some(feature.to_owned()))
+}
+
 #[cfg(test)]
 mod tests {
 	use std::path::Path;
@@ -47,6 +115,8 @@ mod tests {
 	use super::declares_service;
 	use super::declares_service_feature;
 	use super::declares_service_in;
+	use super::server_feature;
+	use super::server_feature_in;
 
 	#[test]
 	fn a_service_feature_is_found_among_the_features() {
@@ -87,5 +157,44 @@ mod tests {
 		assert!(declares_service_in(Some(Path::new(
 			"/nonexistent/leptoskit_rpc_macros"
 		))));
+	}
+
+	#[test]
+	fn a_server_feature_is_read_from_the_metadata() {
+		assert_eq!(
+			server_feature_in(
+				"[package]\nname = \"cloud\"\n\n[package.metadata.leptoskit.rpc]\nserver-feature \
+				 = \"server\"\n\n[features]\nserver = []\n"
+			),
+			Ok(Some("server".to_owned()))
+		);
+	}
+
+	#[test]
+	fn without_the_metadata_there_is_no_server_feature() {
+		assert_eq!(
+			server_feature_in("[package]\nname = \"app\"\n\n[features]\nserver = []\n"),
+			Ok(None)
+		);
+		assert_eq!(server_feature_in("[package\nname = \"app\"\n"), Ok(None));
+		// The macro crate itself names none.
+		assert_eq!(server_feature(), Ok(None));
+	}
+
+	#[test]
+	fn a_server_feature_must_be_a_declared_feature() {
+		let undeclared = server_feature_in(
+			"[package]\nname = \"cloud\"\n\n[package.metadata.leptoskit.rpc]\nserver-feature = \
+			 \"sever\"\n\n[features]\nserver = []\n",
+		)
+		.expect_err("an undeclared feature");
+		assert!(undeclared.contains("`sever`"), "{undeclared}");
+
+		let not_a_string = server_feature_in(
+			"[package]\nname = \"cloud\"\n\n[package.metadata.leptoskit.rpc]\nserver-feature = \
+			 true\n",
+		)
+		.expect_err("not a string");
+		assert!(not_a_string.contains("as a string"), "{not_a_string}");
 	}
 }

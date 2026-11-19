@@ -85,7 +85,14 @@ pub(crate) fn api(service: &'static str) -> Arc<dyn Api> {
 }
 
 /// The origin a service's routes live under, for a client whose origin is
-/// `origin`: `{origin}/_leptoskit/services/<service>`.
+/// `origin`: `{origin}/_leptoskit/services/<service>`. Compiled where
+/// something reaches a service: the browser and a native app through
+/// `at_service`, and a server through `FromEnvironment`.
+#[cfg(any(
+	test,
+	all(any(feature = "guest", feature = "web"), target_arch = "wasm32"),
+	all(feature = "services", not(target_arch = "wasm32")),
+))]
 pub(crate) fn service_origin(origin: Option<&str>, service: &str) -> String {
 	format!(
 		"{}{}",
@@ -400,11 +407,12 @@ impl super::Credentials for IdentityToken {
 }
 
 /// The app's configuration, pointed at `service`'s routes: see
-/// [`for_service`].
-#[cfg_attr(
-	not(target_arch = "wasm32"),
-	allow(dead_code, reason = "a server reaches services by their environment")
-)]
+/// [`for_service`]. Only the browser and a native app use it; a server
+/// reaches services by their environment.
+#[cfg(any(
+	test,
+	all(any(feature = "guest", feature = "web"), target_arch = "wasm32")
+))]
 pub(crate) fn at_service(config: &ClientConfig, service: &str) -> ClientConfig {
 	let config = for_service(config, service);
 	ClientConfig {
@@ -568,6 +576,7 @@ impl<H: super::protocol::Http + Clone> FromEnvironment<H> {
 	}
 }
 
+#[cfg(any(test, all(feature = "services", not(target_arch = "wasm32"))))]
 impl<H: super::protocol::Http + Clone> Api for FromEnvironment<H> {
 	/// Anonymous, signed as the app, or, while the server renders a page for
 	/// someone and the app forwards identity to the service, signed with

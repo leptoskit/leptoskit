@@ -288,6 +288,10 @@ pub(crate) struct Build {
 	/// Whether the crate being compiled declares a `service` feature. Asked
 	/// only for a service's operations and channels in a server build.
 	pub(crate) declares_service: fn() -> bool,
+	/// The feature the crate being compiled keeps its own operations' server
+	/// items behind, if it names one; see [`manifest::server_feature`]. Asked
+	/// only for the app's own operations in a server build.
+	pub(crate) server_feature: fn() -> Result<Option<String>, String>,
 }
 
 impl Build {
@@ -296,6 +300,7 @@ impl Build {
 		Self {
 			server: cfg!(feature = "server"),
 			declares_service: manifest::declares_service_feature,
+			server_feature: manifest::server_feature,
 		}
 	}
 }
@@ -702,6 +707,18 @@ struct Param {
 /// Expands `#[api]`. `register` decides whether the description is
 /// registered: the `ssr` feature in the real macro, either way in tests.
 fn expand(args: TokenStream, item: TokenStream, register: bool) -> syn::Result<TokenStream> {
+	expand_in(args, item, register, manifest::server_feature)
+}
+
+/// [`expand`], with the crate's server feature read by `server_feature`: an
+/// app operation's description is registered only where the operation is
+/// served.
+fn expand_in(
+	args: TokenStream,
+	item: TokenStream,
+	register: bool,
+	server_feature: fn() -> Result<Option<String>, String>,
+) -> syn::Result<TokenStream> {
 	let args = ApiArgs::parse(args)?;
 
 	if let Ok(channel) = syn::parse2::<syn::ItemStruct>(item.clone()) {
@@ -716,7 +733,9 @@ fn expand(args: TokenStream, item: TokenStream, register: bool) -> syn::Result<T
 		.enumerate()
 		.find_map(|(index, attr)| operation_attribute(attr).map(|kind| (index, kind)))
 	{
-		Some((index, kind)) => expand_operation(&args, function, index, kind, register),
+		Some((index, kind)) => {
+			expand_operation(&args, function, index, kind, register, server_feature)
+		}
 		None => expand_server(&args, function, register),
 	}
 }
@@ -872,15 +891,7 @@ fn server_fn_registration(
 		.attrs
 		.iter()
 		.any(|attr| attr.path().is_ident("deprecated"));
-	// A literal is the scope itself; anything else is a variant of a
-	// `scopes!` enum, whose `as_str` is a `const fn`.
-	let scopes = args.scopes.iter().map(|scope| {
-		if let Expr::Lit(_) = scope {
-			scope.to_token_stream()
-		} else {
-			quote!((#scope).as_str())
-		}
-	});
+	let scopes = scope_strings(args);
 	let param_descriptors = params.iter().map(|param| {
 		let wire_name = LitStr::new(&param.wire_name, Span::call_site());
 		let docs = LitStr::new(&param.docs, Span::call_site());
@@ -935,6 +946,7 @@ fn expand_operation(
 	index: usize,
 	kind: OperationKind,
 	register: bool,
+	server_feature: fn() -> Result<Option<String>, String>,
 ) -> syn::Result<TokenStream> {
 	let tokens = operation_tokens(&function.attrs[index], kind)?;
 	let operation_args = OperationArgs::parse(kind, tokens.clone())?;
@@ -958,7 +970,7 @@ fn expand_operation(
 	function.attrs[index] = syn::parse_quote!(#[#path(#forwarded)]);
 
 	let registration = if register {
-		registration(
+		let registration = registration(
 			args,
 			&function,
 			&signature,
@@ -966,7 +978,19 @@ fn expand_operation(
 			&name,
 			&krate,
 			operation_args.service.as_ref(),
-		)?
+		)?;
+		// An app crate that keeps its operations behind its own server
+		// feature describes them only where it serves them.
+		let feature = if operation_args.service.is_none() {
+			server_feature().map_err(|message| syn::Error::new(Span::call_site(), message))?
+		} else {
+			None
+		};
+
+		match feature {
+			Some(feature) => quote!(#[cfg(feature = #feature)] #registration),
+			None => registration,
+		}
 	} else {
 		TokenStream::new()
 	};
@@ -1043,6 +1067,22 @@ fn forward_options(args: &ApiArgs, tokens: TokenStream) -> Punctuated<TokenStrea
 	forwarded
 }
 
+/// The scopes `#[api(scope = ...)]` names, as `&'static str` expressions. A
+/// literal is the scope itself; anything else is a variant of a `scopes!`
+/// enum, whose `as_str` is a `const fn`.
+fn scope_strings(args: &ApiArgs) -> Vec<TokenStream> {
+	args.scopes
+		.iter()
+		.map(|scope| {
+			if let Expr::Lit(_) = scope {
+				scope.to_token_stream()
+			} else {
+				quote!((#scope).as_str())
+			}
+		})
+		.collect()
+}
+
 /// The `ApiFnDescriptor` a registered operation submits.
 fn registration(
 	args: &ApiArgs,
@@ -1081,6 +1121,7 @@ fn registration(
 		.any(|attr| attr.path().is_ident("deprecated"));
 	let internal = args.internal;
 	let tags = &args.tags;
+	let scopes = scope_strings(args);
 	let api_kind = kind.api_variant();
 	let params = param_descriptors(signature, function, krate)?;
 	// A stream's result is one item.
@@ -1112,7 +1153,7 @@ fn registration(
 					internal: #internal,
 					deprecated: #deprecated,
 					tags: &[#(#tags),*],
-					scopes: &[],
+					scopes: &[#(#scopes),*],
 					service: #service,
 					rpc_operation: true,
 				}
