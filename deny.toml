@@ -100,6 +100,5 @@ allow-registry = ["https://github.com/rust-lang/crates.io-index"]
 # `canvist` is git-pinned until its per-extension crates are released.
 allow-git = [
 	"https://github.com/Synphonyte/leptos-use",
-	"https://github.com/openbudgetfun/skribble",
 	"https://github.com/canvist/canvist",
 ]
