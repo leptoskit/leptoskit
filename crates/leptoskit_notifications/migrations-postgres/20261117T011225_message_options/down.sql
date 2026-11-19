@@ -3,7 +3,20 @@
 --
 -- loses data: every value in `notifications.kind` is deleted
 -- loses data: every value in `notifications.options` is deleted
+-- loses data: every silent data message (`kind = 'data'`) is cancelled
 DROP TRIGGER "live_capture" ON "notifications";
+
+-- A silent data message's row is hidden only by its `kind`, which goes with
+-- this rollback: left as it is, every data row would surface in its
+-- person's inbox and unread count as an ordinary notification. Cancelled
+-- rows are never visible and never pushed, in every version of the service,
+-- so each one is cancelled here, while the column still says which they are.
+UPDATE "notifications"
+SET
+	"cancelled_at" = now ()
+WHERE
+	"kind" = 'data'
+	AND "cancelled_at" IS NULL;
 
 ALTER TABLE "notifications"
 DROP CONSTRAINT "notifications_kind_values";

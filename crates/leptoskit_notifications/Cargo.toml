@@ -72,6 +72,13 @@ required-features = ["service"]
 name = "large_audience"
 required-features = ["service"]
 
+# The scale tests check the plans of the reads that grew with the tables,
+# on SQLite and, behind `postgres`, on a private Postgres, and the pruning
+# job: what it deletes, what it keeps, and what a pruned send's key does.
+[[test]]
+name = "scale"
+required-features = ["service"]
+
 # The Postgres races need the Postgres service; they start a private
 # Postgres from local binaries and skip without them.
 [[test]]

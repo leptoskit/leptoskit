@@ -192,7 +192,8 @@ pub const MAX_TARGET_LEN: usize = 1_200;
 	name = "notifications",
 	live,
 	unique(send_key, person),
-	index(person, id)
+	index(person, id),
+	index(person, kind, dismissed_at, read_at)
 )]
 pub struct Notification {
 	/// A UUID v7 the service assigns, so rows order by arrival and pages
@@ -1303,6 +1304,47 @@ pub async fn forget_rows(
 	through: uuid::Uuid,
 ) -> rpc::Result<()> {
 	service::forget_rows(cx.db(), person, through).await
+}
+
+/// Starts the hourly pruning sweep: deletes what the operator's retention
+/// lets go of — notifications nobody can see any more, inbox rows past
+/// their age, finished push deliveries, and old send records — in batches,
+/// each a short write of its own. What the service still works with is
+/// never deleted, whatever its age: [`service::retention`] has the rules,
+/// and [`service::config::Retention`] the settings and their defaults.
+///
+/// A sweep that outlasts this run's share of time goes on in
+/// [`prune_rows`]. Only the service's own workers run it; the app never
+/// enqueues it.
+#[rpc::cron("17 * * * *")]
+#[rpc::job(service = "notifications", queue = "prune", timeout = 5m)]
+pub async fn prune(cx: &rpc::JobCx) -> rpc::Result<()> {
+	service::retention::step(
+		cx,
+		leptoskit_db::now().timestamp(),
+		service::retention::Stage::FIRST,
+		None,
+	)
+	.await
+}
+
+/// Goes on with a pruning sweep where the step before it stopped: `stage`
+/// is the table it was in, `after` the last row it considered there, and
+/// `sweep` when the sweep began, in Unix seconds — a sweep still going when
+/// the next hour's starts ends, and that one covers what it had left.
+///
+/// Only the service's own workers run it; the app never enqueues it.
+#[rpc::job(service = "notifications", queue = "prune", timeout = 5m)]
+pub async fn prune_rows(
+	cx: &rpc::JobCx,
+	sweep: i64,
+	stage: String,
+	after: Option<String>,
+) -> rpc::Result<()> {
+	let stage = service::retention::Stage::from_str_value(&stage)
+		.ok_or_else(|| rpc::Error::server(format!("`{stage}` isn't a pruning stage")))?;
+
+	service::retention::step(cx, sweep, stage, after).await
 }
 
 /// Cancels a scheduled send before it's due: every row it created stops

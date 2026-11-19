@@ -4,11 +4,24 @@
 --
 -- loses data: every value in `notifications.kind` is deleted
 -- loses data: every value in `notifications.options` is deleted
+-- loses data: every silent data message (`kind = 'data'`) is cancelled
 DROP TRIGGER "live_notifications_delete";
 
 DROP TRIGGER "live_notifications_insert";
 
 DROP TRIGGER "live_notifications_update";
+
+-- A silent data message's row is hidden only by its `kind`, which goes with
+-- this rollback: left as it is, every data row would surface in its
+-- person's inbox and unread count as an ordinary notification. Cancelled
+-- rows are never visible and never pushed, in every version of the service,
+-- so each one is cancelled here, while the column still says which they are.
+UPDATE "notifications"
+SET
+	"cancelled_at" = strftime ('%Y-%m-%dT%H:%M:%fZ', 'now')
+WHERE
+	"kind" = 'data'
+	AND "cancelled_at" IS NULL;
 
 CREATE TABLE "_leptoskit_rebuild_notifications" (
 	"id" BLOB NOT NULL CHECK (length ("id") = 16),

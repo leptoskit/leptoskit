@@ -126,9 +126,9 @@ fn names(migrations: &[Migration]) -> Vec<String> {
 /// same schema" is compared by what the schema says, not only by name. The
 /// database crate's own bookkeeping (`_leptoskit_*`) is left out. Postgres
 /// schemas themselves are left out too: `init` creates `live` and `rpc`
-/// with `IF NOT EXISTS`, and no `down.sql` in the repository drops a
-/// schema, so a rolled-back database keeps them empty; what lives inside
-/// them is compared.
+/// with `IF NOT EXISTS`, and its rollback drops each only when it is left
+/// empty, which has its own check below; what lives inside them is
+/// compared.
 async fn snapshot(db: &Db) -> Vec<String> {
 	let (queries, separator): (&[&str], &str) = match db.dialect() {
 		Dialect::Sqlite => (SQLITE_CATALOG, ""),
@@ -566,6 +566,86 @@ async fn backfill_registers_exactly_the_known_persons(engine: &Engine, db: &Db) 
 	}
 }
 
+/// Rolling `message_options` back takes away the column that says which
+/// rows are silent data messages. Those rows must not turn into ordinary
+/// notifications in somebody's inbox: the rollback cancels each one, and
+/// leaves every other row as it was.
+async fn rolling_message_options_back_hides_data_messages(engine: &Engine, db: &Db) {
+	let sql = Sql(engine.dialect);
+	let migrations = engine.discover();
+	let index = migrations
+		.iter()
+		.position(|migration| migration.name.ends_with("_message_options"))
+		.expect("the registry lists message_options");
+	let through = &migrations[..=index];
+
+	db.migrate(through).await.expect("the migrations apply");
+
+	let at = sql.timestamp(&day(3));
+	let earlier = sql.timestamp(&day(2));
+
+	for (key, kind, cancelled) in [
+		("silent", "data", "NULL"),
+		("silent-cancelled", "data", earlier.as_str()),
+		("shown", "notification", "NULL"),
+		("shown-cancelled", "notification", earlier.as_str()),
+	] {
+		run(
+			db,
+			format!(
+				"INSERT INTO notifications (id, send_key, person, category, title, body, data, \
+				 visible_at, cancelled_at, created_at, kind) VALUES ({}, '{key}', {}, 'news', \
+				 't', '', '{{}}', {at}, {cancelled}, {at}, '{kind}')",
+				sql.new_id(),
+				sql.uuid(person(1)),
+			),
+		)
+		.await;
+	}
+
+	let reversed = db
+		.rollback(through, 1)
+		.await
+		.expect("message_options rolls back over rows");
+	assert_eq!(reversed, [migrations[index].name.to_string()]);
+
+	let visible: Vec<String> = run(
+		db,
+		"SELECT send_key FROM notifications WHERE cancelled_at IS NULL ORDER BY send_key",
+	)
+	.await
+	.into_iter()
+	.map(|row| {
+		match &row[0] {
+			Value::Text(key) => key.clone(),
+			other => panic!("expected a key, found {other:?}"),
+		}
+	})
+	.collect();
+	assert_eq!(
+		visible,
+		["shown"],
+		"only the ordinary, uncancelled notification is still visible"
+	);
+
+	// A row cancelled before the rollback keeps the time it was cancelled.
+	let kept = run(
+		db,
+		format!(
+			"SELECT count(*) FROM notifications WHERE cancelled_at = {earlier} AND send_key IN \
+			 ('silent-cancelled', 'shown-cancelled')"
+		),
+	)
+	.await;
+	assert_eq!(int(&kept[0][0]), 2, "earlier cancellations are untouched");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn sqlite_rolling_message_options_back_hides_data_messages() {
+	let engine = sqlite();
+	rolling_message_options_back_hides_data_messages(&engine, &engine.database().await).await;
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn sqlite_a_full_rollback_leaves_nothing() {
 	let engine = sqlite();
@@ -599,6 +679,80 @@ mod on_postgres {
 		Db::connect(&postgres.database())
 			.await
 			.expect("the database opens")
+	}
+
+	async fn schemas(db: &Db) -> Vec<String> {
+		run(
+			db,
+			"SELECT nspname::text FROM pg_namespace WHERE nspname IN ('live', 'rpc') ORDER BY \
+			 nspname",
+		)
+		.await
+		.into_iter()
+		.map(|row| {
+			match &row[0] {
+				Value::Text(name) => name.clone(),
+				other => panic!("expected a schema name, found {other:?}"),
+			}
+		})
+		.collect()
+	}
+
+	/// `init` creates the `live` and `rpc` schemas, so its rollback drops
+	/// them — but only the ones it leaves empty. A schema that holds
+	/// something of another owner's stays, with what it holds, and the
+	/// rollback still succeeds and can be applied again.
+	#[tokio::test(flavor = "multi_thread")]
+	async fn postgres_rolling_init_back_drops_only_the_schemas_it_emptied() {
+		let Some(postgres) = Postgres::start() else {
+			return;
+		};
+		let engine = postgres_engine();
+		let db = connect(&postgres).await;
+		let migrations = engine.discover();
+
+		// On its own in a database: both schemas go.
+		db.migrate(&migrations).await.expect("the migrations apply");
+		assert_eq!(schemas(&db).await, ["live", "rpc"]);
+		db.rollback(&migrations, migrations.len())
+			.await
+			.expect("the migrations roll back");
+		assert_eq!(schemas(&db).await, Vec::<String>::new());
+
+		// Sharing `live` with something that was there first: `live` and
+		// the stranger's table stay, `rpc` goes.
+		run(&db, "CREATE SCHEMA live").await;
+		run(&db, "CREATE TABLE live.somebody_elses (id integer)").await;
+		run(&db, "INSERT INTO live.somebody_elses VALUES (7)").await;
+		db.migrate(&migrations)
+			.await
+			.expect("the migrations apply beside it");
+		db.rollback(&migrations, migrations.len())
+			.await
+			.expect("the migrations roll back beside it");
+		assert_eq!(schemas(&db).await, ["live"]);
+		assert_eq!(
+			int(&run(&db, "SELECT id FROM live.somebody_elses").await[0][0]),
+			7,
+			"what the rollback did not make is untouched"
+		);
+
+		db.migrate(&migrations)
+			.await
+			.expect("and they apply again afterwards");
+	}
+
+	#[tokio::test(flavor = "multi_thread")]
+	async fn postgres_rolling_message_options_back_hides_data_messages() {
+		let Some(postgres) = Postgres::start() else {
+			return;
+		};
+
+		rolling_message_options_back_hides_data_messages(
+			&postgres_engine(),
+			&connect(&postgres).await,
+		)
+		.await;
 	}
 
 	#[tokio::test(flavor = "multi_thread")]

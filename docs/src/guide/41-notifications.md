@@ -61,7 +61,7 @@ let sent = call_as_app(leptoskit_notifications::Send {
 
 Every named recipient gets one durable row of their own, visible immediately — or at `visible_at`, when you schedule one — until `expires_at`. The counts come back: `delivered`, `skipped_opted_out` (recipients who opted out of the category), and `recipients`. A recipients send is one transaction, so it lands all at once or not at all, and answers with its final counts.
 
-The `idempotency_key` is how retries stay safe: derive one stable key per logical send (like the invoice id above) and reuse it on retry. The same key with the same intent answers the first run's result and writes nothing — across restarts, and past the send's expiry, because the send's bookkeeping lives in the service's database — and the same key with a different intent is refused with a conflict, so a reused key can't quietly send something else.
+The `idempotency_key` is how retries stay safe: derive one stable key per logical send (like the invoice id above) and reuse it on retry. The same key with the same intent answers the first run's result and writes nothing — across restarts, and past the send's expiry, because the send's bookkeeping lives in the service's database — and the same key with a different intent is refused with a conflict, so a reused key can't quietly send something else. The key is remembered for as long as the send's record is kept, which is [at least 90 days by default](#how-long-things-are-kept).
 
 `SendSpec::visible_at` and `expires_at` take RFC 3339 instants, at most a year ahead; a `visible_at` in the past means now, so the notification shows from the moment it is sent and its push has its full delivery window from then. `data` is a JSON object of at most 4 KiB your screens read to route a tap; everything is length-checked on both sides, so a screen can reject bad input without a round trip. The whole spec is bounded as the service stores it, too: at most 8 KiB as JSON, with its options at most 4 KiB of that, so a spec that passes the checks is always one the service can keep, whatever its target.
 
@@ -1033,6 +1033,44 @@ The rule cuts the other way for a negated predicate. `user.plan == 'pro' && !(de
 
 A condition made only of device predicates walks the same person registry `SendTarget::Everyone` does, and one that names a topic it needs walks that topic's subscribers, as always. The devices are decided when the fanout writes a batch's rows, with each device's details as they stand then — for a scheduled send too, whose rows and pushes then wait for its time; a device that changes its details after that keeps the decision. `validate_only` counts the same per-device audience, and a refused key is refused there too.
 
+## How long things are kept
+
+A service that never deletes anything gets slower and more expensive every month, and keeps personal data long after anyone needs it. So the service deletes what is over, by itself, once an hour, in small pieces that never hold up a send or an inbox. What counts as over:
+
+| What                                                                                         | Kept for                                                          | Setting                                             | Default  |
+| -------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- | --------------------------------------------------- | -------- |
+| A notification in someone's inbox, read or not                                               | this long after it became visible                                 | `LEPTOSKIT_NOTIFICATIONS_RETENTION_INBOX_DAYS`      | 365 days |
+| A notification nobody can see any more: expired, cancelled, or a silent data message         | this long after it ended                                          | `LEPTOSKIT_NOTIFICATIONS_RETENTION_ENDED_DAYS`      | 30 days  |
+| The record of one push to one device, once it finished (accepted, rejected, or skipped)      | this long after it finished                                       | `LEPTOSKIT_NOTIFICATIONS_RETENTION_DELIVERIES_DAYS` | 30 days  |
+| The record of a send: its idempotency key, counts, and (for a topic or condition) its target | at least this long after the send, and as long as any row it made | `LEPTOSKIT_NOTIFICATIONS_RETENTION_SENDS_DAYS`      | 90 days  |
+
+Each setting is a whole number of days, or `off` to keep that kind of row forever. A value that is neither refuses to start, named. Like every variable the service reads, a setting only reaches it when your `[services.notifications]` table lists its name under `secrets`:
+
+```toml
+[services.notifications]
+secrets = [
+	"LEPTOSKIT_NOTIFICATIONS_RETENTION_INBOX_DAYS",
+	"LEPTOSKIT_NOTIFICATIONS_RETENTION_SENDS_DAYS",
+]
+```
+
+```bash
+LEPTOSKIT_NOTIFICATIONS_RETENTION_INBOX_DAYS=90
+LEPTOSKIT_NOTIFICATIONS_RETENTION_SENDS_DAYS=off
+```
+
+The service prints what it will keep when it starts, so you can check the settings arrived.
+
+A few rules hold whatever you set:
+
+- **Nothing in use is deleted.** A notification with a push still waiting to go out stays, and so does that push. A send that is still working through its audience keeps every row it has written. A scheduled notification is never too old before its time has come, and one you cancelled ahead of its time is kept until that time is `ENDED_DAYS` in the past.
+- **A push record never outlives its notification.** When a notification goes, its push records go with it, whatever their age.
+- **A person's inbox simply gets shorter.** Deleted rows leave the inbox and the unread count the same way a dismissed one does. Nothing on an open screen breaks.
+
+**How long a retry is safe.** The idempotency key is remembered for as long as the send's record is kept: at least `SENDS_DAYS` after the send, and for as long as any notification or push record from that send is still stored. With the defaults that is a year for a send that reached an inbox. During that time a repeat of the same call answers the first result and sends nothing. After the record is deleted, the service has forgotten the key, and the same call is a new send. So keep `SENDS_DAYS` longer than the longest time any of your systems might retry a send. It cannot be set below 2 days.
+
+Retention is also the answer for personal data that isn't tied to one person's deletion request. A condition can carry personal values (`user.email == '…'`), and it is stored with its send's record until that record is deleted. To delete one person's data now, use [`forget_person`](#erase-a-person).
+
 ## What it doesn't do yet
 
 - **Native client enrollment is iOS, Android, and macOS.** The service side of enrollment is done, the web client is this crate's `browser` module, and the native client — iOS's and macOS's APNs token and Android's FCM token alike — is the `native` module (all above). Push notification **tap routing** into a screen is later work, everywhere: a send's `link` is carried in every payload today, but opening it is each app's own code.
@@ -1047,3 +1085,19 @@ The engineering notes in the repository describe the transport work that follows
 ## Deploying
 
 The service ships the way [services](32-services.md#deploying) do: `leptoskit build` builds its binary, and the deploy targets run it beside your app with its own database. Its `healthz` and `readyz` come from the service framework, and its migrations apply when it starts.
+
+### Upgrading a large database
+
+A new version of the service can change its tables, and it makes those changes when it starts, before it serves anything. On a small database that takes no time you would notice. On a large one a few of the changes take as long as copying or indexing the table, and the service is not serving while they run. Plan a quiet moment for these:
+
+| Change                                                            | SQLite                                                                                            | Postgres                                                                                                                   |
+| ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `topics_and_fanout` (adds fanout state to send records)           | copies every send record and builds an index over every notification                              | builds a unique index over every notification and rewrites every send record; writes to both tables wait until it finishes |
+| `message_options` (adds a notification's kind and options)        | copies every notification and rebuilds its indexes                                                | reads every notification once to check the new column; nothing can read or write notifications until it finishes           |
+| `scale_indexes` (indexes for the unread count and the push queue) | builds one index over every notification and two over every push record; writes wait, reads go on | the same three builds; writes to those two tables wait, reads go on. You can build them ahead with no waiting, as below    |
+
+The other changes add empty tables or empty columns and take no measurable time at any size.
+
+On Postgres you can take the wait out of `scale_indexes` by building its three indexes yourself before you upgrade, while the old version is still running. Build each with `CREATE INDEX CONCURRENTLY`, under exactly the name and columns the migration file uses, and check that each one finished valid. The migration then finds them and only has a moment's work left. The migration file's own comment has the details.
+
+Rolling a change back is for emergencies, and some rollbacks lose data: the comment at the top of each `down.sql` says what. Rolling `message_options` back cancels every silent data message, because the older version could not tell them from ordinary notifications and would have shown them in people's inboxes.
