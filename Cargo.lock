@@ -5645,10 +5645,12 @@ name = "leptoskit_admin_pages"
 version = "0.3.0"
 dependencies = [
  "any_spawner",
+ "chrono",
  "console_error_panic_hook",
  "futures",
  "leptos",
  "leptoskit",
+ "leptoskit_analytics",
  "leptoskit_plugin_clipboard",
  "schemars",
  "serde",

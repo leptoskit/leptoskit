@@ -38,7 +38,7 @@ fn dashed(width: f32) -> Stroke {
 }
 
 /// The background class for a series slot.
-pub(crate) fn fill(slot: usize) -> &'static str {
+pub fn fill(slot: usize) -> &'static str {
 	match slot {
 		1 => "bg-[var(--admin-series-1)]",
 		2 => "bg-[var(--admin-series-2)]",
@@ -101,7 +101,7 @@ fn plot_vector() -> Element {
 }
 
 /// One line of a trend.
-pub(crate) struct Line {
+pub struct Line {
 	pub name: String,
 	/// The palette slot, from 1.
 	pub slot: usize,
@@ -121,7 +121,7 @@ impl Line {
 }
 
 /// A trend chart.
-pub(crate) struct Trend {
+pub struct Trend {
 	pub lines: Vec<Line>,
 	/// Every bucket's label; the axis shows the first, middle, and last.
 	pub labels: Vec<String>,
@@ -142,7 +142,7 @@ pub(crate) struct Trend {
 	clippy::too_many_lines,
 	reason = "one chart's layers in drawing order: grid, area, previous, lines, presses, labels"
 )]
-pub(crate) fn trend(chart: &Trend, label: &str) -> Element {
+pub fn trend(chart: &Trend, label: &str) -> Element {
 	let count = chart.labels.len().max(
 		chart
 			.lines
@@ -430,7 +430,7 @@ pub(crate) fn trend(chart: &Trend, label: &str) -> Element {
 }
 
 /// One row of a bar list.
-pub(crate) struct Bar {
+pub struct Bar {
 	pub label: String,
 	pub value: f64,
 	/// Where pressing the row goes: the page filtered by it.
@@ -438,7 +438,7 @@ pub(crate) struct Bar {
 }
 
 /// Horizontal share bars behind text, value right-aligned.
-pub(crate) fn bar_list(head: (&str, &str), rows: &[Bar], empty: &str) -> Element {
+pub fn bar_list(head: (&str, &str), rows: &[Bar], empty: &str) -> Element {
 	let highest = rows.iter().map(|row| row.value).fold(0.0_f64, f64::max);
 	let mut list = View().class("flex-col gap-1").child(
 		View()
@@ -525,7 +525,7 @@ fn hatch() -> Element {
 }
 
 /// One funnel step's column.
-pub(crate) struct Step {
+pub struct Step {
 	pub name: String,
 	pub count: u64,
 	/// From the step before, 0 to 1.
@@ -542,7 +542,7 @@ pub(crate) struct Step {
 	clippy::cast_precision_loss,
 	reason = "people counts become shares for drawing"
 )]
-pub(crate) fn funnel(steps: &[Step], height: &'static str) -> Element {
+pub fn funnel(steps: &[Step], height: &'static str) -> Element {
 	let first = steps.first().map_or(0, |step| step.count).max(1) as f64;
 	let mut row = View()
 		.class("flex-row items-end gap-2")
@@ -678,7 +678,7 @@ fn cell_class(step: usize) -> &'static str {
 }
 
 /// One cohort row.
-pub(crate) struct Cohort {
+pub struct Cohort {
 	pub label: String,
 	pub size: u64,
 	/// Each period's returns, from period 0.
@@ -693,7 +693,7 @@ pub(crate) struct Cohort {
 	clippy::cast_precision_loss,
 	reason = "people counts become shares for drawing"
 )]
-pub(crate) fn retention(cohorts: &[Cohort], period: &str, mean: &[f64]) -> Element {
+pub fn retention(cohorts: &[Cohort], period: &str, mean: &[f64]) -> Element {
 	let periods = cohorts
 		.iter()
 		.map(|cohort| cohort.returns.len())
@@ -793,7 +793,7 @@ pub(crate) fn retention(cohorts: &[Cohort], period: &str, mean: &[f64]) -> Eleme
 	View().class("overflow-scroll pb-1").child(grid)
 }
 
-pub(crate) use leptoskit_admin_pages::charts::trend_sparkline as sparkline;
+pub use crate::charts::trend_sparkline as sparkline;
 
 #[cfg(test)]
 mod tests {

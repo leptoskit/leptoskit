@@ -11,6 +11,8 @@
 
 use std::sync::OnceLock;
 
+pub(crate) use leptoskit_admin_pages::analytics::Drawn;
+pub(crate) use leptoskit_admin_pages::analytics::table;
 use leptoskit_analytics::query::Answer;
 use leptoskit_analytics::query::EventRow;
 use leptoskit_analytics::query::Query;
@@ -35,14 +37,6 @@ pub(crate) fn focus_event(query: &Query) -> Option<String> {
 		Query::Events(events) => events.event.clone(),
 		Query::Actors(actors) => focus_event(&actors.query),
 	}
-}
-
-/// How a card's rows became its chart.
-pub(crate) struct Drawn {
-	/// One or two sentences: how many rows, what the chart does with them.
-	pub sentence: String,
-	/// The rows as a small table, header first.
-	pub rows: Vec<String>,
 }
 
 /// What a drawer is built from.
@@ -493,37 +487,6 @@ pub(crate) fn drawer(source: Source<'_>) -> Drawer {
 			draw(source.drawn),
 		],
 	}
-}
-
-/// Pads a table's cells into columns.
-pub(crate) fn table(rows: &[Vec<String>]) -> Vec<String> {
-	let columns = rows.iter().map(Vec::len).max().unwrap_or(0);
-	let widths: Vec<usize> = (0..columns)
-		.map(|column| {
-			rows.iter()
-				.filter_map(|row| row.get(column))
-				.map(|cell| cell.chars().count())
-				.max()
-				.unwrap_or(0)
-		})
-		.collect();
-	rows.iter()
-		.map(|row| {
-			row.iter()
-				.enumerate()
-				.map(|(column, cell)| {
-					if column == 0 {
-						format!("{cell:<width$}", width = widths[column])
-					} else {
-						format!("{cell:>width$}", width = widths[column])
-					}
-				})
-				.collect::<Vec<_>>()
-				.join("  ")
-				.trim_end()
-				.to_owned()
-		})
-		.collect()
 }
 
 #[cfg(test)]

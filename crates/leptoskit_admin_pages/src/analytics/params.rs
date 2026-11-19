@@ -32,20 +32,20 @@ use leptoskit_analytics::query::RetentionKind;
 use leptoskit_analytics::query::RetentionQuery;
 use leptoskit_analytics::query::TrendsQuery;
 use leptoskit_analytics::query::WebQuery;
-use leptoskit_analytics::service::query::EventDefinitionView;
 
+use super::Definition;
 use super::format::encode;
 
 /// The page's query parameters.
-pub(crate) type Params = BTreeMap<String, String>;
+pub type Params = BTreeMap<String, String>;
 
 /// The most series a trend holds, and steps a funnel.
-pub(crate) const MAX_SERIES: usize = 6;
-pub(crate) const MAX_STEPS: usize = 8;
+pub const MAX_SERIES: usize = 6;
+pub const MAX_STEPS: usize = 8;
 
 /// What a new insight starts from, read from the event catalogue.
 #[derive(Clone, Debug, Default)]
-pub(crate) struct Defaults {
+pub struct Defaults {
 	pub trend: String,
 	pub steps: Vec<String>,
 	pub start: String,
@@ -56,7 +56,7 @@ impl Defaults {
 	/// The app's own events, most stored first, stand in for what it cares
 	/// about: a checkout's steps are stored less and less often, so the
 	/// most stored few make a sensible first funnel.
-	pub(crate) fn from(definitions: &[EventDefinitionView]) -> Self {
+	pub fn from(definitions: &[Definition]) -> Self {
 		let own: Vec<&str> = definitions
 			.iter()
 			.filter(|definition| !definition.name.starts_with('$'))
@@ -67,7 +67,7 @@ impl Defaults {
 			.find(|name| {
 				definitions
 					.iter()
-					.any(|definition| definition.name == **name && definition.fields.is_some())
+					.any(|definition| definition.name == **name && definition.typed())
 			})
 			.or(own.first())
 			.map_or("$pageview", |name| name);
@@ -107,7 +107,7 @@ impl Defaults {
 }
 
 /// The range a page asks for: `from`/`to` dates, else the last `days`.
-pub(crate) fn range(params: &Params) -> DateRange {
+pub fn range(params: &Params) -> DateRange {
 	let date = |key: &str| {
 		params.get(key).and_then(|value| {
 			chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d")
@@ -131,7 +131,7 @@ pub(crate) fn range(params: &Params) -> DateRange {
 }
 
 /// How the range reads: `Last 30 days`, `2 Nov – 9 Nov 2026`.
-pub(crate) fn range_label(range: &DateRange) -> String {
+pub fn range_label(range: &DateRange) -> String {
 	match (&range.from, &range.to) {
 		(Some(from), Some(to)) => {
 			// `to` is exclusive: a range to 2 November ends on the 1st.
@@ -148,7 +148,7 @@ pub(crate) fn range_label(range: &DateRange) -> String {
 }
 
 /// The range inside a sentence: `last 30 days`, `5 Oct – 1 Nov`.
-pub(crate) fn range_phrase(range: &DateRange) -> String {
+pub fn range_phrase(range: &DateRange) -> String {
 	let label = range_label(range);
 
 	match label.strip_prefix("Last") {
@@ -215,7 +215,7 @@ fn breakdown(params: &Params) -> Option<Breakdown> {
 }
 
 /// How a breakdown is written in the address.
-pub(crate) fn breakdown_param(breakdown: &Breakdown) -> String {
+pub fn breakdown_param(breakdown: &Breakdown) -> String {
 	match breakdown.source {
 		FilterSource::Event => breakdown.key.clone(),
 		source => format!("{}:{}", source_name(source), breakdown.key),
@@ -259,7 +259,7 @@ fn compare(params: &Params, default: bool) -> bool {
 		.map_or(default, |value| value == "1" || value == "true")
 }
 
-pub(crate) fn trends(params: &Params, defaults: &Defaults) -> TrendsQuery {
+pub fn trends(params: &Params, defaults: &Defaults) -> TrendsQuery {
 	let mut series = numbered(params, "s", MAX_SERIES);
 
 	if series.is_empty() {
@@ -287,7 +287,7 @@ pub(crate) fn trends(params: &Params, defaults: &Defaults) -> TrendsQuery {
 	}
 }
 
-pub(crate) fn funnels(params: &Params, defaults: &Defaults) -> FunnelsQuery {
+pub fn funnels(params: &Params, defaults: &Defaults) -> FunnelsQuery {
 	let mut steps = numbered(params, "s", MAX_STEPS);
 
 	if steps.len() < 2 {
@@ -316,7 +316,7 @@ pub(crate) fn funnels(params: &Params, defaults: &Defaults) -> FunnelsQuery {
 	}
 }
 
-pub(crate) fn retention(params: &Params, defaults: &Defaults) -> RetentionQuery {
+pub fn retention(params: &Params, defaults: &Defaults) -> RetentionQuery {
 	let pick = |key: &str, default: &str| {
 		params
 			.get(key)
@@ -345,7 +345,7 @@ pub(crate) fn retention(params: &Params, defaults: &Defaults) -> RetentionQuery 
 	}
 }
 
-pub(crate) fn web(params: &Params) -> WebQuery {
+pub fn web(params: &Params) -> WebQuery {
 	WebQuery {
 		range: range(params),
 		compare: compare(params, true),
@@ -356,7 +356,7 @@ pub(crate) fn web(params: &Params) -> WebQuery {
 
 /// Whether the address names a query at all, rather than leaving it to a
 /// saved insight or the defaults.
-pub(crate) fn has_query(params: &Params) -> bool {
+pub fn has_query(params: &Params) -> bool {
 	params.keys().any(|key| {
 		key.starts_with('s')
 			|| matches!(
@@ -380,7 +380,7 @@ pub(crate) fn has_query(params: &Params) -> bool {
 }
 
 /// The parameters that hold `query`.
-pub(crate) fn of(query: &Query) -> Params {
+pub fn of(query: &Query) -> Params {
 	let mut params = Params::new();
 
 	match query {
@@ -475,7 +475,7 @@ pub(crate) fn of(query: &Query) -> Params {
 }
 
 /// `path?key=value&…`.
-pub(crate) fn href(path: &str, params: &Params) -> String {
+pub fn href(path: &str, params: &Params) -> String {
 	if params.is_empty() {
 		return path.to_owned();
 	}
@@ -488,21 +488,21 @@ pub(crate) fn href(path: &str, params: &Params) -> String {
 }
 
 /// `params` with `key` set to `value`.
-pub(crate) fn with(params: &Params, key: &str, value: impl Into<String>) -> Params {
+pub fn with(params: &Params, key: &str, value: impl Into<String>) -> Params {
 	let mut params = params.clone();
 	params.insert(key.to_owned(), value.into());
 	params
 }
 
 /// `params` without `key`.
-pub(crate) fn without(params: &Params, key: &str) -> Params {
+pub fn without(params: &Params, key: &str) -> Params {
 	let mut params = params.clone();
 	params.remove(key);
 	params
 }
 
 /// A numbered list replaced: `s0`, `s1`, … become `items`.
-pub(crate) fn with_list(params: &Params, prefix: &str, items: &[String]) -> Params {
+pub fn with_list(params: &Params, prefix: &str, items: &[String]) -> Params {
 	let mut params = params.clone();
 	params.retain(|key, _| {
 		!(key.starts_with(prefix) && key[prefix.len()..].chars().all(|c| c.is_ascii_digit()))
@@ -516,7 +516,7 @@ pub(crate) fn with_list(params: &Params, prefix: &str, items: &[String]) -> Para
 }
 
 /// A filter's parameter value, for a bar list row that filters the page.
-pub(crate) fn filter_value(source: FilterSource, key: &str, value: &str) -> String {
+pub fn filter_value(source: FilterSource, key: &str, value: &str) -> String {
 	format!("{}:{key}={value}", source_name(source))
 }
 

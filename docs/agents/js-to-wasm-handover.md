@@ -314,7 +314,7 @@ A project's Overview, Changes, Releases, Operations, Backups and Config tabs mov
 - **Tests:** `script.mjs` serves `overview.html`, `overview-release.html` (`?workings=release`), `changes.html` and `releases.html`. The confirm test now checks `:modal` instead of `inert` on the root, and a new test types a version, confirms Deploy and checks the request. `tests/admin.rs` reads an open drawer and Workings mode from the drawer's class and the switch's `aria-pressed`, not root attributes.
 - **Next:** Health with the analytics builder, Live, People and the dialogs, and last delete `admin.mjs` and the attribute rules in `shell_css`.
 
-### `feat/admin-analytics-pages`: admin conversion, part 5a
+### `feat/admin-analytics-pages`: admin conversion, part 5a (merged, #954)
 
 The analytics Library, People and a person's page moved. `leptoskit_admin/src/analytics/{library,people}.rs` build `model::library::Library`, `model::people::People` and `model::people::Person`; `leptoskit_admin_pages/src/pages/{library,people}.rs` draw them. An analytics route's body now returns `analytics::Shown`, a server `Screen` or a pages-crate `Page`, so the not-connected and unreachable states stay server-drawn while a page with data hydrates; `server::render_page` renders a `Page` after the gate.
 
@@ -323,6 +323,15 @@ The analytics Library, People and a person's page moved. `leptoskit_admin/src/an
 - **Shared:** `components::header`, `struct_badge`, `initials` and `avatar` moved to the pages crate, and the server's analytics helpers call them. `post_json` and `idempotency_key` moved to the crate root.
 - **Tests:** `script.mjs` serves `library.html`, `people.html` and `person.html`, fakes the export and delete endpoints, and checks search by Enter, the export download link and fetch, focus return, and the typed-name delete. `analytics_person` was re-reviewed.
 - **Next:** dashboards and the builders (trends, funnels, retention, saved insights) with save and add-to-dashboard, then Live, Health, the sign-in page, and last delete `admin.mjs` and the attribute rules in `shell_css`.
+
+### `feat/admin-analytics-builder`: admin conversion, part 5b (a move, no new behaviour)
+
+The analytics drawing moved from `leptoskit_admin/src/analytics/` to `leptoskit_admin_pages/src/analytics/`, so the builders can hydrate next: `format` (all but `person_name`, which reads a service type and stays in the server's `format`, re-exporting the rest), `params`, `draw`, `insights` (the `Kind`, the charts `trend_view`/`funnel_view`/`retention_view`, the builders' controls, `suggested_name`, `actions`), and the widgets `chip`, `segmented`, `menu`, `menu_item`, `stat`, `Drawn` and `table`. The pages crate now depends on `leptoskit_analytics` with `insights` (the query and result types, Wasm-safe) and `chrono`.
+
+- `analytics::Definition` is the builders' view of an event definition (`EventDefinitionView` is a `service` type); the server converts with `analytics::definitions(facts)`.
+- The builders take `insights::Builder { definitions, notes }`, where `notes` are the margin notes that still show (`analytics::notes(preferences)` on the server).
+- The server keeps what runs queries: `insights::{sample, page, actors}`, `stations` (the drawers), `web`, `library`, `people`, and re-exports the moved items, so the pages still render server-side with `admin.mjs` and the snapshots don't change.
+- **Next:** hydrate the builders: an insight model (query, answer, definitions, drawer), builder links that fetch the next model and swap it in place (the audit's AD-24: router plus a query keyed on the address), the drawer's changed-line wash, menus as `Popover`s, and Save and Add to dashboard through the confirm sheet (a name field; dashboard choices).
 
 ### `feat/public-demo`: pull request #856 (merged)
 

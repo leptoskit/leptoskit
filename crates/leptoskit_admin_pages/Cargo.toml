@@ -21,10 +21,14 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 # The browser's task executor, started before the page runs a request.
 any_spawner = { workspace = true, optional = true, features = ["wasm-bindgen"] }
+# The analytics area's dates and times.
+chrono = { workspace = true }
 console_error_panic_hook = { workspace = true, optional = true }
 futures = { workspace = true }
 leptos = { workspace = true }
 leptoskit = { workspace = true, features = ["aria", "auth", "query", "rpc", "web"] }
+# The insights engine's types: a query, and what it answered.
+leptoskit_analytics = { workspace = true, features = ["insights"] }
 # Copy in a drawer.
 leptoskit_plugin_clipboard = { workspace = true, optional = true }
 schemars = { workspace = true }

@@ -460,7 +460,10 @@ async fn requested_query(
 		.facts()
 		.await
 		.map_err(|failure| unavailable(&failure))?;
-	Ok(kind.query(&request.params, &Defaults::from(&facts.definitions)))
+	Ok(kind.query(
+		&request.params,
+		&Defaults::from(&super::definitions(&facts)),
+	))
 }
 
 /// Saves the request's insight, new or changed, and gives back its id.

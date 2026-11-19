@@ -7,12 +7,10 @@
 
 pub(crate) mod client;
 pub(crate) mod code;
-pub(crate) mod draw;
 pub(crate) mod format;
 pub(crate) mod insights;
 pub(crate) mod library;
 pub(crate) mod live;
-pub(crate) mod params;
 pub(crate) mod people;
 pub(crate) mod routes;
 pub(crate) mod stations;
@@ -23,6 +21,11 @@ pub(crate) use client::Connection;
 pub(crate) use client::Facts;
 pub(crate) use client::Failure;
 use leptoskit::prelude::*;
+pub(crate) use leptoskit_admin_pages::analytics::Stat;
+pub(crate) use leptoskit_admin_pages::analytics::chip;
+pub(crate) use leptoskit_admin_pages::analytics::draw;
+pub(crate) use leptoskit_admin_pages::analytics::params;
+pub(crate) use leptoskit_admin_pages::analytics::stat;
 use params::Params;
 
 use crate::BASE;
@@ -88,169 +91,9 @@ pub(crate) fn header(title: &str, subtitle: &str, actions: Vec<Element>) -> Elem
 	components::header(title, subtitle, actions)
 }
 
-/// A pill that links somewhere: `Last 30 days`, `Compare previous period`.
-pub(crate) fn chip(label: &str, value: &str, href: String, on: bool) -> Element {
-	let mut content = View().class(style::CHIP).class("cursor-pointer");
-
-	if !label.is_empty() {
-		content = content.child(Text(label.to_owned()).class("text-[var(--admin-ink-2)]"));
-	}
-
-	content = content.child(Text(value.to_owned()).class("font-semibold text-[var(--admin-ink)]"));
-	let mut link = Pressable(format!("{label} {value}").trim().to_owned())
-		.href(href)
-		.class("rounded-full hover:bg-[var(--admin-sunken)]")
-		.child(content);
-
-	if on {
-		link = link.aria_current(leptoskit::native::Current::Page);
-	}
-
-	link
-}
-
-/// A row of links where one is chosen: `Day | Week`.
-pub(crate) fn segmented(label: &str, options: &[(String, String, bool)]) -> Element {
-	let mut row = View()
-		.class(
-			"flex-row self-start overflow-hidden rounded-lg border \
-			 border-[var(--admin-line-strong)]",
-		)
-		.role(leptoskit::native::Role::Group)
-		.aria_label(label.to_owned());
-
-	for (name, href, on) in options {
-		let mut link = Pressable(name.clone())
-			.href(href.clone())
-			.class("cursor-pointer px-3 py-1.5")
-			.class(if *on {
-				"bg-[var(--admin-ink)]"
-			} else {
-				"hover:bg-[var(--admin-sunken)]"
-			})
-			.child(Text(name.clone()).class(if *on {
-				"text-sm font-semibold text-[var(--admin-paper)]"
-			} else {
-				"text-sm text-[var(--admin-ink-2)]"
-			}));
-
-		if *on {
-			link = link.aria_current(leptoskit::native::Current::Page);
-		}
-
-		row = row.child(link);
-	}
-
-	View()
-		.class("flex-col gap-1.5")
-		.child(Text(label.to_owned()).class("text-sm font-semibold text-[var(--admin-ink-2)]"))
-		.child(row)
-}
-
-/// A control that opens a list over the content beneath it: `+ Add
-/// series`, `Breakdown`. The script opens one at a time and closes it on a
-/// press anywhere else.
-pub(crate) fn menu(label: &str, test_id: &str, items: Vec<Element>) -> Element {
-	View()
-		.class("relative flex-col")
-		.child(
-			Button(label.to_owned())
-				.aria_expanded(false)
-				.class(
-					"self-start rounded-lg px-1 py-1 text-sm font-semibold \
-					 text-[var(--admin-ink)] cursor-pointer hover:bg-[var(--admin-sunken)]",
-				)
-				.test_id("menu-toggle")
-				.aria_description(test_id.to_owned()),
-		)
-		.child(
-			View()
-				.class(
-					"absolute left-0 top-[100%] mt-1 max-h-72 w-72 flex-col gap-0.5 \
-					 overflow-scroll rounded-xl border border-[var(--admin-line)] \
-					 bg-[var(--admin-surface)] p-1.5",
-				)
-				.test_id("menu-panel")
-				.children(items),
-		)
-}
-
-/// One item in a [`menu`].
-pub(crate) fn menu_item(label: &str, detail: Option<&str>, href: String) -> Element {
-	let mut row = View()
-		.class("flex-row items-center gap-2 px-2 py-1.5")
-		.child(
-			Text(label.to_owned()).class("min-w-0 flex-1 truncate text-sm text-[var(--admin-ink)]"),
-		);
-
-	if let Some(detail) = detail {
-		row = row.child(Text(detail.to_owned()).class(style::LABEL));
-	}
-
-	Pressable(label.to_owned())
-		.href(href)
-		.class("cursor-pointer rounded-lg hover:bg-[var(--admin-sunken)]")
-		.test_id("menu-item")
-		.child(row)
-}
-
 /// The `struct` badge on an event with a Rust type.
 pub(crate) fn struct_badge() -> Element {
 	components::struct_badge()
-}
-
-/// A stat tile: label, hero number, a sparkline, and the change.
-pub(crate) struct Stat<'a> {
-	pub label: &'a str,
-	pub value: String,
-	pub delta: Option<String>,
-	/// Whether a rise is good: bounce rate rising isn't.
-	pub up_is_good: bool,
-	pub spark: Option<Vec<f64>>,
-	pub drawer: &'a str,
-	pub source: &'a str,
-	/// What a change is measured against, without its article: `previous
-	/// 30 days`, `period before`.
-	pub versus: String,
-}
-
-pub(crate) fn stat(stat: Stat<'_>) -> Element {
-	let tone = match &stat.delta {
-		Some(delta) if delta.starts_with('▲') == stat.up_is_good && !delta.starts_with('=') => {
-			"text-[var(--admin-good)]"
-		}
-		Some(delta) if !delta.starts_with('=') => "text-[var(--admin-bad)]",
-		_ => "text-[var(--admin-ink-3)]",
-	};
-	let mut card = components::card(stat.label)
-		.workings(stat.drawer, stat.source)
-		.child(
-			Text(stat.value)
-				.class(style::HERO_NUMBER)
-				.test_id("stat-value"),
-		);
-
-	card = card.child(match stat.spark {
-		Some(values) if values.len() > 1 => draw::sparkline(&values, "h-7 w-32"),
-		_ => {
-			Text("No daily series yet")
-				.class("h-7 truncate text-xs leading-7 text-[var(--admin-ink-3)]")
-		}
-	});
-
-	card.child(
-		Text(match stat.delta {
-			Some(delta) => format!("{delta} vs the {}", stat.versus),
-			None => format!("Nothing in the {} to compare", stat.versus),
-		})
-		.class("text-[13px] tabular-nums")
-		.class(tone),
-	)
-	.build()
-	.test_id(format!(
-		"stat:{}",
-		stat.label.to_lowercase().replace(' ', "-")
-	))
 }
 
 /// A note in the margin, if the person hasn't retired it.
@@ -372,6 +215,31 @@ pub(crate) fn listening(title: &str, section: Section, shows: &str) -> Screen {
 		drawers: Vec::new(),
 		open: None,
 	}
+}
+
+/// The event catalogue, as the builders offer it.
+pub(crate) fn definitions(facts: &Facts) -> Vec<leptoskit_admin_pages::analytics::Definition> {
+	facts
+		.definitions
+		.iter()
+		.map(|definition| {
+			leptoskit_admin_pages::analytics::Definition {
+				name: definition.name.clone(),
+				volume: u64::try_from(definition.volume).unwrap_or(0),
+				fields: definition.fields.clone(),
+				properties: definition.properties.clone(),
+			}
+		})
+		.collect()
+}
+
+/// The builders' margin notes the person hasn't retired.
+pub(crate) fn notes(preferences: &Preferences) -> Vec<String> {
+	["breakdown", "funnel-drop-off", "retention-cells"]
+		.into_iter()
+		.filter(|id| preferences.note(id))
+		.map(str::to_owned)
+		.collect()
 }
 
 /// Where a person's page is.
