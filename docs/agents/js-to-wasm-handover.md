@@ -41,7 +41,7 @@ One pull request per item. Every backend is kept in step, with AppKit as the ref
 | 4  | One-shot focus requests                                     | G2       | #887, open  |
 | 5  | Arrow-key navigation for tabs, radio groups and menus       | G5       | #892, open  |
 | 6  | `Modal` and `Popover`                                       | G1       | #896, open  |
-| 7  | Scroll into view                                            | G4       | not started |
+| 7  | Scroll into view                                            | G4       | #913, open  |
 | 8  | A clock hook                                                | G6       | not started |
 | 9  | Typed refusals in the rpc client (status, code, retry time) | G8       | not started |
 | 10 | Streams without a database                                  | G3       | not started |
@@ -180,7 +180,7 @@ The last part of G1. Every backend now returns `true` from `presents_overlays`, 
 - **Tests that CI's Windows runner will be the first to run:** `crates/leptoskit_windows/tests/overlays.rs`, three tests on real windows. The assertions most likely to need adjusting are `GetFocus()` after a shell is shown, and the exact pixel equality of the shell's and the panel's corners at a fractional DPI scale.
 - **Known limits:** Windows does not dim the owner. The shell is a plain rectangle, so a panel with round corners shows the modal's background in the corners. A shell does not follow its owner if the owner moves. Arrow keys in a `Menu` do nothing, because the backend delivers `on_key` only for radios.
 
-### `feat/scroll-into-view`: stacked on `feat/overlays-windows`
+### `feat/scroll-into-view` (#913): stacked on `feat/overlays-windows`
 
 G4. `Reveal`, `ScrollAlign` and `Element::reveal_on` in `leptoskit_native` (`reveal.rs`), exported from the `leptoskit` prelude. In `view!` the attribute is `reveal_on=(handle, ScrollAlign::Center)`, because a tuple spreads into two arguments.
 
