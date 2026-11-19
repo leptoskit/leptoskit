@@ -348,13 +348,21 @@ The builders (Trends, Funnels, Retention, a saved insight) are `Page::Insight`, 
 - **Tests:** `pages_for_the_script` writes each trends variant's model as JSON and two `-workings.html` pages; `script.mjs` serves the JSON for the header, fakes the dashboards and insights endpoints, and checks the in-place change (marks, status, reveal, focus, Back), the breakdown colours, Save and Add to dashboard, and the phone stations. The trends, funnel and retention snapshots only gained the menus' roles and the station toggles' ▾.
 - **Next (5d):** dashboards (their cards and live refresh), Live with a G3 stream, the web overview and the actors page, Health's fleet charts, the sign-in page; then delete `admin.mjs` and the attribute rules in `shell_css`.
 
-### `feat/admin-health-signin`: admin conversion, part 5g (Health)
+### `feat/admin-signin`: admin conversion, part 5h (sign-in and refusal)
+
+- **Model:** `model::signin::{SignIn, Outcome}` and `Page::SignIn`: the main site's host, the button's name, the roles, and whether the page signs in, refuses, or says a sign-in didn't finish. The admin's `signin::render` builds it with a viewer that is only the admin's own (nobody is signed in) and answers 403 for a refusal.
+- **No shell:** `screen_of` draws `pages/signin.rs` without `Shell::frame`. How admins are chosen is a disclosure with its own state; the panel is only in the page while open.
+- **Starting sign-in:** Continue and Switch account use `leptoskit::auth::client::sign_in_with_provider` with `provider: "main"` and `redirect_to: {BASE}/sign-in`; Switch account adds `Prompt::Login` instead of editing the provider's URL as the script did. A refusal from `/auth/oauth/start` shows its message in a `Status` on the card.
+- **Tests:** `pages_for_the_script` writes `sign-in.html` and `refusal.html`; `script.mjs` fakes `/auth/oauth/start` and a main site, and checks hydration, the disclosure, the problem message, Continue's request, and Switch account's `prompt`.
+- **Next:** delete `admin.mjs`, the SSE route, the server `Screen` path (`shell::page`, `server::render`, `Shown::Screen`) and the attribute rules in `shell_css`.
+
+### `feat/admin-health-signin`: admin conversion, part 5g (Health, merged, #962)
 
 - **Model:** `model::project::Body::Health(Health)`: the health word, the last check, the Run health check action, and the fleet's last hour as `Fleet` (hosts, per-release series, limitations), a mirror of the control service's `Fleet` built in `infra/pages.rs` `health_tab`. `leptoskit_apm`'s `Window`, `HostSample` and `ExportHealth` now derive `PartialEq`, and the pages crate turns on leptoskit's `apm` feature.
 - **Drawing:** `infra/health.rs` moved to the pages crate as `pages/health.rs`, unchanged but for `short`; `pages/project.rs` draws the check card above it.
 - **Route:** the project route reads the fleet inside `hydrated_screen` only for Health; the server's own `health` handler and `health_screen` are gone. Nothing builds a server `Screen` now: `shell::Screen`, `server::render` and `Shown::Screen` go with `admin.mjs`.
 - **Tests:** `pages_for_the_script` records one instance's measurements and writes `health.html`; `script.mjs` checks it hydrates without the script, draws the routes and hosts, and Run health check asks, then sends `status`.
-- **Next:** the sign-in and refusal pages; then delete `admin.mjs`, the SSE route, the server `Screen` path and the attribute rules in `shell_css`.
+- **Next:** the sign-in and refusal pages (5h, above).
 
 ### `feat/admin-web-overview`: admin conversion, part 5f (web overview)
 

@@ -134,12 +134,7 @@ pub(crate) async fn gate(
 		.map_err(|error| failure(&error.to_string()))?;
 
 	if !roles.iter().any(|role| inner.roles.contains(role)) {
-		let page = signin::page(
-			inner,
-			&signin::Outcome::Refused(Some(who)),
-			appearance(headers).as_deref(),
-		);
-		return Err((StatusCode::FORBIDDEN, html(page)).into_response());
+		return Err(signin::render(admin, signin::Outcome::Refused(Some(who)), headers).await);
 	}
 
 	access::welcome(&inner.db, me.account)
@@ -299,7 +294,6 @@ async fn sign_in(
 	Query(query): Query<SignInQuery>,
 ) -> Response {
 	let inner = admin.inner();
-	let appearance = appearance(&headers);
 
 	if let Some(me) = me {
 		let roles = inner.auth.roles(me.account).await.unwrap_or_default();
@@ -309,8 +303,7 @@ async fn sign_in(
 		}
 
 		let who = access::display_name(&inner.db, me.account).await.ok();
-		let page = signin::page(inner, &signin::Outcome::Refused(who), appearance.as_deref());
-		return (StatusCode::FORBIDDEN, html(page)).into_response();
+		return signin::render(&admin, signin::Outcome::Refused(who), &headers).await;
 	}
 
 	let outcome = match query.auth_error.as_deref() {
@@ -325,17 +318,7 @@ async fn sign_in(
 		}
 		None => signin::Outcome::Ready,
 	};
-	let status = if matches!(outcome, signin::Outcome::Refused(_)) {
-		StatusCode::FORBIDDEN
-	} else {
-		StatusCode::OK
-	};
-
-	(
-		status,
-		html(signin::page(inner, &outcome, appearance.as_deref())),
-	)
-		.into_response()
+	signin::render(&admin, outcome, &headers).await
 }
 
 /// Gates, loads the projects, and renders the page `page` makes of them:

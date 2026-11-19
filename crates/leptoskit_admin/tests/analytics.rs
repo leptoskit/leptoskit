@@ -1060,6 +1060,21 @@ async fn pages_for_the_script() {
 		std::fs::write(directory.join(file), html).unwrap();
 	}
 
+	// Sign-in, to someone signed out, and the refusal the callback sends.
+	for (file, query, expected) in [
+		("sign-in.html", "", StatusCode::OK),
+		(
+			"refusal.html",
+			"?auth_error=not_allowed",
+			StatusCode::FORBIDDEN,
+		),
+	] {
+		let path = format!("{BASE}/sign-in{query}");
+		let (status, html) = page(&world, &mut Browser::default(), &path).await;
+		assert_eq!(status, expected, "{path}");
+		std::fs::write(directory.join(file), html).unwrap();
+	}
+
 	// The builders change in place: each page as a model, and two with
 	// their Workings open.
 	for (name, query) in [

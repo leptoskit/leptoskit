@@ -10,10 +10,12 @@ mod library;
 mod live;
 mod people;
 mod project;
+mod signin;
 mod web;
 
 use leptos::prelude::Get as _;
 use leptoskit::prelude::Element;
+pub use signin::host;
 pub(crate) use web::path as web_path;
 
 use crate::model::Page;
@@ -98,6 +100,16 @@ pub(crate) fn screen_of(shell: &Shell) -> Box<dyn Fn() -> Element + Send + Sync>
 				})
 			})
 		}
+		// Nobody is signed in to see the shell, so sign-in has none.
+		Page::SignIn(_) => {
+			let start = signin::Start::new();
+			Box::new(move || {
+				let Page::SignIn(sign_in) = &shell.model.page else {
+					return content(&shell.model.page);
+				};
+				signin::page(&shell.model.viewer, sign_in, Some(start))
+			})
+		}
 		_ => Box::new(move || shell.frame(content(&shell.model.page))),
 	}
 }
@@ -123,5 +135,9 @@ pub fn content(page: &Page) -> Element {
 		Page::Dashboard(dashboard) => analytics::dashboard(dashboard),
 		Page::Actors(actors) => analytics::actors(actors),
 		Page::Notice(notice) => analytics::notice(notice),
+		// Drawn by `screen_of`, which knows the viewer.
+		Page::SignIn(_) => {
+			leptoskit::prelude::Text("Sign in to see this page.").class(crate::style::MUTED)
+		}
 	}
 }

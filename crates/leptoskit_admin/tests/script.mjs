@@ -113,6 +113,8 @@ function serve(directory, clientDirectory) {
 	// Each page model a builder asked for, by address.
 	const models = [];
 	const posted = [];
+	// Whether the main site refuses to start a sign-in.
+	const oauth = { fails: false };
 	const encoder = new TextEncoder();
 	const page = (name) =>
 		Deno.readFile(`${directory}/${name}`).then((body) =>
@@ -219,7 +221,21 @@ function serve(directory, clientDirectory) {
 				case `${BASE}/infra/projects`:
 					return page("projects.html");
 				case `${BASE}/sign-in`:
-					return new Response("<!doctype html><title>Sign in</title>", {
+					return page(
+						url.searchParams.get("auth_error") === "not_allowed"
+							? "refusal.html"
+							: "sign-in.html",
+					);
+				case "/auth/oauth/start":
+					posted.push({ path: url.pathname, body: await request.json() });
+					return oauth.fails
+						? Response.json({
+							error: "provider",
+							message: "The main site didn't answer.",
+						}, { status: 502 })
+						: Response.json({ url: `${url.origin}/main/authorize?state=s` });
+				case "/main/authorize":
+					return new Response("<!doctype html><title>Main site</title>", {
 						headers: { "content-type": "text/html" },
 					});
 				case "/auth/sign-out":
@@ -329,6 +345,7 @@ function serve(directory, clientDirectory) {
 		connected: () => streams.size,
 		posted,
 		models,
+		oauth,
 		/** The `analytics_live` streams open now, and whether each has events. */
 		following: () => Array.from(live, (held) => Boolean(held.args?.events)),
 		/** Sends `value`, a `Live` item, down every `analytics_live` stream. */
@@ -1050,6 +1067,72 @@ Deno.test("Escape gives focus back to the exact control that opened Workings", a
 				JSON.stringify(before)
 			}`,
 			`focus returns to ${before}`,
+		);
+	});
+});
+
+Deno.test("sign-in is the pages' own Rust: the main site, a problem, and switching", async () => {
+	await withBrowser(async (page, site) => {
+		await open(page, `${site.origin}${BASE}/sign-in`);
+		await page.until(
+			"() => document.documentElement.hasAttribute('data-hydrated')",
+			"sign-in hydrates",
+		);
+		assert(
+			await page.evaluate(
+				"!document.querySelector('script[src$=\"admin.mjs\"]') && !document.querySelector('[data-testid=\"how-panel\"]')",
+			),
+			"no hand-written script, and How admins are chosen starts closed",
+		);
+		await page.click('[data-testid="how-toggle"]');
+		await page.until(
+			`() => document.querySelector('[data-testid="how-toggle"]').getAttribute("aria-expanded") === "true" &&
+				document.querySelector('[data-testid="how-panel"]')?.textContent.includes("Roles hook")`,
+			"How admins are chosen opens",
+		);
+
+		// The main site can't start: the page says so, and stays.
+		site.oauth.fails = true;
+		await page.click('[data-testid="continue"]');
+		await page.until(
+			`() => document.querySelector('[data-testid="sign-in"] [role="status"]')?.textContent.includes("didn't answer")`,
+			"the problem shows on the card",
+		);
+
+		// It can: the page goes there, to come back to sign-in.
+		site.oauth.fails = false;
+		let left = page.once("Page.loadEventFired");
+		await page.click('[data-testid="continue"]');
+		await left;
+		assert(
+			await page.evaluate("location.pathname") === "/main/authorize",
+			"Continue goes to the main site",
+		);
+		const started = site.posted.filter((post) =>
+			post.path === "/auth/oauth/start"
+		);
+		assert(
+			started.length === 2 && started[1].body.provider === "main" &&
+				started[1].body.redirect_to === `${BASE}/sign-in` &&
+				!started[1].body.prompt,
+			`Continue's request: ${JSON.stringify(started)}`,
+		);
+
+		// Refused, Switch account asks the main site to sign someone in again.
+		await open(page, `${site.origin}${BASE}/sign-in?auth_error=not_allowed`);
+		await page.until(
+			"() => document.documentElement.hasAttribute('data-hydrated')",
+			"the refusal hydrates",
+		);
+		left = page.once("Page.loadEventFired");
+		await page.click('[data-testid="switch-account"]');
+		await left;
+		const switched = site.posted.filter((post) =>
+			post.path === "/auth/oauth/start"
+		).at(-1);
+		assert(
+			switched?.body.prompt === "login" && switched.body.provider === "main",
+			`Switch account's request: ${JSON.stringify(switched)}`,
 		);
 	});
 });
