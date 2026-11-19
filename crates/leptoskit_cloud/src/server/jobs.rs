@@ -641,6 +641,7 @@ mod tests {
 						environment: named("production"),
 					},
 				),
+				database: None,
 			})),
 			attempt: 0,
 			max_attempts: 1,

@@ -22,6 +22,7 @@ mod audit;
 mod authorize;
 pub(crate) mod config;
 mod control;
+pub(crate) mod databases;
 pub(crate) mod deployments;
 mod dns;
 pub(crate) mod domains;

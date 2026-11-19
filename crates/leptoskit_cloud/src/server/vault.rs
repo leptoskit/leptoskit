@@ -24,6 +24,7 @@ use leptoskit_rpc as rpc;
 use uuid::Uuid;
 
 use crate::tables::DataKey;
+use crate::tables::Database;
 use crate::tables::Environment;
 use crate::tables::NewDataKey;
 use crate::tables::Organization;
@@ -35,6 +36,9 @@ const DATA_KEY_PURPOSE: &[u8] = b"leptoskit-cloud vault data key v1";
 
 /// What a sealed value is bound to, before its place.
 const VALUE_PURPOSE: &[u8] = b"leptoskit-cloud vault secret v1";
+
+/// What a database role's sealed password is bound to, before its place.
+const PASSWORD_PURPOSE: &[u8] = b"leptoskit-cloud vault database password v1";
 
 /// The ID a data key is given inside the [`Keys`] that seals with it. Only
 /// one key is ever in it, so the ID says nothing.
@@ -65,6 +69,15 @@ pub(crate) struct Place<'a> {
 	/// so what it held before doesn't open as its first version.
 	pub(crate) secret: Id<Secret>,
 	pub(crate) name: &'a str,
+	pub(crate) version: i64,
+}
+
+/// Where a managed database's role's password lives: what it is sealed to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct DatabasePlace {
+	pub(crate) organization: Id<Organization>,
+	pub(crate) environment: Id<Environment>,
+	pub(crate) database: Id<Database>,
 	pub(crate) version: i64,
 }
 
@@ -234,6 +247,62 @@ impl Unwrapped {
 	}
 }
 
+impl Unwrapped {
+	/// A password's own context: its purpose differs from a secret's, so
+	/// neither opens as the other.
+	fn password_context(place: &DatabasePlace) -> [Vec<u8>; 5] {
+		[
+			PASSWORD_PURPOSE.to_vec(),
+			uuid_bytes(place.organization.uuid()).to_vec(),
+			uuid_bytes(place.environment.uuid()).to_vec(),
+			uuid_bytes(place.database.uuid()).to_vec(),
+			place.version.to_be_bytes().to_vec(),
+		]
+	}
+
+	/// A database role's `password`, sealed to `place`.
+	///
+	/// # Errors
+	///
+	/// `Server` (`vault_unavailable`) for a place in another organisation,
+	/// or when there is no randomness.
+	pub(crate) fn seal_password(
+		&self,
+		place: &DatabasePlace,
+		password: &str,
+	) -> rpc::Result<Vec<u8>> {
+		if place.organization != self.organization {
+			return Err(unavailable());
+		}
+
+		let context = Self::password_context(place);
+		let parts: Vec<&[u8]> = context.iter().map(Vec::as_slice).collect();
+		self.key
+			.seal(&parts, password.as_bytes())
+			.map_err(|_| unavailable())
+	}
+
+	/// The password `sealed` holds, when it was sealed to `place`.
+	///
+	/// # Errors
+	///
+	/// `Server` (`vault_unavailable`) when it wasn't, or was changed.
+	pub(crate) fn open_password(
+		&self,
+		place: &DatabasePlace,
+		sealed: &[u8],
+	) -> rpc::Result<String> {
+		if place.organization != self.organization {
+			return Err(unavailable());
+		}
+
+		let context = Self::password_context(place);
+		let parts: Vec<&[u8]> = context.iter().map(Vec::as_slice).collect();
+		let opened = self.key.open(&parts, sealed).map_err(|_| unavailable())?;
+		String::from_utf8(opened).map_err(|_| unavailable())
+	}
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
@@ -321,6 +390,56 @@ mod tests {
 		let mut changed = sealed.clone();
 		*changed.last_mut().expect("bytes") ^= 1;
 		assert!(key.open(&home, &changed).is_err());
+	}
+
+	#[test]
+	fn a_password_opens_only_for_its_database() {
+		let organization = Id::from_uuid(Uuid::from_u128(1));
+		let key = unwrapped(organization, 7);
+		let home = DatabasePlace {
+			organization,
+			environment: Id::from_uuid(Uuid::from_u128(3)),
+			database: Id::from_uuid(Uuid::from_u128(4)),
+			version: 1,
+		};
+		let sealed = key.seal_password(&home, "c0ffee").expect("sealed");
+		assert_eq!(key.open_password(&home, &sealed).expect("opens"), "c0ffee");
+
+		let elsewhere = [
+			DatabasePlace {
+				environment: Id::from_uuid(Uuid::from_u128(9)),
+				..home
+			},
+			DatabasePlace {
+				database: Id::from_uuid(Uuid::from_u128(9)),
+				..home
+			},
+			DatabasePlace { version: 2, ..home },
+			DatabasePlace {
+				organization: Id::from_uuid(Uuid::from_u128(8)),
+				..home
+			},
+		];
+
+		for other in elsewhere {
+			assert!(key.open_password(&other, &sealed).is_err(), "{other:?}");
+		}
+
+		// A password is not a secret's value, even at the same IDs.
+		let as_secret = Place {
+			organization,
+			project: Id::from_uuid(Uuid::from_u128(3)),
+			environment: home.environment,
+			secret: Id::from_uuid(home.database.uuid()),
+			name: "DATABASE_URL",
+			version: 1,
+		};
+		assert!(key.open(&as_secret, &sealed).is_err());
+		assert!(
+			unwrapped(organization, 8)
+				.open_password(&home, &sealed)
+				.is_err()
+		);
 	}
 
 	#[test]

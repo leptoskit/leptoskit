@@ -469,6 +469,7 @@ pub const OPERATIONS: &[(&str, Requirement)] = &[
 		"unset_secret",
 		Requirement::Project(Permission::ManageConfig),
 	),
+	("database", Requirement::Project(Permission::ViewProjects)),
 	("domains", Requirement::Project(Permission::ViewProjects)),
 	(
 		"attach_domain",
@@ -490,6 +491,7 @@ pub const OPERATIONS: &[(&str, Requirement)] = &[
 	("report_status", Requirement::Worker),
 	("clusters", Requirement::Operator),
 	("register_cluster", Requirement::Operator),
+	("set_cluster_facts", Requirement::Operator),
 	("workers", Requirement::Operator),
 	("jobs", Requirement::Operator),
 	("issue_pairing", Requirement::Operator),

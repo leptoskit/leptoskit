@@ -8,6 +8,7 @@
 
 use std::collections::BTreeMap;
 
+use leptoskit_cloud_runtime::DatabaseAccess;
 use leptoskit_cloud_runtime::EnvironmentRef;
 use leptoskit_cloud_runtime::NamedRef;
 use leptoskit_cloud_runtime::ProcessKind;
@@ -68,6 +69,7 @@ use crate::pricing::EstimateInput;
 use crate::projects::EnvironmentKind;
 use crate::release;
 use crate::release::APP;
+use crate::release::DATABASE_URL;
 use crate::release::Plan;
 use crate::release::PlannedProcess;
 use crate::release::SpecTarget;
@@ -110,9 +112,12 @@ fn number(value: i64) -> u64 {
 	u64::try_from(value).unwrap_or_default()
 }
 
-/// `text` cut to [`MAX_DETAIL_LEN`] bytes at a character boundary.
+/// `text` cut to [`MAX_DETAIL_LEN`] bytes at a character boundary, with
+/// what a log line would have redacted replaced: a worker's reason may
+/// quote an address with a password in it.
 fn detail(text: &str) -> String {
-	let text = text.trim();
+	let text = super::logs::scrub(text.trim());
+	let text = text.as_str();
 
 	if text.len() <= MAX_DETAIL_LEN {
 		return text.to_owned();
@@ -612,9 +617,16 @@ pub(crate) async fn release_secrets(
 	let StoredInput::Release(input) = &job.input.0 else {
 		return Ok(Ok(crate::workers::LeasedSecrets::default()));
 	};
-	let names: Vec<String> = secret_names(&input.spec.0).into_iter().cloned().collect();
+	// A managed database's address is put together here, not kept as one
+	// of the environment's secrets.
+	let managed = input.database.is_some();
+	let names: Vec<String> = secret_names(&input.spec.0)
+		.into_iter()
+		.filter(|name| !(managed && name.as_str() == DATABASE_URL))
+		.cloned()
+		.collect();
 
-	if names.is_empty() {
+	if names.is_empty() && !managed {
 		return Ok(Ok(crate::workers::LeasedSecrets::default()));
 	}
 
@@ -634,8 +646,42 @@ pub(crate) async fn release_secrets(
 		environment: &environment,
 	};
 
-	match super::config::lease(tx, &services.shipping().vault, &lessee, &names).await {
-		Ok(values) => Ok(Ok(crate::workers::LeasedSecrets::new(values))),
+	let vault = &services.shipping().vault;
+	// Opened before any lease is written: a lease row says a value went.
+	let address = if managed {
+		// A release goes to its deployment's cluster and no other.
+		if job.cluster_id != Some(deployment.cluster_id) {
+			return Ok(Err("this release isn't queued for its deployment's \
+			               cluster"
+				.to_owned()));
+		}
+
+		match super::databases::address(
+			tx,
+			vault,
+			&organization,
+			&environment,
+			deployment.cluster_id,
+			input.spec.0.policy.database.as_ref(),
+		)
+		.await?
+		{
+			Ok(address) => Some(address),
+			Err(why) => return Ok(Err(why)),
+		}
+	} else {
+		None
+	};
+
+	match super::config::lease(tx, vault, &lessee, &names).await {
+		Ok(mut values) => {
+			if let Some(address) = address {
+				let url = super::databases::leased(tx, &lessee, address).await?;
+				values.insert(DATABASE_URL.to_owned(), url);
+			}
+
+			Ok(Ok(crate::workers::LeasedSecrets::new(values)))
+		}
 		Err(super::config::LeaseError::Missing(missing)) => {
 			Ok(Err(format!(
 				"`{}` no longer has {}",
@@ -842,6 +888,8 @@ pub(crate) async fn deploy(
 		&cluster.facts.0,
 	)
 	.map_err(|error| rpc::Error::invalid(error.to_string()))?;
+
+	let planned_database = plan.postgres;
 	let number = next_number(cx.tx(), &environment).await?;
 	let source_detail = format!(
 		"builds from {} ({})",
@@ -876,6 +924,22 @@ pub(crate) async fn deploy(
 		vec![EventKind::Created { signer }],
 	)
 	.await?;
+
+	// A Postgres app's database is decided now, and its role's password
+	// sealed: the cluster's worker makes both when the release reaches it.
+	// After the deployment's row, so of two first deployments at once the
+	// second is told one is in flight.
+	if let Some(planned) = planned_database {
+		super::databases::ensure(
+			cx.tx(),
+			&shipping.vault,
+			&organization,
+			&environment,
+			cluster.id,
+			planned,
+		)
+		.await?;
+	}
 
 	// The archive stays while this deployment needs it, and a while after.
 	let mut archive = archive;
@@ -1105,6 +1169,57 @@ fn rollback_target(target: &Deployment, placement: Option<&Placement>) -> rpc::R
 	Ok(())
 }
 
+/// What a rollback to `target` tells the cluster about the environment's
+/// managed database, and the door to it where the cluster's server is now:
+/// `None` when `target` didn't use one.
+///
+/// # Errors
+///
+/// `Conflict` (`rollback_unavailable`) when the database is gone, or the
+/// cluster's facts no longer say where its server is.
+async fn rollback_database(
+	tx: &Tx,
+	target: &Deployment,
+	environment: &Environment,
+	cluster: Id<Cluster>,
+) -> rpc::Result<Option<(crate::workers::DatabaseStep, DatabaseAccess)>> {
+	if target.plan.0.postgres.is_none() {
+		return Ok(None);
+	}
+
+	let unavailable = |why: &str| {
+		rpc::Error::conflict(format!(
+			"rollback_unavailable: #{} uses a Postgres database, and {why}",
+			target.number
+		))
+	};
+	let Some(step) = super::databases::step(tx, environment.id).await? else {
+		return Err(unavailable(&format!(
+			"`{}` no longer has one",
+			environment.name
+		)));
+	};
+	let server = Cluster::query()
+		.filter(|row| row.id.eq(cluster))
+		.one(tx)
+		.await?
+		.facts
+		.0
+		.postgres;
+	let Some(server) = server else {
+		return Err(unavailable(
+			"its cluster no longer says where its server is",
+		));
+	};
+	Ok(Some((
+		step,
+		DatabaseAccess {
+			namespace: server.namespace,
+			port: server.port,
+		},
+	)))
+}
+
 fn rollback_note(target: &Deployment) -> String {
 	format!(
 		"It runs #{}'s image again, built from the same source, and changes no schema. If the \
@@ -1149,7 +1264,18 @@ pub(crate) async fn rollback(
 	// A rollback applies the spec as it was recorded, variables included.
 	// Its secrets are named there and read when the release is claimed, so
 	// each must still exist: with their values as they are now.
-	let missing = super::config::missing(cx.tx(), environment_id, secret_names(&spec)).await?;
+	// A managed database's address isn't one of them: it is read from the
+	// database's own row, which must still be there.
+	let database = rollback_database(cx.tx(), &target, &environment, placement.cluster_id).await?;
+	let missing = super::config::missing(
+		cx.tx(),
+		environment_id,
+		secret_names(&spec)
+			.into_iter()
+			.filter(|name| !(database.is_some() && name.as_str() == DATABASE_URL)),
+	)
+	.await?;
+	let (database, door) = database.unzip();
 
 	if !missing.is_empty() {
 		return Err(rpc::Error::conflict(format!(
@@ -1175,6 +1301,12 @@ pub(crate) async fn rollback(
 	spec.routes
 		.retain(|route| route.hostname == placement.hostname || held.contains(&route.hostname));
 	super::domains::routing(cx.tx(), environment_id, &held).await?;
+
+	// And the door to its database where the cluster's server is now.
+	if door.is_some() {
+		spec.policy.database = door;
+	}
+
 	spec.validate()
 		.map_err(|error| rpc::Error::server(format!("a rollback's spec is invalid: {error}")))?;
 	let signer = signer(cx.tx(), &access.caller, None).await?;
@@ -1237,6 +1369,7 @@ pub(crate) async fn rollback(
 					reason: format!("a rollback to #{to} changes no schema"),
 				},
 				previous,
+				database,
 			})),
 		},
 	)
@@ -1578,6 +1711,11 @@ pub(crate) async fn before_removal(
 	// The cluster may still answer on its domains until the removal is
 	// done: they keep their hostnames until then.
 	super::domains::environment_removed(tx, environment_id, true).await?;
+	// Its database goes with it: the row with the environment's, and the
+	// database itself when the cluster's worker removes the environment.
+	let database = super::databases::for_environment(tx, environment_id)
+		.await?
+		.map(|row| row.name);
 	let job = jobs::queue(
 		tx,
 		Queue {
@@ -1589,6 +1727,7 @@ pub(crate) async fn before_removal(
 			max_attempts: 1,
 			input: StoredInput::DestroyEnvironment(DestroyEnvironmentInput {
 				environment: RuntimeValue(environment_ref(organization, project, environment)),
+				database,
 			}),
 		},
 	)
@@ -1903,6 +2042,16 @@ async fn built(tx: &Tx, mut changing: Changing, output: &BuildServerOutput) -> r
 			pending,
 		}
 	};
+	let database = if changing.row.plan.0.postgres.is_some() {
+		let Some(step) = super::databases::step(tx, environment_id).await? else {
+			return Err(rpc::Error::server(
+				"a deployment planned with Postgres has no database",
+			));
+		};
+		Some(step)
+	} else {
+		None
+	};
 	changing.advance(DeploymentState::RollingOut)?;
 	let previous = live_number(tx, environment_id).await?;
 	let deployment_number = number(changing.row.number);
@@ -1927,6 +2076,7 @@ async fn built(tx: &Tx, mut changing: Changing, output: &BuildServerOutput) -> r
 				spec: RuntimeValue(spec),
 				migration,
 				previous,
+				database,
 			})),
 		},
 	)
@@ -2080,6 +2230,10 @@ pub(crate) async fn release_finished(
 				})
 				.unwrap_or_default();
 			super::domains::released(tx, environment_id, &routed).await?;
+
+			if changing.row.plan.0.postgres.is_some() {
+				super::databases::applied(tx, environment_id).await?;
+			}
 
 			if let Some(build) = changing.row.build.0.as_ref() {
 				placement.migrations = Json(build.migrations.clone());
