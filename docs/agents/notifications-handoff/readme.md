@@ -35,7 +35,7 @@ This file is the working memory for that effort. It was written on 18 November 2
 | L1. Collapse key, push lifetime, raw Android channel | [#926](https://github.com/leptoskit/leptoskit/pull/926) | Ready: crate, plugin and guest gates pass on both engines, stacked on K; the worker change was checked in Node only, and the browser test was not run                      |
 | L2. Bulk endpoint import                             | [#927](https://github.com/leptoskit/leptoskit/pull/927) | Ready: crate, plugin and guest gates pass on both engines, stacked on L1; one migration per engine (`endpoint_import`)                                                     |
 | L3. Per-endpoint APNs environment                    | [#928](https://github.com/leptoskit/leptoskit/pull/928) | Ready: crate, plugin and guest gates pass on both engines, stacked on L2; one migration per engine (`endpoint_apns_environment`); the Swift host change is not compiled    |
-| L4. Recurring sends                                  | (PR pending)                                            | Ready: crate, plugin and guest gates pass on both engines, stacked on L3; one migration per engine (`recurring_sends`); no screen, and nothing was sent to a real provider |
+| L4. Recurring sends                                  | [#931](https://github.com/leptoskit/leptoskit/pull/931) | Ready: crate, plugin and guest gates pass on both engines, stacked on L3; one migration per engine (`recurring_sends`); no screen, and nothing was sent to a real provider |
 
 Each pull request's description says what was checked, where, and what is left. A sits on `main`; the others are stacked on it in order.
 
