@@ -308,12 +308,11 @@ fn notebook(welcome: &Welcome) -> Element {
 			<View class="flex-col gap-3" test_id="note-form">
 				<View class="flex-col gap-1.5">
 					<Text id="note-label" class=chrome::LABEL>"Write a note"</Text>
-					<TextInput
+					<TextArea
 						id="note-text"
 						test_id="note-text"
 						aria_labelled_by=["note-label"]
 						aria_described_by=["note-help"]
-						aria_multiline=true
 						class="min-h-[120px] w-full rounded-lg border border-[var(--admin-line-strong)] \
 						       bg-[var(--admin-sunken)] px-3 py-2.5 text-[15px] leading-relaxed \
 						       text-[var(--admin-ink)]"

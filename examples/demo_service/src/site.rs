@@ -52,7 +52,12 @@ use leptoskit_idp::NewClientSpec;
 use leptoskit_idp::SigningAlgorithm;
 use tower::ServiceExt as _;
 
+mod operations;
+
+use demo_pages::model;
+
 use crate::activity::Analytics;
+use crate::client::Client;
 use crate::inbox::DemoInbox;
 use crate::notes;
 use crate::notes::CreateError;
@@ -154,6 +159,7 @@ pub struct SiteOptions {
 	day: String,
 	client_ip_header: Option<String>,
 	caps: visitors::Caps,
+	client: Client,
 }
 
 impl SiteOptions {
@@ -165,7 +171,16 @@ impl SiteOptions {
 			day: day.into(),
 			client_ip_header,
 			caps: visitors::Caps::default(),
+			client: Client::absent(),
 		}
+	}
+
+	/// Serves `client` as the pages' browser half. Without one, pages
+	/// render and stay as the server drew them.
+	#[must_use]
+	pub fn with_client(mut self, client: Client) -> Self {
+		self.client = client;
+		self
 	}
 
 	/// Narrows the visitors' caps for a test. Debug builds only: a
@@ -199,7 +214,19 @@ struct Parts {
 	/// The request header the visitor's canonical IP arrives in, when a
 	/// deployment configured one.
 	client_ip_header: Option<String>,
+	/// The pages' browser half.
+	client: Client,
+	/// Where the rpc server keeps its mutation receipts: a private
+	/// in-memory database, so no operation's bookkeeping shares a
+	/// transaction with the site's own stores.
+	receipts: leptoskit_db::Db,
+	/// How many pages may watch for the next day at once. A permit lives
+	/// inside its stream, so a disconnect returns it at once.
+	watchers: Arc<tokio::sync::Semaphore>,
 }
+
+/// The most pages that may watch for the next day at once.
+const WATCHERS: usize = 1_000;
 
 /// Builds the site for a fresh generation: its identity provider client
 /// is registered once, and the credentials are returned for persistence.
@@ -235,6 +262,9 @@ pub async fn build(
 			origin: site_origin.to_owned(),
 			admin_origin: admin_origin.to_owned(),
 			client_ip_header: options.client_ip_header.clone(),
+			client: options.client.clone(),
+			receipts: operations::receipts().await?,
+			watchers: Arc::new(tokio::sync::Semaphore::new(WATCHERS)),
 		})),
 		&auth,
 		&idp,
@@ -255,7 +285,7 @@ pub async fn build(
 /// # Errors
 ///
 /// When sign-in or the provider can't start.
-pub fn rebuild(
+pub async fn rebuild(
 	db: &leptoskit_db::Db,
 	keys: Keys,
 	site_origin: &str,
@@ -277,6 +307,9 @@ pub fn rebuild(
 			origin: site_origin.to_owned(),
 			admin_origin: admin_origin.to_owned(),
 			client_ip_header: options.client_ip_header.clone(),
+			client: options.client.clone(),
+			receipts: operations::receipts().await?,
+			watchers: Arc::new(tokio::sync::Semaphore::new(WATCHERS)),
 		})),
 		&auth,
 		&idp,
@@ -312,6 +345,8 @@ fn site_auth(
 
 fn routes(shared: Shared, auth: &Auth, idp: &Idp) -> Router {
 	Router::new()
+		.merge(operations::router(&shared))
+		.route("/pkg/{file}", get(client_file))
 		.route("/", get(home))
 		.route("/sign-in", get(sign_in))
 		.route("/notes", get(notes))
@@ -431,8 +466,7 @@ async fn mint_pass(State(shared): State<Shared>, request: Request) -> Response {
 	let shared = shared.0;
 	let (parts, body) = request.into_parts();
 
-	// Same-origin only: a present Origin must equal this site's origin,
-	// and a contradictory Origin is never excused by Fetch Metadata.
+	// Same-origin only, before the body is read.
 	if !same_origin(&parts.headers, &shared.origin) {
 		return json_error(StatusCode::FORBIDDEN, "cross_origin");
 	}
@@ -445,54 +479,133 @@ async fn mint_pass(State(shared): State<Shared>, request: Request) -> Response {
 		return json_error(StatusCode::BAD_REQUEST, "bad_request");
 	};
 
-	let Ok(ip) = visitors::client_ip(
-		shared.client_ip_header.as_deref(),
+	let minted = match mint(
+		&shared,
 		&parts.headers,
 		peer(&parts),
-	) else {
-		return json_error(StatusCode::BAD_REQUEST, "bad_client_ip");
+		persona,
+		&return_target,
+	)
+	.await
+	{
+		Ok(minted) => minted,
+		Err(MintRefusal::CrossOrigin) => return json_error(StatusCode::FORBIDDEN, "cross_origin"),
+		Err(MintRefusal::BadClientIp) => {
+			return json_error(StatusCode::BAD_REQUEST, "bad_client_ip");
+		}
+		Err(MintRefusal::RateLimited { retry_after }) => {
+			let mut response = json_error(StatusCode::TOO_MANY_REQUESTS, "rate_limited");
+			response.headers_mut().insert(
+				header::RETRY_AFTER,
+				axum::http::HeaderValue::from(retry_after),
+			);
+			return response;
+		}
+		Err(MintRefusal::Full) => return json_error(StatusCode::SERVICE_UNAVAILABLE, "full"),
+		Err(MintRefusal::Failed(error)) => return internal_error(&error),
 	};
 
-	let pass = match shared.visitors.resolve(&parts.headers).await {
+	let mut response = (
+		StatusCode::SEE_OTHER,
+		[(header::LOCATION, minted.location)],
+		axum::body::Body::empty(),
+	)
+		.into_response();
+
+	if let Some(cookie) = minted.cookie {
+		response.headers_mut().append(header::SET_COOKIE, cookie);
+	}
+
+	response
+}
+
+/// A person minted or reused: where to sign in as them, and the pass
+/// cookie to set when the pass is new.
+struct Minted {
+	/// Local sign-in, carrying the persona and the validated return target.
+	location: String,
+	/// The new pass, when this browser had none.
+	cookie: Option<axum::http::HeaderValue>,
+}
+
+/// Why a mint was refused. Each is a stable reason a page can name.
+enum MintRefusal {
+	/// The request did not come from this site's own pages.
+	CrossOrigin,
+	/// A configured edge header was missing or unusable.
+	BadClientIp,
+	/// This network has asked for too many new passes this hour.
+	RateLimited {
+		/// Whole seconds until it may ask again, at least one.
+		retry_after: u64,
+	},
+	/// The day has handed out all its passes.
+	Full,
+	/// The database failed.
+	Failed(anyhow::Error),
+}
+
+/// Mints this request's pass and persona identity, or reuses what it
+/// already owns: the one mint behind the form post and the page's own
+/// request.
+///
+/// Same-origin only: a present `Origin` must equal this site's origin, and
+/// a contradictory `Origin` is never excused by Fetch Metadata. `return_to`
+/// must already be validated.
+async fn mint(
+	shared: &Parts,
+	headers: &HeaderMap,
+	peer: Option<SocketAddr>,
+	persona: Persona,
+	return_to: &str,
+) -> Result<Minted, MintRefusal> {
+	if !same_origin(headers, &shared.origin) {
+		return Err(MintRefusal::CrossOrigin);
+	}
+
+	let Ok(ip) = visitors::client_ip(shared.client_ip_header.as_deref(), headers, peer) else {
+		return Err(MintRefusal::BadClientIp);
+	};
+
+	let pass = match shared.visitors.resolve(headers).await {
 		Ok(PassState::Valid(pass)) => Some(pass),
 		Ok(PassState::Absent | PassState::EarlierDay) => None,
-		Err(error) => return internal_error(&error),
+		Err(error) => return Err(MintRefusal::Failed(error)),
 	};
 
 	let outcome = match shared.visitors.mint(persona, ip, pass.as_ref()).await {
 		Ok(outcome) => outcome,
 		Err(MintError::IpLimited { retry_after }) => {
-			let mut response = json_error(StatusCode::TOO_MANY_REQUESTS, "rate_limited");
-			response.headers_mut().insert(
-				header::RETRY_AFTER,
-				axum::http::HeaderValue::from(
-					u64::try_from(retry_after.num_seconds().max(1)).unwrap_or(1),
-				),
-			);
-			return response;
+			return Err(MintRefusal::RateLimited {
+				retry_after: u64::try_from(retry_after.num_seconds().max(1)).unwrap_or(1),
+			});
 		}
-		Err(MintError::Full) => return json_error(StatusCode::SERVICE_UNAVAILABLE, "full"),
-		Err(MintError::Database(error)) => return internal_error(&error),
+		Err(MintError::Full) => return Err(MintRefusal::Full),
+		Err(MintError::Database(error)) => return Err(MintRefusal::Failed(error)),
 	};
 
-	let location = visitors::sign_in_location(persona, &return_target);
-	let mut response = (
-		StatusCode::SEE_OTHER,
-		[(header::LOCATION, location)],
-		axum::body::Body::empty(),
-	)
-		.into_response();
+	let cookie = match outcome {
+		MintOutcome::Fresh { token } => {
+			let value = format!("{}.{token}", shared.visitors.day());
+			let max_age = seconds_until_next_midnight(chrono::Utc::now());
+			Some(shared.visitors.cookie().set(&value, max_age))
+		}
+		MintOutcome::Reused => None,
+	};
 
-	if let MintOutcome::Fresh { token } = outcome {
-		let value = format!("{}.{token}", shared.visitors.day());
-		let max_age = seconds_until_next_midnight(chrono::Utc::now());
-		response.headers_mut().append(
-			header::SET_COOKIE,
-			shared.visitors.cookie().set(&value, max_age),
-		);
-	}
+	Ok(Minted {
+		location: visitors::sign_in_location(persona, return_to),
+		cookie,
+	})
+}
 
-	response
+/// `GET /pkg/{file}`: one file of the pages' browser half.
+async fn client_file(
+	State(shared): State<Shared>,
+	axum::extract::Path(file): axum::extract::Path<String>,
+	headers: HeaderMap,
+) -> Response {
+	shared.0.client.serve(&file, &headers)
 }
 
 /// `GET /demo/inbox`: this pass's two people and the mail this process
@@ -632,6 +745,26 @@ impl Held {
 	fn view(&self) -> pages::Person {
 		person_view(&self.person, self.signed_in)
 	}
+
+	/// The person as the hydrated pages show them.
+	fn person(&self) -> model::Person {
+		let tag = display_tag(&self.person.email);
+		model::Person {
+			persona: persona_of(self.person.persona),
+			name: self.person.persona.name(&tag),
+			tag,
+			email: self.person.email.as_inner().to_owned(),
+			signed_in: self.signed_in,
+		}
+	}
+}
+
+/// The pages' name for a persona.
+const fn persona_of(persona: Persona) -> model::Persona {
+	match persona {
+		Persona::Ada => model::Persona::Ada,
+		Persona::Grace => model::Persona::Grace,
+	}
 }
 
 /// A person as the pages show them. Nothing here is a secret: the
@@ -716,6 +849,29 @@ fn page_context(shared: &Parts) -> pages::Context {
 			shared.admin_origin.trim_end_matches('/'),
 			leptoskit_admin::BASE
 		),
+	}
+}
+
+/// What every hydrated page knows: the generation's day, the server's
+/// clock and the reset it counts down to, and the admin's address from
+/// configuration.
+fn context_of(shared: &Parts) -> model::Context {
+	let context = page_context(shared);
+	let resets_at_ms = chrono::NaiveDate::parse_from_str(&context.day, "%Y-%m-%d")
+		.ok()
+		.and_then(|day| day.succ_opt())
+		.and_then(|next| next.and_hms_opt(0, 0, 0))
+		.map_or(context.now_ms, |midnight| {
+			midnight.and_utc().timestamp_millis()
+		});
+
+	model::Context {
+		day: context.day,
+		now_ms: context.now_ms,
+		resets_at_ms,
+		site_host: context.site_host,
+		admin_host: context.admin_host,
+		admin_url: context.admin_url,
 	}
 }
 
@@ -812,24 +968,48 @@ async fn home(
 	};
 
 	let notice = if visit.earlier_day {
-		pages::Notice::NewDay
+		model::Notice::NewDay
 	} else if params.get("signed_out") == Some("1")
 		&& !visit.people.is_empty()
 		&& visit.signed_in().is_none()
 	{
-		pages::Notice::SignedOut
+		model::Notice::SignedOut
 	} else {
-		pages::Notice::None
+		model::Notice::None
 	};
 
-	let door = pages::Door {
-		context: page_context(&shared),
+	let door = model::Door {
+		context: context_of(&shared),
 		return_to: params.return_to(),
 		notice,
-		people: visit.people.iter().map(Held::view).collect(),
+		people: visit.people.iter().map(Held::person).collect(),
 	};
+	let before = demo_pages::noscript_form(&door.return_to);
 
-	html_page(pages::front(&door), clearing(&shared, &visit))
+	page(
+		&shared,
+		model::Page::Front(door),
+		before,
+		clearing(&shared, &visit),
+	)
+	.await
+}
+
+/// A page response: the document, never stored, clearing a stale pass
+/// cookie when the browser carried one.
+async fn page(
+	shared: &Parts,
+	page: model::Page,
+	before: String,
+	clear: Option<axum::http::HeaderValue>,
+) -> Response {
+	let mut response = no_store(shared.client.render(page, before).await);
+
+	if let Some(cookie) = clear {
+		response.headers_mut().append(header::SET_COOKIE, cookie);
+	}
+
+	response
 }
 
 /// `GET /sign-in`: choose, or sign in as the person this pass minted.

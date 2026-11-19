@@ -39,6 +39,7 @@ async fn format_three_is_pinned() -> Result<()> {
 		admin_origin: "http://127.0.0.1".to_owned(),
 		authorities: test_authorities(),
 		client_ip_header: None,
+		client: demo_service::client::Client::absent(),
 	};
 	let terminated = shutdown::init();
 	let readiness = leptoskit_axum::Readiness::new();

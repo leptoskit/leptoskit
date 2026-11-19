@@ -16,13 +16,16 @@ rust-version.workspace = true
 # C, for which no Windows toolchain exists on a Unix development host.
 [target.'cfg(unix)'.dependencies]
 admin_demo = { path = "../admin_demo" }
+any_spawner = { workspace = true, features = ["tokio"] }
 anyhow = { workspace = true }
 axum = { workspace = true }
 chrono = { workspace = true }
+demo_pages = { path = "pages", features = ["ssr"] }
 futures = { workspace = true }
 getrandom = { workspace = true }
 hex = { workspace = true, features = ["serde"] }
 leptos = { workspace = true, features = ["ssr"] }
+leptos_axum = { workspace = true }
 leptoskit = { workspace = true, features = ["web"] }
 leptoskit_admin = { workspace = true }
 leptoskit_analytics = { workspace = true, features = ["derive", "server-client", "service"] }
@@ -31,7 +34,7 @@ leptoskit_axum = { workspace = true }
 leptoskit_db = { workspace = true, features = ["sqlite"] }
 leptoskit_deploy_console = { workspace = true, features = ["server"] }
 leptoskit_idp = { workspace = true, features = ["axum", "sqlite"] }
-leptoskit_rpc = { workspace = true, features = ["services"] }
+leptoskit_rpc = { workspace = true, features = ["live-streams", "server", "services", "sqlite"] }
 rustix = { workspace = true, features = ["fs", "process"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }

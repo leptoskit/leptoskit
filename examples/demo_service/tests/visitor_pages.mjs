@@ -12,7 +12,8 @@
 // of release builds), then point the test at it:
 //
 //   cargo build -p demo_service
-//   DEMO_SERVICE_BIN=<path to target/debug/demo_service> \
+//   (cd examples/demo_service/pages && leptoskit build --release --platform web --out <client>)
+//   DEMO_SERVICE_BIN=<path to target/debug/demo_service> LEPTOS_SITE_ROOT=<client> \
 //   deno test --allow-env --allow-read --allow-net --allow-run --allow-write \
 //     examples/demo_service/tests/visitor_pages.mjs
 //
@@ -80,7 +81,7 @@ async function capture(browser, name, caption, { looks = LOOKS } = {}) {
 	await browser.look(LOOKS[0]);
 }
 
-/** The page's own data, as its script reads it. */
+/** The data a page not yet hydrated hands its script. */
 const demoState = (browser) =>
 	browser.eval(`JSON.parse(document.getElementById("demo-state").textContent)`);
 
@@ -191,7 +192,7 @@ Deno.test("the visitor pages", async (t) => {
 				await browser.page.send("Emulation.setScriptExecutionDisabled", {
 					value: true,
 				});
-				await browser.go(`${service.siteOrigin}/`);
+				await browser.go(`${service.siteOrigin}/`, { scripts: false });
 				assert(
 					await browser.eval(
 						`!!document.querySelector('noscript') && document.documentElement.innerHTML.includes('action="/demo/pass"')`,
@@ -489,8 +490,12 @@ Deno.test("the visitor pages", async (t) => {
 					await browser.go(
 						`${service.siteOrigin}/?return_to=${encodeURIComponent(bad)}`,
 					);
+					// The hydrated front door keeps its target in the plain form a
+					// visitor without scripts posts.
 					assert(
-						(await demoState(browser)).returnTo === "/notes",
+						await browser.eval(
+							`document.querySelector("noscript").textContent.includes('name="return_to" value="/notes"')`,
+						),
 						`${bad} falls back on the front door`,
 					);
 				}
@@ -921,7 +926,63 @@ Deno.test("the visitor pages", async (t) => {
 				await waitFor(browser, `window.__sources.made >= 1`, "the stream");
 				await browser.click("menu-toggle");
 				await browser.press("Escape");
+				// A second visitor waits on the hydrated front door, which hears
+				// the new day over its live connection.
+				const door = await Browser.open();
+				await door.look(LOOKS[0]);
+				await door.go(`${service.siteOrigin}/`);
 				await Deno.writeTextFile(clock, String(NEXT_DAY));
+				try {
+					await waitFor(
+						door,
+						`document.querySelector('dialog[data-testid="reset-dialog"]')?.open`,
+						"the front door's new-day dialog",
+						90_000,
+					);
+					assert(
+						(await door.eval(
+							`document.querySelector('[data-testid="reset-dialog"]').getAttribute("role")`,
+						)) === "alertdialog",
+						"the front door's dialog is an alert dialog",
+					);
+					try {
+						await waitFor(
+							door,
+							`document.activeElement?.dataset.testid === "reset-title"`,
+							"focus moves to the front door's dialog title",
+							5_000,
+						);
+					} catch (error) {
+						throw new Error(
+							`${error.message}; focus is on ${await door.eval(
+								`document.activeElement?.outerHTML.slice(0, 200)`,
+							)}`,
+							{ cause: error },
+						);
+					}
+					await capture(
+						door,
+						"15-front-door-reset-dialog",
+						"The demo just reset, on the front door",
+						{ looks: [LOOKS[0], LOOKS[3]] },
+					);
+					await door.press("Escape");
+					assert(
+						!(await door.eval(
+							`document.querySelector('dialog[data-testid="reset-dialog"]')?.open ?? false`,
+						)),
+						"Escape closes the front door's dialog",
+					);
+					await sleep(3000);
+					assert(
+						!(await door.eval(
+							`document.querySelector('dialog[data-testid="reset-dialog"]')?.open ?? false`,
+						)),
+						"and it does not reopen by itself",
+					);
+				} finally {
+					await door.close();
+				}
 				await waitFor(
 					browser,
 					`document.documentElement.hasAttribute("data-reset")`,

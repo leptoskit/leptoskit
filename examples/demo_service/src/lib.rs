@@ -46,6 +46,8 @@ pub mod admin;
 #[cfg(unix)]
 pub mod barrier;
 #[cfg(unix)]
+pub mod client;
+#[cfg(unix)]
 pub mod clock;
 #[cfg(unix)]
 pub mod config;

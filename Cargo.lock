@@ -2253,18 +2253,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "demo_pages"
+version = "0.3.0"
+dependencies = [
+ "any_spawner",
+ "console_error_panic_hook",
+ "futures",
+ "leptos",
+ "leptoskit",
+ "schemars",
+ "serde",
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
 name = "demo_service"
 version = "0.3.0"
 dependencies = [
  "admin_demo",
+ "any_spawner",
  "anyhow",
  "axum",
  "chrono",
+ "demo_pages",
  "futures",
  "getrandom 0.4.3",
  "hex",
  "insta",
  "leptos",
+ "leptos_axum",
  "leptoskit",
  "leptoskit_admin",
  "leptoskit_analytics",

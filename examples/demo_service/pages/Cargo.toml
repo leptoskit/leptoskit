@@ -1,0 +1,48 @@
+[package]
+name = "demo_pages"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+homepage.workspace = true
+license.workspace = true
+publish = false
+repository.workspace = true
+rust-version.workspace = true
+description = "The public demo's pages: rendered by the demo service and hydrated in the browser from the same component trees."
+
+# One crate is both sides. The service links the library with `ssr` and
+# renders every page from it; `leptoskit build` compiles the same library to
+# Wasm with `hydrate`, and the browser picks the page up where the server
+# left it. The service itself is a Unix process and never builds for Wasm,
+# which is why the pages live here and not inside it.
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# The browser's task executor, started before the client opens its stream.
+any_spawner = { workspace = true, optional = true, features = ["wasm-bindgen"] }
+console_error_panic_hook = { workspace = true, optional = true }
+futures = { workspace = true }
+leptos = { workspace = true }
+leptoskit = { workspace = true, features = ["aria", "clock", "query", "rpc", "web"] }
+schemars = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+wasm-bindgen = { workspace = true, optional = true }
+# A full page load, when a choice leads to another page.
+web-sys = { workspace = true, optional = true, features = ["Document", "Element", "Location", "Window"] }
+
+[features]
+# The server: renders the pages, and runs the operations' bodies.
+ssr = ["leptos/ssr", "leptoskit/db-sqlite", "leptoskit/rpc-live-streams", "leptoskit/ssr"]
+# The browser: hydrates the page the server rendered.
+hydrate = [
+	"dep:any_spawner",
+	"dep:console_error_panic_hook",
+	"dep:wasm-bindgen",
+	"dep:web-sys",
+	"leptos/hydrate",
+	"leptoskit/hydrate",
+]
+
+[lints]
+workspace = true

@@ -34,6 +34,12 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 /** The service binary: `DEMO_SERVICE_BIN`, else the debug build. */
 function serviceBinary() {
 	const configured = Deno.env.get("DEMO_SERVICE_BIN");
+	if (configured && !Deno.env.get("LEPTOS_SITE_ROOT")) {
+		throw new Error(
+			"LEPTOS_SITE_ROOT must name the pages' built client: run `leptoskit build " +
+				"--release --platform web` in examples/demo_service/pages and name its output",
+		);
+	}
 	if (configured) return configured;
 	throw new Error(
 		"DEMO_SERVICE_BIN must name a debug build of demo_service: the debug clock " +
@@ -219,10 +225,27 @@ export class Browser {
 		});
 	}
 
-	async go(url) {
+	/**
+	 * Loads a page. A page that brings the Wasm client is not ready until the
+	 * client has attached to it, which the client marks on the root element;
+	 * `scripts: false` says the browser will not run it.
+	 */
+	async go(url, { scripts = true } = {}) {
 		const loaded = this.page.once("Page.loadEventFired");
 		await this.page.send("Page.navigate", { url });
 		await loaded;
+		if (!scripts) return;
+		const deadline = Date.now() + 30_000;
+		for (;;) {
+			const attached = await this.page.evaluate(
+				`!document.querySelector('link[rel="modulepreload"]') || document.documentElement.hasAttribute("data-hydrated")`,
+			).catch(() => false);
+			if (attached) return;
+			if (Date.now() > deadline) {
+				throw new Error(`the client never attached to ${url}`);
+			}
+			await sleep(50);
+		}
 	}
 
 	/** Waits for the next navigation to finish. */

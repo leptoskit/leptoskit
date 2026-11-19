@@ -408,6 +408,7 @@ impl Harness {
 			&self.options,
 			Analytics::new(self.analytics.clone(), TOKEN),
 		)
+		.await
 		.expect("the second site opens")
 	}
 
@@ -1053,6 +1054,7 @@ async fn a_reopen_keeps_the_notes_and_a_new_day_starts_empty() -> Result<()> {
 				bind: authority("127.0.0.1:8080"),
 			},
 			client_ip_header: None,
+			client: demo_service::client::Client::absent(),
 		}
 	};
 	let open = async |day: &str| {

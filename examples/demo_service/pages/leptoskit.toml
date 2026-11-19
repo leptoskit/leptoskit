@@ -1,0 +1,26 @@
+#:schema https://leptoskit.dev/schemas/leptoskit.v0.schema.json
+
+schema_version = 0
+
+# The browser half of the public demo's pages. `leptoskit build --release
+# --platform web` here writes `dist/pkg/`, which the demo service serves from
+# the directory `LEPTOS_SITE_ROOT` names. The service itself is built by
+# cargo, as `demo_service`; it renders these pages on the server and never
+# builds for Wasm.
+[app]
+name = "demo_pages"
+render = "csr"
+
+[build]
+client_package = "demo_pages"
+# The service is the backend, built on its own.
+backend = false
+# The client hydrates what the service rendered.
+features = ["hydrate"]
+
+[bundle]
+optimize = "smallest"
+# The first load, brotli-compressed, in KiB. The front door alone measured
+# 352: the pages bring typed operations, the live connection and the overlay
+# widgets. A release build fails when the client outgrows this.
+budget_kib = 400

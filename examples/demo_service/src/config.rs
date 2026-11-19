@@ -176,6 +176,9 @@ pub struct Config {
 	/// when a deployment sits behind one that always overwrites it.
 	/// Lowercase and a valid header token, or absent.
 	pub client_ip_header: Option<String>,
+	/// The pages' browser half, read from `LEPTOS_SITE_ROOT` before
+	/// anything serves.
+	pub client: crate::client::Client,
 }
 
 impl Config {
@@ -207,7 +210,11 @@ impl Config {
 				anyhow::bail!("DEMO_CLIENT_IP_HEADER must be valid text");
 			}
 		};
-		Self::parse(bind, volume, &site, &admin, client_ip_header)
+		let mut config = Self::parse(bind, volume, &site, &admin, client_ip_header)?;
+		// The pages' client is part of the release: a service that could
+		// only render pages nobody can use refuses to start instead.
+		config.client = crate::client::Client::load(Path::new(&read("LEPTOS_SITE_ROOT")?))?;
+		Ok(config)
 	}
 
 	/// Validates the parsed inputs into a configuration. The narrow seam
@@ -269,6 +276,7 @@ impl Config {
 				bind: bind_authority,
 			},
 			client_ip_header,
+			client: crate::client::Client::absent(),
 		})
 	}
 
@@ -799,6 +807,7 @@ mod tests {
 			admin_origin: "https://admin.example".into(),
 			authorities: Authorities { site, admin, bind },
 			client_ip_header: None,
+			client: crate::client::Client::absent(),
 		};
 		assert!(
 			config

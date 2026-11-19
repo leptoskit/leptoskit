@@ -46,7 +46,9 @@ input::placeholder {
 	opacity: 1;
 }
 
-.sr-only {
+/* The polite region a screen reader hears and nobody sees. */
+.sr-only,
+[data-testid="announcer"] {
 	position: absolute;
 	width: 1px;
 	height: 1px;
@@ -132,6 +134,16 @@ html[data-js] [data-testid="band-panel"] {
 
 html[data-js][data-band="open"] [data-testid="band-panel"] {
 	display: flex !important;
+}
+
+/* A hydrated page closes the panel and the front door's drawer with a class.
+   A browser that runs no scripts could never open them, so there they stay
+   open. */
+@media (scripting: none) {
+	[data-testid="band-panel"],
+	[data-testid="route-workings"] {
+		display: flex !important;
+	}
 }
 
 /* ---------- The front door ---------- */
