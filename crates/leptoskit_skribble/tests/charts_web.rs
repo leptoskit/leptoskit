@@ -107,7 +107,13 @@ fn the_same_seed_is_byte_stable() {
 				candles=candles()
 				width=320.0
 				height=200.0
-				overlays=vec![Overlay::Sma(2), Overlay::Bollinger { period: 2, deviations: 2.0 }]
+				overlays=vec![
+					Overlay::Sma(2),
+					Overlay::Bollinger {
+						period: 2,
+						deviations: 2.0,
+					},
+				]
 				show_volume=true
 				seed=7
 				label="Stable"

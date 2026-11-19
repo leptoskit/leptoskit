@@ -76,7 +76,10 @@ fn page() -> Element {
 							height=320.0
 							overlays=vec![
 								Overlay::Sma(5),
-								Overlay::Bollinger { period: 12, deviations: 2.0 },
+								Overlay::Bollinger {
+									period: 12,
+									deviations: 2.0,
+								},
 							]
 							show_volume=true
 							label="Illustrative price with volume and Bollinger Bands"

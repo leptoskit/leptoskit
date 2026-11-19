@@ -60,7 +60,12 @@ fn a_button_runs_its_action_when_pressed() {
 		let counter = Arc::clone(&counter);
 		view! {
 			<SkribblePage>
-				<WiredButton label="Save" on_press=move || { counter.fetch_add(1, Ordering::SeqCst); } />
+				<WiredButton
+					label="Save"
+					on_press=move || {
+						counter.fetch_add(1, Ordering::SeqCst);
+					}
+				/>
 			</SkribblePage>
 		}
 	});
@@ -74,7 +79,13 @@ fn a_button_runs_its_action_when_pressed() {
 #[test]
 fn a_disabled_button_cannot_be_pressed() {
 	let mut tester = mount(|| {
-		view! { <WiredButton label="Save" disabled on_press=|| panic!("disabled buttons ignore presses") /> }
+		view! {
+			<WiredButton
+				label="Save"
+				disabled
+				on_press=|| panic!("disabled buttons ignore presses")
+			/>
+		}
 	});
 	assert!(
 		tester
@@ -324,7 +335,9 @@ fn an_input_proposes_typed_text() {
 				label="Name"
 				value=value
 				placeholder="Your name"
-				on_change=move |next: &str| *update.lock().unwrap_or_else(PoisonError::into_inner) = next.to_owned()
+				on_change=move |next: &str| {
+					*update.lock().unwrap_or_else(PoisonError::into_inner) = next.to_owned();
+				}
 			/>
 		}
 	});
@@ -392,7 +405,13 @@ fn progress_clamps_values_outside_zero_to_one() {
 
 #[test]
 fn dividers_are_separators() {
-	let tester = mount(|| view! { <View class="w-full"><WiredDivider /></View> });
+	let tester = mount(|| {
+		view! {
+			<View class="w-full">
+				<WiredDivider />
+			</View>
+		}
+	});
 	let surface = tester.surface();
 	let root = surface.root().expect("a committed root");
 	let divider = surface.children(root)[0];
@@ -447,7 +466,9 @@ fn a_labelled_sketch_is_an_image_at_its_size() {
 #[test]
 fn an_unlabelled_sketch_is_decorative() {
 	let tester = mount(|| {
-		view! { <Sketch width=40.0 height=40.0 shapes=vec![Shape::ellipse(20.0, 20.0, 32.0, 32.0)] /> }
+		view! {
+			<Sketch width=40.0 height=40.0 shapes=vec![Shape::ellipse(20.0, 20.0, 32.0, 32.0)] />
+		}
 	});
 	let surface = tester.surface();
 	let sketch = surface.root().expect("a committed root");
@@ -499,19 +520,25 @@ fn a_sketch_draws_its_doodle_on_native() {
 #[test]
 #[should_panic(expected = "a curve needs at least two points")]
 fn a_sketch_rejects_a_curve_without_two_points() {
-	let _ = view! {
-		<Sketch width=40.0 height=40.0 shapes=vec![Shape::curve([(1.0, 1.0)])] />
-	};
+	let _ = view! { <Sketch width=40.0 height=40.0 shapes=vec![Shape::curve([(1.0, 1.0)])] /> };
 }
 
 #[test]
 fn every_component_builds_a_valid_tree() {
 	let screen = view! {
 		<SkribblePage class="gap-4 p-4">
-			<WiredBox fill_style=FillStyle::Hachure><Text>"Box"</Text></WiredBox>
-			<WiredCard fill_style=FillStyle::Dots><Text>"Card"</Text></WiredCard>
-			<WiredCircle class="size-16"><Text>"1"</Text></WiredCircle>
-			<WiredBadge><Text>"New"</Text></WiredBadge>
+			<WiredBox fill_style=FillStyle::Hachure>
+				<Text>"Box"</Text>
+			</WiredBox>
+			<WiredCard fill_style=FillStyle::Dots>
+				<Text>"Card"</Text>
+			</WiredCard>
+			<WiredCircle class="size-16">
+				<Text>"1"</Text>
+			</WiredCircle>
+			<WiredBadge>
+				<Text>"New"</Text>
+			</WiredBadge>
 			<WiredButton label="Primary" on_press=|| {} />
 			<WiredButton label="Secondary" variant=ButtonVariant::Secondary on_press=|| {} />
 			<WiredInput label="Name" value="" on_change=|_: &str| {} />
@@ -519,7 +546,9 @@ fn every_component_builds_a_valid_tree() {
 			<WiredRadio label="Radio" selected=true on_select=|| {} />
 			<WiredSwitch label="Switch" on=true on_toggle=|_: bool| {} />
 			<WiredProgress label="Progress" value=0.5 />
-			<WiredHighlight><Text>"Highlight"</Text></WiredHighlight>
+			<WiredHighlight>
+				<Text>"Highlight"</Text>
+			</WiredHighlight>
 			<WiredDivider />
 			<Sketch width=20.0 height=20.0 shapes=vec![Shape::rectangle(2.0, 2.0, 16.0, 16.0)] />
 		</SkribblePage>
@@ -538,7 +567,12 @@ fn any_seed_draws_without_overflowing() {
 				<WiredRadio label="Radio" selected=true seed=seed on_select=|| {} />
 				<WiredSwitch label="Switch" on=true seed=seed on_toggle=|_: bool| {} />
 				<WiredProgress label="Progress" value=0.5 seed=seed />
-				<Sketch width=20.0 height=20.0 seed=seed shapes=vec![Shape::ellipse(10.0, 10.0, 16.0, 16.0)] />
+				<Sketch
+					width=20.0
+					height=20.0
+					seed=seed
+					shapes=vec![Shape::ellipse(10.0, 10.0, 16.0, 16.0)]
+				/>
 			</View>
 		};
 		screen.validate().expect("every seed builds a valid tree");
@@ -556,5 +590,7 @@ fn empty_progress_draws_only_its_track() {
 #[test]
 #[should_panic(expected = "a sketch needs a positive, finite size")]
 fn a_sketch_rejects_a_size_it_cannot_draw_at() {
-	let _ = view! { <Sketch width=f32::NAN height=40.0 shapes=vec![Shape::circle(20.0, 20.0, 30.0)] /> };
+	let _ = view! {
+		<Sketch width=f32::NAN height=40.0 shapes=vec![Shape::circle(20.0, 20.0, 30.0)] />
+	};
 }

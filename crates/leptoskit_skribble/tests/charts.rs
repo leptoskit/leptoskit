@@ -145,7 +145,10 @@ fn every_series_kind_and_overlay_renders() {
 					overlays=vec![
 						Overlay::Sma(2),
 						Overlay::Ema(2),
-						Overlay::Bollinger { period: 2, deviations: 2.0 },
+						Overlay::Bollinger {
+							period: 2,
+							deviations: 2.0,
+						},
 					]
 					show_volume=true
 					label="Everything"
@@ -163,7 +166,12 @@ fn line_and_bar_charts_keep_their_promised_sizes() {
 	let tester = mount(|| {
 		view! {
 			<View class="items-start gap-4">
-				<WiredLineChart series=vec![1.0, 3.0, 2.0, 5.0] width=240.0 height=120.0 label="Revenue" />
+				<WiredLineChart
+					series=vec![1.0, 3.0, 2.0, 5.0]
+					width=240.0
+					height=120.0
+					label="Revenue"
+				/>
 				<WiredLineChart
 					series=vec![(0.0, 1.0), (1.0, 4.0), (2.0, 2.0)]
 					width=240.0
@@ -231,7 +239,5 @@ fn tiny_and_large_charts_do_not_overflow() {
 #[test]
 #[should_panic(expected = "a chart needs a positive, finite size")]
 fn a_chart_rejects_a_size_it_cannot_draw_at() {
-	let _ = view! {
-		<WiredCandlestickChart candles=rising() width=f32::NAN height=120.0 />
-	};
+	let _ = view! { <WiredCandlestickChart candles=rising() width=f32::NAN height=120.0 /> };
 }

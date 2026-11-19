@@ -95,7 +95,9 @@ fn map_paper() -> Element {
 		<WiredCard seed=11 class="flex-1 min-w-[320px] overflow-hidden">
 			<View class="flex-row items-center justify-between">
 				<Heading aria_level=2 class="text-xl font-bold">"Paper with a graticule"</Heading>
-				<WiredBadge seed=12><Text>"MapStyle::PAPER"</Text></WiredBadge>
+				<WiredBadge seed=12>
+					<Text>"MapStyle::PAPER"</Text>
+				</WiredBadge>
 			</View>
 			<WiredMap
 				camera=Camera::fit(
@@ -120,15 +122,12 @@ fn map_night() -> Element {
 		<WiredCard seed=21 class="flex-1 min-w-[320px] overflow-hidden">
 			<View class="flex-row items-center justify-between">
 				<Heading aria_level=2 class="text-xl font-bold">"Charcoal paper"</Heading>
-				<WiredBadge seed=22><Text>"MapStyle::DARK"</Text></WiredBadge>
+				<WiredBadge seed=22>
+					<Text>"MapStyle::DARK"</Text>
+				</WiredBadge>
 			</View>
 			<WiredMap
-				camera=Camera::fit(
-					LatLngBounds::new(START, FINISH),
-					480.0,
-					330.0,
-					72.0,
-				)
+				camera=Camera::fit(LatLngBounds::new(START, FINISH), 480.0, 330.0, 72.0)
 				width=480.0
 				height=330.0
 				features=vec![route()]
@@ -167,8 +166,7 @@ fn atlas() -> Element {
 	view! {
 		<SkribblePage class="items-center px-4 py-10">
 			<View class="w-full max-w-[1120px] gap-8">
-				{header()}
-				<View class="flex-row flex-wrap gap-6">{map_paper()}{map_night()}</View>
+				{header()} <View class="flex-row flex-wrap gap-6">{map_paper()}{map_night()}</View>
 				{controls()}
 			</View>
 		</SkribblePage>

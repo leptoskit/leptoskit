@@ -80,7 +80,10 @@ fn features_keep_the_map_size_and_pins_keep_their_own() {
 			camera=camera()
 			width=320.0
 			height=200.0
-			features=vec![park(), MapFeature::route(vec![london(), LatLng::new(51.515, -0.115)])]
+			features=vec![
+				park(),
+				MapFeature::route(vec![london(), LatLng::new(51.515, -0.115)]),
+			]
 			pins=vec![MapPin::new(london(), "Cafe").with_category(PinCategory::Coffee)]
 		/>
 	});

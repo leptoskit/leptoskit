@@ -61,7 +61,12 @@ fn sign_up() -> Element {
 			<Section number="1" title="Controls" seed=12 />
 			<WiredInput label="Name" value="Ada Lovelace" on_change=|_: &str| {} seed=13 />
 			<WiredInput label="Password" value="analytical" secret on_change=|_: &str| {} seed=14 />
-			<WiredCheckbox label="Email me new sketches" checked=true on_toggle=|_: bool| {} seed=15 />
+			<WiredCheckbox
+				label="Email me new sketches"
+				checked=true
+				on_toggle=|_: bool| {}
+				seed=15
+			/>
 			<WiredSwitch label="Dark paper" on=true on_toggle=|_: bool| {} seed=16 />
 			<View role=Role::RadioGroup aria_label="Tool" class="flex-row flex-wrap gap-4">
 				<WiredRadio label="Pencil" selected=true on_select=|| {} seed=17 />
@@ -69,7 +74,12 @@ fn sign_up() -> Element {
 			</View>
 			<View class="flex-row flex-wrap gap-3 pt-2">
 				<WiredButton label="Start sketching" on_press=|| {} seed=19 />
-				<WiredButton label="Later" variant=ButtonVariant::Secondary on_press=|| {} seed=20 />
+				<WiredButton
+					label="Later"
+					variant=ButtonVariant::Secondary
+					on_press=|| {}
+					seed=20
+				/>
 			</View>
 		</WiredCard>
 	}
@@ -92,7 +102,9 @@ fn fills() -> Element {
 		let wash = Theme::SKRIBBLE.accent_at(index);
 		view! {
 			<View class="items-center gap-1">
-				<WiredBox seed=seed fill_style=style fill=wash class="w-[104px] h-[64px]"><></></WiredBox>
+				<WiredBox seed=seed fill_style=style fill=wash class="w-[104px] h-[64px]">
+					<></>
+				</WiredBox>
 				<Text class="text-sm">{name}</Text>
 			</View>
 		}
@@ -103,11 +115,21 @@ fn fills() -> Element {
 			<Section number="2" title="Fills and marks" seed=22 />
 			<View class="flex-row flex-wrap gap-3">{swatches.collect::<Fragment>()}</View>
 			<View class="flex-row flex-wrap items-center gap-3 pt-2">
-				<WiredHighlight kind=HighlightKind::Circle seed=40><Text>"circled"</Text></WiredHighlight>
-				<WiredHighlight kind=HighlightKind::Box seed=41><Text>"boxed"</Text></WiredHighlight>
-				<WiredHighlight kind=HighlightKind::Strikethrough seed=42><Text>"struck"</Text></WiredHighlight>
-				<WiredBadge seed=43><Text>"New"</Text></WiredBadge>
-				<WiredBadge seed=44 fill_style=FillStyle::None><Text>"Beta"</Text></WiredBadge>
+				<WiredHighlight kind=HighlightKind::Circle seed=40>
+					<Text>"circled"</Text>
+				</WiredHighlight>
+				<WiredHighlight kind=HighlightKind::Box seed=41>
+					<Text>"boxed"</Text>
+				</WiredHighlight>
+				<WiredHighlight kind=HighlightKind::Strikethrough seed=42>
+					<Text>"struck"</Text>
+				</WiredHighlight>
+				<WiredBadge seed=43>
+					<Text>"New"</Text>
+				</WiredBadge>
+				<WiredBadge seed=44 fill_style=FillStyle::None>
+					<Text>"Beta"</Text>
+				</WiredBadge>
 			</View>
 		</WiredCard>
 	}
@@ -145,8 +167,21 @@ fn progress_and_doodles() -> Element {
 			</View>
 			<WiredDivider seed=54 class="my-2" />
 			<View class="flex-row flex-wrap items-center gap-6">
-				<Sketch width=190.0 height=80.0 shapes=vec![arrow] seed=55 label="An arrow pointing right" />
-				<Sketch width=80.0 height=80.0 shapes=vec![star] seed=56 fill_style=FillStyle::Hachure label="A star" />
+				<Sketch
+					width=190.0
+					height=80.0
+					shapes=vec![arrow]
+					seed=55
+					label="An arrow pointing right"
+				/>
+				<Sketch
+					width=80.0
+					height=80.0
+					shapes=vec![star]
+					seed=56
+					fill_style=FillStyle::Hachure
+					label="A star"
+				/>
 				<Sketch
 					width=120.0
 					height=80.0
@@ -165,8 +200,7 @@ fn notebook() -> Element {
 	view! {
 		<SkribblePage class="items-center px-4 py-10">
 			<View class="w-full max-w-[960px] gap-8">
-				{header()}
-				<View class="flex-row flex-wrap gap-6">{sign_up()}{fills()}</View>
+				{header()} <View class="flex-row flex-wrap gap-6">{sign_up()}{fills()}</View>
 				{progress_and_doodles()}
 			</View>
 		</SkribblePage>

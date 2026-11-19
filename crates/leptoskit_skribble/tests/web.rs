@@ -43,7 +43,11 @@ fn a_button_is_a_real_button_with_decorative_ink() {
 
 #[test]
 fn ink_follows_dark_mode_through_its_text_colour() {
-	let html = html(view! { <WiredBox><Text>"Box"</Text></WiredBox> });
+	let html = html(view! {
+		<WiredBox>
+			<Text>"Box"</Text>
+		</WiredBox>
+	});
 	assert!(ink_svgs(&html)[0].contains("currentColor"), "{html}");
 	assert!(html.contains("text-[#34283f]"), "plum ink: {html}");
 	assert!(
@@ -54,7 +58,11 @@ fn ink_follows_dark_mode_through_its_text_colour() {
 
 #[test]
 fn the_page_is_warm_paper_and_a_plum_night() {
-	let html = html(view! { <SkribblePage><Text>"Hi"</Text></SkribblePage> });
+	let html = html(view! {
+		<SkribblePage>
+			<Text>"Hi"</Text>
+		</SkribblePage>
+	});
 	assert!(html.contains("bg-[#fffaf0]"), "{html}");
 	assert!(html.contains("dark:bg-[#292331]"), "{html}");
 }
@@ -71,10 +79,18 @@ fn a_primary_label_flips_to_dark_on_the_accent_at_night() {
 #[test]
 fn marks_and_switches_use_the_sunshine_marker() {
 	for element in [
-		view! { <WiredHighlight kind=HighlightKind::Marker><Text>"Hi"</Text></WiredHighlight> },
+		view! {
+			<WiredHighlight kind=HighlightKind::Marker>
+				<Text>"Hi"</Text>
+			</WiredHighlight>
+		},
 		view! { <WiredSwitch label="On" on=true on_toggle=|_: bool| {} /> },
 		view! { <WiredProgress label="Half" value=0.5 /> },
-		view! { <WiredBox fill_style=FillStyle::Hachure><Text>"Box"</Text></WiredBox> },
+		view! {
+			<WiredBox fill_style=FillStyle::Hachure>
+				<Text>"Box"</Text>
+			</WiredBox>
+		},
 	] {
 		let html = html(element);
 		assert!(html.contains("text-[#ffd43b]"), "{html}");
@@ -87,7 +103,11 @@ fn colour_coded_cards_take_their_wash_and_readable_ink() {
 	let washes: Vec<String> = (0..6)
 		.map(|index| {
 			html(view! {
-				<WiredCard seed=index as i64 fill_style=FillStyle::Solid fill=theme.accent_at(index)>
+				<WiredCard
+					seed=index as i64
+					fill_style=FillStyle::Solid
+					fill=theme.accent_at(index)
+				>
 					<Text>"Card"</Text>
 				</WiredCard>
 			})
@@ -116,7 +136,9 @@ fn another_colourway_recolours_every_component() {
 	let html = html(view! { <WiredButton label="Dive" on_press=|| {} theme=theme /> });
 	assert!(html.contains("text-[#6aa6ff]"), "a cobalt primary: {html}");
 	let html = self::html(view! {
-		<WiredHighlight kind=HighlightKind::Marker theme=theme><Text>"Sea"</Text></WiredHighlight>
+		<WiredHighlight kind=HighlightKind::Marker theme=theme>
+			<Text>"Sea"</Text>
+		</WiredHighlight>
 	});
 	assert!(html.contains("text-[#6be3f2]"), "an aqua marker: {html}");
 }
@@ -176,7 +198,9 @@ fn server_rendering_is_byte_stable() {
 	let screen = || {
 		view! {
 			<SkribblePage class="gap-4 p-4">
-				<WiredCard seed=3 fill_style=FillStyle::Hachure><Text>"Card"</Text></WiredCard>
+				<WiredCard seed=3 fill_style=FillStyle::Hachure>
+					<Text>"Card"</Text>
+				</WiredCard>
 				<WiredButton label="Go" seed=4 on_press=|| {} />
 				<WiredDivider seed=5 />
 			</SkribblePage>

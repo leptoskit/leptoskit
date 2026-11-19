@@ -213,9 +213,7 @@ fn zoom_controls_stop_at_the_camera_limits() {
 #[test]
 fn a_map_with_no_features_or_pins_still_draws() {
 	let tester = mount(|| {
-		view! {
-			<WiredMap camera=camera() width=200.0 height=120.0 label="Empty map" />
-		}
+		view! { <WiredMap camera=camera() width=200.0 height=120.0 label="Empty map" /> }
 	});
 	tester
 		.find(&Finder::aria_role(Role::Img, "Empty map"))
@@ -236,10 +234,7 @@ fn features_at_the_poles_and_across_the_antimeridian_build() {
 						LatLng::new(10.0, -179.0),
 						LatLng::new(-10.0, 180.0),
 					]),
-					MapFeature::route(vec![
-						LatLng::new(90.0, 179.0),
-						LatLng::new(-90.0, -179.0),
-					]),
+					MapFeature::route(vec![LatLng::new(90.0, 179.0), LatLng::new(-90.0, -179.0)]),
 					MapFeature::point(LatLng::new(90.0, 0.0)),
 				]
 			/>
