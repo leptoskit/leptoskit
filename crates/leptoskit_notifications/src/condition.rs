@@ -26,6 +26,15 @@
 //! predicate, `!=` and `in` included, so nobody matches a predicate
 //! merely for lacking the attribute.
 //!
+//! A value is written between single quotes, and everything between them
+//! is the value, spaces included: `user.city == 'New York'`. A quote
+//! inside a value is written twice, the way SQL writes it: `user.name ==
+//! 'O''Brien'` compares with `O'Brien`. Nothing else is an escape — a
+//! backslash is a backslash — so a condition that parsed before this rule
+//! existed means what it always meant. [`quoted`] writes a value this way.
+//! Topic names take no escaping: they can hold neither a quote nor a
+//! space, so the topic half stays exactly FCM's.
+//!
 //! A device predicate asks about one of the person's enrolled devices, with
 //! the same operators: `device.<key>` for one of [`DeviceKey`]'s keys —
 //! `device.platform` (one of [`PushPlatform::as_str`]'s names),
@@ -54,7 +63,9 @@
 //! The bounds follow FCM's: at most [`MAX_CONDITION_TOPICS`] distinct
 //! topics, at most [`MAX_CONDITION_ATTRIBUTES`] attribute and device
 //! predicates together, nesting at most [`MAX_CONDITION_DEPTH`] levels
-//! deep, and at most [`MAX_CONDITION_LEN`] bytes of text. Topic names
+//! deep — with `!` and `(` opened at most [`MAX_CONDITION_NESTING`] deep in
+//! the text, redundant parentheses included — and at most
+//! [`MAX_CONDITION_LEN`] bytes of text. Topic names
 //! inside the quotes are topic names anywhere: 1 to
 //! [`MAX_TOPIC_LEN`](crate::MAX_TOPIC_LEN) bytes of the characters FCM
 //! accepts. Attribute keys are `[a-z0-9_]` — 1 to
@@ -77,6 +88,15 @@ pub const MAX_CONDITION_ATTRIBUTES: usize = 10;
 /// How deeply a condition may nest: a membership is depth 1, and every
 /// `!`, `&&`, and `||` over it adds one.
 pub const MAX_CONDITION_DEPTH: usize = 8;
+
+/// How deep `!` and `(` may be opened in a condition's text, counting
+/// every one still open, redundant parentheses included. The parser checks
+/// it before it descends, so its own recursion is bounded by this and not
+/// by how long the text is. It is looser than [`MAX_CONDITION_DEPTH`],
+/// which bounds the parsed tree: parentheses that group nothing add no
+/// depth to the tree, and a condition written with a few too many of them
+/// still parses.
+pub const MAX_CONDITION_NESTING: usize = 4 * MAX_CONDITION_DEPTH;
 
 /// A parsed condition: a boolean over the topics a person holds, the
 /// attributes the app set for them, and one of their devices. Built by
@@ -427,6 +447,7 @@ impl Condition {
 			pos: 0,
 			topics: Vec::new(),
 			predicates: 0,
+			nesting: 0,
 		};
 		let parsed = parser.expression()?;
 		parser.skip_whitespace();
@@ -662,6 +683,33 @@ fn collect_keys<'a>(condition: &'a Condition, keys: &mut Vec<&'a str>) {
 	}
 }
 
+/// Writes `value` as a condition's quoted literal: wrapped in single
+/// quotes, with each quote inside it doubled. Build a condition from a
+/// value the app doesn't control — a city, a name — with this, never by
+/// pasting the value between quotes:
+///
+/// ```
+/// use leptoskit_notifications::condition::Condition;
+/// use leptoskit_notifications::condition::quoted;
+///
+/// let city = "Coeur d'Alene";
+/// let condition = format!("user.city == {}", quoted(city));
+/// assert_eq!(condition, "user.city == 'Coeur d''Alene'");
+///
+/// let parsed = Condition::parse(&condition).unwrap();
+/// assert!(parsed.matches_over(|_| false, |key| (key == "city").then_some(city)));
+/// ```
+///
+/// The literal parses back to exactly `value` when `value` is one a
+/// condition can hold: at most
+/// [`MAX_ATTRIBUTE_VALUE_LEN`](crate::MAX_ATTRIBUTE_VALUE_LEN) bytes, with
+/// no control characters — what
+/// [`check_attribute_value`](crate::check_attribute_value) accepts.
+#[must_use]
+pub fn quoted(value: &str) -> String {
+	format!("'{}'", value.replace('\'', "''"))
+}
+
 /// Checks a condition before a send names it, the way
 /// [`check_send`](crate::check_send) checks the rest: parse it fully, and say
 /// what's wrong.
@@ -681,6 +729,8 @@ struct Parser<'a> {
 	pos: usize,
 	topics: Vec<(&'a str, usize)>,
 	predicates: usize,
+	/// How many `!` and `(` are open where the parser stands.
+	nesting: usize,
 }
 
 impl Parser<'_> {
@@ -719,7 +769,9 @@ impl Parser<'_> {
 		let start = self.pos;
 
 		if self.eat(b"!") {
+			self.descend(start)?;
 			let inner = self.unary()?;
+			self.nesting -= 1;
 			let not = Condition::Not(Box::new(inner));
 			Self::bounded(&not, start)?;
 
@@ -727,7 +779,9 @@ impl Parser<'_> {
 		}
 
 		if self.eat(b"(") {
+			self.descend(start)?;
 			let inner = self.expression()?;
+			self.nesting -= 1;
 			self.skip_whitespace();
 
 			if !self.eat(b")") {
@@ -1083,8 +1137,10 @@ impl Parser<'_> {
 	}
 
 	/// A quoted value: `'…'`, at most
-	/// [`MAX_ATTRIBUTE_VALUE_LEN`](crate::MAX_ATTRIBUTE_VALUE_LEN) bytes,
-	/// no whitespace inside. Answers the value and where it starts.
+	/// [`MAX_ATTRIBUTE_VALUE_LEN`](crate::MAX_ATTRIBUTE_VALUE_LEN) bytes
+	/// once unescaped. Everything up to the closing quote is the value,
+	/// spaces included, and `''` inside it is one quote. Answers the value
+	/// and where it starts.
 	fn value(&mut self) -> Result<(String, usize), ConditionError> {
 		self.skip_whitespace();
 
@@ -1096,24 +1152,32 @@ impl Parser<'_> {
 		}
 
 		let value_start = self.pos;
+		let mut bytes = Vec::new();
 
-		while self
-			.peek()
-			.is_some_and(|byte| byte != b'\'' && !byte.is_ascii_whitespace())
-		{
-			self.pos += 1;
+		loop {
+			match self.peek() {
+				None => {
+					return Err(ConditionError {
+						message: "an unclosed value: expected `'` here".into(),
+						offset: self.pos,
+					});
+				}
+				Some(b'\'') if self.text.get(self.pos + 1) == Some(&b'\'') => {
+					bytes.push(b'\'');
+					self.pos += 2;
+				}
+				Some(b'\'') => {
+					self.pos += 1;
+					break;
+				}
+				Some(byte) => {
+					bytes.push(byte);
+					self.pos += 1;
+				}
+			}
 		}
 
-		let value_end = self.pos;
-
-		if !self.eat(b"'") {
-			return Err(ConditionError {
-				message: "an unclosed value: expected `'` here".into(),
-				offset: self.pos,
-			});
-		}
-
-		if value_end - value_start > crate::MAX_ATTRIBUTE_VALUE_LEN {
+		if bytes.len() > crate::MAX_ATTRIBUTE_VALUE_LEN {
 			return Err(ConditionError {
 				message: format!(
 					"an attribute value is at most {} bytes",
@@ -1123,14 +1187,25 @@ impl Parser<'_> {
 			});
 		}
 
-		let value = std::str::from_utf8(&self.text[value_start..value_end]).map_err(|_| {
+		let value = String::from_utf8(bytes).map_err(|_| {
 			ConditionError {
 				message: "an attribute value is one UTF-8 string".into(),
 				offset: value_start,
 			}
 		})?;
 
-		Ok((value.to_owned(), value_start))
+		// What a stored value can be: no control characters. A literal
+		// holding one could match nothing, and would be a typo to find.
+		if value.chars().any(char::is_control) {
+			return Err(ConditionError {
+				message: "a value has no control characters: a line break or a tab inside the \
+				          quotes is part of the value"
+					.into(),
+				offset: value_start,
+			});
+		}
+
+		Ok((value, value_start))
 	}
 
 	/// A numeric comparison's quoted literal, which must be a finite
@@ -1286,6 +1361,25 @@ impl Parser<'_> {
 		while self.peek().is_some_and(|byte| byte.is_ascii_whitespace()) {
 			self.pos += 1;
 		}
+	}
+
+	/// Opens one more `!` or `(`, refusing it at `offset` — where it
+	/// stands — when that many are open already. Checked before the
+	/// parser recurses, so the recursion's depth is this bound's, whatever
+	/// the text's length.
+	fn descend(&mut self, offset: usize) -> Result<(), ConditionError> {
+		if self.nesting >= MAX_CONDITION_NESTING {
+			return Err(ConditionError {
+				message: format!(
+					"a condition nests `!` and `(` at most {MAX_CONDITION_NESTING} deep"
+				),
+				offset,
+			});
+		}
+
+		self.nesting += 1;
+
+		Ok(())
 	}
 
 	/// Refuses a tree that nests past the bound, at the offset where the
@@ -2155,5 +2249,164 @@ mod tests {
 		};
 		let printed = error.to_string();
 		assert!(printed.contains("byte 7"), "{printed}");
+	}
+
+	/// The parser refuses nesting before it descends, so its recursion is
+	/// bounded by [`MAX_CONDITION_NESTING`] and not by how long the text
+	/// is: a kilobyte of `(` or `!` is refused where the one too many
+	/// stands, on a stack far too small to have descended them all.
+	#[test]
+	fn nesting_is_refused_before_the_parser_descends() {
+		use super::MAX_CONDITION_NESTING;
+
+		for opener in ["(", "!"] {
+			let deep = format!("{}'a' in topics", opener.repeat(1_000));
+			assert!(deep.len() <= MAX_CONDITION_LEN, "inside the length bound");
+
+			let error = std::thread::Builder::new()
+				.stack_size(128 * 1_024)
+				.spawn(move || Condition::parse(&deep))
+				.expect("a thread")
+				.join()
+				.expect("the parser returns instead of overflowing its stack")
+				.expect_err("a thousand levels are too many");
+			assert!(error.message.contains("nest"), "names the bound: {error}");
+			assert_eq!(
+				error.offset, MAX_CONDITION_NESTING,
+				"refused at the opener that is one too many, before descending: {error}"
+			);
+		}
+
+		// Parentheses that group nothing add no depth to the tree: up to
+		// the textual bound they parse, as they always did.
+		let wrapped = format!(
+			"{}'a' in topics{}",
+			"(".repeat(MAX_CONDITION_NESTING),
+			")".repeat(MAX_CONDITION_NESTING)
+		);
+		assert_eq!(
+			Condition::parse(&wrapped).expect("redundant parentheses parse"),
+			Condition::Topic("a".into())
+		);
+
+		let one_more = format!(
+			"{}'a' in topics{}",
+			"(".repeat(MAX_CONDITION_NESTING + 1),
+			")".repeat(MAX_CONDITION_NESTING + 1)
+		);
+		let error = Condition::parse(&one_more).expect_err("one more doesn't");
+		assert_eq!(error.offset, MAX_CONDITION_NESTING, "{error}");
+
+		// Closed groups are not open ones: many siblings stay shallow.
+		Condition::parse("('a' in topics) && ('b' in topics) && ('c' in topics)")
+			.expect("siblings don't nest");
+	}
+
+	/// A value is everything between its quotes — spaces included — and a
+	/// quote inside it is written twice. Nothing else is an escape.
+	#[test]
+	fn values_hold_spaces_and_doubled_quotes() {
+		use super::quoted;
+
+		let city = Condition::parse("user.city == 'New York'").expect("a value with a space");
+		assert!(city.matches_over(|_| false, attrs(&[("city", "New York")])));
+		assert!(!city.matches_over(|_| false, attrs(&[("city", "New")])));
+		assert!(!city.matches_over(|_| false, attrs(&[("city", "NewYork")])));
+
+		let name = Condition::parse("user.name == 'O''Brien'").expect("a doubled quote");
+		assert!(name.matches_over(|_| false, attrs(&[("name", "O'Brien")])));
+		assert!(!name.matches_over(|_| false, attrs(&[("name", "O''Brien")])));
+
+		let listed = Condition::parse(
+			"user.city in ['New York', 'Coeur d''Alene','Paris'] && 'a' in topics",
+		)
+		.expect("values in a list");
+		for held in ["New York", "Coeur d'Alene", "Paris"] {
+			assert!(
+				listed.matches_over(|_| true, attrs(&[("city", held)])),
+				"{held}"
+			);
+		}
+		assert!(!listed.matches_over(|_| true, attrs(&[("city", "Coeur d''Alene")])));
+
+		let not = Condition::parse("user.city != 'New York'").expect("the other operators too");
+		assert!(not.matches_over(|_| false, attrs(&[("city", "Old York")])));
+		assert!(!not.matches_over(|_| false, attrs(&[("city", "New York")])));
+
+		// A device detail is a value like any other.
+		Condition::parse("device.app_version == '3.0 (41)'").expect("a version with a space");
+
+		// A backslash is a backslash, as it always was.
+		let path = Condition::parse(r"user.path == 'a\b'").expect("no backslash escapes");
+		assert!(path.matches_over(|_| false, attrs(&[("path", r"a\b")])));
+		let ends = Condition::parse(r"user.path == 'a\'").expect("a trailing backslash closes");
+		assert!(ends.matches_over(|_| false, attrs(&[("path", r"a\")])));
+
+		// `quoted` writes any storable value so that it parses back.
+		for value in [
+			"plain",
+			"New York",
+			"O'Brien",
+			"'",
+			"''",
+			"it''s",
+			" padded ",
+			r"back\slash",
+			"a, b] || 'x' in topics",
+			"naïve café",
+			"",
+		] {
+			let text = format!("user.k == {}", quoted(value));
+			let parsed = Condition::parse(&text).unwrap_or_else(|error| panic!("{text}: {error}"));
+			assert!(
+				parsed.matches_over(|_| false, attrs(&[("k", value)])),
+				"{text} matches exactly {value:?}"
+			);
+			assert_eq!(
+				parsed,
+				Condition::Attribute {
+					key: "k".into(),
+					test: super::Test::Equals(value.into()),
+				},
+				"{text}"
+			);
+		}
+
+		// The quoting is the only way a quote gets in: an undoubled one
+		// ends the value, and what follows is a stray token.
+		let error = Condition::parse("user.name == 'O'Brien'").expect_err("an undoubled quote");
+		assert_eq!(error.offset, 16, "{error}");
+
+		// An unclosed value is refused at the end of the text, where the
+		// quote is missing.
+		let unclosed = "user.city == 'New York";
+		let error = Condition::parse(unclosed).expect_err("no closing quote");
+		assert!(error.message.contains("unclosed"), "{error}");
+		assert_eq!(error.offset, unclosed.len());
+		let error = Condition::parse("user.name == 'O''").expect_err("the quote was escaped");
+		assert!(error.message.contains("unclosed"), "{error}");
+
+		// A value has no control characters, as a stored one can't.
+		for bad in ["user.city == 'New\tYork'", "user.city == 'New\nYork'"] {
+			let error = Condition::parse(bad).expect_err("a control character");
+			assert!(error.message.contains("control"), "{error}");
+			assert_eq!(error.offset, 14);
+		}
+
+		// The bound is on the value, not on how it is written: 256 quotes
+		// are 512 bytes of text and fit; 257 don't.
+		let most = "'".repeat(crate::MAX_ATTRIBUTE_VALUE_LEN);
+		Condition::parse(&format!("user.k == {}", quoted(&most))).expect("256 bytes fit");
+		let over = "'".repeat(crate::MAX_ATTRIBUTE_VALUE_LEN + 1);
+		let error =
+			Condition::parse(&format!("user.k == {}", quoted(&over))).expect_err("257 don't");
+		assert!(error.message.contains("at most 256"), "{error}");
+
+		// Topic names take no part in this: FCM's conditions parse as
+		// they did, and a topic can hold neither a space nor a quote.
+		Condition::parse("'TopicA' in topics && ('TopicB' in topics || 'TopicC' in topics)")
+			.expect("FCM's documented example");
+		Condition::parse("'Topic A' in topics").expect_err("no spaces in a topic");
+		Condition::parse("'Topic''A' in topics").expect_err("no quotes in a topic");
 	}
 }

@@ -47,11 +47,16 @@
 //!    Android refreshes its token the same way — waits the bounded answer, and
 //!    brings the service up to date with whatever the OS now issues and
 //!    whatever the device now says about itself. When neither changed since the
-//!    enrollment last sent them, nothing is sent at all. The answer is an
-//!    explicit [`Outcome`]: unchanged, rotated with the old handle's retirement
-//!    acknowledged, or rotated with a stale handle — a previous account's
-//!    leftover — dropped rather than operated under this one. Persist the
-//!    enrollment every outcome carries: it remembers what was sent.
+//!    enrollment last sent them, nothing is registered: the module only asks
+//!    the service, in one read, whether the enrollment still stands. The answer
+//!    is an explicit [`Outcome`]: unchanged, rotated with the old handle's
+//!    retirement acknowledged, rotated with a stale handle dropped rather than
+//!    operated, or [`Outcome::Gone`] — the service no longer has this
+//!    enrollment, because it was revoked from another device, taken over by the
+//!    device's next person, or erased with the person. A launch never enrolls
+//!    again in its place: clear the saved enrollment and the opt-in, and offer
+//!    the switch. Persist the enrollment every other outcome carries: it
+//!    remembers what was sent.
 //!
 //! Every enrollment carries the device's details — its preferred locale, its
 //! time zone, and the app's version, read from the OS by the notifications
@@ -64,7 +69,11 @@
 //!    as [`crate::browser::disable`] — so a retried sign-out is safe. It
 //!    changes no OS state; the token stays the device's, and the next account
 //!    enrolls from clean. Clear the saved enrollment and opt-in once the revoke
-//!    is acknowledged.
+//!    is acknowledged. A person whose session ended without this — an expired
+//!    session, a sign-out while offline — still holds the device on the service
+//!    until the next person [`enroll`]s on it: presenting the same token takes
+//!    the endpoint over and revokes theirs. The app's server can also release
+//!    it (`revoke_person_endpoints`).
 //!
 //! iOS, Android, and macOS. Calls on hosts without the plugin answer
 //! `Unavailable` rather than pretending.
@@ -78,7 +87,7 @@ use crate::push::DeviceDetails;
 use crate::push::EndpointSummary;
 use crate::push::PushCredential;
 #[cfg(target_arch = "wasm32")]
-use crate::push::PushEndpoints;
+use crate::push::PushEndpointStanding;
 #[cfg(target_arch = "wasm32")]
 use crate::push::RevokePushEndpoint;
 
@@ -247,7 +256,7 @@ pub enum EnrollError {
 		#[source]
 		cause: leptoskit_rpc::FnError,
 	},
-	/// The service's endpoint listing failed, so ownership of the previous
+	/// The service's ownership check failed, so ownership of the previous
 	/// handle could not be verified and nothing was revoked. As
 	/// [`EnrollError::RetireFailed`], both handles stand.
 	#[error("could not verify the previous enrollment's owner: {cause}")]
@@ -256,7 +265,7 @@ pub enum EnrollError {
 		current: Option<Enrollment>,
 		/// The handle left unverified and unreleased.
 		retired: Enrollment,
-		/// Why the listing failed: the network, or the service's answer.
+		/// Why the check failed: the network, or the service's answer.
 		#[source]
 		cause: leptoskit_rpc::FnError,
 	},
@@ -338,6 +347,14 @@ pub enum Outcome {
 		/// How the previous handle left.
 		retired: Retirement,
 	},
+	/// The service no longer has this enrollment for the signed-in person:
+	/// it was revoked from another device's list or by the app's server,
+	/// taken over by the next person to enroll on this device, or erased
+	/// with the person. Nothing was registered and nothing will be until
+	/// the person turns notifications on again: clear the saved enrollment
+	/// and the opt-in, and show the switch as off. The handle is the one
+	/// that was passed in, for the app to match against what it saved.
+	Gone(Enrollment),
 }
 
 /// How a rotated-out enrollment handle left, when rotation succeeded.
@@ -347,10 +364,9 @@ pub enum Retirement {
 	/// who enrolled the replacement, with the stable [`disable_key`]. The
 	/// handle is gone; drop it.
 	Revoked(Enrollment),
-	/// The handle is not among this person's endpoints — a previous
-	/// account's leftover from a session switch, or one already revoked.
-	/// It was never operated under this identity: no revoke was attempted,
-	/// and no credential moved. Drop it.
+	/// The handle stopped being this person's between the registration
+	/// that renewed it and its retirement — revoked meanwhile from another
+	/// device. No revoke was attempted. Drop it.
 	Stale(Enrollment),
 }
 
@@ -381,7 +397,7 @@ pub async fn enroll() -> Result<Enrollment, EnrollError> {
 
 		match decide(&snapshot)? {
 			Some(credential) => {
-				register(&credential, &device_details().await)
+				register(&credential, &device_details().await, None)
 					.await
 					.map_err(|cause| EnrollError::Enroll(None, cause))
 			}
@@ -403,21 +419,29 @@ pub async fn enroll() -> Result<Enrollment, EnrollError> {
 /// in right now:
 ///
 /// - The same token and the same [details](device_details) the enrollment last
-///   sent: [`Outcome::Kept`], and nothing is sent — a launch where nothing
-///   changed costs the service nothing.
+///   sent: nothing is registered. One read asks the service whether the
+///   enrollment still stands; it does, [`Outcome::Kept`]. When the service
+///   can't be reached the enrollment is kept as it was, and the next launch
+///   asks again.
+/// - An enrollment the service no longer has — revoked from another device,
+///   taken over by this device's next person, or erased — is [`Outcome::Gone`],
+///   whatever else changed. The launch enrolls nothing in its place: a
+///   server-side revoke sticks until the person's own gesture.
 /// - The same token with changed details — an app update, a language change, a
 ///   new time zone — keeps the same endpoint id and sends the new details in
 ///   one idempotent call: [`Outcome::Kept`], with the new details remembered.
 ///   The service rotates nothing for it.
 /// - A rotated token is a new destination. The module verifies the previous
-///   handle against this person's endpoint list — cleanup runs only for the
-///   authenticated owner — and retires it with the stable [`disable_key`], so
-///   rotation never leaks an orphan endpoint. When the person is at the
-///   endpoint quota, the refusal is answered by retiring the known-stale handle
-///   and re-registering once, so rotation at the bound still succeeds.
+///   handle is still this person's — cleanup runs only for the authenticated
+///   owner, and the check is one read by id, right however many endpoints the
+///   person holds — and retires it with the stable [`disable_key`], so rotation
+///   never leaks an orphan endpoint. When the person is at the endpoint quota,
+///   the refusal is answered by retiring the known-stale handle and
+///   re-registering once, so rotation at the bound still succeeds.
 /// - A previous handle that is not this person's — a session switch left it
-///   behind — is dropped, not operated: no revoke is attempted under the new
-///   identity, and no credential moves ([`Retirement::Stale`]).
+///   behind — is [`Outcome::Gone`] like any other enrollment the service no
+///   longer has for them: nothing registers under the new identity, no revoke
+///   is attempted, and no credential moves.
 ///
 /// # Errors
 ///
@@ -452,9 +476,14 @@ pub async fn reconcile(previous: Option<&Enrollment>) -> Result<Outcome, EnrollE
 		let details = device_details().await;
 
 		// Nothing changed since this enrollment last sent: the same token,
-		// the same details. The service already holds exactly this.
+		// the same details. There is nothing to register — only to learn
+		// whether the service still has the enrollment, in one read. An
+		// unanswered read changes nothing: the next launch asks again.
 		if previous.is_current(&credential, &details) {
-			return Ok(Outcome::Kept(*previous));
+			return Ok(match owned(previous).await {
+				Ok(false) => Outcome::Gone(*previous),
+				Ok(true) | Err(_) => Outcome::Kept(*previous),
+			});
 		}
 
 		rotate(previous, &credential, &details).await
@@ -471,11 +500,14 @@ async fn rotate(
 	credential: &PushCredential,
 	details: &DeviceDetails,
 ) -> Result<Outcome, EnrollError> {
-	match register(credential, details).await {
+	match register(credential, details, Some(previous.endpoint)).await {
 		// Same destination: one idempotent refresh — new details at most —
 		// and nothing to retire.
 		Ok(enrollment) if enrollment.endpoint == previous.endpoint => Ok(Outcome::Kept(enrollment)),
 		Ok(enrollment) => retire(previous, enrollment).await,
+		// The service no longer has the enrollment this launch renews, and
+		// so registered nothing. It stays that way until a gesture.
+		Err(cause) if crate::push::enrollment_gone(&cause) => Ok(Outcome::Gone(*previous)),
 		Err(cause) if quota_refused(&cause) => {
 			// The service's own remedy: revoke one first. The previous
 			// handle is the one this device owns and is about to discard.
@@ -505,8 +537,10 @@ async fn rotate(
 			}
 
 			// Room made: one more registration, and the rotation completes
-			// with the retirement this attempt already acknowledged.
-			register(credential, details)
+			// with the retirement this attempt already acknowledged. It
+			// renews nothing — the handle it stood on is the one just
+			// revoked, under this person, moments ago.
+			register(credential, details, None)
 				.await
 				.map(|current| {
 					Outcome::Rotated {
@@ -521,14 +555,20 @@ async fn rotate(
 }
 
 /// Registers a token with the device's details and answers the enrollment
-/// its endpoint id names, remembering what was sent.
+/// its endpoint id names, remembering what was sent. With `renews`, the
+/// call is a launch's renewal of that endpoint and registers nothing once
+/// the service no longer has it; without, it is a gesture's enrollment.
 #[cfg(target_arch = "wasm32")]
 async fn register(
 	credential: &PushCredential,
 	details: &DeviceDetails,
+	renews: Option<uuid::Uuid>,
 ) -> Result<Enrollment, leptoskit_rpc::FnError> {
-	let summary: EndpointSummary =
-		leptoskit_rpc::client::call(request(credential.clone(), details.clone())).await?;
+	let request = match renews {
+		Some(endpoint) => renewal(credential.clone(), details.clone(), endpoint),
+		None => request(credential.clone(), details.clone()),
+	};
+	let summary: EndpointSummary = leptoskit_rpc::client::call(request).await?;
 
 	Ok(Enrollment {
 		endpoint: summary.id,
@@ -544,7 +584,29 @@ pub fn request(
 	credential: PushCredential,
 	device: DeviceDetails,
 ) -> crate::push::RegisterPushEndpoint {
-	crate::push::RegisterPushEndpoint { credential, device }
+	crate::push::RegisterPushEndpoint {
+		credential,
+		device,
+		renews: None,
+	}
+}
+
+/// The typed request a launch's reconciliation sends when the token or the
+/// details changed: [`request`], naming the endpoint the saved enrollment
+/// holds. The service registers only while that endpoint is still this
+/// person's, so an enrollment revoked or erased on the server is never
+/// brought back by a launch.
+#[must_use]
+pub fn renewal(
+	credential: PushCredential,
+	device: DeviceDetails,
+	renews: uuid::Uuid,
+) -> crate::push::RegisterPushEndpoint {
+	crate::push::RegisterPushEndpoint {
+		credential,
+		device,
+		renews: Some(renews),
+	}
 }
 
 /// Whether `cause` is the service's endpoint-quota refusal, whose words are
@@ -558,23 +620,16 @@ fn quota_refused(cause: &leptoskit_rpc::FnError) -> bool {
 		if message.starts_with("a person holds at most"))
 }
 
-/// Whether `previous` is among the signed-in person's endpoints — the
-/// ownership check every retirement runs under the current identity.
+/// Whether `previous` is still one of the signed-in person's endpoints —
+/// the ownership check every retirement runs under the current identity,
+/// and what an unchanged launch asks. One read by id: a listing would be
+/// one page of a list that can be longer than a page.
 #[cfg(target_arch = "wasm32")]
 async fn owned(previous: &Enrollment) -> Result<bool, leptoskit_rpc::FnError> {
-	let endpoints: leptoskit_rpc::Page<EndpointSummary> =
-		leptoskit_rpc::client::call(PushEndpoints {
-			page: leptoskit_rpc::PageArgs::first(
-				u32::try_from(crate::push::MAX_ENDPOINTS + crate::push::MAX_ENDPOINT_HISTORY)
-					.unwrap_or(u32::MAX),
-			),
-		})
-		.await?;
-
-	Ok(endpoints
-		.items
-		.iter()
-		.any(|endpoint| endpoint.id == previous.endpoint))
+	leptoskit_rpc::client::call(PushEndpointStanding {
+		endpoint: previous.endpoint,
+	})
+	.await
 }
 
 /// Revokes `previous` with the stable [`disable_key`].
@@ -590,8 +645,8 @@ async fn revoke(previous: &Enrollment) -> Result<(), leptoskit_rpc::FnError> {
 }
 
 /// The retirement half of a rotation: the previous handle leaves only under
-/// its owner. The endpoint list settles whose it is; a revoke that is not
-/// acknowledged, and a listing that cannot be read, both leave the new
+/// its owner. The service's own answer settles whose it is; a revoke that is
+/// not acknowledged, and a listing that cannot be read, both leave the new
 /// enrollment live and the old handle named in the error for retry.
 #[cfg(target_arch = "wasm32")]
 async fn retire(previous: &Enrollment, current: Enrollment) -> Result<Outcome, EnrollError> {
@@ -825,6 +880,62 @@ mod tests {
 		);
 		let parsed: RegisterPushEndpoint = serde_json::from_value(request).unwrap();
 		assert_eq!(parsed.device, DeviceDetails::default());
+	}
+
+	/// A launch's renewal names the enrollment it renews, so the service
+	/// registers nothing once that is gone; a gesture's enrollment names
+	/// none. And the service's "gone" is told from every other failure by
+	/// its own words, so no stray not-found drops an enrollment.
+	#[test]
+	fn a_renewal_names_its_enrollment_and_gone_is_recognized() {
+		use crate::push::ENROLLMENT_GONE;
+		use crate::push::enrollment_gone;
+
+		let token = "a1b2c3d4e5f67890".repeat(4); // gitleaks:allow (a fake device token a test builds)
+		let credential = decide(&fake_host_token(&token)).unwrap().unwrap();
+		let endpoint: uuid::Uuid = "6ec0f4b1-0000-7000-8000-000000000001".parse().unwrap();
+		let renewal = serde_json::to_value(super::renewal(
+			credential.clone(),
+			DeviceDetails::default(),
+			endpoint,
+		))
+		.unwrap();
+		assert_eq!(
+			renewal,
+			serde_json::json!({
+				"credential": { "apns": { "device_token": token } },
+				"device": {},
+				"renews": endpoint,
+			})
+		);
+		let parsed: RegisterPushEndpoint = serde_json::from_value(renewal).unwrap();
+		assert_eq!(parsed.renews, Some(endpoint));
+
+		let enrollment =
+			serde_json::to_value(super::request(credential, DeviceDetails::default())).unwrap();
+		assert!(
+			enrollment.get("renews").is_none(),
+			"a gesture's enrollment renews nothing: {enrollment}"
+		);
+		let parsed: RegisterPushEndpoint = serde_json::from_value(enrollment).unwrap();
+		assert_eq!(parsed.renews, None);
+
+		// The service's answer, as it crosses the wire.
+		let gone: leptoskit_rpc::FnError = leptoskit_rpc::Error::not_found(format!(
+			"{ENROLLMENT_GONE}: it was revoked or erased on the server"
+		))
+		.into();
+		assert!(enrollment_gone(&gone));
+
+		for other in [
+			leptoskit_rpc::Error::not_found("no endpoint with this id is yours").into(),
+			leptoskit_rpc::Error::invalid(format!("{ENROLLMENT_GONE}: but as a bad request"))
+				.into(),
+			leptoskit_rpc::FnError::Network(ENROLLMENT_GONE.into()),
+			leptoskit_rpc::FnError::Other(ENROLLMENT_GONE.into()),
+		] {
+			assert!(!enrollment_gone(&other), "{other:?}");
+		}
 	}
 
 	/// What the OS reports is sanitized before it's sent: the locale in

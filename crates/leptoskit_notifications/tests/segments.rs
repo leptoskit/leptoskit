@@ -1020,8 +1020,8 @@ async fn validate_only_counts_every_target() {
 }
 
 /// Forgetting a person removes them from every future audience —
-/// everyone's and a condition's — and takes their attributes and topic
-/// subscriptions, while their inbox rows stand.
+/// everyone's and a condition's — and takes their attributes, their topic
+/// subscriptions, and their inbox rows with them.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_forgotten_person_leaves_every_audience() {
 	let service = service().await;
@@ -1055,8 +1055,8 @@ async fn a_forgotten_person_leaves_every_audience() {
 	.await;
 	assert_eq!(status, 200, "{body}");
 
-	// Attributes, subscriptions, and the registry row are gone; the
-	// inbox row stands.
+	// Attributes, subscriptions, the registry row, and the inbox row are
+	// all gone.
 	let stored = attributes_of(&service, ALICE).await;
 	assert_eq!(stored, json!({}), "{stored}");
 	let stored = rows(
@@ -1080,7 +1080,7 @@ async fn a_forgotten_person_leaves_every_audience() {
 	let page: Value = serde_json::from_str(&body).unwrap();
 	assert_eq!(page["items"].as_array().map(Vec::len), Some(0), "{page}");
 
-	assert_eq!(inbox_len(&service, ALICE).await, 1, "the inbox row stands");
+	assert_eq!(inbox_len(&service, ALICE).await, 0, "the inbox is erased");
 
 	// Neither audience reaches her now.
 	send(&service, "after-forgetting-everyone", json!("everyone")).await;
@@ -1093,7 +1093,7 @@ async fn a_forgotten_person_leaves_every_audience() {
 	.await;
 	settled(&service, "after-forgetting-condition").await;
 
-	assert_eq!(inbox_len(&service, ALICE).await, 1, "nothing new arrived");
+	assert_eq!(inbox_len(&service, ALICE).await, 0, "nothing new arrived");
 	assert_eq!(
 		inbox_len(&service, BOB).await,
 		1,

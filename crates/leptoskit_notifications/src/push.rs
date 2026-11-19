@@ -30,9 +30,28 @@ use serde::Serialize;
 /// a re-registration of a held credential is idempotent.
 pub const MAX_ENDPOINTS: usize = 10;
 
-/// Additional invalidated entries allowed per endpoint-list page. Ownership
-/// records stay until explicit revocation, even after provider invalidation.
+/// The most invalidated endpoints one person keeps beside their live ones.
+/// An invalidated endpoint stays listed, so a device list can explain it,
+/// until its owner revokes it or re-enrolls it; past this many, the next
+/// enrollment drops the oldest, so a person's endpoints — and their list,
+/// which is one page of [`MAX_ENDPOINTS`] plus this — never grow without
+/// bound.
 pub const MAX_ENDPOINT_HISTORY: usize = 10;
+
+/// How the service's answer begins when a renewal names an enrollment the
+/// caller no longer holds — revoked from another device, taken over by the
+/// device's next person, or erased with
+/// [`forget_person`](crate::forget_person). The enrollment clients match it, so
+/// a not-found from anywhere else is never mistaken for a revocation.
+pub const ENROLLMENT_GONE: &str = "this enrollment is gone";
+
+/// Whether `cause` is the service saying a renewed enrollment is
+/// [gone](ENROLLMENT_GONE): the cue to drop the saved enrollment and offer
+/// the switch again, rather than retry.
+#[must_use]
+pub fn enrollment_gone(cause: &rpc::FnError) -> bool {
+	matches!(cause, rpc::FnError::Server(message) if message.starts_with(ENROLLMENT_GONE))
+}
 
 /// The longest APNs device token, in hex characters. Tokens are 64 today;
 /// the bound leaves room for longer ones rather than guessing a ceiling.
@@ -990,14 +1009,31 @@ pub struct EndpointSummary {
 /// queued deliveries are untouched. An enrollment that names none, as
 /// every one did before details existed, stores none.
 ///
-/// A destination another **live** account holds is refused rather than
-/// reassigned: the device's previous account revokes it first (signing
-/// out of the app revokes that device's endpoints), which is what keeps a
-/// push from reaching an account that never asked for it. A destination
-/// the provider invalidated is not held: registering it takes it over
-/// clean, for whoever's device now presents it. The refusal says the
-/// destination is taken; the caller holds the credential itself, so this
-/// tells them only what their own device is already enrolled to.
+/// A destination another account holds changes hands only to a caller who
+/// presents the byte-identical credential — the same token, or the same
+/// Web Push subscription with the same keys — because holding the
+/// credential is holding the device. The previous account's endpoint is
+/// revoked: deleted, its queued deliveries skipped, so its notifications
+/// stop reaching a device its person no longer holds, and the caller gets
+/// a fresh endpoint under a fresh id. This is how a shared device passes
+/// to its next person when the previous one never signed out cleanly. The
+/// same destination under a different credential — another person's Web
+/// Push URL with keys of the caller's own — proves nothing and is refused,
+/// whether or not a provider has invalidated it.
+///
+/// `renews` turns the call into a renewal, which is what a launch-time
+/// reconciliation sends: it names the endpoint id the device saved when it
+/// enrolled, and the service registers only while that endpoint is still
+/// the caller's. Once it isn't — revoked from another device, taken over,
+/// or erased by [`forget_person`](crate::forget_person) — the answer is
+/// not found, beginning with [`ENROLLMENT_GONE`], and nothing is written:
+/// a server-side revoke is never undone by a launch, and a renewal never
+/// takes a destination over. Leave it out to enroll, which is a person's
+/// own gesture.
+///
+/// A person keeps at most [`MAX_ENDPOINTS`] live endpoints and
+/// [`MAX_ENDPOINT_HISTORY`] invalidated ones: an enrollment past the
+/// second bound drops the oldest invalidated endpoints.
 ///
 /// # Errors
 ///
@@ -1006,17 +1042,37 @@ pub struct EndpointSummary {
 /// [`check_credential`], details that fail [`check_device_details`], a
 /// host the push-host policy won't push to, an endpoint past
 /// [`MAX_ENDPOINTS`], or a platform this server has no transport
-/// configured for, and [`rpc::Error::Conflict`] when another account
-/// holds the destination live.
+/// configured for, [`rpc::Error::Conflict`] when another account holds
+/// the destination under a different credential, and
+/// [`rpc::Error::NotFound`] when `renews` names an enrollment that is gone.
 #[rpc::mutation(service = "notifications")]
 pub async fn register_push_endpoint(
 	cx: &rpc::MutationCx,
 	credential: PushCredential,
 	#[serde(default)] device: DeviceDetails,
+	#[serde(default, skip_serializing_if = "Option::is_none")] renews: Option<uuid::Uuid>,
 ) -> rpc::Result<EndpointSummary> {
 	let me = crate::service::me(cx.identity())?;
 	let push = crate::service::push::Push::of(cx)?;
-	crate::service::push::register(cx, push, me, &credential, &device).await
+	crate::service::push::register(cx, push, me, &credential, &device, renews).await
+}
+
+/// Whether `endpoint` is still one of the signed-in person's enrollments:
+/// one primary-key read, no write. It is how a device that changed nothing
+/// since its last launch learns that the server no longer has its
+/// enrollment — revoked from another device's list, taken over by the
+/// device's next person, or erased — so it can drop its saved state and
+/// show notifications as off. An invalidated endpoint still stands: it is
+/// the person's until they revoke it, and re-enrolling revives it.
+/// Another person's endpoint, like a strange id, answers `false`.
+///
+/// # Errors
+///
+/// [`rpc::Error::Forbidden`] unless the app forwarded a signed-in person.
+#[rpc::query(service = "notifications")]
+pub async fn push_endpoint_standing(cx: &rpc::QueryCx, endpoint: uuid::Uuid) -> rpc::Result<bool> {
+	let me = crate::service::me(cx.identity())?;
+	crate::service::push::standing(cx.db(), me, endpoint).await
 }
 
 /// The signed-in person's enrolled endpoints, oldest first, one bounded
@@ -1044,8 +1100,10 @@ pub async fn push_endpoints(
 /// it, and its queued deliveries are skipped as revoked. Only the owner
 /// can revoke; another person's endpoint — or an id nobody holds — looks
 /// exactly like a missing one. Signing out of the app on a device
-/// revokes every endpoint it enrolled, so a later account on the same
-/// device enrolls from clean.
+/// revokes the endpoint it enrolled; a device whose person never got to
+/// sign out passes to its next person when they enroll with the same
+/// credential ([`register_push_endpoint`]), and the app's server can
+/// revoke a person's endpoints itself ([`revoke_person_endpoints`]).
 ///
 /// # Errors
 ///
@@ -1055,6 +1113,38 @@ pub async fn push_endpoints(
 pub async fn revoke_push_endpoint(cx: &rpc::MutationCx, endpoint: uuid::Uuid) -> rpc::Result<()> {
 	let me = crate::service::me(cx.identity())?;
 	crate::service::push::revoke(cx.tx(), me, endpoint).await
+}
+
+/// Revokes every endpoint one person holds, from the app's server: for a
+/// session the app ended without the device's help — an expired or
+/// revoked session, a sign-out everywhere, a suspended account — where the
+/// person's own [`revoke_push_endpoint`] can no longer run. Their
+/// endpoints are deleted and their queued deliveries skipped as revoked,
+/// so nothing more is pushed to devices they are signed out of. Their
+/// inbox, preferences, topics, and attributes stay; [`forget_person`]
+/// erases those. The devices learn at their next launch and enroll again
+/// only from a gesture.
+///
+/// Idempotent: the answer is how many endpoints this call removed, `0`
+/// for a person who holds none.
+///
+/// Only the app may call it.
+///
+/// [`forget_person`]: crate::forget_person
+///
+/// # Errors
+///
+/// [`rpc::Error::Forbidden`] from anywhere but the app's server.
+#[rpc::mutation(service = "notifications")]
+pub async fn revoke_person_endpoints(cx: &rpc::MutationCx, person: uuid::Uuid) -> rpc::Result<u32> {
+	if cx.identity().caller.as_deref() != Some(rpc::server::APP_CALLER) {
+		return Err(rpc::Error::forbidden(
+			"only the app revokes another person's endpoints: call this from its server, with the \
+			 service's token",
+		));
+	}
+
+	crate::service::push::revoke_all(cx.tx(), person).await
 }
 
 /// What the app's server reads about a send's push deliveries, oldest

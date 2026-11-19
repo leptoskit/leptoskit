@@ -1621,8 +1621,9 @@ async fn a_worker_that_never_activates_errors_instead_of_hanging() {
 	remove_boundaries().await;
 }
 
-/// Reconcile registers what the browser already holds and never
-/// subscribes; with nothing held it answers `None` and touches no route.
+/// Reconcile renews what the browser already holds under the enrollment
+/// the app saved, and never subscribes; with nothing held it answers
+/// `None` and touches no route.
 #[wasm_bindgen_test]
 async fn reconcile_registers_what_is_held_and_never_prompts() {
 	install_boundaries().await;
@@ -1630,12 +1631,18 @@ async fn reconcile_registers_what_is_held_and_never_prompts() {
 	let _fresh = register_fixture(RECEIVER_SCRIPT_URL).await;
 	seed(&at(FIXTURE_SCOPE), "https://push.test/push/held");
 
+	let saved = lkn::Enrollment {
+		endpoint: "6ec0f4b1-0000-7000-8000-0000000000f1"
+			.parse()
+			.expect("a uuid"),
+	};
 	let mut held = lkn::EnrollOptions::new(vapid_key());
 	held.worker_scope = Some(FIXTURE_SCOPE.to_owned());
-	let _enrollment = lkn::reconcile(&held)
+	let enrollment = lkn::reconcile(&held, Some(&saved))
 		.await
 		.expect("reconcile runs")
 		.expect("held");
+	assert_eq!(enrollment, saved, "the same enrollment stands");
 	assert_eq!(
 		eval_string(&format!(
 			"String(window.__lknSubscribesAt({}))",
@@ -1644,14 +1651,24 @@ async fn reconcile_registers_what_is_held_and_never_prompts() {
 		"0",
 		"reading a subscription prompts nothing"
 	);
-	assert_eq!(requests_to("register_push_endpoint").len(), 1);
+	let calls = requests_to("register_push_endpoint");
+	assert_eq!(calls.len(), 1);
+	let body: serde_json::Value =
+		serde_json::from_str(calls[0]["body"].as_str().expect("a body")).expect("JSON");
+	assert_eq!(
+		body["renews"],
+		saved.endpoint.to_string(),
+		"a launch renews the saved enrollment; it never enrolls: {body}"
+	);
 
 	// The receiver's own scope holds no subscription: `None` is the app's
 	// cue to offer the gesture that `enroll` can then act on.
 	let mut fresh = lkn::EnrollOptions::new(vapid_key());
 	fresh.worker_scope = Some(RECEIVER_SCOPE.to_owned());
 	assert_eq!(
-		lkn::reconcile(&fresh).await.expect("reconcile runs"),
+		lkn::reconcile(&fresh, Some(&saved))
+			.await
+			.expect("reconcile runs"),
 		None,
 		"no subscription held: the app's cue to offer the gesture"
 	);
@@ -1660,6 +1677,83 @@ async fn reconcile_registers_what_is_held_and_never_prompts() {
 		1,
 		"nothing was registered for an absent subscription"
 	);
+
+	remove_boundaries().await;
+}
+
+/// A browser that holds a subscription is never enrolled by a launch on
+/// its own: without the enrollment this person saved — a subscription the
+/// previous account left behind, or one this person turned off — reconcile
+/// answers `None` and registers nothing. And an enrollment the service no
+/// longer has stays gone: the launch hears so, registers nothing, and
+/// leaves the browser's subscription alone.
+#[wasm_bindgen_test]
+async fn reconcile_never_enrolls_and_never_brings_a_revoked_enrollment_back() {
+	install_boundaries().await;
+	let _held = register_fixture(FIXTURE_SCRIPT).await;
+	seed(&at(FIXTURE_SCOPE), "https://push.test/push/left-behind");
+
+	let mut options = lkn::EnrollOptions::new(vapid_key());
+	options.worker_scope = Some(FIXTURE_SCOPE.to_owned());
+	assert_eq!(
+		lkn::reconcile(&options, None)
+			.await
+			.expect("reconcile runs"),
+		None,
+		"no saved enrollment: this person never opted in here"
+	);
+	assert_eq!(
+		requests_to("register_push_endpoint").len(),
+		0,
+		"a held subscription alone enrolls nobody"
+	);
+
+	// The service's own answer to a renewal of an enrollment it no longer
+	// has: not found, in the words the client reads.
+	eval(&format!(
+		r#"
+	window.__lknRouteAnswers["{SERVICE_PREFIX}/register_push_endpoint"] = async () =>
+		new Response(
+			"ServerError|this enrollment is gone: it was revoked or erased on the server, so nothing was registered; enrolling again takes the person's own gesture",
+			{{status: 404}}
+		);
+	"#
+	));
+	let saved = lkn::Enrollment {
+		endpoint: "6ec0f4b1-0000-7000-8000-0000000000f1"
+			.parse()
+			.expect("a uuid"),
+	};
+	assert_eq!(
+		lkn::reconcile(&options, Some(&saved))
+			.await
+			.expect("a revoked enrollment is an answer, not a failure"),
+		None,
+		"the service no longer has it: drop it and offer the switch"
+	);
+	let calls = requests_to("register_push_endpoint");
+	assert_eq!(calls.len(), 1, "one renewal, and no enrollment after it");
+	let body: serde_json::Value =
+		serde_json::from_str(calls[0]["body"].as_str().expect("a body")).expect("JSON");
+	assert_eq!(body["renews"], saved.endpoint.to_string(), "{body}");
+	assert_eq!(
+		eval_string("JSON.stringify(window.__lknUnsubscribed)"),
+		"[]",
+		"the browser's subscription is left alone"
+	);
+
+	// Any other refusal is still a failure the app sees, and the saved
+	// enrollment stands for the next launch.
+	eval(&format!(
+		r#"
+	window.__lknRouteAnswers["{SERVICE_PREFIX}/register_push_endpoint"] = async () =>
+		new Response("ServerError|no such route", {{status: 404}});
+	"#
+	));
+	assert!(matches!(
+		lkn::reconcile(&options, Some(&saved)).await,
+		Err(lkn::EnrollError::Enroll(_))
+	));
 
 	remove_boundaries().await;
 }

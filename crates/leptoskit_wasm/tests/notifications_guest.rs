@@ -12,8 +12,10 @@
 //!   answer scripted APNs snapshots through the plugin's own codec, and method
 //!   9 the device details the OS reports — and the service — the `http` plugin
 //!   answers scripted JSON for the RPC routes the client really addresses, with
-//!   a destination-deduping, quota-refusing, receipt-replaying stand-in. No
-//!   real APNs, no real server, no device.
+//!   a destination-deduping, quota-refusing, receipt-replaying stand-in that
+//!   keeps the real service's ownership rules: a renewal of an enrollment the
+//!   person no longer holds answers "gone" and registers nothing. No real APNs,
+//!   no real server, no device.
 //!
 //! Runs as `test:plugins:guest` does, from the wasm the script builds.
 
@@ -83,8 +85,15 @@ struct Service {
 	destinations: BTreeMap<String, Uuid>,
 	/// The next endpoint id the service mints, deterministic per run.
 	minted: u128,
-	/// The endpoints the listing says this person owns.
+	/// The endpoints this person owns. A successful registration adds its
+	/// endpoint, as the real service's does.
 	owned: Vec<Uuid>,
+	/// Whether the server revokes every enrollment as soon as it is made:
+	/// another device's revoke, the app's server, or an erasure, landing
+	/// between the gesture and the next launch.
+	revokes_behind: bool,
+	/// Whether the standing check answers a transport failure.
+	standing_fails: bool,
 	/// Per-register-call script: a failure, or quota, or success.
 	register: Vec<Refusal>,
 	/// Whether revoke calls answer a server error.
@@ -111,6 +120,8 @@ impl Service {
 			destinations: BTreeMap::new(),
 			minted: 0,
 			owned: Vec::new(),
+			revokes_behind: false,
+			standing_fails: false,
 			register: Vec::new(),
 			revoke_fails: false,
 			receipts: BTreeMap::new(),
@@ -134,6 +145,26 @@ impl Service {
 				panic!("the guest sent no credential the service can parse: {body}");
 			};
 		let destination = destination.to_owned();
+
+		// A renewal stands on the enrollment it names, before anything
+		// else is looked at: once the person no longer holds it, nothing
+		// registers, in the service's own words.
+		if let Some(renews) = body["renews"].as_str() {
+			let renews: Uuid = renews.parse().expect("a uuid");
+
+			if !self.owned.contains(&renews) {
+				self.log.push(format!(
+					"register({destination}, renews {renews}) gone auth=…"
+				));
+				return (
+					404,
+					"ServerError|this enrollment is gone: it was revoked or erased on the server, \
+					 so nothing was registered; enrolling again takes the person's own gesture"
+						.into(),
+				);
+			}
+		}
+
 		self.details.push(body["device"].clone());
 		match self.register.first().copied().unwrap_or(Refusal::Success) {
 			Refusal::Network => {
@@ -167,6 +198,11 @@ impl Service {
 			});
 		self.log
 			.push(format!("register({destination}) = {id} auth=…"));
+
+		if !self.revokes_behind && !self.owned.contains(&id) {
+			self.owned.push(id);
+		}
+
 		(
 			200,
 			format!(
@@ -175,12 +211,15 @@ impl Service {
 		)
 	}
 
-	/// One `push_endpoints` call: the endpoints the person owns.
+	/// One `push_endpoints` call: the first page of the endpoints the
+	/// person owns, at most twenty, as the real service pages them. The
+	/// enrollment flow has no business listing: it asks by id.
 	fn list(&mut self) -> (u16, String) {
 		self.log.push("list() auth=…".into());
 		let items: Vec<String> = self
 			.owned
 			.iter()
+			.take(20)
 			.map(|id| {
 				format!(
 					r#"{{"id":"{id}","platform":"apns","created_at":"2026-11-16T00:00:00Z","invalidated_at":null}}"#
@@ -190,10 +229,28 @@ impl Service {
 		(
 			200,
 			format!(
-				r#"{{"items":[{}],"end":null,"has_more":false}}"#,
-				items.join(",")
+				r#"{{"items":[{}],"end":null,"has_more":{}}}"#,
+				items.join(","),
+				self.owned.len() > 20
 			),
 		)
+	}
+
+	/// One `push_endpoint_standing` call: whether the endpoint is still
+	/// this person's.
+	fn standing(&mut self, body: &str) -> (u16, String) {
+		let endpoint: Uuid = body_json(body)["endpoint"]
+			.as_str()
+			.expect("the endpoint the guest asks about")
+			.parse()
+			.expect("a uuid");
+		self.log.push(format!("standing({endpoint}) auth=…"));
+
+		if self.standing_fails {
+			return (0, String::new());
+		}
+
+		(200, self.owned.contains(&endpoint).to_string())
 	}
 
 	/// One `revoke_push_endpoint` call, with the receipt replay the real
@@ -419,6 +476,7 @@ fn http_reply(service: &mut Service, payload: &[u8]) -> Result<Bytes, Error> {
 			(status, body)
 		}
 		"push_endpoints" => service.list(),
+		"push_endpoint_standing" => service.standing(&body),
 		"revoke_push_endpoint" => service.revoke(&body, key.as_deref()),
 		other => panic!("the guest addressed an unexpected operation {other}"),
 	};
@@ -480,7 +538,16 @@ fn a_gesture_enrolls_and_a_cold_relaunch_keeps_the_same_endpoint() {
 			.filter(|line| line.starts_with("register("))
 			.count(),
 		1,
-		"a relaunch with the same token and the same details sends nothing"
+		"a relaunch with the same token and the same details registers nothing"
+	);
+	assert_eq!(
+		run.service
+			.log
+			.iter()
+			.filter(|line| !line.starts_with("register("))
+			.collect::<Vec<_>>(),
+		vec![&format!("standing({id}) auth=…")],
+		"it asks once, by id, whether the enrollment still stands"
 	);
 	assert_eq!(
 		run.service.details,
@@ -605,19 +672,23 @@ fn failed_enrollments_keep_the_retry_state() {
 	);
 }
 
+/// A previous handle that is not this person's — a session switch left it
+/// behind — is gone like any enrollment the service no longer has for
+/// them: the rotated token registers nothing under the new identity, and
+/// the handle is never operated.
 #[test]
 #[ignore = "run by test:plugins:guest, which compiles the wasm fixture"]
-fn a_stale_previous_handle_is_dropped_not_operated() {
+fn a_previous_handle_of_another_account_registers_nothing() {
 	let previous = Uuid::from_u128(0x5555_5555_5555_7555_8555_5555_5555_5555);
 	let rotated = token(5);
 	let mut service = Service::new();
 	service.owned = Vec::new();
 	let run = run(&guest(), 5, vec![Answer::Token(rotated.clone())], service);
-	let current = run.service.destinations[&rotated];
 
-	assert_eq!(
-		run.steps,
-		vec![format!("reconcile=ok:rotated:{current}:stale:{previous}")]
+	assert_eq!(run.steps, vec![format!("reconcile=ok:gone:{previous}")]);
+	assert!(
+		run.service.destinations.is_empty() && run.service.owned.is_empty(),
+		"nothing was enrolled for an account that never opted in on this device"
 	);
 	assert!(
 		!run.service
@@ -625,6 +696,132 @@ fn a_stale_previous_handle_is_dropped_not_operated() {
 			.iter()
 			.any(|line| line.starts_with("revoke(")),
 		"a handle another account owns is never operated under this identity"
+	);
+}
+
+/// A server-side revoke sticks. The person enrolls; the server then no
+/// longer has the enrollment — revoked from another device's list, by the
+/// app's server, or erased with the person. The next launch, with nothing
+/// about the device changed, asks once, hears so, and registers nothing.
+#[test]
+#[ignore = "run by test:plugins:guest, which compiles the wasm fixture"]
+fn an_unchanged_launch_learns_its_enrollment_is_gone_and_registers_nothing() {
+	let first = token(11);
+	let mut service = Service::new();
+	service.revokes_behind = true;
+	let run = run_with(
+		&guest(),
+		0,
+		vec![Answer::Token(first.clone()), Answer::Token(first.clone())],
+		vec![phone("2.1.0")],
+		service,
+	);
+	let id = run.service.destinations[&first];
+
+	assert_eq!(
+		run.steps,
+		vec![format!("enroll=ok:{id}"), format!("reconcile=ok:gone:{id}")],
+		"the launch drops the enrollment the server no longer has"
+	);
+	assert_eq!(
+		run.service.log,
+		vec![
+			format!("register({first}) = {id} auth=…"),
+			format!("standing({id}) auth=…"),
+		],
+		"one read, and no registration after it: {:?}",
+		run.service.log
+	);
+}
+
+/// The same when the launch has something new to send — an app update: the
+/// renewal names the enrollment it renews, the service registers nothing
+/// in its place, and the launch answers gone rather than enrolling again.
+#[test]
+#[ignore = "run by test:plugins:guest, which compiles the wasm fixture"]
+fn a_changed_launch_never_re_creates_a_revoked_enrollment() {
+	let first = token(12);
+	let mut service = Service::new();
+	service.revokes_behind = true;
+	let run = run_with(
+		&guest(),
+		9,
+		vec![Answer::Token(first.clone()), Answer::Token(first.clone())],
+		vec![phone("2.1.0"), phone("2.2.0")],
+		service,
+	);
+	let id = run.service.destinations[&first];
+
+	assert_eq!(
+		run.steps,
+		vec![format!("enroll=ok:{id}"), format!("reconcile=ok:gone:{id}")]
+	);
+	assert_eq!(
+		run.service.log,
+		vec![
+			format!("register({first}) = {id} auth=…"),
+			format!("register({first}, renews {id}) gone auth=…"),
+		],
+		"the update was sent as a renewal, and the service registered nothing"
+	);
+	assert_eq!(
+		run.service.details.len(),
+		1,
+		"only the gesture's enrollment was ever stored"
+	);
+}
+
+/// An unchanged launch that can't reach the service keeps its enrollment:
+/// an unanswered question is not a revoke, and the next launch asks again.
+#[test]
+#[ignore = "run by test:plugins:guest, which compiles the wasm fixture"]
+fn an_unanswered_standing_check_keeps_the_enrollment() {
+	let first = token(13);
+	let mut service = Service::new();
+	service.standing_fails = true;
+	let run = run_with(
+		&guest(),
+		0,
+		vec![Answer::Token(first.clone()), Answer::Token(first.clone())],
+		vec![phone("2.1.0")],
+		service,
+	);
+	let id = run.service.destinations[&first];
+
+	assert_eq!(
+		run.steps,
+		vec![format!("enroll=ok:{id}"), format!("reconcile=ok:kept:{id}")]
+	);
+}
+
+/// Ownership is asked by id, so it is right however many endpoints the
+/// person holds: with more than a page of them, a rotated token still
+/// retires the previous handle rather than leaving it live as "stale".
+#[test]
+#[ignore = "run by test:plugins:guest, which compiles the wasm fixture"]
+fn a_rotation_retires_a_handle_beyond_the_first_page_of_endpoints() {
+	let previous = Uuid::from_u128(0x1111_1111_1111_7111_8111_1111_1111_1111);
+	let rotated = token(14);
+	let mut service = Service::new();
+	// Twenty-five older endpoints, then this device's: past the twenty a
+	// page of the listing holds.
+	service.owned = (1..=25_u128)
+		.map(|n| Uuid::from_u128(0x0A00_0000_0000_7000_8000_0000_0000_0000 | n))
+		.chain([previous])
+		.collect();
+	let run = run(&guest(), 1, vec![Answer::Token(rotated.clone())], service);
+	let current = run.service.destinations[&rotated];
+
+	assert_eq!(
+		run.steps,
+		vec![format!("reconcile=ok:rotated:{current}:revoked:{previous}")],
+		"the previous handle is this person's, wherever a listing would put it"
+	);
+	assert!(!run.service.owned.contains(&previous), "and it is revoked");
+	assert!(
+		!run.service.log.iter().any(|line| line.starts_with("list(")),
+		"no listing is read: {:?}",
+		run.service.log
 	);
 }
 
@@ -832,12 +1029,15 @@ fn changed_details_are_sent_once_under_the_same_endpoint() {
 #[ignore = "run by test:plugins:guest, which compiles the wasm fixture"]
 fn an_enrollment_saved_before_details_sends_once() {
 	let first = token(10);
+	let mut service = Service::new();
+	// The enrollment the app saved is one the service still holds.
+	service.owned = vec![Uuid::from_u128(0x0E5A_0000_0000_0000_0000_0000_0000_0001)];
 	let run = run_with(
 		&guest(),
 		10,
 		vec![Answer::Token(first.clone()), Answer::Token(first.clone())],
 		vec![Device::Unavailable],
-		Service::new(),
+		service,
 	);
 	let id = run.service.destinations[&first];
 

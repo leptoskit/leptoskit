@@ -115,6 +115,12 @@ pub const MAX_PREFERENCES: usize = 100;
 /// but tighter, so a screen scrolls a bounded amount.
 pub const MAX_INBOX_PAGE: u32 = 100;
 
+/// The most rows a pinned inbox page — one whose arguments name the row it
+/// ends at, as a loaded page of a live list does — reads, whatever arrived
+/// inside it since it was loaded. A few [`MAX_INBOX_PAGE`]s, not the
+/// framework's ten thousand: the page's arguments come from the client.
+pub const MAX_PINNED_INBOX_ROWS: u32 = 5 * MAX_INBOX_PAGE;
+
 /// The longest topic name, in bytes: FCM's bound.
 pub const MAX_TOPIC_LEN: usize = 128;
 
@@ -144,6 +150,12 @@ pub const MAX_ATTRIBUTES_PER_PERSON: usize = 50;
 /// The most persons one [`set_person_attributes`] call may name,
 /// mirroring the topic batch bound.
 pub const MAX_ATTRIBUTE_PERSONS: usize = 1_000;
+
+/// The most keys one [`set_person_attributes`] call may name, `set` and
+/// `remove` together: as many as a person can hold to set, and as many
+/// again to remove, and no more — every key is a parameter of the call's
+/// queries and a write per person.
+pub const MAX_ATTRIBUTE_CHANGES: usize = 2 * MAX_ATTRIBUTES_PER_PERSON;
 
 /// How many people a fanout job step delivers to, in one transaction: the
 /// batch size a topic or condition send walks its audience in.
@@ -325,7 +337,7 @@ pub struct Preference {
 /// someone else's: the app's server setting their attributes
 /// ([`set_person_attributes`]), a push enrollment, a topic
 /// subscription, or a category preference. [`forget_person`] removes
-/// the row again, with their attributes and topic subscriptions.
+/// the row again, with everything else the service holds about them.
 #[table(name = "audience_members", unique(person))]
 pub struct AudienceMember {
 	pub id: leptoskit_db::Id<Self>,
@@ -1277,6 +1289,22 @@ pub async fn cancel_rows(cx: &rpc::JobCx, send_key: String) -> rpc::Result<()> {
 	service::cancel_rows(cx.db(), &send_key).await
 }
 
+/// Erases the rest of a forgotten person's inbox — the rows
+/// [`forget_person`] left because there were more than one batch of them —
+/// with those rows' push deliveries, in batches of [`FANOUT_BATCH`], each a
+/// write of its own. `through` is the newest row id the erasure covers:
+/// rows a later send writes for the person are not its to remove.
+///
+/// Only the service's own workers run it; the app never enqueues it.
+#[rpc::job(service = "notifications", serialize_by = person)]
+pub async fn forget_rows(
+	cx: &rpc::JobCx,
+	person: uuid::Uuid,
+	through: uuid::Uuid,
+) -> rpc::Result<()> {
+	service::forget_rows(cx.db(), person, through).await
+}
+
 /// Cancels a scheduled send before it's due: every row it created stops
 /// being visible, forever. Once a row of the send is visible the send can
 /// no longer be cancelled, and a key the service doesn't know is not found.
@@ -1325,6 +1353,10 @@ pub async fn cancel(cx: &rpc::MutationCx, idempotency_key: String) -> rpc::Resul
 /// reader opted out of are hidden too, whatever was sent before they
 /// opted out.
 ///
+/// A page is at most [`MAX_INBOX_PAGE`] rows. A pinned page — one that
+/// names the row it ends at — reads what lies inside it, at most
+/// [`MAX_PINNED_INBOX_ROWS`] rows, keeping the newest.
+///
 /// # Errors
 ///
 /// [`rpc::Error::Forbidden`] unless the app forwarded a signed-in person.
@@ -1361,10 +1393,11 @@ pub async fn inbox(
 		}
 	};
 
-	let page_of_rows = rpc::paginate(
+	let page_of_rows = service::paginate_bounded(
 		cx.db(),
 		query,
 		&page,
+		MAX_PINNED_INBOX_ROWS,
 		|notification| notification.id.desc(),
 		|notification| notification.id,
 	)
@@ -1669,10 +1702,11 @@ pub async fn my_topics(cx: &rpc::QueryCx, page: rpc::PageArgs) -> rpc::Result<rp
 	let mut page = page;
 	page.limit = page.limit.clamp(1, MAX_TOPICS_PAGE);
 
-	let page_of_rows = rpc::paginate(
+	let page_of_rows = service::paginate_bounded(
 		cx.db(),
 		TopicSubscription::query().filter(|subscription| subscription.person.eq(me)),
 		&page,
+		u32::try_from(MAX_TOPICS_PER_PERSON).unwrap_or(u32::MAX),
 		|subscription| subscription.id.asc(),
 		|subscription| subscription.id,
 	)
@@ -1702,7 +1736,9 @@ pub async fn my_topics(cx: &rpc::QueryCx, page: rpc::PageArgs) -> rpc::Result<rp
 /// person holds at most [`MAX_ATTRIBUTES_PER_PERSON`] attributes; a new
 /// key past that bound is skipped and counted in
 /// [`PersonAttributeChanges::skipped_full`], per person and key, so one
-/// full person never refuses the batch.
+/// full person never refuses the batch. One call names at most
+/// [`MAX_ATTRIBUTE_CHANGES`] keys across `set` and `remove`, and a larger
+/// one is refused before anything is read or written.
 ///
 /// Setting any attribute registers the named persons in the service's
 /// [registry](AudienceMember) — the audience [`SendTarget::Everyone`] and
@@ -1714,7 +1750,8 @@ pub async fn my_topics(cx: &rpc::QueryCx, page: rpc::PageArgs) -> rpc::Result<rp
 ///
 /// [`rpc::Error::Forbidden`] from anywhere but the app's server, and
 /// [`rpc::Error::Invalid`] for a bad key or value, an empty or oversized
-/// batch, or a call that neither sets nor removes anything.
+/// batch, more than [`MAX_ATTRIBUTE_CHANGES`] keys across `set` and
+/// `remove`, or a call that neither sets nor removes anything.
 #[rpc::mutation(service = "notifications")]
 pub async fn set_person_attributes(
 	cx: &rpc::MutationCx,
@@ -1756,14 +1793,30 @@ pub async fn person_attributes(
 	service::read_attributes(cx.db(), person).await
 }
 
-/// Removes one person from the service's [registry](AudienceMember), with their
-/// attributes and their topic subscriptions: the app's server only, for
-/// a person who should belong to no audience anymore — a deleted
-/// account, a withdrawn consent. Their inbox rows stay exactly as they
-/// are ([`inbox`] keeps answering them if the app still signs them in);
-/// push endpoints and category preferences stay too, so a returning
-/// person's devices and opt-outs survive. Future sends to everyone, or
-/// to a condition only attributes anchor, no longer reach them.
+/// Erases everything the service holds about one person: the app's server
+/// only, for a deleted account or a withdrawn consent. Their inbox rows,
+/// their push endpoints with the credentials in them, their push
+/// deliveries, their category preferences, their topic subscriptions,
+/// their attributes, and their place in the [registry](AudienceMember)
+/// all go. Nothing is pushed to their devices again, no audience reaches
+/// them, and [`inbox`] answers nothing for them.
+///
+/// It stays in effect. A device of theirs learns at its next launch that
+/// its enrollment is gone and drops it, rather than enrolling again
+/// ([`push::register_push_endpoint`]'s `renews`); the service hears of
+/// them again only through a new act — the person's own gesture to enroll,
+/// set a preference, or subscribe, or the app's server naming them in a
+/// send, a subscription, or attributes. An app that must keep a person out
+/// stops offering those and stops naming them.
+///
+/// Everything bounded per person is erased before this answers. An inbox
+/// longer than [`FANOUT_BATCH`] rows is finished by a background job
+/// ([`forget_rows`]), a batch per write, so an erasure never writes a
+/// whole history in one transaction; the rest follows within moments.
+///
+/// What the service doesn't hold per person is not touched: a send's own
+/// record keeps its counts, and the framework's job and receipt tables
+/// prune on their own schedule.
 ///
 /// Idempotent: forgetting a person the service doesn't know does
 /// nothing and succeeds.
@@ -1781,7 +1834,7 @@ pub async fn forget_person(cx: &rpc::MutationCx, person: uuid::Uuid) -> rpc::Res
 		));
 	}
 
-	service::forget_person(cx.tx(), person).await
+	service::forget_person(cx, person).await
 }
 
 /// Pushes a spec to one person's live endpoints, right now, as a test:

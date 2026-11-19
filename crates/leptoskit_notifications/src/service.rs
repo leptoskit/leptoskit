@@ -39,6 +39,7 @@ use crate::SERVICE;
 use crate::TopicSubscription;
 use crate::Wake;
 use crate::condition::Condition;
+use crate::push::PushDelivery;
 use crate::push::PushEndpoint;
 
 /// The longest job key the job table holds, in bytes.
@@ -549,6 +550,76 @@ fn kind_of(spec: &crate::SendSpec) -> String {
 fn options_of(spec: &crate::SendSpec) -> Option<String> {
 	(!spec.options.is_empty())
 		.then(|| serde_json::to_string(&spec.options).expect("the options are plain JSON"))
+}
+
+/// [`rpc::paginate`], with a pinned page — one whose arguments name the
+/// row it ends at (`until`) — bounded at `most` rows.
+///
+/// The framework reads a pinned page whole, up to
+/// [`rpc::MAX_PINNED_ROWS`], whatever `limit` says: the page's arguments
+/// come from the client, so `until` alone would let a caller read ten
+/// thousand of their rows in one answer, and re-read them on every change
+/// while subscribed. A page loaded at a clamped `limit` only passes `most`
+/// when that many rows arrive inside it; past it, the page keeps its first
+/// `most` rows in page order, as the framework's own bound does.
+///
+/// # Errors
+///
+/// As [`rpc::paginate`].
+pub(crate) async fn paginate_bounded<T, V>(
+	db: &impl leptoskit_db::Read,
+	query: leptoskit_db::Query<T>,
+	page: &rpc::PageArgs,
+	most: u32,
+	order: impl FnOnce(&T::Columns) -> leptoskit_db::Order,
+	key: impl Fn(&T) -> V,
+) -> rpc::Result<rpc::Page<T>>
+where
+	T: leptoskit_db::Table,
+	V: leptoskit_db::Column + serde::Serialize + serde::de::DeserializeOwned,
+{
+	let Some(until) = page.until.as_deref() else {
+		return rpc::paginate(db, query, page, order, key).await;
+	};
+
+	let order = order(T::columns());
+	let column = leptoskit_db::Col::<T, V>::new(order.column());
+	let descending = order.is_descending();
+	let cursor = |text: &str| {
+		serde_json::from_str::<V>(text)
+			.map_err(|_| rpc::Error::invalid(format!("`{text}` isn't a cursor of this query")))
+	};
+	let mut query = query.order_by(|_| order);
+
+	if let Some(after) = page.after.as_deref() {
+		let after = cursor(after)?;
+		query = query.filter(|_| {
+			if descending {
+				column.lt(after)
+			} else {
+				column.gt(after)
+			}
+		});
+	}
+
+	let last = cursor(until)?;
+	let items = query
+		.filter(|_| {
+			if descending {
+				column.gte(last)
+			} else {
+				column.lte(last)
+			}
+		})
+		.limit(u64::from(most))
+		.all(db)
+		.await?;
+
+	Ok(rpc::Page {
+		items,
+		end: Some(until.to_owned()),
+		has_more: true,
+	})
 }
 
 /// The notification `id`, when it belongs to `person`, and not found
@@ -1918,6 +1989,16 @@ pub(crate) async fn set_attributes(
 		));
 	}
 
+	// Before anything reads: every key is a parameter of the queries
+	// below, and a database takes only so many.
+	if set.len().saturating_add(remove.len()) > crate::MAX_ATTRIBUTE_CHANGES {
+		return Err(rpc::Error::invalid(format!(
+			"an attribute call names at most {} keys across `set` and `remove`; split a larger \
+			 change into several calls",
+			crate::MAX_ATTRIBUTE_CHANGES
+		)));
+	}
+
 	for (key, value) in &set {
 		crate::check_attribute_key(key).map_err(rpc::Error::invalid)?;
 		crate::check_attribute_value(value).map_err(rpc::Error::invalid)?;
@@ -2063,15 +2144,27 @@ pub(crate) async fn read_attributes(
 		.collect())
 }
 
-/// Removes one person from the registry, with their attributes and
-/// topic subscriptions, the body of [`forget_person`](crate::forget_person).
-/// Their inbox, preferences, and push endpoints stay: forgetting them
-/// ends their audiences, not their history or their own choices.
+/// Erases everything the service holds about one person, the body of
+/// [`forget_person`](crate::forget_person): their attributes, topic
+/// subscriptions, category preferences, registry row, and wake row, their
+/// push endpoints — credentials included, their queued deliveries skipped
+/// as revoked — and their inbox rows with those rows' deliveries.
+///
+/// Everything but the inbox is bounded per person, so it goes in this
+/// transaction. The inbox is not: the first batch of rows goes here, and
+/// a person with more history than that has the rest erased by
+/// [`forget_rows`](crate::forget_rows), a batch per write, so an erasure
+/// never holds a whole history in one transaction. Only rows that exist
+/// now are erased — a send that names the person afterwards is the app's
+/// own later act — which is what `through`, a row id made at this moment,
+/// bounds.
 ///
 /// # Errors
 ///
-/// Whatever the writes fail with.
-pub(crate) async fn forget_person(tx: &leptoskit_db::Tx, person: Uuid) -> rpc::Result<()> {
+/// Whatever a read, a write, or the enqueue fails with.
+pub(crate) async fn forget_person(cx: &rpc::MutationCx, person: Uuid) -> rpc::Result<()> {
+	let tx = cx.tx();
+
 	PersonAttribute::query()
 		.filter(|attribute| attribute.person.eq(person))
 		.delete(tx)
@@ -2080,10 +2173,85 @@ pub(crate) async fn forget_person(tx: &leptoskit_db::Tx, person: Uuid) -> rpc::R
 		.filter(|subscription| subscription.person.eq(person))
 		.delete(tx)
 		.await?;
+	Preference::query()
+		.filter(|preference| preference.person.eq(person))
+		.delete(tx)
+		.await?;
 	AudienceMember::query()
 		.filter(|row| row.person.eq(person))
 		.delete(tx)
 		.await?;
+	Wake::query()
+		.filter(|wake| wake.person.eq(person))
+		.delete(tx)
+		.await?;
+	push::revoke_all(tx, person).await?;
+
+	// Row ids are UUID v7, so one made now sorts after every row that
+	// exists and before the rows of any later send.
+	let through = Uuid::now_v7();
+
+	if forget_batch(tx, person, through).await? {
+		// Unkeyed, like a large cancel's job: forgetting again while it
+		// works enqueues a second, which finds whatever the first left.
+		cx.enqueue(crate::ForgetRows { person, through })
+			.at(leptoskit_db::now())
+			.await?;
+	}
+
+	Ok(())
+}
+
+/// Erases one batch of `person`'s inbox rows up to `through`, oldest
+/// first, with the deliveries of exactly those rows, and answers whether
+/// more are left.
+///
+/// # Errors
+///
+/// Whatever a read or a write fails with.
+async fn forget_batch(
+	db: &impl leptoskit_db::Connection,
+	person: Uuid,
+	through: Uuid,
+) -> rpc::Result<bool> {
+	let batch: Vec<Uuid> = Notification::query()
+		.filter(|notification| notification.person.eq(person) & notification.id.lte(through))
+		.order_by(|notification| notification.id.asc())
+		.limit(u64::try_from(crate::FANOUT_BATCH).unwrap_or(u64::MAX))
+		.all(db)
+		.await?
+		.into_iter()
+		.map(|notification| notification.id)
+		.collect();
+
+	if batch.is_empty() {
+		return Ok(false);
+	}
+
+	// Deliveries first: were the rows to go first and the write after
+	// them fail, nothing would name these deliveries' person again.
+	PushDelivery::query()
+		.filter(|delivery| delivery.notification.in_list(batch.iter().copied()))
+		.delete(db)
+		.await?;
+	Notification::query()
+		.filter(|notification| notification.id.in_list(batch.iter().copied()))
+		.delete(db)
+		.await?;
+
+	Ok(batch.len() >= crate::FANOUT_BATCH)
+}
+
+/// The body of [`forget_rows`](crate::forget_rows): the rest of an erased
+/// person's inbox, one batch at a time, each batch its own short write,
+/// until none is left.
+///
+/// # Errors
+///
+/// Whatever a read or a write fails with; the job runs again and picks up
+/// what is left.
+pub(crate) async fn forget_rows(db: &Db, person: Uuid, through: Uuid) -> rpc::Result<()> {
+	while forget_batch(db, person, through).await? {}
 
 	Ok(())
 }

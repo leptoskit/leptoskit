@@ -42,6 +42,16 @@ use postgres::Postgres;
 
 #[path = "support/engine.rs"]
 mod engine;
+#[cfg(feature = "service")]
+#[path = "support/ownership.rs"]
+mod ownership;
+#[cfg(feature = "service")]
+#[path = "support/sql.rs"]
+#[allow(
+	dead_code,
+	reason = "the SQL spellings are shared with other test files"
+)]
+mod sql;
 
 struct Service {
 	address: std::net::SocketAddr,
@@ -686,17 +696,23 @@ async fn concurrent_enrollments_of_one_credential_land_on_one_endpoint() {
 		"one endpoint, not two: {stored:?}"
 	);
 
-	// Bob's raced enrollment of the same credential is refused, and the
-	// row stays alice's.
+	// Bob presents the byte-identical credential: the device is in his
+	// hands, so it passes to him, and there is still one row for it.
 	let bob = signed_in(BOB);
-	let stranger = post(
+	let next = post(
 		&service,
 		"register_push_endpoint",
 		serde_json::json!({ "credential": credential }),
 		Some(&bob),
 	);
-	let (status, body) = stranger.await;
-	assert_eq!(status, 409, "a stranger's enrollment is refused: {body}");
+	let (status, body) = next.await;
+	assert_eq!(status, 200, "the next person takes the device over: {body}");
+	let stored = rows(&service, "SELECT person FROM push_endpoints").await;
+	assert_eq!(
+		stored.iter().map(|row| text(&row[0])).collect::<Vec<_>>(),
+		vec![BOB.to_string()],
+		"one endpoint, bob's"
+	);
 
 	// A boundary that answers nothing: enrollment never reaches it, and
 	// if a delivery somehow did, its failure is loud.
@@ -1203,4 +1219,87 @@ async fn device_details_are_replaced_and_targeted_on_postgres() {
 	assert_eq!(delivered.len(), 1, "{delivered:?}");
 	assert_eq!(text(&delivered[0][0]), ALICE.to_string());
 	assert_eq!(text(&delivered[0][1]), phone_id.to_string());
+}
+
+/// A migrated database on `postgres`, and the ownership checks' service
+/// over it: an APNs transport that reaches nothing, and no workers.
+#[cfg(feature = "service")]
+async fn ownership_service(postgres: &Postgres) -> (std::net::SocketAddr, Db) {
+	let db = Db::connect(&postgres.database())
+		.await
+		.expect("the database opens");
+	db.migrate(POSTGRES_MIGRATIONS)
+		.await
+		.expect("migrations apply");
+	let address = ownership::serve(&db).await;
+
+	(address, db)
+}
+
+/// A device passes to the next person who enrolls on it on Postgres too:
+/// the previous owner's row is deleted and the new one inserted under the
+/// same unique fingerprint, in one transaction.
+#[tokio::test(flavor = "multi_thread")]
+#[cfg(feature = "service")]
+async fn the_next_person_takes_a_device_over_on_postgres() {
+	let Some(postgres) = Postgres::start() else {
+		return;
+	};
+	let (address, db) = ownership_service(&postgres).await;
+	ownership::the_next_person_takes_a_device_over(address, &db).await;
+}
+
+/// A server-side revoke is never undone by a launch on Postgres either.
+#[tokio::test(flavor = "multi_thread")]
+#[cfg(feature = "service")]
+async fn a_server_side_revoke_sticks_on_postgres() {
+	let Some(postgres) = Postgres::start() else {
+		return;
+	};
+	let (address, db) = ownership_service(&postgres).await;
+	ownership::a_server_side_revoke_sticks(address, &db).await;
+}
+
+/// Forgetting a person erases every table's rows about them on Postgres.
+#[tokio::test(flavor = "multi_thread")]
+#[cfg(feature = "service")]
+async fn forgetting_erases_everything_on_postgres() {
+	let Some(postgres) = Postgres::start() else {
+		return;
+	};
+	let (address, db) = ownership_service(&postgres).await;
+	ownership::forgetting_erases_everything(address, &db).await;
+}
+
+/// A long history is erased in batches on Postgres too.
+#[tokio::test(flavor = "multi_thread")]
+#[cfg(feature = "service")]
+async fn forgetting_a_long_history_is_batched_on_postgres() {
+	let Some(postgres) = Postgres::start() else {
+		return;
+	};
+	let (address, db) = ownership_service(&postgres).await;
+	ownership::forgetting_a_long_history_is_batched(address, &db).await;
+}
+
+/// A pinned inbox page is bounded on Postgres too.
+#[tokio::test(flavor = "multi_thread")]
+#[cfg(feature = "service")]
+async fn a_pinned_page_is_bounded_on_postgres() {
+	let Some(postgres) = Postgres::start() else {
+		return;
+	};
+	let (address, db) = ownership_service(&postgres).await;
+	ownership::a_pinned_page_is_bounded(address, &db).await;
+}
+
+/// An attribute call's keys are bounded before they reach Postgres.
+#[tokio::test(flavor = "multi_thread")]
+#[cfg(feature = "service")]
+async fn an_attribute_call_names_a_bounded_number_of_keys_on_postgres() {
+	let Some(postgres) = Postgres::start() else {
+		return;
+	};
+	let (address, db) = ownership_service(&postgres).await;
+	ownership::an_attribute_call_names_a_bounded_number_of_keys(address, &db).await;
 }

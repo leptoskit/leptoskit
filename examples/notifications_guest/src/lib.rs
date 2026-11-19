@@ -142,6 +142,7 @@ impl Steps for Outcome {
 					}
 				)
 			}
+			Outcome::Gone(enrollment) => format!("gone:{}", enrollment.endpoint),
 		}
 	}
 }
@@ -239,8 +240,9 @@ async fn run_scenario(scenario: u32) {
 			reconcile("44444444-4444-7444-8444-444444444444").await;
 			reconcile("44444444-4444-7444-8444-444444444444").await;
 		}
-		// The previous handle belongs to a previous account: it is dropped,
-		// never operated.
+		// The previous handle belongs to a previous account: the service
+		// answers that this person holds no such enrollment, and nothing is
+		// registered or revoked.
 		5 => reconcile("55555555-5555-7555-8555-555555555555").await,
 		// The OS stays silent: unconfirmed, everything untouched, and a
 		// device with no previous enrollment registers nothing at all.
