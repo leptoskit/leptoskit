@@ -91,11 +91,6 @@ pub(crate) fn header(title: &str, subtitle: &str, actions: Vec<Element>) -> Elem
 	components::header(title, subtitle, actions)
 }
 
-/// The `struct` badge on an event with a Rust type.
-pub(crate) fn struct_badge() -> Element {
-	components::struct_badge()
-}
-
 /// A note in the margin, if the person hasn't retired it.
 pub(crate) fn note(preferences: &Preferences, id: &str, text: &str) -> Option<Element> {
 	preferences

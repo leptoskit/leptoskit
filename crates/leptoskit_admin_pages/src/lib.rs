@@ -35,6 +35,21 @@ pub(crate) fn spawn(task: impl Future<Output = ()> + 'static) {
 	leptos::task::spawn_local(task);
 }
 
+/// Points the rpc client at the admin's own endpoints and live connection,
+/// once: configuring it again would start a second connection.
+#[cfg(feature = "hydrate")]
+pub(crate) fn live_connection() {
+	static ONCE: std::sync::Once = std::sync::Once::new();
+
+	ONCE.call_once(|| {
+		leptoskit::rpc::client::configure(
+			leptoskit::rpc::client::ClientConfig::new()
+				.rpc_path(format!("{BASE}/rpc"))
+				.live_path(format!("{BASE}/live")),
+		);
+	});
+}
+
 /// Leaves this page for `address`, as a full page load. On the server there
 /// is no page to leave.
 pub(crate) fn go(address: &str) {

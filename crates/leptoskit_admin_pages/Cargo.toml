@@ -38,7 +38,7 @@ wasm-bindgen = { workspace = true, optional = true }
 wasm-bindgen-futures = { workspace = true, optional = true }
 # The theme's cookie, the device's appearance, saving a preference, and a
 # full page load when a search result leads to another page.
-web-sys = { workspace = true, optional = true, features = ["Crypto", "Document", "Element", "Headers", "History", "HtmlDocument", "HtmlElement", "Location", "MediaQueryList", "Node", "Request", "RequestCredentials", "RequestInit", "Response", "Window"] }
+web-sys = { workspace = true, optional = true, features = ["Crypto", "Document", "Element", "Headers", "History", "HtmlDocument", "HtmlElement", "Location", "MediaQueryList", "Node", "Performance", "Request", "RequestCredentials", "RequestInit", "Response", "Window"] }
 
 [features]
 default = []

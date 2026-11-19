@@ -66,10 +66,10 @@ fn sources(directory: &Path, files: &mut Vec<std::path::PathBuf>) {
 #[test]
 fn every_class_literal_compiles() {
 	let mut files = Vec::new();
-	sources(
-		&Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
-		&mut files,
-	);
+	// The admin draws with its own sources and with its pages crate's.
+	let here = Path::new(env!("CARGO_MANIFEST_DIR"));
+	sources(&here.join("src"), &mut files);
+	sources(&here.join("../leptoskit_admin_pages/src"), &mut files);
 	let mut checked = 0;
 	let mut failures = Vec::new();
 

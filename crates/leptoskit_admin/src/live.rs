@@ -12,6 +12,7 @@ use futures::StreamExt as _;
 use futures::future::BoxFuture;
 use futures::stream::BoxStream;
 use leptoskit_admin_pages::ops::Backend;
+use leptoskit_admin_pages::ops::Live;
 use leptoskit_admin_pages::ops::Port;
 use leptoskit_admin_pages::ops::Progress;
 use leptoskit_auth::CurrentSession;
@@ -66,6 +67,7 @@ impl rpc::server::Identify for Callers {
 
 			let streams = Streams {
 				control: inner.control.clone(),
+				analytics: inner.analytics.clone(),
 			};
 			let context = leptoskit_db::Context::new().with(Port(Arc::new(streams)));
 
@@ -78,6 +80,7 @@ impl rpc::server::Identify for Callers {
 /// The streams' bodies, for one signed-in admin.
 struct Streams {
 	control: Option<Service>,
+	analytics: Option<crate::analytics::Connection>,
 }
 
 impl Backend for Streams {
@@ -87,6 +90,15 @@ impl Backend for Streams {
 			.as_ref()
 			.ok_or_else(|| rpc::Error::not_found("There's no control service."))?;
 		progress(service, &id)
+	}
+
+	fn analytics(&self, events: bool) -> rpc::Result<BoxStream<'static, Live>> {
+		let connection = self
+			.analytics
+			.clone()
+			.ok_or_else(|| rpc::Error::not_found("Analytics isn't connected."))?;
+
+		Ok(crate::analytics::live::follow(connection, events))
 	}
 }
 

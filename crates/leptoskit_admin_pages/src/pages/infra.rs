@@ -88,11 +88,7 @@ impl Follow {
 	/// Opens the operation's progress stream, in the browser.
 	pub(crate) fn open(id: &str) -> Self {
 		#[cfg(feature = "hydrate")]
-		leptoskit::rpc::client::configure(
-			leptoskit::rpc::client::ClientConfig::new()
-				.rpc_path(format!("{BASE}/rpc"))
-				.live_path(format!("{BASE}/live")),
-		);
+		crate::live_connection();
 
 		let id = id.to_owned();
 		let progress = leptoskit::rpc::use_stream({

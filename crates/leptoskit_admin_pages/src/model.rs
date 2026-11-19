@@ -14,6 +14,7 @@ use crate::workings::Drawer;
 
 pub mod insight;
 pub mod library;
+pub mod live;
 pub mod people;
 pub mod project;
 
@@ -60,14 +61,24 @@ impl std::str::FromStr for Environment {
 }
 
 /// How fast analytics events arrive.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Pulse {
 	/// Events a second, over the last ten seconds.
 	pub per_second: f64,
+	/// Events in the last minute.
+	#[serde(default)]
+	pub per_minute: u64,
 	/// Events in each of the last sixty seconds, oldest first.
 	pub seconds: Vec<u64>,
 	/// Whether the admin is hearing the stream now.
 	pub live: bool,
+	/// Why it isn't, once it has lost the stream; nothing while it connects.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub reason: Option<String>,
+	/// The newest event's number: a page that read its data before a larger
+	/// one has something new to show.
+	#[serde(default)]
+	pub latest: u64,
 }
 
 /// Who is looking, and how they like the admin.
@@ -272,6 +283,8 @@ pub enum Page {
 	Person(Box<people::Person>),
 	/// A builder: trends, funnels or retention, new or saved.
 	Insight(Box<insight::Insight>),
+	/// Events as they arrive.
+	Live(Box<live::Live>),
 }
 
 impl Page {
@@ -289,6 +302,7 @@ impl Page {
 			Self::People(_) => "People",
 			Self::Person(person) => &person.name,
 			Self::Insight(insight) => &insight.name,
+			Self::Live(_) => "Live",
 		}
 	}
 
@@ -304,6 +318,7 @@ impl Page {
 			| Self::People(_) => &[],
 			Self::Person(person) => std::slice::from_ref(&person.drawer),
 			Self::Insight(insight) => std::slice::from_ref(&insight.drawer),
+			Self::Live(live) => std::slice::from_ref(&live.drawer),
 			Self::Operation(operation) => std::slice::from_ref(&operation.drawer),
 			Self::Project(project) => &project.drawers,
 		}
@@ -319,6 +334,7 @@ impl Page {
 			Self::Library(_) => Section::Library,
 			Self::People(_) | Self::Person(_) => Section::People,
 			Self::Insight(insight) => insight.kind.section(),
+			Self::Live(_) => Section::Live,
 			Self::Operation(operation) => Section::ProjectOperations(operation.project.clone()),
 			Self::Project(project) => {
 				match project.tab {
