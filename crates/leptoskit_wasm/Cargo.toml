@@ -36,7 +36,7 @@ leptoskit_analytics = { workspace = true, features = ["typed"] }
 leptoskit_log = { workspace = true, features = ["testing"] }
 leptoskit_plugin_filesystem = { workspace = true }
 leptoskit_plugin_http = { workspace = true }
-leptoskit_plugin_notifications = { workspace = true }
+leptoskit_plugin_notifications = { workspace = true, features = ["browser"] }
 uuid = { workspace = true }
 wasmi = { workspace = true, features = ["wat"] }
 
