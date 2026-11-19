@@ -287,7 +287,18 @@ Sign-in is hydrated leptoskit (`pages/src/sign_in.rs`), and loads no `demo.js`. 
 - **Needs `fix/web-semantic-rebuild`:** without it every rebuild drops focus inside `<main>`, and the keyboard steps fail.
 - **Suite changes:** sign-in assertions read the markup, the address, and the `<noscript>` form instead of `#demo-state`; the radio options are `#choose-option-0` and `-1`; the inbox request is `/rpc/inbox`; the stations step waits for each focus move, because leptoskit moves focus on the next frame where `demo.js` moved it at once. `tests/signin.rs` checks elements with a `shows` helper, because the stylesheet names the same test ids.
 - **Still there:** `GET /demo/inbox`, used by the Rust proofs and by nothing in a page.
-- **Next:** Notes (`TextArea`, the account menu as a `Popover`), then delete `demo.js` and take #856 out of draft.
+- **Next:** Notes, on `feat/demo-notes`.
+
+### `feat/demo-notes`: stacked on `feat/demo-sign-in`
+
+Notes is hydrated leptoskit (`pages/src/notes.rs`), and `assets/demo.js` is deleted. The old server-drawn pages (`src/pages/notes.rs`, `src/pages/chrome.rs`) are gone; `src/pages` keeps only the script-free "opening today's demo" page.
+
+- **Shape:** the notebook is a `TextArea` with the count, a field error tied by `aria-describedby`, and Ctrl or ⌘ + Enter through `on:key` with `KeyPress::meta`. The account menu is `aria::Menu`; the page sets test ids on the menu's parts after building it, and **Open the admin** in the menu opens a new tab with `window.open`, because a menu item that is a link has its click handled. The admin links are `Pressable` with `LinkTarget::NewTab`.
+- **Two new operations** on the same port: `notes` (a query) and `save_note` (a mutation). They share the ownership gate with `/demo/notes`: `site::resolve_owner` was factored out of the JSON routes' `owner`. Refusals are `Refused` with status `401` (`no_pass`, `new_day`, `signed_out`), `422` (`empty_note`, `note_too_long`) and `409` (`notes_full`); a cross-origin save is `403`. `RequestBackend` reads the session from `CurrentSession` in the request's extensions.
+- **Still there:** `GET` and `POST /demo/notes`, which the Rust proofs drive and no page calls, beside `/demo/inbox` and `/demo/generation`. Removing them means moving `tests/notes.rs` onto the operations.
+- **Client size:** 524 KiB brotli; the budget is now 540.
+- **CSS:** every rule for the script's classes (`.msg`, `.mail`, `.note`, `.toast`, `data-js`, `data-reset`, `data-shown`) is gone. What is left names elements by test id.
+- **Suite changes:** the notebook's recorder watches `/rpc/notes` and `/rpc/save_note` (a save answers `200`, not `201`, and a dropped attempt is recorded with status `0`); results are present or absent rather than `data-shown`; a note's text is `[data-testid="note-body"]`; the new note is `#note-new`; announcements are `[data-testid="announcer"]`; the toast is `[data-testid="toast"]`; a failed sign-out closes the menu, so the retry opens it again; the new-day dialog is a modal `<dialog>`, and the stream counter counts WebSockets too.
 
 ### The canvist editor stack: #857, #881, #884, and `feat/canvist-ink`
 

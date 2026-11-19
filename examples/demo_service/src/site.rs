@@ -13,11 +13,12 @@
 //!   Auth hooks' registration.
 //!
 //! Private notes are [`crate::notes`], sent through [`crate::activity`]'s
-//! one analytics event; this module owns their two routes and the
-//! ownership gate in front of them.
+//! one analytics event; this module owns the ownership gate in front of
+//! them, which their JSON routes and the page's operations share.
 //!
-//! The pages are [`crate::pages`]: real leptoskit trees, built here from
-//! what the visitor's pass and session say, and always `no-store`.
+//! The pages are `demo_pages`: real leptoskit trees, rendered here from
+//! what the visitor's pass and session say, hydrated in the browser, and
+//! always `no-store`.
 //! Everything a visitor can reach is tested through the real routers, and
 //! no response carries a generation key, the analytics token, the control
 //! key, or a client secret.
@@ -63,7 +64,6 @@ use crate::notes;
 use crate::notes::CreateError;
 use crate::notes::NoteText;
 use crate::notes::Notebook;
-use crate::pages;
 use crate::return_to;
 use crate::visitors;
 use crate::visitors::DemoPerson;
@@ -751,10 +751,6 @@ struct Held {
 }
 
 impl Held {
-	fn view(&self) -> pages::Person {
-		person_view(&self.person, self.signed_in)
-	}
-
 	/// The person as the hydrated pages show them.
 	fn person(&self) -> model::Person {
 		let tag = display_tag(&self.person.email);
@@ -773,19 +769,6 @@ const fn persona_of(persona: Persona) -> model::Persona {
 	match persona {
 		Persona::Ada => model::Persona::Ada,
 		Persona::Grace => model::Persona::Grace,
-	}
-}
-
-/// A person as the pages show them. Nothing here is a secret: the
-/// address is this browser's own, which only its pass can sign in to.
-fn person_view(person: &DemoPerson, signed_in: bool) -> pages::Person {
-	let tag = display_tag(&person.email);
-	pages::Person {
-		persona: person.persona.slug(),
-		name: person.persona.name(&tag),
-		tag,
-		email: person.email.as_inner().to_owned(),
-		signed_in,
 	}
 }
 
@@ -837,9 +820,10 @@ async fn visit(shared: &Parts, headers: &HeaderMap, session: Option<&SignedIn>) 
 	})
 }
 
-/// What every page knows: the generation's day and the server's clock,
-/// and the admin's address from configuration.
-fn page_context(shared: &Parts) -> pages::Context {
+/// What every hydrated page knows: the generation's day, the server's
+/// clock and the reset it counts down to, and the admin's address from
+/// configuration.
+fn context_of(shared: &Parts) -> model::Context {
 	let host_of = |origin: &str| {
 		origin
 			.split_once("://")
@@ -847,10 +831,18 @@ fn page_context(shared: &Parts) -> pages::Context {
 			.trim_end_matches('/')
 			.to_owned()
 	};
+	let day = shared.visitors.day().to_owned();
+	let now_ms = crate::clock::now_millis();
+	let resets_at_ms = chrono::NaiveDate::parse_from_str(&day, "%Y-%m-%d")
+		.ok()
+		.and_then(|day| day.succ_opt())
+		.and_then(|next| next.and_hms_opt(0, 0, 0))
+		.map_or(now_ms, |midnight| midnight.and_utc().timestamp_millis());
 
-	pages::Context {
-		day: shared.visitors.day().to_owned(),
-		now_ms: crate::clock::now_millis(),
+	model::Context {
+		day,
+		now_ms,
+		resets_at_ms,
 		site_host: host_of(&shared.origin),
 		admin_host: host_of(&shared.admin_origin),
 		admin_url: format!(
@@ -858,29 +850,6 @@ fn page_context(shared: &Parts) -> pages::Context {
 			shared.admin_origin.trim_end_matches('/'),
 			leptoskit_admin::BASE
 		),
-	}
-}
-
-/// What every hydrated page knows: the generation's day, the server's
-/// clock and the reset it counts down to, and the admin's address from
-/// configuration.
-fn context_of(shared: &Parts) -> model::Context {
-	let context = page_context(shared);
-	let resets_at_ms = chrono::NaiveDate::parse_from_str(&context.day, "%Y-%m-%d")
-		.ok()
-		.and_then(|day| day.succ_opt())
-		.and_then(|next| next.and_hms_opt(0, 0, 0))
-		.map_or(context.now_ms, |midnight| {
-			midnight.and_utc().timestamp_millis()
-		});
-
-	model::Context {
-		day: context.day,
-		now_ms: context.now_ms,
-		resets_at_ms,
-		site_host: context.site_host,
-		admin_host: context.admin_host,
-		admin_url: context.admin_url,
 	}
 }
 
@@ -916,26 +885,6 @@ impl Params {
 			return_to::local_return_to,
 		)
 	}
-}
-
-/// A page response: HTML, never stored, clearing a stale pass cookie when
-/// the browser carried one.
-fn html_page(body: String, clear: Option<axum::http::HeaderValue>) -> Response {
-	let mut response = (
-		StatusCode::OK,
-		[
-			(header::CONTENT_TYPE, "text/html; charset=utf-8"),
-			(header::CACHE_CONTROL, "no-store"),
-		],
-		body,
-	)
-		.into_response();
-
-	if let Some(cookie) = clear {
-		response.headers_mut().append(header::SET_COOKIE, cookie);
-	}
-
-	response
 }
 
 /// A `303` to a local path, never stored.
@@ -1141,12 +1090,20 @@ async fn notes(
 		return see_other(&location, clearing(&shared, &visit));
 	};
 
-	let welcome = pages::Welcome {
-		context: page_context(&shared),
-		person: held.view(),
+	let welcome = model::Welcome {
+		context: context_of(&shared),
+		person: held.person(),
+		max_notes: notes::MAX_NOTES,
+		max_chars: notes::MAX_CHARS,
 	};
 
-	html_page(pages::notes(&welcome), None)
+	page(
+		&shared,
+		model::Page::Notes(welcome),
+		demo_pages::noscript_notes(),
+		None,
+	)
+	.await
 }
 
 /// The person a notes request is for: the pass's person whose real
@@ -1157,19 +1114,24 @@ struct Owner {
 	who: SignedIn,
 }
 
+/// Why a notes request has no owner: what kind of visit it was, which is
+/// all a refusal names, and the cookie that clears a stale pass.
+struct NoOwner {
+	/// `new_day`, `absent`, or `signed_out`.
+	pass: &'static str,
+	clear: Option<axum::http::HeaderValue>,
+}
+
 /// Resolves who a notes request is for, from the pass cookie and the
 /// session and nothing the caller sends: the pass must be this
 /// generation's, and the session must be the account one of its people
-/// claimed. Anything else is a `401` that names only what kind of visit
-/// it was, never anyone's data.
-async fn owner(
+/// claimed.
+async fn resolve_owner(
 	shared: &Parts,
 	headers: &HeaderMap,
 	session: Option<&SignedIn>,
-) -> Result<Owner, Box<Response>> {
-	let visit = visit(shared, headers, session)
-		.await
-		.map_err(|error| Box::new(no_store(internal_error(&error))))?;
+) -> Result<Result<Owner, NoOwner>> {
+	let visit = visit(shared, headers, session).await?;
 
 	let held = session.and_then(|session| {
 		visit
@@ -1177,29 +1139,48 @@ async fn owner(
 			.map(|held| (held.person.id, held.person.persona, session.clone()))
 	});
 	let Some((person, persona, who)) = held else {
-		let state = if visit.earlier_day {
+		let pass = if visit.earlier_day {
 			"new_day"
 		} else if visit.people.is_empty() {
 			"absent"
 		} else {
 			"signed_out"
 		};
-		let mut body = serde_json::json!({ "error": "no_visit", "pass": state });
-		if visit.earlier_day {
-			body["day"] = serde_json::Value::String(shared.visitors.day().to_owned());
-		}
-		return Err(Box::new(notes_response(
-			StatusCode::UNAUTHORIZED,
-			body,
-			clearing(shared, &visit),
-		)));
+		return Ok(Err(NoOwner {
+			pass,
+			clear: clearing(shared, &visit),
+		}));
 	};
 
-	Ok(Owner {
+	Ok(Ok(Owner {
 		person,
 		persona,
 		who,
-	})
+	}))
+}
+
+/// [`resolve_owner`] for the JSON routes: anything but an owner is a `401`
+/// that names only what kind of visit it was, never anyone's data.
+async fn owner(
+	shared: &Parts,
+	headers: &HeaderMap,
+	session: Option<&SignedIn>,
+) -> Result<Owner, Box<Response>> {
+	match resolve_owner(shared, headers, session).await {
+		Ok(Ok(owner)) => Ok(owner),
+		Ok(Err(refusal)) => {
+			let mut body = serde_json::json!({ "error": "no_visit", "pass": refusal.pass });
+			if refusal.pass == "new_day" {
+				body["day"] = serde_json::Value::String(shared.visitors.day().to_owned());
+			}
+			Err(Box::new(notes_response(
+				StatusCode::UNAUTHORIZED,
+				body,
+				refusal.clear,
+			)))
+		}
+		Err(error) => Err(Box::new(no_store(internal_error(&error)))),
+	}
 }
 
 /// A notes answer: JSON, never stored, clearing a stale pass cookie when

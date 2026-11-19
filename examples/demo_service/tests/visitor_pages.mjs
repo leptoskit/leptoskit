@@ -155,8 +155,9 @@ async function sendAndSignIn(browser, expectPath) {
 	await browser.click("verify");
 	await waitFor(
 		browser,
-		`location.pathname === ${JSON.stringify(expectPath)}`,
-		`arrival at ${expectPath}`,
+		`location.pathname === ${JSON.stringify(expectPath)} &&
+			document.documentElement.hasAttribute("data-hydrated")`,
+		`arrival at ${expectPath}, hydrated`,
 	);
 }
 
@@ -170,27 +171,36 @@ Deno.test("the visitor pages", async (t) => {
 	await service.ready();
 	const browser = await Browser.open();
 	await browser.page.send("Page.addScriptToEvaluateOnNewDocument", {
-		// Counts EventSources, so the proofs can say there is never more than one.
+		// Counts the page's live connections, a WebSocket or the server-sent
+		// events it falls back to, so the proofs can say there is never more
+		// than one.
 		source: `(() => {
-			const Native = window.EventSource;
 			const tally = (window.__sources = { open: 0, max: 0, made: 0 });
-			window.EventSource = class extends Native {
+			const counted = (Native) => class extends Native {
 				constructor(...args) {
 					super(...args);
 					tally.made += 1;
 					tally.open += 1;
 					tally.max = Math.max(tally.max, tally.open);
-					const close = this.close.bind(this);
 					let closed = false;
-					this.close = () => {
+					const done = () => {
 						if (!closed) {
 							closed = true;
 							tally.open -= 1;
 						}
-						close();
+					};
+					// A connection the page has closed is not one it holds,
+					// though a socket's close event comes a moment later.
+					this.addEventListener("close", done);
+					const close = this.close.bind(this);
+					this.close = (...args) => {
+						done();
+						close(...args);
 					};
 				}
 			};
+			window.EventSource = counted(window.EventSource);
+			window.WebSocket = counted(window.WebSocket);
 		})();`,
 	});
 	await browser.look(LOOKS[0]);
@@ -809,20 +819,22 @@ Deno.test("the visitor pages", async (t) => {
 				await choose(browser, service, "ada");
 				await sendAndSignIn(browser, "/notes");
 				await browser.click("menu-toggle");
-				assert(await browser.visible("menu-panel"), "the account menu opens");
-				assert(
-					(await browser.focused()) === "open-admin",
-					"focus enters the menu",
+				await waitFor(
+					browser,
+					`document.querySelector('[data-testid="menu-panel"]')?.matches(":popover-open")`,
+					"the account menu opens",
 				);
+				await focusOn(browser, "open-admin", "focus enters the menu");
 				await capture(browser, "09-notes-menu", "The account menu", {
 					looks: [LOOKS[0], LOOKS[2]],
 				});
 				await browser.press("Escape");
-				assert(!(await browser.visible("menu-panel")), "Escape closes it");
-				assert(
-					(await browser.focused()) === "menu-toggle",
-					"and returns focus to the button",
+				await focusOn(
+					browser,
+					"menu-toggle",
+					"Escape returns focus to the button",
 				);
+				assert(!(await browser.visible("menu-panel")), "Escape closes it");
 				await browser.click("menu-toggle");
 				const errorsBefore = browser.errors.length;
 				await service.stop();
@@ -830,15 +842,15 @@ Deno.test("the visitor pages", async (t) => {
 					await browser.click("sign-out");
 					await waitFor(
 						browser,
-						`document.querySelector('.toast')`,
+						`document.querySelector('[data-testid="toast"]')`,
 						"the failed sign-out explanation",
 						5000,
 					);
 					assert(
-						await browser.eval(
-							`!document.querySelector('[data-testid="sign-out"]').disabled`,
-						),
-						"sign out can be retried after a connection failure",
+						(await browser.eval(
+							`document.querySelector('[data-testid="toast"]').getAttribute("role")`,
+						)) === "alert",
+						"the failure is announced",
 					);
 					assert(
 						(await path(browser)) === "/notes",
@@ -852,6 +864,8 @@ Deno.test("the visitor pages", async (t) => {
 					await service.spawn();
 					await service.ready();
 				}
+				// Sign out can be tried again after a connection failure.
+				await browser.click("menu-toggle");
 				await browser.click("sign-out");
 				await waitFor(
 					browser,
@@ -999,16 +1013,19 @@ Deno.test("the visitor pages", async (t) => {
 				} finally {
 					await door.close();
 				}
-				await waitFor(
-					browser,
-					`document.documentElement.hasAttribute("data-reset")`,
-					"the new-day dialog",
-					90_000,
-				);
-				assert(
-					(await browser.focused()) === "reset-title",
-					"focus moves into the dialog",
-				);
+				const resetOpen =
+					`document.querySelector('dialog[data-testid="reset-dialog"]')?.open ?? false`;
+				await waitFor(browser, resetOpen, "the new-day dialog", 90_000);
+				try {
+					await focusOn(browser, "reset-title", "focus moves into the dialog");
+				} catch (error) {
+					throw new Error(
+						`${error.message}; focus is on ${await browser.eval(
+							`document.activeElement?.outerHTML.slice(0, 300)`,
+						)}`,
+						{ cause: error },
+					);
+				}
 				assert(
 					(await browser.eval(
 						`document.querySelector('[data-testid="reset-dialog"]').getAttribute("role")`,
@@ -1026,7 +1043,7 @@ Deno.test("the visitor pages", async (t) => {
 				);
 				assert(
 					await browser.eval(
-						`document.querySelector('[data-testid="band"]').inert`,
+						`document.querySelector('dialog[data-testid="reset-dialog"]').matches(":modal")`,
 					),
 					"the page behind is inert",
 				);
@@ -1051,23 +1068,10 @@ Deno.test("the visitor pages", async (t) => {
 					"Shift+Tab wraps back",
 				);
 				await browser.press("Escape");
-				assert(
-					!(await browser.eval(
-						`document.documentElement.hasAttribute("data-reset")`,
-					)),
-					"Escape closes it",
-				);
-				assert(
-					!(await browser.eval(
-						`document.querySelector('[data-testid="band"]').inert`,
-					)),
-					"the page is live again",
-				);
+				assert(!(await browser.eval(resetOpen)), "Escape closes it");
 				await sleep(3000);
 				assert(
-					!(await browser.eval(
-						`document.documentElement.hasAttribute("data-reset")`,
-					)),
+					!(await browser.eval(resetOpen)),
 					"it does not reopen by itself",
 				);
 
@@ -1184,17 +1188,21 @@ Deno.test("while a generation builds, the page says so and needs no script", asy
 const MARKUP_NOTE =
 	`<img src=x onerror="window.__pwned=1"> & "quotes" <b>hi</b>`;
 
-/** The page's own record of what `/demo/notes` answered, newest last. */
+/** The page's own record of what the notebook's operations answered,
+ * newest last: `GET` is a read (`notes`), `POST` a save (`save_note`). */
 const answers = (browser) => browser.eval(`window.__notes`);
 
-/** Waits until the nth `/demo/notes` POST answer has arrived. */
+/** Waits until the nth save the server answered has arrived. A save the
+ * network dropped is recorded with status 0 and not counted. */
 async function postAnswer(browser, nth) {
+	const answered =
+		`window.__notes.filter((n) => n.method === "POST" && n.status > 0)`;
 	await waitFor(
 		browser,
-		`window.__notes.filter((n) => n.method === "POST").length >= ${nth}`,
-		`POST /demo/notes answer #${nth}`,
+		`${answered}.length >= ${nth}`,
+		`save_note answer #${nth}`,
 	);
-	const posts = (await answers(browser)).filter((n) => n.method === "POST");
+	const posts = await browser.eval(answered);
 	return { ...posts[nth - 1], json: JSON.parse(posts[nth - 1].body || "null") };
 }
 
@@ -1205,14 +1213,15 @@ Deno.test("a visitor writes a private note and finds its real event in the admin
 	await service.ready();
 	const browser = await Browser.open();
 	await browser.page.send("Page.addScriptToEvaluateOnNewDocument", {
-		// Records every real answer `/demo/notes` gives the page.
+		// Records every real answer the notebook's operations give the page.
 		source: `(() => {
 			const Native = window.fetch.bind(window);
+			const kinds = { "/rpc/notes": "GET", "/rpc/save_note": "POST" };
 			window.__notes = [];
 			window.fetch = async (input, init) => {
 				const url = new URL(typeof input === "string" ? input : input.url, location.href);
-				const method = (init && init.method) || "GET";
-				if (url.pathname !== "/demo/notes") return Native(input, init);
+				const method = kinds[url.pathname];
+				if (!method) return Native(input, init);
 				try {
 					const response = await Native(input, init);
 					const copy = response.clone();
@@ -1279,13 +1288,6 @@ Deno.test("a visitor writes a private note and finds its real event in the admin
 					"the welcome and the account menu stay",
 				);
 				assert(await browser.visible("menu-toggle"), "the account menu stays");
-				liveHref = await browser.eval(
-					`document.querySelector('[data-testid="open-admin-live"]').href`,
-				);
-				assert(
-					liveHref === `${service.adminOrigin}/_leptoskit/admin/analytics/live`,
-					`Live is the configured admin's: ${liveHref}`,
-				);
 				await capture(
 					browser,
 					"16-notebook-empty",
@@ -1306,7 +1308,7 @@ Deno.test("a visitor writes a private note and finds its real event in the admin
 				);
 				await browser.chord("Enter", 2);
 				const saved = await postAnswer(browser, 1);
-				assert(saved.status === 201, `created, not ${saved.status}`);
+				assert(saved.status === 200, `answered, not ${saved.status}`);
 				assert(
 					saved.cacheControl === "no-store",
 					`never stored: ${saved.cacheControl}`,
@@ -1328,8 +1330,15 @@ Deno.test("a visitor writes a private note and finds its real event in the admin
 
 				await waitFor(
 					browser,
-					`document.querySelector('[data-testid="note-saved"][data-shown]')`,
+					`document.querySelector('[data-testid="note-saved"]')`,
 					"the confirmed result",
+				);
+				liveHref = await browser.eval(
+					`document.querySelector('[data-testid="open-admin-live"]').href`,
+				);
+				assert(
+					liveHref === `${service.adminOrigin}/_leptoskit/admin/analytics/live`,
+					`Live is the configured admin's: ${liveHref}`,
 				);
 				assert(
 					(await browser.text("note-actor")) === actor,
@@ -1339,8 +1348,9 @@ Deno.test("a visitor writes a private note and finds its real event in the admin
 					(await browser.text("note-saved")).includes("note_created"),
 					"it names the real event",
 				);
-				assert(
-					(await browser.focused()) === "note-text",
+				await focusOn(
+					browser,
+					"note-text",
 					"focus stays in the field for the next note",
 				);
 				assert(
@@ -1349,7 +1359,7 @@ Deno.test("a visitor writes a private note and finds its real event in the admin
 					"the field is cleared after a save",
 				);
 				const item = await browser.eval(`(() => {
-					const note = document.querySelector('[data-testid="note-list"] [data-testid="note"] p');
+					const note = document.querySelector('[data-testid="note-list"] [data-testid="note"] [data-testid="note-body"]');
 					return { text: note.textContent, children: note.children.length,
 						pwned: window.__pwned === undefined,
 						images: document.querySelectorAll('[data-testid="note-list"] img, [data-testid="note-list"] b').length };
@@ -1364,7 +1374,7 @@ Deno.test("a visitor writes a private note and finds its real event in the admin
 					"the count follows",
 				);
 				const said = await browser.eval(
-					`[...document.querySelectorAll('[role="status"].sr-only')].map((e) => e.textContent).join("|")`,
+					`[...document.querySelectorAll('[data-testid="announcer"]')].map((e) => e.textContent).join("|")`,
 				);
 				assert(
 					said.includes(
@@ -1393,7 +1403,7 @@ Deno.test("a visitor writes a private note and finds its real event in the admin
 				);
 				await browser.press("Enter");
 				const saved = await postAnswer(browser, 2);
-				assert(saved.status === 201 && saved.json.words === 3, `${saved.body}`);
+				assert(saved.status === 200 && saved.json.words === 3, `${saved.body}`);
 				assert(saved.json.actor === actor, "the same person, the same actor");
 				await waitFor(
 					browser,
@@ -1402,12 +1412,13 @@ Deno.test("a visitor writes a private note and finds its real event in the admin
 				);
 				assert(
 					(await browser.eval(
-						`document.querySelector('[data-testid="note-list"] [data-testid="note"] p').textContent`,
+						`document.querySelector('[data-testid="note-list"] [data-testid="note"] [data-testid="note-body"]').textContent`,
 					)) === "second note, plain",
 					"the newest is first",
 				);
-				assert(
-					(await browser.focused()) === "note-save",
+				await focusOn(
+					browser,
+					"note-save",
 					"focus returns to the button that was used",
 				);
 			},
@@ -1468,17 +1479,15 @@ Deno.test("a visitor writes a private note and finds its real event in the admin
 						)).includes("note-error"),
 					"the error is tied to the field",
 				);
-				assert(
-					(await browser.focused()) === "note-text",
-					"focus goes to the field",
-				);
+				await focusOn(browser, "note-text", "focus goes to the field");
 				assert((await posts()) === 0, "no request for an empty note");
 
 				await browser.type("x".repeat(285));
 				assert(
-					await browser.eval(
-						`document.querySelector('[data-testid="note-chars"]').hasAttribute("data-over")`,
-					),
+					(await browser.text("note-chars")) === "285 / 280" &&
+						(await browser.eval(
+								`getComputedStyle(document.querySelector('[data-testid="note-chars"]')).fontWeight`,
+							)) === "700",
 					"the count turns over the limit",
 				);
 				await browser.chord("Enter", 2);
@@ -1596,7 +1605,7 @@ Deno.test("a visitor writes a private note and finds its real event in the admin
 				await browser.click("note-save");
 				await waitFor(
 					browser,
-					`document.querySelector('[data-testid="note-alert"][data-shown]')`,
+					`document.querySelector('[data-testid="note-alert"]')`,
 					"the failure",
 				);
 				assert(
@@ -1637,16 +1646,17 @@ Deno.test("a visitor writes a private note and finds its real event in the admin
 				await service.spawn();
 				await service.ready();
 				await browser.click("note-save");
-				// The refused attempt was this page's first POST; the retry is its second.
-				const retried = await postAnswer(browser, 2);
+				// The attempt the network dropped was never answered; the retry is
+				// this page's first answered save.
+				const retried = await postAnswer(browser, 1);
 				assert(
-					retried.status === 201 &&
+					retried.status === 200 &&
 						retried.json.note.text === "written while the server is down",
 					`the retried note is saved after the restart: ${retried.body}`,
 				);
 				await waitFor(
 					browser,
-					`!document.querySelector('[data-testid="note-alert"][data-shown]') && document.querySelector('[data-testid="note-saved"][data-shown]')`,
+					`!document.querySelector('[data-testid="note-alert"]') && document.querySelector('[data-testid="note-saved"]')`,
 					"the failure gives way to the result",
 				);
 			},
@@ -1689,7 +1699,7 @@ Deno.test("a visitor writes a private note and finds its real event in the admin
 				await browser.click("note-save");
 				await waitFor(
 					browser,
-					`document.querySelector('[data-testid="note-alert"][data-shown]')`,
+					`document.querySelector('[data-testid="note-alert"]')`,
 					"the full notebook's alert",
 				);
 				assert(
@@ -1782,7 +1792,7 @@ Deno.test("a visitor writes a private note and finds its real event in the admin
 					"the calm note",
 				);
 				const motion = await browser.eval(
-					`getComputedStyle(document.querySelector('[data-testid="note-list"] [data-testid="note"][data-new]')).animationName`,
+					`getComputedStyle(document.querySelector('[data-testid="note-list"] #note-new')).animationName`,
 				);
 				assert(
 					motion === "none",
@@ -1803,7 +1813,7 @@ Deno.test("a visitor writes a private note and finds its real event in the admin
 				await browser.click("note-save");
 				await waitFor(
 					browser,
-					`document.querySelector('[data-testid="note-alert"][data-shown]')`,
+					`document.querySelector('[data-testid="note-alert"]')`,
 					"the signed-out alert",
 				);
 				assert(

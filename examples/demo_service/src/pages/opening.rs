@@ -7,7 +7,9 @@
 use leptoskit::native::Role;
 use leptoskit::prelude::*;
 
-use super::chrome;
+/// Body text, and the quieter line under it.
+const SECONDARY: &str = "text-sm leading-normal text-[var(--admin-ink-2)]";
+const MUTED: &str = "text-[13px] leading-normal text-[var(--admin-ink-3)]";
 
 /// The seconds between the page's checks. The response's `Retry-After`
 /// and its meta refresh both say this.
@@ -51,14 +53,14 @@ fn render() -> String {
 					"Notes is opening today's demo."
 				</Heading>
 				<View role=Role::Status class="flex-col gap-3">
-					<Text class=chrome::SECONDARY>
+					<Text class=SECONDARY>
 						{format!(
 							"The demo starts fresh every day at 00:00 UTC, and after each \
 							 release. This takes a few seconds; the page checks again every \
 							 {RETRY_SECONDS} seconds."
 						)}
 					</Text>
-					<Text class=chrome::MUTED>
+					<Text class=MUTED>
 						"If this lasts more than a minute, the demo is down for maintenance. Try again \
 						 later."
 					</Text>

@@ -21,7 +21,7 @@ features = ["hydrate"]
 [bundle]
 optimize = "smallest"
 # The first load, brotli-compressed, in KiB. The front door alone measured
-# 352 and sign-in brought it to 506: the pages bring typed operations, the
-# live connection, the overlay widgets, and Auth's client. A release build
-# fails when the client outgrows this.
-budget_kib = 520
+# 352, sign-in brought it to 506, and Notes to 524: the pages bring typed
+# operations, the live connection, the overlay widgets and the menu, and
+# Auth's client. A release build fails when the client outgrows this.
+budget_kib = 540

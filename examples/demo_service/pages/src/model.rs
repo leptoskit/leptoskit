@@ -220,6 +220,21 @@ pub struct SignIn {
 	pub mail: Mail,
 }
 
+/// What Notes is rendered from: the account the request is really signed in
+/// as, and the notebook's limits. The notes themselves are read once the
+/// page is open, from the private notebook.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Welcome {
+	/// The day and the addresses.
+	pub context: Context,
+	/// The person this browser's pass minted for the signed-in account.
+	pub person: Person,
+	/// The most notes a notebook holds in a day.
+	pub max_notes: usize,
+	/// The most characters a note holds.
+	pub max_chars: usize,
+}
+
 /// One page, with everything it is rendered from.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Page {
@@ -227,6 +242,8 @@ pub enum Page {
 	Front(Door),
 	/// Sign-in, with the demo inbox.
 	SignIn(SignIn),
+	/// Notes, signed in: the notebook and the way to the admin.
+	Notes(Welcome),
 }
 
 impl Page {
@@ -236,6 +253,12 @@ impl Page {
 		match self {
 			Self::Front(_) => "Notes: a leptoskit demo",
 			Self::SignIn(_) => "Sign in · Notes",
+			Self::Notes(welcome) => {
+				match welcome.person.persona {
+					Persona::Ada => "Ada's notes · Notes",
+					Persona::Grace => "Grace's notes · Notes",
+				}
+			}
 		}
 	}
 
@@ -245,6 +268,7 @@ impl Page {
 		match self {
 			Self::Front(door) => &door.context,
 			Self::SignIn(view) => &view.context,
+			Self::Notes(welcome) => &welcome.context,
 		}
 	}
 }

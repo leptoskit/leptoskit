@@ -1,5 +1,5 @@
 //! The public demo's pages: the front door, sign-in with its demo inbox,
-//! and Notes' notebook.
+//! and Notes' notebook with the account menu.
 //!
 //! Every page is a leptoskit component tree written as `view!` markup. The
 //! demo service renders it on the server, in the admin's paper, ink, ember,
@@ -14,6 +14,7 @@
 mod chrome;
 mod front;
 pub mod model;
+mod notes;
 pub mod ops;
 mod sign_in;
 
@@ -28,6 +29,7 @@ use leptoskit::prelude::Element;
 
 use crate::model::Context;
 use crate::model::Page;
+pub use crate::notes::noscript as noscript_notes;
 pub use crate::sign_in::noscript as noscript_sign_in;
 
 /// What every page keeps while it is open: the clock it counts down on, and
@@ -104,6 +106,17 @@ pub(crate) fn go(address: &str) {
 	#[cfg(feature = "hydrate")]
 	if let Some(window) = web_sys::window() {
 		let _ = window.location().assign(address);
+	}
+	#[cfg(not(feature = "hydrate"))]
+	let _ = address;
+}
+
+/// Opens `address` in a new tab that has no handle on this page. On the
+/// server there is no page to open it from.
+pub(crate) fn open_tab(address: &str) {
+	#[cfg(feature = "hydrate")]
+	if let Some(window) = web_sys::window() {
+		let _ = window.open_with_url_and_target_and_features(address, "_blank", "noopener");
 	}
 	#[cfg(not(feature = "hydrate"))]
 	let _ = address;
@@ -187,7 +200,8 @@ pub fn App() -> impl IntoView {
 		use_context::<Page>().expect("the route provides the page it is rendering")
 	})
 	.into_inner();
-	// Sign-in's requests to Auth are mutations, which keep their state here.
+	// The requests to Auth, signing in and out, are mutations, which keep
+	// their state here.
 	leptoskit::query::QueryClient::new().provide();
 	let shell = Shell::new(page.context().clone());
 	watch_generation(&shell);
@@ -211,6 +225,12 @@ fn screen_of(shell: &Shell, page: Page) -> Box<dyn Fn() -> Element + Send + Sync
 			let state = sign_in::State::new(&shell, &view);
 			sign_in::open(&shell, &view, &state);
 			Box::new(move || sign_in::page(&shell, &view, &state))
+		}
+		Page::Notes(welcome) => {
+			let welcome = Arc::new(welcome);
+			let state = notes::State::new();
+			notes::open(&shell, &welcome, &state);
+			Box::new(move || notes::page(&shell, &welcome, &state))
 		}
 	}
 }
