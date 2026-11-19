@@ -228,6 +228,25 @@ pub fn hold_build_lock(root: &Path) -> File {
 	file
 }
 
+/// A site root holding a stand-in for the pages' browser half: the two
+/// files the service insists on before it starts, with nothing in them a
+/// browser could run. The process proofs read status lines and markup and
+/// never open a page, so the real client, which `leptoskit build` makes, is
+/// not needed here. One directory serves every proof in the test binary.
+pub fn client_root() -> &'static Path {
+	static ROOT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+	ROOT.get_or_init(|| {
+		let root = tempfile::tempdir().expect("a temporary directory").keep();
+		let pkg = root.join("pkg");
+		std::fs::create_dir_all(&pkg).expect("the client directory");
+		std::fs::write(pkg.join("demo_pages.js"), b"export {};\n").expect("the stand-in script");
+		std::fs::write(pkg.join("demo_pages_bg.wasm"), b"\0asm\x01\0\0\0")
+			.expect("the stand-in module");
+		root
+	})
+}
+
 /// One server's environment: the given bind, and the loopback HTTP
 /// origins the development proofs use.
 pub fn env(root: &Path, bind: SocketAddr, extra: &[(&str, String)]) -> Vec<(String, String)> {
@@ -241,6 +260,10 @@ pub fn env(root: &Path, bind: SocketAddr, extra: &[(&str, String)]) -> Vec<(Stri
 		(
 			"DEMO_ADMIN_ORIGIN".to_owned(),
 			format!("http://{ADMIN_HOST}"),
+		),
+		(
+			"LEPTOS_SITE_ROOT".to_owned(),
+			client_root().display().to_string(),
 		),
 	];
 	for (name, value) in extra {

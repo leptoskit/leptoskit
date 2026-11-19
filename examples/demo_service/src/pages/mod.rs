@@ -17,13 +17,10 @@
 //! `no-store`, which the routes set.
 
 mod chrome;
-mod front;
 mod notes;
 mod opening;
 mod sign_in;
 
-pub(crate) use front::Door;
-pub(crate) use front::Notice;
 use leptos::prelude::RenderHtml as _;
 use leptoskit::prelude::Element;
 pub(crate) use notes::Welcome;
@@ -229,11 +226,6 @@ fn base_state(page: &str, context: &Context, return_to: &str) -> serde_json::Val
 	})
 }
 
-/// The front door, as a document.
-pub(crate) fn front(door: &Door) -> String {
-	front::page(door)
-}
-
 /// The sign-in page, as a document.
 pub(crate) fn sign_in(view: &SignIn) -> String {
 	sign_in::page(view)
@@ -270,23 +262,6 @@ mod tests {
 
 	#[test]
 	fn every_page_renders_in_every_state() {
-		for notice in [Notice::None, Notice::NewDay, Notice::SignedOut] {
-			for people in [
-				vec![],
-				vec![person("ada", false)],
-				vec![person("ada", true), person("grace", false)],
-			] {
-				let door = Door {
-					context: context(),
-					return_to: "/notes".to_owned(),
-					notice: notice.clone(),
-					people,
-				};
-				let html = front(&door);
-				assert!(html.contains("Be Ada or Grace for a day."));
-			}
-		}
-
 		for flow in [
 			Flow::Plain,
 			Flow::Admin,

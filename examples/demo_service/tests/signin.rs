@@ -420,6 +420,7 @@ impl SiteHarness {
 			options,
 			self.analytics.clone(),
 		)
+		.await
 		.expect("the site reopens")
 	}
 
@@ -487,6 +488,7 @@ async fn a_generation(root: &Path, day: &str) -> Result<generation::Generation> 
 		admin_origin: ADMIN_ORIGIN.to_owned(),
 		authorities: test_authorities(),
 		client_ip_header: None,
+		client: demo_service::client::Client::absent(),
 	};
 	let terminated = demo_service::shutdown::init();
 	let readiness = leptoskit_axum::Readiness::new();
@@ -1659,7 +1661,8 @@ async fn a_new_day_clears_the_pass_and_refuses_old_sessions() -> Result<()> {
 	Ok(())
 }
 
-/// The page's own data, as its script reads it: the JSON in `#demo-state`.
+/// The data a page not yet hydrated hands its script: the JSON in
+/// `#demo-state`.
 fn page_state(html: &str) -> Value {
 	let marker = "id=\"demo-state\">";
 	let start = html.find(marker).expect("the page carries its state") + marker.len();
@@ -1705,8 +1708,14 @@ async fn the_front_door_and_sign_in_render_what_the_pass_says() -> Result<()> {
 		html.contains("action=\"/demo/pass\""),
 		"a visitor without scripts can still choose"
 	);
-	assert_eq!(page_state(&html)["people"], json!([]));
-	assert_eq!(page_state(&html)["day"], harness.day);
+	assert!(
+		!html.contains("demo.invalid"),
+		"a browser without a pass has no people to show"
+	);
+	assert!(
+		html.contains(&harness.day),
+		"the page value the client reads back carries the generation's day"
+	);
 
 	let hostile = ada
 		.get(
@@ -1715,9 +1724,9 @@ async fn the_front_door_and_sign_in_render_what_the_pass_says() -> Result<()> {
 			"/?return_to=%2F%2Fevil.example%2Fx",
 		)
 		.await;
-	assert_eq!(
-		page_state(&text_body(hostile).await)["returnTo"],
-		"/notes",
+	let html = text_body(hostile).await;
+	assert!(
+		html.contains("name=\"return_to\" value=\"/notes\"") && !html.contains("evil.example"),
 		"a foreign return target becomes the fallback"
 	);
 
@@ -1902,7 +1911,7 @@ async fn stale_passes_and_lost_mail_are_named_without_leaking_codes() -> Result<
 	);
 	let html = text_body(door).await;
 	assert!(html.contains("A new demo day started at 00:00 UTC."));
-	assert_eq!(page_state(&html)["notice"], "new-day");
+	assert!(html.contains("data-testid=\"notice-new-day\""));
 
 	let mut ada = Browser::default();
 	mint(&mut ada, &built.router, "ada").await;

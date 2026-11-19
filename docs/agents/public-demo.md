@@ -6,13 +6,14 @@ The service is a Unix process, and deliberately so: its locks are `flock`, its r
 
 ## The environment
 
-| Variable                         | Meaning                                                                                                                                                                                                                                    |
-| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `DEMO_BIND`                      | The private loopback address to bind, e.g. `127.0.0.1:8080` (bracketed IPv6 accepted). The edge terminates the public origins and forwards here.                                                                                           |
-| `LEPTOSKIT_SERVICE_VOLUME_STATE` | The state root: a real directory, mode `0700`, owned by the service account, not a symlink. Refused otherwise.                                                                                                                             |
-| `DEMO_SITE_ORIGIN`               | The site's public origin. HTTPS, except loopback/localhost HTTP for development.                                                                                                                                                           |
-| `DEMO_ADMIN_ORIGIN`              | The admin's public origin, same rules, a distinct authority — and a distinct **host** — from the site's.                                                                                                                                   |
-| `DEMO_CLIENT_IP_HEADER`          | Optional. The request header the edge sets to the visitor's canonical IP (lowercase, a valid header token, e.g. `x-forwarded-for`). Absent locally: the socket peer is used when the process serves with one, and nothing else is trusted. |
+| Variable                         | Meaning                                                                                                                                                                                                                                                                                                          |
+| -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DEMO_BIND`                      | The private loopback address to bind, e.g. `127.0.0.1:8080` (bracketed IPv6 accepted). The edge terminates the public origins and forwards here.                                                                                                                                                                 |
+| `LEPTOSKIT_SERVICE_VOLUME_STATE` | The state root: a real directory, mode `0700`, owned by the service account, not a symlink. Refused otherwise.                                                                                                                                                                                                   |
+| `DEMO_SITE_ORIGIN`               | The site's public origin. HTTPS, except loopback/localhost HTTP for development.                                                                                                                                                                                                                                 |
+| `DEMO_ADMIN_ORIGIN`              | The admin's public origin, same rules, a distinct authority — and a distinct **host** — from the site's.                                                                                                                                                                                                         |
+| `DEMO_CLIENT_IP_HEADER`          | Optional. The request header the edge sets to the visitor's canonical IP (lowercase, a valid header token, e.g. `x-forwarded-for`). Absent locally: the socket peer is used when the process serves with one, and nothing else is trusted.                                                                       |
+| `LEPTOS_SITE_ROOT`               | The directory `leptoskit build --release --platform web` wrote for `examples/demo_service/pages`. Its `pkg/` holds the pages' Wasm client (`demo_pages.js`, `demo_pages_bg.wasm`, and their `.br` and `.gz` copies). Read once at start and served from memory; a missing or foreign directory refuses to start. |
 
 A misconfigured service refuses to start (nonzero exit) instead of serving half-configured.
 
@@ -78,13 +79,33 @@ A signed-in visitor writes private notes, and each one sends one real analytics 
 - **The page** (`pages/notes.rs`, with the notebook parts of `assets/demo.js` and `assets/demo.css`) is a labelled field with a visible count, a **Save note** button, `n of 20`, and the saved notes, put in with `textContent`. The web renderer has no multi-line field, so the script swaps the markup's `TextInput` for a `<textarea>` carrying its attributes. A confirmed save shows the exact actor and the admin's Live link, and says the event is named `note_created` there. An unconfirmed save says the note is saved and delivery was not confirmed, and never invites a resend. Failures keep the typed text: validation at the field (announced once through the page's status region), a full notebook, a signed-out or new-day `401`, and network or server errors (their own alert).
 - **Reading notes emits no event.** Live filters by event name, so a visitor filters for `note_created` and finds the row whose actor starts with theirs; no person row exists for an actor, so People does not list it.
 
+### Hydrated pages
+
+The pages are moving from server-drawn markup with `assets/demo.js` to hydrated leptoskit, one page at a time. A converted page lives in `examples/demo_service/pages` (the `demo_pages` crate), which is both sides: the service links it with `ssr` and renders the page from it, and `leptoskit build --release --platform web` compiles the same crate to Wasm with `hydrate`. The browser attaches that client to the server's markup, so a page works before the client arrives and behaves once it has.
+
+- **Converted:** the front door, with the band, its countdown, and the new-day dialog. It loads no `demo.js`.
+- **Not yet:** sign-in and Notes. They still carry `demo.js`, which is deleted when Notes is converted.
+
+What a hydrated page does goes through leptoskit's typed operations, declared in `pages/src/ops.rs`. The operations hold no logic: each calls a port (`ops::Backend`) the service implements per request in `src/site/operations.rs`, so the stores, transactions and limits are the ones the plain routes use.
+
+- `POST /rpc/mint` mints the visitor's pass. It is the same code path as the form post `POST /demo/pass`, which stays for a visitor without scripts (the page carries it in `<noscript>`). The cookie is set by a small layer around the operation, because an operation's answer has no headers. A full demo is refused with the code `full`; the per-address limit is leptoskit's `rate_limited` with its wait.
+- `generation` is a resumable stream on the site's live connection (`/live`). It names the generation's day once and then stays open; the client reconnects after a reset, hears another day, and opens the dialog. It has its own cap of 1,000 watchers. `/demo/generation` (server-sent events) stays for the pages not yet converted.
+- Only the operations listed in `SERVED` in `src/site/operations.rs` are reachable. Anything else under `/rpc/` is `404`, whatever else is linked into the binary.
+- Idempotency receipts for these operations live in a private in-memory SQLite database, so the generation's schema and format are unchanged.
+
+`GET /pkg/{file}` serves the client from memory in the smallest encoding the browser accepts, with `Cache-Control: no-cache`: the file names carry no hash, so a browser revalidates and a release is never served stale. The service reads the client before it binds and never again, so the markup a process renders and the client it hands out always come from the same start.
+
+Without scripts the front door still mints through its form, and the band's panel and the route's drawer stay open (`@media (scripting: none)` in `assets/demo.css`).
+
 ### Proving the pages in a browser
 
 `examples/demo_service/tests/visitor_pages.mjs` drives the real debug service in headless Chrome through the repository's `browser.mjs` harness; Rust rendering and route proofs are in `tests/signin.rs`, `tests/notes.rs` (two cookie jars on the real router, the real analytics service read back through its own `run` query, the 20-note race across two database handles, and the refusing, rate-limiting, or stalled stand-ins that isolate the unconfirmed path), and the `pages` unit tests. The notebook journey signs in normally, saves a markup-bearing note by keyboard, reloads, opens the real admin's Live to find the matching event, and checks a second visitor sees none of it; it runs on a volume of its own because the real limit is ten new passes per network address per hour.
 
 ```sh
 cargo build -p demo_service
+(cd examples/demo_service/pages && leptoskit build --release --platform web --out /some/client/dir)
 DEMO_SERVICE_BIN=<target dir>/debug/demo_service \
+LEPTOS_SITE_ROOT=/some/client/dir \
 DEMO_SHOTS=/some/scratch/dir \
 deno test --allow-env --allow-read --allow-net --allow-run --allow-write \
   examples/demo_service/tests/visitor_pages.mjs

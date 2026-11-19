@@ -21,6 +21,7 @@ members = [
 	"examples/auth_pages",
 	"examples/counter",
 	"examples/demo_service",
+	"examples/demo_service/pages",
 	"examples/exact",
 	"examples/gallery",
 	"examples/gallery/verify",

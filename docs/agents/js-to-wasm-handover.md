@@ -250,14 +250,31 @@ Found while converting sign-in: on the web every screen rebuild replaced each la
 - **Tab in a modal.** Chrome lets Tab leave a modal `<dialog>` for its own toolbar after the last control (and in headless Chrome focus then stays on `<body>`). `Modal` now wraps Tab and Shift+Tab itself (`overlay::browser::keep_tab_inside`); a focused element that is not a stop, such as a dialog's heading, counts by its place. Browser test `tab_wraps_inside_an_open_modal`.
 - **Follow-up, not fixed:** on the web, an `Element::text_from` binding is read with tracking (`reactive.rs::read_binding`), so a ticking countdown rebuilds the whole screen once a second, not just its text. The audit's note that only the text updates is wrong. Rebuilds are now cheap and keep focus, but a binding that updates its own text node would be cheaper still.
 
-### `feat/public-demo`: no pull request
+### `feat/public-demo`: pull request #856 (draft)
 
 Twenty-three commits: the public demo service. One process serves one UTC day's generation, resets itself at midnight by re-executing in the same PID, gives each browser its own visitor pass, inbox and real sign-in, hands off to the admin, and lets visitors save private notes that emit one real `note_created` analytics event. [public-demo.md](public-demo.md) on that branch is the operator contract.
 
 - **Verified:** `cargo test -p demo_service` passed 123 tests before the last test-only commit. The last commit stabilises `tests/lifecycle.rs`; that suite then passed 10 consecutive runs of 21 tests.
 - **Blocked:** the branch cannot merge as it is. `lint:monostyle` scores the tree at 79.8 for complexity against a floor of 80, and the file it names is `examples/demo_service/assets/demo.js`. Do not patch that file to pass. It is replaced by the conversion.
-- **Not verified:** the Linux-only descriptor and lifecycle tests have never run (all work so far was on macOS). Nothing is deployed. systemd behaviour, the edge deployment, the admin hand-over in a real browser across a process restart, and the link from the website are all outstanding.
+- **Linux:** the descriptor and lifecycle tests now run on Linux (see `feat/demo-front-door`).
+- **Not verified:** nothing is deployed. systemd behaviour, the edge deployment, the admin hand-over in a real browser across a process restart, and the link from the website are all outstanding.
 - **Known gaps:** the admin's Live page sometimes needs a reload before a new event appears (about one run in four). The People page cannot find a demo visitor, because a visitor has no person row.
+
+### `feat/demo-front-door`: stacked on `feat/public-demo`
+
+The first of the demo's conversions: the front door, the band and the new-day dialog are hydrated leptoskit, and that page loads no `demo.js`.
+
+- **Shape:** the pages live in `examples/demo_service/pages` (crate `demo_pages`, `cdylib` and `rlib`). The service renders them with `leptos_axum` and serves the client `leptoskit build --release --platform web` made, from `LEPTOS_SITE_ROOT/pkg`, read into memory at start. `public-demo.md` has the details under "Hydrated pages".
+- **Choices made here, for the owner to confirm or change:**
+  - Operations are declared in `demo_pages::ops` and call a port the service implements per request. The service keeps its routes, stores and transactions.
+  - The pass cookie is set by a demo-only layer around the mutation. No leptoskit API was added for response headers.
+  - The rpc server's receipts sit in a private in-memory SQLite database, so the generation format did not change.
+  - Only allow-listed operations are served (`SERVED`).
+  - The service refuses to start without the built client. That is a new step for whoever deploys it.
+- **Verified on Linux (x86-64, cloud container):** `cargo test -p demo_service`, and `tests/visitor_pages.mjs` in headless Chrome against the debug service with the release client. The Linux-only descriptor tests ran for the first time and pass. Two tests fail only for the container: one needs IPv6 loopback, one needs to not be root.
+- **Client size:** 352 KiB brotli for the first load (345 KiB Wasm, 7 KiB loader), with `optimize = "smallest"`.
+- **Suite changes:** the harness waits for `data-hydrated` on the root element before it acts on a page that brings the client. Assertions that read `#demo-state` on the front door now read the markup.
+- **Next:** sign-in (inbox query, `leptoskit_auth::client`, `Tabs`, `RadioGroup`), then Notes (`TextArea`, `Popover` menu), then delete `demo.js` and take #856 out of draft.
 
 ### The canvist editor stack: #857, #881, #884, and `feat/canvist-ink`
 

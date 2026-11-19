@@ -41,38 +41,6 @@ pub(super) const SECONDARY: &str = "text-sm leading-normal text-[var(--admin-ink
 pub(super) const MUTED: &str = "text-[13px] leading-normal text-[var(--admin-ink-3)]";
 pub(super) const LABEL: &str = "text-xs font-semibold text-[var(--admin-ink-2)]";
 
-/// The leptoskit mark: two ember boxes and the mint piece that arrives
-/// over the air, tilted −12°.
-pub(super) fn mark(size: f32) -> Element {
-	let unit = size / 28.0;
-	let px = |value: f32| format!("{:.1}px", value * unit);
-	view! {
-		<View class=format!("relative shrink-0 h-[{}] w-[{}]", px(28.0), px(28.0)) aria_hidden=true>
-			<View class=format!(
-				"absolute rounded-[3px] bg-[var(--admin-ember)] left-0 top-[{}] h-[{}] w-[{}]",
-				px(4.0),
-				px(24.0),
-				px(11.0)
-			) />
-			<View class=format!(
-				"absolute rounded-[3px] bg-[var(--admin-ember-warm)] left-[{}] top-[{}] h-[{}] \
-				 w-[{}]",
-				px(14.0),
-				px(17.0),
-				px(11.0),
-				px(11.0)
-			) />
-			<View class=format!(
-				"absolute rounded-[3px] bg-[var(--admin-mint)] -rotate-12 left-[{}] top-0 h-[{}] \
-				 w-[{}]",
-				px(15.0),
-				px(11.0),
-				px(11.0)
-			) />
-		</View>
-	}
-}
-
 /// One paragraph of text in which some runs are bold.
 pub(super) fn rich(class: &str, parts: &[(&str, bool)]) -> Element {
 	let spans = parts

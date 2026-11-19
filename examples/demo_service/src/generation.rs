@@ -236,6 +236,7 @@ async fn open(
 		&site_options(config, marker.day.as_str()),
 		Analytics::new(analytics.clone(), &secrets.analytics_token),
 	)
+	.await
 	.context("starting the site")?;
 
 	let store = Store::open(&dir.join("console.sqlite3")).context("opening the console store")?;
@@ -466,7 +467,7 @@ pub fn site_key_id(day: &str) -> String {
 /// The site's own options for a generation: its day and the configured
 /// client IP header.
 fn site_options(config: &Config, day: &str) -> site::SiteOptions {
-	site::SiteOptions::new(day, config.client_ip_header.clone())
+	site::SiteOptions::new(day, config.client_ip_header.clone()).with_client(config.client.clone())
 }
 
 async fn connect_site_db(dir: &Path) -> Result<leptoskit_db::Db> {
