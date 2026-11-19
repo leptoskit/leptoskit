@@ -225,12 +225,9 @@ fn live_badges(html: &str) -> Vec<(String, bool)> {
 				|| attribute_of(row, "how-toggle", "aria-label"),
 				|value| value[..value.find('"').unwrap()].to_owned(),
 			);
-			let badge = row
-				.find("data-testid=\"struct-badge\"")
-				.unwrap_or_else(|| panic!("a row without a badge: {row}"));
-			let tag =
-				&row[row[..badge].rfind('<').unwrap()..badge + row[badge..].find('>').unwrap()];
-			(name, !tag.contains("aria-hidden=\"true\""))
+			// The badge sits in the row's toggle, and only on a typed event.
+			let toggle = &row[..row.find("</button>").unwrap_or(row.len())];
+			(name, toggle.contains("data-testid=\"struct-badge\""))
 		})
 		.collect()
 }

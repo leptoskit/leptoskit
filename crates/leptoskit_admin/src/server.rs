@@ -262,14 +262,10 @@ fn viewer(admin: &Admin, gate: &Gate, headers: &HeaderMap, proof: &learn::Proof<
 			.map(|state| state.project.id.clone())
 			.collect(),
 		progress: learn::progress(proof),
-		pulse: inner.analytics.as_ref().map(|connection| {
-			let pulse = connection.live().pulse();
-			leptoskit_admin_pages::model::Pulse {
-				live: pulse.status == analytics::live::Status::Live,
-				per_second: pulse.per_second,
-				seconds: pulse.seconds,
-			}
-		}),
+		pulse: inner
+			.analytics
+			.as_ref()
+			.map(|connection| connection.live().pulse().shown()),
 	}
 }
 

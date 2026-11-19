@@ -5,6 +5,7 @@ mod infra;
 mod insight;
 mod learn;
 mod library;
+mod live;
 mod people;
 mod project;
 
@@ -64,6 +65,15 @@ pub(crate) fn screen_of(shell: &Shell) -> Box<dyn Fn() -> Element + Send + Sync>
 				shell.frame(people::person(person, Some(actions)))
 			})
 		}
+		Page::Live(live) => {
+			let watch = live::Watch::new(live);
+			Box::new(move || {
+				let Page::Live(live) = &shell.model.page else {
+					return shell.frame(content(&shell.model.page));
+				};
+				shell.frame(live::page(live, Some(watch)))
+			})
+		}
 		Page::Insight(_) => {
 			let swap = crate::analytics::swap::Swap::new(
 				shell.page,
@@ -101,5 +111,6 @@ pub fn content(page: &Page) -> Element {
 		Page::People(people) => people::list(people, None),
 		Page::Person(person) => people::person(person, None),
 		Page::Insight(insight) => insight::page(insight, None),
+		Page::Live(live) => live::page(live, None),
 	}
 }

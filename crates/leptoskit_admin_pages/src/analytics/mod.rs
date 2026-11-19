@@ -8,6 +8,7 @@ pub mod format;
 pub mod insights;
 pub mod params;
 pub mod swap;
+pub mod tail;
 
 use leptoskit::native::Placement;
 use leptoskit::prelude::*;

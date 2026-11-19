@@ -108,6 +108,10 @@ const TYPES = {
 /** Serves the pages as the admin would, and a live stream to push into. */
 function serve(directory, clientDirectory) {
 	const streams = new Set();
+	// The admin's live connection: each `analytics_live` stream a page opened.
+	const live = new Set();
+	// Each page model a builder asked for, by address.
+	const models = [];
 	const posted = [];
 	const encoder = new TextEncoder();
 	const page = (name) =>
@@ -136,6 +140,7 @@ function serve(directory, clientDirectory) {
 						: "trends-day";
 					// A builder changing in place asks for the page's model.
 					if (request.headers.get("x-admin-page") === "json") {
+						models.push(url.pathname + url.search);
 						return new Response(
 							await Deno.readFile(`${directory}/${name}.json`),
 							{ headers: { "content-type": "application/json" } },
@@ -149,6 +154,51 @@ function serve(directory, clientDirectory) {
 				}
 				case `${BASE}/analytics/live`:
 					return page("live.html");
+				case `${BASE}/live`: {
+					if (request.headers.get("upgrade") !== "websocket") {
+						return new Response("Not found", { status: 404 });
+					}
+					const { socket, response } = Deno.upgradeWebSocket(request, {
+						protocol: "leptoskit.live.v1.json",
+					});
+					const send = (frame) => {
+						if (socket.readyState === WebSocket.OPEN) {
+							socket.send(JSON.stringify(frame));
+						}
+					};
+					socket.onopen = () =>
+						send({
+							type: "welcome",
+							connection: "script",
+							version: 0,
+							heartbeat_seconds: 30,
+						});
+					socket.onmessage = (message) => {
+						const frame = JSON.parse(message.data);
+						if (frame.type === "ping") send({ type: "pong" });
+						if (frame.type === "stream" && frame.name === "analytics_live") {
+							live.add({
+								socket,
+								send,
+								stream: frame.stream,
+								args: frame.args,
+							});
+						}
+						if (frame.type === "cancel") {
+							for (const held of live) {
+								if (held.socket === socket && held.stream === frame.stream) {
+									live.delete(held);
+								}
+							}
+						}
+					};
+					socket.onclose = () => {
+						for (const held of live) {
+							if (held.socket === socket) live.delete(held);
+						}
+					};
+					return response;
+				}
 				case `${BASE}/analytics/library`:
 					return page("library.html");
 				case `${BASE}/analytics/people`:
@@ -257,6 +307,15 @@ function serve(directory, clientDirectory) {
 		origin: `http://127.0.0.1:${server.addr.port}`,
 		connected: () => streams.size,
 		posted,
+		models,
+		/** The `analytics_live` streams open now, and whether each has events. */
+		following: () => Array.from(live, (held) => Boolean(held.args?.events)),
+		/** Sends `value`, a `Live` item, down every `analytics_live` stream. */
+		send(value) {
+			for (const held of live) {
+				held.send({ type: "item", stream: held.stream, value });
+			}
+		},
 		push(kind, data) {
 			const message = encoder.encode(
 				`event: ${kind}\ndata: ${JSON.stringify(data)}\n\n`,
@@ -265,6 +324,7 @@ function serve(directory, clientDirectory) {
 		},
 		async close() {
 			for (const stream of streams) stream.close();
+			for (const held of live) held.socket.close();
 			await server.shutdown();
 		},
 	};
@@ -517,16 +577,54 @@ Deno.test("confirmation dialogs contain focus and restore their opener without c
 	});
 });
 
-Deno.test("a live event's struct badge follows the event, not the row it copies", async () => {
+/** Waits until a page follows the admin's analytics stream. */
+async function following(site, events) {
+	for (
+		let tries = 0;
+		!site.following().includes(events) && tries < 200;
+		tries++
+	) {
+		await new Promise((resolve) => setTimeout(resolve, 50));
+	}
+	assert(
+		site.following().includes(events),
+		`the page follows the analytics stream${events ? " with events" : ""}`,
+	);
+}
+
+const arrival = (seq, name, typed) => ({
+	Event: {
+		seq,
+		name,
+		distinct_id: "anon-live",
+		timestamp: new Date().toISOString(),
+		properties: { $pathname: "/notes" },
+		typed,
+	},
+});
+
+const topRow = (page) =>
+	page.evaluate(`(() => {
+		const row = document.querySelector('[data-testid="live-event"]');
+		return row?.getAttribute("aria-description");
+	})()`);
+
+Deno.test("Live is the pages' own Rust: each event at the top, with its struct badge", async () => {
 	await withBrowser(async (page, site) => {
 		await open(page, `${site.origin}${BASE}/analytics/live`);
+		await hydrated(page, "Live");
+		assert(
+			await page.evaluate(
+				"!document.querySelector('script[src$=\"admin.mjs\"]')",
+			),
+			"the page loads no hand-written script",
+		);
 		const badge = (row) =>
 			page.evaluate(`(() => {
 				const row = document.querySelectorAll('[data-testid="live-event"]')[${row}];
-				const badge = row.querySelector('[data-testid="struct-badge"]');
 				return {
 					name: row.getAttribute("aria-description"),
-					shown: getComputedStyle(badge).display !== "none",
+					shown: Boolean(row.querySelector('[data-testid="struct-badge"]')),
 				};
 			})()`);
 
@@ -536,35 +634,177 @@ Deno.test("a live event's struct badge follows the event, not the row it copies"
 				JSON.stringify({ name: "$pageview", shown: false }),
 			"the newest row is the untyped pageview",
 		);
-		for (let tries = 0; !site.connected() && tries < 100; tries++) {
-			await new Promise((resolve) => setTimeout(resolve, 50));
-		}
-		assert(site.connected(), "the page follows the live stream");
+		await following(site, true);
 
-		const event = (seq, name, typed) => ({
-			seq,
-			name,
-			distinct_id: "anon-live",
-			timestamp: new Date().toISOString(),
-			properties: { $pathname: "/notes" },
-			typed,
-		});
-		site.push("event", event(10, "note_created", true));
+		site.send(arrival(10, "note_created", true));
 		await page.until(
 			`() => document.querySelector('[data-testid="live-event"]').getAttribute("aria-description") === "note_created"`,
 			"the typed event arrives",
 		);
-		const typed = await badge(0);
-		assert(typed.shown, "a typed event after an untyped one shows `struct`");
+		assert((await badge(0)).shown, "a typed event shows `struct`");
 
-		site.push("event", event(11, "$pageview", false));
+		site.send(arrival(11, "$pageview", false));
 		await page.until(
 			`() => document.querySelector('[data-testid="live-event"]').getAttribute("aria-description") === "$pageview"`,
 			"the untyped event arrives",
 		);
-		const untyped = await badge(0);
-		assert(!untyped.shown, "an untyped event after a typed one hides it");
+		assert(!(await badge(0)).shown, "an untyped event has no badge");
 		assert((await badge(1)).shown, "the typed row keeps its badge");
+
+		// A row opens to its properties.
+		assert(
+			await page.evaluate(
+				"!document.querySelector('[data-testid=\"how-panel\"]')",
+			),
+			"rows start closed",
+		);
+		await page.click('[data-testid="how-toggle"]');
+		await page.until(
+			`() => document.querySelector('[data-testid="how-toggle"]').getAttribute("aria-expanded") === "true" &&
+				document.querySelector('[data-testid="live-event"] [data-testid="how-panel"]')?.textContent.includes("/notes")`,
+			"the row opens to its properties",
+		);
+	});
+});
+
+Deno.test("Live's rate and the top bar's pulse follow the stream", async () => {
+	await withBrowser(async (page, site) => {
+		await open(page, `${site.origin}${BASE}/analytics/live`);
+		await hydrated(page, "Live");
+		await following(site, true);
+		site.send({
+			Pulse: {
+				per_second: 12.4,
+				per_minute: 1234,
+				seconds: Array.from({ length: 60 }, (_, at) => at % 7),
+				live: true,
+				latest: 99,
+			},
+		});
+		await page.until(
+			`() => document.querySelector('[data-testid="live-rate"]').textContent === "12.4/s"`,
+			"the rate follows the pulse",
+		);
+		const shown = await page.evaluate(`(() => ({
+			minute: document.querySelector('[data-testid="live-minute"]').textContent,
+			status: document.querySelector('[data-testid="live-status"]').textContent,
+			pulse: document.querySelector('[data-testid="pulse-rate"]').textContent,
+			label: document.querySelector('[data-testid="live-pulse"]').getAttribute("aria-label"),
+		}))()`);
+		assert(
+			JSON.stringify(shown) ===
+				JSON.stringify({
+					minute: "1,234",
+					status: "✓ Listening",
+					pulse: "12/s",
+					label: "Live events: 12.4 a second",
+				}),
+			`the card and the top bar show the pulse: ${JSON.stringify(shown)}`,
+		);
+
+		// Another page follows only the pulse.
+		await open(page, `${site.origin}${BASE}/analytics/people`);
+		await hydrated(page, "People");
+		await following(site, false);
+	});
+});
+
+Deno.test("a builder reads itself again when newer events arrive, at most every ten seconds", async () => {
+	await withBrowser(async (page, site) => {
+		await open(page, `${site.origin}${BASE}/analytics/trends?interval=week`);
+		await hydrated(page, "the builder");
+		await following(site, false);
+		const pulse = (latest) =>
+			site.send({
+				Pulse: {
+					per_second: 1,
+					per_minute: 60,
+					seconds: Array(60).fill(1),
+					live: true,
+					latest,
+				},
+			});
+		const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+		// Newer events, but too soon after the page was read.
+		pulse(1_000_000);
+		await wait(1_000);
+		assert(site.models.length === 0, `too soon: ${site.models}`);
+
+		// Ten seconds on, the next pulse re-reads the same address.
+		await wait(9_500);
+		pulse(1_000_001);
+		for (let tries = 0; site.models.length === 0 && tries < 100; tries++) {
+			await wait(50);
+		}
+		assert(
+			site.models.length === 1 &&
+				site.models[0].endsWith("/analytics/trends?interval=week"),
+			`one re-read of the page's own address: ${site.models}`,
+		);
+
+		// Nothing newer, nothing read.
+		await wait(10_500);
+		pulse(1_000_001);
+		await wait(1_000);
+		assert(site.models.length === 1, `nothing newer: ${site.models}`);
+	});
+});
+
+Deno.test("Live's Pause holds the list, and its filter narrows it", async () => {
+	await withBrowser(async (page, site) => {
+		await open(page, `${site.origin}${BASE}/analytics/live`);
+		await hydrated(page, "Live");
+		await following(site, true);
+		const pause = () =>
+			page.evaluate(`(() => {
+				const pause = document.querySelector('[data-testid="live-pause"]');
+				return [pause.textContent, pause.getAttribute("aria-pressed")];
+			})()`);
+
+		await page.click('[data-testid="live-pause"]');
+		await page.until(
+			`() => document.querySelector('[data-testid="live-pause"]').getAttribute("aria-pressed") === "true"`,
+			"Pause holds the list",
+		);
+		const noted = () =>
+			site.posted.some((entry) =>
+				entry.path === `${BASE}/api/preferences` &&
+				entry.body?.note === "live-pause"
+			);
+		for (let tries = 0; !noted() && tries < 100; tries++) {
+			await new Promise((resolve) => setTimeout(resolve, 50));
+		}
+		assert(noted(), "pausing counts toward retiring the note");
+		site.send(arrival(20, "note_created", true));
+		site.send(arrival(21, "note_shared", true));
+		await page.until(
+			`() => document.querySelector('[data-testid="live-pause"]').textContent === "Resume (2)"`,
+			"what comes while paused waits",
+		);
+		assert(await topRow(page) === "$pageview", "the list holds still");
+
+		await page.click('[data-testid="live-pause"]');
+		await page.until(
+			`() => document.querySelector('[data-testid="live-event"]').getAttribute("aria-description") === "note_shared"`,
+			"Resume lets the waiting events in, newest on top",
+		);
+		assert(
+			JSON.stringify(await pause()) === JSON.stringify(["Pause", "false"]),
+			`the button says Pause again: ${JSON.stringify(await pause())}`,
+		);
+
+		await page.click('[data-testid="live-filter"]');
+		await page.send("Input.insertText", { text: "Shared" });
+		await page.until(
+			`() => Array.from(document.querySelectorAll('[data-testid="live-event"]'))
+				.map((row) => row.getAttribute("aria-description")).join() === "note_shared"`,
+			"the filter keeps the names that hold it, whatever the case",
+		);
+		assert(
+			await focused(page) === "live-filter",
+			`typing keeps focus in the filter, not ${await focused(page)}`,
+		);
 	});
 });
 

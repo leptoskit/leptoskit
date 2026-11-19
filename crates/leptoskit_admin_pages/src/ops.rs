@@ -16,6 +16,8 @@ use serde::Deserialize;
 use serde::Serialize;
 
 use crate::components::Tone;
+use crate::model::Pulse;
+use crate::model::live::Arrival;
 
 /// What happened to an operation, as it happens.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -43,6 +45,25 @@ pub async fn operation_progress(
 	cx.require::<Port>()?.0.progress(id)
 }
 
+/// What the analytics stream says: how fast events arrive, and each event.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub enum Live {
+	/// The pulse, about once a second.
+	Pulse(Pulse),
+	/// One event, as it arrives.
+	Event(Arrival),
+}
+
+/// The pulse about once a second, and with `events`, every event from now
+/// on.
+#[rpc::stream(crate = "leptoskit::rpc")]
+pub async fn analytics_live(
+	cx: &rpc::StreamCx,
+	events: bool,
+) -> rpc::Result<impl futures::Stream<Item = Live>> {
+	cx.require::<Port>()?.0.analytics(events)
+}
+
 /// The admin's side of the streams, for one signed-in admin.
 #[cfg(feature = "ssr")]
 pub trait Backend: Send + Sync + 'static {
@@ -52,6 +73,13 @@ pub trait Backend: Send + Sync + 'static {
 	///
 	/// When there is no such operation, or no control service.
 	fn progress(&self, id: String) -> rpc::Result<futures::stream::BoxStream<'static, Progress>>;
+
+	/// The analytics pulse, and with `events`, each event.
+	///
+	/// # Errors
+	///
+	/// When the admin isn't connected to an analytics service.
+	fn analytics(&self, events: bool) -> rpc::Result<futures::stream::BoxStream<'static, Live>>;
 }
 
 /// The caller's [`Backend`], as the streams find it in their context.

@@ -11,6 +11,12 @@
 use std::collections::HashSet;
 
 use leptos::context::use_context;
+#[cfg(feature = "hydrate")]
+use leptos::prelude::Effect;
+#[cfg(feature = "hydrate")]
+use leptos::prelude::GetValue as _;
+#[cfg(feature = "hydrate")]
+use leptos::prelude::SetValue as _;
 use leptos::prelude::StoredValue;
 use leptos::prelude::WithValue as _;
 use leptoskit::native::EventOutcome;
@@ -61,9 +67,73 @@ impl Swap {
 				}
 			});
 			leptos::prelude::on_cleanup(move || handle.remove());
+			swap.reread();
 		}
 
 		swap
+	}
+
+	/// Reads the page again when the stream has newer events, at most every
+	/// ten seconds, unless the person is in the middle of something: an
+	/// open menu or row, the confirm sheet, or a field.
+	#[cfg(feature = "hydrate")]
+	fn reread(self) {
+		const EVERY_MS: f64 = 10_000.0;
+
+		let Some(tail) = crate::analytics::tail::Tail::current() else {
+			return;
+		};
+		let now = || {
+			web_sys::window()
+				.and_then(|window| window.performance())
+				.map_or(0.0, |performance| performance.now())
+		};
+		let confirm = crate::confirm::Confirm::current();
+		let seen = StoredValue::new(tail.latest_untracked());
+		let read_at = StoredValue::new(now());
+
+		Effect::new(move |_| {
+			let _ = tail.beats();
+			let Some(latest) = tail.latest_untracked() else {
+				return;
+			};
+			let Some(before) = seen.get_value() else {
+				seen.set_value(Some(latest));
+				return;
+			};
+
+			if latest <= before
+				|| self.busy.get_untracked()
+				|| now() - read_at.get_value() < EVERY_MS
+			{
+				return;
+			}
+
+			let Some(document) = web_sys::window().and_then(|window| window.document()) else {
+				return;
+			};
+			let busy = self.menu.with_untracked(Option::is_some)
+				|| confirm.is_some_and(|confirm| confirm.asking_untracked())
+				|| document
+					.query_selector(r#"[data-testid="how-toggle"][aria-expanded="true"]"#)
+					.ok()
+					.flatten()
+					.is_some()
+				|| document.active_element().is_some_and(|element| {
+					matches!(element.tag_name().as_str(), "INPUT" | "TEXTAREA")
+				});
+
+			if busy {
+				return;
+			}
+
+			seen.set_value(Some(latest));
+			read_at.set_value(now());
+
+			if let Some(href) = web_sys::window().and_then(|window| window.location().href().ok()) {
+				self.go(href, false);
+			}
+		});
 	}
 
 	/// The builder's swap, when the page runs as this crate's.

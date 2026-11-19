@@ -181,6 +181,15 @@ impl Confirm {
 		use_context::<Self>()
 	}
 
+	/// Whether the sheet is asking now, without tracking it.
+	#[cfg_attr(
+		not(feature = "hydrate"),
+		expect(dead_code, reason = "only the browser re-reads a builder")
+	)]
+	pub(crate) fn asking_untracked(&self) -> bool {
+		self.ask.with_untracked(Option::is_some)
+	}
+
 	/// Shows the sheet; `yes` runs with the answer if the person confirms,
 	/// and `from` gets focus back either way.
 	pub fn ask(

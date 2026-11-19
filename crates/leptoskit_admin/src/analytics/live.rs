@@ -19,11 +19,16 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
+use futures::StreamExt as _;
+use futures::stream::BoxStream;
+use leptoskit_admin_pages::model::live::Arrival;
+use leptoskit_admin_pages::ops::Live;
 use leptoskit_analytics::service::query::TailItem;
 use leptoskit_rpc::live::ClientFrame;
 use leptoskit_rpc::live::ServerFrame;
 use serde::Serialize;
 use tokio::sync::broadcast;
+use tokio::sync::broadcast::error::RecvError;
 
 /// The stream's id on the admin's connection: it opens just the one.
 const STREAM: u32 = 1;
@@ -59,6 +64,25 @@ pub(crate) struct Pulse {
 	/// The last event's sequence number: a page that saw a smaller one has
 	/// new data to show.
 	pub latest: u64,
+}
+
+impl Pulse {
+	/// The pulse as a page shows it.
+	pub(crate) fn shown(self) -> leptoskit_admin_pages::model::Pulse {
+		let (live, reason) = match self.status {
+			Status::Live => (true, None),
+			Status::Connecting => (false, None),
+			Status::Disconnected(reason) => (false, Some(reason)),
+		};
+		leptoskit_admin_pages::model::Pulse {
+			per_second: self.per_second,
+			per_minute: self.per_minute,
+			seconds: self.seconds,
+			live,
+			reason,
+			latest: self.latest,
+		}
+	}
 }
 
 #[derive(Default)]
@@ -341,5 +365,95 @@ impl Hub {
 		}
 
 		Ok(())
+	}
+}
+
+/// What a page's `analytics_live` stream sends: the pulse at once and then
+/// every second, and with `events`, each event as the hub hears it.
+pub(crate) fn follow(connection: super::Connection, events: bool) -> BoxStream<'static, Live> {
+	let hub = connection.live().clone();
+	let receiver = hub.subscribe();
+	let mut tick = tokio::time::interval(Duration::from_secs(1));
+	tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+	let state = Following {
+		hub,
+		receiver,
+		tick,
+		connection,
+		typed: None,
+	};
+
+	futures::stream::unfold(state, move |mut state| {
+		async move {
+			loop {
+				tokio::select! {
+					_ = state.tick.tick() => {
+						let pulse = Live::Pulse(state.hub.pulse().shown());
+						return Some((pulse, state));
+					}
+					item = state.receiver.recv(), if events => match item {
+						Ok(item) => {
+							let typed = state.typed(&item.event.name).await;
+							return Some((Live::Event(arrival(&item, typed)), state));
+						}
+						Err(RecvError::Lagged(_)) => {}
+						Err(RecvError::Closed) => return None,
+					},
+				}
+			}
+		}
+	})
+	.boxed()
+}
+
+/// One page's share of the hub.
+struct Following {
+	hub: Hub,
+	receiver: broadcast::Receiver<Arc<TailItem>>,
+	tick: tokio::time::Interval,
+	connection: super::Connection,
+	/// The names of the events the app declared fields for, read once the
+	/// first event arrives.
+	typed: Option<Vec<String>>,
+}
+
+impl Following {
+	/// Whether event `name` has declared fields.
+	async fn typed(&mut self, name: &str) -> bool {
+		if self.typed.is_none() {
+			self.typed = Some(typed_names(&self.connection).await);
+		}
+
+		self.typed
+			.as_ref()
+			.is_some_and(|typed| typed.iter().any(|typed| typed == name))
+	}
+}
+
+/// The names of the events the app declared with `#[derive(Event)]`.
+pub(crate) async fn typed_names(connection: &super::Connection) -> Vec<String> {
+	connection
+		.facts()
+		.await
+		.map(|facts| {
+			facts
+				.definitions
+				.into_iter()
+				.filter(|definition| definition.fields.is_some())
+				.map(|definition| definition.name)
+				.collect()
+		})
+		.unwrap_or_default()
+}
+
+/// A tail item as the Live page lists it.
+fn arrival(item: &TailItem, typed: bool) -> Arrival {
+	Arrival {
+		seq: item.event.seq,
+		name: item.event.name.clone(),
+		distinct_id: item.event.distinct_id.clone(),
+		timestamp: item.event.timestamp.clone(),
+		properties: item.event.properties.clone(),
+		typed,
 	}
 }

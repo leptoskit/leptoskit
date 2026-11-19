@@ -28,6 +28,7 @@ use leptoskit::shortcut::Shortcut;
 use leptoskit::shortcut::use_shortcut;
 
 use crate::BASE;
+use crate::analytics::tail::Tail;
 use crate::components;
 use crate::confirm::Confirm;
 use crate::model::Model;
@@ -427,11 +428,18 @@ pub fn switcher(viewer: &Viewer, section: &Section) -> Option<Element> {
 /// the Live screen.
 #[must_use]
 pub fn pulse(viewer: &Viewer) -> Element {
+	pulse_of(viewer.pulse.as_ref())
+}
+
+/// The live events indicator for `pulse`, or that analytics isn't
+/// connected.
+#[must_use]
+pub fn pulse_of(pulse: Option<&crate::model::Pulse>) -> Element {
 	const CLASS: &str = "flex-row items-center gap-2 rounded-full border \
 	                     border-[var(--admin-line)] px-2.5 py-1 cursor-pointer \
 	                     hover:bg-[var(--admin-sunken)] max-sm:hidden";
 
-	let Some(pulse) = &viewer.pulse else {
+	let Some(pulse) = pulse else {
 		return Pressable("Live events: analytics isn't connected yet")
 			.href(format!("{BASE}/analytics/live"))
 			.class(CLASS)
@@ -561,6 +569,8 @@ pub struct Shell {
 	pub(crate) confirm: Confirm,
 	/// Signing out at the main site.
 	sign_out: MutationHandle<(), (), ErrorResponse>,
+	/// The analytics stream: the pulse, and on Live, each event.
+	pub(crate) tail: Tail,
 }
 
 impl Shell {
@@ -568,6 +578,10 @@ impl Shell {
 	/// elsewhere) finds a screen and Shift+W turns Workings mode on or off.
 	#[must_use]
 	pub fn new(model: Model) -> Self {
+		let tail = Tail::open(
+			model.viewer.pulse.clone(),
+			matches!(model.page, Page::Live(_)),
+		);
 		let shell = Self {
 			workings: Workings::new(
 				model.viewer.workings_mode,
@@ -584,6 +598,7 @@ impl Shell {
 			notice: RwSignal::new(String::new()),
 			confirm: Confirm::new(),
 			sign_out: use_mutation(sign_out_mutation()),
+			tail,
 		};
 
 		let find = shell.clone();
@@ -596,6 +611,7 @@ impl Shell {
 		let confirm = shell.confirm;
 		provide_context(drawers);
 		provide_context(confirm);
+		provide_context(tail);
 		provide_context(components::Notes::new());
 		// While the confirm sheet asks, no shortcut runs: its keys are its
 		// own.
@@ -726,7 +742,7 @@ impl Shell {
 			.children(switcher(viewer, &section))
 			.child(self.search_field())
 			.child(View().class("flex-1"))
-			.child(pulse(viewer))
+			.child(pulse_of(self.tail.pulse().as_ref()))
 			.child(self.workings_switch())
 			.child(self.theme_button())
 			.child(self.account_menu())
@@ -1080,8 +1096,11 @@ mod tests {
 				viewer: Viewer {
 					pulse: Some(crate::model::Pulse {
 						per_second: 1.5,
+						per_minute: 3,
 						seconds: vec![0, 2, 1],
 						live: true,
+						reason: None,
+						latest: 7,
 					}),
 					..viewer(&["notes-production", "notes-staging"])
 				},
