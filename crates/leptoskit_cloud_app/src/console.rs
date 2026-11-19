@@ -91,7 +91,8 @@ pub fn rpc_problem(error: &FnError) -> String {
 		FnError::Invalid(message)
 		| FnError::Server(message)
 		| FnError::Decode(message)
-		| FnError::Other(message) => message.clone(),
+		| FnError::Other(message)
+		| FnError::Refused { message, .. } => message.clone(),
 	}
 }
 

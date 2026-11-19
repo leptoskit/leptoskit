@@ -206,6 +206,7 @@ fn class(cause: &FnError) -> &'static str {
 		FnError::Server(_) => "server",
 		FnError::Decode(_) => "decode",
 		FnError::Other(_) => "other",
+		FnError::Refused { .. } => "refused",
 	}
 }
 
