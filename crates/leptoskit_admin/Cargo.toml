@@ -11,11 +11,15 @@ rust-version.workspace = true
 description = "One admin web app for a leptoskit site: analytics, infrastructure, and lessons, signed in through the site's own sign-in."
 
 [dependencies]
+# The pages' work runs on leptos's executor, which is tokio here.
+any_spawner = { workspace = true, features = ["tokio"] }
 axum = { workspace = true }
 chrono = { workspace = true }
 futures = { workspace = true }
 leptos = { workspace = true, features = ["ssr"] }
+leptos_axum = { workspace = true }
 leptoskit = { workspace = true, features = ["web", "apm", "db"] }
+leptoskit_admin_pages = { workspace = true, features = ["ssr"] }
 leptoskit_analytics = { workspace = true, features = ["service"] }
 leptoskit_auth = { workspace = true, features = ["axum", "oauth", "sqlite"] }
 leptoskit_config = { workspace = true }

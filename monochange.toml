@@ -82,6 +82,7 @@ packages = [
 	"leptoskit_analytics_macros",
 	"leptoskit_deploy_console",
 	"leptoskit_admin",
+	"leptoskit_admin_pages",
 	"leptoskit_form",
 	"leptoskit_config",
 	"leptoskit_platform",
@@ -363,6 +364,10 @@ type = "cargo"
 
 [package.leptoskit_admin]
 path = "crates/leptoskit_admin"
+type = "cargo"
+
+[package.leptoskit_admin_pages]
+path = "crates/leptoskit_admin_pages"
 type = "cargo"
 
 [package.leptoskit_form]

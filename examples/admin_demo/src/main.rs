@@ -129,9 +129,16 @@ async fn run(real: bool, seed: bool) -> Result<()> {
 		.analytics(AnalyticsService::new(ANALYTICS, ANALYTICS_TOKEN))
 		// The admin says "Simulated" everywhere unless the real `lk`
 		// commands run.
-		.simulated_infrastructure(!real)
-		.build()
-		.await?;
+		.simulated_infrastructure(!real);
+	// The pages that moved to Wasm need their browser half: build it with
+	// `leptoskit build --platform web --out <dir>` in
+	// crates/leptoskit_admin_pages and name `<dir>` here.
+	let admin = match std::env::var_os("LEPTOSKIT_ADMIN_CLIENT_DIR") {
+		Some(directory) if !directory.is_empty() => admin.client_dir(directory),
+		_ => admin,
+	}
+	.build()
+	.await?;
 
 	let executor: Arc<dyn leptoskit_deploy_console::control::Executor> = if real {
 		Arc::new(leptoskit_cli::console::CommandRunner::new(

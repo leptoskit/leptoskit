@@ -62,6 +62,12 @@ pub enum AdminCommand {
 		/// area explains how to connect.
 		#[arg(long)]
 		analytics_url: Option<String>,
+		/// The admin pages' browser half: the directory `leptoskit build
+		/// --release --platform web` wrote in `crates/leptoskit_admin_pages`.
+		/// Defaults to `LEPTOSKIT_ADMIN_CLIENT_DIR`. Without either, the
+		/// pages that moved to Wasm render but don't respond to presses.
+		#[arg(long)]
+		client_dir: Option<PathBuf>,
 	},
 }
 
@@ -79,6 +85,7 @@ pub fn run(command: AdminCommand) -> Result<()> {
 			environment,
 			app_name,
 			analytics_url,
+			client_dir,
 		} => {
 			let secret = std::env::var("LEPTOSKIT_ADMIN_CLIENT_SECRET").context(
 				"set LEPTOSKIT_ADMIN_CLIENT_SECRET to the client secret the main site issued to \
@@ -110,6 +117,11 @@ pub fn run(command: AdminCommand) -> Result<()> {
 				None => None,
 			};
 
+			let client_dir = client_dir.or_else(|| {
+				std::env::var_os("LEPTOSKIT_ADMIN_CLIENT_DIR")
+					.filter(|directory| !directory.is_empty())
+					.map(PathBuf::from)
+			});
 			let runtime = tokio::runtime::Builder::new_multi_thread()
 				.worker_threads(4)
 				.enable_all()
@@ -123,6 +135,10 @@ pub fn run(command: AdminCommand) -> Result<()> {
 					.keys(keys)
 					.data_dir(data.join("admin"))
 					.control(service.clone());
+				let admin = match client_dir {
+					Some(directory) => admin.client_dir(directory),
+					None => admin,
+				};
 				let admin = match analytics {
 					Some(analytics) => admin.analytics(analytics),
 					None => admin,

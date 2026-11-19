@@ -33,19 +33,23 @@
 
 mod access;
 mod analytics;
-mod charts;
-mod components;
+mod client;
 mod infra;
 mod learn;
 mod server;
 mod shell;
 mod signin;
-mod style;
-mod workings;
 
 use std::path::PathBuf;
 use std::sync::Arc;
 
+pub use leptoskit_admin_pages::BASE;
+pub use leptoskit_admin_pages::Environment;
+use leptoskit_admin_pages::charts;
+use leptoskit_admin_pages::components;
+pub use leptoskit_admin_pages::model::UnknownEnvironment;
+use leptoskit_admin_pages::style;
+use leptoskit_admin_pages::workings;
 use leptoskit_auth::Auth;
 use leptoskit_auth::Keys;
 use leptoskit_auth::Provider;
@@ -54,10 +58,6 @@ use leptoskit_auth::ProviderHttp;
 use leptoskit_auth::ProviderRequest;
 use leptoskit_db::Db;
 use leptoskit_deploy_console::control::Service;
-
-/// Where the admin mounts: every page and endpoint lives under this path.
-pub const BASE: &str = "/_leptoskit/admin";
-
 /// The admin's colour custom properties as one stylesheet fragment, so a
 /// page beside the admin, such as the main site's sign-in, can wear the
 /// same paper, ink, ember, and mint without copying the values.
@@ -72,35 +72,6 @@ pub const BASE: &str = "/_leptoskit/admin";
 /// Only the custom properties are shared. The admin's component classes stay
 /// private, so they can change without breaking a page that reads the tokens.
 pub use style::tokens_css as theme_css;
-
-/// Which environment the admin acts on, shown as the pill in the top bar.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum Environment {
-	/// Real people use it: the pill fills with ember.
-	#[default]
-	Production,
-	/// A rehearsal of production.
-	Staging,
-	/// A developer's own machine.
-	Development,
-}
-
-impl std::str::FromStr for Environment {
-	type Err = AdminError;
-
-	fn from_str(value: &str) -> Result<Self, Self::Err> {
-		match value {
-			"production" => Ok(Self::Production),
-			"staging" => Ok(Self::Staging),
-			"development" => Ok(Self::Development),
-			other => {
-				Err(AdminError::Config(format!(
-					"`{other}` isn't an environment: use production, staging, or development"
-				)))
-			}
-		}
-	}
-}
 
 /// The main site the admin signs people in through.
 #[derive(Clone)]
@@ -255,6 +226,7 @@ pub struct AdminBuilder {
 	analytics: Option<AnalyticsService>,
 	simulated_infrastructure: bool,
 	http: Option<SharedHttp>,
+	client_dir: Option<PathBuf>,
 }
 
 impl AdminBuilder {
@@ -352,6 +324,17 @@ impl AdminBuilder {
 		self
 	}
 
+	/// Where `leptoskit build --release --platform web` wrote the admin's
+	/// pages for the browser, run in `crates/leptoskit_admin_pages`: the
+	/// directory that holds `pkg/`. With it, the pages the admin has moved
+	/// to Wasm answer presses and keys in the browser. Without it, they
+	/// render and stay as the server drew them.
+	#[must_use]
+	pub fn client_dir(mut self, path: impl Into<PathBuf>) -> Self {
+		self.client_dir = Some(path.into());
+		self
+	}
+
 	/// Opens the database and sets up sign-in.
 	///
 	/// # Errors
@@ -430,6 +413,10 @@ impl AdminBuilder {
 		let auth = auth
 			.build()
 			.map_err(|error| AdminError::Config(error.to_string()))?;
+		let client = match &self.client_dir {
+			Some(directory) => client::Client::load(directory)?,
+			None => client::Client::absent(),
+		};
 
 		Ok(Admin(Arc::new(Inner {
 			app_name: self.app_name,
@@ -443,6 +430,7 @@ impl AdminBuilder {
 			control: self.control,
 			analytics: self.analytics.map(analytics::Connection::new),
 			simulated_infrastructure: self.simulated_infrastructure,
+			client,
 		})))
 	}
 }
@@ -465,6 +453,8 @@ pub(crate) struct Inner {
 	pub analytics: Option<analytics::Connection>,
 	/// Whether infrastructure actions run against a stand-in cloud.
 	pub simulated_infrastructure: bool,
+	/// The pages' browser half.
+	pub client: client::Client,
 }
 
 impl Admin {
@@ -483,6 +473,7 @@ impl Admin {
 			analytics: None,
 			simulated_infrastructure: false,
 			http: None,
+			client_dir: None,
 		}
 	}
 

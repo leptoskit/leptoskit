@@ -1,0 +1,50 @@
+[package]
+name = "leptoskit_admin_pages"
+version = "0.3.0"
+authors.workspace = true
+edition.workspace = true
+homepage.workspace = true
+license.workspace = true
+readme = "readme.md"
+repository.workspace = true
+rust-version.workspace = true
+description = "The leptoskit admin's pages: rendered by `leptoskit_admin` on the server and hydrated in the browser from the same component trees."
+
+# One crate is both sides. `leptoskit_admin` links the library with `ssr` and
+# renders every page from it; `leptoskit build` compiles the same library to
+# Wasm with `hydrate`, and the browser picks the page up where the server
+# left it. The admin itself is a server and never builds for Wasm, which is
+# why the pages live here and not inside it.
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# The browser's task executor, started before the page runs a request.
+any_spawner = { workspace = true, optional = true, features = ["wasm-bindgen"] }
+console_error_panic_hook = { workspace = true, optional = true }
+leptos = { workspace = true }
+leptoskit = { workspace = true, features = ["aria", "auth", "query", "web"] }
+serde = { workspace = true, features = ["derive"] }
+wasm-bindgen = { workspace = true, optional = true }
+wasm-bindgen-futures = { workspace = true, optional = true }
+# The theme's cookie, the device's appearance, saving a preference, and a
+# full page load when a search result leads to another page.
+web-sys = { workspace = true, optional = true, features = ["Document", "Element", "HtmlDocument", "Location", "MediaQueryList", "Request", "RequestCredentials", "RequestInit", "Window"] }
+
+[features]
+default = []
+# The server: renders the pages.
+ssr = ["leptos/ssr", "leptoskit/ssr"]
+# The browser: hydrates the page the server rendered.
+hydrate = [
+	"dep:any_spawner",
+	"dep:console_error_panic_hook",
+	"dep:wasm-bindgen",
+	"dep:wasm-bindgen-futures",
+	"dep:web-sys",
+	"leptos/hydrate",
+	"leptoskit/hydrate",
+]
+
+[lints]
+workspace = true

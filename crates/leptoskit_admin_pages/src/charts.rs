@@ -14,7 +14,7 @@ use leptoskit::prelude::*;
 use crate::style;
 
 /// One line on a chart.
-pub(crate) struct Series {
+pub struct Series {
 	pub name: String,
 	/// The palette slot, from 1.
 	pub slot: usize,
@@ -24,13 +24,13 @@ pub(crate) struct Series {
 }
 
 /// A labelled vertical marker: a release reaching the fleet.
-pub(crate) struct Marker {
+pub struct Marker {
 	pub at: usize,
 	pub label: String,
 }
 
 /// What a chart draws.
-pub(crate) struct LineChart {
+pub struct LineChart {
 	pub series: Vec<Series>,
 	/// A horizontal threshold, such as an SLO, with its label.
 	pub threshold: Option<(f64, String)>,
@@ -96,7 +96,7 @@ fn x_of(index: usize, count: usize) -> f32 {
 	reason = "one chart's layers in drawing order: grid, threshold, series, markers, labels, \
 	          legend"
 )]
-pub(crate) fn line_chart(chart: &LineChart, label: &str) -> Element {
+pub fn line_chart(chart: &LineChart, label: &str) -> Element {
 	let count = chart
 		.series
 		.iter()
@@ -297,7 +297,7 @@ fn series_fill(slot: usize) -> &'static str {
 }
 
 /// A sparkline: a thin line, no axes, the last point as a dot.
-pub(crate) fn sparkline(values: &[f64]) -> Element {
+pub fn sparkline(values: &[f64]) -> Element {
 	let view_box = ViewBox::new(0.0, 0.0, 100.0, 24.0).expect("a valid view box");
 	let mut vector = Vector(view_box)
 		.scaling(VectorScaling::Stretch)
@@ -338,7 +338,7 @@ pub(crate) fn sparkline(values: &[f64]) -> Element {
 }
 
 /// `250 ms`, `1.2 s`.
-pub(crate) fn milliseconds(value: f64) -> String {
+pub fn milliseconds(value: f64) -> String {
 	if value >= 1000.0 {
 		format!("{:.1} s", value / 1000.0)
 	} else {
@@ -347,13 +347,13 @@ pub(crate) fn milliseconds(value: f64) -> String {
 }
 
 /// `1.2%`.
-pub(crate) fn percent(value: f64) -> String {
+pub fn percent(value: f64) -> String {
 	format!("{value:.1}%")
 }
 
 /// `12.4k`.
 #[expect(clippy::cast_precision_loss, reason = "display only")]
-pub(crate) fn count(value: u64) -> String {
+pub fn count(value: u64) -> String {
 	match value {
 		0..1000 => value.to_string(),
 		1000..1_000_000 => format!("{:.1}k", value as f64 / 1000.0),
@@ -363,7 +363,7 @@ pub(crate) fn count(value: u64) -> String {
 
 /// `512 MB`, `1.5 GB`.
 #[expect(clippy::cast_precision_loss, reason = "display only")]
-pub(crate) fn bytes(value: u64) -> String {
+pub fn bytes(value: u64) -> String {
 	const MB: f64 = 1024.0 * 1024.0;
 	let megabytes = value as f64 / MB;
 
@@ -372,6 +372,69 @@ pub(crate) fn bytes(value: u64) -> String {
 	} else {
 		format!("{megabytes:.0} MB")
 	}
+}
+
+/// A trend's sparkline: a 1.5px line in series 1, the last point as a
+/// dot, sized by `class`.
+pub fn trend_sparkline(values: &[f64], class: &str) -> Element {
+	let view_box = ViewBox::new(0.0, 0.0, 100.0, 28.0).expect("a valid view box");
+	let mut line = Vector(view_box)
+		.scaling(VectorScaling::Stretch)
+		.class("absolute inset-0 text-[var(--admin-series-1)]")
+		.aria_hidden(true);
+	let highest = values
+		.iter()
+		.copied()
+		.fold(0.0_f64, f64::max)
+		.max(f64::EPSILON);
+	#[expect(
+		clippy::cast_possible_truncation,
+		clippy::cast_precision_loss,
+		reason = "a sparkline has a few dozen points"
+	)]
+	let points: Vec<Point> = values
+		.iter()
+		.enumerate()
+		.map(|(index, value)| {
+			Point {
+				x: if values.len() <= 1 {
+					50.0
+				} else {
+					index as f32 / (values.len() - 1) as f32 * 97.0
+				},
+				y: 25.0 - (value / highest) as f32 * 22.0,
+			}
+		})
+		.collect();
+
+	if points.len() > 1
+		&& let Ok(data) = PathData::polyline(points.clone())
+	{
+		line = line.path(VectorPath::new(data).stroke(stroke(1.5)));
+	}
+
+	let mut spark = View()
+		.class("relative")
+		.class(class)
+		.aria_hidden(true)
+		.child(line);
+
+	if let Some(last) = points.last() {
+		spark = spark.child(
+			View()
+				.class(
+					"absolute h-1.5 w-1.5 -ml-[3px] -mt-[3px] rounded-full \
+					 bg-[var(--admin-series-1)]",
+				)
+				.class(format!(
+					"left-[{}%] top-[{}%]",
+					(f64::from(last.x) * 10.0).round() / 10.0,
+					(f64::from(last.y) / 28.0 * 1000.0).round() / 10.0
+				)),
+		);
+	}
+
+	spark
 }
 
 #[cfg(test)]

@@ -793,67 +793,7 @@ pub(crate) fn retention(cohorts: &[Cohort], period: &str, mean: &[f64]) -> Eleme
 	View().class("overflow-scroll pb-1").child(grid)
 }
 
-/// A sparkline: a 1.5px line in series 1, the last point as a dot.
-pub(crate) fn sparkline(values: &[f64], class: &str) -> Element {
-	let view_box = ViewBox::new(0.0, 0.0, 100.0, 28.0).expect("a valid view box");
-	let mut line = Vector(view_box)
-		.scaling(VectorScaling::Stretch)
-		.class("absolute inset-0 text-[var(--admin-series-1)]")
-		.aria_hidden(true);
-	let highest = values
-		.iter()
-		.copied()
-		.fold(0.0_f64, f64::max)
-		.max(f64::EPSILON);
-	#[expect(
-		clippy::cast_possible_truncation,
-		clippy::cast_precision_loss,
-		reason = "a sparkline has a few dozen points"
-	)]
-	let points: Vec<Point> = values
-		.iter()
-		.enumerate()
-		.map(|(index, value)| {
-			Point {
-				x: if values.len() <= 1 {
-					50.0
-				} else {
-					index as f32 / (values.len() - 1) as f32 * 97.0
-				},
-				y: 25.0 - (value / highest) as f32 * 22.0,
-			}
-		})
-		.collect();
-
-	if points.len() > 1
-		&& let Ok(data) = PathData::polyline(points.clone())
-	{
-		line = line.path(VectorPath::new(data).stroke(stroke(1.5)));
-	}
-
-	let mut spark = View()
-		.class("relative")
-		.class(class)
-		.aria_hidden(true)
-		.child(line);
-
-	if let Some(last) = points.last() {
-		spark = spark.child(
-			View()
-				.class(
-					"absolute h-1.5 w-1.5 -ml-[3px] -mt-[3px] rounded-full \
-					 bg-[var(--admin-series-1)]",
-				)
-				.class(format!(
-					"left-[{}%] top-[{}%]",
-					(f64::from(last.x) * 10.0).round() / 10.0,
-					(f64::from(last.y) / 28.0 * 1000.0).round() / 10.0
-				)),
-		);
-	}
-
-	spark
-}
+pub(crate) use leptoskit_admin_pages::charts::trend_sparkline as sparkline;
 
 #[cfg(test)]
 mod tests {

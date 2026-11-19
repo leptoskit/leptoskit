@@ -72,6 +72,7 @@ pub(crate) fn router(admin: Admin) -> Router {
 		.route(&at("/learn/glossary"), get(glossary))
 		.route(&at("/learn/{track}/{lesson}"), get(lesson))
 		.route(&at("/assets/admin.mjs"), get(script))
+		.route(&at("/pkg/{file}"), get(client_file))
 		.route(&at("/assets/sketch.woff2"), get(|| async { font(SKETCH) }))
 		.route(&at("/assets/mono.woff2"), get(|| async { font(MONO) }))
 		.merge(analytics::routes::router())
@@ -249,8 +250,13 @@ pub(crate) fn render(
 	proof: &learn::Proof<'_>,
 	screen: Screen,
 ) -> Response {
+	html(shell::page(&viewer(admin, gate, headers, proof), screen))
+}
+
+/// Who is looking at a signed-in screen, and how they like the admin.
+fn viewer(admin: &Admin, gate: &Gate, headers: &HeaderMap, proof: &learn::Proof<'_>) -> Viewer {
 	let inner = admin.inner();
-	let viewer = Viewer {
+	Viewer {
 		app_name: inner.app_name.clone(),
 		environment: inner.environment,
 		simulated: inner.simulated_infrastructure,
@@ -263,12 +269,15 @@ pub(crate) fn render(
 			.map(|state| state.project.id.clone())
 			.collect(),
 		progress: learn::progress(proof),
-		pulse: inner
-			.analytics
-			.as_ref()
-			.map(|connection| connection.live().pulse()),
-	};
-	html(shell::page(&viewer, screen))
+		pulse: inner.analytics.as_ref().map(|connection| {
+			let pulse = connection.live().pulse();
+			leptoskit_admin_pages::model::Pulse {
+				live: pulse.status == analytics::live::Status::Live,
+				per_second: pulse.per_second,
+				seconds: pulse.seconds,
+			}
+		}),
+	}
 }
 
 async fn home(Extension(admin): Extension<Admin>, me: Option<SignedIn>) -> Response {
@@ -341,6 +350,38 @@ async fn sign_in(
 }
 
 /// Gates, loads the projects, and renders what `screen` makes of them.
+/// A signed-in page `leptoskit_admin_pages` builds, which the browser picks
+/// up where the server left it.
+async fn hydrated_screen(
+	admin: &Admin,
+	me: Option<SignedIn>,
+	headers: &HeaderMap,
+	page: leptoskit_admin_pages::model::Page,
+) -> Response {
+	let gate = match gate(admin, me, headers).await {
+		Ok(gate) => gate,
+		Err(response) => return response,
+	};
+	let states = match states(admin).await {
+		Ok(states) => states,
+		Err(error) => return failure(&format!("the control service didn't answer: {error}")),
+	};
+	let facts = analytics_facts(admin).await;
+	let proof = learn::Proof {
+		states: &states,
+		now: now(),
+		facts: facts.as_ref(),
+		preferences: &gate.preferences,
+		simulated: admin.inner().simulated_infrastructure,
+	};
+	let model = leptoskit_admin_pages::Model {
+		viewer: viewer(admin, &gate, headers, &proof),
+		page,
+	};
+
+	admin.inner().client.render(model).await
+}
+
 async fn signed_in_screen(
 	admin: &Admin,
 	me: Option<SignedIn>,
@@ -765,7 +806,13 @@ async fn glossary(
 	me: Option<SignedIn>,
 	headers: HeaderMap,
 ) -> Response {
-	signed_in_screen(&admin, me, &headers, |_| Some(learn::glossary())).await
+	hydrated_screen(
+		&admin,
+		me,
+		&headers,
+		leptoskit_admin_pages::model::Page::Glossary,
+	)
+	.await
 }
 
 async fn lesson(
@@ -778,6 +825,15 @@ async fn lesson(
 		learn::lesson(&track, &lesson, proof)
 	})
 	.await
+}
+
+/// `GET {BASE}/pkg/{file}`: one file of the pages' browser half.
+async fn client_file(
+	Extension(admin): Extension<Admin>,
+	Path(file): Path<String>,
+	headers: HeaderMap,
+) -> Response {
+	admin.inner().client.serve(&file, &headers)
 }
 
 async fn script() -> Response {
