@@ -372,7 +372,9 @@ async fn hydrated_screen(
 		return not_found();
 	};
 	// Only a drawer the page has opens: the id goes back into the page.
-	let open = open.filter(|open| page.drawers().iter().any(|drawer| drawer.id == *open));
+	let open = open
+		.or_else(|| opens_by_default(&page))
+		.filter(|open| page.drawers().iter().any(|drawer| drawer.id == *open));
 	let model = leptoskit_admin_pages::Model {
 		viewer: viewer(admin, &gate, headers, &proof),
 		page,
@@ -380,6 +382,19 @@ async fn hydrated_screen(
 	};
 
 	admin.inner().client.render(model).await
+}
+
+/// The drawer a page opens when no link names one: the plan's, the first
+/// three times.
+fn opens_by_default(page: &Page) -> Option<String> {
+	let Page::Project(project) = page else {
+		return None;
+	};
+	let leptoskit_admin_pages::model::project::Body::Changes(changes) = &project.body else {
+		return None;
+	};
+
+	changes.workings_by_default.then(|| "plan".to_owned())
 }
 
 async fn projects(
@@ -402,15 +417,41 @@ async fn project(
 	me: Option<SignedIn>,
 	headers: HeaderMap,
 	Path((id, tab)): Path<(String, String)>,
+	Query(query): Query<WorkingsQuery>,
 ) -> Response {
 	let Some(tab) = infra::Tab::parse(&tab) else {
 		return not_found();
 	};
-	let gate = match gate(&admin, me, &headers).await {
+
+	if tab == infra::Tab::Health {
+		return health(&admin, me, &headers, &id).await;
+	}
+
+	let linked = query.workings.is_some();
+
+	hydrated_screen(&admin, me, &headers, query.workings, |proof| {
+		let state = proof.states.iter().find(|state| state.project.id == id)?;
+		let context = infra::Context {
+			now: proof.now,
+			preferences: proof.preferences,
+			fleet: None,
+			simulated: proof.simulated,
+			linked,
+		};
+		Some(Page::Project(Box::new(infra::project(
+			state, tab, &context,
+		))))
+	})
+	.await
+}
+
+/// A project's Health tab, which the admin still draws itself.
+async fn health(admin: &Admin, me: Option<SignedIn>, headers: &HeaderMap, id: &str) -> Response {
+	let gate = match gate(admin, me, headers).await {
 		Ok(gate) => gate,
 		Err(response) => return response,
 	};
-	let states = match states(&admin).await {
+	let states = match states(admin).await {
 		Ok(states) => states,
 		Err(error) => return failure(&format!("the control service didn't answer: {error}")),
 	};
@@ -418,22 +459,20 @@ async fn project(
 		return not_found();
 	};
 	let now = now();
-	let fleet = (tab == infra::Tab::Health)
-		.then(|| admin.inner().control.as_ref())
-		.flatten()
-		.map(|service| {
-			service
-				.fleet(&Principal::owner(), &id, now.saturating_sub(3600), now)
-				.map_err(|error| error.to_string())
-		});
+	let fleet = admin.inner().control.as_ref().map(|service| {
+		service
+			.fleet(&Principal::owner(), id, now.saturating_sub(3600), now)
+			.map_err(|error| error.to_string())
+	});
 	let context = infra::Context {
 		now,
 		preferences: &gate.preferences,
 		fleet,
 		simulated: admin.inner().simulated_infrastructure,
+		linked: false,
 	};
-	let screen = infra::project(state, tab, &context);
-	let facts = analytics_facts(&admin).await;
+	let screen = infra::health_screen(state, &context);
+	let facts = analytics_facts(admin).await;
 	let proof = learn::Proof {
 		states: &states,
 		now,
@@ -441,7 +480,7 @@ async fn project(
 		preferences: &gate.preferences,
 		simulated: admin.inner().simulated_infrastructure,
 	};
-	render(&admin, &gate, &headers, &proof, screen)
+	render(admin, &gate, headers, &proof, screen)
 }
 
 async fn operation(

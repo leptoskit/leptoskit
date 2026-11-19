@@ -292,7 +292,7 @@ Learn's hub and lessons moved. The lessons and their checks stay in `leptoskit_a
 - **Tests:** the `learn` and `analytics_learn` snapshots didn't change, so the server's markup is the same as before. `script.mjs` serves `learn.html` and checks that it hydrates without `admin.mjs`, that the theme flips, and that a lesson row opens its lesson.
 - **Next:** see part 3.
 
-### `feat/admin-infra-pages`: admin conversion, part 3
+### `feat/admin-infra-pages`: admin conversion, part 3 (merged, #951)
 
 Workings drawers, Projects and the Operation page moved.
 
@@ -301,7 +301,18 @@ Workings drawers, Projects and the Operation page moved.
 - **Live progress:** the Operation page follows a running operation with the G3 rpc stream `ops::operation_progress`, served by `leptoskit_admin/src/live.rs` on `rpc::server::LiveStreams` nested under the admin's base path (`{BASE}/live`, `{BASE}/live/events`, `{BASE}/live/frames`), so a host site's own `/live` keeps working. The stream's `Identify` lets only a signed-in admin in. It sends the steps so far, each new one, then `Done`, and the page then loads itself again to show how it ended. The old `/infra/operations/{id}/events` SSE endpoint is gone.
 - **Tests:** `live::tests` follows an operation through the stream in Rust; `tests/admin.rs` checks that the page says it's following live, that `{BASE}/live/events` answers an admin and refuses a stranger. `script.mjs` serves `projects.html`, `operation.html` and `operation-workings.html` and checks the drawer: open, focus, Escape, focus return, `W`, and `?workings=`.
 - **Not tested:** the live stream end to end in a browser (the script's pages are static). The layout rules for an open drawer at extra-large widths (collapsed rail labels, one-column grid) are not reproduced yet.
-- **Next:** the project tabs with their actions and confirm dialogs (`Modal`), then the analytics builder, Live, People and the dialogs, and last delete `admin.mjs` and the attribute rules in `shell_css`.
+- **Next:** see part 4.
+
+### `feat/admin-project-tabs`: admin conversion, part 4
+
+A project's Overview, Changes, Releases, Operations, Backups and Config tabs moved. `leptoskit_admin/src/infra/pages.rs` builds `model::project::Project` (each tab's data, its actions as `Action { kind, label, request, explain }`, its drawers), and `leptoskit_admin_pages/src/pages/project.rs` draws it. Health stays server-drawn with `admin.mjs` until its fleet charts move with the analytics pages.
+
+- **The confirm sheet** is `confirm::Confirm`, provided by the shell: an `aria::Dialog` as a `Modal`, test ids `confirm-sheet`, `confirm-yes`, `confirm-no`. The browser keeps focus inside it and makes the page inert; Escape and the backdrop cancel; focus goes back to the button that asked, one frame after the dialog closes (focus can't land while the page is inert). No app shortcut runs while it is open: `leptoskit_native`'s web shortcut listener now skips keys while any `dialog:modal` is open, because before it ran the app's Escape and prevented the key's default, so Escape couldn't close the modal (`shortcuts_wait_while_a_modal_is_open` in `tests/web_browser.rs`). It has no text field or choices yet: the analytics dialogs add them.
+- **Actions** POST to `{BASE}/api/projects/{id}/actions` as before, with an idempotency key from `crypto.randomUUID()`, and open the operation they start. Deploy without a version says so in the notice and focuses the field.
+- **Plan rows** open the plan's drawer, mark the `[infra]` lines that cause the row (`Workings::link`, `style::LINKED`) and scroll to the first with a `Reveal`.
+- **W** opens the drawer of the card that holds focus and gives focus back to what had it; this reads `document.activeElement` through `web-sys` (`workings::browser`), because leptoskit has no way to ask what has focus. Margin notes' Got it hides the note and saves the dismissal.
+- **Tests:** `script.mjs` serves `overview.html`, `overview-release.html` (`?workings=release`), `changes.html` and `releases.html`. The confirm test now checks `:modal` instead of `inert` on the root, and a new test types a version, confirms Deploy and checks the request. `tests/admin.rs` reads an open drawer and Workings mode from the drawer's class and the switch's `aria-pressed`, not root attributes.
+- **Next:** Health with the analytics builder, Live, People and the dialogs, and last delete `admin.mjs` and the attribute rules in `shell_css`.
 
 ### `feat/public-demo`: pull request #856 (merged)
 

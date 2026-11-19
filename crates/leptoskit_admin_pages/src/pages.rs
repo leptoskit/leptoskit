@@ -3,6 +3,7 @@
 mod glossary;
 mod infra;
 mod learn;
+mod project;
 
 use leptoskit::prelude::Element;
 
@@ -24,6 +25,23 @@ pub(crate) fn screen_of(shell: &Shell) -> Box<dyn Fn() -> Element + Send + Sync>
 				shell.frame(infra::operation(operation, Some(follow)))
 			})
 		}
+		Page::Project(project) => {
+			let actions = project::Actions::new(&project.id, shell.confirm, shell.notice);
+
+			if let crate::model::project::Body::Changes(changes) = &project.body
+				&& changes.workings_by_default
+			{
+				// The plan's Workings open by default the first three times.
+				crate::shell::preference(r#"{"kind":"use_note","note":"plan-workings"}"#);
+			}
+
+			Box::new(move || {
+				let Page::Project(project) = &shell.model.page else {
+					return shell.frame(content(&shell.model.page));
+				};
+				shell.frame(project::page(project, Some(actions)))
+			})
+		}
 		_ => Box::new(move || shell.frame(content(&shell.model.page))),
 	}
 }
@@ -39,5 +57,6 @@ pub fn content(page: &Page) -> Element {
 		Page::Lesson(lesson) => learn::lesson(lesson),
 		Page::Projects(cards) => infra::projects(cards),
 		Page::Operation(operation) => infra::operation(operation, None),
+		Page::Project(project) => project::page(project, None),
 	}
 }

@@ -2530,6 +2530,82 @@ async fn a_modal_opens_in_the_top_layer_and_gives_focus_back() {
 }
 
 #[wasm_bindgen_test]
+async fn shortcuts_wait_while_a_modal_is_open() {
+	use leptoskit_native::components::Button;
+	use leptoskit_native::components::Modal;
+	use leptoskit_native::shortcut::Shortcut;
+	use leptoskit_native::shortcut::use_shortcut;
+
+	let parent = container();
+	let escapes = Arc::new(AtomicUsize::new(0));
+	let dismissals = Arc::new(AtomicUsize::new(0));
+	let app = Owner::new();
+	app.with(|| {
+		let escapes = Arc::clone(&escapes);
+		use_shortcut(Shortcut::key("Escape"), move || {
+			escapes.fetch_add(1, Ordering::SeqCst);
+		});
+	});
+	let open = RwSignal::new(true);
+	let mount = mount_to(parent.clone(), {
+		let dismissals = Arc::clone(&dismissals);
+		move || {
+			let dismissals = Arc::clone(&dismissals);
+			move || {
+				let dismissals = Arc::clone(&dismissals);
+				render(
+					Modal(open.get())
+						.aria_label("Discard the draft?")
+						.initial_focus("keep")
+						.on_dismiss(move || {
+							dismissals.fetch_add(1, Ordering::SeqCst);
+						})
+						.child(View().class("w-40 h-20").child(Button("Keep").id("keep"))),
+				)
+			}
+		}
+	});
+	tick().await;
+	next_frame().await;
+
+	let escape = |target: &web_sys::EventTarget| {
+		let options = web_sys::KeyboardEventInit::new();
+		options.set_key("Escape");
+		options.set_bubbles(true);
+		options.set_cancelable(true);
+		target
+			.dispatch_event(
+				&web_sys::KeyboardEvent::new_with_keyboard_event_init_dict("keydown", &options)
+					.unwrap(),
+			)
+			.unwrap()
+	};
+	let keep: web_sys::EventTarget = document().get_element_by_id("keep").unwrap().into();
+
+	assert!(
+		escape(&keep),
+		"the browser keeps Escape, which asks the modal to close"
+	);
+	assert_eq!(
+		escapes.load(Ordering::SeqCst),
+		0,
+		"the app's Escape waits while the modal is open"
+	);
+
+	open.set(false);
+	tick().await;
+	next_frame().await;
+	next_frame().await;
+	let body: web_sys::EventTarget = document().body().unwrap().into();
+	assert!(!escape(&body), "a shortcut takes the key again");
+	assert_eq!(escapes.load(Ordering::SeqCst), 1);
+
+	drop(mount);
+	drop(app);
+	parent.remove();
+}
+
+#[wasm_bindgen_test]
 async fn tab_wraps_inside_an_open_modal() {
 	use leptoskit_native::components::Button;
 	use leptoskit_native::components::Heading;

@@ -7,7 +7,11 @@
 //! something rather than guessing.
 
 use leptos::context::use_context;
+use leptos::prelude::StoredValue;
+use leptos::prelude::UpdateValue as _;
+use leptos::prelude::WithValue as _;
 use leptoskit::native::FocusRequest;
+use leptoskit::native::Reveal;
 use leptoskit::prelude::*;
 use serde::Deserialize;
 use serde::Serialize;
@@ -106,6 +110,14 @@ pub struct Workings {
 	opener: RwSignal<Option<FocusRequest>>,
 	/// The first drawer on the page, which W opens.
 	first: RwSignal<Option<String>>,
+	/// Each drawer's mint tab, which gets focus back when nothing else
+	/// opened it.
+	tabs: StoredValue<Vec<(String, FocusRequest)>>,
+	/// The `[infra]` key a plan row linked, whose lines the plan's drawer
+	/// marks.
+	linked: RwSignal<Option<String>>,
+	/// Scrolls the first linked line into view.
+	reveal: Reveal,
 }
 
 /// How long a Copy button says "Copied".
@@ -124,7 +136,21 @@ impl Workings {
 			close: FocusRequest::new(),
 			opener: RwSignal::new(None),
 			first: RwSignal::new(first),
+			tabs: StoredValue::new(Vec::new()),
+			linked: RwSignal::new(None),
+			reveal: Reveal::new(),
 		}
+	}
+
+	/// Notes drawer `id`'s mint tab, which gets focus back when the drawer
+	/// closes and nothing else opened it.
+	pub(crate) fn register_tab(&self, id: &str, tab: FocusRequest) {
+		self.tabs.update_value(|tabs| {
+			match tabs.iter_mut().find(|(known, _)| known == id) {
+				Some(known) => known.1 = tab,
+				None => tabs.push((id.to_owned(), tab)),
+			}
+		});
 	}
 
 	/// The page's drawers, when the page runs as this crate's.
@@ -143,9 +169,39 @@ impl Workings {
 	/// Opens drawer `id` and moves focus to its Close button; `from` gets
 	/// focus back when it closes.
 	pub fn show(&self, id: &str, from: Option<FocusRequest>) {
+		self.linked.set(None);
 		self.open.set(Some(id.to_owned()));
 		self.opener.set(from);
 		self.close.request();
+	}
+
+	/// Opens the plan's drawer with the lines that declare `key` marked, and
+	/// scrolls to them; `from` gets focus back when it closes.
+	pub fn link(&self, key: &str, from: Option<FocusRequest>) {
+		self.show("plan", from);
+		self.linked.set(Some(key.to_owned()));
+		self.reveal.request();
+	}
+
+	/// Whether a line or plan row for `key` is the one a plan row linked:
+	/// the key itself, or one of its parts (`backups` links
+	/// `backups.enabled`).
+	#[must_use]
+	pub fn is_linked(&self, key: &str) -> bool {
+		self.linked.with(|linked| {
+			linked.as_deref().is_some_and(|linked| {
+				key == linked
+					|| key
+						.strip_prefix(linked)
+						.is_some_and(|rest| rest.starts_with('.'))
+			})
+		})
+	}
+
+	/// Scrolls the first linked line into view.
+	#[must_use]
+	pub fn reveal(&self) -> Reveal {
+		self.reveal
 	}
 
 	/// Closes the open drawer and gives focus back to what opened it.
@@ -154,10 +210,24 @@ impl Workings {
 			return;
 		}
 
+		let open = self.open.get_untracked();
 		self.open.set(None);
+		self.linked.set(None);
+
+		let remembered = browser::take_focus();
 
 		if let Some(opener) = self.opener.get_untracked() {
 			opener.request();
+		} else if !remembered.is_some_and(browser::Focus::restore) {
+			let tab = self.tabs.with_value(|tabs| {
+				tabs.iter()
+					.find(|(id, _)| Some(id) == open.as_ref())
+					.map(|(_, tab)| *tab)
+			});
+
+			if let Some(tab) = tab {
+				tab.request();
+			}
 		}
 
 		self.opener.set(None);
@@ -172,13 +242,21 @@ impl Workings {
 		}
 	}
 
-	/// W: closes the open drawer, or opens the page's first.
+	/// W: closes the open drawer, or opens the drawer of the card that has
+	/// focus, or else the page's first. What had focus gets it back.
 	pub fn toggle_first(&self) {
 		if self.open.get_untracked().is_some() {
 			self.hide();
-		} else if let Some(first) = self.first.get_untracked() {
-			self.show(&first, None);
+			return;
 		}
+
+		let card = browser::focused_card();
+		let Some(id) = card.or_else(|| self.first.get_untracked()) else {
+			return;
+		};
+		// Before the drawer takes focus.
+		browser::remember_focus();
+		self.show(&id, None);
 	}
 
 	/// Whether a station is open on a phone, where stations start as headers.
@@ -595,4 +673,81 @@ pub fn aside(drawers: &[Drawer]) -> Element {
 		.role(leptoskit::native::Role::Complementary)
 		.aria_label("Workings")
 		.children(drawers.iter().map(panel))
+}
+
+/// What had focus, and the card it is in, in the browser. W asks: the
+/// framework has no question for "what has focus", so this reads the page.
+mod browser {
+	#[cfg(feature = "hydrate")]
+	thread_local! {
+		static REMEMBERED: std::cell::RefCell<Option<web_sys::HtmlElement>> =
+			const { std::cell::RefCell::new(None) };
+	}
+
+	/// An element that had focus.
+	pub(super) struct Focus(#[cfg(feature = "hydrate")] web_sys::HtmlElement);
+
+	impl Focus {
+		/// Gives it focus back, when it is still on the page.
+		pub(super) fn restore(self) -> bool {
+			#[cfg(feature = "hydrate")]
+			{
+				if !self.0.is_connected() {
+					return false;
+				}
+				self.0.focus().is_ok()
+			}
+			#[cfg(not(feature = "hydrate"))]
+			{
+				let _ = self;
+				false
+			}
+		}
+	}
+
+	#[cfg(feature = "hydrate")]
+	fn active() -> Option<web_sys::HtmlElement> {
+		use wasm_bindgen::JsCast as _;
+
+		web_sys::window()?
+			.document()?
+			.active_element()?
+			.dyn_into::<web_sys::HtmlElement>()
+			.ok()
+	}
+
+	/// The drawer id of the card that holds focus.
+	pub(super) fn focused_card() -> Option<String> {
+		#[cfg(feature = "hydrate")]
+		{
+			let card = active()?.closest("[data-testid^='card:']").ok()??;
+			card.get_attribute("data-testid")?
+				.strip_prefix("card:")
+				.map(str::to_owned)
+		}
+		#[cfg(not(feature = "hydrate"))]
+		None
+	}
+
+	/// Remembers what has focus, unless nothing does.
+	pub(super) fn remember_focus() {
+		#[cfg(feature = "hydrate")]
+		{
+			let body = web_sys::window()
+				.and_then(|window| window.document())
+				.and_then(|document| document.body());
+			let element = active().filter(|element| Some(element) != body.as_ref());
+			REMEMBERED.with(|remembered| *remembered.borrow_mut() = element);
+		}
+	}
+
+	/// What [`remember_focus`] remembered, forgetting it.
+	pub(super) fn take_focus() -> Option<Focus> {
+		#[cfg(feature = "hydrate")]
+		{
+			REMEMBERED.with(|remembered| remembered.borrow_mut().take().map(Focus))
+		}
+		#[cfg(not(feature = "hydrate"))]
+		None
+	}
 }

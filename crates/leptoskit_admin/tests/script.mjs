@@ -154,7 +154,19 @@ function serve(directory, clientDirectory) {
 					posted.push({ path: url.pathname, body: await request.text() });
 					return Response.json({});
 				case `${BASE}/infra/projects/notes-production/overview`:
-					return page("overview.html");
+					return page(
+						url.searchParams.get("workings") === "release"
+							? "overview-release.html"
+							: "overview.html",
+					);
+				case `${BASE}/infra/projects/notes-production/releases`:
+					return page("releases.html");
+				case `${BASE}/api/projects/notes-production/actions`:
+					posted.push({ path: url.pathname, body: await request.json() });
+					return Response.json(
+						{ operation: "plan", href: `${BASE}/infra/operations/plan` },
+						{ status: 202 },
+					);
 				case `${BASE}/infra/projects/notes-production/changes`:
 					return page("changes.html");
 				case `${BASE}/api/analytics/live`: {
@@ -331,9 +343,17 @@ Deno.test("a breakdown has the same colours after a builder change as after a re
 
 Deno.test("confirmation dialogs contain focus and restore their opener without closing Workings", async () => {
 	await withBrowser(async (page, site) => {
+		const sheetOpen = () =>
+			page.evaluate(
+				`document.querySelector('[data-testid="confirm-sheet"]')?.matches(':modal') === true`,
+			);
 		await open(
 			page,
-			`${site.origin}${BASE}/infra/projects/notes-production/overview#workings=release`,
+			`${site.origin}${BASE}/infra/projects/notes-production/overview?workings=release`,
+		);
+		await page.until(
+			"() => document.documentElement.hasAttribute('data-hydrated')",
+			"the overview hydrates",
 		);
 		await page.evaluate(`(() => {
 			const held = document.createElement('button');
@@ -344,54 +364,64 @@ Deno.test("confirmation dialogs contain focus and restore their opener without c
 		})()`);
 		await press(page, "Enter");
 		await page.until(
-			"() => document.querySelector('[data-testid=\"confirm-sheet\"]')",
+			`() => document.querySelector('[data-testid="confirm-sheet"]')?.matches(':modal')`,
 			"the health dialog",
 		);
-		assert(
-			await focused(page) === "confirm-yes",
+		await page.until(
+			`() => document.activeElement?.getAttribute("data-testid") === "confirm-yes"`,
 			"the confirmation receives focus",
-		);
-		await press(page, "Tab");
-		assert(
-			await focused(page) === "confirm-no",
-			`Tab wraps inside the dialog, not ${await focused(page)}`,
 		);
 		await press(page, "Tab", { shift: true });
 		assert(
+			await focused(page) === "confirm-no",
+			`Shift+Tab stays inside the dialog, not ${await focused(page)}`,
+		);
+		await press(page, "Tab");
+		assert(
 			await focused(page) === "confirm-yes",
-			"Shift+Tab wraps back to confirmation",
-		);
-		assert(
-			await page.evaluate("document.querySelector('[data-lk-root]').inert"),
-			"the background is inert while confirming",
-		);
-		await press(page, "Escape");
-		assert(
-			await focused(page) === "action:status",
-			"Escape restores the exact opener",
+			"Tab moves back to the confirmation",
 		);
 		assert(
 			await page.evaluate(
-				"document.documentElement.getAttribute('data-admin-drawer') === 'release'",
+				`document.querySelector('[data-testid="drawer:release"]').getClientRects().length > 0`,
+			),
+			"the drawer stays open behind the dialog",
+		);
+		await press(page, "Escape");
+		try {
+			await page.until(
+				`() => document.activeElement?.getAttribute("data-testid") === "action:status"`,
+				"Escape restores the exact opener",
+			);
+		} catch {
+			throw new Error(
+				`Escape restores the exact opener: focus is on ${await focused(
+					page,
+				)}, the sheet is ${(await sheetOpen()) ? "open" : "closed"}`,
+			);
+		}
+		assert(!(await sheetOpen()), "Escape closes the dialog");
+		assert(
+			await page.evaluate(
+				`document.querySelector('[data-testid="drawer:release"]').getClientRects().length > 0`,
 			),
 			"Escape dismisses only the dialog",
 		);
 		assert(
-			await page.evaluate(
-				"!document.querySelector('[data-lk-root]').inert && document.getElementById('already-inert').inert",
-			),
-			"closing restores prior inert states",
+			await page.evaluate("document.getElementById('already-inert').inert"),
+			"closing leaves other inert states alone",
 		);
 		await press(page, "Enter");
 		await page.until(
-			"() => document.querySelector('[data-testid=\"confirm-sheet\"]')",
+			`() => document.querySelector('[data-testid="confirm-sheet"]')?.matches(':modal')`,
 			"the reopened dialog",
 		);
 		await page.click('[data-testid="confirm-no"]');
-		assert(
-			await focused(page) === "action:status",
+		await page.until(
+			`() => document.activeElement?.getAttribute("data-testid") === "action:status"`,
 			"Cancel restores the opener too",
 		);
+		assert(!(await sheetOpen()), "Cancel closes the dialog");
 
 		await open(page, `${site.origin}${BASE}/analytics/trends`);
 		// Pointer activation need not focus the opener (notably in Safari).
@@ -522,31 +552,68 @@ Deno.test("the Ask tabs are tabs: selection, arrow keys, Home, and End", async (
 
 Deno.test("Escape gives focus back to the exact control that opened Workings", async () => {
 	await withBrowser(async (page, site) => {
-		// A plan row opens the plan's Workings too; Escape returns to the row,
-		// not to the plan card's mint tab.
+		const shown = (id) =>
+			page.evaluate(
+				`document.querySelector('[data-testid="${id}"]')?.getClientRects().length > 0`,
+			);
+		// A plan row opens the plan's Workings too, with the lines that cause
+		// it marked; Escape returns to the row, not to the plan card's mint
+		// tab.
 		await open(
 			page,
 			`${site.origin}${BASE}/infra/projects/notes-production/changes`,
 		);
-		await page.evaluate(`(() => {
-			document.documentElement.removeAttribute("data-admin-drawer");
-			document.querySelector('[data-testid^="plan-row:"]').focus();
+		await page.until(
+			"() => document.documentElement.hasAttribute('data-hydrated')",
+			"Changes hydrates",
+		);
+		if (await shown("drawer:plan")) {
+			await page.click(
+				'[data-testid="drawer:plan"] [data-testid="workings-close"]',
+			);
+			await page.until(
+				`() => !document.querySelector('[data-testid="drawer:plan"]')?.getClientRects().length`,
+				"the plan's Workings closes",
+			);
+		}
+		const row = await page.evaluate(`(() => {
+			const row = document.querySelector('[data-testid^="plan-row:"]');
+			row.focus();
+			return row.getAttribute("data-testid");
 		})()`);
 		await press(page, "Enter");
 		await page.until(
-			"() => document.documentElement.getAttribute('data-admin-drawer') === 'plan'",
+			`() => document.querySelector('[data-testid="drawer:plan"]')?.getClientRects().length > 0`,
 			"the plan's Workings opens",
 		);
-		await press(page, "Escape");
+		const key = row.slice("plan-row:".length);
+		const marked = await page.evaluate(
+			`Array.from(document.querySelectorAll('[data-testid="drawer:plan"] [data-testid^="code-line:"]')).filter((line) => getComputedStyle(line).backgroundColor !== "rgba(0, 0, 0, 0)").map((line) => line.getAttribute("data-testid"))`,
+		);
 		assert(
-			(await focused(page)).startsWith("plan-row:"),
+			marked.length > 0 &&
+				marked.every((line) =>
+					line === `code-line:${key}` || line.startsWith(`code-line:${key}.`)
+				),
+			`the row marks the lines that cause it: ${JSON.stringify(marked)}`,
+		);
+		await press(page, "Escape");
+		await page.until(
+			`() => document.activeElement?.getAttribute("data-testid") === ${
+				JSON.stringify(row)
+			}`,
 			`focus returns to the plan row, not ${await focused(page)}`,
 		);
 
-		// W from inside a card returns to what had focus there.
+		// W from inside a card opens that card's drawer and returns to what
+		// had focus there.
 		await open(
 			page,
 			`${site.origin}${BASE}/infra/projects/notes-production/overview`,
+		);
+		await page.until(
+			"() => document.documentElement.hasAttribute('data-hydrated')",
+			"the overview hydrates",
 		);
 		await page.evaluate(
 			`document.querySelector('[data-testid="card:release"] a[href$="/releases"]').focus()`,
@@ -556,14 +623,73 @@ Deno.test("Escape gives focus back to the exact control that opened Workings", a
 		);
 		await press(page, "w");
 		await page.until(
-			"() => document.documentElement.getAttribute('data-admin-drawer') === 'release'",
+			`() => document.querySelector('[data-testid="drawer:release"]')?.getClientRects().length > 0`,
 			"W opens the card's Workings",
 		);
 		await press(page, "Escape");
-		const after = await page.evaluate(
-			"document.activeElement.getAttribute('aria-label') ?? document.activeElement.textContent",
+		await page.until(
+			`() => (document.activeElement.getAttribute('aria-label') ?? document.activeElement.textContent) === ${
+				JSON.stringify(before)
+			}`,
+			`focus returns to ${before}`,
 		);
-		assert(after === before, `focus returns to ${before}, not ${after}`);
+	});
+});
+
+Deno.test("a project's actions are the pages' own Rust: ask, then send", async () => {
+	await withBrowser(async (page, site) => {
+		await open(
+			page,
+			`${site.origin}${BASE}/infra/projects/notes-production/releases`,
+		);
+		await page.until(
+			"() => document.documentElement.hasAttribute('data-hydrated')",
+			"Releases hydrates",
+		);
+		assert(
+			await page.evaluate(
+				"!document.querySelector('script[src$=\"admin.mjs\"]')",
+			),
+			"the page loads no hand-written script",
+		);
+
+		// Deploy needs a version first, and says so.
+		await page.click('[data-testid="action:deploy"]');
+		await page.until(
+			`() => document.querySelector('[data-testid="notice"]')?.textContent.includes("Type an image tag")`,
+			"Deploy asks for a version",
+		);
+		assert(
+			await focused(page) === "version:deploy",
+			`the version field takes focus, not ${await focused(page)}`,
+		);
+
+		await page.send("Input.insertText", { text: "v43" });
+		await page.click('[data-testid="action:deploy"]');
+		await page.until(
+			`() => document.querySelector('[data-testid="confirm-sheet"]')?.matches(':modal')`,
+			"Deploy asks first",
+		);
+		const says = await page.evaluate(`(() => {
+			const explains = document.querySelector('[data-testid="action:deploy"]')
+				.getAttribute("aria-description").replaceAll("\`", "");
+			const sheet = document.querySelector('[data-testid="confirm-sheet"]').textContent;
+			return { explains, sheet };
+		})()`);
+		assert(
+			says.explains.length > 0 && says.sheet.includes(says.explains),
+			`the sheet says what runs: ${JSON.stringify(says)}`,
+		);
+		const opened = page.once("Page.loadEventFired");
+		await page.click('[data-testid="confirm-yes"]');
+		// A sent action opens the operation it started.
+		await opened;
+		const sent = site.posted.find((entry) => entry.path.endsWith("/actions"));
+		assert(
+			sent?.body.kind === "deploy" && sent.body.version === "v43" &&
+				sent.body.idempotency_key.length > 0,
+			`the request: ${JSON.stringify(sent)}`,
+		);
 	});
 });
 

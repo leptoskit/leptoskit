@@ -29,6 +29,7 @@ use leptoskit::shortcut::use_shortcut;
 
 use crate::BASE;
 use crate::components;
+use crate::confirm::Confirm;
 use crate::model::Model;
 use crate::model::Section;
 use crate::model::Viewer;
@@ -552,7 +553,9 @@ pub struct Shell {
 	/// Takes focus to the search field.
 	search: FocusRequest,
 	/// What the notice above the content says.
-	notice: RwSignal<String>,
+	pub(crate) notice: RwSignal<String>,
+	/// The confirm sheet a page's actions ask through.
+	pub(crate) confirm: Confirm,
 	/// Signing out at the main site.
 	sign_out: MutationHandle<(), (), ErrorResponse>,
 }
@@ -575,6 +578,7 @@ impl Shell {
 			search_open: RwSignal::new(false),
 			search: FocusRequest::new(),
 			notice: RwSignal::new(String::new()),
+			confirm: Confirm::new(),
 			sign_out: use_mutation(sign_out_mutation()),
 		};
 
@@ -585,7 +589,12 @@ impl Shell {
 			workings.toggle_workings();
 		});
 		let drawers = shell.workings;
+		let confirm = shell.confirm;
 		provide_context(drawers);
+		provide_context(confirm);
+		provide_context(components::Notes::new());
+		// While the confirm sheet asks, no shortcut runs: its keys are its
+		// own.
 		use_shortcut(Shortcut::key("w").unless_typing(), move || {
 			drawers.toggle_first();
 		});
@@ -684,6 +693,10 @@ impl Shell {
 				viewer,
 				search_open().on_press(move || find.find()),
 			))
+			.children(
+				matches!(self.model.page, crate::model::Page::Project(_))
+					.then(|| self.confirm.view()),
+			)
 	}
 
 	fn top_bar(&self) -> Element {
