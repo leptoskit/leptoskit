@@ -357,6 +357,10 @@ fn set_mode(file: &File, mode: u32) -> io::Result<()> {
 }
 
 #[cfg(not(unix))]
+#[expect(
+	clippy::unnecessary_wraps,
+	reason = "the same signature as on Unix, where setting the mode can fail"
+)]
 fn set_mode(_: &File, _: u32) -> io::Result<()> {
 	Ok(())
 }

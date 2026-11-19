@@ -8,7 +8,6 @@ use std::path::PathBuf;
 
 use anyhow::Context as _;
 use anyhow::Result;
-use anyhow::ensure;
 use serde::Deserialize;
 use serde::Serialize;
 use sha2::Digest as _;
@@ -144,10 +143,20 @@ impl Store {
 	}
 }
 
+#[cfg_attr(
+	not(unix),
+	expect(
+		clippy::unnecessary_wraps,
+		reason = "the same signature as on Unix, where the check can fail"
+	)
+)]
 fn private(path: &Path, mode: u32) -> Result<()> {
 	#[cfg(unix)]
 	{
 		use std::os::unix::fs::PermissionsExt as _;
+
+		use anyhow::ensure;
+
 		let metadata = std::fs::symlink_metadata(path)?;
 		ensure!(
 			!metadata.file_type().is_symlink(),
@@ -159,5 +168,8 @@ fn private(path: &Path, mode: u32) -> Result<()> {
 			path.display()
 		);
 	}
+	// Elsewhere the file is private by where the account keeps it.
+	#[cfg(not(unix))]
+	let _ = (path, mode);
 	Ok(())
 }
