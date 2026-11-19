@@ -5,9 +5,13 @@
 //! elements, so the `role` attribute only appears where no element implies
 //! it. Every other property becomes the matching `aria-*` attribute.
 
-use leptos::tachys::html::attribute::any_attribute::AnyAttribute;
-use leptos::tachys::html::attribute::any_attribute::IntoAnyAttribute;
+use std::borrow::Cow;
+
+use leptos::tachys::html::attribute::Attribute;
+use leptos::tachys::html::attribute::NamedAttributeKey;
+use leptos::tachys::html::attribute::NextAttribute;
 use leptos::tachys::html::attribute::custom::custom_attribute;
+use leptos::tachys::renderer::Rndr;
 
 use crate::NativeKind;
 use crate::Role;
@@ -143,7 +147,7 @@ pub(super) fn attributes(
 	tag: Tag,
 	hidden: bool,
 	custom_control: bool,
-) -> Vec<AnyAttribute> {
+) -> Semantics {
 	let mut attrs = Vec::new();
 
 	let flag = |value: bool| Some(if value { "true" } else { "false" }.to_owned());
@@ -253,14 +257,113 @@ pub(super) fn attributes(
 	);
 
 	for (name, value) in &aria.extra {
-		attrs.push(custom_attribute(name.clone(), value.clone()).into_any_attr());
+		attrs.push((Cow::Owned(name.clone()), value.clone()));
 	}
 
-	attrs
+	Semantics(attrs)
 }
 
-fn push(attrs: &mut Vec<AnyAttribute>, name: &'static str, value: Option<String>) {
+fn push(attrs: &mut Vec<(Cow<'static, str>, String)>, name: &'static str, value: Option<String>) {
 	if let Some(value) = value {
-		attrs.push(custom_attribute(name, value).into_any_attr());
+		attrs.push((Cow::Borrowed(name), value));
+	}
+}
+
+/// A node's semantic attributes, by name, in the order they render.
+///
+/// A rebuild changes only what changed: a value that differs is set, a name
+/// that is gone is removed, and the rest are left alone. Removing every
+/// attribute and adding it back, as a list of type-erased attributes does,
+/// takes `tabindex` off a focused element for a moment, and the browser
+/// moves focus to the body when that happens.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(super) struct Semantics(Vec<(Cow<'static, str>, String)>);
+
+impl Semantics {
+	fn set_all(&self, element: &web_sys::Element) {
+		for (name, value) in &self.0 {
+			Rndr::set_attribute(element, name, value);
+		}
+	}
+}
+
+impl Attribute for Semantics {
+	type AsyncOutput = Self;
+	type Cloneable = Self;
+	type CloneableOwned = Self;
+	type State = (web_sys::Element, Self);
+
+	const MIN_LENGTH: usize = 0;
+
+	fn html_len(&self) -> usize {
+		self.0
+			.iter()
+			.map(|(name, value)| name.len() + value.len() + 4)
+			.sum()
+	}
+
+	fn to_html(self, buf: &mut String, class: &mut String, style: &mut String, inner: &mut String) {
+		for (name, value) in self.0 {
+			custom_attribute(name, value).to_html(buf, class, style, inner);
+		}
+	}
+
+	fn hydrate<const FROM_SERVER: bool>(self, element: &web_sys::Element) -> Self::State {
+		self.build(element)
+	}
+
+	fn build(self, element: &web_sys::Element) -> Self::State {
+		self.set_all(element);
+		(element.clone(), self)
+	}
+
+	fn rebuild(self, state: &mut Self::State) {
+		let (element, old) = state;
+
+		for (name, _) in &old.0 {
+			if !self.0.iter().any(|(next, _)| next == name) {
+				Rndr::remove_attribute(element, name);
+			}
+		}
+		for (name, value) in &self.0 {
+			let unchanged = old
+				.0
+				.iter()
+				.any(|(before, was)| before == name && was == value);
+			if !unchanged {
+				Rndr::set_attribute(element, name, value);
+			}
+		}
+
+		*old = self;
+	}
+
+	fn into_cloneable(self) -> Self {
+		self
+	}
+
+	fn into_cloneable_owned(self) -> Self {
+		self
+	}
+
+	fn dry_resolve(&mut self) {}
+
+	fn resolve(self) -> impl Future<Output = Self> + Send {
+		std::future::ready(self)
+	}
+
+	fn keys(&self) -> Vec<NamedAttributeKey> {
+		self.0
+			.iter()
+			.map(|(name, _)| NamedAttributeKey::Attribute(name.clone()))
+			.collect()
+	}
+}
+
+impl NextAttribute for Semantics {
+	type Output<NewAttr: Attribute> = (Self, NewAttr);
+
+	fn add_any_attr<NewAttr: Attribute>(self, next: NewAttr) -> Self::Output<NewAttr> {
+		(self, next)
 	}
 }

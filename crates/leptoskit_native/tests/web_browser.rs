@@ -581,6 +581,101 @@ async fn a_rebuild_keeps_landmarks_headings_and_the_focus_inside_them() {
 }
 
 #[wasm_bindgen_test]
+async fn a_rebuild_changes_only_the_attributes_that_changed_and_keeps_focus() {
+	use leptoskit_native::components::Heading;
+
+	let parent = container();
+	let revision = ArcRwSignal::new(0);
+	let mount = mount_to(parent.clone(), {
+		let revision = revision.clone();
+		move || {
+			move || {
+				let count = revision.get();
+				let title = Heading(2, format!("Revision {count}"))
+					.test_id("title")
+					.id("title")
+					.tab_index(-1);
+				let title = if count == 0 {
+					title.aria_described_by(["first"])
+				} else {
+					title
+				};
+				render(
+					View()
+						.role(Role::Dialog)
+						.children([title, Text("First").id("first")]),
+				)
+			}
+		}
+	});
+	tick().await;
+	let title: web_sys::HtmlElement = find(&parent, "[data-testid=title]");
+	assert_eq!(
+		title.get_attribute("aria-describedby").as_deref(),
+		Some("first")
+	);
+	title.focus().expect("focus the heading");
+	assert_eq!(document().active_element().as_ref(), Some(title.as_ref()));
+
+	// Record every attribute the rebuild touches: one that is set again to
+	// the value it had would blink out of the DOM and back.
+	let touched = std::rc::Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
+	let observer = {
+		let touched = std::rc::Rc::clone(&touched);
+		let callback = wasm_bindgen::closure::Closure::<dyn FnMut(js_sys::Array)>::new(
+			move |records: js_sys::Array| {
+				for record in records.iter() {
+					let record: web_sys::MutationRecord = record.unchecked_into();
+					if let Some(name) = record.attribute_name() {
+						touched.borrow_mut().push(name);
+					}
+				}
+			},
+		);
+		let observer =
+			web_sys::MutationObserver::new(callback.as_ref().unchecked_ref()).expect("observer");
+		callback.forget();
+		let options = web_sys::MutationObserverInit::new();
+		options.set_attributes(true);
+		observer
+			.observe_with_options(&title, &options)
+			.expect("observe");
+		observer
+	};
+
+	revision.set(1);
+	tick().await;
+	for record in observer.take_records().iter() {
+		let record: web_sys::MutationRecord = record.unchecked_into();
+		if let Some(name) = record.attribute_name() {
+			touched.borrow_mut().push(name);
+		}
+	}
+	observer.disconnect();
+
+	let after: web_sys::HtmlElement = find(&parent, "[data-testid=title]");
+	assert!(
+		after.is_same_node(Some(&title)),
+		"the rebuild keeps the heading"
+	);
+	assert_eq!(title.get_attribute("aria-describedby"), None);
+	assert_eq!(title.get_attribute("tabindex").as_deref(), Some("-1"));
+	assert_eq!(
+		document().active_element().as_ref(),
+		Some(title.as_ref()),
+		"the heading keeps focus"
+	);
+	assert_eq!(
+		*touched.borrow(),
+		["aria-describedby"],
+		"only the gone attribute changes"
+	);
+
+	drop(mount);
+	parent.remove();
+}
+
+#[wasm_bindgen_test]
 async fn handled_events_stop_bubbling_and_disabled_buttons_do_not_press() {
 	let parent = container();
 	let outer = Arc::new(AtomicUsize::new(0));

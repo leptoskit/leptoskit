@@ -48,7 +48,7 @@ js-sys = { workspace = true }
 leptos = { workspace = true, features = ["csr", "hydrate"] }
 wasm-bindgen-futures = { workspace = true }
 wasm-bindgen-test = { workspace = true }
-web-sys = { workspace = true, features = ["Blob", "BlobPropertyBag", "CanvasRenderingContext2d", "CssStyleDeclaration", "Document", "DomRect", "EventInit", "FocusEvent", "HtmlCanvasElement", "HtmlCollection", "HtmlElement", "HtmlIFrameElement", "ImageData", "KeyboardEventInit", "MouseEvent", "MouseEventInit", "NodeList", "Range", "Url", "Window"] }
+web-sys = { workspace = true, features = ["Blob", "BlobPropertyBag", "CanvasRenderingContext2d", "CssStyleDeclaration", "Document", "DomRect", "EventInit", "FocusEvent", "HtmlCanvasElement", "HtmlCollection", "HtmlElement", "HtmlIFrameElement", "ImageData", "KeyboardEventInit", "MouseEvent", "MouseEventInit", "MutationObserver", "MutationObserverInit", "MutationRecord", "NodeList", "Range", "Url", "Window"] }
 
 [[bench]]
 name = "vector"
