@@ -345,6 +345,12 @@ fn cert_manager_http01_cold_s3_and_zot_ingress_opt_in() {
 		cnpg["spec"]["postgresql"]["parameters"]["max_connections"],
 		"300"
 	);
+	let pg_hba = cnpg["spec"]["postgresql"]["pg_hba"].as_array().unwrap();
+	assert!(
+		pg_hba
+			.iter()
+			.any(|rule| rule.as_str() == Some("hostnossl all all 0.0.0.0/0 reject"))
+	);
 
 	let cluster = config
 		.regions
@@ -360,7 +366,10 @@ fn cert_manager_http01_cold_s3_and_zot_ingress_opt_in() {
 	assert_eq!(profile.cluster_issuer.as_deref(), Some("apps-http01"));
 
 	let tofu = leptoskit_cloud_platform::tofu::generate(&config).unwrap();
-	assert!(tofu.values().any(|s| s.contains("http_status:404")));
+	assert!(
+		!tofu.values().any(|s| s.contains("http_status:404")),
+		"tunnel must forward custom domains and HTTP-01 challenges to Traefik"
+	);
 }
 
 #[test]
@@ -378,6 +387,10 @@ fn growth() {
 		.unwrap();
 	let profile = addons::runtime_profile(&config, cluster);
 	assert!(profile.edge_terminated_custom_domains);
+	assert_eq!(
+		profile.tenant_tolerations[0].effect, "NoSchedule",
+		"dedicated tenant pool uses NoSchedule so k3s system pods remain on platform servers"
+	);
 	assert_eq!(profile.cluster_issuer, None);
 	assert_eq!(
 		profile

@@ -50,6 +50,11 @@ pub fn runtime_profile(
 		profile.image_pull_secret = Some(pull_secret.clone());
 	}
 	if cluster.nodes.values().any(|n| n.pool() == Pool::Tenant) {
+		let effect = if cluster.nodes.values().any(|n| n.pool() == Pool::Platform) {
+			"NoSchedule"
+		} else {
+			"PreferNoSchedule"
+		};
 		profile
 			.tenant_node_selector
 			.insert("leptoskit.dev/pool".to_owned(), "tenant".to_owned());
@@ -59,7 +64,7 @@ pub fn runtime_profile(
 				key: "leptoskit.dev/pool".to_owned(),
 				operator: "Equal".to_owned(),
 				value: Some("tenant".to_owned()),
-				effect: "PreferNoSchedule".to_owned(),
+				effect: effect.to_owned(),
 			});
 	}
 	profile
@@ -274,7 +279,7 @@ fn namespaces_and_runtime(namespaces: &[&'static str]) -> Documents {
 	documents
 }
 
-fn credential_keys(reference: &CredentialRef) -> (&str, &str, &str) {
+pub(super) fn credential_keys(reference: &CredentialRef, cold: bool) -> (&str, &str, &str) {
 	match reference {
 		CredentialRef::KubernetesSecret {
 			name,
@@ -282,9 +287,45 @@ fn credential_keys(reference: &CredentialRef) -> (&str, &str, &str) {
 			secret_key,
 		} => (name.as_str(), access_key.as_str(), secret_key.as_str()),
 		CredentialRef::Environment { .. } => {
-			("object-storage", "ACCESS_KEY_ID", "SECRET_ACCESS_KEY")
+			if cold {
+				("object-storage-cold", "ACCESS_KEY_ID", "SECRET_ACCESS_KEY")
+			} else {
+				("object-storage", "ACCESS_KEY_ID", "SECRET_ACCESS_KEY")
+			}
 		}
 	}
+}
+
+/// Host CIDRs for control-plane servers so host-network `kube-apiserver`
+/// webhooks and `APIService` probes (cert-manager, CNPG, KEDA, metrics-server)
+/// can reach platform pods across nodes.
+fn server_host_cidrs(cluster: &Cluster) -> Vec<String> {
+	let mut cidrs = Vec::new();
+	if let Some(private_cidr) = &cluster.private_cidr
+		&& cluster
+			.nodes
+			.values()
+			.any(|node| node.role() == crate::config::Role::Server && node.cloud())
+	{
+		cidrs.push(private_cidr.clone());
+	}
+	for node in cluster.nodes.values() {
+		if let crate::config::Node::Existing {
+			role: crate::config::Role::Server,
+			public_address,
+			private_address,
+			..
+		} = node
+		{
+			cidrs.push(format!("{public_address}/32"));
+			if let Some(private) = private_address {
+				cidrs.push(format!("{private}/32"));
+			}
+		}
+	}
+	cidrs.sort();
+	cidrs.dedup();
+	cidrs
 }
 
 /// Generate independent, ordered YAML documents per cluster without resolving
@@ -333,9 +374,15 @@ pub fn generate(config: &PlatformConfig) -> Result<Generated, PlatformError> {
 						.map(|cidr| json!({"ipBlock":{"cidr":cidr}}))
 						.collect();
 					// HostPort DNAT can bypass host INPUT rules. Enforce the
-					// same source boundary at the
-					// destination pod, on its target port.
-					documents.push(("10-policies",object("networking.k8s.io/v1","NetworkPolicy","cloudflare-https",Some("kube-system"),json!({"spec":{"podSelector":{"matchLabels":{"app.kubernetes.io/name":"traefik"}},"policyTypes":["Ingress"],"ingress":[{"from":sources,"ports":[{"protocol":"TCP","port":8443}]}]}}))));
+					// same source boundary at the destination pod, on its
+					// target port.
+					let mut traefik_ingress =
+						vec![json!({"from":sources,"ports":[{"protocol":"TCP","port":8443}]})];
+					if config.edge.custom_domains == CustomDomains::CertManager {
+						traefik["ports"]["web"]["hostPort"] = json!(80);
+						traefik_ingress.push(json!({"from":[{"ipBlock":{"cidr":"0.0.0.0/0"}},{"ipBlock":{"cidr":"::/0"}}],"ports":[{"protocol":"TCP","port":8000}]}));
+					}
+					documents.push(("10-policies",object("networking.k8s.io/v1","NetworkPolicy","cloudflare-https",Some("kube-system"),json!({"spec":{"podSelector":{"matchLabels":{"app.kubernetes.io/name":"traefik"}},"policyTypes":["Ingress"],"ingress":traefik_ingress}}))));
 				}
 				documents.push((
 					"20-charts",
@@ -372,10 +419,11 @@ pub fn generate(config: &PlatformConfig) -> Result<Generated, PlatformError> {
 				}
 			}
 			let (hot_secret, hot_access, hot_key) =
-				credential_keys(&config.object_storage.credentials);
+				credential_keys(&config.object_storage.credentials, false);
 			let (backups_endpoint, backups_region, backups_cred_ref) =
 				config.object_storage.backups_store();
-			let (db_secret, db_access, db_key) = credential_keys(backups_cred_ref);
+			let uses_cold = config.object_storage.cold.is_some();
+			let (db_secret, db_access, db_key) = credential_keys(backups_cred_ref, uses_cold);
 			let mut required = vec![
 				json!({"namespace":"database","name":db_secret,"keys":[db_access,db_key],"purpose":"WAL archives and base backups","source":backups_cred_ref,"createdBy":"operator"}),
 			];
@@ -413,35 +461,13 @@ pub fn generate(config: &PlatformConfig) -> Result<Generated, PlatformError> {
 			));
 			// Native Barman and affinity fields verified against the v1.30.2
 			// API. Superuser access is enabled so the cluster worker can
-			// provision isolated tenant databases and roles; pg_hba enforces
-			// TLS and SCRAM authentication.
+			// provision isolated tenant databases and roles; pg_hba explicitly
+			// rejects plaintext TCP connections before CNPG's defaults.
 			let mut affinity = platform.clone();
 			affinity["podAntiAffinityType"] = json!("preferred");
-			documents.push(("30-database",object("postgresql.cnpg.io/v1","Cluster","shared",Some("database"),json!({"spec":{"instances":config.postgres.instances,"enableSuperuserAccess":true,"postgresql":{"parameters":{"max_connections":config.postgres.max_connections.to_string()},"pg_hba":["hostssl all all 0.0.0.0/0 scram-sha-256"]},"storage":{"size":config.postgres.storage_size,"storageClass":config.postgres.storage_class},"affinity":affinity,"backup":{"retentionPolicy":format!("{}d",config.postgres.retention_days),"barmanObjectStore":{"destinationPath":format!("s3://{}/{region}/{name}",config.postgres.wal_bucket),"endpointURL":backups_endpoint,"s3Credentials":{"accessKeyId":{"name":db_secret,"key":db_access},"secretAccessKey":{"name":db_secret,"key":db_key}},"wal":{"compression":"gzip"}}}}}))));
+			documents.push(("30-database",object("postgresql.cnpg.io/v1","Cluster","shared",Some("database"),json!({"spec":{"instances":config.postgres.instances,"enableSuperuserAccess":true,"postgresql":{"parameters":{"max_connections":config.postgres.max_connections.to_string()},"pg_hba":["hostnossl all all 0.0.0.0/0 reject","hostnossl all all ::/0 reject","hostssl all all 0.0.0.0/0 scram-sha-256","hostssl all all ::/0 scram-sha-256"]},"storage":{"size":config.postgres.storage_size,"storageClass":config.postgres.storage_class},"affinity":affinity,"backup":{"retentionPolicy":format!("{}d",config.postgres.retention_days),"barmanObjectStore":{"destinationPath":format!("s3://{}/{region}/{name}",config.postgres.wal_bucket),"endpointURL":backups_endpoint,"s3Credentials":{"accessKeyId":{"name":db_secret,"key":db_access},"secretAccessKey":{"name":db_secret,"key":db_key}},"wal":{"compression":"gzip"}}}}}))));
 			documents.push(("30-database",object("postgresql.cnpg.io/v1","ScheduledBackup","shared-daily",Some("database"),json!({"spec":{"schedule":"0 0 2 * * *","backupOwnerReference":"self","cluster":{"name":"shared"},"method":"barmanObjectStore"}}))));
-			let allowed_platform_namespaces: Vec<&str> = namespaces.clone();
-			for &ns in &namespaces {
-				// The runtime owns tenant default-deny and egress policies.
-				// Protect each destination namespace with an explicit allowlist
-				// of trusted platform namespaces instead of a denylist.
-				let mut ingress = vec![
-					json!({"from":[{"namespaceSelector":{"matchExpressions":[{"key":"kubernetes.io/metadata.name","operator":"In","values":allowed_platform_namespaces}]}}]}),
-				];
-				if ns == "database" {
-					ingress.push(json!({"from":[{"namespaceSelector":{"matchLabels":{"app.kubernetes.io/managed-by":"leptoskit-cloud"}}}],"ports":[{"protocol":"TCP","port":5432}]}));
-				}
-				documents.push((
-					"10-policies",
-					object(
-						"networking.k8s.io/v1",
-						"NetworkPolicy",
-						"platform-ingress",
-						Some(ns),
-						json!({"spec":{"podSelector":{},"policyTypes":["Ingress"],"ingress":ingress}}),
-					),
-				));
-			}
-			documents.push(("10-policies",object("networking.k8s.io/v1","NetworkPolicy","tenant-dns",Some("kube-system"),json!({"spec":{"podSelector":{"matchLabels":{"k8s-app":"kube-dns"}},"policyTypes":["Ingress"],"ingress":[{"from":[{"namespaceSelector":{"matchLabels":{"app.kubernetes.io/managed-by":"leptoskit-cloud"}}}],"ports":[{"protocol":"UDP","port":53},{"protocol":"TCP","port":53}]}]}}))));
+			documents.extend(platform_network_policies(cluster, &namespaces));
 			for (index, (phase, mut document)) in documents.into_iter().enumerate() {
 				if document["kind"] == "Cluster" {
 					document["spec"]["env"] =
@@ -455,4 +481,42 @@ pub fn generate(config: &PlatformConfig) -> Result<Generated, PlatformError> {
 		}
 	}
 	Ok(files)
+}
+
+fn platform_network_policies(cluster: &Cluster, namespaces: &[&str]) -> Documents {
+	let mut docs = Vec::new();
+	let control_plane_cidrs: Vec<Value> = server_host_cidrs(cluster)
+		.into_iter()
+		.map(|cidr| json!({"ipBlock":{"cidr":cidr}}))
+		.collect();
+	for &ns in namespaces {
+		// The runtime owns tenant default-deny and egress policies. Protect
+		// each destination namespace with an explicit allowlist of trusted
+		// platform namespaces instead of a denylist.
+		let mut ingress = vec![
+			json!({"from":[{"namespaceSelector":{"matchExpressions":[{"key":"kubernetes.io/metadata.name","operator":"In","values":namespaces}]}}]}),
+		];
+		if !control_plane_cidrs.is_empty()
+			&& matches!(ns, "kube-system" | "cnpg-system" | "keda" | "cert-manager")
+		{
+			// Host-network kube-apiserver calls webhooks and APIServices from
+			// server node IPs on multi-node clusters.
+			ingress.push(json!({"from":control_plane_cidrs}));
+		}
+		if ns == "database" {
+			ingress.push(json!({"from":[{"namespaceSelector":{"matchLabels":{"app.kubernetes.io/managed-by":"leptoskit-cloud"}}}],"ports":[{"protocol":"TCP","port":5432}]}));
+		}
+		docs.push((
+			"10-policies",
+			object(
+				"networking.k8s.io/v1",
+				"NetworkPolicy",
+				"platform-ingress",
+				Some(ns),
+				json!({"spec":{"podSelector":{},"policyTypes":["Ingress"],"ingress":ingress}}),
+			),
+		));
+	}
+	docs.push(("10-policies",object("networking.k8s.io/v1","NetworkPolicy","tenant-dns",Some("kube-system"),json!({"spec":{"podSelector":{"matchLabels":{"k8s-app":"kube-dns"}},"policyTypes":["Ingress"],"ingress":[{"from":[{"namespaceSelector":{"matchLabels":{"app.kubernetes.io/managed-by":"leptoskit-cloud"}}}],"ports":[{"protocol":"UDP","port":53},{"protocol":"TCP","port":53}]}]}}))));
+	docs
 }

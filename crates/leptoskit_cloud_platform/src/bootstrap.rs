@@ -65,6 +65,19 @@ pub fn generate(
 	Ok(files)
 }
 
+/// Build nodes are always `NoSchedule`. When a dedicated platform pool exists,
+/// tenant nodes become `NoSchedule` so k3s system pods (`coredns`,
+/// `metrics-server`, `local-path-provisioner`, `helm-install-*`) stay on
+/// platform servers while tenant pods carry matching tenant tolerations.
+fn pool_taint_effect(cluster: &Cluster, pool: Pool) -> &'static str {
+	let has_dedicated_platform_pool = cluster.nodes.values().any(|n| n.pool() == Pool::Platform);
+	if pool == Pool::Build || (pool == Pool::Tenant && has_dedicated_platform_pool) {
+		"NoSchedule"
+	} else {
+		"PreferNoSchedule"
+	}
+}
+
 fn script(
 	config: &PlatformConfig,
 	cluster: &Cluster,
@@ -85,17 +98,7 @@ fn script(
 		GvisorPlatform::Systrap => "systrap",
 		GvisorPlatform::Kvm => "kvm",
 	};
-	// Build nodes are always NoSchedule. Platform nodes become NoSchedule when
-	// dedicated tenant nodes exist so untrusted tenant pods cannot land on
-	// control-plane VMs.
-	let has_dedicated_tenant_pool = cluster.nodes.values().any(|n| n.pool() == Pool::Tenant);
-	let effect = if machine.node.pool() == Pool::Build
-		|| (machine.node.pool() == Pool::Platform && has_dedicated_tenant_pool)
-	{
-		"NoSchedule"
-	} else {
-		"PreferNoSchedule"
-	};
+	let effect = pool_taint_effect(cluster, machine.node.pool());
 	let mut settings = json!({"node-name":machine.id,"node-ip":machine.private.as_ref().unwrap_or(&machine.public),"node-external-ip":machine.public,"token-file":"/etc/rancher/k3s/join-token","node-label":[format!("leptoskit.dev/pool={pool}")],"node-taint":[format!("leptoskit.dev/pool={pool}:{effect}")]});
 	let registration = cluster
 		.registration_address

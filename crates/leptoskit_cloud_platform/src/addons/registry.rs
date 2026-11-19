@@ -5,24 +5,11 @@ use serde_json::json;
 
 use super::Documents;
 use super::chart;
+use super::credential_keys;
 use super::object;
 use crate::PlatformError;
-use crate::config::CredentialRef;
 use crate::config::PlatformConfig;
 use crate::config::Registry;
-
-pub(super) fn credentials(config: &PlatformConfig) -> (&str, &str, &str) {
-	match &config.object_storage.credentials {
-		CredentialRef::KubernetesSecret {
-			name,
-			access_key,
-			secret_key,
-		} => (name, access_key, secret_key),
-		CredentialRef::Environment { .. } => {
-			("object-storage", "ACCESS_KEY_ID", "SECRET_ACCESS_KEY")
-		}
-	}
-}
 
 pub(super) fn documents(
 	config: &PlatformConfig,
@@ -39,7 +26,7 @@ pub(super) fn documents(
 	if !edge {
 		return Ok(Vec::new());
 	}
-	let (secret, access, key) = credentials(config);
+	let (secret, access, key) = credential_keys(&config.object_storage.credentials, false);
 	let host = format!("registry.{}", config.apps_domain);
 	// A persistent BoltDB cache is needed even with remote blob storage.
 	// AWS_ACCESS_* are consumed by the distribution S3 driver provider chain;

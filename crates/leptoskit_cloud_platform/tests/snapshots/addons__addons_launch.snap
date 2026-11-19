@@ -124,6 +124,15 @@ expression: "files.iter().map(|(path, content)|\nformat!(\"# {path}\\n{content}\
             }
           }
         ]
+      },
+      {
+        "from": [
+          {
+            "ipBlock": {
+              "cidr": "203.0.113.10/32"
+            }
+          }
+        ]
       }
     ],
     "podSelector": {},
@@ -161,6 +170,15 @@ expression: "files.iter().map(|(path, content)|\nformat!(\"# {path}\\n{content}\
                   ]
                 }
               ]
+            }
+          }
+        ]
+      },
+      {
+        "from": [
+          {
+            "ipBlock": {
+              "cidr": "203.0.113.10/32"
             }
           }
         ]
@@ -261,6 +279,15 @@ expression: "files.iter().map(|(path, content)|\nformat!(\"# {path}\\n{content}\
             }
           }
         ]
+      },
+      {
+        "from": [
+          {
+            "ipBlock": {
+              "cidr": "203.0.113.10/32"
+            }
+          }
+        ]
       }
     ],
     "podSelector": {},
@@ -298,6 +325,15 @@ expression: "files.iter().map(|(path, content)|\nformat!(\"# {path}\\n{content}\
                   ]
                 }
               ]
+            }
+          }
+        ]
+      },
+      {
+        "from": [
+          {
+            "ipBlock": {
+              "cidr": "203.0.113.10/32"
             }
           }
         ]
@@ -618,7 +654,7 @@ expression: "files.iter().map(|(path, content)|\nformat!(\"# {path}\\n{content}\
             "DELETE"
           ],
           "resources": [
-            "*"
+            "*/*"
           ],
           "scope": "*"
         }
@@ -626,8 +662,12 @@ expression: "files.iter().map(|(path, content)|\nformat!(\"# {path}\\n{content}\
     },
     "validations": [
       {
-        "expression": "(request.kind.kind == 'Namespace' && request.name.startsWith('lk-')) || (request.namespace != '' && request.namespace.startsWith('lk-'))",
-        "message": "leptoskit-cloud-worker may only mutate lk-* tenant namespaces"
+        "expression": "(request.kind.group == '' && request.kind.kind == 'Namespace' && request.name.matches('^lk-[0-9a-f]{20}$')) || (request.namespace != '' && request.namespace.matches('^lk-[0-9a-f]{20}$'))",
+        "message": "leptoskit-cloud-worker may only mutate lk-<20 hex> tenant namespaces"
+      },
+      {
+        "expression": "!(request.kind.group == '' && request.kind.kind == 'Namespace' && request.operation != 'DELETE') || (has(object.metadata.labels) && 'pod-security.kubernetes.io/enforce' in object.metadata.labels && object.metadata.labels['pod-security.kubernetes.io/enforce'] == 'restricted' && 'app.kubernetes.io/managed-by' in object.metadata.labels && object.metadata.labels['app.kubernetes.io/managed-by'] == 'leptoskit-cloud')",
+        "message": "tenant namespaces must enforce restricted Pod Security and app.kubernetes.io/managed-by=leptoskit-cloud"
       }
     ]
   }
@@ -871,7 +911,10 @@ expression: "files.iter().map(|(path, content)|\nformat!(\"# {path}\\n{content}\
         "max_connections": "300"
       },
       "pg_hba": [
-        "hostssl all all 0.0.0.0/0 scram-sha-256"
+        "hostnossl all all 0.0.0.0/0 reject",
+        "hostnossl all all ::/0 reject",
+        "hostssl all all 0.0.0.0/0 scram-sha-256",
+        "hostssl all all ::/0 scram-sha-256"
       ]
     },
     "storage": {

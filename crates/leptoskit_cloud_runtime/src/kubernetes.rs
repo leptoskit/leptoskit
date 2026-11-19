@@ -162,14 +162,18 @@ pub fn worker_rbac(
 
 /// Admission policy restricting the cluster worker's mutations to tenant
 /// namespaces named `lk-*`.
-///
 /// Kubernetes RBAC cannot restrict a `ClusterRole` to namespaces created in the
 /// future. This `ValidatingAdmissionPolicy` + binding denies any create,
-/// update, or delete sent by
-/// `system:serviceaccount:<namespace>:<service_account>` outside `lk-*`
-/// namespaces (and denies mutating non-`lk-*` `Namespace` objects). Read
-/// operations (`list`/`get`) are not evaluated by admission controllers;
-/// operators should still restrict access to the worker ServiceAccount.
+/// update, or delete (including subresources) sent by
+/// `system:serviceaccount:<namespace>:<service_account>` outside
+/// `lk-<20 hex>` tenant namespaces, and guarantees that any created or updated
+/// tenant namespace preserves `pod-security.kubernetes.io/enforce=restricted`
+/// and `app.kubernetes.io/managed-by=leptoskit-cloud`.
+///
+/// # Panics
+///
+/// Panics if `namespace` or `service_account` is not a valid Kubernetes DNS
+/// label (`[a-z0-9-]`, 1..=63 chars), preventing malformed CEL interpolation.
 #[must_use]
 pub fn worker_admission_policy(
 	namespace: &str,
@@ -178,6 +182,14 @@ pub fn worker_admission_policy(
 	admission::ValidatingAdmissionPolicy,
 	admission::ValidatingAdmissionPolicyBinding,
 ) {
+	assert!(
+		is_dns_label(namespace),
+		"worker_admission_policy namespace must be a valid DNS label: {namespace:?}"
+	);
+	assert!(
+		is_dns_label(service_account),
+		"worker_admission_policy service_account must be a valid DNS label: {service_account:?}"
+	);
 	let name = "leptoskit-cloud-worker-scope";
 	let subject = format!("system:serviceaccount:{namespace}:{service_account}");
 	let policy = admission::ValidatingAdmissionPolicy {
@@ -200,21 +212,43 @@ pub fn worker_admission_policy(
 						"UPDATE".to_owned(),
 						"DELETE".to_owned(),
 					]),
-					resources: Some(vec!["*".to_owned()]),
+					resources: Some(vec!["*/*".to_owned()]),
 					resource_names: None,
 					scope: Some("*".to_owned()),
 				}]),
 				..Default::default()
 			}),
-			validations: Some(vec![admission::Validation {
-				expression: "(request.kind.kind == 'Namespace' && request.name.startsWith('lk-')) \
-				             || (request.namespace != '' && request.namespace.startsWith('lk-'))"
-					.to_owned(),
-				message: Some(
-					"leptoskit-cloud-worker may only mutate lk-* tenant namespaces".to_owned(),
-				),
-				..Default::default()
-			}]),
+			validations: Some(vec![
+				admission::Validation {
+					expression: "(request.kind.group == '' && request.kind.kind == 'Namespace' && \
+					             request.name.matches('^lk-[0-9a-f]{20}$')) || (request.namespace \
+					             != '' && request.namespace.matches('^lk-[0-9a-f]{20}$'))"
+						.to_owned(),
+					message: Some(
+						"leptoskit-cloud-worker may only mutate lk-<20 hex> tenant namespaces"
+							.to_owned(),
+					),
+					..Default::default()
+				},
+				admission::Validation {
+					expression: "!(request.kind.group == '' && request.kind.kind == 'Namespace' \
+					             && request.operation != 'DELETE') || \
+					             (has(object.metadata.labels) && \
+					             'pod-security.kubernetes.io/enforce' in object.metadata.labels \
+					             && object.metadata.labels['pod-security.kubernetes.io/enforce'] \
+					             == 'restricted' && 'app.kubernetes.io/managed-by' in \
+					             object.metadata.labels && \
+					             object.metadata.labels['app.kubernetes.io/managed-by'] == \
+					             'leptoskit-cloud')"
+						.to_owned(),
+					message: Some(
+						"tenant namespaces must enforce restricted Pod Security and \
+						 app.kubernetes.io/managed-by=leptoskit-cloud"
+							.to_owned(),
+					),
+					..Default::default()
+				},
+			]),
 			..Default::default()
 		}),
 		status: None,
@@ -232,6 +266,16 @@ pub fn worker_admission_policy(
 		},
 	};
 	(policy, binding)
+}
+
+fn is_dns_label(name: &str) -> bool {
+	!name.is_empty()
+		&& name.len() <= 63
+		&& name
+			.bytes()
+			.all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+		&& !name.starts_with('-')
+		&& !name.ends_with('-')
 }
 
 /// How a process's replicas are owned, decided once and read by both the
@@ -280,7 +324,7 @@ pub struct ClusterProfile {
 	pub wildcard_tls_secret: Option<String>,
 	/// The cert-manager cluster issuer that issues per-host certificates.
 	pub cluster_issuer: Option<String>,
-	/// When true (for example, Cloudflare for SaaS), custom domains terminate
+	/// When true (for example, Cloudflare for `SaaS`), custom domains terminate
 	/// TLS at the edge and do not annotate Ingress objects with a cert-manager
 	/// cluster issuer.
 	#[serde(default)]
@@ -397,26 +441,30 @@ impl ClusterProfile {
 	/// # Errors
 	/// Returns `ManifestError::Profile` for an unusable cluster profile.
 	pub fn validate(&self) -> Result<(), ManifestError> {
-		let valid_name = |name: &str| {
-			!name.is_empty()
-				&& name.len() <= 63
-				&& name
-					.bytes()
-					.all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
-				&& !name.starts_with('-')
-				&& !name.ends_with('-')
-		};
 		if [
 			&self.ingress_class,
 			&self.ingress_namespace,
 			&self.dns_namespace,
 		]
 		.into_iter()
-		.any(|name| !valid_name(name))
+		.any(|name| !is_dns_label(name))
 		{
 			return Err(ManifestError::Profile(
 				"invalid ingress or DNS name".to_owned(),
 			));
+		}
+		for (field, value) in [
+			("image_pull_secret", self.image_pull_secret.as_deref()),
+			("wildcard_tls_secret", self.wildcard_tls_secret.as_deref()),
+			("cluster_issuer", self.cluster_issuer.as_deref()),
+		] {
+			if let Some(name) = value
+				&& !is_dns_label(name)
+			{
+				return Err(ManifestError::Profile(format!(
+					"invalid {field} name: must be a Kubernetes DNS label"
+				)));
+			}
 		}
 		if self.tmp_size_limit_mib == 0 {
 			return Err(ManifestError::Profile(
@@ -430,7 +478,7 @@ impl ClusterProfile {
 				&addon.scaler_service,
 			]
 			.into_iter()
-			.any(|name| !valid_name(name))
+			.any(|name| !is_dns_label(name))
 				|| addon.interceptor_port == 0
 				|| addon.scaler_port == 0
 				|| addon.interceptor_labels.is_empty())
@@ -450,8 +498,103 @@ impl ClusterProfile {
 				));
 			}
 		}
+		for (key, value) in &self.tenant_node_selector {
+			if !is_label_key(key) || !is_label_value(value) {
+				return Err(ManifestError::Profile(
+					"invalid tenant_node_selector label key or value".to_owned(),
+				));
+			}
+		}
+		for toleration in &self.tenant_tolerations {
+			validate_toleration(toleration)?;
+		}
 		Ok(())
 	}
+}
+
+fn is_label_key(key: &str) -> bool {
+	if key.is_empty() || key.len() > 253 + 1 + 63 {
+		return false;
+	}
+	let name = match key.split_once('/') {
+		Some((prefix, name)) => {
+			if prefix.is_empty() || prefix.len() > 253 || !prefix.split('.').all(is_dns_label) {
+				return false;
+			}
+			name
+		}
+		None => key,
+	};
+	!name.is_empty()
+		&& name.len() <= 63
+		&& name
+			.bytes()
+			.all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
+		&& name
+			.bytes()
+			.next()
+			.is_some_and(|b| b.is_ascii_alphanumeric())
+		&& name
+			.bytes()
+			.last()
+			.is_some_and(|b| b.is_ascii_alphanumeric())
+}
+
+fn is_label_value(value: &str) -> bool {
+	value.len() <= 63
+		&& (value.is_empty()
+			|| (value
+				.bytes()
+				.all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
+				&& value
+					.bytes()
+					.next()
+					.is_some_and(|b| b.is_ascii_alphanumeric())
+				&& value
+					.bytes()
+					.last()
+					.is_some_and(|b| b.is_ascii_alphanumeric())))
+}
+
+fn validate_toleration(toleration: &TolerationSpec) -> Result<(), ManifestError> {
+	if !is_label_key(&toleration.key) {
+		return Err(ManifestError::Profile(
+			"invalid tenant_tolerations key".to_owned(),
+		));
+	}
+	match toleration.operator.as_str() {
+		"Equal" => {
+			if let Some(value) = &toleration.value
+				&& !is_label_value(value)
+			{
+				return Err(ManifestError::Profile(
+					"invalid tenant_tolerations value".to_owned(),
+				));
+			}
+		}
+		"Exists" => {
+			if toleration.value.is_some() {
+				return Err(ManifestError::Profile(
+					"tenant_tolerations with operator Exists must not set value".to_owned(),
+				));
+			}
+		}
+		_ => {
+			return Err(ManifestError::Profile(
+				"tenant_tolerations operator must be Equal or Exists".to_owned(),
+			));
+		}
+	}
+	if !matches!(
+		toleration.effect.as_str(),
+		"" | "NoSchedule" | "PreferNoSchedule" | "NoExecute"
+	) {
+		return Err(ManifestError::Profile(
+			"tenant_tolerations effect must be NoSchedule, PreferNoSchedule, NoExecute, or empty"
+				.to_owned(),
+		));
+	}
+	Ok(())
 }
 
 /// The values behind a release spec's `secret_env` keys.
@@ -1002,6 +1145,11 @@ fn network_policies(
 		),
 	];
 	policies.extend(ingress_policies(spec, cluster, namespace, labels));
+	if !cluster.edge_terminated_custom_domains
+		&& spec.routes.iter().any(|route| route.tls == Tls::Issued)
+	{
+		policies.push(acme_http01_solver_policy(cluster, namespace, labels));
+	}
 	policies.push(dns_policy(cluster, namespace, labels));
 	if spec.policy.egress == Egress::Internet {
 		policies.push(internet_policy(cluster, namespace, labels));
@@ -1159,6 +1307,36 @@ fn ingress_policy_for(
 				match_labels: Some(BTreeMap::from([(
 					NAME_LABEL.to_owned(),
 					process.name.clone(),
+				)])),
+				match_expressions: None,
+			}),
+			policy_types: Some(vec!["Ingress".to_owned()]),
+			ingress: Some(vec![from]),
+			egress: None,
+		}),
+	})
+}
+
+/// Allows Traefik (in `cluster.ingress_namespace`) to reach cert-manager's
+/// ephemeral HTTP-01 challenge solver pods (`port 8089`) inside a tenant
+/// namespace when custom domains use cert-manager rather than edge-terminated
+/// TLS.
+fn acme_http01_solver_policy(
+	cluster: &ClusterProfile,
+	namespace: &str,
+	labels: &BTreeMap<String, String>,
+) -> Object {
+	let from = networking::NetworkPolicyIngressRule {
+		ports: Some(vec![tcp_door(8089)]),
+		from: Some(vec![peer_from_namespace(&cluster.ingress_namespace)]),
+	};
+	Object::NetworkPolicy(networking::NetworkPolicy {
+		metadata: object_meta(Some(namespace), "allow-acme-http01-solver", labels),
+		spec: Some(networking::NetworkPolicySpec {
+			pod_selector: Some(meta::LabelSelector {
+				match_labels: Some(BTreeMap::from([(
+					"acme.cert-manager.io/http01-solver".to_owned(),
+					"true".to_owned(),
 				)])),
 				match_expressions: None,
 			}),
@@ -1954,6 +2132,11 @@ fn host_tls(
 		}
 		Tls::Issued => {
 			if cluster.edge_terminated_custom_domains {
+				let _secret = cluster.wildcard_tls_secret.as_ref().ok_or_else(|| {
+					ManifestError::NoWildcardSecret {
+						hostname: hostname.to_owned(),
+					}
+				})?;
 				return Ok((
 					Some(networking::IngressTLS {
 						hosts: Some(vec![hostname.to_owned()]),

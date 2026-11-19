@@ -2,7 +2,7 @@
 "leptoskit_cloud_runtime": minor
 ---
 
-# Harden cloud cluster manifests and fix Day-1 platform blockers
+# Harden cloud manifests and fix Day-1 platform blockers
 
 `ClusterProfile` gains `Serialize`/`Deserialize`, `edge_terminated_custom_domains` (for Cloudflare for SaaS custom domains without cert-manager annotations), `tenant_node_selector` and `tenant_tolerations` (to isolate tenant pods onto dedicated tenant pools), and `tmp_size_limit_mib` (bounding `/tmp` `emptyDir` and container/namespace `ephemeral-storage`). `worker_admission_policy` emits a `ValidatingAdmissionPolicy` restricting cluster-worker mutations to `lk-*` tenant namespaces.
 

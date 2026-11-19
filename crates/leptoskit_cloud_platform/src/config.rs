@@ -579,34 +579,10 @@ impl PlatformConfig {
 			!self.admin_cidrs.is_empty(),
 			"admin_cidrs must not be empty",
 		)?;
-		for value in self
-			.admin_cidrs
-			.iter()
-			.chain(&self.isolation.denied_egress_cidrs)
-			.chain(&self.edge.cloudflare_cidrs)
-		{
+		for value in self.admin_cidrs.iter().chain(&self.edge.cloudflare_cidrs) {
 			cidr(value)?;
 		}
-		require(
-			self.isolation.runtime_class == "gvisor",
-			"only the gvisor runtime class is supported",
-		)?;
-		require(
-			self.isolation.sha512.len() == 128
-				&& self.isolation.sha512.bytes().all(|b| b.is_ascii_hexdigit()),
-			"isolation.sha512 must be the official tarball SHA-512 (128 hex digits)",
-		)?;
-		let (date, point) =
-			self.isolation.release.split_once('.').ok_or_else(|| {
-				PlatformError::Invalid("gVisor release must be YYYYMMDD.N".into())
-			})?;
-		require(
-			date.len() == 8
-				&& date.bytes().all(|b| b.is_ascii_digit())
-				&& !point.is_empty()
-				&& point.bytes().all(|b| b.is_ascii_digit()),
-			"gVisor release must be YYYYMMDD.N",
-		)?;
+		self.validate_isolation()?;
 		require(
 			https(&self.object_storage.endpoint),
 			"object storage requires an HTTPS origin",
@@ -659,6 +635,37 @@ impl PlatformConfig {
 				cluster.validate(self.isolation.platform)?;
 			}
 		}
+		Ok(())
+	}
+
+	fn validate_isolation(&self) -> Result<(), PlatformError> {
+		for value in &self.isolation.denied_egress_cidrs {
+			let parsed = cidr(value)?;
+			require(
+				parsed.0.is_ipv4(),
+				"isolation.denied_egress_cidrs must be IPv4 CIDRs",
+			)?;
+		}
+		require(
+			self.isolation.runtime_class == "gvisor",
+			"only the gvisor runtime class is supported",
+		)?;
+		require(
+			self.isolation.sha512.len() == 128
+				&& self.isolation.sha512.bytes().all(|b| b.is_ascii_hexdigit()),
+			"isolation.sha512 must be the official tarball SHA-512 (128 hex digits)",
+		)?;
+		let (date, point) =
+			self.isolation.release.split_once('.').ok_or_else(|| {
+				PlatformError::Invalid("gVisor release must be YYYYMMDD.N".into())
+			})?;
+		require(
+			date.len() == 8
+				&& date.bytes().all(|b| b.is_ascii_digit())
+				&& !point.is_empty()
+				&& point.bytes().all(|b| b.is_ascii_digit()),
+			"gVisor release must be YYYYMMDD.N",
+		)?;
 		Ok(())
 	}
 }
