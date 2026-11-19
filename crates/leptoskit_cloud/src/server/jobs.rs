@@ -13,15 +13,17 @@
 //! - requeues a build whose lease ran out, until it has run
 //!   [`BUILD_ATTEMPTS`](crate::workers::BUILD_ATTEMPTS) times, and then fails
 //!   its deployment with `builder_unavailable`;
-//! - marks a release or removal whose lease ran out *unknown*, and never
-//!   retries it or calls it failed;
+//! - marks a release, a removal, or a restore whose lease ran out *unknown*,
+//!   and never retries it or calls it failed;
+//! - fails a backup whose lease ran out: nothing was promised, and another can
+//!   be asked for;
 //! - fails a build nobody claimed for
 //!   [`ShippingSettings::unclaimed_build`](super::ShippingSettings::unclaimed_build)
 //!   with `builder_unavailable`. A release waits for its cluster's worker as
 //!   long as it takes: the cluster may be down, and the deployment stays
 //!   `rolling_out`;
-//! - deletes archives past their expiry that no deployment in flight uses, and
-//!   log chunks past their retention.
+//! - deletes archives past their expiry that no deployment in flight uses, log
+//!   chunks past their retention, and the rows of backups past their expiry.
 
 use std::time::Duration;
 
@@ -35,6 +37,7 @@ use serde::Deserialize;
 use serde::Serialize;
 
 use super::Services;
+use super::backups;
 use super::delta;
 use super::deployments;
 use super::storage::Bucket;
@@ -54,6 +57,8 @@ use crate::tables::NewJob;
 use crate::tables::Organization;
 use crate::tables::Project;
 use crate::tables::SourceArchive;
+use crate::workers::BackupDatabaseInput;
+use crate::workers::BackupOutcome;
 use crate::workers::BuildServerInput;
 use crate::workers::DeploymentRef;
 use crate::workers::DestroyEnvironmentInput;
@@ -63,6 +68,8 @@ use crate::workers::JobInput;
 use crate::workers::JobKind;
 use crate::workers::JobOutcome;
 use crate::workers::ReleaseInput;
+use crate::workers::RestoreDatabaseInput;
+use crate::workers::RestoreOutcome;
 use crate::workers::WorkerRole;
 
 /// How many times a transaction the sweeper runs is tried when another
@@ -93,6 +100,11 @@ pub enum StoredInput {
 	Release(Box<ReleaseInput>),
 	/// A removal, as the worker gets it.
 	DestroyEnvironment(DestroyEnvironmentInput),
+	/// A backup, as the worker gets it.
+	BackupDatabase(BackupDatabaseInput),
+	/// A restore, as the worker gets it. Its `location` is the cluster
+	/// worker's own name for a dump, and no credential.
+	RestoreDatabase(RestoreDatabaseInput),
 }
 
 impl StoredInput {
@@ -103,6 +115,8 @@ impl StoredInput {
 			Self::BuildServer { .. } => JobKind::BuildServer,
 			Self::Release(_) => JobKind::Release,
 			Self::DestroyEnvironment(_) => JobKind::DestroyEnvironment,
+			Self::BackupDatabase(_) => JobKind::BackupDatabase,
+			Self::RestoreDatabase(_) => JobKind::RestoreDatabase,
 		}
 	}
 }
@@ -232,6 +246,8 @@ pub(crate) fn assignment_input(
 		}
 		StoredInput::Release(input) => JobInput::Release(input.clone()),
 		StoredInput::DestroyEnvironment(input) => JobInput::DestroyEnvironment(input.clone()),
+		StoredInput::BackupDatabase(input) => JobInput::BackupDatabase(input.clone()),
+		StoredInput::RestoreDatabase(input) => JobInput::RestoreDatabase(input.clone()),
 	})
 }
 
@@ -254,9 +270,11 @@ pub(crate) async fn summary(db: &impl leptoskit_db::Read, job: &Job) -> rpc::Res
 		worker: job.worker_id.map(|worker| worker.uuid()),
 		lease_expires_at: job.lease_expires_at,
 		failure: match &job.outcome.0 {
-			Some(JobOutcome::DestroyEnvironment(DestroyOutcome::Failed { reason })) => {
-				Some(reason.clone())
-			}
+			Some(
+				JobOutcome::DestroyEnvironment(DestroyOutcome::Failed { reason })
+				| JobOutcome::BackupDatabase(BackupOutcome::Failed { reason })
+				| JobOutcome::RestoreDatabase(RestoreOutcome::Failed { reason }),
+			) => Some(reason.clone()),
 			_ => None,
 		},
 		created_at: job.created_at,
@@ -302,15 +320,22 @@ pub(crate) async fn deployment_ref(
 }
 
 /// Takes a held job back: a build is queued again for another worker while
-/// it has attempts left, and fails its deployment when it hasn't; a
-/// release or removal becomes unknown. `reason` says why, for the
-/// deployment's history.
+/// it has attempts left, and fails its deployment when it hasn't; a backup
+/// fails; a release, a removal, or a restore becomes unknown. `reason`
+/// says why, for the deployment's history.
 ///
 /// # Errors
 ///
 /// When the database fails.
 pub(crate) async fn lapse(tx: &Tx, mut job: Job, reason: &str) -> rpc::Result<Lapsed> {
 	job.lease_expires_at = None;
+
+	if job.kind == JobKind::BackupDatabase {
+		job.state = JobState::Abandoned;
+		job.save(tx).await?;
+		backups::backup_abandoned(tx, &job, reason).await?;
+		return Ok(Lapsed::Abandoned);
+	}
 
 	if job.kind != JobKind::BuildServer {
 		job.state = JobState::Unknown;
@@ -367,14 +392,17 @@ pub(crate) enum Lapsed {
 pub struct Swept {
 	/// Builds queued again after their lease ran out.
 	pub retried: u32,
-	/// Builds given up on: out of attempts, or never claimed.
+	/// Builds given up on: out of attempts, or never claimed. Backups
+	/// whose worker went quiet.
 	pub abandoned: u32,
-	/// Releases and removals whose outcome is now unknown.
+	/// Releases, removals, and restores whose outcome is now unknown.
 	pub unknown: u32,
 	/// Archives deleted.
 	pub archives: u32,
 	/// Log chunks deleted.
 	pub log_chunks: u32,
+	/// Expired backups forgotten.
+	pub backups: u32,
 }
 
 /// Runs `work` in a serializable transaction, again when another
@@ -494,6 +522,7 @@ pub(crate) async fn sweep(services: &Services) -> rpc::Result<Swept> {
 
 	swept.archives = sweep_archives(services).await?;
 	swept.log_chunks = sweep_logs(services).await?;
+	swept.backups = backups::sweep(db, SWEEP_BATCH).await?;
 	Ok(swept)
 }
 

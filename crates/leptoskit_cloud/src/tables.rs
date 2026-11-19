@@ -4,7 +4,7 @@
 //! where environments are placed on them, workers and their pairing codes,
 //! jobs, log chunks, and what clusters report; variables, secrets and the
 //! keys they are sealed with, and the leases that say where a secret's
-//! value went.
+//! value went; managed databases and the backups taken of them.
 //!
 //! Every key is a UUID v7, so rows order by creation. People are
 //! `Id<Account>`s from `leptoskit_auth`, stored without a foreign key: a
@@ -25,6 +25,8 @@ use leptoskit_db::table;
 
 use crate::access::Role;
 use crate::access::TokenScope;
+use crate::databases::BackupKind;
+use crate::databases::BackupState;
 use crate::deployment::DeploymentState;
 use crate::deployment::Source;
 use crate::deployments::DeployConfig;
@@ -678,6 +680,41 @@ pub struct Database {
 	pub sealed_password: Vec<u8>,
 	/// Whether a release that uses it has been applied.
 	pub ready: bool,
+	#[db(created_at)]
+	pub created_at: Timestamp,
+	#[db(updated_at)]
+	pub updated_at: Timestamp,
+}
+
+/// A backup of an environment's managed database: a record of a dump its
+/// cluster's worker took and keeps. The control plane never holds the
+/// dump, and `location` is the worker's own name for it, which no
+/// operation answers.
+#[table(name = "database_backups", index(environment_id, created_at))]
+pub struct DatabaseBackup {
+	pub id: Id<Self>,
+	#[db(on_delete = cascade)]
+	pub environment_id: Id<Environment>,
+	#[db(no_foreign_key)]
+	pub organization_id: Id<Organization>,
+	#[db(no_foreign_key)]
+	pub database_id: Id<Database>,
+	pub kind: BackupKind,
+	pub state: BackupState,
+	/// Where the worker keeps the dump, once it has taken it.
+	#[db(max_len = 512)]
+	pub location: Option<String>,
+	pub bytes: Option<i64>,
+	/// The migrations the database had when the dump was taken, as the
+	/// environment's placement recorded them then.
+	pub migrations: Json<Vec<MigrationFingerprint>>,
+	/// Whether the database may have had more than `migrations` says.
+	pub schema_uncertain: bool,
+	#[db(max_len = 400)]
+	pub failure: Option<String>,
+	pub completed_at: Option<Timestamp>,
+	/// When its row is deleted, and its worker deletes the dump.
+	pub expires_at: Timestamp,
 	#[db(created_at)]
 	pub created_at: Timestamp,
 	#[db(updated_at)]

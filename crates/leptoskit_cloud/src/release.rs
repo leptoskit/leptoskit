@@ -397,7 +397,8 @@ pub fn plan(
 	if postgres.is_some() {
 		fine_print.push(
 			"Its Postgres database is a database and a role of its own on the cluster's shared \
-			 server. It isn't backed up yet, whatever `[cloud.database] backups` says."
+			 server. It isn't backed up on a schedule yet, whatever `[cloud.database] backups` \
+			 says: `create_backup` takes one when asked."
 				.to_owned(),
 		);
 	}
@@ -939,7 +940,7 @@ mod tests {
 		assert!(
 			plan.fine_print
 				.iter()
-				.any(|line| line.contains("isn't backed up yet")),
+				.any(|line| line.contains("isn't backed up on a schedule yet")),
 			"{:?}",
 			plan.fine_print
 		);

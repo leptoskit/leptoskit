@@ -34,10 +34,12 @@ use crate::tables::Organization;
 use crate::tables::Placement;
 use crate::tables::Worker;
 use crate::workers::JobKind;
+use crate::workers::JobOutcome;
 use crate::workers::PAIRING_CODE_LEN;
 use crate::workers::PAIRING_CODE_PREFIX;
 use crate::workers::PAIRING_MINUTES;
 use crate::workers::ReleaseOutcome;
+use crate::workers::RestoreOutcome;
 use crate::workers::WorkerRole;
 use crate::workers::WorkerSummary;
 
@@ -561,8 +563,30 @@ pub(crate) async fn reconcile(
 			row.save(cx.tx()).await?;
 			woke = true;
 		}
+		(JobKind::RestoreDatabase, Reconciliation::Applied) => {
+			// The environment runs on the backup's data. Whether a dump of
+			// what it replaced exists, only its worker could have said.
+			row.state = JobState::Done;
+			row.outcome = Json(Some(JobOutcome::RestoreDatabase(
+				RestoreOutcome::Restored {
+					before_restore: None,
+				},
+			)));
+			row.save(cx.tx()).await?;
+		}
+		(JobKind::RestoreDatabase, Reconciliation::NotApplied { detail }) => {
+			// The environment runs on the database it had.
+			row.state = JobState::Done;
+			row.outcome = Json(Some(JobOutcome::RestoreDatabase(RestoreOutcome::Failed {
+				reason: format!("an operator found it hadn't been restored: {detail}"),
+			})));
+			row.save(cx.tx()).await?;
+		}
 		(JobKind::BuildServer, _) => {
 			return Err(rpc::Error::server("a build is never unknown"));
+		}
+		(JobKind::BackupDatabase, _) => {
+			return Err(rpc::Error::server("a backup is never unknown"));
 		}
 	}
 
