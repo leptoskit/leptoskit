@@ -154,11 +154,13 @@ pub(crate) async fn register(
 	renews: Option<Uuid>,
 ) -> rpc::Result<EndpointSummary> {
 	crate::push::check_credential(credential).map_err(rpc::Error::invalid)?;
-	let device = device.normalized().map_err(rpc::Error::invalid)?;
+	let platform = credential.platform();
+	let device = device
+		.normalized()
+		.map_err(rpc::Error::invalid)?
+		.for_platform(platform);
 
 	let runtime = push.runtime.as_ref().ok_or_else(push_unconfigured)?;
-
-	let platform = credential.platform();
 
 	if !runtime.configured(platform) {
 		return Err(rpc::Error::invalid(format!(
@@ -225,6 +227,10 @@ pub(crate) async fn register(
 					.set(|endpoint| endpoint.locale, device.locale.clone())
 					.set(|endpoint| endpoint.time_zone, device.time_zone.clone())
 					.set(|endpoint| endpoint.app_version, device.app_version.clone())
+					.set(
+						|endpoint| endpoint.apns_environment,
+						stored_environment(&device),
+					)
 					.set(|endpoint| endpoint.seen_at, Some(leptoskit_db::now()))
 					.run(cx.tx())
 					.await?;
@@ -254,6 +260,10 @@ pub(crate) async fn register(
 					.set(|endpoint| endpoint.locale, device.locale.clone())
 					.set(|endpoint| endpoint.time_zone, device.time_zone.clone())
 					.set(|endpoint| endpoint.app_version, device.app_version.clone())
+					.set(
+						|endpoint| endpoint.apns_environment,
+						stored_environment(&device),
+					)
 					.set(|endpoint| endpoint.seen_at, Some(leptoskit_db::now()))
 					.run(cx.tx())
 					.await?;
@@ -323,6 +333,7 @@ pub(crate) async fn register(
 		app_version: device.app_version.clone(),
 		seen_at: Some(leptoskit_db::now()),
 		imported_at: None,
+		apns_environment: stored_environment(&device),
 	}
 	.insert(cx.tx())
 	.await
@@ -388,7 +399,11 @@ pub(crate) async fn import(
 		}
 
 		let named = |complaint| rpc::Error::invalid(format!("endpoints[{index}]: {complaint}"));
-		let device = entry.device.normalized().map_err(named)?;
+		let device = entry
+			.device
+			.normalized()
+			.map_err(named)?
+			.for_platform(platform);
 		let destination = entry.credential.destination().map_err(named)?;
 		let canonical = entry.credential.canonical().map_err(named)?;
 
@@ -455,6 +470,7 @@ pub(crate) async fn import(
 			generation: 1,
 			fingerprint,
 			invalidated_at: None,
+			apns_environment: stored_environment(&device),
 			locale: device.locale,
 			time_zone: device.time_zone,
 			app_version: device.app_version,
@@ -482,6 +498,13 @@ pub(crate) async fn import(
 	}
 
 	Ok(report)
+}
+
+/// The APNs environment `device` reported, as the column stores it.
+fn stored_environment(device: &DeviceDetails) -> Option<String> {
+	device
+		.apns_environment
+		.map(|environment| environment.as_str().to_owned())
 }
 
 /// How often an unchanged re-enrollment moves an endpoint's `seen_at`, in
@@ -1523,7 +1546,16 @@ async fn attempt(
 		badge,
 	};
 
-	Ok(transport.attempt(&endpoint.credential, &message).await)
+	Ok(transport.attempt(target_of(&endpoint), &message).await)
+}
+
+/// Where one attempt goes: the endpoint's credential, and the APNs
+/// environment its device reported.
+fn target_of(endpoint: &PushEndpoint) -> transport::Target<'_> {
+	transport::Target {
+		credential: &endpoint.credential,
+		apns_environment: endpoint.apns_environment(),
+	}
 }
 
 /// The push lifetime the notification's send set, read from the options

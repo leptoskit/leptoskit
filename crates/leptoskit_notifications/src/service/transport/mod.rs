@@ -484,15 +484,26 @@ pub(crate) struct Shaped {
 	pub(crate) fits: bool,
 }
 
-/// One provider's sender. `credential` is the stored, canonical
-/// credential string for this transport's platform.
+/// Where one push goes: an endpoint's stored credential, and what else
+/// the endpoint says about how to reach it.
+#[derive(Clone, Copy)]
+pub(crate) struct Target<'a> {
+	/// The stored, canonical credential string for the transport's
+	/// platform.
+	pub(crate) credential: &'a str,
+	/// The APNs environment the endpoint's device reported, when it did.
+	/// Only the APNs transport reads it; `None` is the environment the
+	/// transport was configured with.
+	pub(crate) apns_environment: Option<crate::push::ApnsEnvironment>,
+}
+
+/// One provider's sender.
 pub(crate) trait Transport: Send + Sync {
-	/// Pushes `message` to one endpoint's credential. The boundary call
-	/// is the only awaited work; no lock or database handle is held
-	/// across it.
+	/// Pushes `message` to one endpoint. The boundary call is the only
+	/// awaited work; no lock or database handle is held across it.
 	fn attempt<'a>(
 		&'a self,
-		credential: &'a str,
+		target: Target<'a>,
 		message: &'a Message,
 	) -> Pin<Box<dyn Future<Output = Outcome> + Send + 'a>>;
 }

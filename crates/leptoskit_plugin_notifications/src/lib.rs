@@ -68,6 +68,12 @@ pub const DEVICE: MethodId = MethodId(9);
 /// an empty batch; a bound of `0` never waits. Other platforms, and hosts
 /// that predate it, report `Unavailable`.
 pub const RECEIVED: MethodId = MethodId(10);
+/// iOS and macOS: empty payload; reads which APNs environment the running
+/// build is signed for — the `aps-environment` of its provisioning — as an
+/// [`ApsEnvironment`], without side effects. A device token is known only
+/// to that environment's server, so enrollment sends it with the token.
+/// Other platforms, and hosts that predate it, report `Unavailable`.
+pub const APS_ENVIRONMENT: MethodId = MethodId(11);
 /// Exported independently grantable operations.
 pub const METHODS: &[MethodId] = &[
 	PERMISSION,
@@ -81,6 +87,7 @@ pub const METHODS: &[MethodId] = &[
 	REMOTE_REGISTER,
 	DEVICE,
 	RECEIVED,
+	APS_ENVIRONMENT,
 ];
 
 /// The most received items a host keeps and one [`RECEIVED`] reply carries.
@@ -359,6 +366,38 @@ fn validate_detail(value: &str) -> Result<(), Error> {
 		Err(Error::InvalidArgument)
 	} else {
 		Ok(())
+	}
+}
+
+/// Which APNs environment the running Apple build is signed for, as the
+/// host read it from the app's provisioning.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u32)]
+pub enum ApsEnvironment {
+	/// The host could not tell.
+	Unknown = 0,
+	/// A development build: its device tokens belong to APNs' sandbox
+	/// server.
+	Development = 1,
+	/// A TestFlight, App Store, ad hoc, or enterprise build: its device
+	/// tokens belong to APNs' production server.
+	Production = 2,
+}
+impl ApsEnvironment {
+	/// Encodes an `APS_ENVIRONMENT` reply: four little-endian bytes.
+	#[must_use]
+	pub fn encode(self) -> [u8; 4] {
+		(self as u32).to_le_bytes()
+	}
+
+	/// Validates the exact four-byte response.
+	pub fn decode(bytes: &[u8]) -> Result<Self, Error> {
+		match u32::from_le_bytes(bytes.try_into().map_err(|_| Error::InvalidArgument)?) {
+			0 => Ok(Self::Unknown),
+			1 => Ok(Self::Development),
+			2 => Ok(Self::Production),
+			_ => Err(Error::InvalidArgument),
+		}
 	}
 }
 
@@ -983,6 +1022,34 @@ mod tests {
 		for value in [&[][..], &[3], &[6, 0, 0, 0], &[3, 0, 0, 0, 0]] {
 			assert!(Permission::decode(value).is_err());
 		}
+	}
+	/// An `APS_ENVIRONMENT` reply is exactly four bytes naming one of the
+	/// three answers, and the method is one a host can be granted.
+	#[test]
+	fn an_aps_environment_reply_decodes_exactly() {
+		let expected = [
+			ApsEnvironment::Unknown,
+			ApsEnvironment::Development,
+			ApsEnvironment::Production,
+		];
+
+		for (value, environment) in (0u32..).zip(expected) {
+			assert_eq!(
+				ApsEnvironment::decode(&value.to_le_bytes()),
+				Ok(environment)
+			);
+			assert_eq!(
+				ApsEnvironment::decode(&environment.encode()),
+				Ok(environment)
+			);
+		}
+
+		for value in [&[][..], &[1], &[3, 0, 0, 0], &[1, 0, 0, 0, 0]] {
+			assert!(ApsEnvironment::decode(value).is_err());
+		}
+
+		assert!(METHODS.contains(&APS_ENVIRONMENT));
+		assert_eq!(APS_ENVIRONMENT, MethodId(11));
 	}
 	#[test]
 	fn every_permission_state_decodes_exactly() {

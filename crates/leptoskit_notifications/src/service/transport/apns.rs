@@ -25,6 +25,7 @@ use crate::service::transport::Boundary;
 use crate::service::transport::Message;
 use crate::service::transport::Outcome;
 use crate::service::transport::Shaped;
+use crate::service::transport::Target;
 use crate::service::transport::Transport;
 use crate::service::transport::WireRequest;
 use crate::service::transport::WireResponse;
@@ -89,7 +90,9 @@ pub struct Apns {
 	key_id: String,
 	team_id: String,
 	topic: String,
-	host: &'static str,
+	/// The environment an endpoint is pushed through when its device
+	/// reported none.
+	environment: crate::push::ApnsEnvironment,
 	boundary: std::sync::Arc<dyn Boundary>,
 	/// The cached provider token, and the epoch second it stops being
 	/// trusted.
@@ -127,17 +130,12 @@ impl Apns {
 			return Err("APNs: the topic is 1 to 250 characters".into());
 		}
 
-		let host = match config.environment {
-			crate::service::config::ApnsEnvironment::Production => HOST,
-			crate::service::config::ApnsEnvironment::Sandbox => SANDBOX_HOST,
-		};
-
 		Ok(Self {
 			key,
 			key_id: key_id.to_owned(),
 			team_id: team_id.to_owned(),
 			topic: topic.to_owned(),
-			host,
+			environment: config.environment,
 			boundary,
 			token: Mutex::new(None),
 		})
@@ -206,7 +204,7 @@ impl Apns {
 	}
 
 	/// Posts one shaped payload and classifies the answer.
-	async fn post(&self, credential: &str, token: &str, shaped: Shaped) -> Outcome {
+	async fn post(&self, target: Target<'_>, token: &str, shaped: Shaped) -> Outcome {
 		let mut headers = vec![
 			("authorization".to_owned(), format!("Bearer {token}")),
 			("apns-topic".to_owned(), self.topic.clone()),
@@ -215,7 +213,14 @@ impl Apns {
 		let payload = shaped.body;
 
 		let request = WireRequest {
-			url: format!("{}/3/device/{credential}", self.host),
+			// A device token is known to one of Apple's two servers: the
+			// one its build was signed for, when the device said which,
+			// and otherwise the one this service is configured for.
+			url: format!(
+				"{}/3/device/{}",
+				host(target.apns_environment.unwrap_or(self.environment)),
+				target.credential
+			),
 			headers,
 			body: payload,
 			pinned: None,
@@ -239,10 +244,18 @@ impl Apns {
 	}
 }
 
+/// The server an environment's device tokens are known to.
+fn host(environment: crate::push::ApnsEnvironment) -> &'static str {
+	match environment {
+		crate::push::ApnsEnvironment::Production => HOST,
+		crate::push::ApnsEnvironment::Sandbox => SANDBOX_HOST,
+	}
+}
+
 impl Transport for Apns {
 	fn attempt<'a>(
 		&'a self,
-		credential: &'a str,
+		target: Target<'a>,
 		message: &'a Message,
 	) -> Pin<Box<dyn Future<Output = Outcome> + Send + 'a>> {
 		let send = async move {
@@ -265,7 +278,7 @@ impl Transport for Apns {
 				};
 			}
 
-			self.post(credential, &token, shaped).await
+			self.post(target, &token, shaped).await
 		};
 
 		Box::pin(send)

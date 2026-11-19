@@ -76,6 +76,13 @@ impl Notifications {
 		DeviceInfo::decode(&self.0.call(DEVICE, &[])?.await?)
 	}
 
+	/// Reads which APNs environment the running build is signed for,
+	/// without side effects. iOS and macOS; every other platform, and a
+	/// host that predates the method, answers Unavailable.
+	pub async fn aps_environment(self) -> Result<ApsEnvironment, Error> {
+		ApsEnvironment::decode(&self.0.call(APS_ENVIRONMENT, &[])?.await?)
+	}
+
 	/// Takes what the host has received since the last call — taps,
 	/// notifications that arrived while the app was open, and silent data
 	/// messages — oldest first. With nothing queued the host waits up to

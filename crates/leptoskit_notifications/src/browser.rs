@@ -341,6 +341,7 @@ pub fn device_details(
 		locale: language,
 		time_zone,
 		app_version,
+		apns_environment: None,
 	}
 	.sanitized()
 }
@@ -1271,6 +1272,7 @@ mod tests {
 				locale: Some("en-GB".into()),
 				time_zone: Some("Europe/London".into()),
 				app_version: Some("2.1.0".into()),
+				apns_environment: None,
 			}
 		);
 		assert_eq!(
@@ -1279,6 +1281,7 @@ mod tests {
 				locale: None,
 				time_zone: Some("UTC".into()),
 				app_version: None,
+				apns_environment: None,
 			}
 		);
 

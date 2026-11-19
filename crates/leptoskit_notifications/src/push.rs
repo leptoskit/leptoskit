@@ -453,6 +453,41 @@ pub(crate) fn base64_url(text: &str) -> Option<Vec<u8>> {
 	})
 }
 
+/// Which of Apple's two push servers a device token belongs to. A token
+/// issued to a development build (`aps-environment` `development`) is
+/// only known to the sandbox server, and a token issued to a TestFlight or
+/// App Store build only to the production one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ApnsEnvironment {
+	/// The development server, `api.sandbox.push.apple.com`.
+	Sandbox,
+	/// The production server, `api.push.apple.com`.
+	Production,
+}
+
+impl ApnsEnvironment {
+	/// The stored name, and the value `APNS_ENVIRONMENT` takes.
+	#[must_use]
+	pub fn as_str(self) -> &'static str {
+		match self {
+			Self::Sandbox => "sandbox",
+			Self::Production => "production",
+		}
+	}
+
+	/// The environment a stored name stands for, or `None` for anything
+	/// else.
+	#[must_use]
+	pub fn from_str_value(name: &str) -> Option<Self> {
+		match name {
+			"sandbox" => Some(Self::Sandbox),
+			"production" => Some(Self::Production),
+			_ => None,
+		}
+	}
+}
+
 /// What a device says about itself when it enrolls: the language it
 /// prefers, the time zone it is in, and the version of the app running on
 /// it. Every detail is optional — a browser knows no app version unless
@@ -481,6 +516,15 @@ pub struct DeviceDetails {
 	/// [`MAX_APP_VERSION_LEN`] bytes with no control characters.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub app_version: Option<String>,
+	/// The APNs environment the build on the device is signed for, which
+	/// the iOS and macOS enrollment reads from the app's provisioning. The
+	/// service pushes the endpoint through that environment's server.
+	/// `None` — a build that predates the report, or one that could not
+	/// tell — uses the environment the service is configured for
+	/// (`APNS_ENVIRONMENT`). Kept only for an APNs endpoint; conditions do
+	/// not read it.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub apns_environment: Option<ApnsEnvironment>,
 }
 
 impl DeviceDetails {
@@ -502,6 +546,7 @@ impl DeviceDetails {
 			app_version: present(self.app_version.as_deref())
 				.map(|version| check_app_version(version).map(|()| version.to_owned()))
 				.transpose()?,
+			apns_environment: self.apns_environment,
 		})
 	}
 
@@ -520,6 +565,7 @@ impl DeviceDetails {
 			app_version: present(self.app_version.as_deref())
 				.filter(|version| check_app_version(version).is_ok())
 				.map(str::to_owned),
+			apns_environment: self.apns_environment,
 		}
 	}
 
@@ -533,7 +579,21 @@ impl DeviceDetails {
 	/// Whether the device said nothing about itself.
 	#[must_use]
 	pub fn is_empty(&self) -> bool {
-		self.locale.is_none() && self.time_zone.is_none() && self.app_version.is_none()
+		self.locale.is_none()
+			&& self.time_zone.is_none()
+			&& self.app_version.is_none()
+			&& self.apns_environment.is_none()
+	}
+
+	/// The details an endpoint of `platform` keeps: the APNs environment
+	/// means nothing anywhere else, so only an APNs endpoint keeps one.
+	#[must_use]
+	pub fn for_platform(mut self, platform: PushPlatform) -> Self {
+		if platform != PushPlatform::Apns {
+			self.apns_environment = None;
+		}
+
+		self
 	}
 }
 
@@ -754,6 +814,13 @@ pub struct PushEndpoint {
 	/// the endpoint an ordinary enrollment. `None` for every endpoint a
 	/// device enrolled.
 	pub imported_at: Option<leptoskit_db::Timestamp>,
+	/// The APNs environment the device's build reported when it last
+	/// enrolled, as [`ApnsEnvironment`]'s names: which of Apple's servers
+	/// this endpoint is pushed through. `None` uses the environment the
+	/// service is configured for, as every endpoint did before the column
+	/// existed. Always `None` for an endpoint that is not APNs'.
+	#[db(max_len = 16)]
+	pub apns_environment: Option<String>,
 }
 
 #[cfg(feature = "service")]
@@ -765,7 +832,16 @@ impl PushEndpoint {
 			locale: self.locale.clone(),
 			time_zone: self.time_zone.clone(),
 			app_version: self.app_version.clone(),
+			apns_environment: self.apns_environment(),
 		}
+	}
+
+	/// The APNs environment the endpoint's device reported, if it did.
+	#[must_use]
+	pub(crate) fn apns_environment(&self) -> Option<ApnsEnvironment> {
+		self.apns_environment
+			.as_deref()
+			.and_then(ApnsEnvironment::from_str_value)
 	}
 }
 
@@ -1615,6 +1691,7 @@ mod tests {
 			locale: Some(" en_gb ".into()),
 			time_zone: Some("Europe/London".into()),
 			app_version: Some(" 2.1.0 ".into()),
+			apns_environment: None,
 		};
 		let stored = reported.normalized().unwrap();
 		assert_eq!(
@@ -1623,6 +1700,7 @@ mod tests {
 				locale: Some("en-GB".into()),
 				time_zone: Some("Europe/London".into()),
 				app_version: Some("2.1.0".into()),
+				apns_environment: None,
 			}
 		);
 		assert_eq!(stored.language(), Some("en"));
@@ -1633,6 +1711,7 @@ mod tests {
 			locale: Some(String::new()),
 			time_zone: Some("  ".into()),
 			app_version: None,
+			apns_environment: None,
 		};
 		assert_eq!(blank.normalized(), Ok(DeviceDetails::default()));
 		assert!(blank.normalized().unwrap().is_empty());
@@ -1643,6 +1722,7 @@ mod tests {
 			locale: Some("français".into()),
 			time_zone: Some("Europe/London".into()),
 			app_version: Some("2.1".into()),
+			apns_environment: None,
 		};
 		let refusal = odd.normalized().unwrap_err();
 		assert!(refusal.contains("locale"), "{refusal}");
@@ -1653,6 +1733,7 @@ mod tests {
 				locale: None,
 				time_zone: Some("Europe/London".into()),
 				app_version: Some("2.1".into()),
+				apns_environment: None,
 			}
 		);
 

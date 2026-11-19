@@ -123,7 +123,8 @@ This reason means the fix is yours, and it usually affects every device on that 
 
 **APNs (iOS and macOS)**
 
-- `LEPTOSKIT_NOTIFICATIONS_APNS_ENVIRONMENT` does not match the build. A build run from Xcode registers with `sandbox`. A TestFlight, App Store, or notarized build registers with `production`. A token from one is refused by the other. One service has one environment, so development builds and store builds cannot share a service: run a second service, or test push with TestFlight builds.
+- The `.p8` key is not allowed to use the server the device belongs to. A build run from Xcode registers with Apple's sandbox, and a TestFlight, App Store, or notarized build registers with production. The app reports which, and the service [pushes each device through its own server](push-setup.md#development-and-store-builds-on-one-service), with one key for both.
+- `LEPTOSKIT_NOTIFICATIONS_APNS_ENVIRONMENT` does not match a device that reported no environment: an app version from before the report existed, a Mac build without a provisioning profile, or a token you imported without naming one. A token sent to the wrong server is refused, and the device stays enrolled. `person_endpoints` shows what each device reported as `device.apns_environment`.
 - `LEPTOSKIT_NOTIFICATIONS_APNS_TOPIC` is not the app's bundle id.
 - The `.p8` key, its key id, or the team id is wrong, or the key was revoked in your Apple developer account.
 

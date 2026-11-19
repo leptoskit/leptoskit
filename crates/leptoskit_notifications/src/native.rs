@@ -160,6 +160,14 @@ pub fn digest(credential: &PushCredential, details: &DeviceDetails) -> u64 {
 		}
 	}
 
+	// An environment digests only when the device reported one, so an
+	// enrollment saved before the report existed still compares equal
+	// until the device has something new to say.
+	if let Some(environment) = details.apns_environment {
+		feed(&[2]);
+		feed(environment.as_str().as_bytes());
+		feed(&[0]);
+	}
 	hash
 }
 
@@ -173,6 +181,7 @@ pub fn details_from(info: &leptoskit_plugin_notifications::DeviceInfo) -> Device
 		locale: info.locale.clone(),
 		time_zone: info.time_zone.clone(),
 		app_version: info.app_version.clone(),
+		apns_environment: None,
 	}
 	.sanitized()
 }
@@ -196,11 +205,40 @@ pub async fn device_details() -> DeviceDetails {
 			return DeviceDetails::default();
 		};
 
-		notifications
+		let mut details = notifications
 			.device_info()
 			.await
 			.map(|info| details_from(&info))
-			.unwrap_or_default()
+			.unwrap_or_default();
+		// The APNs environment the build is signed for, where the host can
+		// say: an Apple host that has the method. Anything else — Android,
+		// an older host, an answer of "unknown" — leaves it out, and the
+		// service uses the environment it is configured for.
+		details.apns_environment = notifications
+			.aps_environment()
+			.await
+			.ok()
+			.and_then(apns_environment_from);
+
+		details
+	}
+}
+
+/// The APNs environment a host's answer names: a development build's
+/// tokens belong to the sandbox server, every other signed build's to the
+/// production one, and "unknown" names none.
+#[must_use]
+pub fn apns_environment_from(
+	reported: leptoskit_plugin_notifications::ApsEnvironment,
+) -> Option<crate::push::ApnsEnvironment> {
+	match reported {
+		leptoskit_plugin_notifications::ApsEnvironment::Development => {
+			Some(crate::push::ApnsEnvironment::Sandbox)
+		}
+		leptoskit_plugin_notifications::ApsEnvironment::Production => {
+			Some(crate::push::ApnsEnvironment::Production)
+		}
+		leptoskit_plugin_notifications::ApsEnvironment::Unknown => None,
 	}
 }
 
@@ -1096,6 +1134,7 @@ mod tests {
 				locale: Some("zh-Hant-TW".into()),
 				time_zone: None,
 				app_version: Some("3.0 (41)".into()),
+				apns_environment: None,
 			}
 		);
 
@@ -1126,6 +1165,7 @@ mod tests {
 			locale: Some("en-GB".into()),
 			time_zone: Some("Europe/London".into()),
 			app_version: Some("2.1.0".into()),
+			apns_environment: None,
 		};
 		let endpoint = "6ec0f4b1-0000-7000-8000-000000000001".parse().unwrap();
 		let saved = Enrollment {
@@ -1172,6 +1212,7 @@ mod tests {
 			locale: None,
 			time_zone: Some("en-GB".into()),
 			app_version: Some("Europe/London".into()),
+			apns_environment: None,
 		};
 		assert_ne!(digest(&credential, &details), digest(&credential, &shifted));
 
@@ -1206,6 +1247,56 @@ mod tests {
 			),
 			0x9dcd_6d26_c72e_e0a8_u64,
 			"the FNV-1a digest of `fcm\\0token\\0\\0\\0`"
+		);
+
+		// An APNs environment is part of what an enrollment sends once a
+		// build reports one, and each environment digests apart.
+		let signed = |environment| {
+			digest(
+				&credential,
+				&DeviceDetails {
+					apns_environment: environment,
+					..details.clone()
+				},
+			)
+		};
+		assert_eq!(signed(None), digest(&credential, &details));
+		assert_ne!(
+			signed(Some(crate::push::ApnsEnvironment::Sandbox)),
+			signed(None),
+			"a build that starts reporting its environment enrolls once more"
+		);
+		assert_ne!(
+			signed(Some(crate::push::ApnsEnvironment::Sandbox)),
+			signed(Some(crate::push::ApnsEnvironment::Production))
+		);
+	}
+
+	/// A development build's tokens belong to the sandbox server, every
+	/// other signed build's to production, and a host that cannot tell
+	/// names neither.
+	#[test]
+	fn a_hosts_aps_environment_names_the_apns_server() {
+		use leptoskit_plugin_notifications::ApsEnvironment;
+
+		use crate::push::ApnsEnvironment;
+
+		assert_eq!(
+			super::apns_environment_from(ApsEnvironment::Development),
+			Some(ApnsEnvironment::Sandbox)
+		);
+		assert_eq!(
+			super::apns_environment_from(ApsEnvironment::Production),
+			Some(ApnsEnvironment::Production)
+		);
+		assert_eq!(super::apns_environment_from(ApsEnvironment::Unknown), None);
+		assert_eq!(
+			serde_json::to_value(DeviceDetails {
+				apns_environment: Some(ApnsEnvironment::Sandbox),
+				..DeviceDetails::default()
+			})
+			.unwrap(),
+			serde_json::json!({ "apns_environment": "sandbox" })
 		);
 	}
 

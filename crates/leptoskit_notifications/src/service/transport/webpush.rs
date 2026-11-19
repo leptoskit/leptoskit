@@ -56,6 +56,7 @@ use crate::service::transport::Message;
 use crate::service::transport::Outcome;
 use crate::service::transport::Pinned;
 use crate::service::transport::Shaped;
+use crate::service::transport::Target;
 use crate::service::transport::Transport;
 use crate::service::transport::WireRequest;
 use crate::service::transport::WireResponse;
@@ -281,10 +282,12 @@ enum BuildFailure {
 impl Transport for WebPush {
 	fn attempt<'a>(
 		&'a self,
-		credential: &'a str,
+		target: Target<'a>,
 		message: &'a Message,
 	) -> Pin<Box<dyn Future<Output = Outcome> + Send + 'a>> {
 		let send = async move {
+			let credential = target.credential;
+
 			// Browsers require every push to show a notification — Chrome
 			// shows its own generic one, Safari revokes the subscription,
 			// Edge takes no silent subscriptions — and the worker has no

@@ -812,4 +812,40 @@ struct ReceivedNotificationTests {
         #expect(delegate === NotificationCenterDelegate.shared)
         plugin.close()
     }
+
+    /// Apple's hosts advertise the APNs environment method, and a
+    /// provisioning profile's entitlements say which environment a build
+    /// is signed for, under the name either platform spells it with. The
+    /// profile bytes are made up for this test.
+    @Test
+    func aProvisioningProfileNamesTheApnsEnvironment() {
+        let plugin = NotificationsPlugin(service: Service())
+
+        #if os(iOS) || os(macOS)
+        #expect(plugin.methods.contains(11))
+        #else
+        #expect(!plugin.methods.contains(11))
+        #endif
+        plugin.close()
+
+        func profile(_ key: String, _ value: String) -> Data {
+            let list = "<?xml version=\"1.0\" encoding=\"UTF-8\"?><plist version=\"1.0\"><dict>"
+                + "<key>Entitlements</key><dict><key>\(key)</key><string>\(value)</string></dict>"
+                + "</dict></plist>"
+
+            return Data("signature".utf8) + Data(list.utf8) + Data("trailer".utf8)
+        }
+
+        #expect(ApsEnvironment.named(inProfile: profile("aps-environment", "development")) == .development)
+        #expect(ApsEnvironment.named(inProfile: profile("aps-environment", "production")) == .production)
+        #expect(
+            ApsEnvironment.named(inProfile: profile("com.apple.developer.aps-environment", "production"))
+                == .production
+        )
+        #expect(ApsEnvironment.named(inProfile: profile("aps-environment", "other")) == nil)
+        #expect(ApsEnvironment.named(inProfile: profile("get-task-allow", "development")) == nil)
+        #expect(ApsEnvironment.named(inProfile: Data("no property list".utf8)) == nil)
+        #expect(NotificationsPlugin.encodeApsEnvironment(.development) == Data([1, 0, 0, 0]))
+        #expect(NotificationsPlugin.encodeApsEnvironment(.production) == Data([2, 0, 0, 0]))
+    }
 }

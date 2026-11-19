@@ -169,23 +169,23 @@ The checks the service runs are public functions of the crate, so a form can run
 
 The service starts with an empty environment. It receives a variable only when the `secrets` list of your `[services.notifications]` table names it. A variable that is set but not listed does not reach the service.
 
-| Variable                                             | For                               | Explained in                                                                    |
-| ---------------------------------------------------- | --------------------------------- | ------------------------------------------------------------------------------- |
-| `LEPTOSKIT_NOTIFICATIONS_APNS_KEY_P8`                | APNs: the `.p8` key's contents    | [Push setup](push-setup.md#configure-a-transport)                               |
-| `LEPTOSKIT_NOTIFICATIONS_APNS_KEY_ID`                | APNs: the key's id                | [Push setup](push-setup.md#configure-a-transport)                               |
-| `LEPTOSKIT_NOTIFICATIONS_APNS_TEAM_ID`               | APNs: your team id                | [Push setup](push-setup.md#configure-a-transport)                               |
-| `LEPTOSKIT_NOTIFICATIONS_APNS_TOPIC`                 | APNs: the app's bundle id         | [Push setup](push-setup.md#configure-a-transport)                               |
-| `LEPTOSKIT_NOTIFICATIONS_APNS_ENVIRONMENT`           | APNs: `sandbox` or `production`   | [Push setup](push-setup.md#configure-a-transport)                               |
-| `LEPTOSKIT_NOTIFICATIONS_FCM_SERVICE_ACCOUNT`        | FCM: the service-account JSON     | [Push setup](push-setup.md#configure-a-transport)                               |
-| `LEPTOSKIT_NOTIFICATIONS_WEB_PUSH_VAPID_PRIVATE_KEY` | Web Push: the private key         | [Push setup](push-setup.md#configure-a-transport)                               |
-| `LEPTOSKIT_NOTIFICATIONS_WEB_PUSH_VAPID_PUBLIC_KEY`  | Web Push: the public key          | [Push setup](push-setup.md#configure-a-transport)                               |
-| `LEPTOSKIT_NOTIFICATIONS_WEB_PUSH_VAPID_SUBJECT`     | Web Push: your contact address    | [Push setup](push-setup.md#configure-a-transport)                               |
-| `LEPTOSKIT_NOTIFICATIONS_WEB_PUSH_EXTRA_HOSTS`       | Web Push: more push services      | [Push setup](push-setup.md#which-push-services-a-browser-may-use)               |
-| `LEPTOSKIT_NOTIFICATIONS_OPEN_TOPICS`                | topics people may join themselves | [Audiences](audiences.md#let-people-subscribe-themselves)                       |
-| `LEPTOSKIT_NOTIFICATIONS_RETENTION_INBOX_DAYS`       | retention, default 365            | [Privacy and data retention](privacy-and-retention.md#how-long-things-are-kept) |
-| `LEPTOSKIT_NOTIFICATIONS_RETENTION_ENDED_DAYS`       | retention, default 30             | [Privacy and data retention](privacy-and-retention.md#how-long-things-are-kept) |
-| `LEPTOSKIT_NOTIFICATIONS_RETENTION_DELIVERIES_DAYS`  | retention, default 30             | [Privacy and data retention](privacy-and-retention.md#how-long-things-are-kept) |
-| `LEPTOSKIT_NOTIFICATIONS_RETENTION_SENDS_DAYS`       | retention, default 90             | [Privacy and data retention](privacy-and-retention.md#how-long-things-are-kept) |
+| Variable                                             | For                                                                 | Explained in                                                                    |
+| ---------------------------------------------------- | ------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| `LEPTOSKIT_NOTIFICATIONS_APNS_KEY_P8`                | APNs: the `.p8` key's contents                                      | [Push setup](push-setup.md#configure-a-transport)                               |
+| `LEPTOSKIT_NOTIFICATIONS_APNS_KEY_ID`                | APNs: the key's id                                                  | [Push setup](push-setup.md#configure-a-transport)                               |
+| `LEPTOSKIT_NOTIFICATIONS_APNS_TEAM_ID`               | APNs: your team id                                                  | [Push setup](push-setup.md#configure-a-transport)                               |
+| `LEPTOSKIT_NOTIFICATIONS_APNS_TOPIC`                 | APNs: the app's bundle id                                           | [Push setup](push-setup.md#configure-a-transport)                               |
+| `LEPTOSKIT_NOTIFICATIONS_APNS_ENVIRONMENT`           | APNs: `sandbox` or `production`, for a device that reported neither | [Push setup](push-setup.md#configure-a-transport)                               |
+| `LEPTOSKIT_NOTIFICATIONS_FCM_SERVICE_ACCOUNT`        | FCM: the service-account JSON                                       | [Push setup](push-setup.md#configure-a-transport)                               |
+| `LEPTOSKIT_NOTIFICATIONS_WEB_PUSH_VAPID_PRIVATE_KEY` | Web Push: the private key                                           | [Push setup](push-setup.md#configure-a-transport)                               |
+| `LEPTOSKIT_NOTIFICATIONS_WEB_PUSH_VAPID_PUBLIC_KEY`  | Web Push: the public key                                            | [Push setup](push-setup.md#configure-a-transport)                               |
+| `LEPTOSKIT_NOTIFICATIONS_WEB_PUSH_VAPID_SUBJECT`     | Web Push: your contact address                                      | [Push setup](push-setup.md#configure-a-transport)                               |
+| `LEPTOSKIT_NOTIFICATIONS_WEB_PUSH_EXTRA_HOSTS`       | Web Push: more push services                                        | [Push setup](push-setup.md#which-push-services-a-browser-may-use)               |
+| `LEPTOSKIT_NOTIFICATIONS_OPEN_TOPICS`                | topics people may join themselves                                   | [Audiences](audiences.md#let-people-subscribe-themselves)                       |
+| `LEPTOSKIT_NOTIFICATIONS_RETENTION_INBOX_DAYS`       | retention, default 365                                              | [Privacy and data retention](privacy-and-retention.md#how-long-things-are-kept) |
+| `LEPTOSKIT_NOTIFICATIONS_RETENTION_ENDED_DAYS`       | retention, default 30                                               | [Privacy and data retention](privacy-and-retention.md#how-long-things-are-kept) |
+| `LEPTOSKIT_NOTIFICATIONS_RETENTION_DELIVERIES_DAYS`  | retention, default 30                                               | [Privacy and data retention](privacy-and-retention.md#how-long-things-are-kept) |
+| `LEPTOSKIT_NOTIFICATIONS_RETENTION_SENDS_DAYS`       | retention, default 90                                               | [Privacy and data retention](privacy-and-retention.md#how-long-things-are-kept) |
 
 ## Settings in `leptoskit.toml`
 

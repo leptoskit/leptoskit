@@ -2058,6 +2058,7 @@ mod tests {
 			locale: Some(locale.into()),
 			time_zone: Some(time_zone.into()),
 			app_version: Some(app_version.into()),
+			apns_environment: None,
 		}
 	}
 

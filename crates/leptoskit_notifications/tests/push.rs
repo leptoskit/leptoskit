@@ -744,6 +744,7 @@ async fn enroll_directly(service: &Service, people: &[Uuid]) {
 			app_version: None,
 			seen_at: None,
 			imported_at: None,
+			apns_environment: None,
 		}
 		.insert(&tx)
 		.await
@@ -6623,4 +6624,117 @@ async fn a_raw_android_channel_id_is_sent_as_given() {
 	let (status, body) = send(&service, "raw-channel-long", spec, &[ALICE]).await;
 	assert_eq!(status, 400, "{body}");
 	assert!(body.contains("options.android.raw_channel_id"), "{body}");
+}
+
+/// Apple's production server, where the tests' service is configured for
+/// the sandbox one ([`APNS_HOST`]).
+const APNS_PRODUCTION_HOST: &str = "https://api.push.apple.com/";
+
+/// Each Apple device is pushed through the APNs environment its build
+/// reported when it enrolled, so development builds and store builds share
+/// one service. A device that reported none goes through the environment
+/// the service is configured for, as every device did before. A test send
+/// follows the same rule, a later enrollment replaces what an earlier one
+/// said, and an environment that isn't one is refused.
+#[tokio::test(flavor = "multi_thread")]
+async fn each_apple_device_is_pushed_through_the_environment_it_reported() {
+	let mock = Mock::new();
+	let mut service = service(&mock, &all_transports()).await;
+	mock.scripted(passing_exchange());
+	service.resume();
+
+	let (store, development, silent) = (device_token(71), device_token(72), device_token(73));
+	let enroll_with = |token: String, device: Value| {
+		let service = &service;
+		async move {
+			post(
+				service,
+				"register_push_endpoint",
+				json!({ "credential": apns_credential(&token), "device": device }),
+				Some(&signed_in(ALICE)),
+			)
+			.await
+		}
+	};
+
+	for (token, device) in [
+		(&store, json!({ "apns_environment": "production" })),
+		(&development, json!({ "apns_environment": "sandbox" })),
+		(&silent, json!({})),
+	] {
+		let (status, body) = enroll_with(token.clone(), device).await;
+		assert_eq!(status, 200, "{body}");
+	}
+
+	let host_of = |token: &str, nth: usize| {
+		let seen = mock
+			.requests()
+			.into_iter()
+			.filter(|seen| seen.url.ends_with(token))
+			.nth(nth)
+			.unwrap_or_else(|| panic!("push {nth} to the device"));
+		seen.url
+	};
+
+	let (status, body) = send(&service, "environments-1", spec(), &[ALICE]).await;
+	assert_eq!(status, 200, "{body}");
+	assert_eq!(
+		settled(&service, "environments-1").await,
+		vec![("accepted".to_owned(), None); 3]
+	);
+	assert!(
+		host_of(&store, 0).starts_with(APNS_PRODUCTION_HOST),
+		"a store build's token goes to production: {}",
+		host_of(&store, 0)
+	);
+	assert!(host_of(&development, 0).contains(APNS_HOST));
+	assert!(
+		host_of(&silent, 0).contains(APNS_HOST),
+		"a device that reported nothing goes where the service is configured to"
+	);
+
+	// A test send picks the server the same way.
+	let (status, body) = post(
+		&service,
+		"send_test",
+		json!({ "spec": spec(), "person": ALICE }),
+		Some(TOKEN),
+	)
+	.await;
+	assert_eq!(status, 200, "{body}");
+	assert!(host_of(&store, 1).starts_with(APNS_PRODUCTION_HOST));
+	assert!(host_of(&development, 1).contains(APNS_HOST));
+	assert!(host_of(&silent, 1).contains(APNS_HOST));
+
+	// The device that said nothing updates to a build that reports its
+	// environment: the same endpoint, pushed through production from now.
+	let before = delivery_status(&service, "environments-1").await;
+	let (status, body) =
+		enroll_with(silent.clone(), json!({ "apns_environment": "production" })).await;
+	assert_eq!(status, 200, "{body}");
+	let (status, body) = send(&service, "environments-2", spec(), &[ALICE]).await;
+	assert_eq!(status, 200, "{body}");
+	assert_eq!(
+		settled(&service, "environments-2").await,
+		vec![("accepted".to_owned(), None); 3]
+	);
+	assert!(host_of(&silent, 2).starts_with(APNS_PRODUCTION_HOST));
+	let endpoints = |deliveries: &[Value]| {
+		let mut ids = deliveries
+			.iter()
+			.map(|delivery| delivery["endpoint"].as_str().unwrap().to_owned())
+			.collect::<Vec<_>>();
+		ids.sort();
+		ids
+	};
+	assert_eq!(
+		endpoints(&before),
+		endpoints(&delivery_status(&service, "environments-2").await),
+		"the endpoints are the same three"
+	);
+
+	// An environment is one of Apple's two.
+	let (status, body) =
+		enroll_with(device_token(74), json!({ "apns_environment": "staging" })).await;
+	assert_eq!(status, 400, "{body}");
 }

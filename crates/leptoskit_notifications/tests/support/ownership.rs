@@ -1278,3 +1278,112 @@ pub async fn an_import_needs_the_platforms_transport(address: std::net::SocketAd
 		"nothing was written"
 	);
 }
+
+/// An Apple endpoint keeps the APNs environment its build reported: the
+/// app's server reads it back, a later enrollment replaces it, an import
+/// can state it, and an endpoint that is not Apple's stores none.
+pub async fn an_endpoint_keeps_the_apns_environment_it_reported(
+	address: std::net::SocketAddr,
+	db: &Db,
+) {
+	let phone = apns(0xF1);
+	let enroll_with = |credential: Value, device: Value| {
+		async move {
+			ok(
+				address,
+				"register_push_endpoint",
+				json!({ "credential": credential, "device": device }),
+				Some(ALICE),
+			)
+			.await
+		}
+	};
+	let stored = || {
+		async {
+			let sql = Sql(db.dialect());
+			rows(
+				db,
+				format!(
+					"SELECT platform, apns_environment FROM push_endpoints WHERE person = {} \
+					 ORDER BY id",
+					sql.uuid(ALICE)
+				),
+			)
+			.await
+			.into_iter()
+			.map(|row| {
+				let text = |value: &leptoskit_db::Value| {
+					match value {
+						leptoskit_db::Value::Text(text) => Some(text.clone()),
+						_ => None,
+					}
+				};
+				(text(&row[0]).unwrap_or_default(), text(&row[1]))
+			})
+			.collect::<Vec<_>>()
+		}
+	};
+
+	let enrolled = enroll_with(
+		phone.clone(),
+		json!({ "apns_environment": "production", "locale": "en" }),
+	)
+	.await;
+	assert_eq!(
+		enrolled["device"],
+		json!({ "locale": "en", "apns_environment": "production" })
+	);
+	assert_eq!(
+		stored().await,
+		vec![("apns".to_owned(), Some("production".to_owned()))]
+	);
+	assert_eq!(
+		person_endpoints(address, ALICE).await[0]["device"]["apns_environment"],
+		"production"
+	);
+
+	// A development build installed over it says so, on the same endpoint.
+	let again = enroll_with(
+		phone.clone(),
+		json!({ "apns_environment": "sandbox", "locale": "en" }),
+	)
+	.await;
+	assert_eq!(again["id"], enrolled["id"]);
+	assert_eq!(
+		stored().await,
+		vec![("apns".to_owned(), Some("sandbox".to_owned()))]
+	);
+
+	// A build that reports nothing leaves none: the service's configured
+	// environment is used for it.
+	enroll_with(phone, json!({ "locale": "en" })).await;
+	assert_eq!(stored().await, vec![("apns".to_owned(), None)]);
+
+	// An import states it for an Apple token, and an FCM token has none
+	// whatever the call says.
+	let (status, body) = import(
+		address,
+		json!([
+			{
+				"person": ALICE,
+				"credential": apns(0xF2),
+				"device": { "apns_environment": "production" },
+			},
+			{
+				"person": ALICE,
+				"credential": fcm("fcm-with-an-environment"),
+				"device": { "apns_environment": "production" },
+			},
+		]),
+	)
+	.await;
+	assert_eq!(status, 200, "{body}");
+	assert_eq!(
+		stored().await,
+		vec![
+			("apns".to_owned(), None),
+			("apns".to_owned(), Some("production".to_owned())),
+			("fcm".to_owned(), None),
+		]
+	);
+}

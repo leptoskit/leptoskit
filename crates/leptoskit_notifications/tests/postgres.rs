@@ -1291,6 +1291,18 @@ async fn an_import_needs_the_platforms_transport_on_postgres() {
 	ownership::an_import_needs_the_platforms_transport(address, &db).await;
 }
 
+/// The APNs environment an endpoint reported is stored and replaced on
+/// Postgres too.
+#[tokio::test(flavor = "multi_thread")]
+#[cfg(feature = "service")]
+async fn an_endpoint_keeps_the_apns_environment_it_reported_on_postgres() {
+	let Some(postgres) = Postgres::start() else {
+		return;
+	};
+	let (address, db) = ownership_service_with_fcm(&postgres).await;
+	ownership::an_endpoint_keeps_the_apns_environment_it_reported(address, &db).await;
+}
+
 /// A device passes to the next person who enrolls on it on Postgres too:
 /// the previous owner's row is deleted and the new one inserted under the
 /// same unique fingerprint, in one transaction.

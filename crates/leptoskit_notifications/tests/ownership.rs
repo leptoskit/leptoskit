@@ -95,3 +95,9 @@ async fn an_import_needs_the_platforms_transport() {
 	let (address, db) = service().await;
 	ownership::an_import_needs_the_platforms_transport(address, &db).await;
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_endpoint_keeps_the_apns_environment_it_reported() {
+	let (address, db) = service_with_fcm().await;
+	ownership::an_endpoint_keeps_the_apns_environment_it_reported(address, &db).await;
+}
