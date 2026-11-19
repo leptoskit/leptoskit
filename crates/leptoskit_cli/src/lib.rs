@@ -29,6 +29,7 @@ pub mod build;
 pub mod cache;
 pub mod cargo_messages;
 pub mod cli;
+pub mod cloud;
 pub mod codepush;
 pub mod compress;
 

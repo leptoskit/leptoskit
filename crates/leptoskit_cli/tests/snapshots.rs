@@ -132,6 +132,7 @@ fn help_text_is_pinned() {
 		&["workspace", "plan", "--help"][..],
 		&["workspace", "deploy", "--help"][..],
 		&["console", "--help"][..],
+		&["cloud", "--help"][..],
 		&["console", "serve", "--help"][..],
 		&["console", "worker", "--help"][..],
 		&["console", "connect", "--help"][..],

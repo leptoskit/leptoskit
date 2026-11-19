@@ -11,23 +11,17 @@
 //! None of these tables is `public`: clients never read them directly, only
 //! through the operations, which decide who sees which rows.
 
-#[cfg(feature = "server")]
+// Tables are server-only; client types are plain serde types and operations
+// never return rows.
 use leptoskit_auth::Account;
-#[cfg(feature = "server")]
 use leptoskit_db::Id;
-#[cfg(feature = "server")]
 use leptoskit_db::Json;
-#[cfg(feature = "server")]
 use leptoskit_db::Timestamp;
 use leptoskit_db::table;
 
-#[cfg(feature = "server")]
 use crate::access::Role;
-#[cfg(feature = "server")]
 use crate::access::TokenScope;
-#[cfg(feature = "server")]
 use crate::projects::EnvironmentKind;
-#[cfg(feature = "server")]
 use crate::projects::EnvironmentScale;
 
 /// An organisation: the tenant everything else belongs to. Each person has

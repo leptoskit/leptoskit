@@ -1,0 +1,33 @@
+---
+source: crates/leptoskit_cli/src/cloud/tests.rs
+expression: help
+---
+Emails an invitation to join
+
+Usage: invite [OPTIONS] --role <ROLE> <ORGANIZATION> <EMAIL>
+
+Arguments:
+  <ORGANIZATION>
+          
+
+  <EMAIL>
+          
+
+Options:
+      --role <ROLE>
+          
+
+      --url <URL>
+          Cloud origin; overrides `LEPTOSKIT_CLOUD_URL` and [cloud].url
+
+      --json
+          Prints the documented JSON result
+
+      --org <ORG>
+          Organization slug; defaults to [cloud].organization or your personal one
+
+      --project <PROJECT>
+          Project slug; defaults to [cloud].project
+
+  -h, --help
+          Print help

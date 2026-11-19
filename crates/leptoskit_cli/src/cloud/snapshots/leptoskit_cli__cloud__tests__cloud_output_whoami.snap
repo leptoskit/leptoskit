@@ -1,0 +1,15 @@
+---
+source: crates/leptoskit_cli/src/cloud/tests.rs
+expression: human(&output)
+---
+account: 00000000-0000-0000-0000-000000000001
+email: person@example.com
+operator: false
+organizations: id: 00000000-0000-0000-0000-000000000001
+name: Team
+personal: false
+plan: hobby
+role: owner
+slug: team
+token: Done.
+via: cli

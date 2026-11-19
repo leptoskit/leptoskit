@@ -1,0 +1,39 @@
+---
+source: crates/leptoskit_cli/src/cloud/tests.rs
+expression: help
+---
+Reads the current revision and changes the app's scale
+
+Usage: update [OPTIONS] <NAME>
+
+Arguments:
+  <NAME>
+          
+
+Options:
+      --size <SIZE>
+          
+
+      --url <URL>
+          Cloud origin; overrides `LEPTOSKIT_CLOUD_URL` and [cloud].url
+
+      --json
+          Prints the documented JSON result
+
+      --min <MIN>
+          
+
+      --max <MAX>
+          
+
+      --org <ORG>
+          Organization slug; defaults to [cloud].organization or your personal one
+
+      --project <PROJECT>
+          Project slug; defaults to [cloud].project
+
+      --sleep <SLEEP>
+          
+
+  -h, --help
+          Print help

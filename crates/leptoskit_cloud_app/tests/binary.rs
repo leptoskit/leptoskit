@@ -101,6 +101,56 @@ async fn start(mut command: Command) -> Running {
 }
 
 #[tokio::test]
+async fn development_serves_identity_protocol_and_readiness_routes() {
+	let server = start(control(
+		&[
+			("LEPTOSKIT_CLOUD_DATABASE_URL", "sqlite::memory:"),
+			("LEPTOSKIT_CLOUD_BIND", "127.0.0.1:0"),
+		],
+		&["serve", "--dev"],
+	))
+	.await;
+	let client = reqwest::Client::builder()
+		.no_proxy()
+		.build()
+		.expect("client");
+	for path in [
+		"/.well-known/openid-configuration",
+		"/.well-known/leptoskit-cloud",
+		"/readyz",
+		"/healthz",
+	] {
+		let response = client
+			.get(format!("{}{path}", server.origin))
+			.send()
+			.await
+			.expect("route responds");
+		assert_eq!(response.status().as_u16(), 200, "{path}");
+	}
+	let discovery: Value = client
+		.get(format!("{}/.well-known/leptoskit-cloud", server.origin))
+		.send()
+		.await
+		.expect("cloud discovery")
+		.json()
+		.await
+		.expect("JSON");
+	let device = client
+		.post(format!("{}/oauth/device_authorization", server.origin))
+		.form(&[
+			(
+				"client_id",
+				discovery["cli_client_id"].as_str().expect("client ID"),
+			),
+			("scope", discovery["scope"].as_str().expect("scopes")),
+		])
+		.send()
+		.await
+		.expect("device authorization");
+	assert_eq!(device.status().as_u16(), 200);
+}
+
+#[tokio::test]
 async fn development_listens_on_this_machine_only() {
 	let (ok, _, stderr) = finish(control(
 		&[

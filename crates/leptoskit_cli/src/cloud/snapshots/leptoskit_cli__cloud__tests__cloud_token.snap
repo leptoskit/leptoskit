@@ -1,0 +1,29 @@
+---
+source: crates/leptoskit_cli/src/cloud/tests.rs
+expression: help
+---
+Manages scoped API tokens for CI
+
+Usage: token [OPTIONS] <COMMAND>
+
+Commands:
+  list    Lists live token metadata, never values
+  create  Creates a scoped token and shows its value once
+  revoke  Revokes a token; requires its ID again as confirmation
+  help    Print this message or the help of the given subcommand(s)
+
+Options:
+      --url <URL>
+          Cloud origin; overrides `LEPTOSKIT_CLOUD_URL` and [cloud].url
+
+      --json
+          Prints the documented JSON result
+
+      --org <ORG>
+          Organization slug; defaults to [cloud].organization or your personal one
+
+      --project <PROJECT>
+          Project slug; defaults to [cloud].project
+
+  -h, --help
+          Print help

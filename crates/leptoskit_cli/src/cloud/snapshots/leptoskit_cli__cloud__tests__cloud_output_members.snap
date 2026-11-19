@@ -1,0 +1,8 @@
+---
+source: crates/leptoskit_cli/src/cloud/tests.rs
+expression: human(&output)
+---
+account: 00000000-0000-0000-0000-000000000001
+email: person@example.com
+joined_at: 2026-11-18T00:00:00Z
+role: owner

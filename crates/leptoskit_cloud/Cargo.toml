@@ -16,7 +16,7 @@ description = "LeptosKit Cloud's shared types: slugs, sizes, deployment states, 
 # Without features: types the dashboard (wasm), the CLI, the control plane,
 # and the workers all share, with no server dependencies and nothing that
 # needs a filesystem; `tests/dependencies.rs` keeps it that way. That
-# includes the control plane's tables and its operations' argument and
+# includes the control plane's operations' argument and
 # result types, which the CLI and the dashboard call. The optional crates
 # pack a project (the CLI) and unpack it (the build worker); only the
 # `archive` feature compiles them.
@@ -30,7 +30,6 @@ getrandom = { workspace = true, optional = true }
 hex = { workspace = true, optional = true }
 http = { workspace = true, optional = true }
 ignore = { workspace = true, optional = true }
-# Sign-in, and `Id<Account>` in the tables.
 leptoskit_auth = { workspace = true, optional = true }
 leptoskit_axum = { workspace = true, optional = true }
 # `schema`: the sizes and sleep the environment operations carry describe
@@ -72,7 +71,6 @@ server = [
 	"dep:getrandom",
 	"dep:hex",
 	"dep:http",
-	"dep:leptoskit_auth",
 	"dep:leptoskit_axum",
 	"dep:leptoskit_idp",
 	"dep:sha2",
