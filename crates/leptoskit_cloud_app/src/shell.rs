@@ -17,6 +17,7 @@ use leptoskit_router::Routable as _;
 use crate::components::CostMeter;
 use crate::components::ICON_ACCOUNT;
 use crate::components::ICON_APPS;
+use crate::components::ICON_BILLING;
 use crate::components::ICON_PLUS;
 use crate::components::ICON_SEARCH;
 use crate::components::ICON_SWITCH;
@@ -52,10 +53,11 @@ pub fn desk(children: Children) -> Element {
 #[must_use]
 pub fn current_organization<'a>(route: &Route, me: &'a WhoAmI) -> Option<&'a OrganizationSummary> {
 	match route {
-		Route::Org(route) => {
+		Route::Org(crate::routes::Org { org })
+		| Route::OrgBilling(crate::routes::OrgBilling { org }) => {
 			me.organizations
 				.iter()
-				.find(|organization| organization.slug == route.org)
+				.find(|organization| &organization.slug == org)
 		}
 		_ => first_organization(me),
 	}
@@ -374,6 +376,15 @@ fn rail(console: &Console, chrome: &Chrome) -> Element {
 			&format!("/{}/new", organization.slug),
 			false,
 		))
+		.child(rail_item(
+			console.focus,
+			"rail-billing",
+			"Billing",
+			"Billing",
+			ICON_BILLING,
+			&format!("/{}/settings/billing", organization.slug),
+			matches!(&chrome.route, Route::OrgBilling(route) if route.org == organization.slug),
+		))
 }
 
 fn filter(console: &Console) -> Element {
@@ -526,7 +537,7 @@ fn tab_bar(chrome: &Chrome) -> Element {
 		|| "/organizations".to_owned(),
 		|org| format!("/{}", org.slug),
 	);
-	let on_apps = matches!(chrome.route, Route::Org(_));
+	let on_apps = matches!(chrome.route, Route::Org(_) | Route::OrgBilling(_));
 	let on_you = matches!(chrome.route, Route::Account | Route::Organizations);
 
 	View()

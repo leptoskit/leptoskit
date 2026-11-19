@@ -11,6 +11,7 @@ expression: "readable(desktop.palette(Appearance::Dark))"
 "/"                                          #9d93a8 on #1d1726  5.96
 "Projects"                                   #c9c0d0 on #1d1726  9.92
 "New project"                                #c9c0d0 on #1d1726  9.92
+"Billing"                                    #c9c0d0 on #1d1726  9.92
 "Organisations"                              #f4efe8 on #16111f 16.19
 "Create an organisation"                     #f4efe8 on #1d1726 15.26
 "ana"                                        #f4efe8 on #1d1726 15.26

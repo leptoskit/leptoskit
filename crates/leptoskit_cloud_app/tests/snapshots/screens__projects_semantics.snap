@@ -17,6 +17,7 @@ navigation "Console"
     listitem
       button "Blog"
   button "New project"
+  button "Billing"
 main
   heading(1) "Projects"
   button "New project"

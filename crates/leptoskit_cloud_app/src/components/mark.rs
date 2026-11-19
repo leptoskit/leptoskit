@@ -45,6 +45,8 @@ pub const ICON_SEARCH: &str = "M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14z|M20 20l-4-4
 pub const ICON_PLUS: &str = "M12 5v14|M5 12h14";
 /// Switch: two arrows.
 pub const ICON_SWITCH: &str = "M7 7h12l-3-3|M17 17H5l3 3";
+/// Billing: a card.
+pub const ICON_BILLING: &str = "M3 6h18v12H3z|M3 10h18|M7 15h4";
 
 /// Every icon, for the test that checks each one parses.
 #[cfg(test)]

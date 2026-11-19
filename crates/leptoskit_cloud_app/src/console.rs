@@ -39,6 +39,7 @@ use leptoskit::query::use_mutation;
 use leptoskit::query::use_query_with;
 use leptoskit::rpc::FnError;
 use leptoskit::rpc::client::Args;
+use leptoskit::rpc::client::action_scope;
 use leptoskit::rpc::client::mutation_scope;
 use leptoskit::rpc::client::query_scope;
 use leptoskit_cloud::account::CreateOrganization;
@@ -46,6 +47,17 @@ use leptoskit_cloud::account::OrganizationSummary;
 use leptoskit_cloud::account::Organizations;
 use leptoskit_cloud::account::WhoAmI;
 use leptoskit_cloud::account::Whoami;
+use leptoskit_cloud::billing::BillingLink;
+use leptoskit_cloud::billing::Checkout;
+use leptoskit_cloud::billing::PlanList;
+use leptoskit_cloud::billing::Plans;
+use leptoskit_cloud::billing::Portal;
+use leptoskit_cloud::billing::SetSpendCap;
+use leptoskit_cloud::billing::SpendCap;
+use leptoskit_cloud::billing::Subscription;
+use leptoskit_cloud::billing::SubscriptionSummary;
+use leptoskit_cloud::billing::Usage;
+use leptoskit_cloud::billing::UsageReport;
 use leptoskit_cloud::projects::ProjectSummary;
 use leptoskit_cloud::projects::Projects;
 
@@ -191,6 +203,84 @@ pub struct AccountState {
 	pub link_provider: MutationHandle<StartProvider, (), ErrorResponse>,
 	/// Signing out of this device.
 	pub sign_out: MutationHandle<(), (), ErrorResponse>,
+}
+
+/// The billing page's reads and actions.
+#[derive(Clone, Copy)]
+pub struct BillingState {
+	/// The plan and the subscription that pays for it.
+	pub subscription: QueryHandle<SubscriptionSummary, FnError>,
+	/// The plans and prices this cloud offers.
+	pub plans: QueryHandle<PlanList, FnError>,
+	/// This month's usage, priced.
+	pub usage: QueryHandle<UsageReport, FnError>,
+	/// The spend cap, as typed, in the currency's major unit.
+	pub cap: RwSignal<String>,
+	/// Setting the spend cap.
+	pub set_cap: MutationHandle<SetSpendCap, SpendCap, FnError>,
+	/// Asking the payment provider for a checkout page.
+	pub checkout: MutationHandle<Checkout, BillingLink, FnError>,
+	/// Asking the payment provider for its portal.
+	pub portal: MutationHandle<Portal, BillingLink, FnError>,
+}
+
+impl BillingState {
+	/// The billing page's reads, asked on `/<org>/settings/billing` only,
+	/// in this order.
+	fn new(navigation: &Navigation) -> Self {
+		let organization = {
+			let navigation = navigation.clone();
+			move || {
+				match navigation.current() {
+					Route::OrgBilling(route) => Some(route.org),
+					_ => None,
+				}
+			}
+		};
+
+		Self {
+			subscription: use_query_with(
+				query_scope::<Subscription>(),
+				{
+					let organization = organization.clone();
+					move || {
+						organization().map(|organization| Args::new(Subscription { organization }))
+					}
+				},
+				QueryObserverOptions::default(),
+			),
+			plans: use_query_with(
+				query_scope::<Plans>(),
+				{
+					let organization = organization.clone();
+					move || organization().map(|_| Args::new(Plans {}))
+				},
+				QueryObserverOptions::default(),
+			),
+			usage: use_query_with(
+				query_scope::<Usage>(),
+				move || {
+					organization().map(|organization| {
+						Args::new(Usage {
+							organization,
+							period: None,
+						})
+					})
+				},
+				QueryObserverOptions::default(),
+			),
+			cap: RwSignal::new(String::new()),
+			set_cap: use_mutation(
+				mutation_scope::<SetSpendCap>().with_on_success_async(|args| {
+					async move {
+						args.client.invalidate_scope(&query_scope::<Usage>()).await;
+					}
+				}),
+			),
+			checkout: use_mutation(action_scope::<Checkout>()),
+			portal: use_mutation(action_scope::<Portal>()),
+		}
+	}
 }
 
 impl SignInFlow {
@@ -351,6 +441,8 @@ pub struct Console {
 	pub new_organization: NewOrganization,
 	/// The account page.
 	pub account: AccountState,
+	/// The billing page.
+	pub billing: BillingState,
 	/// Which cards are turned over.
 	pub turned: Turned,
 	/// The control whose focus ring shows.
@@ -443,6 +535,7 @@ impl Console {
 		);
 		let device = DeviceFlow::new(navigation);
 		let account = AccountState::new(navigation);
+		let billing = BillingState::new(navigation);
 		let sign_in = SignInFlow::new();
 		let new_organization = NewOrganization::new();
 		// The organisation on screen: the one in the address, or the
@@ -456,6 +549,7 @@ impl Console {
 				move || {
 					let organization = match navigation.current() {
 						Route::Org(route) => route.org,
+						Route::OrgBilling(route) => route.org,
 						Route::Home
 						| Route::SignIn(_)
 						| Route::SignInEmail(_)
@@ -494,6 +588,7 @@ impl Console {
 			device,
 			new_organization,
 			account,
+			billing,
 			turned: Turned::new(),
 			focus: RwSignal::new(None),
 			filter: RwSignal::new(String::new()),

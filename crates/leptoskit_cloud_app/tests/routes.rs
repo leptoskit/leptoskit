@@ -7,6 +7,7 @@ use std::path::Path;
 use leptoskit_cloud::access::RESERVED_ORGANIZATION_SLUGS;
 use leptoskit_cloud_app::routes::Device;
 use leptoskit_cloud_app::routes::Org;
+use leptoskit_cloud_app::routes::OrgBilling;
 use leptoskit_cloud_app::routes::Route;
 use leptoskit_cloud_app::routes::SignIn;
 use leptoskit_cloud_app::routes::SignInEmail;
@@ -70,6 +71,12 @@ fn every_page_has_its_address() {
 		(
 			"/acme",
 			Route::Org(Org {
+				org: "acme".to_owned(),
+			}),
+		),
+		(
+			"/acme/settings/billing",
+			Route::OrgBilling(OrgBilling {
 				org: "acme".to_owned(),
 			}),
 		),

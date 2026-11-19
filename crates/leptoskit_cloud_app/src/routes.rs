@@ -12,6 +12,11 @@ pub mod console {
 	pub mod org {
 		#[path = "index.rs"]
 		pub mod index;
+		#[path = "settings"]
+		pub mod settings {
+			#[path = "billing.rs"]
+			pub mod billing;
+		}
 	}
 	#[path = "organizations.rs"]
 	pub mod organizations;
@@ -37,6 +42,7 @@ pub mod sheet {
 	pub mod welcome;
 }
 pub use console::org::index::Org;
+pub use console::org::settings::billing::OrgBilling;
 pub use index::Home;
 pub use sheet::device::Device;
 pub use sheet::sign_in::email::SignInEmail;
@@ -62,6 +68,8 @@ pub enum Route {
 	SignInEmail(SignInEmail),
 	/// `/:org`
 	Org(Org),
+	/// `/:org/settings/billing`
+	OrgBilling(OrgBilling),
 	/// `/*path?`
 	NotFound(::leptoskit_router::NotFound),
 }
@@ -90,14 +98,24 @@ impl ::core::convert::From<Org> for Route {
 		Self::Org(route)
 	}
 }
+impl ::core::convert::From<OrgBilling> for Route {
+	fn from(route: OrgBilling) -> Self {
+		Self::OrgBilling(route)
+	}
+}
 const _: () = ::leptoskit_router::__private::require_field(
 	<Org as ::leptoskit_router::RouteParams>::FIELDS,
 	"org",
 	"`Org` needs a field named `org`",
 );
+const _: () = ::leptoskit_router::__private::require_field(
+	<OrgBilling as ::leptoskit_router::RouteParams>::FIELDS,
+	"org",
+	"`OrgBilling` needs a field named `org`",
+);
 /// Each route's pattern, in the order of the variants: what its href
 /// writes.
-const PATTERNS: [::leptoskit_router::Pattern; 9] = [
+const PATTERNS: [::leptoskit_router::Pattern; 10] = [
 	::leptoskit_router::Pattern::new(&[]),
 	::leptoskit_router::Pattern::new(&[::leptoskit_router::Segment::Static("account")]),
 	::leptoskit_router::Pattern::new(&[::leptoskit_router::Segment::Static("device")]),
@@ -109,6 +127,11 @@ const PATTERNS: [::leptoskit_router::Pattern; 9] = [
 		::leptoskit_router::Segment::Static("email"),
 	]),
 	::leptoskit_router::Pattern::new(&[::leptoskit_router::Segment::Param("org")]),
+	::leptoskit_router::Pattern::new(&[
+		::leptoskit_router::Segment::Param("org"),
+		::leptoskit_router::Segment::Static("settings"),
+		::leptoskit_router::Segment::Static("billing"),
+	]),
 	::leptoskit_router::Pattern::new(&[::leptoskit_router::Segment::OptionalRest("path")]),
 ];
 /// Each shape of URL a route matches, with each optional segment
@@ -117,7 +140,7 @@ const PATTERNS: [::leptoskit_router::Pattern; 9] = [
 const ROUTES: [(
 	::leptoskit_router::__private::Shape,
 	::leptoskit_router::__private::ReadRoute<Route>,
-); 9] = [
+); 10] = [
 	(
 		::leptoskit_router::__private::Shape::new(&[], &[]),
 		|_, _| ::core::option::Option::Some(Route::Home),
@@ -192,6 +215,21 @@ const ROUTES: [(
 	),
 	(
 		::leptoskit_router::__private::Shape::new(
+			&[
+				::leptoskit_router::Segment::Param("org"),
+				::leptoskit_router::Segment::Static("settings"),
+				::leptoskit_router::Segment::Static("billing"),
+			],
+			&[],
+		),
+		|captures, url| {
+			::leptoskit_router::__private::decode(captures, url)
+				.ok()
+				.map(Route::OrgBilling)
+		},
+	),
+	(
+		::leptoskit_router::__private::Shape::new(
 			&[::leptoskit_router::Segment::OptionalRest("path")],
 			&[],
 		),
@@ -222,7 +260,8 @@ impl ::leptoskit_router::Routable for Route {
 			Self::Welcome => PATTERNS[5].static_href(),
 			Self::SignInEmail(route) => PATTERNS[6].href(route),
 			Self::Org(route) => PATTERNS[7].href(route),
-			Self::NotFound(route) => PATTERNS[8].href(route),
+			Self::OrgBilling(route) => PATTERNS[8].href(route),
+			Self::NotFound(route) => PATTERNS[9].href(route),
 		}
 	}
 }
@@ -250,6 +289,12 @@ pub fn axum_route_list() -> ::std::vec::Vec<::std::string::String> {
 		])
 		.axum_path(),
 		::leptoskit_router::Pattern::new(&[::leptoskit_router::Segment::Param("org")]).axum_path(),
+		::leptoskit_router::Pattern::new(&[
+			::leptoskit_router::Segment::Param("org"),
+			::leptoskit_router::Segment::Static("settings"),
+			::leptoskit_router::Segment::Static("billing")
+		])
+		.axum_path(),
 		::leptoskit_router::Pattern::new(&[::leptoskit_router::Segment::OptionalRest("path")])
 			.axum_path()
 	]
@@ -318,6 +363,16 @@ impl ::leptoskit_router::Render for Route {
 			Self::Org(route) => {
 				let view = ::leptoskit_router::__private::IntoView::into_view(
 					console::org::index::Page(route, navigation),
+				);
+				::leptoskit_router::__private::IntoView::into_view(console::layout::Layout(
+					::leptoskit_router::__private::Fragment::new().with(view),
+					self,
+					navigation,
+				))
+			}
+			Self::OrgBilling(route) => {
+				let view = ::leptoskit_router::__private::IntoView::into_view(
+					console::org::settings::billing::Page(route, navigation),
 				);
 				::leptoskit_router::__private::IntoView::into_view(console::layout::Layout(
 					::leptoskit_router::__private::Fragment::new().with(view),

@@ -15,6 +15,7 @@ expression: "readable(desktop.palette(Appearance::Light))"
 "B"                                          #4d4558 on #f3ede4  7.82
 "Blog"                                       #4d4558 on #fffdf8  8.95
 "New project"                                #4d4558 on #fffdf8  8.95
+"Billing"                                    #4d4558 on #fffdf8  8.95
 "Projects"                                   #16111f on #faf6f0 17.20
 "New project"                                #faf6f0 on #16111f 17.20
 "notes"                                      #16111f on #fffdf8 18.22

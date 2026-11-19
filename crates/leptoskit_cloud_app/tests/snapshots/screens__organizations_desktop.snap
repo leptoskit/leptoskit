@@ -43,6 +43,10 @@ view text=None label=None value=None frame=(0.0,0.0,1280.0,1600.0) visible=true 
         pressable text=None label=Some("New project") value=None frame=(10.0,294.7,220.0,44.0) visible=true enabled=true
           vector text=None label=None value=None frame=(22.0,307.7,18.0,18.0) visible=true enabled=true
           text text=Some("New project") label=None value=None frame=(52.0,308.7,166.0,16.0) visible=true enabled=true
+      view text=None label=None value=None frame=(8.0,344.7,224.0,48.0) visible=true enabled=true
+        pressable text=None label=Some("Billing") value=None frame=(10.0,346.7,220.0,44.0) visible=true enabled=true
+          vector text=None label=None value=None frame=(22.0,359.7,18.0,18.0) visible=true enabled=true
+          text text=Some("Billing") label=None value=None frame=(52.0,360.7,166.0,16.0) visible=true enabled=true
     view text=None label=None value=None frame=(240.0,57.0,1.0,1543.0) visible=true enabled=true
     scroll_view text=None label=None value=None frame=(241.0,57.0,1039.0,1543.0) visible=true enabled=true
       view text=None label=None value=None frame=(241.0,57.0,1039.0,1543.0) visible=true enabled=true
