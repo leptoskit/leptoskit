@@ -21,6 +21,7 @@ use crate::model::project::Backups;
 use crate::model::project::Body;
 use crate::model::project::Changes;
 use crate::model::project::Config;
+use crate::model::project::Health;
 use crate::model::project::Overview;
 use crate::model::project::Plan;
 use crate::model::project::Project;
@@ -278,9 +279,40 @@ pub(crate) fn page(project: &Project, actions: Option<Actions>) -> Element {
 		Body::Changes(changes) => self::changes(changes, actions),
 		Body::Releases(releases) => self::releases(releases, actions),
 		Body::Operations(rows) => operations(rows),
+		Body::Health(health) => self::health(health, actions),
 		Body::Backups(backups) => self::backups(backups, actions),
 		Body::Config(config) => self::config(config),
 	})
+}
+
+/// Health: the last check, then the fleet's last hour.
+fn health(health: &Health, actions: Option<Actions>) -> Vec<Element> {
+	let mut body = vec![
+		components::card("Health check")
+			.workings("status", "lk infra status")
+			.child(components::status_word(
+				health.health.0,
+				health.health.1.clone(),
+			))
+			.child(Text(health.last.clone()).class(style::SECONDARY))
+			.child(action_button(actions, &health.status))
+			.build(),
+	];
+
+	match &health.fleet {
+		Some(Ok(fleet)) => body.extend(super::health::section(fleet, 500)),
+		Some(Err(error)) => {
+			body.push(
+				Status(format!(
+					"The control service couldn't read measurements: {error}"
+				))
+				.class("text-sm text-[var(--admin-bad)]"),
+			);
+		}
+		None => {}
+	}
+
+	body
 }
 
 fn overview(id: &str, overview: &Overview, actions: Option<Actions>) -> Vec<Element> {

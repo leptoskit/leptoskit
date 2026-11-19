@@ -233,6 +233,8 @@ function serve(directory, clientDirectory) {
 					);
 				case `${BASE}/infra/projects/notes-production/releases`:
 					return page("releases.html");
+				case `${BASE}/infra/projects/notes-production/health`:
+					return page("health.html");
 				case `${BASE}/api/projects/notes-production/actions`:
 					posted.push({ path: url.pathname, body: await request.json() });
 					return Response.json(
@@ -1048,6 +1050,44 @@ Deno.test("Escape gives focus back to the exact control that opened Workings", a
 				JSON.stringify(before)
 			}`,
 			`focus returns to ${before}`,
+		);
+	});
+});
+
+Deno.test("Health draws the fleet and runs a check, as the pages' own Rust", async () => {
+	await withBrowser(async (page, site) => {
+		await open(
+			page,
+			`${site.origin}${BASE}/infra/projects/notes-production/health`,
+		);
+		await page.until(
+			"() => document.documentElement.hasAttribute('data-hydrated')",
+			"Health hydrates",
+		);
+		const drawn = await page.evaluate(`({
+			script: !!document.querySelector('script[src$="admin.mjs"]'),
+			routes: [...document.querySelectorAll('[data-testid="route-row"]')].map((row) => row.textContent),
+			hosts: document.querySelectorAll('[data-testid="host"]').length,
+		})`);
+		assert(!drawn.script, "the page loads no hand-written script");
+		assert(
+			drawn.routes.some((row) => row.includes("/notes/{id}")) &&
+				drawn.hosts > 0,
+			`the fleet's routes and hosts: ${JSON.stringify(drawn)}`,
+		);
+
+		await page.click('[data-testid="action:status"]');
+		await page.until(
+			`() => document.querySelector('[data-testid="confirm-sheet"]')?.matches(':modal')`,
+			"the health check asks first",
+		);
+		const opened = page.once("Page.loadEventFired");
+		await page.click('[data-testid="confirm-yes"]');
+		await opened;
+		const sent = site.posted.find((entry) => entry.path.endsWith("/actions"));
+		assert(
+			sent?.body.kind === "status",
+			`the request: ${JSON.stringify(sent)}`,
 		);
 	});
 });

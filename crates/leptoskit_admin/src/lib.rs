@@ -46,7 +46,6 @@ use std::sync::Arc;
 
 pub use leptoskit_admin_pages::BASE;
 pub use leptoskit_admin_pages::Environment;
-use leptoskit_admin_pages::charts;
 use leptoskit_admin_pages::components;
 pub use leptoskit_admin_pages::model::UnknownEnvironment;
 use leptoskit_admin_pages::style;

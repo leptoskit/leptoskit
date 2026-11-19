@@ -974,6 +974,41 @@ async fn pages_for_the_script() {
 	assert_eq!(status, StatusCode::OK, "{week}");
 	std::fs::write(directory.join("web-week.json"), json).unwrap();
 
+	// What one instance reported, for Health's charts.
+	let fleet = leptoskit::apm::Analytics::new(
+		leptoskit::apm::Resource {
+			service: "notes-production".into(),
+			environment: "production".into(),
+			release: "v41".into(),
+			instance: "web-0".into(),
+		},
+		leptoskit::apm::Limits::default(),
+		|| {
+			std::time::SystemTime::now()
+				.duration_since(std::time::UNIX_EPOCH)
+				.unwrap()
+				.as_secs()
+		},
+	)
+	.unwrap();
+
+	for (operation, duration) in [("/notes/{id}", 12.0), ("/", 4.0)] {
+		fleet.record(
+			leptoskit::apm::SeriesKey {
+				source: leptoskit::apm::Source::Backend,
+				signal: leptoskit::apm::Signal::Http,
+				operation: operation.into(),
+				outcome: leptoskit::apm::Outcome::Ok,
+			},
+			duration,
+			None,
+		);
+	}
+
+	world
+		.store
+		.ingest("notes-production", &fleet.snapshot())
+		.unwrap();
 	let project = format!("{BASE}/infra/projects/notes-production");
 	for (file, path) in [
 		(
@@ -1008,6 +1043,7 @@ async fn pages_for_the_script() {
 			format!("{project}/overview?workings=release"),
 		),
 		("releases.html", format!("{project}/releases")),
+		("health.html", format!("{project}/health")),
 		("changes.html", format!("{project}/changes")),
 		("projects.html", format!("{BASE}/infra/projects")),
 		(

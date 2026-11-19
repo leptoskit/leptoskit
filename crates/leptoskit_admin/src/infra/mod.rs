@@ -4,7 +4,6 @@
 //! know something (a plan's price, offline), it says so.
 
 mod drawers;
-mod health;
 mod pages;
 
 use std::path::Path;

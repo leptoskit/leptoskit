@@ -2,6 +2,7 @@
 
 mod analytics;
 mod glossary;
+mod health;
 mod infra;
 mod insight;
 mod learn;

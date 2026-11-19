@@ -69,7 +69,7 @@ impl Tab {
 }
 
 /// One tab of one project.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Project {
 	pub id: String,
 	/// `Changes · notes-production`.
@@ -201,15 +201,65 @@ pub struct Action {
 }
 
 /// What a tab shows.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Body {
 	Overview(Box<Overview>),
 	Changes(Box<Changes>),
 	Releases(Releases),
 	/// Every operation, newest first.
 	Operations(Vec<Row>),
+	Health(Box<Health>),
 	Backups(Backups),
 	Config(Config),
+}
+
+/// Health: the last health check, and what the fleet's servers reported in
+/// the last hour.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Health {
+	/// The last check, in a word.
+	pub health: (Tone, String),
+	/// What it said and when, or that none has run.
+	pub last: String,
+	/// Run health check.
+	pub status: Action,
+	/// The measurements, or why the control service couldn't read them;
+	/// nothing when there's no control service.
+	pub fleet: Option<Result<Fleet, String>>,
+}
+
+/// The fleet's measurements over a time span, merged across instances by
+/// the control service.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Fleet {
+	pub hosts: Vec<Host>,
+	pub from: u64,
+	pub to: u64,
+	pub instances: usize,
+	/// Instances that stopped reporting.
+	pub stale_instances: usize,
+	pub series: Vec<FleetSeries>,
+	/// What the measurements can't show.
+	pub limitations: Vec<String>,
+}
+
+/// One series' windows, from one release.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct FleetSeries {
+	pub release: String,
+	pub key: leptoskit::apm::SeriesKey,
+	pub windows: Vec<leptoskit::apm::Window>,
+}
+
+/// What one instance last said about its host.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Host {
+	pub instance: String,
+	pub release: String,
+	/// When it last reported, in Unix seconds.
+	pub seen: u64,
+	pub host: Option<leptoskit::apm::HostSample>,
+	pub export: Option<leptoskit::apm::ExportHealth>,
 }
 
 /// Overview: what's serving, what ran lately, the budget, and the topology.
