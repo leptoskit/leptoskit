@@ -5652,6 +5652,7 @@ dependencies = [
  "leptoskit_plugin_clipboard",
  "schemars",
  "serde",
+ "serde_json",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",

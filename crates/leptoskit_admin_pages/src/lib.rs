@@ -14,6 +14,7 @@
 
 pub mod charts;
 pub mod components;
+pub mod confirm;
 pub mod model;
 pub mod ops;
 pub mod pages;

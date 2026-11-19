@@ -12,6 +12,8 @@ use serde::Serialize;
 use crate::components::Tone;
 use crate::workings::Drawer;
 
+pub mod project;
+
 /// Which environment the admin acts on, shown as the pill in the top bar.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -257,6 +259,8 @@ pub enum Page {
 	Projects(Vec<ProjectCard>),
 	/// One operation, followed live while it runs.
 	Operation(Box<Operation>),
+	/// One tab of one project.
+	Project(Box<project::Project>),
 }
 
 impl Page {
@@ -269,6 +273,7 @@ impl Page {
 			Self::Lesson(lesson) => &lesson.title,
 			Self::Projects(_) => "Projects",
 			Self::Operation(operation) => &operation.title,
+			Self::Project(project) => &project.title,
 		}
 	}
 
@@ -278,6 +283,7 @@ impl Page {
 		match self {
 			Self::Glossary | Self::Learn(_) | Self::Lesson(_) | Self::Projects(_) => &[],
 			Self::Operation(operation) => std::slice::from_ref(&operation.drawer),
+			Self::Project(project) => &project.drawers,
 		}
 	}
 
@@ -289,6 +295,13 @@ impl Page {
 			Self::Learn(_) | Self::Lesson(_) => Section::Learn,
 			Self::Projects(_) => Section::Projects,
 			Self::Operation(operation) => Section::ProjectOperations(operation.project.clone()),
+			Self::Project(project) => {
+				match project.tab {
+					project::Tab::Health => Section::ProjectHealth(project.id.clone()),
+					project::Tab::Operations => Section::ProjectOperations(project.id.clone()),
+					_ => Section::Project(project.id.clone()),
+				}
+			}
 		}
 	}
 }

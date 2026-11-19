@@ -99,6 +99,8 @@ pub fn tokens_css() -> String {
 
 /// The page behind everything.
 pub const PAGE: &str = "bg-[var(--admin-paper)] text-[var(--admin-ink)]";
+/// A code line or plan row a plan row linked: a mint wash with a rule.
+pub const LINKED: &str = "bg-[#5ef2c2]/20 border-l-[3px] border-[#5ef2c2]";
 /// A card: surface, hairline border, rounded, padded.
 pub const CARD: &str = "flex-col gap-3 rounded-xl border border-[var(--admin-line)] \
                         bg-[var(--admin-surface)] p-4 md:p-5";
@@ -224,6 +226,7 @@ mod tests {
 	#[test]
 	fn every_class_compiles() {
 		for class in [
+			LINKED,
 			PAGE,
 			CARD,
 			CARD_HEADER,

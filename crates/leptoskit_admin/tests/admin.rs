@@ -52,8 +52,29 @@ fn redact(world: &World, text: &str) -> String {
 }
 
 /// The `<html>` element's own attributes.
-fn root(html: &str) -> &str {
-	html.split_once("<head>").map_or(html, |(root, _)| root)
+/// The opening tag of the element with `test_id`.
+fn tag_of<'a>(html: &'a str, test_id: &str) -> &'a str {
+	let start = html
+		.find(&format!("data-testid=\"{test_id}\""))
+		.unwrap_or_else(|| panic!("no {test_id}"));
+	let tag_start = html[..start].rfind('<').unwrap();
+	&html[tag_start..start + html[start..].find('>').unwrap()]
+}
+
+/// Whether the drawer `id` is open on the page the server drew.
+fn drawer_open(html: &str, id: &str) -> bool {
+	let tag = tag_of(html, &format!("drawer:{id}"));
+	let classes = tag
+		.split("class=\"")
+		.nth(1)
+		.and_then(|rest| rest.split('"').next())
+		.unwrap_or_default();
+	!classes.split_whitespace().any(|class| class == "hidden") && !tag.contains("display:none")
+}
+
+/// Whether Workings mode is on, by the switch in the top bar.
+fn workings_mode(html: &str) -> bool {
+	tag_of(html, "workings-mode").contains("aria-pressed=\"true\"")
 }
 
 async fn page(world: &World, browser: &mut Browser, path: &str) -> (StatusCode, String) {
@@ -358,10 +379,7 @@ async fn key_screens() {
 	)
 	.await;
 	assert_eq!(status, StatusCode::OK);
-	assert!(
-		root(&html).contains("data-admin-drawer=\"plan\""),
-		"Workings opens the first times"
-	);
+	assert!(drawer_open(&html, "plan"), "Workings opens the first times");
 	assert!(html.contains("persistent_resource_deletion_blocked"));
 	insta::assert_snapshot!(
 		"changes",
@@ -456,10 +474,7 @@ async fn preferences_follow_the_person() {
 	let changes = format!("{BASE}/infra/projects/notes-production/changes");
 
 	let (_, html) = page(&world, &mut ada, &changes).await;
-	assert!(
-		root(&html).contains("data-admin-mode=\"workings\""),
-		"Workings mode is on the first week"
-	);
+	assert!(workings_mode(&html), "Workings mode is on the first week");
 	assert!(html.contains("note:plan-review"));
 
 	for change in [
@@ -481,10 +496,10 @@ async fn preferences_follow_the_person() {
 	}
 
 	let (_, html) = page(&world, &mut ada, &changes).await;
-	assert!(!root(&html).contains("data-admin-mode=\"workings\""));
+	assert!(!workings_mode(&html));
 	assert!(!html.contains("note:plan-review"));
 	assert!(
-		!root(&html).contains("data-admin-drawer=\"plan\""),
+		!drawer_open(&html, "plan"),
 		"Workings retires after three opens"
 	);
 

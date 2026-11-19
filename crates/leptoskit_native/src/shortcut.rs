@@ -21,7 +21,9 @@
 //! ```
 //!
 //! A key an element's own `on_key` handles never reaches a shortcut, so a
-//! dialog that takes Enter keeps it.
+//! dialog that takes Enter keeps it. While a `Modal` is open, no shortcut
+//! runs: the modal's keys are its own, and Escape closes it, not whatever
+//! the app's Escape does.
 //!
 //! On the web a shortcut listens on the window. Native hosts don't deliver
 //! keys to shortcuts yet, so there a shortcut does nothing for now.

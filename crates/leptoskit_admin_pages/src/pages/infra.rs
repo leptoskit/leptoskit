@@ -104,7 +104,7 @@ impl Follow {
 		Effect::new(move |_| {
 			let done = progress
 				.items()
-				.with(|items| items.iter().any(|item| *item == Progress::Done));
+				.with(|items| items.contains(&Progress::Done));
 
 			if done {
 				crate::go(&page);

@@ -7,6 +7,7 @@
 
 use leptoskit::native::Color;
 use leptoskit::native::FocusRequest;
+use leptoskit::native::ScrollAlign;
 use leptoskit::native::TextSpan;
 use leptoskit::prelude::*;
 use serde::Deserialize;
@@ -157,6 +158,7 @@ pub fn mint_tab(drawer: &str, source: &str) -> Element {
 		let open = workings.is_open(drawer);
 		let mode = workings.mode.get();
 		let here = FocusRequest::new();
+		workings.register_tab(drawer, here);
 		let id = drawer.to_owned();
 
 		return Pressable(format!("Show workings: {source}"))
@@ -203,7 +205,7 @@ pub fn mint_tab(drawer: &str, source: &str) -> Element {
 }
 
 /// What a button looks like.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Kind {
 	/// Ink fill on an ember-warm offset block.
 	Primary,
@@ -258,20 +260,64 @@ pub fn raised(control: Element) -> Element {
 		.child(control)
 }
 
+/// The margin notes dismissed on this page, on a page this crate runs.
+#[derive(Clone, Copy, Debug)]
+pub struct Notes(RwSignal<Vec<String>>);
+
+impl Notes {
+	#[must_use]
+	pub fn new() -> Self {
+		Self(RwSignal::new(Vec::new()))
+	}
+
+	fn current() -> Option<Self> {
+		leptos::context::use_context::<Self>()
+	}
+
+	fn dismissed(self, id: &str) -> bool {
+		self.0
+			.with(|dismissed| dismissed.iter().any(|known| known == id))
+	}
+
+	/// Hides note `id` and tells the admin not to show it again.
+	fn dismiss(self, id: &str) {
+		self.0.update(|dismissed| dismissed.push(id.to_owned()));
+		crate::shell::preference(
+			&serde_json::json!({ "kind": "dismiss_note", "note": id }).to_string(),
+		);
+	}
+}
+
+impl Default for Notes {
+	fn default() -> Self {
+		Self::new()
+	}
+}
+
 /// A margin note in the sketch face, with "Got it".
 pub fn margin_note(id: &str, text: impl Into<String>) -> Element {
+	let notes = Notes::current();
+	let mut dismiss = Button("Got it")
+		.class(
+			"text-xs font-semibold text-[var(--admin-mint-text)] cursor-pointer hover:opacity-70",
+		)
+		.test_id(format!("note-dismiss:{id}"));
+
+	if let Some(notes) = notes {
+		let note = id.to_owned();
+		dismiss = dismiss.on_press(move || notes.dismiss(&note));
+	}
+
 	View()
 		.class(style::NOTE)
+		.class(if notes.is_some_and(|notes| notes.dismissed(id)) {
+			"hidden"
+		} else {
+			""
+		})
 		.test_id(format!("note:{id}"))
 		.child(Text(text.into()).class(style::NOTE_TEXT))
-		.child(
-			Button("Got it")
-				.class(
-					"text-xs font-semibold text-[var(--admin-mint-text)] cursor-pointer \
-					 hover:opacity-70",
-				)
-				.test_id(format!("note-dismiss:{id}")),
-		)
+		.child(dismiss)
 }
 
 /// The environment pill: the one place ember fills outside data.
@@ -533,6 +579,9 @@ pub fn code_block(lines: &[Line], copy_as: &str) -> Element {
 			text,
 		));
 	let mut block = View().class(style::CODE_BLOCK).test_id("code").child(head);
+	let workings = crate::workings::Workings::current();
+	// The first line a plan row linked scrolls into view.
+	let mut revealed = false;
 
 	for (index, line) in lines.iter().enumerate() {
 		let wash = match line.mark {
@@ -564,6 +613,18 @@ pub fn code_block(lines: &[Line], copy_as: &str) -> Element {
 					)
 					.test_id("code-text"),
 			);
+
+		if let Some(workings) = workings
+			&& let Some(key) = &line.key
+			&& workings.is_linked(key)
+		{
+			row = row.class(style::LINKED);
+
+			if !revealed {
+				revealed = true;
+				row = row.reveal_on(workings.reveal(), ScrollAlign::Center);
+			}
+		}
 
 		if line.mark != Mark::Plain {
 			row = row.aria_description(if line.mark == Mark::Added {

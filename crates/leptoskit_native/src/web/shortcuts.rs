@@ -14,6 +14,7 @@ thread_local! {
 /// The listener sits on the window, so it hears a key after every element
 /// it passed through. An element whose `on_key` handled the key stopped it
 /// and prevented its default, so a handled key never reaches a shortcut.
+/// Neither does a key pressed while a `Modal` is open.
 pub(crate) fn listen() {
 	if LISTENING.with(|listening| listening.replace(true)) {
 		return;
@@ -36,7 +37,7 @@ pub(crate) fn listen() {
 }
 
 fn on_keydown(event: &web_sys::KeyboardEvent) {
-	if event.default_prevented() || event.is_composing() {
+	if event.default_prevented() || event.is_composing() || modal_open() {
 		return;
 	}
 
@@ -53,6 +54,16 @@ fn on_keydown(event: &web_sys::KeyboardEvent) {
 		// does not also open the browser's search.
 		event.prevent_default();
 	}
+}
+
+/// Whether a modal is open. Its keys are its own: Escape asks it to close
+/// rather than running the app's Escape, and the app's other shortcuts
+/// wait, as everything else behind a modal does.
+fn modal_open() -> bool {
+	web_sys::window()
+		.and_then(|window| window.document())
+		.and_then(|document| document.query_selector("dialog:modal").ok().flatten())
+		.is_some()
 }
 
 /// Whether the key goes into a text field: a text input, a text area, a
