@@ -625,3 +625,39 @@ max = 2
 		);
 	}
 }
+
+#[test]
+fn storage_buckets_resolve_and_validate() {
+	let cloud = resolved(
+		r#"
+[cloud]
+project = "notes"
+
+[cloud.storage.buckets.uploads]
+public = false
+max_size_gb = 25
+
+[cloud.storage.buckets.avatars]
+public = true
+"#,
+	);
+	let uploads = cloud
+		.storage
+		.get(&"uploads".parse::<Slug>().unwrap())
+		.expect("uploads bucket");
+	assert!(!uploads.public);
+	assert_eq!(uploads.max_size_gb, Some(25));
+
+	let avatars = cloud
+		.storage
+		.get(&"avatars".parse::<Slug>().unwrap())
+		.expect("avatars bucket");
+	assert!(avatars.public);
+	assert_eq!(avatars.max_size_gb, None);
+
+	let (error, _) = problem("[cloud.storage.buckets.Bad_Name]\npublic = false\n");
+	assert!(matches!(error, CloudError::BucketName { .. }));
+
+	let (error, _) = problem("[cloud.storage.buckets.uploads]\nmax_size_gb = 0\n");
+	assert!(matches!(error, CloudError::BucketSize { .. }));
+}

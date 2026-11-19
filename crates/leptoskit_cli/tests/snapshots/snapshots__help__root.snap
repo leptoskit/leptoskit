@@ -8,11 +8,11 @@ Usage: leptoskit [OPTIONS] <COMMAND>
 
 Commands:
   targets      Validate and list the destinations in this application's configuration
-  console      Hosts or connects to the deployment dashboard and durable agent API
-  cloud        Signs in and manages cloud accounts, projects, environments and tokens
+  console      Legacy operator-enrolled deployment dashboard and agent API. For new projects, prefer `lk cloud` (LeptosKit Cloud) or `lk infra` (self-hosted)
+  cloud        Primary managed hosting track (LeptosKit Cloud): login, launch, deploy, status, logs, secrets, domains, databases, and usage
   admin        Runs the admin: analytics, infrastructure and lessons, signed in through the main site
-  infra        Generates and manages the app's `OpenTofu` infrastructure
-  deploy       Deploys a Git commit through its service, releases a prebuilt image, or rolls back
+  infra        Primary self-hosted track: generates and manages OpenTofu + Kamal infrastructure on your own servers (infra.mode = "graph" is experimental)
+  deploy       Deploys the app: ships to LeptosKit Cloud when [cloud].project is set, or releases through self-hosted OpenTofu/Kamal ([infra])
   verify       Builds and reproduces backends from public commits and checks signed deployment policies; does not show what a live server runs
   migrate      Upgrades leptoskit.toml to the current configuration schema
   native       Builds native application hosts and generates plugin registration

@@ -39,6 +39,33 @@ pub fn run_frontends(
 	name: Option<&str>,
 	sdk: Option<&str>,
 ) -> Result<()> {
+	run_frontends_with_options(path, frontends, name, sdk, None, false, false, false)
+}
+
+/// Scaffolds a multi-frontend workspace with optional database, sign-in,
+/// web-only, and `[cloud]` starter wiring.
+///
+/// When `--db` or `--auth` is passed, it is wired onto the primary `app`
+/// frontend (or the first frontend when `app` is omitted).
+///
+/// # Errors
+///
+/// Unknown frontend names, duplicates, invalid package names, or scaffold
+/// conflicts.
+#[expect(
+	clippy::too_many_arguments,
+	reason = "forwards CLI scaffold switches directly into frontend app templates"
+)]
+pub fn run_frontends_with_options(
+	path: &str,
+	frontends: &[String],
+	name: Option<&str>,
+	sdk: Option<&str>,
+	database: Option<leptoskit_config::DbDialect>,
+	auth: bool,
+	web_only: bool,
+	cloud: bool,
+) -> Result<()> {
 	let kinds = ApplicationKind::parse_frontend_list(frontends).map_err(anyhow::Error::msg)?;
 
 	std::fs::create_dir_all(path).with_context(|| format!("could not create {path}"))?;
@@ -54,25 +81,32 @@ pub fn run_frontends(
 	preflight_file(&dir, &dir.join("README.md"))?;
 
 	let mut applications = BTreeMap::new();
+	let primary_backend_kind = kinds
+		.iter()
+		.copied()
+		.find(|kind| *kind == ApplicationKind::Product)
+		.or_else(|| kinds.first().copied());
 
 	for kind in &kinds {
 		let id = kind.application_id();
 		let package_name = package_name_for(*kind, product);
 		ensure_package_name(package_name)?;
 		let app_dir = dir.join("apps").join(id);
-		let platforms = if kind.includes_native() {
+		let platforms = if !web_only && kind.includes_native() {
 			None
 		} else {
 			Some(vec![Platform::Web])
 		};
+		let is_primary = Some(*kind) == primary_backend_kind;
 		run_configured(NewAppOptions {
 			path: app_dir.as_str(),
 			platform: Platform::Web,
 			name: Some(package_name),
 			sdk,
-			database: None,
+			database: is_primary.then_some(database).flatten(),
 			extension: false,
-			auth: false,
+			auth: is_primary && auth,
+			cloud,
 			platforms,
 			serve_port: Some(kind.default_port()),
 			quiet: true,
@@ -341,5 +375,38 @@ mod tests {
 			error.contains(WORKSPACE_FILE) || error.contains("exists") || error.contains("already"),
 			"{error}"
 		);
+	}
+
+	#[test]
+	fn run_frontends_with_options_wires_backend_web_only_and_cloud() {
+		let root = tempfile::tempdir().unwrap();
+		let path = root.path().join("saas");
+		run_frontends_with_options(
+			path.to_str().unwrap(),
+			&["landing".into(), "app".into()],
+			Some("saas"),
+			None,
+			None,
+			true,
+			true,
+			true,
+		)
+		.unwrap();
+
+		let landing =
+			leptoskit_config::LeptoskitConfig::load_from(&path.join("apps/landing")).unwrap();
+		assert!(landing.db.is_none());
+		assert!(landing.auth.is_none());
+		assert!(landing.cloud.is_some());
+
+		let product = leptoskit_config::LeptoskitConfig::load_from(&path.join("apps/app")).unwrap();
+		assert_eq!(product.app.platforms, [Platform::Web]);
+		assert!(!path.join("apps/app/ios").exists());
+		assert!(product.auth.is_some());
+		assert_eq!(
+			product.db.as_ref().map(|db| db.dialect),
+			Some(leptoskit_config::DbDialect::Postgres)
+		);
+		assert!(product.cloud.is_some());
 	}
 }

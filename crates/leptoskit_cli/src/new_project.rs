@@ -106,6 +106,7 @@ pub fn run_with_options(
 		database,
 		extension,
 		auth,
+		cloud: false,
 		platforms: None,
 		serve_port: None,
 		quiet: false,
@@ -113,10 +114,15 @@ pub fn run_with_options(
 }
 
 pub use frontends::run_frontends;
+pub use frontends::run_frontends_with_options;
 
 mod frontends;
 
 /// Options for scaffolding one leptoskit application directory.
+#[expect(
+	clippy::struct_excessive_bools,
+	reason = "mirrors independent scaffold feature switches (--extension, --auth, --cloud, quiet)"
+)]
 pub(crate) struct NewAppOptions<'a> {
 	pub(crate) path: &'a str,
 	pub(crate) platform: Platform,
@@ -125,6 +131,9 @@ pub(crate) struct NewAppOptions<'a> {
 	pub(crate) database: Option<DbDialect>,
 	pub(crate) extension: bool,
 	pub(crate) auth: bool,
+	/// Adds a starter `[cloud]` table for `LeptosKit` Cloud and defaults
+	/// `--auth` without `--db` to Postgres instead of SQLite.
+	pub(crate) cloud: bool,
 	/// When set, replaces the default platform list (then the default platform
 	/// is added if missing).
 	pub(crate) platforms: Option<Vec<Platform>>,
@@ -152,6 +161,7 @@ pub(crate) fn run_configured(options: NewAppOptions<'_>) -> Result<()> {
 		database,
 		extension,
 		auth,
+		cloud,
 		platforms,
 		serve_port,
 		quiet,
@@ -203,7 +213,11 @@ pub(crate) fn run_configured(options: NewAppOptions<'_>) -> Result<()> {
 		return crate::native::scaffold::run_for_target(path, name, sdk, Some(target));
 	}
 
-	let database = database.or(auth.then_some(DbDialect::Sqlite));
+	let database = database.or(auth.then_some(if cloud {
+		DbDialect::Postgres
+	} else {
+		DbDialect::Sqlite
+	}));
 	let sdk = sdk.map(resolve_sdk).transpose()?;
 	std::fs::create_dir_all(path).with_context(|| format!("could not create {path}"))?;
 	let dir = std::fs::canonicalize(path).with_context(|| format!("could not resolve {path}"))?;
@@ -232,6 +246,13 @@ pub(crate) fn run_configured(options: NewAppOptions<'_>) -> Result<()> {
 	if extension {
 		app.platforms.push(Platform::Extension);
 	}
+
+	let cloud_config = cloud.then(|| {
+		leptoskit_config::cloud::CloudConfig {
+			database: database.map(|_| leptoskit_config::cloud::CloudDatabase::default()),
+			..leptoskit_config::cloud::CloudConfig::default()
+		}
+	});
 
 	let config = LeptoskitConfig {
 		app,
@@ -277,6 +298,7 @@ pub(crate) fn run_configured(options: NewAppOptions<'_>) -> Result<()> {
 		}),
 		extension: extension.then(|| extension_config(name)),
 		auth: auth.then(AuthConfig::default),
+		cloud: cloud_config,
 		..LeptoskitConfig::default()
 	};
 	let files = template(&config, sdk.as_deref())?;
@@ -2070,5 +2092,40 @@ fn startup() { entry(); assert!(RENDERED.load(Ordering::SeqCst)); }
 				"{extension_error}"
 			);
 		}
+	}
+
+	#[test]
+	fn web_only_and_cloud_options_configure_platforms_cloud_and_postgres() {
+		use leptoskit_config::DbDialect;
+		use leptoskit_config::LeptoskitConfig;
+		use leptoskit_config::Platform;
+
+		let root = tempfile::tempdir().unwrap();
+		let dir = root.path().join("cloud_notes");
+		super::run_configured(super::NewAppOptions {
+			path: dir.to_str().unwrap(),
+			platform: Platform::Web,
+			name: Some("cloud_notes"),
+			sdk: None,
+			database: None,
+			extension: false,
+			auth: true,
+			cloud: true,
+			platforms: Some(vec![Platform::Web]),
+			serve_port: None,
+			quiet: true,
+		})
+		.unwrap();
+
+		let config = LeptoskitConfig::load_from(&dir).unwrap();
+		assert_eq!(config.app.platforms, [Platform::Web]);
+		assert!(!dir.join("ios").exists());
+		assert!(!dir.join("android").exists());
+		assert!(config.cloud.is_some());
+		assert_eq!(
+			config.db.as_ref().map(|db| db.dialect),
+			Some(DbDialect::Postgres),
+			"--cloud with --auth and no --db must default to Postgres"
+		);
 	}
 }

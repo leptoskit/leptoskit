@@ -262,6 +262,15 @@ pub(crate) fn directory_lock(path: &Path) -> Result<std::fs::File> {
 }
 
 pub fn deploy(args: &crate::infra::ReleaseArgs) -> Result<()> {
+	if crate::cloud::has_cloud_project()? {
+		ensure!(
+			args.version.is_none() && args.rollback.is_none(),
+			"`lk deploy` targets LeptosKit Cloud because [cloud].project is set; use `lk cloud \
+			 rollback <number>` for rollbacks"
+		);
+		return crate::cloud::deploy_from_cli(None, false);
+	}
+
 	if let Some(connection) = client::Connection::for_project()? {
 		return client::deploy(&connection, args);
 	}

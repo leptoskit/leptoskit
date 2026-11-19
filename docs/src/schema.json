@@ -1116,6 +1116,26 @@
 				}
 			]
 		},
+		"CloudBucket": {
+			"description": "`[cloud.storage.buckets.<name>]`: one application object storage bucket.",
+			"type": "object",
+			"properties": {
+				"max_size_gb": {
+					"description": "Optional soft size cap in gigabytes (must be >= 1 when set).",
+					"type": [
+						"integer",
+						"null"
+					],
+					"format": "uint32",
+					"minimum": 1
+				},
+				"public": {
+					"description": "Whether objects in this bucket may be read publicly over HTTPS without\npresigned URLs (defaults to `false`, private).",
+					"type": "boolean"
+				}
+			},
+			"additionalProperties": false
+		},
 		"CloudConfig": {
 			"description": "`LeptosKit` Cloud: where the app runs and how big. `lk deploy` deploys to\nthe cloud while `project` is set.",
 			"type": "object",
@@ -1165,6 +1185,17 @@
 					"anyOf": [
 						{
 							"$ref": "#/$defs/Region"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"storage": {
+					"description": "Application-level S3-compatible object storage buckets provisioned per\nenvironment (`[cloud.storage.buckets.<name>]`).",
+					"anyOf": [
+						{
+							"$ref": "#/$defs/CloudStorage"
 						},
 						{
 							"type": "null"
@@ -1287,6 +1318,20 @@
 					"description": "How much CPU and memory each replica gets.",
 					"$ref": "#/$defs/Size",
 					"default": "xs"
+				}
+			},
+			"additionalProperties": false
+		},
+		"CloudStorage": {
+			"description": "`[cloud.storage]`: application-level S3-compatible object storage buckets\nprovisioned per environment.",
+			"type": "object",
+			"properties": {
+				"buckets": {
+					"description": "Named buckets provisioned for the app (e.g.\n`[cloud.storage.buckets.uploads]`). Each bucket injects\n`LEPTOSKIT_BUCKET_<NAME>_ENDPOINT`, `LEPTOSKIT_BUCKET_<NAME>_NAME`, and\ncredentials into the environment.",
+					"type": "object",
+					"additionalProperties": {
+						"$ref": "#/$defs/CloudBucket"
+					}
 				}
 			},
 			"additionalProperties": false

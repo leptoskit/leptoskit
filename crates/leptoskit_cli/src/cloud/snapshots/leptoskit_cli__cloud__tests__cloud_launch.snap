@@ -1,0 +1,38 @@
+---
+source: crates/leptoskit_cli/src/cloud/tests.rs
+expression: help
+---
+Creates & links a cloud project if needed, previews cost, and ships the first deployment
+
+Usage: launch [OPTIONS]
+
+Options:
+      --name <NAME>
+          Project display name (defaults to `[app].name` in leptoskit.toml)
+
+      --url <URL>
+          Cloud origin; overrides `LEPTOSKIT_CLOUD_URL` and [cloud].url
+
+      --json
+          Prints the documented JSON result
+
+      --region <REGION>
+          Region slug (defaults to `[cloud].region` or the cloud default)
+
+      --org <ORG>
+          Organization slug; defaults to [cloud].organization or your personal one
+
+  -y, --yes
+          Skip interactive confirmation after printing the release preview
+
+      --detach
+          Return as soon as the deployment is queued without following logs
+
+      --project <PROJECT>
+          Project slug; defaults to [cloud].project
+
+  -e, --environment <ENVIRONMENT>
+          Environment name, for the commands about one; defaults to production
+
+  -h, --help
+          Print help

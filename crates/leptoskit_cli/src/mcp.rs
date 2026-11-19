@@ -26,6 +26,7 @@ use clap::Subcommand;
 use serde_json::Value;
 use serde_json::json;
 
+pub(crate) mod cloud;
 pub(crate) mod devtools;
 
 /// The protocol revisions this server speaks.
@@ -319,6 +320,7 @@ fn tools() -> Value {
 
 	if let Value::Array(tools) = &mut tools {
 		tools.extend(devtools::tools());
+		tools.extend(cloud::tools());
 	}
 
 	tools
@@ -418,6 +420,9 @@ fn call_tool(params: Option<&Value>) -> Result<Value, String> {
 
 	if devtools::NAMES.contains(&name) {
 		return Ok(devtools::call(name, &arguments));
+	}
+	if cloud::NAMES.contains(&name) {
+		return Ok(cloud::call(name, &arguments));
 	}
 
 	match name {
@@ -618,6 +623,12 @@ mod tests {
 				"set_state",
 				"runtime_errors",
 				"performance",
+				"cloud_estimate",
+				"cloud_deploy",
+				"cloud_status",
+				"cloud_logs",
+				"cloud_secrets_list",
+				"db_check",
 			]
 		);
 		// The control tool carries the document schema, so clients validate

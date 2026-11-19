@@ -20,7 +20,7 @@ pub(crate) fn development(arguments: &[String], disabled: bool) -> anyhow::Resul
 	}
 
 	let executable = std::env::current_exe().context("locate the leptoskit executable")?;
-	let status = Command::new("monosecret")
+	let status = match Command::new("monosecret")
 		.arg("--file")
 		.arg(root.join("monosecret.toml"))
 		.arg("run")
@@ -34,10 +34,22 @@ pub(crate) fn development(arguments: &[String], disabled: bool) -> anyhow::Resul
 				.unwrap_or_else(|| "Start leptoskit development processes".into()),
 		)
 		.status()
-		.context(
-			"install monosecret to resolve monosecret.toml, or use `leptoskit dev --no-secrets` \
-			 for an environment supplied by your host",
-		)?;
+	{
+		Ok(status) => status,
+		Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+			crate::ui::warning(
+				"monosecret.toml is present, but `monosecret` is not installed; continuing with \
+				 the current environment (install monosecret or pass `--no-secrets` to silence)",
+			);
+			return Ok(None);
+		}
+		Err(error) => {
+			return Err(error).context(
+				"run monosecret to resolve monosecret.toml, or use `leptoskit dev --no-secrets` \
+				 for an environment supplied by your host",
+			);
+		}
+	};
 	Ok(Some(status.code().unwrap_or(1)))
 }
 

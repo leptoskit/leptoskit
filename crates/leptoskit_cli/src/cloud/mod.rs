@@ -1,10 +1,12 @@
 //! `lk cloud`: accounts and projects (CLI 1), an environment's
-//! configuration and history (CLI 2), and store publishing and usage
-//! (CLI 3). `launch`, `deploy`, `status`, `logs` and `open` aren't built.
+//! configuration and history (CLI 2), store publishing and usage (CLI 3),
+//! and the first-class shipping workflow (`launch`, `deploy`, `status`,
+//! `logs`, `estimate`, and `open`).
 
 pub mod client;
 mod credentials;
-mod ship;
+pub(crate) mod deploy;
+pub(crate) mod ship;
 mod stores;
 #[cfg(test)]
 mod tests;
@@ -63,6 +65,60 @@ pub struct CloudArgs {
 /// The cloud's commands. Every one takes `--json`.
 #[derive(Debug, Subcommand)]
 pub enum CloudCommand {
+	/// Creates & links a cloud project if needed, previews cost, and ships the
+	/// first deployment.
+	Launch {
+		/// Project display name (defaults to `[app].name` in leptoskit.toml).
+		#[arg(long)]
+		name: Option<String>,
+		/// Region slug (defaults to `[cloud].region` or the cloud default).
+		#[arg(long)]
+		region: Option<String>,
+		/// Skip interactive confirmation after printing the release preview.
+		#[arg(long, short = 'y')]
+		yes: bool,
+		/// Return as soon as the deployment is queued without following logs.
+		#[arg(long)]
+		detach: bool,
+	},
+	/// Packs, uploads, and deploys the current project.
+	#[command(about = "Packs, uploads, and deploys the current project to LeptosKit Cloud")]
+	Deploy {
+		/// Return as soon as the deployment is queued without following logs.
+		#[arg(long)]
+		detach: bool,
+	},
+	/// Shows the observed status, hostname, and process readiness of an
+	/// environment.
+	Status,
+	/// Reads recent runtime logs for an environment (pass `--follow` to
+	/// stream).
+	Logs {
+		/// Continuously poll for new runtime log lines.
+		#[arg(long, short = 'f')]
+		follow: bool,
+		/// Filter to a single process (e.g. `app` or a service name).
+		#[arg(long)]
+		process: Option<String>,
+		/// Only include lines from the last N minutes.
+		#[arg(long)]
+		since_minutes: Option<u32>,
+		/// Only include lines containing this substring.
+		#[arg(long)]
+		contains: Option<String>,
+		/// Maximum lines per page.
+		#[arg(long)]
+		limit: Option<u32>,
+	},
+	/// Previews the resolved release plan and estimated monthly cost without
+	/// deploying.
+	Estimate,
+	/// Opens the environment's live HTTPS URL in your browser.
+	Open {
+		/// Print the URL without launching a browser.
+		#[arg(long)]
+		print: bool,
+	},
 	/// Signs in through your browser with a short code.
 	Login {
 		/// Prints the URL and code without opening a browser.
@@ -407,6 +463,45 @@ fn confirm(actual: &impl ToString, confirmation: &str) -> Result<()> {
 	Ok(())
 }
 
+/// Returns true when the nearest `leptoskit.toml` configures `[cloud]` with a
+/// linked `project` slug (meaning `lk deploy` should ship to `LeptosKit`
+/// Cloud).
+pub(crate) fn has_cloud_project() -> Result<bool> {
+	let Some(file) = std::env::current_dir()?
+		.ancestors()
+		.map(|dir| dir.join("leptoskit.toml"))
+		.find(|path| path.is_file())
+	else {
+		return Ok(false);
+	};
+	let document: toml::Value = toml::from_str(&std::fs::read_to_string(file)?)?;
+	Ok(document
+		.get("cloud")
+		.and_then(|cloud| cloud.get("project"))
+		.and_then(toml::Value::as_str)
+		.is_some_and(|slug| !slug.trim().is_empty()))
+}
+
+/// Dispatches `lk deploy` to `lk cloud deploy` when `[cloud].project` is set.
+pub(crate) fn deploy_from_cli(environment: Option<String>, detach: bool) -> Result<()> {
+	let args = CloudArgs {
+		url: None,
+		json: false,
+		org: None,
+		project: None,
+		environment,
+		command: CloudCommand::Deploy { detach },
+	};
+	run(&args)
+}
+
+/// Runs one cloud command and returns its structured JSON value (used by MCP
+/// tools).
+pub(crate) fn execute_json(args: &CloudArgs) -> Result<Value> {
+	let context = Context::load(args)?;
+	execute(args, &context)
+}
+
 /// Executes one cloud command.
 ///
 /// # Errors
@@ -459,6 +554,42 @@ fn execute(args: &CloudArgs, context: &Context) -> Result<Value> {
 		"This needs `lk cloud login`. Unset LEPTOSKIT_CLOUD_TOKEN first."
 	);
 	match &args.command {
+		CloudCommand::Launch {
+			name,
+			region,
+			yes,
+			detach,
+		} => {
+			deploy::launch(
+				args,
+				context,
+				name.as_deref(),
+				region.as_deref(),
+				*yes,
+				*detach,
+			)
+		}
+		CloudCommand::Deploy { detach } => deploy::deploy(args, context, *detach),
+		CloudCommand::Status => deploy::status(args, context),
+		CloudCommand::Logs {
+			follow,
+			process,
+			since_minutes,
+			contains,
+			limit,
+		} => {
+			deploy::logs(
+				args,
+				context,
+				*follow,
+				process.clone(),
+				*since_minutes,
+				contains.clone(),
+				*limit,
+			)
+		}
+		CloudCommand::Estimate => deploy::estimate(args, context),
+		CloudCommand::Open { print } => deploy::open(args, context, *print),
 		CloudCommand::Login { no_browser } => {
 			client.login(|verification| {
 				if args.json {

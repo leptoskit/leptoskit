@@ -19,5 +19,7 @@ Options:
       --extension                      Add a browser extension: the `extension` platform, a popup and a background worker in `[extension]`, and the app's entry points
       --auth                           Start with sign-in wired up: email codes, a user table, and the sign-in screens in front of the app. Adds a SQLite database unless `--db` picks one
       --frontends [<FRONTENDS>...]     Scaffold several frontend apps in one workspace. Pass values (`landing`, `app`, `admin`) or the flag alone for all three
+      --web-only                       Scaffold a web-only project (`app.platforms = ["web"]`)
+      --cloud                          Add a starter [cloud] table for LeptosKit Cloud and default --auth without --db to Postgres instead of SQLite
   -h, --help                           Print help
   -V, --version                        Print version

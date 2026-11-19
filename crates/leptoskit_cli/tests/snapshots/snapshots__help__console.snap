@@ -2,7 +2,7 @@
 source: crates/leptoskit_cli/tests/snapshots.rs
 expression: "normalize(&stdout(&output), &scratch.path)"
 ---
-Hosts or connects to the deployment dashboard and durable agent API
+Legacy operator-enrolled deployment dashboard and agent API. For new projects, prefer `lk cloud` (LeptosKit Cloud) or `lk infra` (self-hosted)
 
 Usage: leptoskit console [OPTIONS] <COMMAND>
 
