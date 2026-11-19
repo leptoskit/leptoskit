@@ -1193,7 +1193,10 @@ const RUNTIME: &str = r#"
 class FnError(Exception):
     """A failed RPC call, classified like ``leptoskit_rpc::FnError``.
 
-    ``kind`` is one of ``network``, ``invalid``, ``server``, ``decode``, or ``other``.
+    ``kind`` is one of ``network``, ``invalid``, ``server``, ``decode``, ``refused``, or
+    ``other``. When the server refused the call and said why, ``code`` is the stable name of
+    the reason, such as ``rate_limited``, and ``retry_after`` is how many seconds to wait
+    before trying again, when the server said.
     """
 
     def __init__(
@@ -1203,12 +1206,16 @@ class FnError(Exception):
         *,
         status: Optional[int] = None,
         raw: Optional[str] = None,
+        code: Optional[str] = None,
+        retry_after: Optional[int] = None,
     ) -> None:
         super().__init__(message)
         self.kind = kind
         self.message = message
         self.status = status
         self.raw = raw
+        self.code = code
+        self.retry_after = retry_after
 
     @property
     def retryable(self) -> bool:
@@ -1225,6 +1232,22 @@ class FnError(Exception):
         variant, separator, message = body.partition("|")
         if not separator:
             return cls("other", body or f"HTTP {status}", status=status, raw=body)
+        if variant == "Refused":
+            try:
+                refusal = json.loads(message)
+            except ValueError:
+                refusal = None
+            if isinstance(refusal, dict) and isinstance(refusal.get("code"), str):
+                wait = refusal.get("retry_after")
+                text = refusal.get("message")
+                return cls(
+                    "refused",
+                    text if isinstance(text, str) else "",
+                    status=status,
+                    raw=body,
+                    code=refusal["code"],
+                    retry_after=wait if isinstance(wait, int) and not isinstance(wait, bool) else None,
+                )
         kind = _ERROR_KINDS.get(variant, "other")
         return cls(kind, message, status=status, raw=body)
 

@@ -2,6 +2,7 @@
 //! and a typed result.
 
 use std::fmt;
+use std::time::Duration;
 
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -157,7 +158,29 @@ pub enum Error {
 	/// `500`. A job that fails with it stops at once, without its remaining
 	/// retries, and its `on_failure` mutation runs.
 	Permanent(String),
+	/// The caller is asking too often: `429`, with a `Retry-After` header.
+	/// The client reads it as [`FnError::Refused`] with the code
+	/// `rate_limited` and how long to wait.
+	RateLimited {
+		/// How long the caller should wait before asking again.
+		retry_after: Duration,
+	},
+	/// The request was understood and turned down for a reason the app
+	/// names, such as a full notebook. The client reads the code from
+	/// [`FnError::Refused`] and chooses its words by it.
+	Refused {
+		/// A short name for the reason that the client matches on, such as
+		/// `notes_full`. Keep it stable: it is part of the app's API.
+		code: String,
+		/// What a person can read.
+		message: String,
+		/// The HTTP status: `409` from [`Error::refused`].
+		status: u16,
+	},
 }
+
+/// The code a client reads for [`Error::RateLimited`].
+pub const RATE_LIMITED: &str = "rate_limited";
 
 impl Error {
 	/// The arguments were wrong.
@@ -205,6 +228,73 @@ impl Error {
 		Self::Permanent(message.into())
 	}
 
+	/// The caller is asking too often, and should wait `retry_after`.
+	///
+	/// ```
+	/// use std::time::Duration;
+	///
+	/// use leptoskit_rpc::Error;
+	/// use leptoskit_rpc::FnError;
+	///
+	/// let error = Error::rate_limited(Duration::from_secs(30));
+	/// assert_eq!(error.status(), 429);
+	///
+	/// let seen: FnError = error.into();
+	/// assert_eq!(seen.code(), Some("rate_limited"));
+	/// assert_eq!(seen.retry_after(), Some(Duration::from_secs(30)));
+	/// ```
+	#[must_use]
+	pub const fn rate_limited(retry_after: Duration) -> Self {
+		Self::RateLimited { retry_after }
+	}
+
+	/// The request was turned down for the reason `code` names, with the
+	/// status `409`. Build [`Error::Refused`] itself for another status.
+	///
+	/// ```
+	/// use leptoskit_rpc::Error;
+	/// use leptoskit_rpc::FnError;
+	///
+	/// let error = Error::refused("notes_full", "Your notebook is full");
+	/// assert_eq!(error.status(), 409);
+	///
+	/// match FnError::from(error) {
+	/// 	FnError::Refused { code, message, .. } if code == "notes_full" => {
+	/// 		assert_eq!(message, "Your notebook is full");
+	/// 	}
+	/// 	other => panic!("{other}"),
+	/// }
+	/// ```
+	pub fn refused(code: impl Into<String>, message: impl Into<String>) -> Self {
+		Self::Refused {
+			code: code.into(),
+			message: message.into(),
+			status: 409,
+		}
+	}
+
+	/// The reason's name, for the failures that have one: the code of a
+	/// [`Refused`](Self::Refused), and [`RATE_LIMITED`] for a
+	/// [`RateLimited`](Self::RateLimited).
+	#[must_use]
+	pub fn code(&self) -> Option<&str> {
+		match self {
+			Self::RateLimited { .. } => Some(RATE_LIMITED),
+			Self::Refused { code, .. } => Some(code),
+			_ => None,
+		}
+	}
+
+	/// How long the caller should wait before asking again, when the failure
+	/// says.
+	#[must_use]
+	pub const fn retry_after(&self) -> Option<Duration> {
+		match self {
+			Self::RateLimited { retry_after } => Some(*retry_after),
+			_ => None,
+		}
+	}
+
 	/// Whether a job that failed with this should stop at once.
 	#[must_use]
 	pub fn is_permanent(&self) -> bool {
@@ -223,6 +313,8 @@ impl Error {
 			Self::TooMany(_) => 429,
 			Self::Server(_) | Self::Permanent(_) => 500,
 			Self::Retry(_) => 503,
+			Self::RateLimited { .. } => 429,
+			Self::Refused { status, .. } => *status,
 		}
 	}
 
@@ -238,7 +330,9 @@ impl Error {
 			| Self::TooMany(message)
 			| Self::Server(message)
 			| Self::Retry(message)
-			| Self::Permanent(message) => message,
+			| Self::Permanent(message)
+			| Self::Refused { message, .. } => message,
+			Self::RateLimited { .. } => "too many requests; wait before trying again",
 			Self::Contended => "the server was too busy to finish this; try again",
 		}
 	}
@@ -253,8 +347,23 @@ impl Error {
 	/// The body a caller receives: `Kind|message`, where `Kind` is the
 	/// `ServerFnError` variant generated clients classify, as
 	/// [`FnError::from_wire`] reads it.
+	///
+	/// A failure with a [code](Self::code) is `Refused|` followed by a JSON
+	/// object with `status`, `code`, `message` and, when there is one,
+	/// `retry_after` in whole seconds.
 	#[must_use]
 	pub fn to_wire(&self) -> String {
+		if let Some(code) = self.code() {
+			let refusal = serde_json::json!({
+				"status": self.status(),
+				"code": code,
+				"message": self.message(),
+				"retry_after": self.retry_after().map(whole_seconds),
+			});
+
+			return format!("{REFUSED}|{refusal}");
+		}
+
 		let kind = match self {
 			Self::Invalid(_) => "Args",
 			_ => "ServerError",
@@ -262,6 +371,15 @@ impl Error {
 
 		format!("{kind}|{}", self.message())
 	}
+}
+
+/// The kind that starts a refusal's wire text.
+pub(crate) const REFUSED: &str = "Refused";
+
+/// A wait in the whole seconds `Retry-After` counts in, rounded up so a
+/// caller never comes back early.
+pub(crate) fn whole_seconds(wait: Duration) -> u64 {
+	wait.as_secs() + u64::from(wait.subsec_nanos() > 0)
 }
 
 impl fmt::Display for Error {
@@ -371,6 +489,60 @@ mod tests {
 		assert_eq!(
 			FnError::from(Error::not_found("gone")),
 			FnError::Server("gone".to_owned())
+		);
+	}
+
+	#[test]
+	fn refusals_reach_callers_with_their_code_and_wait() {
+		let limited = Error::rate_limited(Duration::from_millis(1500));
+		assert_eq!(limited.status(), 429);
+		assert_eq!(limited.code(), Some(RATE_LIMITED));
+		assert_eq!(limited.retry_after(), Some(Duration::from_millis(1500)));
+		// A wait is sent in whole seconds, rounded up.
+		assert_eq!(
+			FnError::from(limited),
+			FnError::Refused {
+				status: 429,
+				code: "rate_limited".to_owned(),
+				message: "too many requests; wait before trying again".to_owned(),
+				retry_after: Some(Duration::from_secs(2)),
+			}
+		);
+
+		let full = Error::refused("notes_full", "Your notebook is full");
+		assert_eq!(full.status(), 409);
+		assert_eq!(full.retry_after(), None);
+		assert_eq!(
+			full.to_wire(),
+			r#"Refused|{"code":"notes_full","message":"Your notebook is full","retry_after":null,"status":409}"#
+		);
+		assert_eq!(
+			FnError::from(full),
+			FnError::Refused {
+				status: 409,
+				code: "notes_full".to_owned(),
+				message: "Your notebook is full".to_owned(),
+				retry_after: None,
+			}
+		);
+
+		let gone = Error::Refused {
+			code: "pass_gone".to_owned(),
+			message: "Your pass has ended".to_owned(),
+			status: 401,
+		};
+		assert_eq!(gone.status(), 401);
+		assert_eq!(FnError::from(gone).code(), Some("pass_gone"));
+
+		// A message with a bar in it survives the trip.
+		let barred = FnError::from(Error::refused("odd", "a|b"));
+		assert_eq!(barred.message(), "a|b");
+		assert!(!barred.retryable());
+
+		// A refusal this build can't read is still an error with its text.
+		assert_eq!(
+			FnError::from_wire("Refused|not json"),
+			FnError::Other("Refused|not json".to_owned())
 		);
 	}
 

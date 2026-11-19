@@ -8,7 +8,7 @@ The same calls work in the browser and during SSR, on the web target. Native app
 
 ## Errors that mean something
 
-`FnError` sorts every `ServerFnError` into one of five kinds, so the UI can respond to each one differently:
+`FnError` sorts every failure into a few kinds, so the UI can respond to each one differently:
 
 | Variant   | Comes from                                | Retryable |
 | --------- | ----------------------------------------- | --------- |
@@ -17,6 +17,9 @@ The same calls work in the browser and during SSR, on the web target. Native app
 | `Invalid` | bad or missing arguments                  | no        |
 | `Decode`  | a response or request that wouldn't parse | no        |
 | `Other`   | registration and response errors          | no        |
+| `Refused` | an operation that said no with a reason   | no        |
+
+`Refused` comes from [queries and mutations](13-sharing-the-rpc.md#saying-no-with-a-reason), which can name why they refused and how long to wait. A `#[server]` function can't produce one.
 
 `Server` errors aren't retried because they are also how a function says no. `ServerFnError::new("not found")` and a database outage arrive the same way, and retrying a refusal only makes the user wait longer for it. When you know a failure is temporary, decide for yourself: a [`leptoskit_query`](11-fetching-data.md) scope takes `Retry::decide`, which sees the `FnError` and can retry `Server` errors you recognize.
 

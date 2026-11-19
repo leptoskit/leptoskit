@@ -331,6 +331,8 @@ impl Hub {
 						WireError {
 							status: 503,
 							message: format!("the change log can't be read: {error}"),
+							code: None,
+							retry_after: None,
 						}
 					};
 					let source = self.source().await.map_err(|error| unreadable(&error))?;

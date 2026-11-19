@@ -229,6 +229,8 @@ mod tests {
 		let error = WireError {
 			status: 403,
 			message: "policy changed".to_owned(),
+			code: None,
+			retry_after: None,
 		};
 		let mut refused = batch(2, vec![(1, Changed::Failed(error.clone()))]);
 		refused.revalidate = true;
@@ -250,6 +252,8 @@ mod tests {
 		let error = WireError {
 			status: 503,
 			message: "retry".to_owned(),
+			code: None,
+			retry_after: None,
 		};
 		assert!(sender.send(batch(1, vec![(1, Changed::Failed(error))])));
 		assert!(sender.send(batch(2, vec![(1, value(2))])));

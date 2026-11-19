@@ -664,6 +664,15 @@ async fn answer(receiver: oneshot::Receiver<Result<Value, WireError>>) -> Result
 
 /// A frame's failure, classified like any other call's.
 pub(crate) fn fn_error(error: WireError) -> FnError {
+	if let Some(code) = error.code {
+		return FnError::Refused {
+			status: error.status,
+			code,
+			message: error.message,
+			retry_after: error.retry_after.map(Duration::from_secs),
+		};
+	}
+
 	match error.status {
 		0 => FnError::Network(error.message),
 		400 => FnError::Invalid(error.message),
@@ -914,6 +923,8 @@ impl Inner {
 					message: "the live connection dropped before the action answered; it may or \
 					          may not have run"
 						.to_owned(),
+					code: None,
+					retry_after: None,
 				}));
 			}
 		}
@@ -1536,6 +1547,8 @@ fn refuse(inner: &Inner, refused: bool) {
 	let error = WireError {
 		status: 401,
 		message: "sign in again to watch this".to_owned(),
+		code: None,
+		retry_after: None,
 	};
 	inner.mutations().clear();
 	inner.actions().clear();
@@ -1556,6 +1569,8 @@ fn refuse(inner: &Inner, refused: bool) {
 		let _ = subscriber.sender.unbounded_send(Update::Err(WireError {
 			status: 401,
 			message: "sign in again to watch this".to_owned(),
+			code: None,
+			retry_after: None,
 		}));
 	}
 }
@@ -3290,6 +3305,8 @@ mod tests {
 					err: Some(WireError {
 						status: 400,
 						message: "no body".into(),
+						code: None,
+						retry_after: None,
 					}),
 					version: 9,
 				});

@@ -183,6 +183,8 @@ impl StreamSink {
 				.get_or_insert(WireError {
 					status: 500,
 					message: "the stream producer failed".to_owned(),
+					code: None,
+					retry_after: None,
 				});
 		}
 		completion.await;
@@ -250,6 +252,8 @@ impl StreamSink {
 				WireError {
 					status: error.status(),
 					message: error.message().to_owned(),
+					code: error.code().map(str::to_owned),
+					retry_after: error.retry_after().map(crate::operation::whole_seconds),
 				}
 			});
 	}
@@ -267,6 +271,8 @@ impl StreamSink {
 			let error = WireError {
 				status: 413,
 				message: format!("a stream frame may contain at most {MAX_FRAME_BYTES} bytes"),
+				code: None,
+				retry_after: None,
 			};
 
 			if let Ok(text) = serde_json::to_string(&EndReason::Failed(error).frame(self.stream)) {

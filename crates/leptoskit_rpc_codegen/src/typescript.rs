@@ -674,7 +674,7 @@ const TSCONFIG: &str = r#"{
 
 /// The runtime every generated TypeScript client shares.
 const RUNTIME: &str = r#"/** How a failed call is classified, mirroring `leptoskit_rpc::FnError`. */
-export type FnErrorKind = "network" | "invalid" | "server" | "decode" | "other";
+export type FnErrorKind = "network" | "invalid" | "server" | "decode" | "refused" | "other";
 
 /** A failed RPC call. */
 export class FnError extends Error {
@@ -684,17 +684,29 @@ export class FnError extends Error {
 	readonly status: number | undefined;
 	/** The raw response body, when a response arrived. */
 	readonly raw: string | undefined;
+	/** The stable name of the reason, such as `rate_limited`, when the server refused the call and said why. */
+	readonly code: string | undefined;
+	/** How many seconds to wait before trying again, when the server said. */
+	readonly retryAfter: number | undefined;
 
 	constructor(
 		kind: FnErrorKind,
 		message: string,
-		options: { status?: number; raw?: string; cause?: unknown } = {},
+		options: {
+			status?: number;
+			raw?: string;
+			cause?: unknown;
+			code?: string;
+			retryAfter?: number;
+		} = {},
 	) {
 		super(message, options.cause === undefined ? undefined : { cause: options.cause });
 		this.name = "FnError";
 		this.kind = kind;
 		this.status = options.status;
 		this.raw = options.raw;
+		this.code = options.code;
+		this.retryAfter = options.retryAfter;
 	}
 
 	/**
@@ -717,6 +729,17 @@ export class FnError extends Error {
 		}
 		const variant = body.slice(0, separator);
 		const message = body.slice(separator + 1);
+		if (variant === "Refused") {
+			const refusal = FnError.refusal(message);
+			if (refusal !== undefined) {
+				return new FnError("refused", refusal.message, {
+					status,
+					raw: body,
+					code: refusal.code,
+					retryAfter: refusal.retryAfter,
+				});
+			}
+		}
 		let kind: FnErrorKind;
 		switch (variant) {
 			case "Request":
@@ -739,6 +762,30 @@ export class FnError extends Error {
 				kind = "other";
 		}
 		return new FnError(kind, message, { status, raw: body });
+	}
+
+	/** Reads the JSON a refusal carries: its code, message, and wait. */
+	private static refusal(
+		text: string,
+	): { code: string; message: string; retryAfter?: number } | undefined {
+		try {
+			const refusal = JSON.parse(text) as {
+				code?: unknown;
+				message?: unknown;
+				retry_after?: unknown;
+			};
+			if (typeof refusal.code !== "string") {
+				return undefined;
+			}
+			return {
+				code: refusal.code,
+				message: typeof refusal.message === "string" ? refusal.message : "",
+				retryAfter:
+					typeof refusal.retry_after === "number" ? refusal.retry_after : undefined,
+			};
+		} catch {
+			return undefined;
+		}
 	}
 }
 

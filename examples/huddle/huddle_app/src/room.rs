@@ -296,6 +296,8 @@ mod tests {
 					.unbounded_send(ChannelEvent::Error(WireError {
 						status: 403,
 						message: "fixture refusal".into(),
+						code: None,
+						retry_after: None,
 					}))
 					.unwrap();
 				drop(events);

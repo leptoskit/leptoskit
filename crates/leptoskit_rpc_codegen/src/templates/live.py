@@ -45,13 +45,24 @@ class LiveError(Exception):
     """A failure the server reported over the live connection.
 
     ``status`` is the HTTP status the same failure would carry, or ``0`` when the
-    connection closed.
+    connection closed. When the server refused the request and said why, ``code`` is the
+    stable name of the reason, such as ``rate_limited``, and ``retry_after`` is how many
+    seconds to wait before trying again, when the server said.
     """
 
-    def __init__(self, status: int, message: str) -> None:
+    def __init__(
+        self,
+        status: int,
+        message: str,
+        *,
+        code: Optional[str] = None,
+        retry_after: Optional[int] = None,
+    ) -> None:
         super().__init__(message)
         self.status = status
         self.message = message
+        self.code = code
+        self.retry_after = retry_after
 
 
 @dataclass(frozen=True)
@@ -1286,7 +1297,15 @@ def _wire_error(err: Any) -> LiveError:
     error = err if isinstance(err, dict) else {}
     message = error.get("message")
 
-    return LiveError(_number(error.get("status"), 500), str(message if message is not None else "the server failed"))
+    code = error.get("code")
+    wait = error.get("retry_after")
+
+    return LiveError(
+        _number(error.get("status"), 500),
+        str(message if message is not None else "the server failed"),
+        code=code if isinstance(code, str) else None,
+        retry_after=wait if isinstance(wait, int) and not isinstance(wait, bool) else None,
+    )
 
 
 def _number(value: Any, fallback: Any) -> Any:

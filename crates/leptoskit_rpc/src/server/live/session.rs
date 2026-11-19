@@ -1022,6 +1022,8 @@ impl Session {
 						message: format!(
 							"a connection may have {MAX_ACTIONS} pending actions; wait for a reply"
 						),
+						code: None,
+						retry_after: None,
 					}),
 				)
 				.await;
@@ -1068,6 +1070,8 @@ impl Session {
 					Err(WireError {
 						status: 401,
 						message: "the identity changed while the action ran".to_owned(),
+						code: None,
+						retry_after: None,
 					}),
 				)
 				.await;
@@ -1703,6 +1707,8 @@ mod tests {
 		let error = WireError {
 			status: 403,
 			message: "no longer available".to_owned(),
+			code: None,
+			retry_after: None,
 		};
 		assert_eq!(
 			subscription.apply(Changed::Failed(error.clone())),
@@ -1742,6 +1748,8 @@ mod tests {
 			let error = WireError {
 				status,
 				message: format!("failure {status}"),
+				code: None,
+				retry_after: None,
 			};
 			subscription.apply(Changed::Failed(error.clone()));
 			assert_eq!(subscription.full_update(), Update::Err(error));

@@ -202,6 +202,60 @@ The first argument is the context, and the body can only do what its context all
 
 A body returns `rpc::Result<T>`. `?` on a database error turns a missing row into `NotFound`, a policy's refusal into `Forbidden`, a broken rule into `Invalid`, and anything else into a `Server` error that says nothing about the database.
 
+### Saying no with a reason
+
+A screen often has to say why something didn't happen, and what to do about it: "wait 30 seconds", "your notebook is full, delete a note", "your session ended, sign in again". The message alone is not enough for that, because the screen would have to compare sentences, and the sentence changes when someone rewords it. So an operation can refuse with a code, a short name that stays the same:
+
+```rust
+#[rpc::mutation]
+pub async fn add_note(cx: &rpc::MutationCx, title: String) -> rpc::Result<Id<Note>> {
+	let me = cx.require::<auth::SignedIn>()?;
+	if let Some(wait) = too_soon(cx, &me).await? {
+		// 429, with a `Retry-After` header.
+		return Err(rpc::Error::rate_limited(wait));
+	}
+	if count_notes(cx, &me).await? >= 50 {
+		// 409, with a code this app chose.
+		return Err(rpc::Error::refused("notes_full", "Your notebook is full"));
+	}
+	// …
+}
+```
+
+The caller gets `FnError::Refused`, with the status, the code, the message, and how long to wait when the server said:
+
+```rust
+let notice = RwSignal::new(String::new());
+
+let save = move |title: String| async move {
+	match rpc::client::call(AddNote { title }).await {
+		Ok(_) => notice.set(String::new()),
+		Err(FnError::Refused { code, retry_after: Some(wait), .. }) if code == rpc::RATE_LIMITED => {
+			notice.set(format!("Too fast. Try again in {} seconds.", wait.as_secs()));
+		}
+		Err(FnError::Refused { code, .. }) if code == "notes_full" => {
+			notice.set("Your notebook is full. Delete a note to make room.".to_owned());
+		}
+		Err(error) => notice.set(error.message().to_owned()),
+	}
+};
+
+view! {
+	<Text role=Role::Status>{move || notice.get()}</Text>
+}
+```
+
+`error.code()` and `error.retry_after()` read the same two values without a `match`.
+
+- **`rpc::Error::rate_limited(wait)`** answers `429`. Its code is `rate_limited` (`rpc::RATE_LIMITED`). The wait is sent in whole seconds, rounded up, so a caller never comes back early.
+- **`rpc::Error::refused(code, message)`** answers `409`. For another status, build the variant: `rpc::Error::Refused { code, message, status: 401 }`. Only a rate limit carries a wait.
+- A code is part of your API once a client matches on it, so keep it stable and change the message freely.
+- A refusal is never retried.
+
+This works the same on every platform and over every way an operation is called: a plain call, a live mutation or subscription over the socket, and a stream. Sign-in refusals (`leptoskit_auth::ErrorResponse`) have the same three parts, `error`, `message`, and `retry_after`, so both read alike. The generated clients for other languages carry the code and the wait too; see [Errors](#errors).
+
+An app built before this release reads a refusal as an `other` error whose text is the raw `Refused|{…}` body, so release the server after the clients that call it, or keep using plain errors for operations old clients still call.
+
 ### Serving them
 
 The server merges one router, which answers `POST /api/<name>` for every query and mutation. With [sign-in](23-sign-in.md), each runs as the signed-in person:
@@ -602,9 +656,22 @@ Every client classifies failures the way `leptoskit_rpc::FnError` does, parsed f
 | `ServerError`, `MiddlewareError`, `WrappedServerFn` | `server`  | no        |
 | `Args`, `MissingArg`                                | `invalid` | no        |
 | `Deserialization`, `Serialization`                  | `decode`  | no        |
+| `Refused`                                           | `refused` | no        |
 | anything else                                       | `other`   | no        |
 
 Only `network` failures are retryable: the request never got an answer. A `server` error is final, because a function reports a refusal such as "not found" (`ServerFnError::new`) the same way as an outage.
+
+A `refused` error is an operation [saying no with a reason](#saying-no-with-a-reason). It carries the reason's code and, for a rate limit, how long to wait. The wait is also in the response's `Retry-After` header.
+
+| Language   | Where the code and the wait are                                                       |
+| ---------- | ------------------------------------------------------------------------------------- |
+| Rust       | `Error::Refused { status, code, message, retry_after }`, the wait as a `Duration`     |
+| TypeScript | `error.code` and `error.retryAfter`, in seconds                                       |
+| Dart       | `error.code` and `error.retryAfter`, a `Duration`                                     |
+| Go         | `err.Code` and `err.RetryAfter`, a `time.Duration` that is zero when there is no wait |
+| Python     | `error.code` and `error.retry_after`, in seconds                                      |
+
+Over the live connection, each language's `LiveError` has the same two values beside its `status`. Regenerate a client to get them: a client generated earlier reports a refusal as `other`, with the body in `raw`. In Rust, `Error` gained a variant, so a `match` over it without a wildcard arm needs a new arm after regenerating.
 
 Custom error types are not described yet. A server function whose error type is its own, rather than `ServerFnError`, sends errors in that type's encoding: the OpenAPI document marks them `x-leptoskit-error-encoding: custom` with no schema, and every generated client reports them as `other`, with the raw body in its `raw` field (`Error::Fn`'s message in Rust) for you to decode.
 
