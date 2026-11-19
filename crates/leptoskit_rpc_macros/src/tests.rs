@@ -651,6 +651,57 @@ mod operations {
 	}
 
 	#[test]
+	fn limits_become_the_registrations_limits() {
+		let server = query(
+			quote!(rate_limit = 10 / 1m, timeout = 5s, max_body = 64KiB),
+			messages(),
+			true,
+		);
+		let compact: String = server.split_whitespace().collect();
+		assert!(
+			compact.contains(
+				"limits:::leptoskit_rpc::server::OperationLimits::NONE.\
+				 with_rate(::leptoskit_rpc::server::Rate::new(10,\
+				 ::core::time::Duration::from_millis(60000u64))).\
+				 with_timeout(::core::time::Duration::from_millis(5000u64)).with_max_body(65536)"
+			),
+			"{server}"
+		);
+
+		let action = pretty(
+			expand(
+				OperationKind::Action,
+				quote!(max_body = 2MiB),
+				quote! {
+					pub async fn upload(cx: &rpc::ActionCx) -> rpc::Result<()> {
+						Ok(())
+					}
+				},
+				build(true),
+			)
+			.expect("an action"),
+		);
+		let compact: String = action.split_whitespace().collect();
+		assert!(compact.contains("with_max_body(2097152)"), "{action}");
+
+		let job = pretty(
+			expand(
+				OperationKind::Job,
+				quote!(timeout = 30s),
+				quote! {
+					pub async fn send(cx: &rpc::JobCx) -> rpc::Result<()> {
+						Ok(())
+					}
+				},
+				build(true),
+			)
+			.expect("a job"),
+		);
+		// A job's timeout is the job's own, not a client call's.
+		assert!(!job.contains("OperationLimits"), "{job}");
+	}
+
+	#[test]
 	fn a_service_operation_keeps_its_body_only_in_the_service_build() {
 		let client = query(quote!(service = "analytics"), messages(), false);
 		assert!(
@@ -1274,17 +1325,17 @@ mod operations {
 			),
 			(
 				Mutation,
-				"timeout = 3",
+				"queue = \"mail\"",
 				"async fn f(cx: &MutationCx) -> rpc::Result<()> {}",
 				"`retries = N`",
-				"timeout = 3",
+				"queue = \"mail\"",
 			),
 			(
 				Query,
-				"timeout = 3",
+				"queue = \"mail\"",
 				"async fn f(cx: &QueryCx) -> rpc::Result<()> {}",
 				"expected `name",
-				"timeout = 3",
+				"queue = \"mail\"",
 			),
 		];
 
@@ -1292,6 +1343,98 @@ mod operations {
 			let (found, span) = error(*kind, args, item);
 			assert!(found.contains(message), "{item}: {found}");
 			assert_eq!(&span, underlined, "{item}: {found}");
+		}
+	}
+
+	#[test]
+	fn misshapen_limits_say_how_to_fix_them() {
+		use OperationKind::Mutation;
+		use OperationKind::Query;
+
+		let cases: &[(OperationKind, &str, &str, &str, &str)] = &[
+			(
+				Mutation,
+				"timeout = 3",
+				"async fn f(cx: &MutationCx) -> rpc::Result<()> {}",
+				"expects a duration",
+				"3",
+			),
+			(
+				Query,
+				"timeout = 5s, timeout = 6s",
+				"async fn f(cx: &QueryCx) -> rpc::Result<()> {}",
+				"given twice",
+				"timeout = 6s",
+			),
+			(
+				Query,
+				"rate_limit = 10",
+				"async fn f(cx: &QueryCx) -> rpc::Result<()> {}",
+				"calls per duration",
+				"10",
+			),
+			(
+				Query,
+				"rate_limit = 0 / 1m",
+				"async fn f(cx: &QueryCx) -> rpc::Result<()> {}",
+				"above zero",
+				"0",
+			),
+			(
+				Query,
+				"rate_limit = 10 / 0s",
+				"async fn f(cx: &QueryCx) -> rpc::Result<()> {}",
+				"calls per duration",
+				"0s",
+			),
+			(
+				Query,
+				"rate_limit = 10u8 / 1m",
+				"async fn f(cx: &QueryCx) -> rpc::Result<()> {}",
+				"calls per duration",
+				"10u8",
+			),
+			(
+				Query,
+				"rate_limit = n / 1m",
+				"async fn f(cx: &QueryCx) -> rpc::Result<()> {}",
+				"calls per duration",
+				"n",
+			),
+			(
+				Query,
+				"rate_limit = 10 / minute",
+				"async fn f(cx: &QueryCx) -> rpc::Result<()> {}",
+				"expects a duration",
+				"minute",
+			),
+			(
+				Mutation,
+				"max_body = 64",
+				"async fn f(cx: &MutationCx) -> rpc::Result<()> {}",
+				"`KiB`",
+				"64",
+			),
+			(
+				Mutation,
+				"max_body = 0KiB",
+				"async fn f(cx: &MutationCx) -> rpc::Result<()> {}",
+				"expects a size",
+				"0KiB",
+			),
+			(
+				Mutation,
+				"max_body = \"64KiB\"",
+				"async fn f(cx: &MutationCx) -> rpc::Result<()> {}",
+				"expects a size",
+				"\"64KiB\"",
+			),
+		];
+
+		for (kind, args, item, message, underlined) in cases {
+			let (found, span) = error(*kind, args, item);
+			assert!(found.contains(message), "{args}: {found}");
+			assert_eq!(&span, underlined, "{args}: {found}");
 		}
 	}
 
@@ -1719,6 +1862,7 @@ mod jobs {
 		use OperationKind::Action;
 		use OperationKind::Job;
 		use OperationKind::Mutation;
+		use OperationKind::Stream;
 
 		let job = "async fn f(cx: &JobCx, wallet: u64) -> rpc::Result<()> {}";
 		let cases: &[(OperationKind, &str, &str, &str)] = &[
@@ -1770,6 +1914,19 @@ mod jobs {
 				"queue = \"x\"",
 				"async fn f(cx: &ActionCx) -> rpc::Result<()> {}",
 				"only applies",
+			),
+			(
+				Job,
+				"rate_limit = 1 / 1m",
+				job,
+				"only applies to #[rpc::query], #[rpc::mutation], and #[rpc::action]",
+			),
+			(Job, "max_body = 1KiB", job, "only applies to #[rpc::query]"),
+			(
+				Stream,
+				"timeout = 5s",
+				"async fn f(cx: &QueryCx) -> rpc::Result<impl Stream<Item = u8>> {}",
+				"only applies to #[rpc::query]",
 			),
 			(
 				Action,

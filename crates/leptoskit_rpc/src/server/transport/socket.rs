@@ -52,6 +52,7 @@ pub(crate) async fn upgrade<H: Host>(
 		return crate::server::failure(&error);
 	}
 
+	let address = live.guards().address(&parts);
 	let websocket = match WebSocketUpgrade::from_request_parts(&mut parts, &()).await {
 		Ok(websocket) => websocket,
 		Err(rejection) => return rejection.into_response(),
@@ -64,11 +65,16 @@ pub(crate) async fn upgrade<H: Host>(
 		.protocols([SUBPROTOCOL])
 		.max_message_size(2 * MAX_FRAME_BYTES)
 		.max_frame_size(2 * MAX_FRAME_BYTES)
-		.on_upgrade(move |socket| async move { run(live, socket, identity).await })
+		.on_upgrade(move |socket| async move { run(live, socket, identity, address).await })
 }
 
 /// Runs one socket's session on `live` until either side closes it.
-async fn run<H: Host>(live: H, socket: WebSocket, identity: Identity) {
+async fn run<H: Host>(
+	live: H,
+	socket: WebSocket,
+	identity: Identity,
+	address: Option<std::net::IpAddr>,
+) {
 	let number = live.next_number();
 	let (out, mut outgoing) = mpsc::channel::<Outbound>(OUTGOING);
 	let (frames, incoming) = mpsc::channel::<Incoming>(INCOMING);
@@ -133,6 +139,7 @@ async fn run<H: Host>(live: H, socket: WebSocket, identity: Identity) {
 		out,
 		resume_floor: None,
 		caller: Arc::new(Mutex::new(None)),
+		address,
 	})
 	.await;
 

@@ -41,6 +41,7 @@ async fn session() -> (
 		live,
 		number: 1,
 		identity: Identity::anonymous(),
+		address: None,
 		epoch: 0,
 		lease: IdentityLease::default(),
 		db,

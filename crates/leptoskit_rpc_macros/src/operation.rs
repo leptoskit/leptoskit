@@ -141,7 +141,44 @@ pub(crate) struct OperationArgs {
 	pub(crate) service: Option<LitStr>,
 	/// `#[rpc::stream(resumable)]`.
 	resumable: bool,
+	/// `rate_limit`, `timeout`, and `max_body` on a query, mutation, or
+	/// action.
+	limits: LimitArgs,
 	job: JobArgs,
+}
+
+/// The limits a query, mutation, or action declares for calls from
+/// clients.
+#[derive(Default)]
+struct LimitArgs {
+	/// `rate_limit = 10 / 1m`: the count and the duration.
+	rate: Option<(LitInt, TokenStream)>,
+	/// `timeout = 5s`.
+	timeout: Option<TokenStream>,
+	/// `max_body = 64KiB`, in bytes.
+	max_body: Option<u64>,
+}
+
+impl LimitArgs {
+	/// The `OperationLimits` value, as tokens.
+	fn tokens(&self, krate: &Path) -> TokenStream {
+		let mut limits = quote!(#krate::server::OperationLimits::NONE);
+
+		if let Some((max, per)) = &self.rate {
+			limits = quote!(#limits.with_rate(#krate::server::Rate::new(#max, #per)));
+		}
+
+		if let Some(timeout) = &self.timeout {
+			limits = quote!(#limits.with_timeout(#timeout));
+		}
+
+		if let Some(bytes) = self.max_body {
+			let bytes = proc_macro2::Literal::u64_unsuffixed(bytes);
+			limits = quote!(#limits.with_max_body(#bytes));
+		}
+
+		limits
+	}
 }
 
 /// The options only `#[rpc::job(...)]` accepts.
@@ -160,11 +197,13 @@ struct JobArgs {
 fn expected_options(kind: OperationKind) -> &'static str {
 	match kind {
 		OperationKind::Query | OperationKind::Action => {
-			"`name = \"...\"`, `service = \"...\"`, or `crate = \"...\"`"
+			"`name = \"...\"`, `service = \"...\"`, `rate_limit = 10 / 1m`, `timeout = 5s`, \
+			 `max_body = 64KiB`, or `crate = \"...\"`"
 		}
 		OperationKind::Stream => "`name = \"...\"`, `resumable`, or `crate = \"...\"`",
 		OperationKind::Mutation => {
-			"`name = \"...\"`, `retries = N`, `service = \"...\"`, or `crate = \"...\"`"
+			"`name = \"...\"`, `retries = N`, `service = \"...\"`, `rate_limit = 10 / 1m`, \
+			 `timeout = 5s`, `max_body = 64KiB`, or `crate = \"...\"`"
 		}
 		OperationKind::Job => {
 			"`name`, `crate`, `queue`, `retries`, `backoff`, `deadline`, `timeout`, \
@@ -176,6 +215,12 @@ fn expected_options(kind: OperationKind) -> &'static str {
 /// A duration written as a number with a unit, `500ms`, `30s`, `15m`, `2h`,
 /// or `7d`, as tokens that build a `Duration`.
 fn duration_value(value: &syn::Expr, option: &str, example: &str) -> syn::Result<TokenStream> {
+	let millis = duration_millis(value, option, example)?;
+	Ok(quote!(::core::time::Duration::from_millis(#millis)))
+}
+
+/// A duration written as a number with a unit, in milliseconds.
+fn duration_millis(value: &syn::Expr, option: &str, example: &str) -> syn::Result<u64> {
 	let error = || {
 		syn::Error::new_spanned(
 			value,
@@ -203,7 +248,75 @@ fn duration_value(value: &syn::Expr, option: &str, example: &str) -> syn::Result
 		_ => return Err(error()),
 	}
 	.ok_or_else(error)?;
-	Ok(quote!(::core::time::Duration::from_millis(#millis)))
+	Ok(millis)
+}
+
+/// `rate_limit = 10 / 1m`: at most ten calls a minute.
+fn rate_value(value: &syn::Expr) -> syn::Result<(LitInt, TokenStream)> {
+	let error = |spanned: &dyn ToTokens| {
+		syn::Error::new_spanned(
+			spanned,
+			"`rate_limit` expects calls per duration: a whole number above zero, `/`, and a \
+			 duration, such as `rate_limit = 10 / 1m` for ten calls a minute",
+		)
+	};
+	let syn::Expr::Binary(syn::ExprBinary {
+		left,
+		op: syn::BinOp::Div(_),
+		right,
+		..
+	}) = value
+	else {
+		return Err(error(value));
+	};
+	let syn::Expr::Lit(syn::ExprLit {
+		lit: syn::Lit::Int(max),
+		..
+	}) = &**left
+	else {
+		return Err(error(left));
+	};
+
+	if !max.suffix().is_empty() || max.base10_parse::<u32>().map_err(|_| error(max))? == 0 {
+		return Err(error(max));
+	}
+
+	if duration_millis(right, "rate_limit", "rate_limit = 10 / 1m")? == 0 {
+		return Err(error(right));
+	}
+
+	Ok((
+		max.clone(),
+		duration_value(right, "rate_limit", "rate_limit = 10 / 1m")?,
+	))
+}
+
+/// `max_body = 64KiB`: a size with a unit, `B`, `KiB`, or `MiB`, in bytes.
+fn size_value(value: &syn::Expr) -> syn::Result<u64> {
+	let error = || {
+		syn::Error::new_spanned(
+			value,
+			"`max_body` expects a size: a whole number and a unit, `B`, `KiB`, or `MiB`, such as \
+			 `max_body = 64KiB`",
+		)
+	};
+	let syn::Expr::Lit(syn::ExprLit {
+		lit: syn::Lit::Int(literal),
+		..
+	}) = value
+	else {
+		return Err(error());
+	};
+	let amount: u64 = literal.base10_parse().map_err(|_| error())?;
+	let bytes = match literal.suffix() {
+		"B" => Some(amount),
+		"KiB" => amount.checked_mul(1024),
+		"MiB" => amount.checked_mul(1024 * 1024),
+		_ => return Err(error()),
+	}
+	.filter(|bytes| *bytes > 0)
+	.ok_or_else(error)?;
+	Ok(bytes)
 }
 
 /// A plain name, such as an argument's.
@@ -344,6 +457,25 @@ impl OperationArgs {
 				})?);
 			}
 
+			"rate_limit" => {
+				Self::limit_kind(kind, pair)?;
+				Self::once(self.limits.rate.is_some(), pair)?;
+				self.limits.rate = Some(rate_value(&pair.value)?);
+			}
+
+			// A job's timeout is its own: see `job_option`.
+			"timeout" if kind != OperationKind::Job => {
+				Self::limit_kind(kind, pair)?;
+				Self::once(self.limits.timeout.is_some(), pair)?;
+				self.limits.timeout = Some(duration_value(&pair.value, "timeout", "timeout = 5s")?);
+			}
+
+			"max_body" => {
+				Self::limit_kind(kind, pair)?;
+				Self::once(self.limits.max_body.is_some(), pair)?;
+				self.limits.max_body = Some(size_value(&pair.value)?);
+			}
+
 			"retries" => {
 				match kind {
 					OperationKind::Query => {
@@ -481,6 +613,26 @@ impl OperationArgs {
 		}
 
 		Ok(true)
+	}
+
+	/// Rejects a limit on calls from clients for a kind clients don't call
+	/// that way: a stream, or a job.
+	fn limit_kind(kind: OperationKind, pair: &syn::MetaNameValue) -> syn::Result<()> {
+		match kind {
+			OperationKind::Query | OperationKind::Mutation | OperationKind::Action => Ok(()),
+			OperationKind::Stream | OperationKind::Job => {
+				Err(syn::Error::new_spanned(
+					pair,
+					format!(
+						"`{}` only applies to #[rpc::query], #[rpc::mutation], and \
+						 #[rpc::action]; for #[rpc::{}], expected {}",
+						pair.path.to_token_stream(),
+						kind.attribute(),
+						expected_options(kind)
+					),
+				))
+			}
+		}
 	}
 
 	/// Rejects an option only a job takes.
@@ -1759,6 +1911,7 @@ fn server_items(
 	// Arguments and results are JSON through serde. `handle` is the only
 	// transport today; another encoding would be a second handler later.
 	let handler = quote!(#krate::__private::handle::<#struct_ident>);
+	let limits = args.limits.tokens(krate);
 	let service = service_const(args.service.as_ref());
 	let call = if signature.takes_context {
 		quote_spanned! {signature.output_span=>
@@ -1787,6 +1940,7 @@ fn server_items(
 			kind: <#struct_ident as #krate::Operation>::KIND,
 			module_path: ::core::module_path!(),
 			service: <#struct_ident as #krate::Operation>::SERVICE,
+			limits: #limits,
 			handler: #handler,
 		}
 	} };

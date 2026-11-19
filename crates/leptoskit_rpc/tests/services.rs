@@ -90,6 +90,7 @@ const _: () = {
 			kind: <Ping as rpc::Operation>::KIND,
 			module_path: module_path!(),
 			service: <Ping as rpc::Operation>::SERVICE,
+			limits: rpc::server::OperationLimits::NONE,
 			handler: rpc::__private::handle::<Ping>,
 		}
 	}

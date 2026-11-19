@@ -91,6 +91,19 @@ use operation::OperationKind;
 /// is taken, and `crate = "..."`, the path to `leptoskit_rpc`, such as `crate
 /// = "leptoskit::rpc"`. Put `#[api]` above it to publish it to generated
 /// clients.
+///
+/// Limits on the calls clients send, which a query, a mutation, and an
+/// action all take:
+///
+/// - `rate_limit = 10 / 1m`: each caller may call it ten times a minute,
+///   counted apart from, and on top of, the server's `RateLimit`;
+/// - `timeout = 5s`: a call still running after five seconds is answered `504`
+///   (`timed_out`), and a mutation's transaction rolls back;
+/// - `max_body = 64KiB`: the largest arguments a call over HTTP may send, in
+///   `B`, `KiB`, or `MiB`, in place of the server's `max_body`.
+///
+/// Durations take `ms`, `s`, `m`, `h`, or `d`. See
+/// `rpc::server::OperationLimits`.
 #[proc_macro_attribute]
 pub fn query(
 	args: proc_macro::TokenStream,

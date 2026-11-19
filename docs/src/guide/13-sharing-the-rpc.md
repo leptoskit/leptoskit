@@ -270,6 +270,70 @@ let app = Router::new()
 
 Without `identify`, every caller is anonymous. Anything that implements `rpc::Identify`, such as an API-key check, can tell callers apart instead. Server code calls operations directly with `rpc::call(&db, AddNote { … })`: a mutation still gets its transaction and retries.
 
+### Limiting how often, how long, and how much
+
+Every query, mutation, and action you write is a public endpoint the moment the server is deployed. A script can call your search query a thousand times a second, send a 2 MiB note body, or ask for a report that takes a minute to build, and nothing in the operation's body stops it. The server can, before the body runs:
+
+```rust
+use leptoskit::rpc::server::{Rate, RateLimit, Server};
+
+let rpc = Server::new(db.clone())
+	.identify(auth.clone())
+	// Where callers come from, when a proxy in front of the server says.
+	.client_ip_header("fly-client-ip")
+	// 120 calls a minute from an address nobody is signed in from, 600 for
+	// someone signed in.
+	.rate_limit(RateLimit::new());
+```
+
+`RateLimit::new()` lets a caller spend their whole allowance at once and then refills it evenly, so a page that makes a handful of calls never notices it and a script settles at two calls a second. A caller nobody signed in is counted by their address, with IPv6 counted by its /64, which is what one machine is usually given. Someone signed in is counted as themselves, so everyone behind one office network doesn't share an allowance. Change either with `.anonymous(Rate::per_minute(60))` and `.signed_in(Rate::per_second(20))`, and count every session of one person together with `.key(…)`. Your own [services](32-services.md), and the app calling them, aren't counted unless you say so with `.internal(…)`.
+
+An operation that costs more than most says so where it is declared:
+
+```rust
+#[rpc::mutation(rate_limit = 5 / 1h, max_body = 16KiB)]
+pub async fn send_invite(cx: &rpc::MutationCx, email: String) -> rpc::Result<()> { … }
+
+#[rpc::query(timeout = 10s)]
+pub async fn yearly_report(cx: &rpc::QueryCx, year: i32) -> rpc::Result<Report> { … }
+```
+
+| Option                | What it does                                                                                           | When it is refused                     |
+| --------------------- | ------------------------------------------------------------------------------------------------------ | -------------------------------------- |
+| `rate_limit = 5 / 1h` | Each caller may call this five times an hour, on top of the server's `RateLimit`, and even without one | `429`, code `rate_limited`, and a wait |
+| `timeout = 10s`       | A call still running after ten seconds is stopped. A mutation's transaction rolls back                 | `504`, code `timed_out`                |
+| `max_body = 16KiB`    | The arguments may be at most 16 KiB, in place of the server's `max_body`, 2 MiB unless you change it   | `413`, code `too_large`                |
+
+Durations take `ms`, `s`, `m`, `h`, or `d`, and sizes `B`, `KiB`, or `MiB`. `Server::timeout(…)` and `Server::max_body(…)` set the defaults for every operation that doesn't set its own.
+
+Each refusal reaches the client as `FnError::Refused` with its code, on every platform and in every generated client, so a screen handles it the way [Saying no with a reason](#saying-no-with-a-reason) shows. The limits apply to every call a client sends: `POST /rpc/<name>`, and the subscriptions, mutations, actions, and streams a [live connection](24-real-time.md) sends, each counted as one call. A live connection that goes over its allowance is answered for that one frame and stays open. Calls the server makes while it renders a page are already inside a request it counted, and aren't counted again.
+
+For any other rule, write a guard. It sees the operation's name and kind, who is calling, and from where, and its error is the answer:
+
+```rust
+use leptoskit::rpc::server::{Call, Guard};
+
+/// Only people who are signed in may call anything outside `public.*`.
+struct SignedInOnly;
+
+impl Guard for SignedInOnly {
+	fn check<'a>(&'a self, call: &'a Call<'a>) -> BoxFuture<'a, rpc::Result<()>> {
+		let allowed = call.name.starts_with("public.") || call.identity.caller.is_some();
+		Box::pin(std::future::ready(if allowed {
+			Ok(())
+		} else {
+			Err(rpc::Error::unauthorized("sign in first"))
+		}))
+	}
+}
+
+let rpc = Server::new(db).identify(auth).rate_limit(RateLimit::new()).guard(SignedInOnly);
+```
+
+The rate limit counts first, then guards run in the order you add them.
+
+The counts live in the server's memory, so with three servers behind a load balancer a caller gets three times the allowance. To share one count, implement `RateStore` over Redis or your database and pass it with `RateLimit::new().store(…)`. Only use `client_ip_header` when your proxy always sets that header: without a proxy, a client can write any address it likes there.
+
 ### Calls that run once
 
 On a phone, the commonest real-time bug is "did my send go through?": the request arrived, the answer was lost, and sending again saves it twice. A mutation called with an `Idempotency-Key` header runs once: the server keeps a receipt, and a repeat with the same key and arguments gets the first call's result back. A repeat with the same key and other arguments is refused with `409`. Each signed-in session's keys are its own.

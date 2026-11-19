@@ -21,6 +21,8 @@ mod ambient;
 pub mod channel;
 #[cfg(any(feature = "postgres", feature = "sqlite"))]
 mod cx;
+#[cfg(any(feature = "live-streams", feature = "postgres", feature = "sqlite"))]
+mod guard;
 #[cfg(any(feature = "postgres", feature = "sqlite"))]
 mod http;
 
@@ -78,6 +80,30 @@ pub use cx::MutationCx;
 pub use cx::QueryCx;
 #[cfg(any(feature = "postgres", feature = "sqlite"))]
 pub use cx::ReadSink;
+#[cfg(any(feature = "live-streams", feature = "postgres", feature = "sqlite"))]
+pub use guard::Call;
+#[cfg(any(feature = "live-streams", feature = "postgres", feature = "sqlite"))]
+pub use guard::CallerKey;
+#[cfg(any(feature = "live-streams", feature = "postgres", feature = "sqlite"))]
+pub use guard::Guard;
+#[cfg(any(feature = "live-streams", feature = "postgres", feature = "sqlite"))]
+pub(crate) use guard::Guards;
+#[cfg(any(feature = "live-streams", feature = "postgres", feature = "sqlite"))]
+pub use guard::MemoryStore;
+#[cfg(any(feature = "live-streams", feature = "postgres", feature = "sqlite"))]
+pub use guard::OperationLimits;
+#[cfg(any(feature = "live-streams", feature = "postgres", feature = "sqlite"))]
+pub use guard::Rate;
+#[cfg(any(feature = "live-streams", feature = "postgres", feature = "sqlite"))]
+pub use guard::RateLimit;
+#[cfg(any(feature = "live-streams", feature = "postgres", feature = "sqlite"))]
+pub use guard::RateStore;
+#[cfg(any(feature = "live-streams", feature = "postgres", feature = "sqlite"))]
+pub use guard::TIMED_OUT;
+#[cfg(any(feature = "live-streams", feature = "postgres", feature = "sqlite"))]
+pub use guard::TOO_LARGE;
+#[cfg(any(feature = "live-streams", feature = "postgres", feature = "sqlite"))]
+pub use guard::Via;
 #[cfg(any(feature = "postgres", feature = "sqlite"))]
 pub use http::IDEMPOTENCY_KEY;
 #[cfg(any(feature = "postgres", feature = "sqlite"))]
@@ -266,6 +292,9 @@ pub struct Registration {
 	/// service's operations (see [`Server::service`]), so a service's
 	/// operation linked into the app's build is never served by the app.
 	pub service: Option<&'static str>,
+	/// What it allows beyond the server's own limits: its `rate_limit`,
+	/// `timeout`, and `max_body`.
+	pub limits: OperationLimits,
 	/// Decodes the arguments, runs the operation, and encodes its result.
 	#[doc(hidden)]
 	pub handler: run::Handler,
@@ -400,6 +429,7 @@ mod tests {
 		kind: crate::Kind::Query,
 		module_path: "app::one",
 		service: None,
+		limits: OperationLimits::NONE,
 		handler,
 	};
 	static B: Registration = Registration {
@@ -407,6 +437,7 @@ mod tests {
 		kind: crate::Kind::Mutation,
 		module_path: "app::one",
 		service: None,
+		limits: OperationLimits::NONE,
 		handler,
 	};
 	static A_AGAIN: Registration = Registration {
@@ -414,6 +445,7 @@ mod tests {
 		kind: crate::Kind::Mutation,
 		module_path: "app::two",
 		service: None,
+		limits: OperationLimits::NONE,
 		handler,
 	};
 
@@ -436,6 +468,7 @@ mod tests {
 		kind: crate::Kind::Query,
 		module_path: "cards::one",
 		service: Some("cards"),
+		limits: OperationLimits::NONE,
 		handler,
 	};
 	static A_IN_CARDS_AGAIN: Registration = Registration {
@@ -443,6 +476,7 @@ mod tests {
 		kind: crate::Kind::Query,
 		module_path: "cards::two",
 		service: Some("cards"),
+		limits: OperationLimits::NONE,
 		handler,
 	};
 	static BUILT_IN: Registration = Registration {
@@ -450,6 +484,7 @@ mod tests {
 		kind: crate::Kind::Query,
 		module_path: "leptoskit_rpc",
 		service: None,
+		limits: OperationLimits::NONE,
 		handler,
 	};
 
@@ -479,6 +514,7 @@ mod tests {
 		kind: crate::Kind::Query,
 		module_path: "app::audit",
 		service: None,
+		limits: OperationLimits::NONE,
 		handler,
 	};
 

@@ -61,6 +61,7 @@ pub(crate) async fn events<H: Host>(
 		return crate::server::failure(&error);
 	}
 
+	let address = live.guards().address(&parts);
 	let Some(secret) = secret() else {
 		return StatusCode::SERVICE_UNAVAILABLE.into_response();
 	};
@@ -95,6 +96,7 @@ pub(crate) async fn events<H: Host>(
 				out,
 				resume_floor,
 				caller,
+				address,
 			})
 			.await;
 		session.event_streams().remove(&name);

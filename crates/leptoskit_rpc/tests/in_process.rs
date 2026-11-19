@@ -52,6 +52,15 @@ impl Identify for Header {
 	}
 }
 
+/// Refuses every call a client sends.
+struct RefuseEveryone;
+
+impl rpc::server::Guard for RefuseEveryone {
+	fn check<'a>(&'a self, _call: &'a rpc::server::Call<'a>) -> BoxFuture<'a, rpc::Result<()>> {
+		Box::pin(std::future::ready(Err(rpc::Error::forbidden("no"))))
+	}
+}
+
 #[tokio::test]
 async fn rendering_calls_run_in_process_as_the_request() {
 	// Before any server is set up, calls say what's missing.
@@ -63,7 +72,9 @@ async fn rendering_calls_run_in_process_as_the_request() {
 	assert!(error.message().contains("no server is set up"), "{error}");
 
 	let db = leptoskit_db::testing::sqlite().await;
-	let server = Server::new(db).identify(Header);
+	// Guards check what clients send; a call the server makes while it
+	// renders is already inside a request that was checked.
+	let server = Server::new(db).identify(Header).guard(RefuseEveryone);
 	server.install();
 	assert!(format!("{server:?}").contains("Server"));
 

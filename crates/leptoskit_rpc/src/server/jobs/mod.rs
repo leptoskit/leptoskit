@@ -730,6 +730,7 @@ const _: () = {
 			kind: <crate::jobs::JobStatusArgs as Operation>::KIND,
 			module_path: module_path!(),
 			service: None,
+			limits: crate::server::OperationLimits::NONE,
 			handler: handle::<crate::jobs::JobStatusArgs>,
 		}
 	}
@@ -739,6 +740,7 @@ const _: () = {
 			kind: <crate::jobs::CancelJob as Operation>::KIND,
 			module_path: module_path!(),
 			service: None,
+			limits: crate::server::OperationLimits::NONE,
 			handler: handle::<crate::jobs::CancelJob>,
 		}
 	}

@@ -119,6 +119,8 @@ struct Inner {
 	live_path: String,
 	/// How long a frame may wait to be sent before the connection closes.
 	stall: std::time::Duration,
+	/// What runs before every operation a connection sends.
+	guards: super::Guards,
 	shared: Arc<Shared>,
 }
 
@@ -213,6 +215,7 @@ impl Live {
 				service: None,
 				live_path: crate::live::LIVE_PATH.to_owned(),
 				stall: STALL,
+				guards: super::Guards::default(),
 				shared: Arc::new(Shared {
 					drain: broadcast::channel(8).0,
 					stats: Stats::default(),
@@ -283,6 +286,43 @@ impl Live {
 	pub(crate) fn with_live_path(self, path: impl Into<String>) -> Self {
 		let path = super::mount_path(&path.into());
 		self.with(|inner| inner.live_path = path)
+	}
+
+	/// Runs `guard` before every operation a connection sends, as
+	/// [`Server::guard`](super::Server::guard) does for calls over HTTP.
+	/// [`Server::live`](super::Server::live) passes its server's guards on.
+	#[must_use]
+	pub fn guard(self, guard: impl super::Guard) -> Self {
+		self.with(|inner| inner.guards.push(Arc::new(guard)))
+	}
+
+	/// Limits how often each caller may send an operation, as
+	/// [`Server::rate_limit`](super::Server::rate_limit) does.
+	#[must_use]
+	pub fn rate_limit(self, limit: super::RateLimit) -> Self {
+		self.with(|inner| inner.guards.set_rate_limit(limit))
+	}
+
+	/// Reads where a connection came from from `header`, as
+	/// [`Server::client_ip_header`](super::Server::client_ip_header) does.
+	///
+	/// # Panics
+	///
+	/// When `header` isn't a header name.
+	#[must_use]
+	pub fn client_ip_header(self, header: &str) -> Self {
+		let name = http::HeaderName::try_from(header)
+			.unwrap_or_else(|_| panic!("`{header}` isn't a header name"));
+		self.with(|inner| {
+			inner
+				.guards
+				.set_client_ip(super::guard::ClientIp::Header(name));
+		})
+	}
+
+	/// The guards of the server that hands this out.
+	pub(crate) fn with_guards(self, guards: super::Guards) -> Self {
+		self.with(|inner| inner.guards = guards)
 	}
 
 	/// The service whose operations this serves, or `None` for the app's.
@@ -446,6 +486,7 @@ impl Live {
 			service: self.inner.service,
 			live_path: self.inner.live_path.clone(),
 			stall: self.inner.stall,
+			guards: self.inner.guards.clone(),
 			shared: Arc::clone(&self.inner.shared),
 		};
 		change(&mut inner);
@@ -541,6 +582,10 @@ impl Live {
 impl Host for Live {
 	fn identifier(&self) -> &dyn Identify {
 		&*self.inner.identify
+	}
+
+	fn guards(&self) -> &crate::server::Guards {
+		&self.inner.guards
 	}
 
 	fn allowed_origin(&self) -> Option<&str> {

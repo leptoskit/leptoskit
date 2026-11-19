@@ -665,6 +665,7 @@ const _: () = {
 			kind: <crate::ServiceTokenArgs as crate::Operation>::KIND,
 			module_path: module_path!(),
 			service: None,
+			limits: crate::server::OperationLimits::NONE,
 			handler: super::handle::<crate::ServiceTokenArgs>,
 		}
 	}

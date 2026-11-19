@@ -523,10 +523,11 @@ pub struct WireError {
 	pub retry_after: Option<u64>,
 }
 
-// The constructors compile with the server's live module, which the `live`
-// feature builds (`live` implies `server`); in builds without it, such as
-// an app server that depends on the auth crate alone, they are dead code.
-#[cfg(feature = "live")]
+// The constructors compile with the server's live modules, which the
+// `live-streams` feature builds (`live` implies it); in builds without it,
+// such as an app server that depends on the auth crate alone, they are dead
+// code.
+#[cfg(feature = "live-streams")]
 impl WireError {
 	/// The failure `error` carries.
 	pub(crate) fn new(error: &crate::Error) -> Self {

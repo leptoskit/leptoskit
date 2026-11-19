@@ -120,6 +120,7 @@ impl Transport for Pipe {
 					out,
 					resume_floor: None,
 					caller: Arc::new(Mutex::new(None)),
+					address: None,
 				})
 				.await;
 			});
