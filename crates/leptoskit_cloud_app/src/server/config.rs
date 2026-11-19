@@ -544,15 +544,6 @@ fn payments(vars: Vars<'_>, dev: bool) -> Result<Option<PaymentsConfig>, ConfigE
 		));
 	}
 
-	if !livemode && !test_mode && !dev {
-		return Err(invalid(
-			STRIPE_KEY,
-			format!(
-				"is a test key: with one, a made up card buys a plan. Use a live key, or set \
-				 {STRIPE_TEST_MODE}=true for a control plane nobody pays"
-			),
-		));
-	}
 	let webhook_secret = required(vars, STRIPE_WEBHOOK_SECRET)?;
 	let mut prices = BTreeMap::new();
 
@@ -585,6 +576,17 @@ fn payments(vars: Vars<'_>, dev: bool) -> Result<Option<PaymentsConfig>, ConfigE
 			));
 		}
 	};
+	// Last, so what else is wrong with the variables is said first.
+	if !livemode && !test_mode && !dev {
+		return Err(invalid(
+			STRIPE_KEY,
+			format!(
+				"is a test key: with one, a made up card buys a plan. Use a live key, or set \
+				 {STRIPE_TEST_MODE}=true for a control plane nobody pays"
+			),
+		));
+	}
+
 	Ok(Some(PaymentsConfig {
 		provider: Arc::new(stripe),
 		webhook_secret,
