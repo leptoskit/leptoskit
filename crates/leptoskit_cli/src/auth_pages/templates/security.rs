@@ -1000,6 +1000,7 @@ impl Security {
 					StartProvider {
 						provider,
 						redirect_to: None,
+						prompt: None,
 					},
 					MutateCallbacks::new()
 						.on_success(move |_| notice.set(connected()))

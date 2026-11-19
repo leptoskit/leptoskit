@@ -1635,10 +1635,11 @@ impl Auth {
 	) -> Result<Response, AuthError> {
 		let provider = &body.start.provider;
 		let redirect_to = body.start.redirect_to.as_deref();
+		let prompt = body.start.prompt;
 
 		if let Some(native) = &body.native {
 			let start = self
-				.start_native_provider(provider, me, redirect_to, native, request)
+				.start_native_provider_prompted(provider, me, redirect_to, native, prompt, request)
 				.await?;
 			return Ok(Json(crate::ProviderRedirect {
 				url: start.url,
@@ -1649,7 +1650,7 @@ impl Auth {
 		}
 
 		let start = self
-			.start_provider(provider, me, redirect_to, request)
+			.start_provider_prompted(provider, me, redirect_to, prompt, request)
 			.await?;
 		let mut response = Json(crate::ProviderRedirect {
 			url: start.url,

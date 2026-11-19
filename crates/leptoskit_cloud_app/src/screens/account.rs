@@ -211,6 +211,7 @@ fn sign_in_methods(console: &Console, page: &AccountPage) -> Vec<Element> {
 								account.link_provider.mutate(StartProvider {
 									provider: id.clone(),
 									redirect_to: Some("/account".to_owned()),
+									prompt: None,
 								});
 							},
 						),

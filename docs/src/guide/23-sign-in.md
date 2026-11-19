@@ -630,8 +630,10 @@ use leptoskit::auth::client::use_providers;
 
 let providers = use_providers();               // [ProviderInfo { id: "google", name: "Google" }, …]
 let start = use_mutation(sign_in_with_provider());
-start.mutate(StartProvider { provider: "google".into(), redirect_to: Some("/notes".into()) });
+start.mutate(StartProvider { provider: "google".into(), redirect_to: Some("/notes".into()), prompt: None });
 ```
+
+`prompt` asks the provider what to show before it answers. `Some(Prompt::Login)` signs the person in again even when someone is signed in there already, so they can switch accounts. `Some(Prompt::SelectAccount)` shows the provider's account picker. `None` lets the provider decide, which usually means it reuses whoever is signed in there. It is OpenID Connect's `prompt` parameter, and a provider that doesn't know it ignores it.
 
 The page goes to the provider's sign-in page, and comes back to `redirect_to` (a path on your site; anything else is refused) with the outcome in its query, which `provider_outcome()` reads. A native app opens the provider's page in the system browser instead, or Sign in with Apple's own sheet for Apple on an Apple device; the mutation resolves once it's back, and then `provider_outcome()` says the same:
 

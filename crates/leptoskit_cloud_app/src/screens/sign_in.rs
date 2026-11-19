@@ -442,6 +442,7 @@ pub fn view(console: &Console, state: &SignInSheet) -> Element {
 								flow.provider.mutate(StartProvider {
 									provider: "github".to_owned(),
 									redirect_to: Some(return_href("github", next.as_deref())),
+									prompt: None,
 								});
 							},
 						)
@@ -592,6 +593,7 @@ fn quiet_ways(
 				flow.provider.mutate(StartProvider {
 					provider: "google".to_owned(),
 					redirect_to: Some(return_href("google", next.as_deref())),
+					prompt: None,
 				});
 			}),
 		));

@@ -1343,14 +1343,14 @@ fn authorization_url(
 	state: &str,
 	challenge: &str,
 	nonce: &str,
-	linking: bool,
+	prompt: Option<crate::Prompt>,
 ) -> Result<url::Url> {
 	let mut url = url::Url::parse(authorization_endpoint)
 		.map_err(|_| AuthError::Config(format!("`{}` has a bad authorization URL", provider.id)))?;
 	let mut query = url.query_pairs_mut();
 
 	for (name, value) in
-		authorization_params(provider, redirect_uri, state, challenge, nonce, linking)
+		authorization_params(provider, redirect_uri, state, challenge, nonce, prompt)
 	{
 		query.append_pair(name, &value);
 	}
@@ -1367,7 +1367,7 @@ fn authorization_params(
 	state: &str,
 	challenge: &str,
 	nonce: &str,
-	linking: bool,
+	prompt: Option<crate::Prompt>,
 ) -> Vec<(&'static str, String)> {
 	let quirks = &provider.quirks;
 	let offline = provider.store_tokens.then_some(quirks.offline);
@@ -1398,13 +1398,25 @@ fn authorization_params(
 
 	params.extend(extra_params(quirks, offline));
 
-	if linking && quirks.select_account {
-		// Connecting should pick the account, not reuse whichever one the
-		// browser is signed in to there.
-		params.push(("prompt", "select_account".to_string()));
+	if let Some(prompt) = prompt {
+		params.push(("prompt", prompt.as_str().to_string()));
 	}
 
 	params
+}
+
+/// What the authorization page asks the person: what the app asked for,
+/// to sign in again or to pick an account, or else, when connecting to a
+/// provider known to accept it, the account picker, so a connection picks
+/// the account rather than reusing whichever one the browser has there.
+fn prompt_for(
+	provider: &Provider,
+	linking: bool,
+	asked: Option<crate::Prompt>,
+) -> Option<crate::Prompt> {
+	asked.or_else(|| {
+		(linking && provider.quirks.select_account).then_some(crate::Prompt::SelectAccount)
+	})
 }
 
 /// The app's scopes, with the one that asks for a refresh token when the
@@ -1508,6 +1520,21 @@ impl Auth {
 		redirect_to: Option<&str>,
 		request: &RequestInfo,
 	) -> Result<ProviderStart> {
+		self.start_provider_prompted(provider, me, redirect_to, None, request)
+			.await
+	}
+
+	/// [`Auth::start_provider`], asking the provider to `prompt` the
+	/// person, as [`StartProvider::prompt`](crate::StartProvider::prompt)
+	/// says.
+	pub(crate) async fn start_provider_prompted(
+		&self,
+		provider: &str,
+		me: Option<&SignedIn>,
+		redirect_to: Option<&str>,
+		prompt: Option<crate::Prompt>,
+		request: &RequestInfo,
+	) -> Result<ProviderStart> {
 		if request.transport == Transport::Bearer {
 			return Err(AuthError::Unsupported(
 				"a native app signs in with a provider through the system browser: start it with \
@@ -1515,7 +1542,7 @@ impl Auth {
 			));
 		}
 
-		self.begin_provider(provider, me, redirect_to, None, request)
+		self.begin_provider(provider, me, redirect_to, None, prompt, request)
 			.await
 	}
 
@@ -1542,6 +1569,21 @@ impl Auth {
 		native: &crate::NativeStart,
 		request: &RequestInfo,
 	) -> Result<ProviderStart> {
+		self.start_native_provider_prompted(provider, me, redirect_to, native, None, request)
+			.await
+	}
+
+	/// [`Auth::start_native_provider`], asking the provider to `prompt` the
+	/// person.
+	pub(crate) async fn start_native_provider_prompted(
+		&self,
+		provider: &str,
+		me: Option<&SignedIn>,
+		redirect_to: Option<&str>,
+		native: &crate::NativeStart,
+		prompt: Option<crate::Prompt>,
+		request: &RequestInfo,
+	) -> Result<ProviderStart> {
 		match native {
 			crate::NativeStart::Browser { return_to } => {
 				self.native_return(return_to)?;
@@ -1562,7 +1604,7 @@ impl Auth {
 			transport: Transport::Bearer,
 			..request.clone()
 		};
-		self.begin_provider(provider, me, redirect_to, Some(native), &request)
+		self.begin_provider(provider, me, redirect_to, Some(native), prompt, &request)
 			.await
 	}
 
@@ -1613,6 +1655,7 @@ impl Auth {
 		me: Option<&SignedIn>,
 		redirect_to: Option<&str>,
 		native: Option<&crate::NativeStart>,
+		prompt: Option<crate::Prompt>,
 		request: &RequestInfo,
 	) -> Result<ProviderStart> {
 		let provider = self.provider(provider)?;
@@ -1667,7 +1710,7 @@ impl Auth {
 			state.expose(),
 			&challenge,
 			&nonce,
-			me.is_some(),
+			prompt_for(provider, me.is_some(), prompt),
 		)?;
 
 		Ok(ProviderStart {
@@ -2983,7 +3026,7 @@ mod tests {
 				"state",
 				"challenge",
 				"nonce",
-				linking,
+				prompt_for(provider, linking, None),
 			)
 			.into_iter()
 			.find(|(key, _)| *key == name)
@@ -3355,6 +3398,42 @@ mod tests {
 	}
 
 	#[test]
+	fn an_apps_prompt_reaches_the_authorization_page_once() {
+		let prompts = |provider: &Provider, linking, prompt| {
+			authorization_params(
+				provider,
+				"https://notes.example/auth/callback/x",
+				"state",
+				"challenge",
+				"nonce",
+				prompt_for(provider, linking, prompt),
+			)
+			.into_iter()
+			.filter(|(key, _)| *key == "prompt")
+			.map(|(_, value)| value)
+			.collect::<Vec<_>>()
+		};
+		let google = Provider::google("client", "secret");
+
+		assert_eq!(
+			prompts(&google, false, Some(crate::Prompt::Login)),
+			["login"]
+		);
+		assert_eq!(
+			prompts(&google, true, Some(crate::Prompt::Login)),
+			["login"],
+			"the app's prompt replaces the picker a connection asks for"
+		);
+		assert_eq!(
+			prompts(&google, false, Some(crate::Prompt::SelectAccount)),
+			["select_account"]
+		);
+		assert_eq!(prompts(&google, false, None), Vec::<String>::new());
+		let sso = Provider::oidc("sso", "SSO", ISSUER, "client", None).unwrap();
+		assert_eq!(prompts(&sso, false, Some(crate::Prompt::Login)), ["login"]);
+	}
+
+	#[test]
 	fn an_authorization_endpoint_must_be_a_url() {
 		let refused = authorization_url(
 			&Provider::google("client", "secret"),
@@ -3363,7 +3442,7 @@ mod tests {
 			"state",
 			"challenge",
 			"nonce",
-			false,
+			None,
 		)
 		.unwrap_err();
 		assert!(
