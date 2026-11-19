@@ -1053,7 +1053,9 @@ pub(crate) fn state_of(reason: DeliveryReason) -> DeliveryState {
 		| DeliveryReason::OptedOut
 		| DeliveryReason::EndpointRevoked
 		| DeliveryReason::EndpointUnavailable
-		| DeliveryReason::TransportUnavailable => DeliveryState::Skipped,
+		| DeliveryReason::TransportUnavailable
+		| DeliveryReason::SubscriptionUnusable
+		| DeliveryReason::PlatformUnsupported => DeliveryState::Skipped,
 		DeliveryReason::Oversized
 		| DeliveryReason::Unregistered
 		| DeliveryReason::ProviderRejected

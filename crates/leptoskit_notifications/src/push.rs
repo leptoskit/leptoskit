@@ -581,7 +581,7 @@ pub enum DeliveryReason {
 	/// endpoint was invalidated.
 	Unregistered,
 	/// The provider refused the message for good, for a reason the codes
-	/// don't name: a topic or project mismatch, a bad request.
+	/// don't name: a request it calls malformed.
 	ProviderRejected,
 	/// The attempts ran out before the provider took the message.
 	AttemptsExhausted,
@@ -589,8 +589,19 @@ pub enum DeliveryReason {
 	HorizonExceeded,
 	/// Retry time arithmetic could not be represented.
 	RetryOverflow,
-	/// Operator credentials or project configuration prevented delivery.
+	/// Operator credentials or project configuration prevented delivery:
+	/// a provider token, access token, or VAPID signature the provider
+	/// refused, an APNs topic or environment the device token doesn't
+	/// belong to, or a token from another FCM project. The endpoint stays
+	/// enrolled, because the fix is the operator's.
 	OperatorConfiguration,
+	/// The Web Push subscription can't be encrypted to — its `p256dh`
+	/// value isn't a point on P-256 — so no push can ever reach it.
+	SubscriptionUnusable,
+	/// The platform can't take this kind of message: a silent data
+	/// message to a browser, which requires every push to show a
+	/// notification.
+	PlatformUnsupported,
 }
 
 impl DeliveryReason {
@@ -611,6 +622,8 @@ impl DeliveryReason {
 			Self::HorizonExceeded => "horizon_exceeded",
 			Self::RetryOverflow => "retry_overflow",
 			Self::OperatorConfiguration => "operator_configuration",
+			Self::SubscriptionUnusable => "subscription_unusable",
+			Self::PlatformUnsupported => "platform_unsupported",
 		}
 	}
 
@@ -631,6 +644,8 @@ impl DeliveryReason {
 			"horizon_exceeded" => Some(Self::HorizonExceeded),
 			"retry_overflow" => Some(Self::RetryOverflow),
 			"operator_configuration" => Some(Self::OperatorConfiguration),
+			"subscription_unusable" => Some(Self::SubscriptionUnusable),
+			"platform_unsupported" => Some(Self::PlatformUnsupported),
 			_ => None,
 		}
 	}

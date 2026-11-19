@@ -405,6 +405,52 @@ async fn bad_options_are_refused_with_precise_errors() {
 	assert_eq!(status, 200, "{body}");
 }
 
+/// A data message shows nothing, so the options that only shape what is
+/// shown — an image, a sound, a tap link, and the per-platform
+/// presentation blocks — are refused on one, each named. Its priority and
+/// its badge, which rides as data for the app to apply, are accepted.
+#[tokio::test(flavor = "multi_thread")]
+async fn display_options_are_refused_on_a_data_send() {
+	let service = service().await;
+
+	for (option, value) in [
+		("image", json!("https://cdn.example.test/p.png")),
+		("sound", json!("default")),
+		("link", json!("/invoice/42")),
+		("android", json!({ "channel_id": "inbox" })),
+		("apple", json!({ "thread_id": "billing" })),
+		("web", json!({ "lang": "en", "actions": [] })),
+	] {
+		let mut options = json!({ "kind": "data" });
+		options[option] = value;
+		let (status, body) = send(
+			&service,
+			&format!("data-{option}"),
+			json!({ "category": "news", "title": "Sync", "options": options }),
+			&[ALICE],
+		)
+		.await;
+		assert_eq!(status, 400, "{option} on a data send: {body}");
+		assert!(
+			body.contains(&format!("options.{option}")) && body.contains("data message"),
+			"the refusal names {option} and why: {body}"
+		);
+	}
+
+	let (status, body) = send(
+		&service,
+		"data-priority-badge",
+		json!({
+			"category": "news",
+			"title": "Sync",
+			"options": { "kind": "data", "priority": "high", "badge": { "set": 2 } },
+		}),
+		&[ALICE],
+	)
+	.await;
+	assert_eq!(status, 200, "{body}");
+}
+
 /// A data send pushes durably, is counted as delivered, and never
 /// surfaces: no inbox row, no unread count, and a row whose kind is the
 /// only trace.

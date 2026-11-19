@@ -21,16 +21,34 @@ use std::time::Duration;
 use super::Pinned;
 
 /// The push-service hosts leptoskit pushes to, exact and lower case.
-/// Chrome and Android Chrome answer to `fcm.googleapis.com`, Firefox to
-/// Mozilla's autopush, and Safari to Apple's Web Push service. A
-/// subscription at any other host is refused at enrollment, so a lookalike
+/// Chrome and Android Chrome answer to `fcm.googleapis.com`, and Firefox
+/// to Mozilla's autopush. A subscription at any other host — outside
+/// [`SHIPPED_DOMAINS`] — is refused at enrollment, so a lookalike
 /// (`fcm.googleapis.com.attacker.test`), a port trick, or a credential in
 /// the URL never gets as far as a delivery.
-pub(crate) const SHIPPED_HOSTS: &[&str] = &[
-	"fcm.googleapis.com",
-	"updates.push.services.mozilla.com",
-	"webpush.apple.com",
-];
+pub(crate) const SHIPPED_HOSTS: &[&str] =
+	&["fcm.googleapis.com", "updates.push.services.mozilla.com"];
+
+/// The push services that hand out endpoints under many subdomains of one
+/// domain, matched on a label boundary: `web.push.apple.com` is under
+/// `push.apple.com`, `webpush.apple.com` and `push.apple.com.attacker.test`
+/// are not. Safari's subscriptions live on Apple's `push.apple.com`
+/// subdomains, which Apple tells senders to allow as `*.push.apple.com`,
+/// and Edge on Windows subscribes through the Windows Push Notification
+/// Services, whose channel URLs Microsoft says to accept on the
+/// `notify.windows.com` domain whatever their subdomain. The domain itself
+/// is not an endpoint.
+pub(crate) const SHIPPED_DOMAINS: &[&str] = &["push.apple.com", "notify.windows.com"];
+
+/// Whether `host`, lower case, is one of the shipped push services.
+fn is_shipped(host: &str) -> bool {
+	SHIPPED_HOSTS.contains(&host)
+		|| SHIPPED_DOMAINS.iter().any(|domain| {
+			host.strip_suffix(domain)
+				.and_then(|label| label.strip_suffix('.'))
+				.is_some_and(is_host_shape)
+		})
+}
 
 /// How long a pinned host's resolution may take before the attempt gives
 /// up on it as a transient failure.
@@ -85,7 +103,7 @@ impl HostPolicy {
 		};
 		let host = host.to_ascii_lowercase();
 
-		if SHIPPED_HOSTS.contains(&host.as_str()) {
+		if is_shipped(&host) {
 			return Ok(None);
 		}
 
@@ -365,6 +383,47 @@ mod tests {
 			policy.check(&port).is_ok(),
 			"the shipped host check is on the host only; the port check is enrollment's"
 		);
+	}
+
+	/// Endpoints as each major browser hands them out pass plain: Chrome's
+	/// FCM, Firefox's autopush, Safari's Apple Web Push on a
+	/// `push.apple.com` subdomain, and Edge's Windows Push Notification
+	/// Services channel on a `notify.windows.com` subdomain. The domains
+	/// match on a label boundary only: a lookalike that ends with the same
+	/// letters, the bare domain, a trailing dot, or the domain under an
+	/// attacker's own is refused.
+	#[test]
+	fn real_browser_endpoints_pass_and_lookalikes_never_do() {
+		let policy = HostPolicy::with_extra_hosts(&[]).unwrap();
+
+		for endpoint in [
+			"https://fcm.googleapis.com/fcm/send/dQw4w9WgXcQ:APA91bFakeChromeEndpoint",
+			"https://updates.push.services.mozilla.com/wpush/v2/gAAAAABfakeFirefoxEndpoint",
+			"https://web.push.apple.com/QFakeSafariEndpointToken",
+			"https://wns2-par02p.notify.windows.com/w/?token=BQYAAADfakeEdgeEndpoint",
+			"https://WNS2-BL2P.NOTIFY.WINDOWS.COM/w/?token=BQYAAADfakeEdgeEndpoint",
+		] {
+			let url = url::Url::parse(endpoint).unwrap();
+			assert_eq!(policy.check(&url), Ok(None), "{endpoint} passes plain");
+		}
+
+		for endpoint in [
+			"https://webpush.apple.com/push/1",
+			"https://push.apple.com/push/1",
+			"https://evilpush.apple.com/push/1",
+			"https://web.push.apple.com.attacker.test/push/1",
+			"https://web.push.apple.com./push/1",
+			"https://web.push.apple.com@attacker.test/push/1",
+			"https://notify.windows.com/w/?token=1",
+			"https://attackernotify.windows.com/w/?token=1",
+			"https://wns2-par02p.notify.windows.com.attacker.test/w/?token=1",
+			"https://notify.windows.com.attacker.test/w/?token=1",
+			"https://a_b.push.apple.com/push/1",
+		] {
+			let url = url::Url::parse(endpoint).unwrap();
+			let refusal = policy.check(&url).expect_err(endpoint);
+			assert!(!refusal.contains("attacker"), "no host echoed: {refusal}");
+		}
 	}
 
 	/// An operator-approved host passes with pinning; an unapproved one

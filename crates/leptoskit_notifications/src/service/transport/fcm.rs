@@ -58,7 +58,10 @@ const SEND_SCOPE: &str = "https://www.googleapis.com/auth/firebase.messaging";
 /// The send endpoint's fixed host and path shape.
 const SEND_HOST: &str = "https://fcm.googleapis.com/v1/projects";
 
-/// The whole encoded message's limit, in bytes.
+/// The payload limit, in bytes: FCM's error reference counts "the total
+/// size of the payload data included in a message", keys and values both
+/// — what a device receives, not the request around it. See
+/// [`payload_size`].
 const PAYLOAD_LIMIT: usize = 4_096;
 
 /// How early of an access token's lapse a cached one is retired.
@@ -324,11 +327,11 @@ impl Transport for Fcm {
 		message: &'a Message,
 	) -> Pin<Box<dyn Future<Output = Outcome> + Send + 'a>> {
 		let send = async move {
-			// Size is checked on the encoded message before any network
-			// work, trimming the optional extras in the shared order —
-			// platform overrides, then image, then sound, badge, and
-			// link — before falling back to the id-only envelope, and
-			// past it a terminal clear result with nothing sent.
+			// Size is checked on the payload before any network work,
+			// trimming the optional extras in the shared order — platform
+			// overrides and the image, then sound, badge, and link —
+			// before falling back to the id-only envelope, and past it a
+			// terminal clear result with nothing sent.
 			let mut body_message = fcm_message(credential, message, Include::All);
 
 			for trim in [
@@ -336,25 +339,24 @@ impl Transport for Fcm {
 				trim_sound_badge_link,
 				trim_minimal,
 			] {
-				let encoded = serde_json::to_vec(&body_message).unwrap_or_default();
-
-				if encoded.len() <= PAYLOAD_LIMIT {
-					return self.send_encoded(encoded).await;
+				if payload_size(&body_message) <= PAYLOAD_LIMIT {
+					return self
+						.send_encoded(serde_json::to_vec(&body_message).unwrap_or_default())
+						.await;
 				}
 
 				trim(&mut body_message, credential, message);
 			}
 
-			let minimal = serde_json::to_vec(&body_message).unwrap_or_default();
-
-			if minimal.len() > PAYLOAD_LIMIT {
+			if payload_size(&body_message) > PAYLOAD_LIMIT {
 				return Outcome::Ended {
 					reason: DeliveryReason::Oversized,
 					invalidate: false,
 				};
 			}
 
-			self.send_encoded(minimal).await
+			self.send_encoded(serde_json::to_vec(&body_message).unwrap_or_default())
+				.await
 		};
 
 		Box::pin(send)
@@ -378,7 +380,9 @@ impl Fcm {
 
 		let (status, outcome) = self.post(&access_token, &body).await;
 
-		if status == 401 {
+		// A 401 that names the project's own APNs or Web Push credential
+		// ended already: a new access token wouldn't change it.
+		if status == 401 && matches!(outcome, Outcome::AuthRejected { .. }) {
 			// The provider refused this authorization: the cached
 			// token is stale or wrong, so drop it, exchange once more
 			// — bounded, once per request. A
@@ -446,11 +450,12 @@ fn trim_platform_and_image(
 					aps.remove(key);
 				}
 
-				if let Some(alert) = aps.get_mut("alert").and_then(|a| a.as_object_mut()) {
-					alert.remove("subtitle");
-				}
+				// The alert rides only to carry the subtitle.
+				aps.remove("alert");
 			}
 		}
+
+		drop_empty_aps(root);
 	}
 }
 
@@ -462,6 +467,7 @@ fn trim_sound_badge_link(message: &mut serde_json::Value, _credential: &str, _or
 	{
 		if let Some(data) = root.get_mut("data").and_then(|d| d.as_object_mut()) {
 			data.remove("lklink");
+			data.remove("lkbadge");
 		}
 
 		if let Some(notification) = root
@@ -492,6 +498,24 @@ fn trim_sound_badge_link(message: &mut serde_json::Value, _credential: &str, _or
 		{
 			aps.remove("badge");
 		}
+
+		drop_empty_aps(root);
+	}
+}
+
+/// An `aps` the trims emptied carries nothing and goes, as the payload
+/// built without those options never had one.
+fn drop_empty_aps(root: &mut serde_json::Map<String, serde_json::Value>) {
+	if let Some(payload) = root
+		.get_mut("apns")
+		.and_then(|apns| apns.get_mut("payload"))
+		.and_then(|payload| payload.as_object_mut())
+		&& payload
+			.get("aps")
+			.and_then(|aps| aps.as_object())
+			.is_some_and(serde_json::Map::is_empty)
+	{
+		payload.remove("aps");
 	}
 }
 
@@ -511,7 +535,9 @@ enum Include {
 }
 
 /// The HTTP v1 message: the standard visible notification — or, for a
-/// data send, no notification block at all — the send's `data` as the
+/// data send, no notification block of any kind, because FCM shows a
+/// message that has one in the tray instead of handing it to the app —
+/// the send's `data` as the
 /// string-valued map the API asks for, the notification's id as the
 /// collapse key and in `data`, the same collapse id for an iOS app the
 /// project also talks to, and the notification's remaining life as the
@@ -573,8 +599,9 @@ fn fcm_notification(message: &Message, include: Include) -> serde_json::Value {
 }
 
 /// The string-valued `data` map: the caller's own object, the link the
-/// send names, and the notification's id — with the envelope's own keys
-/// and the platform's reserved words never let through.
+/// send names, a data message's badge, and the notification's id — with
+/// the envelope's own keys and the platform's reserved words never let
+/// through.
 fn fcm_data_map(message: &Message, include: Include) -> serde_json::Map<String, serde_json::Value> {
 	let mut map = serde_json::Map::new();
 
@@ -585,14 +612,17 @@ fn fcm_data_map(message: &Message, include: Include) -> serde_json::Map<String, 
 			for (name, value) in object {
 				// The envelope's own keys and FCM's reserved words are
 				// dropped from the caller's data rather than overwritten
-				// or sent: `lkn`, `lklink`, and `lkimg` are ours, and
-				// `from`, `google.*`, and `gcm.*` are words the platform
-				// reserves.
-				if name == "lkn"
-					|| name == "lklink"
-					|| name == "lkimg"
-					|| name == "from"
-					|| name.starts_with("google.")
+				// or sent: `lkn`, `lklink`, `lkimg`, and `lkbadge` are
+				// ours, and `from`, `message_type`, and any key starting
+				// `google.` or `gcm.` (`gcm.notification.` among them) are
+				// the words the HTTP v1 reference reserves, which FCM
+				// answers with a 400 for the whole message. A send is
+				// for every platform, so the key still reaches APNs and
+				// browsers.
+				if matches!(
+					name.as_str(),
+					"lkn" | "lklink" | "lkimg" | "lkbadge" | "from" | "message_type"
+				) || name.starts_with("google.")
 					|| name.starts_with("gcm.")
 				{
 					continue;
@@ -616,6 +646,17 @@ fn fcm_data_map(message: &Message, include: Include) -> serde_json::Map<String, 
 				serde_json::Value::String(link.to_owned()),
 			);
 		}
+
+		// A data message has no notification to badge: its badge rides as
+		// data, for the app to apply itself.
+		if message.options.is_data()
+			&& let Some(badge) = message.badge
+		{
+			map.insert(
+				"lkbadge".to_owned(),
+				serde_json::Value::String(badge.to_string()),
+			);
+		}
 	}
 
 	map.insert(
@@ -627,8 +668,10 @@ fn fcm_data_map(message: &Message, include: Include) -> serde_json::Map<String, 
 }
 
 /// The `android` config: the collapse key and TTL every message carries,
-/// the priority the send named, and — when there is room — the
-/// notification block the Android options shape.
+/// the priority the send named, and — when there is room, and only for a
+/// visible notification — the notification block the Android options
+/// shape. An Android notification block on a data message would make FCM
+/// show it in the tray.
 fn fcm_android(message: &Message, include: Include, ttl: Option<i64>) -> serde_json::Value {
 	let mut android = serde_json::json!({
 		"collapse_key": message.id.to_string(),
@@ -656,7 +699,7 @@ fn fcm_android(message: &Message, include: Include, ttl: Option<i64>) -> serde_j
 		None => {}
 	}
 
-	if include != Include::All {
+	if include != Include::All || message.options.is_data() {
 		return android;
 	}
 
@@ -706,10 +749,12 @@ fn fcm_android(message: &Message, include: Include, ttl: Option<i64>) -> serde_j
 
 /// The `apns` block FCM serves an iOS app through the same project: the
 /// collapse header every message carries, the expiry and the
-/// background-or-priority headers the send implies, and the payload a
-/// direct APNs send would carry — alert or `content-available`, the
-/// Apple options, the badge, and the image under the mutable-content
-/// flag.
+/// background-or-priority headers the send implies, and what a direct
+/// APNs send would add — for a data message `content-available` alone,
+/// and otherwise the Apple options, the badge, and the image under the
+/// mutable-content flag. FCM builds the iOS alert from the message's
+/// `notification`, so the title and body don't ride here a second time
+/// unless a subtitle needs the alert they belong to.
 fn fcm_apns(message: &Message, include: Include, ttl: Option<i64>) -> serde_json::Value {
 	let data = message.options.is_data();
 	let mut headers = serde_json::Map::new();
@@ -752,23 +797,21 @@ fn fcm_apns(message: &Message, include: Include, ttl: Option<i64>) -> serde_json
 			"content-available": 1,
 		})
 	} else {
-		serde_json::json!({
-			"alert": {
-				"title": message.title,
-				"body": message.body,
-			},
-		})
+		serde_json::json!({})
 	};
 
-	if include == Include::All {
-		apply_apple_options(&mut aps, message, data);
-		apply_badge_and_image(&mut aps, message, data);
+	if include == Include::All && !data {
+		apply_apple_options(&mut aps, message);
+		apply_badge_and_image(&mut aps, message);
 	}
 
 	let mut payload = serde_json::json!({
-		"aps": aps,
 		"lkn": message.id.to_string(),
 	});
+
+	if aps.as_object().is_some_and(|aps| !aps.is_empty()) {
+		payload["aps"] = aps;
+	}
 
 	if include == Include::All && message.options.image.is_some() && !data {
 		payload["fcm_options"] = serde_json::json!({
@@ -782,15 +825,21 @@ fn fcm_apns(message: &Message, include: Include, ttl: Option<i64>) -> serde_json
 	})
 }
 
-/// The Apple options into `aps`: subtitle on the alert, and the
-/// grouping and interruption keys beside it.
-fn apply_apple_options(aps: &mut serde_json::Value, message: &Message, data: bool) {
+/// The Apple options into `aps`: a subtitle on the alert, and the
+/// grouping and interruption keys beside it. An `apns.payload` alert
+/// takes the place of the notification's title and body, so a subtitle
+/// carries them too.
+fn apply_apple_options(aps: &mut serde_json::Value, message: &Message) {
 	let Some(apple) = message.options.apple.as_ref() else {
 		return;
 	};
 
-	if !data && let Some(subtitle) = apple.subtitle.as_deref() {
-		aps["alert"]["subtitle"] = serde_json::json!(subtitle);
+	if let Some(subtitle) = apple.subtitle.as_deref() {
+		aps["alert"] = serde_json::json!({
+			"title": message.title,
+			"body": message.body,
+			"subtitle": subtitle,
+		});
 	}
 
 	if let Some(thread_id) = apple.thread_id.as_deref() {
@@ -813,19 +862,68 @@ fn apply_apple_options(aps: &mut serde_json::Value, message: &Message, data: boo
 /// The badge and the image flag into `aps`. An image needs a
 /// Notification Service Extension in the iOS app to display: the
 /// mutable-content flag hands the payload to it.
-fn apply_badge_and_image(aps: &mut serde_json::Value, message: &Message, data: bool) {
+fn apply_badge_and_image(aps: &mut serde_json::Value, message: &Message) {
 	if let Some(badge) = message.badge {
 		aps["badge"] = serde_json::json!(badge);
 	}
 
-	if message.options.image.is_some() && !data {
+	if message.options.image.is_some() {
 		aps["mutable-content"] = serde_json::json!(1);
 	}
 }
 
-/// Classifies one FCM answer. The provider's status strings are read here
-/// for classification and never surface anywhere else.
+/// The bytes FCM's limit counts: the keys and values of the payload a
+/// device receives — the notification, the data, and the Android
+/// notification options delivered with them — not the token, the
+/// collapse key, the TTL, or the JSON around them. The APNs payload an
+/// iOS app of the same project receives counts too, encoded, so one
+/// measure covers whichever platform the token belongs to.
+fn payload_size(message: &serde_json::Value) -> usize {
+	let fields = |value: &serde_json::Value| -> usize {
+		value.as_object().map_or(0, |object| {
+			object
+				.iter()
+				.map(|(key, value)| {
+					key.len()
+						+ match value {
+							serde_json::Value::String(text) => text.len(),
+							other => other.to_string().len(),
+						}
+				})
+				.sum()
+		})
+	};
+	let root = &message["message"];
+
+	fields(&root["notification"])
+		+ fields(&root["data"])
+		+ fields(&root["android"]["notification"])
+		+ root["apns"]
+			.get("payload")
+			.map_or(0, |payload| payload.to_string().len())
+}
+
+/// Classifies one FCM answer, as the HTTP v1 error reference documents
+/// each code. The provider's status strings are read here for
+/// classification and never surface anywhere else.
+///
+/// Only `UNREGISTERED` invalidates the endpoint. `SENDER_ID_MISMATCH` —
+/// the token belongs to another project — and the third-party errors —
+/// the project's APNs or Web Push credential is missing or wrong — are
+/// the operator's setup, and no retry fixes them, so they end the
+/// delivery as the operator's configuration with the device enrolled.
 fn classify(response: &WireResponse) -> Outcome {
+	if (response.status == 401 || response.status == 403)
+		&& matches!(
+			fcm_error_code(response).as_deref(),
+			Some("SENDER_ID_MISMATCH" | "THIRD_PARTY_AUTH_ERROR" | "THIRD_PARTY_PERMISSION_DENIED")
+		) {
+		return Outcome::Ended {
+			reason: DeliveryReason::OperatorConfiguration,
+			invalidate: false,
+		};
+	}
+
 	match response.status {
 		200..=299 => Outcome::Accepted,
 		404 => {
@@ -890,19 +988,22 @@ fn classify(response: &WireResponse) -> Outcome {
 
 /// Only an FCM-specific detail identifies an unregistered token.
 fn unregistered(response: &WireResponse) -> bool {
-	let Ok(parsed) = serde_json::from_slice::<serde_json::Value>(response.body.trim_ascii()) else {
-		return false;
-	};
+	fcm_error_code(response).as_deref() == Some("UNREGISTERED")
+}
+
+/// The FCM-specific error code an answer's details carry, if any: only a
+/// detail typed as FCM's own counts.
+fn fcm_error_code(response: &WireResponse) -> Option<String> {
+	let parsed = serde_json::from_slice::<serde_json::Value>(response.body.trim_ascii()).ok()?;
 
 	parsed["error"]["details"]
-		.as_array()
-		.is_some_and(|details| {
-			details.iter().any(|detail| {
-				detail["@type"].as_str()
-					== Some("type.googleapis.com/google.firebase.fcm.v1.FcmError")
-					&& detail["errorCode"].as_str() == Some("UNREGISTERED")
-			})
-		})
+		.as_array()?
+		.iter()
+		.find(|detail| {
+			detail["@type"].as_str() == Some("type.googleapis.com/google.firebase.fcm.v1.FcmError")
+		})?["errorCode"]
+		.as_str()
+		.map(str::to_owned)
 }
 
 fn retry_after(response: &WireResponse) -> Option<Duration> {
@@ -934,6 +1035,108 @@ mod tests {
 				after: Some(Duration::from_mins(1000))
 			}
 		);
+	}
+
+	fn fcm_answer(status: u16, error: &str, code: &str) -> WireResponse {
+		let body = if code.is_empty() {
+			serde_json::json!({ "error": { "status": error } })
+		} else {
+			serde_json::json!({
+				"error": {
+					"status": error,
+					"details": [{
+						"@type": "type.googleapis.com/google.firebase.fcm.v1.FcmError",
+						"errorCode": code,
+					}],
+				},
+			})
+		};
+
+		WireResponse {
+			status,
+			headers: Vec::new(),
+			body: body.to_string().into_bytes(),
+		}
+	}
+
+	/// Every error code the FCM HTTP v1 reference documents, and what
+	/// each comes to. Only `UNREGISTERED` invalidates the endpoint. The
+	/// answers that name the sender's setup — another project's token, a
+	/// missing APNs or Web Push credential in the Firebase project — end
+	/// at once as the operator's configuration, since no retry fixes them;
+	/// a refused access token is refreshed and retried; the rest of the
+	/// 4xx answers are the request's own.
+	#[test]
+	fn fcm_answers_classify_as_the_reference_documents_them() {
+		let configuration = Outcome::Ended {
+			reason: DeliveryReason::OperatorConfiguration,
+			invalidate: false,
+		};
+		let rejected = Outcome::Ended {
+			reason: DeliveryReason::ProviderRejected,
+			invalidate: false,
+		};
+		let gone = Outcome::Ended {
+			reason: DeliveryReason::Unregistered,
+			invalidate: true,
+		};
+		let auth = Outcome::AuthRejected { after: None };
+
+		for (status, error, code, expected) in [
+			(200, "", "", Outcome::Accepted),
+			(404, "NOT_FOUND", "UNREGISTERED", gone),
+			(400, "INVALID_ARGUMENT", "UNREGISTERED", gone),
+			(400, "INVALID_ARGUMENT", "INVALID_ARGUMENT", rejected),
+			(400, "INVALID_ARGUMENT", "", rejected),
+			(401, "UNAUTHENTICATED", "", auth),
+			(
+				401,
+				"UNAUTHENTICATED",
+				"THIRD_PARTY_AUTH_ERROR",
+				configuration,
+			),
+			(
+				403,
+				"PERMISSION_DENIED",
+				"SENDER_ID_MISMATCH",
+				configuration,
+			),
+			(
+				403,
+				"PERMISSION_DENIED",
+				"THIRD_PARTY_PERMISSION_DENIED",
+				configuration,
+			),
+			(403, "PERMISSION_DENIED", "", auth),
+			(404, "NOT_FOUND", "", auth),
+			(
+				429,
+				"RESOURCE_EXHAUSTED",
+				"QUOTA_EXCEEDED",
+				Outcome::Transient {
+					after: Some(Duration::from_secs(60)),
+				},
+			),
+			(
+				500,
+				"INTERNAL",
+				"INTERNAL",
+				Outcome::Transient { after: None },
+			),
+			(
+				503,
+				"UNAVAILABLE",
+				"UNAVAILABLE",
+				Outcome::Transient { after: None },
+			),
+			(302, "", "", rejected),
+		] {
+			assert_eq!(
+				classify(&fcm_answer(status, error, code)),
+				expected,
+				"{status} {error} {code}"
+			);
+		}
 	}
 
 	#[test]

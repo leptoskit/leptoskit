@@ -16,8 +16,9 @@
 //! extra hosts.
 //!
 //! The envelope is the documented one — title, body, the notification's
-//! id, and the send's `data` — and a client's service worker shows it or
-//! not as it chooses; nothing executable rides in it. The operator holds
+//! id, and the send's `data` — and a client's service worker shows it;
+//! nothing executable rides in it. A silent data message is never sent:
+//! browsers require every push to show a notification. The operator holds
 //! the key pair the ecosystem's own tools generate: a 32-byte private
 //! scalar and a 65-byte public point, base64url, cross-checked against
 //! each other here so a mistyped half fails at startup, not at every
@@ -256,7 +257,7 @@ impl WebPush {
 		let signature = self
 			.key
 			.sign(&SystemRandom::new(), signed.as_bytes())
-			.map_err(|_| BuildFailure::Signing)?;
+			.map_err(|_| BuildFailure::Random)?;
 
 		Ok(format!(
 			"vapid t={signed}.{}, k={}",
@@ -288,12 +289,13 @@ enum RouteFailure {
 }
 
 /// Why a request couldn't be built: the stored subscription's keys
-/// won't parse or agree, or the VAPID token wouldn't sign. The delivery
-/// falls back to the minimal envelope and past that ends clearly; the
-/// reason names no key material.
+/// won't parse or aren't a point on the curve, which ends the delivery as
+/// an unusable subscription, or the system RNG refused the ephemeral key
+/// or the VAPID signature, which retries. The reason names no key
+/// material.
 enum BuildFailure {
 	Keys,
-	Signing,
+	Random,
 }
 
 impl Transport for WebPush {
@@ -303,6 +305,18 @@ impl Transport for WebPush {
 		message: &'a Message,
 	) -> Pin<Box<dyn Future<Output = Outcome> + Send + 'a>> {
 		let send = async move {
+			// Browsers require every push to show a notification — Chrome
+			// shows its own generic one, Safari revokes the subscription,
+			// Edge takes no silent subscriptions — and the worker has no
+			// page to hand data to: a silent data message never goes to
+			// one, and no attempt is spent deciding so.
+			if message.options.is_data() {
+				return Outcome::Ended {
+					reason: DeliveryReason::PlatformUnsupported,
+					invalidate: false,
+				};
+			}
+
 			// Defense in depth: the policy held at enrollment, and it
 			// holds again at the moment of the attempt, against a
 			// subscription stored under an earlier policy.
@@ -336,7 +350,7 @@ impl Transport for WebPush {
 
 			// Size is checked on the encrypted body, trimming the
 			// payload's optional extras in the shared order — platform
-			// overrides, then image, then sound, badge, and link —
+			// overrides and the image, then sound, badge, and link —
 			// before falling back to the id-only envelope, and past it a
 			// terminal clear result: a body past the record size would
 			// overflow the single record its header declares, so nothing
@@ -347,15 +361,28 @@ impl Transport for WebPush {
 				Include::NoSimpleOptions,
 				Include::Minimal,
 			] {
-				if let Ok(request) = self.build_wire(
+				match self.build_wire(
 					&subscription.endpoint,
 					&subscription.keys,
 					message,
 					include,
 					ttl,
-				) && request.body.len() <= BODY_LIMIT
-				{
-					return self.post(request, pinned).await;
+				) {
+					Ok(request) if request.body.len() <= BODY_LIMIT => {
+						return self.post(request, pinned).await;
+					}
+					Ok(_) => {}
+					// A `p256dh` that isn't a point on the curve fails every
+					// stage alike: no payload size helps, and saying
+					// `oversized` would send the operator to the message.
+					Err(BuildFailure::Keys) => {
+						return Outcome::Ended {
+							reason: DeliveryReason::SubscriptionUnusable,
+							invalidate: false,
+						};
+					}
+					// The system RNG refused: it comes back.
+					Err(BuildFailure::Random) => return Outcome::Transient { after: None },
 				}
 			}
 
@@ -397,18 +424,19 @@ impl Seeds {
 ///
 /// # Errors
 ///
-/// [`BuildFailure::Keys`], when the subscription's point isn't on the
-/// curve or the system RNG refuses — never one carrying key material.
+/// [`BuildFailure::Keys`] when the subscription's point isn't on the
+/// curve, [`BuildFailure::Random`] when the system RNG refuses — never one
+/// carrying key material.
 fn encrypt_payload(
 	ua_public: &[u8],
 	auth_secret: &[u8],
 	payload: &[u8],
 ) -> Result<Vec<u8>, BuildFailure> {
-	let seeds = Seeds::fresh(&SystemRandom::new()).map_err(|_| BuildFailure::Keys)?;
+	let seeds = Seeds::fresh(&SystemRandom::new()).map_err(|_| BuildFailure::Random)?;
 	let sender_public = seeds
 		.private
 		.compute_public_key()
-		.map_err(|_| BuildFailure::Keys)?;
+		.map_err(|_| BuildFailure::Random)?;
 
 	agree_ephemeral(
 		seeds.private,
@@ -500,19 +528,18 @@ fn hkdf(salt: &[u8], secret: &[u8], infos: &[&[u8]], length: usize) -> Vec<u8> {
 enum Include {
 	/// The send's options and its `data`.
 	All,
-	/// The web presentation options dropped.
+	/// The web presentation options and the image dropped.
 	NoPlatform,
-	/// The image, the silent flag, the badge, and the link dropped too.
+	/// The silent flag, the badge, and the link dropped too.
 	NoSimpleOptions,
-	/// The id-only envelope, which a data message still flags: a silent
-	/// push must stay silent.
+	/// The id-only envelope: the visible text and the notification's id.
 	Minimal,
 }
 
 /// The push envelope a client's service worker reads: the visible text,
 /// the notification's id, and — when it fits — the send's `data` and the
-/// options that shape the banner: a silent data flag, an image, a badge
-/// count, a click link, and the web presentation options. No executable
+/// options that shape the banner: an image, a badge count, a click link,
+/// a silent flag, and the web presentation options. No executable
 /// anything rides in it.
 fn envelope(message: &Message, include: Include) -> Vec<u8> {
 	let mut payload = serde_json::json!({
@@ -520,13 +547,6 @@ fn envelope(message: &Message, include: Include) -> Vec<u8> {
 		"body": message.body,
 		"lkn": message.id.to_string(),
 	});
-
-	// A data message shows nothing wherever it lands: the flag rides the
-	// id-only envelope too, because a silent push that fell back to a
-	// banner would be a lie.
-	if message.options.is_data() {
-		payload["lkdata"] = serde_json::json!(true);
-	}
 
 	if include != Include::Minimal
 		&& let Some(object) = serde_json::from_str::<serde_json::Value>(&message.data)
@@ -537,11 +557,13 @@ fn envelope(message: &Message, include: Include) -> Vec<u8> {
 		payload["lk"] = serde_json::Value::Object(object);
 	}
 
-	if include != Include::Minimal {
-		if let Some(image) = message.options.image.as_deref() {
-			payload["image"] = serde_json::json!(image);
-		}
+	if include == Include::All
+		&& let Some(image) = message.options.image.as_deref()
+	{
+		payload["image"] = serde_json::json!(image);
+	}
 
+	if include != Include::Minimal {
 		if let Some(badge) = message.badge {
 			payload["lkbadge"] = serde_json::json!(badge);
 		}
@@ -611,10 +633,22 @@ fn envelope(message: &Message, include: Include) -> Vec<u8> {
 	serde_json::to_vec(&payload).unwrap_or_default()
 }
 
-/// Classifies one push-service answer.
+/// Classifies one push-service answer. RFC 8030 §7.3 signals an expired
+/// subscription with 404, and the shipped services answer 410 for one
+/// that's gone: only those invalidate. RFC 8292 §4.2 refuses a missing or
+/// invalid VAPID signature with 401 or 403 — and Apple answers 403
+/// `VapidPkHashMismatch` once the operator's key pair is no longer the one
+/// the subscription was made for — which is the operator's to fix, so
+/// the subscription stays.
 fn classify(response: &WireResponse) -> Outcome {
 	match response.status {
 		200..=299 => Outcome::Accepted,
+		401 | 403 => {
+			Outcome::Ended {
+				reason: DeliveryReason::OperatorConfiguration,
+				invalidate: false,
+			}
+		}
 		404 | 410 => {
 			Outcome::Ended {
 				reason: DeliveryReason::Unregistered,
@@ -650,6 +684,43 @@ fn retry_after(response: &WireResponse) -> Option<Duration> {
 mod tests {
 	use super::seal_record;
 	use crate::push::base64_url;
+
+	/// Every answer RFC 8030 and RFC 8292 define, as the shipped push
+	/// services give them, and what each comes to. A subscription the
+	/// push service no longer knows (RFC 8030 §7.3's 404, the services'
+	/// 410) invalidates the endpoint; a refused VAPID signature (RFC 8292
+	/// §4.2's 401 or 403, Apple's `VapidPkHashMismatch` after a key
+	/// rotation) is the operator's configuration and leaves it enrolled.
+	#[test]
+	fn push_service_answers_classify_as_the_rfcs_define_them() {
+		use super::DeliveryReason;
+		use super::Outcome;
+		use super::WireResponse;
+		use super::classify;
+
+		let ended = |reason, invalidate| Outcome::Ended { reason, invalidate };
+
+		for (status, expected) in [
+			(201, Outcome::Accepted),
+			(400, ended(DeliveryReason::ProviderRejected, false)),
+			(401, ended(DeliveryReason::OperatorConfiguration, false)),
+			(403, ended(DeliveryReason::OperatorConfiguration, false)),
+			(404, ended(DeliveryReason::Unregistered, true)),
+			(410, ended(DeliveryReason::Unregistered, true)),
+			(413, ended(DeliveryReason::Oversized, false)),
+			(429, Outcome::Transient { after: None }),
+			(500, Outcome::Transient { after: None }),
+			(503, Outcome::Transient { after: None }),
+			(302, ended(DeliveryReason::ProviderRejected, false)),
+		] {
+			let response = WireResponse {
+				status,
+				headers: Vec::new(),
+				body: Vec::new(),
+			};
+			assert_eq!(classify(&response), expected, "{status}");
+		}
+	}
 
 	/// The RFC 8291 §5 and Appendix A vector, byte for byte: the fixed
 	/// plaintext, receiver keys, auth secret, sender point, and salt

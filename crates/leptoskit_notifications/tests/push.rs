@@ -1931,8 +1931,10 @@ async fn the_fcm_data_map_drops_reserved_keys_and_unneeded_ttls() {
 			"data": json!({
 				"lkn": "the attacker's id",
 				"from": "spoofed",
+				"message_type": "spoofed",
 				"google.sneaky": "no",
 				"gcm.sneaky": "no",
+				"gcm.notification.sneaky": "no",
 				"real": "kept"
 			})
 			.to_string(),
@@ -1956,8 +1958,12 @@ async fn the_fcm_data_map_drops_reserved_keys_and_unneeded_ttls() {
 	);
 	assert!(
 		message["message"]["data"].get("from").is_none()
+			&& message["message"]["data"].get("message_type").is_none()
 			&& message["message"]["data"].get("google.sneaky").is_none()
-			&& message["message"]["data"].get("gcm.sneaky").is_none(),
+			&& message["message"]["data"].get("gcm.sneaky").is_none()
+			&& message["message"]["data"]
+				.get("gcm.notification.sneaky")
+				.is_none(),
 		"the platform's reserved words don't ride: {}",
 		message["message"]["data"]
 	);
@@ -2716,14 +2722,14 @@ async fn provider_rejections_end_without_invalidating() {
 	let (status, _) = enroll(&service, ALICE, apns_credential(&device_token(1))).await;
 	assert_eq!(status, 200);
 
-	// A topic mismatch is the operator's configuration: the delivery
+	// A request APNs calls malformed is the send's own: the delivery
 	// ends, the endpoint stays.
 	mock.scripted(|request, _| {
 		if request.url.contains(APNS_HOST) {
 			return Scripted::Reply(
-				403,
+				400,
 				Vec::new(),
-				json!({ "reason": "InvalidProviderToken" }).to_string(),
+				json!({ "reason": "BadPriority" }).to_string(),
 			);
 		}
 
@@ -2824,56 +2830,26 @@ async fn oversized_payloads_drop_data_first_and_end_clearly() {
 	assert!(payload["lkn"].as_str().is_some(), "the id stayed");
 	assert_eq!(payload["aps"]["alert"]["body"], "x".repeat(1_900));
 
-	// A send too big even for the minimal envelope — at FCM the visible
-	// notification rides twice, in `notification` and again inside the
-	// `apns` payload, so a full-size body pushes the encoded message past
-	// 4 KiB whatever is dropped. It ends oversized, with no request at
-	// all — and the fallback keeps its collapse ids, so a repeat that
-	// fits coalesces with the full payload would have.
-	let mock2 = Mock::new();
-	let (rsa_pem, _) = test_rsa();
-	let mut service2 = start(
-		db().await,
-		&config::PushConfig {
-			apns: None,
-			fcm: Some(fcm_config_for(&rsa_pem)),
-			web: None,
-		},
-		&mock2,
-	)
-	.await;
-	let (status, _) = enroll(&service2, ALICE, fcm_credential("fcm-token-2")).await;
-	assert_eq!(status, 200);
-	// The exchange would answer normally; the delivery never gets there.
-	mock2.scripted(|request, _| {
-		if request.url.contains(FCM_TOKEN_HOST) {
-			return Scripted::Reply(
-				200,
-				vec![("content-type".to_owned(), "application/json".to_owned())],
-				json!({ "access_token": "ya29.too-big", "expires_in": 3600 }).to_string(),
-			);
-		}
-
-		Scripted::Default
-	});
-	service2.resume();
-
+	// A send too big even for the minimal envelope — a title and body
+	// whose quotes JSON escapes to past Apple's 4 KiB — ends oversized,
+	// with no request at all.
 	let too_big = json!({
 		"category": "news",
-		"title": "It ships",
-		"body": "y".repeat(2_000),
+		"title": "\"".repeat(200),
+		"body": "\"".repeat(2_000),
 	});
-	let (status, body) = send(&service2, "too-big", too_big, &[ALICE]).await;
+	let (status, body) = send(&service, "too-big", too_big, &[ALICE]).await;
 	assert_eq!(status, 200, "{body}");
 
-	let outcomes = settled(&service2, "too-big").await;
+	let outcomes = settled(&service, "too-big").await;
 	assert_eq!(
 		outcomes,
 		vec![("rejected".to_owned(), Some("oversized".to_owned()))],
 		"{outcomes:?}"
 	);
-	assert!(
-		mock2.requests_to(FCM_HOST).is_empty(),
+	assert_eq!(
+		mock.requests_to(APNS_HOST).len(),
+		1,
 		"an oversized payload never reaches the provider"
 	);
 
@@ -3823,7 +3799,6 @@ async fn the_apns_data_wire_is_a_background_push() {
 				"kind": "data",
 				"priority": "high",
 				"badge": { "set": 3 },
-				"link": "/sync",
 			},
 		}),
 		&[ALICE],
@@ -3841,15 +3816,17 @@ async fn the_apns_data_wire_is_a_background_push() {
 		"a background push is priority 5, whatever the send asked"
 	);
 
+	// Apple's background push takes `content-available` alone in `aps`:
+	// a badge there would be a user-visible change, so it rides as data
+	// for the app to apply.
 	let payload = sent[0].json();
-	assert_eq!(payload["aps"]["content-available"], 1);
-	assert!(
-		payload["aps"].get("alert").is_none(),
-		"no banner: {payload}"
+	assert_eq!(
+		payload["aps"],
+		json!({ "content-available": 1 }),
+		"nothing but the background flag: {payload}"
 	);
-	assert_eq!(payload["aps"]["badge"], 3);
+	assert_eq!(payload["lkbadge"], 3, "the badge rides as data");
 	assert_eq!(payload["lk"]["since"], "42");
-	assert_eq!(payload["lklink"], "/sync");
 	assert!(payload["lkn"].as_str().is_some());
 }
 
@@ -3992,7 +3969,7 @@ async fn the_fcm_data_wire_has_no_notification_block() {
 			"title": "Sync",
 			"body": "A silent nudge.",
 			"data": json!({ "since": "42" }).to_string(),
-			"options": { "kind": "data", "priority": "normal" },
+			"options": { "kind": "data", "priority": "normal", "badge": { "set": 3 } },
 		}),
 		&[ALICE],
 	)
@@ -4005,14 +3982,21 @@ async fn the_fcm_data_wire_has_no_notification_block() {
 		message.get("notification").is_none(),
 		"a data message shows nothing: {message}"
 	);
+	// An Android notification block would make FCM show the message in
+	// the tray and never hand it to the app: the badge rides as data.
+	assert!(
+		message["android"].get("notification").is_none(),
+		"no Android notification block either: {message}"
+	);
+	assert_eq!(message["data"]["lkbadge"], "3", "the badge rides as data");
 	assert_eq!(message["data"]["since"], "42");
 	assert_eq!(message["data"]["lkn"], message["android"]["collapse_key"]);
 	assert_eq!(message["android"]["priority"], "NORMAL");
 	assert_eq!(message["apns"]["headers"]["apns-push-type"], "background");
 	assert_eq!(message["apns"]["headers"]["apns-priority"], "5");
-	assert_eq!(message["apns"]["payload"]["aps"]["content-available"], 1);
-	assert!(
-		message["apns"]["payload"]["aps"].get("alert").is_none(),
+	assert_eq!(
+		message["apns"]["payload"]["aps"],
+		json!({ "content-available": 1 }),
 		"{message}"
 	);
 }
@@ -4101,58 +4085,80 @@ async fn the_web_push_wire_carries_the_send_options() {
 	assert_eq!(plain.header("urgency"), Some("normal"));
 }
 
-/// A data send's web envelope is flagged so the receiver shows nothing.
+/// A data message is never pushed to a browser: browsers require every
+/// push to show a notification — Chrome shows its own generic one, Safari
+/// revokes the subscription after silent pushes, Edge doesn't take them
+/// — and the worker has no page to hand data to. The delivery is skipped
+/// with a reason that says the platform doesn't support it; the same send
+/// still reaches the person's native devices, and a test send says the
+/// same per endpoint.
 #[tokio::test(flavor = "multi_thread")]
-async fn the_web_push_data_envelope_is_flagged_silent() {
+async fn a_data_message_is_never_pushed_to_a_browser() {
 	let mock = Mock::new();
-	let (key_pem, _) = generated_pem();
-	let (_, web) = web_config_for(&key_pem);
-	let config = config::PushConfig {
-		apns: None,
-		fcm: None,
-		web: Some(web),
-	};
-	let mut service = service(&mock, &config).await;
+	let mut service = service(&mock, &all_transports()).await;
 
 	let endpoint = format!("https://{WEB_HOST}/push/abcdef123456");
-	let (receiver, credential, auth_secret, _) = web_subscription(&endpoint);
-	let (status, body) = enroll(&service, ALICE, credential).await;
+	let (status, body) = enroll(&service, ALICE, web_credential(&endpoint)).await;
+	assert_eq!(status, 200, "{body}");
+	let (status, body) = enroll(&service, ALICE, apns_credential(&device_token(1))).await;
 	assert_eq!(status, 200, "{body}");
 	service.resume();
 
-	let (status, body) = send(
+	let data = json!({
+		"category": "sync",
+		"title": "Sync",
+		"body": "A silent nudge.",
+		"data": json!({ "since": "42" }).to_string(),
+		"options": { "kind": "data", "badge": { "set": 2 } },
+	});
+	let (status, body) = send(&service, "web-data", data.clone(), &[ALICE]).await;
+	assert_eq!(status, 200, "{body}");
+
+	let mut outcomes = settled(&service, "web-data").await;
+	outcomes.sort();
+	assert_eq!(
+		outcomes,
+		vec![
+			("accepted".to_owned(), None),
+			(
+				"skipped".to_owned(),
+				Some("platform_unsupported".to_owned())
+			),
+		],
+		"the browser's delivery is skipped, the device's goes: {outcomes:?}"
+	);
+	assert!(
+		mock.requests_to(WEB_HOST).is_empty(),
+		"nothing reached the push service"
+	);
+	assert_eq!(mock.requests_to(APNS_HOST).len(), 1);
+	assert!(
+		endpoints_of(&service, ALICE)
+			.await
+			.iter()
+			.all(|endpoint| endpoint["invalidated_at"].is_null()),
+		"the subscription stays enrolled"
+	);
+
+	let (status, body) = post(
 		&service,
-		"web-data",
-		json!({
-			"category": "sync",
-			"title": "Sync",
-			"body": "A silent nudge.",
-			"data": json!({ "since": "42" }).to_string(),
-			"options": { "kind": "data", "badge": { "set": 2 } },
-		}),
-		&[ALICE],
+		"send_test",
+		json!({ "spec": data, "person": ALICE }),
+		Some(TOKEN),
 	)
 	.await;
 	assert_eq!(status, 200, "{body}");
-	settled(&service, "web-data").await;
-
-	let sent = mock.requests_to(WEB_HOST);
-	assert_eq!(sent.len(), 1);
-	let receiver_point = {
-		let stored = rows(&service, "SELECT credential FROM push_endpoints").await;
-		let subscription: Value = serde_json::from_str(&text(&stored[0][0])).unwrap();
-		URL_SAFE_NO_PAD
-			.decode(subscription["keys"]["p256dh"].as_str().unwrap())
-			.unwrap()
-	};
-	let opened = open_aes128gcm(&sent[0].body, receiver, &receiver_point, &auth_secret);
-	let payload: Value = serde_json::from_slice(&opened).unwrap();
-	assert_eq!(
-		payload["lkdata"], true,
-		"the receiver's cue to show nothing"
-	);
-	assert_eq!(payload["lk"]["since"], "42");
-	assert_eq!(payload["lkbadge"], 2, "a badge still sets, silently");
+	let tested: Value = serde_json::from_str(&body).unwrap();
+	let web = tested
+		.as_array()
+		.unwrap()
+		.iter()
+		.find(|outcome| outcome["platform"] == "web_push")
+		.cloned()
+		.expect("the browser's outcome");
+	assert_eq!(web["state"], "skipped", "{tested}");
+	assert_eq!(web["reason"], "platform_unsupported", "{tested}");
+	assert!(mock.requests_to(WEB_HOST).is_empty());
 }
 
 /// An unread badge resolves per recipient at push time: two people, two
@@ -4320,9 +4326,10 @@ async fn payload_limits_degrade_options_in_the_documented_order() {
 
 	// The same order on FCM: the Android notification, the image, and
 	// the Apple extras go before the link, and the data outlasts them
-	// all short of the id-only envelope. The body rides twice — the
-	// notification block and the APNs payload — so this send is past
-	// the whole message's 4 KiB until the platform extras leave.
+	// all short of the id-only envelope. Sized on what FCM counts — the
+	// keys and values the device receives — so the full payload is about
+	// 4,170 bytes and the platform-and-image trim brings it to about
+	// 4,030: past 4 KiB until the platform extras leave, and not after.
 	let (status, body) = send(
 		&service,
 		"fcm-degrade",
@@ -4330,7 +4337,7 @@ async fn payload_limits_degrade_options_in_the_documented_order() {
 			"category": "billing",
 			"title": "T",
 			"body": "y".repeat(1_050),
-			"data": json!({ "k": "d".repeat(1_500) }).to_string(),
+			"data": json!({ "k": "d".repeat(2_840) }).to_string(),
 			"options": {
 				"image": "https://cdn.example.test/i.png",
 				"badge": { "set": 7 },
@@ -4348,8 +4355,16 @@ async fn payload_limits_degrade_options_in_the_documented_order() {
 		.requests_to(FCM_HOST)
 		.iter()
 		.map(|seen| seen.json()["message"].clone())
-		.find(|message| message["data"].get("k").is_some())
+		.find(|message| {
+			message["notification"]["body"]
+				.as_str()
+				.is_some_and(|body| body.starts_with('y'))
+		})
 		.expect("the degraded FCM message went out");
+	assert!(
+		degraded["data"].get("k").is_some(),
+		"the data outlasts the platform block: {degraded}"
+	);
 
 	// Stage one dropped the platform overrides and the image, and kept
 	// everything the later stages own: the badge and the link, and the
@@ -4381,6 +4396,449 @@ async fn payload_limits_degrade_options_in_the_documented_order() {
 		degraded["android"].get("collapse_key").is_some(),
 		"the collapse key never goes: {degraded}"
 	);
+}
+
+// Provider rules, as each provider documents them.
+
+/// Real browsers' subscriptions enroll: Chrome's FCM endpoint, Firefox's
+/// autopush, Safari's Apple Web Push service on a `push.apple.com`
+/// subdomain, and Edge's Windows Push Notification Services channel on a
+/// `notify.windows.com` subdomain. Lookalikes of the new domains, a wrong
+/// port, and credentials in the URL are still refused, without an echo.
+#[tokio::test(flavor = "multi_thread")]
+async fn every_major_browsers_subscription_enrolls() {
+	let mock = Mock::new();
+	let service = service(&mock, &all_transports()).await;
+
+	for (browser, endpoint) in [
+		(
+			"Chrome",
+			"https://fcm.googleapis.com/fcm/send/dQw4w9WgXcQ:APA91bFakeChromeEndpoint",
+		),
+		(
+			"Firefox",
+			"https://updates.push.services.mozilla.com/wpush/v2/gAAAAABfakeFirefoxEndpoint",
+		),
+		(
+			"Safari",
+			"https://web.push.apple.com/QFakeSafariEndpointToken",
+		),
+		(
+			"Edge",
+			"https://wns2-par02p.notify.windows.com/w/?token=BQYAAADfakeEdgeEndpoint",
+		),
+	] {
+		let (status, body) = enroll(&service, ALICE, web_credential(endpoint)).await;
+		assert_eq!(status, 200, "{browser} enrolls: {body}");
+	}
+
+	for (name, endpoint) in [
+		(
+			"Apple's domain under another",
+			"https://web.push.apple.com.attacker.test/push/1",
+		),
+		(
+			"a host that only ends like Apple's",
+			"https://webpush.apple.com/push/1",
+		),
+		("Apple's bare domain", "https://push.apple.com/push/1"),
+		(
+			"Windows's domain under another",
+			"https://wns2-par02p.notify.windows.com.attacker.test/w/?token=1",
+		),
+		(
+			"a host that only ends like Windows's",
+			"https://attackernotify.windows.com/w/?token=1",
+		),
+		("a trailing dot", "https://web.push.apple.com./push/1"),
+		("a wrong port", "https://web.push.apple.com:8443/push/1"),
+		(
+			"credentials in the URL",
+			"https://user:pass@wns2-par02p.notify.windows.com/w/?token=1",
+		),
+		(
+			"userinfo hiding the real host",
+			"https://web.push.apple.com@attacker.test/push/1",
+		),
+	] {
+		let (status, body) = enroll(&service, BOB, web_credential(endpoint)).await;
+		assert_eq!(status, 400, "{name} is refused: {body}");
+		assert!(
+			!body.contains(endpoint) && !body.contains("attacker"),
+			"the refusal doesn't echo the URL: {body}"
+		);
+	}
+}
+
+/// FCM's 4,096-byte limit is on the payload a device receives — the keys
+/// and values of the notification and the data — not on the HTTP request
+/// around it, and the visible text rides once: the largest title and
+/// body a send allows reach an Android device whole, options and data
+/// included.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_largest_send_text_reaches_an_fcm_device() {
+	let mock = Mock::new();
+	let (rsa_pem, _) = test_rsa();
+	let config = config::PushConfig {
+		apns: None,
+		fcm: Some(fcm_config_for(&rsa_pem)),
+		web: None,
+	};
+	let mut service = service(&mock, &config).await;
+
+	let (status, _) = enroll(&service, ALICE, fcm_credential("fcm-token-large")).await;
+	assert_eq!(status, 200);
+	mock.scripted(passing_exchange());
+	service.resume();
+
+	let title = "t".repeat(leptoskit_notifications::MAX_TITLE_LEN);
+	let body = "b".repeat(leptoskit_notifications::MAX_BODY_LEN);
+	let (status, answer) = send(
+		&service,
+		"fcm-large",
+		json!({
+			"category": "news",
+			"title": title,
+			"body": body,
+			"data": json!({ "order": "42" }).to_string(),
+			"options": { "image": "https://cdn.example.test/i.png" },
+		}),
+		&[ALICE],
+	)
+	.await;
+	assert_eq!(status, 200, "{answer}");
+
+	let outcomes = settled(&service, "fcm-large").await;
+	assert_eq!(outcomes, vec![("accepted".to_owned(), None)]);
+
+	let sent = mock.requests_to(FCM_HOST);
+	assert_eq!(sent.len(), 1);
+	let message = sent[0].json()["message"].clone();
+	assert_eq!(message["notification"]["title"], title.as_str());
+	assert_eq!(message["notification"]["body"], body.as_str());
+	assert_eq!(
+		message["notification"]["image"],
+		"https://cdn.example.test/i.png"
+	);
+	assert_eq!(message["data"]["order"], "42", "nothing was trimmed");
+	assert!(
+		message["apns"]["payload"]["aps"].get("alert").is_none(),
+		"FCM builds the iOS alert from the notification; the text rides once"
+	);
+	assert_eq!(
+		String::from_utf8_lossy(&sent[0].body)
+			.matches(body.as_str())
+			.count(),
+		1,
+		"the body is on the wire once"
+	);
+}
+
+/// APNs answers that mean the operator's environment or topic is wrong —
+/// `BadDeviceToken` is what a sandbox token gets from production, and
+/// `DeviceTokenNotForTopic` what any token gets under the wrong bundle id
+/// — end the delivery as the operator's configuration and leave the
+/// device enrolled: one bad deploy must not kill every iPhone. Only
+/// `410 Unregistered` invalidates.
+#[tokio::test(flavor = "multi_thread")]
+async fn apns_configuration_answers_never_invalidate_a_device() {
+	let mock = Mock::new();
+	let mut service = service(&mock, &all_transports()).await;
+
+	for n in 1..=3 {
+		let (status, body) = enroll(&service, ALICE, apns_credential(&device_token(n))).await;
+		assert_eq!(status, 200, "{body}");
+	}
+
+	mock.scripted(|request, _| {
+		if !request.url.contains(APNS_HOST) {
+			return Scripted::Default;
+		}
+
+		let (status, reason) = if request.url.ends_with(&device_token(1)) {
+			(400, "BadDeviceToken")
+		} else if request.url.ends_with(&device_token(2)) {
+			(400, "DeviceTokenNotForTopic")
+		} else {
+			(410, "Unregistered")
+		};
+
+		Scripted::Reply(status, Vec::new(), json!({ "reason": reason }).to_string())
+	});
+	service.resume();
+	let (status, _) = send(&service, "misconfigured", spec(), &[ALICE]).await;
+	assert_eq!(status, 200);
+
+	let mut outcomes = settled(&service, "misconfigured").await;
+	outcomes.sort();
+	assert_eq!(
+		outcomes,
+		vec![
+			(
+				"rejected".to_owned(),
+				Some("operator_configuration".to_owned())
+			),
+			(
+				"rejected".to_owned(),
+				Some("operator_configuration".to_owned())
+			),
+			("rejected".to_owned(), Some("unregistered".to_owned())),
+		],
+		"{outcomes:?}"
+	);
+
+	// Oldest first: the two the operator's setup refused stay live.
+	let endpoints = endpoints_of(&service, ALICE).await;
+	assert!(endpoints[0]["invalidated_at"].is_null(), "{endpoints:?}");
+	assert!(endpoints[1]["invalidated_at"].is_null(), "{endpoints:?}");
+	assert!(endpoints[2]["invalidated_at"].is_string(), "{endpoints:?}");
+}
+
+/// A provider token APNs refuses — stale, or not valid — is dropped from
+/// the cache, and the retry signs a fresh one rather than failing every
+/// delivery with the refused token until it ages out.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_refused_apns_provider_token_is_replaced_and_the_push_retried() {
+	let mock = Mock::new();
+	let mut service = service(&mock, &all_transports()).await;
+
+	let (status, _) = enroll(&service, ALICE, apns_credential(&device_token(1))).await;
+	assert_eq!(status, 200);
+	mock.scripted(|request, index| {
+		if request.url.contains(APNS_HOST) && index == 0 {
+			return Scripted::Reply(
+				403,
+				Vec::new(),
+				json!({ "reason": "ExpiredProviderToken" }).to_string(),
+			);
+		}
+
+		Scripted::Default
+	});
+	service.resume();
+	let (status, _) = send(&service, "stale-token", spec(), &[ALICE]).await;
+	assert_eq!(status, 200);
+
+	// The retry waits out the engine's one-minute backoff like any other,
+	// so the test moves the queue's clock rather than waiting for it.
+	let outcomes = settled_rewinding(&service, "stale-token").await;
+	assert_eq!(
+		outcomes,
+		vec![("accepted".to_owned(), None)],
+		"{outcomes:?}"
+	);
+
+	let sent = mock.requests_to(APNS_HOST);
+	assert_eq!(sent.len(), 2, "one refused push, one retry");
+	assert_ne!(
+		sent[0].header("authorization"),
+		sent[1].header("authorization"),
+		"the retry carries a freshly signed provider token"
+	);
+	assert!(endpoints_of(&service, ALICE).await[0]["invalidated_at"].is_null());
+}
+
+/// FCM answers that name the sender's setup — `SENDER_ID_MISMATCH`, the
+/// token belongs to another Firebase project, and
+/// `THIRD_PARTY_AUTH_ERROR`, the project's APNs or Web Push credential is
+/// missing — end at once as the operator's configuration: no retry fixes
+/// them, and neither means the device is gone.
+#[tokio::test(flavor = "multi_thread")]
+async fn fcm_sender_configuration_answers_end_without_retrying() {
+	let mock = Mock::new();
+	let (rsa_pem, _) = test_rsa();
+	let config = config::PushConfig {
+		apns: None,
+		fcm: Some(fcm_config_for(&rsa_pem)),
+		web: None,
+	};
+	let mut service = service(&mock, &config).await;
+
+	for token in ["fcm-other-project", "fcm-third-party"] {
+		let (status, body) = enroll(&service, ALICE, fcm_credential(token)).await;
+		assert_eq!(status, 200, "{body}");
+	}
+
+	mock.scripted(|request, _| {
+		if request.url.contains(FCM_TOKEN_HOST) {
+			return Scripted::Reply(
+				200,
+				Vec::new(),
+				json!({ "access_token": "ya29.test-token", "expires_in": 3600 }).to_string(),
+			);
+		}
+
+		if !request.url.contains(FCM_HOST) {
+			return Scripted::Default;
+		}
+
+		let message: Value = serde_json::from_slice(&request.body).unwrap_or(Value::Null);
+		let (status, error, code) = if message["message"]["token"] == "fcm-other-project" {
+			(403, "PERMISSION_DENIED", "SENDER_ID_MISMATCH")
+		} else {
+			(401, "UNAUTHENTICATED", "THIRD_PARTY_AUTH_ERROR")
+		};
+
+		Scripted::Reply(
+			status,
+			Vec::new(),
+			json!({
+				"error": {
+					"status": error,
+					"details": [{
+						"@type": "type.googleapis.com/google.firebase.fcm.v1.FcmError",
+						"errorCode": code,
+					}],
+				},
+			})
+			.to_string(),
+		)
+	});
+	service.resume();
+	let (status, _) = send(&service, "fcm-sender", spec(), &[ALICE]).await;
+	assert_eq!(status, 200);
+
+	let items = wait_not_enqueued(&service, "fcm-sender").await;
+	assert_eq!(items.len(), 2);
+	for item in &items {
+		assert_eq!(item["state"], "rejected", "{items:?}");
+		assert_eq!(item["reason"], "operator_configuration", "{items:?}");
+	}
+	assert_eq!(
+		mock.requests_to(FCM_HOST).len(),
+		2,
+		"one push each, no retry"
+	);
+	assert!(
+		endpoints_of(&service, ALICE)
+			.await
+			.iter()
+			.all(|endpoint| endpoint["invalidated_at"].is_null())
+	);
+}
+
+/// A push service refusing the VAPID signature — RFC 8292's 401 or 403,
+/// or Apple's `VapidPkHashMismatch` after the operator rotated the key
+/// pair — is the operator's configuration: the delivery ends saying so,
+/// and the subscription stays enrolled.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_refused_vapid_signature_is_the_operators_configuration() {
+	let mock = Mock::new();
+	let config = config::PushConfig {
+		apns: None,
+		fcm: None,
+		web: Some(web_config_for(&generated_pem().0).1),
+	};
+	let mut service = service(&mock, &config).await;
+
+	for path in ["unauthorized", "forbidden"] {
+		let endpoint = format!("https://{WEB_HOST}/push/{path}");
+		let (status, body) = enroll(&service, ALICE, web_credential(&endpoint)).await;
+		assert_eq!(status, 200, "{body}");
+	}
+
+	mock.scripted(|request, _| {
+		if request.url.ends_with("/unauthorized") {
+			return Scripted::Reply(401, Vec::new(), String::new());
+		}
+
+		if request.url.ends_with("/forbidden") {
+			return Scripted::Reply(
+				403,
+				Vec::new(),
+				json!({ "reason": "VapidPkHashMismatch" }).to_string(),
+			);
+		}
+
+		Scripted::Default
+	});
+	service.resume();
+	let (status, _) = send(&service, "vapid-refused", spec(), &[ALICE]).await;
+	assert_eq!(status, 200);
+
+	let outcomes = settled(&service, "vapid-refused").await;
+	assert_eq!(
+		outcomes,
+		vec![
+			(
+				"rejected".to_owned(),
+				Some("operator_configuration".to_owned())
+			);
+			2
+		],
+		"{outcomes:?}"
+	);
+	assert!(
+		endpoints_of(&service, ALICE)
+			.await
+			.iter()
+			.all(|endpoint| endpoint["invalidated_at"].is_null())
+	);
+}
+
+/// A subscription whose `p256dh` value has the right length but is no
+/// point on P-256 can never be encrypted to. Its delivery ends at once,
+/// with no request, as an unusable subscription — not as `oversized`,
+/// which would send the operator looking at the message.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_subscription_key_off_the_curve_ends_as_unusable() {
+	let mock = Mock::new();
+	let config = config::PushConfig {
+		apns: None,
+		fcm: None,
+		web: Some(web_config_for(&generated_pem().0).1),
+	};
+	let mut service = service(&mock, &config).await;
+
+	let mut off_curve = vec![0x04];
+	off_curve.extend_from_slice(&[0x01; 64]);
+	let credential = json!({
+		"web_push": {
+			"endpoint": format!("https://{WEB_HOST}/push/off-curve"),
+			"keys": {
+				"p256dh": URL_SAFE_NO_PAD.encode(&off_curve),
+				"auth": URL_SAFE_NO_PAD.encode([7_u8; 16]),
+			},
+		}
+	});
+	let (status, body) = enroll(&service, ALICE, credential).await;
+	assert_eq!(status, 200, "the shape check passes it: {body}");
+
+	service.resume();
+	let (status, _) = send(&service, "off-curve", spec(), &[ALICE]).await;
+	assert_eq!(status, 200);
+
+	let outcomes = settled(&service, "off-curve").await;
+	assert_eq!(
+		outcomes,
+		vec![(
+			"skipped".to_owned(),
+			Some("subscription_unusable".to_owned())
+		)],
+		"{outcomes:?}"
+	);
+	assert!(mock.requests_to(WEB_HOST).is_empty(), "nothing was sent");
+}
+
+/// The operator's extra Web Push hosts mean nothing without a VAPID pair
+/// to push with: setting them alone is half a transport, refused with
+/// every missing variable named in full, not a server that runs with Web
+/// Push off.
+#[test]
+fn extra_hosts_without_a_vapid_pair_are_half_configured() {
+	let error = config::PushConfig::from_vars([(
+		"LEPTOSKIT_NOTIFICATIONS_WEB_PUSH_EXTRA_HOSTS",
+		"push.example.net",
+	)])
+	.expect_err("extra hosts alone are half a transport");
+
+	for missing in [
+		"LEPTOSKIT_NOTIFICATIONS_WEB_PUSH_VAPID_PRIVATE_KEY",
+		"LEPTOSKIT_NOTIFICATIONS_WEB_PUSH_VAPID_PUBLIC_KEY",
+		"LEPTOSKIT_NOTIFICATIONS_WEB_PUSH_VAPID_SUBJECT",
+	] {
+		assert!(error.contains(missing), "{missing} is named: {error}");
+	}
 }
 
 #[cfg(feature = "postgres")]

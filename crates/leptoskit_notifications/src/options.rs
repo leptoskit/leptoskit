@@ -69,10 +69,14 @@ pub const MAX_OPTIONS_LEN: usize = 4_096;
 /// [`Notification`](Self::Notification) is the default: a visible
 /// notification, shown by the platform from the payload. [`Data`](Self::Data)
 /// is a **silent background message**: no banner anywhere — APNs answers
-/// with `content-available` under `apns-push-type: background` at priority
-/// 5, FCM carries the data map with no notification block, and the
-/// receiver service worker shows nothing — while the send's `data` reaches
-/// the app, which decides what to do with it.
+/// with `content-available` alone under `apns-push-type: background` at
+/// priority 5, and FCM carries the data map with no notification block of
+/// any kind — while the send's `data` reaches the app, which decides what
+/// to do with it. Browsers require every push to show a notification, so
+/// a data message is never pushed to one: its Web Push deliveries are
+/// skipped as `platform_unsupported`. The options that only shape what is
+/// shown are refused on a data send; a badge rides as data for the app to
+/// apply.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum MessageKind {
@@ -364,6 +368,27 @@ fn is_default_kind(kind: &MessageKind) -> bool {
 ///
 /// A message naming the field and what's wrong with it.
 pub fn check_options(options: &MessageOptions) -> Result<(), String> {
+	// A data message shows nothing, so what only shapes a shown
+	// notification can't mean anything on one: refused, named, rather
+	// than dropped without a word — or turning the silent push into a
+	// banner, as a notification block does at FCM.
+	if options.is_data() {
+		for (field, set) in [
+			("image", options.image.is_some()),
+			("sound", options.sound.is_some()),
+			("link", options.link.is_some()),
+			("android", options.android.is_some()),
+			("apple", options.apple.is_some()),
+			("web", options.web.is_some()),
+		] {
+			if set {
+				return Err(format!(
+					"options.{field} shapes a shown notification, and a data message shows nothing"
+				));
+			}
+		}
+	}
+
 	if let Some(image) = options.image.as_deref() {
 		check_https_url(image, "options.image")?;
 	}
