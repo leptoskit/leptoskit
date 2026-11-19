@@ -42,7 +42,7 @@ One pull request per item. Every backend is kept in step, with AppKit as the ref
 | 5  | Arrow-key navigation for tabs, radio groups and menus       | G5       | #892, open  |
 | 6  | `Modal` and `Popover`                                       | G1       | #896, open  |
 | 7  | Scroll into view                                            | G4       | #913, open  |
-| 8  | A clock hook                                                | G6       | not started |
+| 8  | A clock hook                                                | G6       | #914, open  |
 | 9  | Typed refusals in the rpc client (status, code, retry time) | G8       | not started |
 | 10 | Streams without a database                                  | G3       | not started |
 | 11 | The ⌘ key on the web                                        | G7a      | not started |
@@ -189,6 +189,15 @@ G4. `Reveal`, `ScrollAlign` and `Element::reveal_on` in `leptoskit_native` (`rev
 - **Where the view is now:** the surface keeps the last `Scroll` event per view in `scrolled`, set in `dispatch_event`. A host that does not forward scroll events leaves it at the last offset the app or a reveal set, so `Nearest` can misjudge there.
 - **Backends that now apply `scroll_offset`:** GTK (`scroll_to_offsets`, sets the adjustments after the batch, raising `upper` to the new extent first), Windows (`Widget::update_props` sets the scroll cell and the batch-end `refresh_scroll` clamps it), AppKit (`scrollToPoint` and `reflectScrolledClipView` after the documents are sized) and UIKit (`setContentOffset:animated:`). Each scrolls when the offset changes and not while it holds the same one. GTK, Windows and AppKit do not animate.
 - **Not done:** the terminal and HarmonyOS apply neither. Only the nearest scroll view moves, where the web scrolls every ancestor.
+
+### `feat/clock-hook` (#914): stacked on `feat/scroll-into-view`
+
+G6. `leptoskit_use::use_clock(interval)` returns a `Clock` that advances by itself. It is a loop over `leptoskit_query::try_sleep`, wrapped in `futures::future::abortable` and aborted from `on_cleanup`. The value is `now_ms()` minus the start, kept from going backwards, so it is measured and not counted.
+
+- **Feature:** `clock` on `leptoskit_use` (it brings in `leptoskit_query` and `any_spawner`, which the crate otherwise avoids), and `clock` on `leptoskit`, which turns on `use` and `query`. `leptoskit_use/web` passes `browser` to `leptoskit_query` when both are on.
+- **Run here:** `tests/clock.rs` on tokio, and `tests/web_clock.rs` in headless Chrome. `test:browser` in `devenv.nix` now runs the browser one.
+- **Not run:** a native guest. There the loop uses the timer plugin through `leptoskit_query`'s `guest` feature, which the query cache already relies on.
+- **Limit to know for the conversions:** the timer stops on owner cleanup. A leptos component on the web has an owner that is cleaned when it leaves. A native guest keeps its owner for as long as it runs, so a clock made in a screen there keeps ticking after the screen leaves; make one for the app. A view function that rebuilds starts a new clock on each run, and `remember(|| use_clock(…))` does not fix that on the web, because the closure runs under the owner of the first build, which is cleaned on the next. A clock that a rebuilt screen can keep would be a new API, and has not been asked for.
 
 ### `feat/public-demo`: no pull request
 

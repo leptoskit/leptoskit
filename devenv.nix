@@ -721,7 +721,7 @@ in
           cargo test --target wasm32-unknown-unknown --package leptoskit_use --features local-storage --test web_storage --test web_storage_worker
         test:rive
         CHROMEDRIVER="$DEVENV_PROFILE/bin/chromedriver" \
-          cargo test --target wasm32-unknown-unknown --package leptoskit_use --features web --test web --test web_worker
+          cargo test --target wasm32-unknown-unknown --package leptoskit_use --features web,clock --test web --test web_worker --test web_clock
         # Named core and optional positional batches use different transports.
         CHROMEDRIVER="$DEVENV_PROFILE/bin/chromedriver" \
           cargo test --target wasm32-unknown-unknown --package leptoskit_analytics --features web,derive --test web --test web_pageviews
