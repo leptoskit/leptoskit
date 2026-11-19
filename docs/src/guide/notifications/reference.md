@@ -13,40 +13,41 @@ There are two kinds of caller, and no operation serves both:
 
 ### Called by your server
 
-| Operation                 | Module      | What it does                                                         | Explained in                                                       |
-| ------------------------- | ----------- | -------------------------------------------------------------------- | ------------------------------------------------------------------ |
-| `send`                    | root        | makes a send, or with `validate_only` counts its audience            | [Sending](sending.md#send-from-your-server)                        |
-| `cancel`                  | root        | cancels a send that is not yet visible                               | [Sending](sending.md#cancel-a-scheduled-send)                      |
-| `send_status`             | root        | a send's state and counts                                            | [Sending](sending.md#track-a-large-send)                           |
-| `send_report`             | root        | what became of a send: inbox counts, push counts, reads by hour      | [Sending](sending.md#see-what-a-send-came-to)                      |
-| `list_sends`              | root        | the sends that were made, newest first                               | [Sending](sending.md#browse-the-sends-you-made)                    |
-| `send_test`               | root        | pushes a spec to one person's devices once, writing nothing          | [Troubleshooting](troubleshooting.md#test-on-a-device)             |
-| `preview_push`            | `preview`   | the request each provider would be sent, and its size                | [Shaping messages](shaping-messages.md#preview-a-push)             |
-| `subscribe_to_topic`      | root        | subscribes up to 1,000 people to a topic                             | [Audiences](audiences.md#send-to-a-topic)                          |
-| `unsubscribe_from_topic`  | root        | unsubscribes up to 1,000 people from a topic                         | [Audiences](audiences.md#send-to-a-topic)                          |
-| `set_person_attributes`   | root        | sets and removes attributes for up to 1,000 people                   | [Audiences](audiences.md#describe-people-with-attributes)          |
-| `person_attributes`       | root        | one person's attributes                                              | [Audiences](audiences.md#describe-people-with-attributes)          |
-| `forget_person`           | root        | erases everything stored about one person                            | [Audiences](audiences.md#erase-a-person)                           |
-| `notifications_overview`  | `catalogue` | how many people, devices per platform, and topics the service knows  | [Audiences](audiences.md#know-your-audience-before-you-send)       |
-| `topics`                  | `catalogue` | topics with their subscriber counts                                  | [Audiences](audiences.md#know-your-audience-before-you-send)       |
-| `attribute_keys`          | `catalogue` | attribute keys with how many people hold each                        | [Audiences](audiences.md#know-your-audience-before-you-send)       |
-| `attribute_values`        | `catalogue` | one key's values with how many people hold each                      | [Audiences](audiences.md#know-your-audience-before-you-send)       |
-| `categories`              | `catalogue` | categories with their opt-out counts and last send                   | [Audiences](audiences.md#know-your-audience-before-you-send)       |
-| `estimate_audience`       | `catalogue` | about how many people a target would reach                           | [Audiences](audiences.md#know-your-audience-before-you-send)       |
-| `person_endpoints`        | `push`      | one person's devices, without credentials                            | [Audiences](audiences.md#know-your-audience-before-you-send)       |
-| `revoke_person_endpoints` | `push`      | removes every device a person enrolled                               | [Push setup](push-setup.md#when-the-server-revokes-a-device)       |
-| `push_deliveries`         | `push`      | a send's deliveries, one by one, with state and reason               | [Troubleshooting](troubleshooting.md#read-what-happened-to-a-send) |
-| `create_campaign`         | `campaign`  | saves a new draft                                                    | [Campaigns](campaigns.md)                                          |
-| `update_campaign`         | `campaign`  | saves a change to a draft, from a named revision                     | [Campaigns](campaigns.md)                                          |
-| `campaign`                | `campaign`  | reads one campaign                                                   | [Campaigns](campaigns.md)                                          |
-| `campaigns`               | `campaign`  | lists campaigns, newest first                                        | [Campaigns](campaigns.md)                                          |
-| `campaign_events`         | `campaign`  | a campaign's history: created, tested, launched, cancelled, archived | [Campaigns](campaigns.md)                                          |
-| `test_campaign`           | `campaign`  | pushes a draft to one person's devices                               | [Campaigns](campaigns.md)                                          |
-| `launch_campaign`         | `campaign`  | makes the draft's send, once                                         | [Campaigns](campaigns.md)                                          |
-| `cancel_campaign`         | `campaign`  | cancels a launched campaign's send                                   | [Campaigns](campaigns.md)                                          |
-| `archive_campaign`        | `campaign`  | puts a campaign away                                                 | [Campaigns](campaigns.md)                                          |
-| `duplicate_campaign`      | `campaign`  | copies a campaign into a new draft                                   | [Campaigns](campaigns.md)                                          |
-| `duplicate_send`          | `campaign`  | makes a new draft from a send                                        | [Campaigns](campaigns.md)                                          |
+| Operation                 | Module      | What it does                                                         | Explained in                                                        |
+| ------------------------- | ----------- | -------------------------------------------------------------------- | ------------------------------------------------------------------- |
+| `send`                    | root        | makes a send, or with `validate_only` counts its audience            | [Sending](sending.md#send-from-your-server)                         |
+| `cancel`                  | root        | cancels a send that is not yet visible                               | [Sending](sending.md#cancel-a-scheduled-send)                       |
+| `send_status`             | root        | a send's state and counts                                            | [Sending](sending.md#track-a-large-send)                            |
+| `send_report`             | root        | what became of a send: inbox counts, push counts, reads by hour      | [Sending](sending.md#see-what-a-send-came-to)                       |
+| `list_sends`              | root        | the sends that were made, newest first                               | [Sending](sending.md#browse-the-sends-you-made)                     |
+| `send_test`               | root        | pushes a spec to one person's devices once, writing nothing          | [Troubleshooting](troubleshooting.md#test-on-a-device)              |
+| `preview_push`            | `preview`   | the request each provider would be sent, and its size                | [Shaping messages](shaping-messages.md#preview-a-push)              |
+| `subscribe_to_topic`      | root        | subscribes up to 1,000 people to a topic                             | [Audiences](audiences.md#send-to-a-topic)                           |
+| `unsubscribe_from_topic`  | root        | unsubscribes up to 1,000 people from a topic                         | [Audiences](audiences.md#send-to-a-topic)                           |
+| `set_person_attributes`   | root        | sets and removes attributes for up to 1,000 people                   | [Audiences](audiences.md#describe-people-with-attributes)           |
+| `person_attributes`       | root        | one person's attributes                                              | [Audiences](audiences.md#describe-people-with-attributes)           |
+| `forget_person`           | root        | erases everything stored about one person                            | [Audiences](audiences.md#erase-a-person)                            |
+| `notifications_overview`  | `catalogue` | how many people, devices per platform, and topics the service knows  | [Audiences](audiences.md#know-your-audience-before-you-send)        |
+| `topics`                  | `catalogue` | topics with their subscriber counts                                  | [Audiences](audiences.md#know-your-audience-before-you-send)        |
+| `attribute_keys`          | `catalogue` | attribute keys with how many people hold each                        | [Audiences](audiences.md#know-your-audience-before-you-send)        |
+| `attribute_values`        | `catalogue` | one key's values with how many people hold each                      | [Audiences](audiences.md#know-your-audience-before-you-send)        |
+| `categories`              | `catalogue` | categories with their opt-out counts and last send                   | [Audiences](audiences.md#know-your-audience-before-you-send)        |
+| `estimate_audience`       | `catalogue` | about how many people a target would reach                           | [Audiences](audiences.md#know-your-audience-before-you-send)        |
+| `person_endpoints`        | `push`      | one person's devices, without credentials                            | [Audiences](audiences.md#know-your-audience-before-you-send)        |
+| `revoke_person_endpoints` | `push`      | removes every device a person enrolled                               | [Push setup](push-setup.md#when-the-server-revokes-a-device)        |
+| `import_push_endpoints`   | `push`      | imports up to 500 FCM or APNs tokens your server already holds       | [Coming from Firebase](coming-from-firebase.md#moving-step-by-step) |
+| `push_deliveries`         | `push`      | a send's deliveries, one by one, with state and reason               | [Troubleshooting](troubleshooting.md#read-what-happened-to-a-send)  |
+| `create_campaign`         | `campaign`  | saves a new draft                                                    | [Campaigns](campaigns.md)                                           |
+| `update_campaign`         | `campaign`  | saves a change to a draft, from a named revision                     | [Campaigns](campaigns.md)                                           |
+| `campaign`                | `campaign`  | reads one campaign                                                   | [Campaigns](campaigns.md)                                           |
+| `campaigns`               | `campaign`  | lists campaigns, newest first                                        | [Campaigns](campaigns.md)                                           |
+| `campaign_events`         | `campaign`  | a campaign's history: created, tested, launched, cancelled, archived | [Campaigns](campaigns.md)                                           |
+| `test_campaign`           | `campaign`  | pushes a draft to one person's devices                               | [Campaigns](campaigns.md)                                           |
+| `launch_campaign`         | `campaign`  | makes the draft's send, once                                         | [Campaigns](campaigns.md)                                           |
+| `cancel_campaign`         | `campaign`  | cancels a launched campaign's send                                   | [Campaigns](campaigns.md)                                           |
+| `archive_campaign`        | `campaign`  | puts a campaign away                                                 | [Campaigns](campaigns.md)                                           |
+| `duplicate_campaign`      | `campaign`  | copies a campaign into a new draft                                   | [Campaigns](campaigns.md)                                           |
+| `duplicate_send`          | `campaign`  | makes a new draft from a send                                        | [Campaigns](campaigns.md)                                           |
 
 ### Called by the signed-in person
 
@@ -134,15 +135,16 @@ The checks the service runs are public functions of the crate, so a form can run
 
 **Devices**
 
-| What                            | Limit                                                         |
-| ------------------------------- | ------------------------------------------------------------- |
-| Live endpoints one person holds | 10, plus up to 10 invalidated ones kept for their device list |
-| APNs device token               | 32 to 200 lower-case hex characters                           |
-| FCM registration token          | 4,096 bytes                                                   |
-| Web Push endpoint address       | 2,048 bytes                                                   |
-| Device locale                   | 35 bytes                                                      |
-| Device time zone, app version   | 64 bytes each                                                 |
-| Push attempts for one delivery  | 8, within 24 hours of the notification becoming visible       |
+| What                                          | Limit                                                         |
+| --------------------------------------------- | ------------------------------------------------------------- |
+| Live endpoints one person holds               | 10, plus up to 10 invalidated ones kept for their device list |
+| Endpoints in one `import_push_endpoints` call | 1 to 500 (`MAX_IMPORT_ENDPOINTS`); FCM and APNs tokens only   |
+| APNs device token                             | 32 to 200 lower-case hex characters                           |
+| FCM registration token                        | 4,096 bytes                                                   |
+| Web Push endpoint address                     | 2,048 bytes                                                   |
+| Device locale                                 | 35 bytes                                                      |
+| Device time zone, app version                 | 64 bytes each                                                 |
+| Push attempts for one delivery                | 8, within 24 hours of the notification becoming visible       |
 
 **Pages**
 

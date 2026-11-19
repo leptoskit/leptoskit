@@ -16,7 +16,7 @@ It applies to web, iOS, Android, and macOS apps. On Android you keep one piece o
 
 FCM addresses a **device**: you store registration tokens, send to tokens, and subscribe tokens to topics. leptoskit addresses a **person**: you send to the user id your sign-in already has, and the service keeps track of which devices that person enrolled.
 
-So the token table in your own database goes away. You no longer store tokens, refresh them, or prune dead ones. A topic belongs to the person, so subscribing on a phone also subscribes that person's laptop. And every device has to be signed in before it can enroll: there is no push to an anonymous installation.
+So the token table in your own database goes away, after you [import it once](#moving-step-by-step). You no longer store tokens, refresh them, or prune dead ones. A topic belongs to the person, so subscribing on a phone also subscribes that person's laptop. And every device has to be signed in before it can enroll: there is no push to an anonymous installation.
 
 ## How the concepts map
 
@@ -209,21 +209,66 @@ Nothing changes for your users yet.
 - set the attributes your segments need, with `set_person_attributes`;
 - list the topics a person may join from a client in `LEPTOSKIT_NOTIFICATIONS_OPEN_TOPICS`.
 
-**3. Release an app version that enrolls with leptoskit.** There is no way to import existing tokens into the service, so each device enrolls itself when the new version runs:
+**3. Import the tokens you hold.** Your server has a table of device tokens it collected for Firebase. Import them, and the people they belong to are pushed to from your next send, before anyone has updated the app:
+
+```rust
+use leptoskit_notifications::push::ImportEndpoint;
+use leptoskit_notifications::push::ImportPushEndpoints;
+use leptoskit_notifications::push::PushCredential;
+use leptoskit_notifications::DeviceDetails;
+
+let report = call_as_app(ImportPushEndpoints {
+    endpoints: rows
+        .iter()
+        .map(|row| ImportEndpoint {
+            person: row.user_id,
+            credential: PushCredential::Fcm {
+                registration_token: row.fcm_token.clone(),
+            },
+            device: DeviceDetails {
+                locale: row.locale.clone(),
+                ..DeviceDetails::default()
+            },
+        })
+        .collect(),
+})
+.await?;
+```
+
+A call takes at most 500 entries, so send your table in batches. What to import:
+
+- **Android:** the FCM registration tokens, as `PushCredential::Fcm`. They stay valid because the service's FCM service account is in the same Firebase project.
+- **iOS, when your server holds APNs device tokens:** import them as `PushCredential::Apns`.
+- **iOS, when your server holds only FCM tokens:** import them as `PushCredential::Fcm` too. The service sends them through FCM, which forwards to APNs for as long as your Firebase project keeps its APNs key. `device.platform` reads `fcm` for these.
+- **Browsers:** nothing. A Web Push subscription cannot be imported; see the next step.
+
+What the import does and does not do:
+
+- The answer counts `imported` and `unchanged` entries and lists `skipped` ones by their index in the call. It never repeats a token.
+- Importing the same token for the same person again changes nothing, so you can run the import again after a failure.
+- A token another person already holds is skipped as `held_by_another`. An import never moves a device between people.
+- A person holds at most ten live endpoints. Entries past that are skipped as `person_full`.
+- One entry with a malformed token or a bad detail refuses the whole call and names the entry. Nothing is written.
+- An imported endpoint has the `device` details you gave it and no others, so a [`device.` condition](audiences.md#target-devices) on a detail you did not give does not match it. [`person_endpoints`](audiences.md#know-your-audience-before-you-send) shows it with `imported: true`.
+- The service keeps no record of a revoke or an erasure. If you import a token again after its person turned notifications off, or after `forget_person`, it is enrolled again. Import from your current records, once, and leave out people you erased.
+
+An old app version treats a push from leptoskit like any other FCM notification message: the system shows it while the app is in the background, and your old `onMessage` code receives it while the app is open. It does not know leptoskit's tap routing: a tap opens the app, and the keys your old code read from the message are there only if you put them in the send's `data`.
+
+**4. Release an app version that enrolls with leptoskit.** Each device enrolls itself when the new version runs. When it presents a token you imported for the same person, the imported endpoint becomes the device's own: it keeps its id and its queued pushes, takes the details the device reports, and is no longer marked imported.
 
 - **Android:** set `[native.android] push = true` and keep `google-services.json`. Remove your own Firebase Messaging service and token code; the generated app has its own.
-- **iOS and macOS:** set `aps-environment`. The app now enrolls its APNs device token directly. An FCM token for an iOS device is not an APNs token and cannot be reused. This guide does not cover running the Firebase iOS SDK beside leptoskit's notification delegate in one app: remove Firebase Messaging from the iOS app in the same release.
+- **iOS and macOS:** set `aps-environment`. The app now enrolls its APNs device token directly. If you imported an FCM token for the same iPhone, the phone now has two endpoints until the FCM token dies. Both pushes carry the same collapse id, so iOS is asked to show one banner. To end the old endpoint sooner, call Firebase's `deleteToken` once in the updated app before you remove the SDK; FCM then reports the token as unregistered and the service invalidates the endpoint. This guide does not cover running the Firebase iOS SDK beside leptoskit's notification delegate in one app: remove Firebase Messaging from the iOS app in the same release.
 - **Web:** replace `firebase-messaging-sw.js` with the [receiver](push-setup.md#enroll-a-browser). A browser that subscribed with Firebase's key holds a subscription leptoskit cannot use, and `browser::enroll` answers `KeyMismatch`. Unsubscribe the old subscription first, with the browser's own [`PushSubscription.unsubscribe()`](https://developer.mozilla.org/en-US/docs/Web/API/PushSubscription/unsubscribe), then enroll. Subscribing again needs a click from the person.
 
 People who had notifications on must end up enrolled without being asked twice. On iOS, Android, and macOS the system permission they already gave still stands, and `native::enroll` never prompts by itself, so your app can enroll them once after the update if your own records say they had opted in. Whether that earlier opt-in covers the new enrollment is your call to make. In a browser the new subscription needs their click.
 
 In the same release, add the [`Receiver`](receiving.md) loop so taps keep opening the right screen. A push from leptoskit carries its link and data in its own keys, not in Firebase's.
 
-**4. Send through both until devices have moved.** A device that has not updated is still reachable only through Firebase, and a device that has is reachable through both and would show two banners. Choose per person: your server can ask the service for a person's devices with [`person_endpoints`](audiences.md#know-your-audience-before-you-send). Send through leptoskit to people who have at least one, and through Firebase to the rest. For topic sends during this period, keep sending through both and accept that the inbox row exists for everyone while the push reaches only updated devices from leptoskit.
+**5. Send each person through one system.** A person with an imported or enrolled endpoint is reachable through leptoskit, and sending through Firebase as well would show two banners. Your server can ask the service for a person's devices with [`person_endpoints`](audiences.md#know-your-audience-before-you-send): send through leptoskit to people who have at least one, and through Firebase to the rest. The rest are mostly browsers, which have to subscribe again, and tokens the import skipped. For topic sends during this period, send through leptoskit, and through Firebase only if browsers matter to that topic.
 
-**5. Move the sends.** Replace each Admin SDK call with its equivalent from the section above. Give every send a category and a stable idempotency key. Try each kind on your own device with `send_test` first.
+**6. Move the sends.** Replace each Admin SDK call with its equivalent from the section above. Give every send a category and a stable idempotency key. Try each kind on your own device with `send_test` first.
 
-**6. Cut over.** When the share of people still on old versions is small enough for you, stop sending through Firebase, delete your token table and its refresh code, and remove the Firebase SDKs you no longer use. Keep the Firebase project and the service account: Android delivery depends on them.
+**7. Cut over.** When the share of people still on old versions is small enough for you, stop sending through Firebase, delete your token table and its refresh code, and remove the Firebase SDKs you no longer use. Keep the Firebase project and the service account: Android delivery depends on them.
 
 ## A checklist
 
@@ -233,6 +278,7 @@ Before you stop sending through Firebase, each of these should be true:
 - The APNs environment of the service matches the builds you ship (`production` for TestFlight and the App Store).
 - The FCM service account and `google-services.json` are from the same Firebase project.
 - Topics and attributes are copied from your own records.
+- Your token table is imported, and you have looked at what the import skipped.
 - The new app version enrolls, reconciles at launch, disables at sign-out, and runs a `Receiver`.
 - The web app unsubscribes a Firebase subscription before enrolling.
 - `send_test` is `accepted` on a real iPhone, a real Android phone, and a real browser.
@@ -254,7 +300,8 @@ Check this list against what your app uses before you start. None of these has a
 
 **Devices and apps**
 
-- **No import of existing tokens.** Devices enroll when the updated app runs, as in step 3.
+- **No import of browser subscriptions.** [`import_push_endpoints`](#moving-step-by-step) takes FCM and APNs tokens. A browser subscribes again when the person next clicks, as in step 4.
+- **An imported iOS FCM token and the same phone's own APNs enrollment are two endpoints.** The service cannot tell that they are one device, and your server cannot revoke a single endpoint: `revoke_person_endpoints` removes all of a person's.
 - **One APNs environment per service.** Development builds and store builds cannot share one service.
 - **No iOS Notification Service Extension is generated**, so a push's image is not shown on iOS or macOS until you add an extension of your own.
 - **Android channels you created under Firebase are reached only by `android.raw_channel_id`.** `android.channel_id` names a channel made with the plugin, which keeps its channels under the `leptoskit.notifications.` prefix. For a channel your earlier app created as `orders`, send `raw_channel_id: "orders"`, and keep the code that creates the channel. The plugin cannot configure or list such a channel.

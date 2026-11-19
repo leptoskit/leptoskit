@@ -68,3 +68,30 @@ async fn an_attribute_call_names_a_bounded_number_of_keys() {
 	let (address, db) = service().await;
 	ownership::an_attribute_call_names_a_bounded_number_of_keys(address, &db).await;
 }
+
+/// A fresh, migrated database, and a service over it that also speaks
+/// FCM.
+async fn service_with_fcm() -> (std::net::SocketAddr, Db) {
+	let db = leptoskit_db::testing::sqlite_migrated(MIGRATIONS).await;
+	let address = ownership::serve_with_fcm(&db).await;
+
+	(address, db)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn imported_endpoints_work_until_the_app_enrolls() {
+	let (address, db) = service_with_fcm().await;
+	ownership::imported_endpoints_work_until_the_app_enrolls(address, &db).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_import_is_bounded_and_ends_like_any_endpoint() {
+	let (address, db) = service_with_fcm().await;
+	ownership::an_import_is_bounded_and_ends_like_any_endpoint(address, &db).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_import_needs_the_platforms_transport() {
+	let (address, db) = service().await;
+	ownership::an_import_needs_the_platforms_transport(address, &db).await;
+}

@@ -747,6 +747,13 @@ pub struct PushEndpoint {
 	/// seen live endpoint. `None` for an endpoint enrolled before the
 	/// column existed, which counts as seen when it was created.
 	pub seen_at: Option<leptoskit_db::Timestamp>,
+	/// When the app's server imported this endpoint
+	/// ([`import_push_endpoints`]) from the tokens it held before the app
+	/// enrolled devices itself. Cleared the first time the device's own
+	/// app enrolls the same credential for the same person, which makes
+	/// the endpoint an ordinary enrollment. `None` for every endpoint a
+	/// device enrolled.
+	pub imported_at: Option<leptoskit_db::Timestamp>,
 }
 
 #[cfg(feature = "service")]
@@ -1003,6 +1010,156 @@ pub struct EndpointSummary {
 	/// when the service predates device details.
 	#[serde(default)]
 	pub device: DeviceDetails,
+	/// Whether the app's server imported this endpoint
+	/// ([`import_push_endpoints`]) and the device's own app has not
+	/// enrolled it since. An imported endpoint is pushed to like any
+	/// other; its details are what the import said, or none.
+	#[serde(default, skip_serializing_if = "std::ops::Not::not")]
+	pub imported: bool,
+}
+
+/// The most endpoints one [`import_push_endpoints`] call carries.
+pub const MAX_IMPORT_ENDPOINTS: usize = 500;
+
+/// One endpoint to import: a token the app's server already holds for a
+/// person, from before the app enrolled devices with this service.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ImportEndpoint {
+	/// The person the token belongs to, as the app's own records say.
+	pub person: uuid::Uuid,
+	/// The token: an FCM registration token or an APNs device token. A
+	/// Web Push subscription cannot be imported.
+	pub credential: PushCredential,
+	/// What the app's server knows about the device, each part optional.
+	/// The device's own enrollment replaces it later.
+	#[serde(default)]
+	pub device: DeviceDetails,
+}
+
+/// Why one entry of an import made no endpoint.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum ImportSkip {
+	/// Another person already holds this token. An import proves nothing
+	/// about who holds a device, so it never moves one.
+	HeldByAnother,
+	/// The person already holds [`MAX_ENDPOINTS`] live endpoints.
+	PersonFull,
+}
+
+/// One entry an import skipped, by its place in the call.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct SkippedImport {
+	/// The entry's index in the call's `endpoints`, from zero.
+	pub index: u32,
+	/// Why it made no endpoint.
+	pub reason: ImportSkip,
+}
+
+/// What an import came to. It names entries by their place in the call
+/// and never repeats a credential.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ImportedEndpoints {
+	/// How many endpoints the call created.
+	pub imported: u32,
+	/// How many entries named an endpoint their person already holds,
+	/// imported earlier or enrolled by the device: left exactly as they
+	/// were.
+	pub unchanged: u32,
+	/// The entries that made no endpoint, in the call's order.
+	pub skipped: Vec<SkippedImport>,
+}
+
+/// Checks an import's shape, on both sides of the wire: 1 to
+/// [`MAX_IMPORT_ENDPOINTS`] entries, each an APNs or FCM credential that
+/// passes [`check_credential`] with details that pass
+/// [`check_device_details`].
+///
+/// # Errors
+///
+/// A message naming the entry by its index, and never its credential.
+pub fn check_import(endpoints: &[ImportEndpoint]) -> Result<(), String> {
+	if endpoints.is_empty() || endpoints.len() > MAX_IMPORT_ENDPOINTS {
+		return Err(format!(
+			"an import carries 1 to {MAX_IMPORT_ENDPOINTS} endpoints (MAX_IMPORT_ENDPOINTS): send \
+			 the rest in further calls"
+		));
+	}
+
+	for (index, entry) in endpoints.iter().enumerate() {
+		if matches!(entry.credential, PushCredential::WebPush { .. }) {
+			return Err(format!(
+				"endpoints[{index}].credential is a Web Push subscription, which cannot be \
+				 imported: a browser subscribes again itself"
+			));
+		}
+
+		check_credential(&entry.credential)
+			.map_err(|complaint| format!("endpoints[{index}].credential: {complaint}"))?;
+		check_device_details(&entry.device)
+			.map_err(|complaint| format!("endpoints[{index}].device: {complaint}"))?;
+	}
+
+	Ok(())
+}
+
+/// Imports push tokens the app's server already holds, so the people they
+/// belong to are pushed to from the next send on: before their devices
+/// run a build that enrolls with this service. It is for the tokens an
+/// app collected while it sent through Firebase Cloud Messaging or
+/// straight to APNs — FCM registration tokens (Android, and iOS apps that
+/// used the Firebase SDK) and APNs device tokens. At most
+/// [`MAX_IMPORT_ENDPOINTS`] entries a call.
+///
+/// Each entry becomes an endpoint of its person, marked as imported
+/// ([`EndpointSummary::imported`]), with the device details the entry
+/// states and no others. The rules an enrollment follows hold:
+///
+/// - **Idempotent.** An entry whose person already holds the token — imported
+///   before, or enrolled by the device — changes nothing and counts as
+///   `unchanged`, an invalidated endpoint included: a stale token is not
+///   revived.
+/// - **Never a takeover.** A token another person holds stays theirs and the
+///   entry is skipped as `held_by_another`. Only a person presenting the token
+///   from the device takes it over ([`register_push_endpoint`]).
+/// - **Bounded per person.** An entry past its person's [`MAX_ENDPOINTS`] live
+///   endpoints is skipped as `person_full`.
+/// - **Replaced by the real enrollment.** When the device's app enrolls the
+///   same token for the same person, the endpoint keeps its id and queued
+///   deliveries, takes the details the device reports, and is no longer
+///   imported.
+/// - **Revoked and erased like any endpoint.** The service keeps no record of a
+///   revoke or an erasure, so importing a token again after its person turned
+///   notifications off, or after [`forget_person`](crate::forget_person),
+///   enrolls it again: import from your current records, and stop importing a
+///   person you erased.
+///
+/// The whole call is checked before anything is written, and one bad
+/// entry refuses it by its index. The answer counts what happened and
+/// names skipped entries by index; no credential is ever answered.
+///
+/// Only the app may call it: [`rpc::client::call_as_app`] from server
+/// code.
+///
+/// # Errors
+///
+/// [`rpc::Error::Forbidden`] from anywhere but the app's server, and
+/// [`rpc::Error::Invalid`] for an import that fails [`check_import`] or
+/// names a platform this server has no transport configured for.
+#[rpc::mutation(service = "notifications")]
+pub async fn import_push_endpoints(
+	cx: &rpc::MutationCx,
+	endpoints: Vec<ImportEndpoint>,
+) -> rpc::Result<ImportedEndpoints> {
+	if cx.identity().caller.as_deref() != Some(rpc::server::APP_CALLER) {
+		return Err(rpc::Error::forbidden(
+			"only the app imports endpoints: call this from its server, with the service's token",
+		));
+	}
+
+	let push = crate::service::push::Push::of(cx)?;
+	crate::service::push::import(cx.tx(), push, &endpoints).await
 }
 
 /// Registers one push endpoint for the signed-in person: their app hands
