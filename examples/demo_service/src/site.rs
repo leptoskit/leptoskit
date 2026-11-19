@@ -427,7 +427,16 @@ async fn pass_gate(State(shared): State<Shared>, request: Request, next: Next) -
 	};
 
 	if !owned {
-		let mut response = json_error(StatusCode::FORBIDDEN, "not_your_identity");
+		// Auth's own error shape, so the sign-in page's Auth client names
+		// the refusal and not a failure it could not read.
+		let mut response = (
+			StatusCode::FORBIDDEN,
+			axum::Json(serde_json::json!({
+				"error": "not_your_identity",
+				"message": "this browser's pass does not own that address",
+			})),
+		)
+			.into_response();
 
 		// A cookie that named no pass here goes with the refusal, so a
 		// stale browser stops carrying it around.
@@ -1060,35 +1069,42 @@ async fn sign_in(
 				.then_some(Persona::Ada)
 				.filter(|_| signed_in.is_some())
 		})
-		.map(Persona::slug);
+		.map(persona_of);
 
 	let flow = match (oauth, signed_in) {
-		(false, _) => pages::Flow::Plain,
-		(true, None) => pages::Flow::Admin,
-		(true, Some(held)) => pages::Flow::Switch(held.view()),
+		(false, _) => model::Flow::Plain,
+		(true, None) => model::Flow::Admin,
+		(true, Some(held)) => model::Flow::Switch(held.person()),
 	};
 
 	let mail = chosen
 		.map(|held| mail_for(&shared, &held.person))
 		.unwrap_or_default();
 
-	let view = pages::SignIn {
-		context: page_context(&shared),
+	let view = model::SignIn {
+		context: context_of(&shared),
 		return_to: target,
 		flow,
-		identity: chosen.map(Held::view),
+		identity: chosen.map(Held::person),
 		preselect,
 		new_day: visit.earlier_day,
 		mail,
 	};
+	let before = demo_pages::noscript_sign_in(&view);
 
-	html_page(pages::sign_in(&view), clearing(&shared, &visit))
+	page(
+		&shared,
+		model::Page::SignIn(view),
+		before,
+		clearing(&shared, &visit),
+	)
+	.await
 }
 
 /// What this process holds for one person, without the messages: how
 /// many it still has, and whether the person's latest code is
 /// unavailable here.
-fn mail_for(shared: &Parts, person: &DemoPerson) -> pages::Mail {
+fn mail_for(shared: &Parts, person: &DemoPerson) -> model::Mail {
 	let retained = shared.inbox.messages_for(person.email.as_inner());
 	let lost = DemoInbox::unavailable(
 		person.persona,
@@ -1098,7 +1114,7 @@ fn mail_for(shared: &Parts, person: &DemoPerson) -> pages::Mail {
 	)
 	.and(person.last_receipt_at);
 
-	pages::Mail {
+	model::Mail {
 		held: retained.len(),
 		lost_at_ms: lost.map(|at| at.timestamp_millis()),
 	}

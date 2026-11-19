@@ -274,7 +274,20 @@ The first of the demo's conversions: the front door, the band and the new-day di
 - **Verified on Linux (x86-64, cloud container):** `cargo test -p demo_service`, and `tests/visitor_pages.mjs` in headless Chrome against the debug service with the release client. The Linux-only descriptor tests ran for the first time and pass. Two tests fail only for the container: one needs IPv6 loopback, one needs to not be root.
 - **Client size:** 352 KiB brotli for the first load (345 KiB Wasm, 7 KiB loader), with `optimize = "smallest"`.
 - **Suite changes:** the harness waits for `data-hydrated` on the root element before it acts on a page that brings the client. Assertions that read `#demo-state` on the front door now read the markup.
-- **Next:** sign-in (inbox query, `leptoskit_auth::client`, `Tabs`, `RadioGroup`), then Notes (`TextArea`, `Popover` menu), then delete `demo.js` and take #856 out of draft.
+- **Next:** sign-in, on `feat/demo-sign-in`.
+
+### `feat/demo-sign-in`: stacked on `feat/demo-front-door`
+
+Sign-in is hydrated leptoskit (`pages/src/sign_in.rs`), and loads no `demo.js`. The old server-drawn page (`src/pages/sign_in.rs`) is gone.
+
+- **Shape:** the choice is `aria::RadioGroup`, the stations are `aria::Tabs`, focus moves with `FocusRequest` and the inbox scrolls into view with `Reveal`. Sending and checking the code use `leptoskit::auth::client` through `use_mutation`, so `App` provides a `QueryClient`. The inbox is a new query, `inbox`, on the same port as `mint`.
+- **Service change:** the pass gate's `403 not_your_identity` now carries a `message`, because Auth's client reads a body without one as `server`.
+- **Classes the compiler refuses**, moved to `assets/demo.css` by test id: `ring-*`, `border-dashed`, `underline` and `decoration-*`, `line-through`, `whitespace-pre-wrap`. They are candidates for the class compiler.
+- **Client size:** 506 KiB brotli for the first load, up from 352: Auth's client and the extra widgets. The budget in `pages/leptoskit.toml` is now 520 and says why. This is double the other examples' budget and worth a look before release.
+- **Needs `fix/web-semantic-rebuild`:** without it every rebuild drops focus inside `<main>`, and the keyboard steps fail.
+- **Suite changes:** sign-in assertions read the markup, the address, and the `<noscript>` form instead of `#demo-state`; the radio options are `#choose-option-0` and `-1`; the inbox request is `/rpc/inbox`; the stations step waits for each focus move, because leptoskit moves focus on the next frame where `demo.js` moved it at once. `tests/signin.rs` checks elements with a `shows` helper, because the stylesheet names the same test ids.
+- **Still there:** `GET /demo/inbox`, used by the Rust proofs and by nothing in a page.
+- **Next:** Notes (`TextArea`, the account menu as a `Popover`), then delete `demo.js` and take #856 out of draft.
 
 ### The canvist editor stack: #857, #881, #884, and `feat/canvist-ink`
 

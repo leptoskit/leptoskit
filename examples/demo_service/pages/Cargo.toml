@@ -24,7 +24,7 @@ any_spawner = { workspace = true, optional = true, features = ["wasm-bindgen"] }
 console_error_panic_hook = { workspace = true, optional = true }
 futures = { workspace = true }
 leptos = { workspace = true }
-leptoskit = { workspace = true, features = ["aria", "clock", "query", "rpc", "web"] }
+leptoskit = { workspace = true, features = ["aria", "auth", "clock", "query", "rpc", "web"] }
 schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 wasm-bindgen = { workspace = true, optional = true }

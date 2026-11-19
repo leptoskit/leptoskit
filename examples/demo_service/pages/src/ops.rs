@@ -21,6 +21,37 @@ use crate::model::Persona;
 /// The refusal code for a day that has handed out all its people.
 pub const FULL: &str = "full";
 
+/// The refusal code for a browser that carries no pass for today.
+pub const NO_PASS: &str = "no_pass";
+
+/// The refusal code for a browser whose pass is from an earlier day.
+pub const NEW_DAY: &str = "new_day";
+
+/// One message in the demo inbox.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct Letter {
+	/// The address it was sent to.
+	pub to: String,
+	/// Its subject, which ends with the code.
+	pub subject: String,
+	/// Its text.
+	pub text: String,
+	/// The mailer's receipt for it, which names this one message.
+	pub receipt: String,
+	/// When it was sent, in Unix milliseconds.
+	pub sent_at_ms: i64,
+}
+
+/// What the demo inbox holds for one of this browser's people.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct Mailbox {
+	/// The messages this server still holds, oldest first.
+	pub letters: Vec<Letter>,
+	/// When the person's latest code was sent, in Unix milliseconds, if this
+	/// server no longer holds it.
+	pub lost_at_ms: Option<i64>,
+}
+
 /// Where a visitor goes once they have a person to be.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct Minted {
@@ -59,6 +90,16 @@ pub async fn mint(
 	cx.require::<Port>()?.0.mint(persona, return_to).await
 }
 
+/// The mail this server holds for one of this browser's people.
+///
+/// The pass cookie decides whose mail it is; nothing in the call can name
+/// another browser's person. Refused with [`NO_PASS`] when the browser has
+/// no pass for today and [`NEW_DAY`] when its pass is from an earlier day.
+#[rpc::query(crate = "leptoskit::rpc")]
+pub async fn inbox(cx: &rpc::QueryCx, persona: Persona) -> rpc::Result<Mailbox> {
+	cx.require::<Port>()?.0.inbox(persona).await
+}
+
 /// The day the server is serving, sent once each time the stream opens.
 ///
 /// A page compares it with the day it was made for. The stream stays open
@@ -83,6 +124,9 @@ pub trait Backend: Send + Sync + 'static {
 		persona: Persona,
 		return_to: String,
 	) -> futures::future::BoxFuture<'_, rpc::Result<Minted>>;
+
+	/// The mail held for this request's pass and `persona`.
+	fn inbox(&self, persona: Persona) -> futures::future::BoxFuture<'_, rpc::Result<Mailbox>>;
 
 	/// The serving generation's day, then silence for as long as the
 	/// generation serves.

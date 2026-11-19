@@ -1,12 +1,13 @@
-//! The public demo's pages: the front door, sign-in with its demo inbox,
-//! and Notes' welcome, plus the "opening today's demo" page the service
-//! serves while a generation builds.
+//! The pages the service still draws itself: Notes' welcome, and the
+//! "opening today's demo" page it serves while a generation builds. The
+//! front door and sign-in are `demo_pages`, rendered here and hydrated in
+//! the browser.
 //!
 //! Every page is a real leptoskit component tree, written as `view!`
 //! markup and rendered by the same web renderer the admin uses, in the
 //! admin's paper, ink, ember, and mint ([`leptoskit_admin::theme_css`]).
-//! The behaviour the web renderer cannot express, such as the sign-in
-//! flow, the countdown, and the new-day dialog, lives in `assets/demo.js`,
+//! The behaviour the web renderer cannot express, such as saving a note,
+//! the countdown, and the new-day dialog, lives in `assets/demo.js`,
 //! which only ever builds the page's text with `textContent`.
 //!
 //! What a page knows is a small, safe view value the route builds from
@@ -19,7 +20,6 @@
 mod chrome;
 mod notes;
 mod opening;
-mod sign_in;
 
 use leptos::prelude::RenderHtml as _;
 use leptoskit::prelude::Element;
@@ -28,9 +28,6 @@ pub(crate) use opening::RETRY_SECONDS;
 pub(crate) use opening::opening;
 use serde::Serialize;
 use serde_json::json;
-pub(crate) use sign_in::Flow;
-pub(crate) use sign_in::Mail;
-pub(crate) use sign_in::SignIn;
 
 use crate::visitors::Persona;
 
@@ -136,18 +133,6 @@ impl Person {
 	}
 }
 
-/// A host without its port: what a cookie is tied to.
-pub(crate) fn host_only(host: &str) -> &str {
-	match host.rsplit_once(':') {
-		Some((name, port))
-			if !port.is_empty() && port.bytes().all(|byte| byte.is_ascii_digit()) =>
-		{
-			name
-		}
-		_ => host,
-	}
-}
-
 /// The document around one page: head, the root's initial state, the
 /// page's data for its script, and the script itself.
 ///
@@ -226,11 +211,6 @@ fn base_state(page: &str, context: &Context, return_to: &str) -> serde_json::Val
 	})
 }
 
-/// The sign-in page, as a document.
-pub(crate) fn sign_in(view: &SignIn) -> String {
-	sign_in::page(view)
-}
-
 /// Notes' welcome, as a document.
 pub(crate) fn notes(welcome: &Welcome) -> String {
 	notes::page(welcome)
@@ -262,32 +242,6 @@ mod tests {
 
 	#[test]
 	fn every_page_renders_in_every_state() {
-		for flow in [
-			Flow::Plain,
-			Flow::Admin,
-			Flow::Switch(person("grace", true)),
-		] {
-			for identity in [
-				None,
-				Some(person("ada", false)),
-				Some(person("grace", false)),
-			] {
-				let view = SignIn {
-					context: context(),
-					return_to: "/oauth/authorize?client_id=x".to_owned(),
-					flow: flow.clone(),
-					identity,
-					preselect: Some("ada"),
-					new_day: true,
-					mail: Mail {
-						held: 1,
-						lost_at_ms: Some(1),
-					},
-				};
-				assert!(sign_in(&view).contains("Sign in to Notes"));
-			}
-		}
-
 		for who in [person("ada", true), person("grace", true)] {
 			let ada = who.is_ada();
 			let html = notes(&Welcome {
