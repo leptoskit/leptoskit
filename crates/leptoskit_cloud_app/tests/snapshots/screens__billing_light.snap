@@ -1,0 +1,41 @@
+---
+source: crates/leptoskit_cloud_app/tests/screens.rs
+expression: "readable(desktop.palette(Appearance::Light))"
+---
+"Acme"                                       #16111f on #fffdf8 18.22
+"Pro"                                        #4d4558 on #fffdf8  8.95
+"A"                                          #16111f on #f3ede4 15.91
+"Acme"                                       #16111f on #fffdf8 18.22
+"Switch"                                     #4d4558 on #fffdf8  8.95
+"Filter projects"                            #6e6578 on #fffdf8  5.44
+"/"                                          #6e6578 on #fffdf8  5.44
+"Projects"                                   #4d4558 on #fffdf8  8.95
+"PROJECTS"                                   #6e6578 on #fffdf8  5.44
+"N"                                          #4d4558 on #f3ede4  7.82
+"notes"                                      #4d4558 on #fffdf8  8.95
+"New project"                                #4d4558 on #fffdf8  8.95
+"Billing"                                    #16111f on #f3ede4 15.91
+"Billing"                                    #16111f on #faf6f0 17.20
+"Plan"                                       #16111f on #fffdf8 18.22
+"Pro · $20.00 a month"                       #16111f on #fffdf8 18.22
+"$20.00 of usage included"                   #4d4558 on #fffdf8  8.95
+"Payment and invoices"                       #16111f on #fffdf8 18.22
+"Spend cap"                                  #16111f on #fffdf8 18.22
+"$50.00 of usage a month beyond the plan,"   #16111f on #fffdf8 18.22
+"New cap, in USD"                            #6e6578 on #fffdf8  5.44
+"Set cap"                                    #16111f on #fffdf8 18.22
+"November 2026 so far"                       #16111f on #fffdf8 18.22
+"build_minutes_linux"                        #16111f on #fffdf8 18.22
+"240"                                        #4d4558 on #fffdf8  8.95
+"$1.20"                                      #16111f on #fffdf8 18.22
+"egress_gb"                                  #16111f on #fffdf8 18.22
+"12 of 100 free"                             #4d4558 on #fffdf8  8.95
+"$0.00"                                      #16111f on #fffdf8 18.22
+"Usage"                                      #16111f on #fffdf8 18.22
+"$1.20"                                      #16111f on #fffdf8 18.22
+"Included in the plan"                       #16111f on #fffdf8 18.22
+"−$1.20"                                     #16111f on #fffdf8 18.22
+"Plan"                                       #16111f on #fffdf8 18.22
+"$20.00"                                     #16111f on #fffdf8 18.22
+"So far"                                     #16111f on #fffdf8 18.22
+"$20.00"                                     #16111f on #fffdf8 18.22

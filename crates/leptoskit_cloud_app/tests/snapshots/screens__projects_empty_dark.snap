@@ -10,6 +10,7 @@ expression: "readable(desktop.palette(Appearance::Dark))"
 "/"                                          #9d93a8 on #1d1726  5.96
 "Projects"                                   #f4efe8 on #251e30 14.05
 "New project"                                #c9c0d0 on #1d1726  9.92
+"Billing"                                    #c9c0d0 on #1d1726  9.92
 "Ship your first app"                        #f4efe8 on #221b2c 14.56
 "Three ways in. Each ends the same way: a"   #c9c0d0 on #221b2c  9.46
 "From your terminal"                         #f4efe8 on #221b2c 14.56

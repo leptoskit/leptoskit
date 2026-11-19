@@ -6,6 +6,7 @@
 //! state without a server.
 
 pub mod account;
+pub mod billing;
 pub mod device;
 pub mod organizations;
 pub mod projects;

@@ -1,0 +1,116 @@
+---
+source: crates/leptoskit_cloud_app/tests/screens.rs
+expression: desktop.tree()
+---
+view text=None label=None value=None frame=(0.0,0.0,1280.0,1600.0) visible=true enabled=true
+  view text=None label=None value=None frame=(0.0,0.0,1280.0,56.0) visible=true enabled=true
+    pressable text=None label=Some("LeptosKit Cloud: your projects") value=None frame=(16.0,6.0,44.0,44.0) visible=true enabled=true
+      view text=None label=None value=None frame=(26.0,16.0,24.0,24.0) visible=true enabled=true
+        view text=None label=None value=None frame=(26.0,19.4,9.4,20.6) visible=true enabled=true
+        view text=None label=None value=None frame=(38.0,30.6,9.4,9.4) visible=true enabled=true
+        view text=None label=None value=None frame=(38.9,16.0,9.4,9.4) visible=true enabled=true
+    pressable text=None label=Some("Acme: projects") value=None frame=(72.0,6.0,32.0,44.0) visible=true enabled=true
+      text text=Some("Acme") label=None value=None frame=(72.0,20.0,32.0,16.0) visible=true enabled=true
+    view text=None label=None value=None frame=(116.0,28.0,1029.4,0.0) visible=false enabled=true
+    view text=None label=None value=None frame=(1157.4,6.0,50.6,44.0) visible=true enabled=true
+      view text=None label=Some("Plan: Pro. Spend isn't available yet.") value=None frame=(1157.4,6.0,50.6,44.0) visible=true enabled=true
+        view text=None label=None value=None frame=(1161.4,18.1,42.6,19.7) visible=true enabled=true
+          text text=Some("Pro") label=None value=None frame=(1172.4,21.1,20.6,13.7) visible=true enabled=true
+    pressable text=None label=Some("Your account") value=None frame=(1220.0,6.0,44.0,44.0) visible=true enabled=true
+      view text=None label=None value=None frame=(1226.0,12.0,32.0,32.0) visible=true enabled=true
+        text text=Some("A") label=None value=None frame=(1238.0,20.0,8.0,16.0) visible=true enabled=true
+  view text=None label=None value=None frame=(0.0,56.0,1280.0,1.0) visible=true enabled=true
+  view text=None label=None value=None frame=(0.0,57.0,1280.0,1543.0) visible=true enabled=true
+    view text=None label=Some("Console") value=None frame=(0.0,57.0,240.0,1543.0) visible=true enabled=true
+      view text=None label=None value=None frame=(8.0,69.0,224.0,44.0) visible=true enabled=true
+        text text=Some("Acme") label=None value=None frame=(20.0,81.9,200.0,18.3) visible=true enabled=true
+      view text=None label=None value=None frame=(8.0,117.0,224.0,48.0) visible=true enabled=true
+        pressable text=None label=Some("Switch organisation") value=None frame=(10.0,119.0,220.0,44.0) visible=true enabled=true
+          vector text=None label=None value=None frame=(22.0,132.0,18.0,18.0) visible=true enabled=true
+          text text=Some("Switch") label=None value=None frame=(52.0,133.0,166.0,16.0) visible=true enabled=true
+      view text=None label=None value=None frame=(8.0,169.0,224.0,63.7) visible=true enabled=true
+        vector text=None label=None value=None frame=(12.0,191.9,18.0,18.0) visible=true enabled=true
+        view text=None label=None value=None frame=(38.0,169.0,161.1,63.7) visible=true enabled=true
+          text text=Some("Filter projects") label=None value=None frame=(38.0,169.0,161.1,13.7) visible=true enabled=true
+          text_input text=None label=Some("Filter projects") value=Some("") frame=(38.0,188.7,161.1,44.0) visible=true enabled=true
+        text text=Some("/") label=None value=None frame=(207.1,193.0,20.9,15.7) visible=true enabled=true
+      view text=None label=None value=None frame=(8.0,236.7,224.0,48.0) visible=true enabled=true
+        pressable text=None label=Some("Projects") value=None frame=(10.0,238.7,220.0,44.0) visible=true enabled=true
+          vector text=None label=None value=None frame=(22.0,251.7,18.0,18.0) visible=true enabled=true
+          text text=Some("Projects") label=None value=None frame=(52.0,252.7,166.0,16.0) visible=true enabled=true
+      view text=None label=None value=None frame=(8.0,288.7,224.0,25.7) visible=true enabled=true
+        text text=Some("PROJECTS") label=None value=None frame=(20.0,300.7,200.0,13.7) visible=true enabled=true
+      view text=None label=Some("Projects") value=None frame=(8.0,318.4,224.0,48.0) visible=true enabled=true
+        view text=None label=None value=None frame=(8.0,318.4,224.0,48.0) visible=true enabled=true
+          view text=None label=None value=None frame=(8.0,318.4,224.0,48.0) visible=true enabled=true
+            pressable text=None label=Some("notes") value=None frame=(10.0,320.4,220.0,44.0) visible=true enabled=true
+              view text=None label=None value=None frame=(22.0,333.4,18.0,18.0) visible=true enabled=true
+                text text=Some("N") label=None value=None frame=(27.9,336.1,6.3,12.6) visible=true enabled=true
+              text text=Some("notes") label=None value=None frame=(52.0,334.4,166.0,16.0) visible=true enabled=true
+      view text=None label=None value=None frame=(8.0,370.4,224.0,48.0) visible=true enabled=true
+        pressable text=None label=Some("New project") value=None frame=(10.0,372.4,220.0,44.0) visible=true enabled=true
+          vector text=None label=None value=None frame=(22.0,385.4,18.0,18.0) visible=true enabled=true
+          text text=Some("New project") label=None value=None frame=(52.0,386.4,166.0,16.0) visible=true enabled=true
+      view text=None label=None value=None frame=(8.0,422.4,224.0,48.0) visible=true enabled=true
+        pressable text=None label=Some("Billing") value=None frame=(10.0,424.4,220.0,44.0) visible=true enabled=true
+          vector text=None label=None value=None frame=(22.0,437.4,18.0,18.0) visible=true enabled=true
+          text text=Some("Billing") label=None value=None frame=(52.0,438.4,166.0,16.0) visible=true enabled=true
+    view text=None label=None value=None frame=(240.0,57.0,1.0,1543.0) visible=true enabled=true
+    scroll_view text=None label=None value=None frame=(241.0,57.0,1039.0,1543.0) visible=true enabled=true
+      view text=None label=None value=None frame=(241.0,57.0,1039.0,1543.0) visible=true enabled=true
+        view text=None label=None value=None frame=(273.0,81.0,975.0,506.3) visible=true enabled=true
+          text text=Some("Billing") label=None value=None frame=(273.0,81.0,975.0,30.0) visible=true enabled=true
+          view text=None label=None value=None frame=(273.0,135.0,975.0,452.3) visible=true enabled=true
+            view text=None label=None value=None frame=(273.0,135.0,409.5,452.3) visible=true enabled=true
+              view text=None label=Some("Plan") value=None frame=(273.0,135.0,409.5,186.3) visible=true enabled=true
+                text text=Some("Plan") label=None value=None frame=(294.0,156.0,367.5,18.3) visible=true enabled=true
+                text text=Some("Pro · $20.00 a month") label=None value=None frame=(294.0,186.3,367.5,21.0) visible=true enabled=true
+                text text=Some("$20.00 of usage included") label=None value=None frame=(294.0,219.3,367.5,21.0) visible=true enabled=true
+                view text=None label=None value=None frame=(294.0,252.3,367.5,48.0) visible=true enabled=true
+                  view text=None label=None value=None frame=(294.0,252.3,198.0,48.0) visible=true enabled=true
+                    pressable text=None label=Some("Payment and invoices") value=None frame=(296.0,254.3,194.0,44.0) visible=true enabled=true
+                      text text=Some("Payment and invoices") label=None value=None frame=(313.0,268.3,160.0,16.0) visible=true enabled=true
+              view text=None label=Some("Spend cap") value=None frame=(273.0,337.3,409.5,250.0) visible=true enabled=true
+                text text=Some("Spend cap") label=None value=None frame=(294.0,358.3,367.5,18.3) visible=true enabled=true
+                text text=Some("$50.00 of usage a month beyond the plan, the plan's cap.") label=None value=None frame=(294.0,388.6,367.5,42.0) visible=true enabled=true
+                view text=None label=None value=None frame=(294.0,442.6,367.5,63.7) visible=true enabled=true
+                  text text=Some("New cap, in USD") label=None value=None frame=(294.0,442.6,367.5,13.7) visible=true enabled=true
+                  text_input text=None label=Some("New cap, in USD") value=Some("") frame=(294.0,462.3,367.5,44.0) visible=true enabled=true
+                view text=None label=None value=None frame=(294.0,518.3,367.5,48.0) visible=true enabled=true
+                  view text=None label=None value=None frame=(294.0,518.3,94.0,48.0) visible=true enabled=true
+                    pressable text=None label=Some("Set cap") value=None frame=(296.0,520.3,90.0,44.0) visible=true enabled=false
+                      text text=Some("Set cap") label=None value=None frame=(313.0,534.3,56.0,16.0) visible=true enabled=false
+            view text=None label=None value=None frame=(698.5,135.0,549.5,301.0) visible=true enabled=true
+              view text=None label=Some("Usage") value=None frame=(698.5,135.0,549.5,301.0) visible=true enabled=true
+                text text=Some("November 2026 so far") label=None value=None frame=(719.5,156.0,507.5,18.3) visible=true enabled=true
+                view text=None label=Some("Usage by meter") value=None frame=(719.5,186.3,507.5,228.8) visible=true enabled=true
+                  view text=None label=None value=None frame=(719.5,186.3,507.5,38.1) visible=true enabled=true
+                    text text=Some("build_minutes_linux") label=None value=None frame=(719.5,194.3,379.5,21.0) visible=true enabled=true
+                    text text=Some("240") label=None value=None frame=(1111.0,194.3,24.0,21.0) visible=true enabled=true
+                    text text=Some("$1.20") label=None value=None frame=(1147.0,194.3,80.0,21.1) visible=true enabled=true
+                  view text=None label=None value=None frame=(719.5,224.4,507.5,38.1) visible=true enabled=true
+                    text text=Some("egress_gb") label=None value=None frame=(719.5,232.5,291.5,21.0) visible=true enabled=true
+                    text text=Some("12 of 100 free") label=None value=None frame=(1023.0,232.5,112.0,21.0) visible=true enabled=true
+                    text text=Some("$0.00") label=None value=None frame=(1147.0,232.4,80.0,21.1) visible=true enabled=true
+                  view text=None label=None value=None frame=(719.5,262.5,507.5,38.1) visible=true enabled=true
+                    text text=Some("Usage") label=None value=None frame=(719.5,270.6,415.5,21.0) visible=true enabled=true
+                    text text=Some("$1.20") label=None value=None frame=(1147.0,270.5,80.0,21.1) visible=true enabled=true
+                  view text=None label=None value=None frame=(719.5,300.7,507.5,38.1) visible=true enabled=true
+                    text text=Some("Included in the plan") label=None value=None frame=(719.5,308.7,415.5,21.0) visible=true enabled=true
+                    text text=Some("−$1.20") label=None value=None frame=(1147.0,308.7,80.0,21.1) visible=true enabled=true
+                  view text=None label=None value=None frame=(719.5,338.8,507.5,38.1) visible=true enabled=true
+                    text text=Some("Plan") label=None value=None frame=(719.5,346.8,415.5,21.0) visible=true enabled=true
+                    text text=Some("$20.00") label=None value=None frame=(1147.0,346.8,80.0,21.1) visible=true enabled=true
+                  view text=None label=None value=None frame=(719.5,376.9,507.5,38.1) visible=true enabled=true
+                    text text=Some("So far") label=None value=None frame=(719.5,385.0,415.5,21.0) visible=true enabled=true
+                    text text=Some("$20.00") label=None value=None frame=(1147.0,384.9,80.0,21.1) visible=true enabled=true
+  view text=None label=None value=None frame=(0.0,0.0,0.0,0.0) visible=false enabled=true
+  view text=None label=Some("Sections") value=None frame=(0.0,0.0,0.0,0.0) visible=false enabled=true
+    pressable text=None label=Some("Apps") value=None frame=(0.0,0.0,0.0,0.0) visible=false enabled=true
+      view text=None label=None value=None frame=(0.0,0.0,0.0,0.0) visible=false enabled=true
+      vector text=None label=None value=None frame=(0.0,0.0,0.0,0.0) visible=false enabled=true
+      text text=Some("Apps") label=None value=None frame=(0.0,0.0,0.0,0.0) visible=false enabled=true
+    pressable text=None label=Some("You") value=None frame=(0.0,0.0,0.0,0.0) visible=false enabled=true
+      view text=None label=None value=None frame=(0.0,0.0,0.0,0.0) visible=false enabled=true
+      vector text=None label=None value=None frame=(0.0,0.0,0.0,0.0) visible=false enabled=true
+      text text=Some("You") label=None value=None frame=(0.0,0.0,0.0,0.0) visible=false enabled=true

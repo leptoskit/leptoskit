@@ -13,6 +13,7 @@ navigation "Console"
   textbox "Filter projects"
   button "Projects"
   button "New project"
+  button "Billing"
 main
   heading(1) "Organisations"
   button "Create an organisation"

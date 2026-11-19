@@ -1,0 +1,57 @@
+---
+source: crates/leptoskit_cloud_app/tests/screens.rs
+expression: desktop.semantics()
+---
+banner
+  button "LeptosKit Cloud: your projects"
+  button "Acme: projects"
+  status "Plan: Pro. Spend isn't available yet." live=polite atomic
+  button "Your account"
+navigation "Console"
+  text "Acme"
+  button "Switch organisation"
+  textbox "Filter projects"
+  button "Projects"
+  list "Projects"
+    listitem
+      button "notes"
+  button "New project"
+  button "Billing" [current=page]
+main
+  heading(1) "Billing"
+  region "Plan"
+    heading(2) "Plan"
+    text "Pro · $20.00 a month"
+    text "$20.00 of usage included"
+    button "Payment and invoices"
+  region "Spend cap"
+    heading(2) "Spend cap"
+    text "$50.00 of usage a month beyond the plan, the plan's cap."
+    textbox "New cap, in USD"
+    button "Set cap" [disabled]
+  region "Usage"
+    heading(2) "November 2026 so far"
+    list "Usage by meter"
+      listitem
+        text "build_minutes_linux"
+        text "240"
+        text "$1.20"
+      listitem
+        text "egress_gb"
+        text "12 of 100 free"
+        text "$0.00"
+      listitem
+        text "Usage"
+        text "$1.20"
+      listitem
+        text "Included in the plan"
+        text "−$1.20"
+      listitem
+        text "Plan"
+        text "$20.00"
+      listitem
+        text "So far"
+        text "$20.00"
+navigation "Sections"
+  button "Apps" [current=page]
+  button "You"
