@@ -113,7 +113,15 @@ async fn ready(
 	})
 }
 
-async fn finish(admin: &Admin, ready: &Ready, headers: &HeaderMap, shown: Shown) -> Response {
+/// Renders what a route made. A builder changing in place asks for a
+/// page's model as JSON instead; anything else is the page itself.
+async fn finish(
+	admin: &Admin,
+	ready: &Ready,
+	headers: &HeaderMap,
+	open: Option<String>,
+	shown: Shown,
+) -> Response {
 	let proof = learn::Proof {
 		states: &ready.states,
 		now: server::now(),
@@ -124,8 +132,11 @@ async fn finish(admin: &Admin, ready: &Ready, headers: &HeaderMap, shown: Shown)
 
 	match shown {
 		Shown::Screen(screen) => server::render(admin, &ready.gate, headers, &proof, *screen),
+		Shown::Page(page) if headers.contains_key(leptoskit_admin_pages::PAGE_HEADER) => {
+			server::no_store(Json(*page).into_response())
+		}
 		Shown::Page(page) => {
-			server::render_page(admin, &ready.gate, headers, &proof, *page, None).await
+			server::render_page(admin, &ready.gate, headers, &proof, *page, open).await
 		}
 	}
 }
@@ -164,7 +175,10 @@ macro_rules! analytics_page {
 		};
 
 		match shown {
-			Some(shown) => finish(&$admin, &ready, &$headers, shown).await,
+			Some(shown) => {
+				let open = $params.get("workings").cloned();
+				finish(&$admin, &ready, &$headers, open, shown).await
+			}
 			None => server::not_found(),
 		}
 	}};
@@ -271,11 +285,13 @@ async fn saved_insight(
 				Ok(Some(saved)) => {
 					match Kind::of(&saved.query) {
 						Some(kind) => Some(insights::page(&cx, kind, Some(saved)).await),
-						None => Some(web::page(&cx).await),
+						None => Some(web::page(&cx).await.into()),
 					}
 				}
 				Ok(None) => None,
-				Err(failure) => Some(super::unreachable("Insight", Section::Library, &failure)),
+				Err(failure) => {
+					Some(super::unreachable("Insight", Section::Library, &failure).into())
+				}
 			}
 		}
 	)

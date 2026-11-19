@@ -101,6 +101,59 @@ pub(crate) async fn post_json(path: &str, body: &str) -> Option<(bool, serde_jso
 	}
 }
 
+/// The header that asks a page's address for its [`model::Page`] as JSON,
+/// so a builder can put the next page in place of this one.
+pub const PAGE_HEADER: &str = "x-admin-page";
+
+/// Gets `path` on this site as JSON: whether the answer was a success, and
+/// its JSON, or `Null` when it wasn't JSON. With `page`, asks a page's
+/// address for its model. `None` when nothing came back.
+#[cfg_attr(
+	not(feature = "hydrate"),
+	expect(clippy::unused_async, reason = "only a browser fetches anything")
+)]
+pub(crate) async fn get_json(path: &str, page: bool) -> Option<(bool, serde_json::Value)> {
+	#[cfg(feature = "hydrate")]
+	{
+		use wasm_bindgen::JsCast as _;
+		use wasm_bindgen_futures::JsFuture;
+
+		let init = web_sys::RequestInit::new();
+		init.set_method("GET");
+		init.set_credentials(web_sys::RequestCredentials::SameOrigin);
+		let request = web_sys::Request::new_with_str_and_init(path, &init).ok()?;
+		request.headers().set("accept", "application/json").ok()?;
+
+		if page {
+			request.headers().set(PAGE_HEADER, "json").ok()?;
+		}
+
+		let response: web_sys::Response =
+			JsFuture::from(web_sys::window()?.fetch_with_request(&request))
+				.await
+				.ok()?
+				.dyn_into()
+				.ok()?;
+		// A sign-in the session lost answers with a redirect to a page.
+		if response.redirected() {
+			return Some((false, serde_json::Value::Null));
+		}
+
+		let text = JsFuture::from(response.text().ok()?).await.ok()?;
+		let data = text
+			.as_string()
+			.and_then(|text| serde_json::from_str(&text).ok())
+			.unwrap_or(serde_json::Value::Null);
+
+		Some((response.ok(), data))
+	}
+	#[cfg(not(feature = "hydrate"))]
+	{
+		let _ = (path, page);
+		None
+	}
+}
+
 /// The HTML document a page renders into.
 ///
 /// The admin provides the page's [`Model`] as context for the request it is

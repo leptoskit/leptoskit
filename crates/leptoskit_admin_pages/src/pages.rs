@@ -2,11 +2,13 @@
 
 mod glossary;
 mod infra;
+mod insight;
 mod learn;
 mod library;
 mod people;
 mod project;
 
+use leptos::prelude::Get as _;
 use leptoskit::prelude::Element;
 
 use crate::model::Page;
@@ -62,6 +64,23 @@ pub(crate) fn screen_of(shell: &Shell) -> Box<dyn Fn() -> Element + Send + Sync>
 				shell.frame(people::person(person, Some(actions)))
 			})
 		}
+		Page::Insight(_) => {
+			let swap = crate::analytics::swap::Swap::new(
+				shell.page,
+				shell.workings,
+				&shell.model.viewer.app_name,
+			);
+			leptos::context::provide_context(swap);
+			let actions = insight::Actions::new(shell.confirm, shell.notice);
+			Box::new(move || {
+				// The page a swap put in place, or the server's.
+				let page = shell.page.get();
+				let Page::Insight(insight) = &page else {
+					return shell.frame(content(&page));
+				};
+				shell.frame(insight::page(insight, Some(actions)))
+			})
+		}
 		_ => Box::new(move || shell.frame(content(&shell.model.page))),
 	}
 }
@@ -81,5 +100,6 @@ pub fn content(page: &Page) -> Element {
 		Page::Library(library) => library::page(library),
 		Page::People(people) => people::list(people, None),
 		Page::Person(person) => people::person(person, None),
+		Page::Insight(insight) => insight::page(insight, None),
 	}
 }

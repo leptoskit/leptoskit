@@ -9,6 +9,8 @@
 //! A sheet can also take a line of text, such as a name typed to confirm a
 //! delete, and hold its button until the text matches; and its button can be
 //! a download link, so a confirmed export is the browser's own download.
+//! A sheet can offer choices, such as which dashboard to add a card to,
+//! with the line of text for the choice that needs one.
 
 use std::sync::Arc;
 
@@ -42,6 +44,20 @@ pub struct Ask {
 	/// The address the button downloads, and the file's name, when it is a
 	/// download rather than a press.
 	pub download: Option<(String, String)>,
+	/// What the field holds when the sheet opens.
+	pub value: String,
+	/// The choices, each a value and its label; the field is for the one
+	/// whose value is empty.
+	pub choices: Vec<(String, String)>,
+}
+
+/// What the person answered.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Answer {
+	/// What they typed, trimmed.
+	pub text: String,
+	/// The value of the choice they made, when the sheet offered choices.
+	pub choice: Option<String>,
 }
 
 /// A line of text the sheet asks for.
@@ -62,7 +78,36 @@ impl Ask {
 			must_match: None,
 			danger: false,
 			download: None,
+			value: String::new(),
+			choices: Vec::new(),
 		}
+	}
+
+	/// Asks for a line of text, starting as `value`, that can't be empty.
+	#[must_use]
+	pub fn named(mut self, label: impl Into<String>, value: impl Into<String>) -> Self {
+		self.field = Some(Field {
+			label: label.into(),
+			placeholder: String::new(),
+		});
+		self.value = value.into();
+		self
+	}
+
+	/// Offers `choices`, each a value and its label, the first chosen. A
+	/// choice whose value is empty is the one the field is for.
+	#[must_use]
+	pub fn choices(mut self, choices: Vec<(String, String)>) -> Self {
+		self.choices = choices;
+		self
+	}
+
+	/// Whether the field is for `choice`: always, without choices.
+	#[must_use]
+	pub fn field_for(&self, choice: usize) -> bool {
+		self.choices
+			.get(choice)
+			.is_none_or(|(value, _)| value.is_empty())
 	}
 
 	/// Asks the person to type `expected` before the button works.
@@ -91,17 +136,19 @@ impl Ask {
 		self
 	}
 
-	/// Whether `typed` lets the button work.
+	/// Whether `typed`, with `choice` chosen, lets the button work.
 	#[must_use]
-	pub fn accepts(&self, typed: &str) -> bool {
-		self.must_match
-			.as_deref()
-			.is_none_or(|expected| typed.trim() == expected)
+	pub fn accepts(&self, typed: &str, choice: usize) -> bool {
+		match &self.must_match {
+			Some(expected) => typed.trim() == expected,
+			// A field that names something can't be left empty.
+			None => self.field.is_none() || !self.field_for(choice) || !typed.trim().is_empty(),
+		}
 	}
 }
 
-/// What runs once the person confirms, with what they typed.
-type Yes = Arc<dyn Fn(String) + Send + Sync>;
+/// What runs once the person confirms, with their answer.
+type Yes = Arc<dyn Fn(Answer) + Send + Sync>;
 
 /// The page's confirm sheet. The shell provides one as context.
 #[derive(Clone, Copy)]
@@ -109,6 +156,8 @@ pub struct Confirm {
 	ask: RwSignal<Option<Ask>>,
 	/// What the person has typed into the sheet's field.
 	typed: RwSignal<String>,
+	/// The choice they made, by its place.
+	chosen: RwSignal<usize>,
 	yes: StoredValue<Option<Yes>>,
 	/// The control that asked, which gets focus back.
 	opener: StoredValue<Option<FocusRequest>>,
@@ -120,6 +169,7 @@ impl Confirm {
 		Self {
 			ask: RwSignal::new(None),
 			typed: RwSignal::new(String::new()),
+			chosen: RwSignal::new(0),
 			yes: StoredValue::new(None),
 			opener: StoredValue::new(None),
 		}
@@ -131,34 +181,50 @@ impl Confirm {
 		use_context::<Self>()
 	}
 
-	/// Shows the sheet; `yes` runs with what was typed if the person
-	/// confirms, and `from` gets focus back either way.
+	/// Shows the sheet; `yes` runs with the answer if the person confirms,
+	/// and `from` gets focus back either way.
 	pub fn ask(
 		&self,
 		ask: Ask,
 		from: Option<FocusRequest>,
-		yes: impl Fn(String) + Send + Sync + 'static,
+		yes: impl Fn(Answer) + Send + Sync + 'static,
 	) {
 		self.yes.set_value(Some(Arc::new(yes)));
 		self.opener.set_value(from);
-		self.typed.set(String::new());
+		self.typed.set(ask.value.clone());
+		self.chosen.set(0);
 		self.ask.set(Some(ask));
 	}
 
-	/// Closes the sheet and runs what it was asked for, if what was typed
-	/// lets it.
+	/// Whether the sheet is asking.
+	#[must_use]
+	pub fn is_open(&self) -> bool {
+		self.ask.with(Option::is_some)
+	}
+
+	/// Closes the sheet and runs what it was asked for, if the answer lets
+	/// it.
 	fn confirm(&self) {
 		let typed = self.typed.get_untracked();
-		let accepted = self
-			.ask
-			.with_untracked(|ask| ask.as_ref().is_some_and(|ask| ask.accepts(&typed)));
+		let chosen = self.chosen.get_untracked();
+		let answer = self.ask.with_untracked(|ask| {
+			let ask = ask.as_ref().filter(|ask| ask.accepts(&typed, chosen))?;
 
-		if !accepted {
+			Some(Answer {
+				text: if ask.field_for(chosen) {
+					typed.trim().to_owned()
+				} else {
+					String::new()
+				},
+				choice: ask.choices.get(chosen).map(|(value, _)| value.clone()),
+			})
+		});
+		let Some(answer) = answer else {
 			return;
-		}
+		};
 
 		if let Some(yes) = self.close() {
-			yes(typed.trim().to_owned());
+			yes(answer);
 		}
 	}
 
@@ -185,7 +251,8 @@ impl Confirm {
 			.unwrap_or_else(|| Ask::new("Confirm", String::new()));
 		let open = self.ask.with(Option::is_some);
 		let typed = self.typed.get();
-		let ready = ask.accepts(&typed);
+		let chosen = self.chosen.get();
+		let ready = ask.accepts(&typed, chosen);
 		let dialog = Dialog::new("confirm", ask.title.clone()).description(ask.explanation.clone());
 		let mut panel = View()
 			.class(
@@ -203,7 +270,47 @@ impl Confirm {
 					.class(style::SECONDARY),
 			);
 
+		if !ask.choices.is_empty() {
+			let chosen = chosen.min(ask.choices.len() - 1);
+			let mut group = leptoskit::aria::RadioGroup::new(
+				"confirm-choice",
+				ask.choices.iter().map(|(_, label)| label.clone()),
+				Some(chosen),
+			);
+
+			for (index, (_, label)) in ask.choices.iter().enumerate() {
+				group = group.option(
+					index,
+					View()
+						.class(
+							"flex-row items-center gap-2.5 rounded-lg px-2 py-1.5 cursor-pointer \
+							 hover:bg-[var(--admin-sunken)]",
+						)
+						.child(
+							View()
+								.class(if index == chosen {
+									"h-4 w-4 shrink-0 rounded-full border-[5px] \
+									 border-[var(--admin-ink)]"
+								} else {
+									"h-4 w-4 shrink-0 rounded-full border-2 \
+									 border-[var(--admin-line-strong)]"
+								})
+								.aria_hidden(true),
+						)
+						.child(Text(label.clone()).class("text-sm text-[var(--admin-ink)]")),
+				);
+			}
+
+			panel = panel.child(
+				Element::from(group.on_change(move |index| confirm.chosen.set(index)))
+					.aria_label(ask.title.clone())
+					.class("flex-col gap-1")
+					.test_id("confirm-choices"),
+			);
+		}
+
 		if let Some(field) = &ask.field {
+			let enabled = ask.field_for(chosen);
 			panel = panel.child(
 				View()
 					.class("flex-col gap-1.5")
@@ -217,6 +324,7 @@ impl Confirm {
 							.value(typed)
 							.placeholder(field.placeholder.clone())
 							.aria_label(field.label.clone())
+							.enabled(enabled)
 							.class(
 								"rounded-lg border border-[var(--admin-line-strong)] \
 								 bg-[var(--admin-surface)] px-3 py-2 text-sm \
@@ -282,7 +390,7 @@ impl Confirm {
 			.modal(open)
 			.class("items-center justify-center bg-[#16111f]/45 p-4")
 			.test_id("confirm-sheet")
-			.initial_focus(if ask.field.is_some() {
+			.initial_focus(if ask.field.is_some() && ask.field_for(0) {
 				"confirm-input"
 			} else {
 				"confirm-yes"
@@ -300,13 +408,25 @@ impl Default for Confirm {
 	}
 }
 
-/// Runs `then` once the browser has drawn the closed sheet, or once it has
-/// followed the link just pressed.
+/// Runs `then` once the closed sheet has left the page, or once the
+/// browser has followed the link just pressed: after the render that closes
+/// it and the renderer's task that closes the dialog.
+///
+/// The browser's own timer, not leptos's: leptos ties a timer to the
+/// reactive owner that set it, and the press that closes the sheet belongs
+/// to the build that closing replaces, so its timer would be cancelled
+/// before it ran.
 fn after_close(then: impl FnOnce() + 'static) {
 	#[cfg(feature = "hydrate")]
 	{
-		// Without a frame to wait for, there's no page to focus either.
-		let _ = leptos::prelude::request_animation_frame(then);
+		let callback = wasm_bindgen::closure::Closure::once_into_js(then);
+
+		if let Some(window) = web_sys::window() {
+			let _ = window.set_timeout_with_callback_and_timeout_and_arguments_0(
+				wasm_bindgen::JsCast::unchecked_ref(&callback),
+				0,
+			);
+		}
 	}
 	#[cfg(not(feature = "hydrate"))]
 	then();

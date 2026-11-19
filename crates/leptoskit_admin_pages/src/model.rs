@@ -12,6 +12,7 @@ use serde::Serialize;
 use crate::components::Tone;
 use crate::workings::Drawer;
 
+pub mod insight;
 pub mod library;
 pub mod people;
 pub mod project;
@@ -249,7 +250,7 @@ pub struct Lesson {
 
 /// The pages this crate builds. Every other page is still rendered by
 /// `leptoskit_admin` alone.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Page {
 	/// The glossary of words the admin uses.
 	Glossary,
@@ -269,6 +270,8 @@ pub enum Page {
 	People(people::People),
 	/// One person.
 	Person(Box<people::Person>),
+	/// A builder: trends, funnels or retention, new or saved.
+	Insight(Box<insight::Insight>),
 }
 
 impl Page {
@@ -285,6 +288,7 @@ impl Page {
 			Self::Library(_) => "Library",
 			Self::People(_) => "People",
 			Self::Person(person) => &person.name,
+			Self::Insight(insight) => &insight.name,
 		}
 	}
 
@@ -299,6 +303,7 @@ impl Page {
 			| Self::Library(_)
 			| Self::People(_) => &[],
 			Self::Person(person) => std::slice::from_ref(&person.drawer),
+			Self::Insight(insight) => std::slice::from_ref(&insight.drawer),
 			Self::Operation(operation) => std::slice::from_ref(&operation.drawer),
 			Self::Project(project) => &project.drawers,
 		}
@@ -313,6 +318,7 @@ impl Page {
 			Self::Projects(_) => Section::Projects,
 			Self::Library(_) => Section::Library,
 			Self::People(_) | Self::Person(_) => Section::People,
+			Self::Insight(insight) => insight.kind.section(),
 			Self::Operation(operation) => Section::ProjectOperations(operation.project.clone()),
 			Self::Project(project) => {
 				match project.tab {

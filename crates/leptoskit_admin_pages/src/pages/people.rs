@@ -299,8 +299,8 @@ impl Actions {
 		)
 		.typed("Type their name to confirm", name)
 		.danger();
-		self.confirm.ask(ask, Some(self.delete), move |typed| {
-			self.send_delete(&typed);
+		self.confirm.ask(ask, Some(self.delete), move |answer| {
+			self.send_delete(&answer.text);
 		});
 	}
 
