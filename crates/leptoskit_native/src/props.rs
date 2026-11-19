@@ -69,6 +69,8 @@ pub enum NativeKind {
 	/// A host-owned Live Photo surface; the session comes from the `live_photo`
 	/// prop.
 	LivePhoto,
+	/// A multi-line editable field, where Enter adds a new line.
+	TextArea,
 	/// A platform-defined widget referenced by registered name.
 	Custom(&'static str),
 }
@@ -109,6 +111,7 @@ impl NativeKind {
 			Self::Camera => "camera",
 			Self::Map => "map",
 			Self::LivePhoto => "live_photo",
+			Self::TextArea => "text_area",
 			Self::Custom(name) => name,
 		}
 	}
@@ -152,6 +155,7 @@ impl<'de> serde::de::Visitor<'de> for NativeKindVisitor {
 			"live_photo" | "LivePhoto" => Ok(NativeKind::LivePhoto),
 			"scroll_view" | "ScrollView" => Ok(NativeKind::ScrollView),
 			"text_input" | "TextInput" => Ok(NativeKind::TextInput),
+			"text_area" | "TextArea" => Ok(NativeKind::TextArea),
 			"button" | "Button" => Ok(NativeKind::Button),
 			"switch" | "Switch" => Ok(NativeKind::Switch),
 			"checkbox" | "Checkbox" => Ok(NativeKind::Checkbox),

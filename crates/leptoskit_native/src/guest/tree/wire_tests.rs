@@ -445,6 +445,7 @@ fn every_kind_has_the_code_both_sides_read() {
 			| NativeKind::Image
 			| NativeKind::ScrollView
 			| NativeKind::TextInput
+			| NativeKind::TextArea
 			| NativeKind::Button
 			| NativeKind::Switch
 			| NativeKind::Checkbox

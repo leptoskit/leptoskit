@@ -69,6 +69,7 @@ use objc2_ui_kit::UITextField;
 use objc2_ui_kit::UITextInput;
 use objc2_ui_kit::UITextInputTraits;
 use objc2_ui_kit::UITextSpellCheckingType;
+use objc2_ui_kit::UITextView;
 use objc2_ui_kit::UIUserInterfaceStyle;
 use objc2_ui_kit::UIView;
 use objc2_ui_kit::UIViewContentMode;
@@ -142,6 +143,13 @@ enum Control {
 		field: Retained<UITextField>,
 		target: Retained<ActionTarget>,
 	},
+	/// A multi-line text view, and the placeholder label drawn over it
+	/// while it is empty: `UITextView` has no placeholder of its own.
+	Area {
+		text: Retained<UITextView>,
+		placeholder: Retained<UILabel>,
+		target: Retained<ActionTarget>,
+	},
 	Image {
 		image: Retained<UIImageView>,
 		source: Option<String>,
@@ -166,6 +174,7 @@ impl Widget {
 			| Control::Switch { target, .. }
 			| Control::Slider { target, .. }
 			| Control::Input { target, .. }
+			| Control::Area { target, .. }
 			| Control::Scroll { target, .. } => Some(target),
 			_ => None,
 		}
@@ -200,6 +209,12 @@ impl Widget {
 				}
 			}
 			Control::Input { field, .. } => field.setDelegate(None),
+			Control::Area { text, .. } => {
+				// SAFETY: Clearing the weak delegate during teardown is valid.
+				unsafe {
+					text.setDelegate(None);
+				}
+			}
 			Control::Scroll { scroll, .. } => {
 				// SAFETY: Clearing the weak delegate during teardown is valid.
 				unsafe {
@@ -338,24 +353,9 @@ impl UIKitBackend {
 				)
 			}
 			NativeKind::TextInput | NativeKind::PasswordInput => {
-				let field = UITextField::initWithFrame(UITextField::alloc(self.mtm), frame);
-				if kind == NativeKind::PasswordInput {
-					apply_password_traits(&field);
-				}
-
-				let target = target();
-				field.setDelegate(Some(ProtocolObject::from_ref(&*target)));
-				connect(
-					&field,
-					&target,
-					sel!(edit:),
-					UIControlEvents::EditingChanged,
-				);
-				(
-					field.clone().into_super().into_super(),
-					Control::Input { field, target },
-				)
+				build_input(self.mtm, kind, frame, target())
 			}
+			NativeKind::TextArea => build_area(self.mtm, frame, target()),
 			NativeKind::Image | NativeKind::Rive => {
 				let image = UIImageView::initWithFrame(UIImageView::alloc(self.mtm), frame);
 				image.setContentMode(UIViewContentMode::ScaleAspectFit);
@@ -824,6 +824,9 @@ fn apply_props(widget: &mut Widget, props: &NativeProps, mtm: MainThreadMarker) 
 		Control::Input { field, .. } => {
 			apply_input_props(field, props, widget.kind, &foreground, &font);
 		}
+		Control::Area {
+			text, placeholder, ..
+		} => apply_area_props(text, placeholder, props, &foreground, &font),
 		Control::Image { image, source } => {
 			if source != &props.source {
 				let loaded = props.source.as_deref().and_then(load_image);
@@ -978,18 +981,18 @@ fn apply_password_traits(field: &UITextField) {
 /// Every selector must be a forwarded setter that takes one `NSInteger` and
 /// returns void, and the field must remain alive on the main thread through
 /// each synchronous send.
-unsafe fn send_integer_traits(field: &UITextField, traits: &[(Sel, isize)]) {
+unsafe fn send_integer_traits(field: &objc2::runtime::NSObject, traits: &[(Sel, isize)]) {
 	// SAFETY: each selector is checked before the send, which takes one
 	// NSInteger and returns void. The field remains alive on the main thread
 	// throughout each synchronous send.
 	unsafe {
-		let send: unsafe extern "C-unwind" fn(&UITextField, Sel, isize) =
+		let send: unsafe extern "C-unwind" fn(&objc2::runtime::NSObject, Sel, isize) =
 			std::mem::transmute(objc2::ffi::objc_msgSend as unsafe extern "C-unwind" fn());
 
 		for (selector, value) in traits {
 			assert!(
 				field.respondsToSelector(*selector),
-				"UITextField must support {selector}"
+				"the text control must support {selector}"
 			);
 			send(field, *selector, *value);
 		}
@@ -1031,6 +1034,133 @@ fn return_key(submit_label: Option<SubmitLabel>) -> UIReturnKeyType {
 		Some(SubmitLabel::Send) => UIReturnKeyType::Send,
 		None => UIReturnKeyType::Default,
 	}
+}
+
+/// A single-line text field, secure for `PasswordInput`, whose edits and
+/// submissions go to `target`.
+fn build_input(
+	mtm: MainThreadMarker,
+	kind: NativeKind,
+	frame: CGRect,
+	target: Retained<ActionTarget>,
+) -> (Retained<UIView>, Control) {
+	let field = UITextField::initWithFrame(UITextField::alloc(mtm), frame);
+
+	if kind == NativeKind::PasswordInput {
+		apply_password_traits(&field);
+	}
+
+	field.setDelegate(Some(ProtocolObject::from_ref(&*target)));
+	connect(
+		&field,
+		&target,
+		sel!(edit:),
+		UIControlEvents::EditingChanged,
+	);
+	(
+		field.clone().into_super().into_super(),
+		Control::Input { field, target },
+	)
+}
+
+/// A multi-line text view whose edits go to `target`, with the label that
+/// stands in for its placeholder.
+fn build_area(
+	mtm: MainThreadMarker,
+	frame: CGRect,
+	target: Retained<ActionTarget>,
+) -> (Retained<UIView>, Control) {
+	let text = UITextView::initWithFrame(UITextView::alloc(mtm), frame);
+	// SAFETY: `ActionTarget` conforms to `UITextViewDelegate`, and the widget
+	// keeps the target alive while the view can message it.
+	unsafe {
+		text.setDelegate(Some(ProtocolObject::from_ref(&*target)));
+	}
+	// A label ignores touches, so they reach the text view.
+	let placeholder = UILabel::initWithFrame(UILabel::alloc(mtm), frame);
+	text.addSubview(&placeholder);
+	(
+		text.clone().into_super().into_super(),
+		Control::Area {
+			text,
+			placeholder,
+			target,
+		},
+	)
+}
+
+/// Applies a `TextArea`'s value, hints, and placeholder.
+fn apply_area_props(
+	text: &UITextView,
+	placeholder: &UILabel,
+	props: &NativeProps,
+	foreground: &UIColor,
+	font: &UIFont,
+) {
+	let value = input_value(props);
+
+	if text.text().to_string() != value {
+		text.setText(Some(&NSString::from_str(value)));
+	}
+
+	text.setFont(Some(font));
+	text.setTextColor(Some(foreground));
+	text.setTextAlignment(alignment(props.text_style()));
+	// A read-only or disabled view refuses edits; only a disabled one also
+	// refuses selection.
+	let enabled = props.enabled.unwrap_or(true);
+	text.setEditable(enabled && props.read_only != Some(true));
+	text.setSelectable(enabled);
+
+	if props.is_custom_drawn() {
+		text.setBackgroundColor(Some(&UIColor::clearColor()));
+	}
+
+	let (correction, spelling) = if props.autocorrect == Some(false) {
+		(UITextAutocorrectionType::No, UITextSpellCheckingType::No)
+	} else {
+		(
+			UITextAutocorrectionType::Default,
+			UITextSpellCheckingType::Default,
+		)
+	};
+	// SAFETY: every selector is a `UITextInputTraits` setter taking one
+	// NSInteger, which `UITextView` implements.
+	unsafe {
+		send_integer_traits(
+			text,
+			&[
+				(
+					sel!(setAutocapitalizationType:),
+					autocapitalization(props.capitalize).0,
+				),
+				(sel!(setAutocorrectionType:), correction.0),
+				(sel!(setSpellCheckingType:), spelling.0),
+			],
+		);
+	}
+
+	// The placeholder sits where the first line of text would: inside the
+	// container's inset and its line fragment padding.
+	placeholder.setText(
+		props
+			.placeholder
+			.as_ref()
+			.map(|text| NSString::from_str(text))
+			.as_deref(),
+	);
+	// SAFETY: both setters receive a live, non-null object.
+	unsafe {
+		placeholder.setFont(Some(font));
+		placeholder.setTextColor(Some(&UIColor::placeholderTextColor()));
+	}
+	placeholder.sizeToFit();
+	let inset = text.textContainerInset();
+	let mut frame = placeholder.frame();
+	frame.origin.x = inset.left + 5.0;
+	frame.origin.y = inset.top;
+	placeholder.setFrame(frame);
+	placeholder.setHidden(!value.is_empty() || props.placeholder.is_none());
 }
 
 fn apply_input_props(

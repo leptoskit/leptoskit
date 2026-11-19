@@ -33,6 +33,8 @@ use objc2_ui_kit::UISlider;
 use objc2_ui_kit::UISwitch;
 use objc2_ui_kit::UITextField;
 use objc2_ui_kit::UITextFieldDelegate;
+use objc2_ui_kit::UITextView;
+use objc2_ui_kit::UITextViewDelegate;
 use objc2_ui_kit::UIView;
 
 /// Receives native user proposals outside borrowed backend state.
@@ -335,9 +337,80 @@ define_class!(
 		}
 	}
 
+	// A `TextArea`'s text view reports its edits and focus here.
+	unsafe impl UITextViewDelegate for ActionTarget {
+		#[unsafe(method(textViewDidChange:))]
+		fn area_changed(&self, text: &UITextView) {
+			let _keep_alive = self.retain();
+			let text = text.retain();
+
+			if text.isEditable() && interactive(&text) {
+				self.emit(&NativeEvent::Change { value: text.text().to_string() });
+			}
+
+			if self.ivars().active.get() {
+				let value = {
+					let props = self.ivars().props.borrow();
+					input_value(&props).to_owned()
+				};
+
+				if text.text().to_string() != value {
+					text.setText(Some(&NSString::from_str(&value)));
+				}
+			}
+		}
+
+		#[unsafe(method(textViewDidBeginEditing:))]
+		fn area_began(&self, text: &UITextView) {
+			let _keep_alive = self.retain();
+			let text = text.retain();
+			if interactive(&text) { self.emit(&NativeEvent::Focus); }
+		}
+
+		#[unsafe(method(textViewDidEndEditing:))]
+		fn area_ended(&self, text: &UITextView) {
+			let _keep_alive = self.retain();
+			let _text = text.retain();
+			self.emit(&NativeEvent::Blur);
+		}
+
+		/// Whether the view accepts replacing `range` with `replacement`: a
+		/// `max_length` area refuses the edit that would pass its cap. Enter
+		/// is an ordinary insertion here, so it adds a line.
+		#[unsafe(method(textView:shouldChangeTextInRange:replacementText:))]
+		fn area_should_change(
+			&self,
+			text: &UITextView,
+			range: NSRange,
+			replacement: &NSString,
+		) -> objc2::runtime::Bool {
+			let _keep_alive = self.retain();
+			let text = text.retain();
+			let Some(max_length) = self.ivars().props.borrow().max_length else {
+				return true.into();
+			};
+
+			// Ranges and lengths count UTF-16 code units, as the view's own
+			// text does.
+			let proposed = text
+				.text()
+				.length()
+				.saturating_sub(range.length)
+				.saturating_add(replacement.length());
+
+			(proposed <= max_length).into()
+		}
+	}
+
 	unsafe impl UIScrollViewDelegate for ActionTarget {
 		#[unsafe(method(scrollViewDidScroll:))]
 		fn scroll(&self, scroll: &UIScrollView) {
+			// A text view is a scroll view and shares this delegate; only a
+			// `ScrollView` reports its scrolling.
+			if self.ivars().kind == NativeKind::TextArea {
+				return;
+			}
+
 			let _keep_alive = self.retain();
 			let scroll = scroll.retain();
 			let offset = scroll.contentOffset();

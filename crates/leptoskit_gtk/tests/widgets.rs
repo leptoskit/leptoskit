@@ -137,6 +137,10 @@ mod linux {
 				password_editing_focus_and_removal,
 			),
 			(
+				"text_area_edits_lines_and_honours_hints",
+				text_area_edits_lines_and_honours_hints,
+			),
+			(
 				"scroll_and_disabled_hidden_ancestors",
 				scroll_and_disabled_hidden_ancestors,
 			),
@@ -1038,6 +1042,85 @@ mod linux {
 				.is_some_and(|focus| focus == editor || focus.is_ancestor(&editor)),
 			"native callback's chosen focus is retained"
 		);
+	}
+
+	fn text_area_edits_lines_and_honours_hints() {
+		let mounted = mounted(
+			&View().class("p-4 gap-2").children([
+				TextArea()
+					.aria_label("Note")
+					.value("one")
+					.max_length(8)
+					.class("h-24 w-64"),
+				TextArea()
+					.aria_label("Frozen")
+					.value("kept")
+					.read_only(true)
+					.class("h-24 w-64"),
+			]),
+		);
+		let id = child(&mounted, 0);
+		let scroll = native::<gtk::ScrolledWindow>(&mounted, id);
+		let view = scroll
+			.child()
+			.and_then(|child| child.downcast::<gtk::TextView>().ok())
+			.expect("a text area holds a text view");
+		let text = |view: &gtk::TextView| {
+			let buffer = view.buffer();
+			buffer
+				.text(&buffer.start_iter(), &buffer.end_iter(), false)
+				.to_string()
+		};
+		assert_eq!(text(&view), "one");
+		assert_eq!(view.wrap_mode(), gtk::WrapMode::WordChar);
+		assert!(view.is_editable());
+
+		let frozen = native::<gtk::ScrolledWindow>(&mounted, child(&mounted, 1))
+			.child()
+			.and_then(|child| child.downcast::<gtk::TextView>().ok())
+			.unwrap();
+		assert!(!frozen.is_editable());
+		assert_eq!(text(&frozen), "kept");
+
+		let events = Rc::new(RefCell::new(Vec::new()));
+		mounted.surface.borrow().backend().set_event_listener({
+			let events = events.clone();
+			move |id, event| events.borrow_mut().push((id, event))
+		});
+		view.grab_focus();
+		pump();
+		key("ctrl+End");
+		// Enter adds a line: it proposes a change and never submits.
+		key("Return");
+		key("x");
+		pump();
+		assert!(events.borrow().contains(&(
+			id,
+			NativeEvent::Change {
+				value: "one\n".into()
+			}
+		)));
+		assert!(
+			!events
+				.borrow()
+				.iter()
+				.any(|(_, event)| matches!(event, NativeEvent::Submit { .. }))
+		);
+		// The application did not accept the proposals, so the committed
+		// value stands.
+		assert_eq!(text(&view), "one");
+
+		// Text past `max_length` is reported cut to the limit.
+		events.borrow_mut().clear();
+		view.buffer().set_text("0123456789");
+		pump();
+		assert!(events.borrow().contains(&(
+			id,
+			NativeEvent::Change {
+				value: "01234567".into()
+			}
+		)));
+		assert_eq!(text(&view), "one");
 	}
 
 	fn password_editing_focus_and_removal() {

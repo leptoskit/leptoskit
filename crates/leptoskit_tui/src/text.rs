@@ -232,3 +232,66 @@ impl TextMeasurer for TuiTextMeasurer {
 		Size::new(cells as f32 * CELL_WIDTH, CELL_HEIGHT)
 	}
 }
+
+/// Where a multi-line field's text and caret sit once wrapped into a box
+/// `cols` wide and `rows` tall.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AreaLayout {
+	/// Every wrapped line, as a byte range into the text.
+	pub lines: Vec<Range<usize>>,
+	/// The wrapped line the caret is on.
+	pub caret_line: usize,
+	/// The caret's column on that line, in cells.
+	pub caret_col: usize,
+	/// The first line shown: later lines scroll into view with the caret.
+	pub first: usize,
+}
+
+/// Wraps a multi-line field's `text` and finds its caret, a character
+/// index, scrolling just far enough that the caret's line is on screen.
+#[must_use]
+pub fn area_layout(text: &str, caret: usize, cols: usize, rows: usize) -> AreaLayout {
+	let lines = wrap_ranges(text, cols);
+	let offset = text
+		.char_indices()
+		.nth(caret)
+		.map_or(text.len(), |(index, _)| index);
+	let caret_line = lines
+		.iter()
+		.rposition(|line| line.start <= offset)
+		.unwrap_or(0);
+	let line = lines.get(caret_line).cloned().unwrap_or(0..0);
+	let caret_col = display_width(&text[line.start..offset.clamp(line.start, line.end)]);
+	let first = (caret_line + 1).saturating_sub(rows.max(1));
+
+	AreaLayout {
+		lines,
+		caret_line,
+		caret_col,
+		first,
+	}
+}
+
+/// The character index at `col` cells into wrapped line `line` of `text`.
+#[must_use]
+pub fn area_caret(text: &str, layout: &AreaLayout, line: usize, col: usize) -> usize {
+	let Some(range) = layout
+		.lines
+		.get(line.min(layout.lines.len().saturating_sub(1)))
+	else {
+		return 0;
+	};
+	let mut width = 0;
+	let mut end = range.start;
+
+	for (index, symbol) in text[range.clone()].char_indices() {
+		if width >= col {
+			break;
+		}
+
+		width += char_width(symbol);
+		end = range.start + index + symbol.len_utf8();
+	}
+
+	text[..end].chars().count()
+}

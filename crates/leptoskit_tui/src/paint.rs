@@ -115,6 +115,10 @@ impl Painter<'_> {
 				self.container(rect, node, dim, id, x, y, underline, false);
 				self.field(id, rect, fg, bg, attrs, focused);
 			}
+			NativeKind::TextArea => {
+				self.container(rect, node, dim, id, x, y, underline, false);
+				self.area(id, rect, fg, bg, attrs, focused);
+			}
 			NativeKind::Switch => self.mark(id, rect, fg, bg, attrs, focused, "switch"),
 			NativeKind::Checkbox => self.mark(id, rect, fg, bg, attrs, focused, "checkbox"),
 			NativeKind::Radio => self.mark(id, rect, fg, bg, attrs, focused, "radio"),
@@ -621,6 +625,83 @@ impl Painter<'_> {
 			if self.clip.contains(col, rect.top) {
 				self.buffer
 					.set_cursor(u16::try_from(col).ok().zip(u16::try_from(rect.top).ok()));
+			}
+		}
+	}
+
+	/// A multi-line field: its wrapped value, or its placeholder, scrolled so
+	/// the caret's line stays in view.
+	fn area(
+		&mut self,
+		id: NodeId,
+		rect: Rect,
+		fg: TuiColor,
+		bg: TuiColor,
+		attrs: Attributes,
+		focused: bool,
+	) {
+		let Some(node) = self.backend.node(id) else {
+			return;
+		};
+		let draft = self.backend.draft(id);
+		let value = draft.map_or_else(
+			|| {
+				node.props
+					.value
+					.as_deref()
+					.or(node.props.text.as_deref())
+					.unwrap_or_default()
+					.to_owned()
+			},
+			|draft| draft.value.clone(),
+		);
+		let caret = if focused {
+			draft.map_or(0, |draft| draft.caret)
+		} else {
+			0
+		};
+		let layout = crate::text::area_layout(
+			&value,
+			caret,
+			usize::from(rect.width),
+			usize::from(rect.height),
+		);
+
+		if value.is_empty() {
+			if let Some(placeholder) = node
+				.props
+				.placeholder
+				.as_deref()
+				.filter(|placeholder| !placeholder.is_empty())
+			{
+				self.write(
+					placeholder,
+					rect.left,
+					rect.top,
+					TuiColor::PLACEHOLDER,
+					bg,
+					attrs,
+				);
+			}
+		} else {
+			for (row, range) in layout.lines.iter().skip(layout.first).enumerate() {
+				let line_row = rect.top + row as i16;
+
+				if line_row >= rect.bottom() {
+					break;
+				}
+
+				self.write(&value[range.clone()], rect.left, line_row, fg, bg, attrs);
+			}
+		}
+
+		if focused {
+			let col = (rect.left + layout.caret_col as i16).min(rect.right() - 1);
+			let row = rect.top + (layout.caret_line - layout.first) as i16;
+
+			if self.clip.contains(col, row) {
+				self.buffer
+					.set_cursor(u16::try_from(col).ok().zip(u16::try_from(row).ok()));
 			}
 		}
 	}

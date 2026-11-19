@@ -271,6 +271,9 @@ internal class NativeWidgetProps(
                         }
                 }
                 if (!autocorrect) inputType = inputType or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+                if (widget is NativeTextArea && inputType and InputType.TYPE_MASK_CLASS == InputType.TYPE_CLASS_TEXT) {
+                    inputType = inputType or InputType.TYPE_TEXT_FLAG_MULTI_LINE
+                }
                 if (widget.inputType != inputType) widget.inputType = inputType
             }
 
@@ -295,14 +298,19 @@ internal class NativeWidgetProps(
                 widget.filters = arrayOf(InputFilter.LengthFilter(maxLength))
             }
 
-            // What the return key is named.
+            // What the return key is named. A text area's return key adds a
+            // line, so it names no action.
             val ime =
-                when (props.rest?.optString("submit_label") ?: "done") {
-                    "go" -> EditorInfo.IME_ACTION_GO
-                    "next" -> EditorInfo.IME_ACTION_NEXT
-                    "search" -> EditorInfo.IME_ACTION_SEARCH
-                    "send" -> EditorInfo.IME_ACTION_SEND
-                    else -> EditorInfo.IME_ACTION_DONE
+                if (widget is NativeTextArea) {
+                    EditorInfo.IME_FLAG_NO_ENTER_ACTION
+                } else {
+                    when (props.rest?.optString("submit_label") ?: "done") {
+                        "go" -> EditorInfo.IME_ACTION_GO
+                        "next" -> EditorInfo.IME_ACTION_NEXT
+                        "search" -> EditorInfo.IME_ACTION_SEARCH
+                        "send" -> EditorInfo.IME_ACTION_SEND
+                        else -> EditorInfo.IME_ACTION_DONE
+                    }
                 }
             if (widget.imeOptions != ime) widget.imeOptions = ime
         }
@@ -310,7 +318,9 @@ internal class NativeWidgetProps(
         val weight = cssWeight(props.fontWeight)
         // A button centres its label unless the element aligns it, as web
         // buttons and UIKit buttons do.
-        val unaligned = if (widget is Button) Gravity.CENTER else Gravity.START or Gravity.CENTER_VERTICAL
+        // A text area starts its text at the top, like a `<textarea>`.
+        val vertical = if (widget is NativeTextArea) Gravity.TOP else Gravity.CENTER_VERTICAL
+        val unaligned = if (widget is Button) Gravity.CENTER else Gravity.START or vertical
         val style =
             TextStyle(
                 size = (props.fontSize ?: DEFAULT_FONT_SIZE).toFloat(),
@@ -320,8 +330,8 @@ internal class NativeWidgetProps(
                 gravity =
                     when (props.textAlign) {
                         "center" -> Gravity.CENTER
-                        "end" -> Gravity.END or Gravity.CENTER_VERTICAL
-                        "start" -> Gravity.START or Gravity.CENTER_VERTICAL
+                        "end" -> Gravity.END or vertical
+                        "start" -> Gravity.START or vertical
                         else -> unaligned
                     },
             )

@@ -952,12 +952,13 @@ impl Widget {
 		// SAFETY: Message payloads match the standard native control class.
 		unsafe {
 			match self.kind {
-				NativeKind::TextInput | NativeKind::PasswordInput => {
+				NativeKind::TextInput | NativeKind::TextArea | NativeKind::PasswordInput => {
 					let value = props
 						.value
 						.as_deref()
 						.or(props.text.as_deref())
 						.unwrap_or("");
+					let value = &*native_lines(self.kind, value);
 
 					if window_text(control) != value {
 						let mut start = 0_u32;
@@ -1143,7 +1144,10 @@ impl Widget {
 			}
 		}
 
-		if matches!(self.kind, NativeKind::TextInput | NativeKind::PasswordInput) {
+		if matches!(
+			self.kind,
+			NativeKind::TextInput | NativeKind::TextArea | NativeKind::PasswordInput
+		) {
 			update_input(control, props, rtl);
 		}
 
@@ -1815,6 +1819,14 @@ fn create_windows(parking: HWND, kind: NativeKind) -> (HWND, HWND, Option<HWND>,
 			NativeKind::Radio => Some((w!("BUTTON"), BS_RADIOBUTTON as u32)),
 			NativeKind::TextInput => Some((w!("EDIT"), ES_AUTOHSCROLL as u32)),
 			NativeKind::PasswordInput => Some((w!("EDIT"), (ES_AUTOHSCROLL | ES_PASSWORD) as u32)),
+			// A multi-line edit wraps at its width, scrolls vertically, and
+			// keeps Enter for a new line.
+			NativeKind::TextArea => {
+				Some((
+					w!("EDIT"),
+					(ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN) as u32 | WS_VSCROLL.0,
+				))
+			}
 			NativeKind::Slider => Some((TRACKBAR_CLASSW, TBS_HORZ | TBS_NOTICKS)),
 			NativeKind::LinearProgressIndicator => Some((PROGRESS_CLASSW, PBS_SMOOTH)),
 			_ => None,
@@ -1977,6 +1989,29 @@ fn msaa_i4(value: u32) -> windows::Win32::System::Variant::VARIANT {
 
 pub(crate) fn wide(text: &str) -> Vec<u16> {
 	text.encode_utf16().chain(Some(0)).collect()
+}
+
+/// A value as an edit control holds it: a multi-line edit breaks lines with
+/// a carriage return and a line feed, where the shared value uses a line
+/// feed alone.
+pub(crate) fn native_lines(kind: NativeKind, value: &str) -> std::borrow::Cow<'_, str> {
+	if kind == NativeKind::TextArea && value.contains('\n') {
+		std::borrow::Cow::Owned(value.replace("\r\n", "\n").replace('\n', "\r\n"))
+	} else {
+		std::borrow::Cow::Borrowed(value)
+	}
+}
+
+/// An edit control's text as the shared value: a `TextArea`'s line breaks
+/// become single line feeds again.
+pub(crate) fn edit_text(kind: NativeKind, hwnd: HWND) -> String {
+	let text = window_text(hwnd);
+
+	if kind == NativeKind::TextArea {
+		text.replace("\r\n", "\n")
+	} else {
+		text
+	}
 }
 
 pub(crate) fn window_text(hwnd: HWND) -> String {

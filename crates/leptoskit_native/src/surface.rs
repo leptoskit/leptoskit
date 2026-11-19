@@ -202,7 +202,10 @@ impl TextCell {
 fn has_native_chrome(element: &Element) -> bool {
 	matches!(
 		element.kind,
-		NativeKind::TextInput | NativeKind::PasswordInput | NativeKind::Button
+		NativeKind::TextInput
+			| NativeKind::TextArea
+			| NativeKind::PasswordInput
+			| NativeKind::Button
 	) && !element.props.is_custom_drawn()
 }
 
@@ -210,7 +213,7 @@ fn has_native_chrome(element: &Element) -> bool {
 fn measured_content(element: &Element) -> Option<&str> {
 	if matches!(
 		element.kind,
-		NativeKind::TextInput | NativeKind::PasswordInput
+		NativeKind::TextInput | NativeKind::TextArea | NativeKind::PasswordInput
 	) {
 		return Some(
 			element

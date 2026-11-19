@@ -326,6 +326,24 @@ pub fn TextInput() -> Element {
 	Element::text_input()
 }
 
+/// An editable multi-line text field, for notes, messages, and anything else
+/// longer than a line.
+///
+/// Enter adds a new line instead of submitting, so a `TextArea` raises no
+/// `Submit` event; listen with `on_key` for a shortcut such as Ctrl+Enter.
+/// It accepts the same hints as [`TextInput`]: `read_only`, `max_length`,
+/// `capitalize`, `autocorrect`, and `autocomplete`. It announces itself as
+/// multi-line to assistive technology.
+///
+/// It is as tall as its wrapped text plus 12 layout units of native chrome,
+/// so it grows as the person types. A height class such as `min-h-[120px]`
+/// keeps room for more lines; `h-*` fixes the height, and the field scrolls
+/// past it.
+#[track_caller]
+pub fn TextArea() -> Element {
+	Element::text_area()
+}
+
 tag!(View => View());
 tag!(Text => Text(""));
 tag!(Heading => Heading(2, ""));
@@ -339,3 +357,4 @@ tag!(ScrollView => ScrollView());
 
 tag!(Vector => Vector(ViewBox::UNIT));
 tag!(TextInput => TextInput());
+tag!(TextArea => TextArea());

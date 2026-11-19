@@ -189,7 +189,9 @@ pub(crate) fn handle_key(backend: &mut TuiBackend, key: Key) -> Vec<Dispatch> {
 	};
 
 	match node.kind {
-		NativeKind::TextInput | NativeKind::PasswordInput => edit_field(backend, focused, key),
+		NativeKind::TextInput | NativeKind::TextArea | NativeKind::PasswordInput => {
+			edit_field(backend, focused, key)
+		}
 		NativeKind::Button | NativeKind::Pressable => activate(focused, key),
 		NativeKind::Switch | NativeKind::Checkbox => toggle(focused, node.props.checked, key),
 		NativeKind::Radio => radio_key(backend, focused, key),
@@ -428,6 +430,9 @@ fn edit_field(backend: &mut TuiBackend, id: NodeId, key: Key) -> Vec<Dispatch> {
 	}
 
 	let max_length = props.max_length;
+	let multiline = backend
+		.node(id)
+		.is_some_and(|node| node.kind == NativeKind::TextArea);
 
 	let mut chars: Vec<char> = draft.value.chars().collect();
 	let caret = draft.caret.min(chars.len());
@@ -454,6 +459,21 @@ fn edit_field(backend: &mut TuiBackend, id: NodeId, key: Key) -> Vec<Dispatch> {
 		KeyCode::Delete if caret < chars.len() => {
 			chars.remove(caret);
 			true
+		}
+
+		// In a multi-line field Enter adds a line and never submits.
+		KeyCode::Enter if multiline => {
+			if max_length.is_some_and(|max| chars.len() >= max) {
+				return Vec::new();
+			}
+			chars.insert(caret, '\n');
+			caret += 1;
+			true
+		}
+
+		KeyCode::Up | KeyCode::Down | KeyCode::Home | KeyCode::End if multiline => {
+			set_caret(backend, id, line_caret(&chars, caret, key.code));
+			return Vec::new();
 		}
 
 		KeyCode::Left => {
@@ -497,6 +517,44 @@ fn edit_field(backend: &mut TuiBackend, id: NodeId, key: Key) -> Vec<Dispatch> {
 	}]
 }
 
+/// Where the caret lands in a multi-line field: up and down keep the
+/// column on the neighbouring line, home and end go to the line's ends.
+fn line_caret(chars: &[char], caret: usize, code: KeyCode) -> usize {
+	let start = chars[..caret]
+		.iter()
+		.rposition(|&symbol| symbol == '\n')
+		.map_or(0, |index| index + 1);
+	let end = chars[caret..]
+		.iter()
+		.position(|&symbol| symbol == '\n')
+		.map_or(chars.len(), |index| caret + index);
+	let column = caret - start;
+
+	match code {
+		KeyCode::Home => start,
+		KeyCode::End => end,
+		KeyCode::Up if start == 0 => 0,
+		KeyCode::Up => {
+			let previous = chars[..start - 1]
+				.iter()
+				.rposition(|&symbol| symbol == '\n')
+				.map_or(0, |index| index + 1);
+
+			(previous + column).min(start - 1)
+		}
+		KeyCode::Down if end == chars.len() => chars.len(),
+		KeyCode::Down => {
+			let next_end = chars[end + 1..]
+				.iter()
+				.position(|&symbol| symbol == '\n')
+				.map_or(chars.len(), |index| end + 1 + index);
+
+			(end + 1 + column).min(next_end)
+		}
+		_ => caret,
+	}
+}
+
 fn set_caret(backend: &mut TuiBackend, id: NodeId, caret: usize) {
 	if let Some(draft) = backend.drafts.get_mut(id.index()).and_then(Option::as_mut) {
 		draft.caret = caret;
@@ -523,7 +581,7 @@ pub(crate) fn handle_mouse(backend: &mut TuiBackend, mouse: Mouse) -> Vec<Dispat
 
 			scroll_enclosing(backend, hit, direction)
 		}
-		Mouse::Click { .. } => click(backend, hit, x),
+		Mouse::Click { .. } => click(backend, hit, x, y),
 	}
 }
 
@@ -548,7 +606,7 @@ fn scroll_enclosing(backend: &mut TuiBackend, hit: NodeId, direction: f32) -> Ve
 	Vec::new()
 }
 
-fn click(backend: &mut TuiBackend, hit: NodeId, x: f32) -> Vec<Dispatch> {
+fn click(backend: &mut TuiBackend, hit: NodeId, x: f32, y: f32) -> Vec<Dispatch> {
 	if !path_active(backend, hit) {
 		return Vec::new();
 	}
@@ -578,6 +636,10 @@ fn click(backend: &mut TuiBackend, hit: NodeId, x: f32) -> Vec<Dispatch> {
 		}
 		NativeKind::TextInput | NativeKind::PasswordInput => {
 			place_caret(backend, hit, x);
+			None
+		}
+		NativeKind::TextArea => {
+			place_area_caret(backend, hit, x, y);
 			None
 		}
 		_ => None,
@@ -616,4 +678,23 @@ fn place_caret(backend: &mut TuiBackend, id: NodeId, x: f32) {
 
 	let column = ((x - frame.x) / CELL_WIDTH).floor().max(0.0) as usize;
 	set_caret(backend, id, column);
+}
+
+/// Puts a multi-line field's caret under a click, on the wrapped line and
+/// column the painter drew there.
+fn place_area_caret(backend: &mut TuiBackend, id: NodeId, x: f32, y: f32) {
+	let Some(frame) = backend.absolute_frame(id) else {
+		return;
+	};
+	let Some(draft) = backend.draft(id) else {
+		return;
+	};
+
+	let cols = (frame.width / CELL_WIDTH).floor().max(1.0) as usize;
+	let rows = (frame.height / CELL_HEIGHT).floor().max(1.0) as usize;
+	let layout = crate::text::area_layout(&draft.value, draft.caret, cols, rows);
+	let row = ((y - frame.y) / CELL_HEIGHT).floor().max(0.0) as usize;
+	let column = ((x - frame.x) / CELL_WIDTH).floor().max(0.0) as usize;
+	let caret = crate::text::area_caret(&draft.value, &layout, layout.first + row, column);
+	set_caret(backend, id, caret);
 }

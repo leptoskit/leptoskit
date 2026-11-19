@@ -15,6 +15,7 @@ pub const fn focusable_kind(kind: NativeKind) -> bool {
 		NativeKind::Button
 			| NativeKind::Pressable
 			| NativeKind::TextInput
+			| NativeKind::TextArea
 			| NativeKind::PasswordInput
 			| NativeKind::Switch
 			| NativeKind::Checkbox

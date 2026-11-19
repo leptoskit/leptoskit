@@ -110,6 +110,7 @@ fn native_participant(kind: NativeKind) -> Option<bool> {
 		NativeKind::Button
 		| NativeKind::Pressable
 		| NativeKind::TextInput
+		| NativeKind::TextArea
 		| NativeKind::PasswordInput
 		| NativeKind::Switch
 		| NativeKind::Checkbox

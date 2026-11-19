@@ -14,7 +14,7 @@ use crate::NativeProps;
 ///
 /// Codes are append-only: a kind keeps its index for as long as the ABI
 /// version stays the same.
-pub const KINDS: [NativeKind; 22] = [
+pub const KINDS: [NativeKind; 23] = [
 	NativeKind::View,
 	NativeKind::Text,
 	NativeKind::TextRun,
@@ -37,6 +37,7 @@ pub const KINDS: [NativeKind; 22] = [
 	NativeKind::Camera,
 	NativeKind::Map,
 	NativeKind::LivePhoto,
+	NativeKind::TextArea,
 ];
 
 /// The ABI code of `kind`, or `None` for a custom widget, which has none.

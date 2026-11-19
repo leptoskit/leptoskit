@@ -560,6 +560,23 @@ class WidgetHost(
                     }
                 }
 
+                // Several lines of text: Enter adds a line, the text wraps, and
+                // the field scrolls its own content.
+                "text_area" -> {
+                    EditText(context).apply {
+                        setSingleLine(false)
+                        inputType =
+                            InputType.TYPE_CLASS_TEXT or
+                            InputType.TYPE_TEXT_FLAG_MULTI_LINE or
+                            InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+                        imeOptions = EditorInfo.IME_FLAG_NO_ENTER_ACTION
+                        setHorizontallyScrolling(false)
+                        isVerticalScrollBarEnabled = true
+                        setPadding(0, 0, 0, 0)
+                        includeFontPadding = false
+                    }
+                }
+
                 "switch" -> {
                     Switch(context)
                 }
@@ -691,7 +708,10 @@ class WidgetHost(
                     },
                 )
                 control.setOnEditorActionListener { _, action, event ->
-                    if (action in
+                    // A text area keeps Enter for a new line and never submits.
+                    if (kind == "text_area") {
+                        false
+                    } else if (action in
                         listOf(
                             EditorInfo.IME_ACTION_DONE,
                             EditorInfo.IME_ACTION_GO,
@@ -978,7 +998,7 @@ class WidgetHost(
             control.setTextColor(foregroundColor)
             control.gravity =
 
-                (if (control is EditText || control is Button) Gravity.CENTER_VERTICAL else Gravity.TOP) or
+                (if ((control is EditText && node.kind != "text_area") || control is Button) Gravity.CENTER_VERTICAL else Gravity.TOP) or
                 when (props.string("text_align")) {
                     "center" -> Gravity.CENTER_HORIZONTAL
                     "end" -> Gravity.END
@@ -1003,6 +1023,7 @@ class WidgetHost(
                 // name follow the typed props. A password field keeps its own
                 // masking and correction behavior.
                 val secure = node.kind == "password_input"
+                val area = node.kind == "text_area"
                 if (!secure) {
                     val keyboard = props.string("keyboard") ?: "text"
                     val capitalize = props.string("capitalize") ?: "none"
@@ -1026,6 +1047,9 @@ class WidgetHost(
                             }
                     }
                     if (!autocorrect) inputType = inputType or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+                    if (area && inputType and InputType.TYPE_MASK_CLASS == InputType.TYPE_CLASS_TEXT) {
+                        inputType = inputType or InputType.TYPE_TEXT_FLAG_MULTI_LINE
+                    }
                     if (control.inputType != inputType) control.inputType = inputType
                 }
 
@@ -1049,14 +1073,19 @@ class WidgetHost(
                     control.filters = arrayOf(InputFilter.LengthFilter(maxLength))
                 }
 
-                // What the return key is named.
+                // What the return key is named. A text area's return key adds
+                // a line, so it keeps the plain return key.
                 val ime =
-                    when (props.string("submit_label") ?: "done") {
-                        "go" -> EditorInfo.IME_ACTION_GO
-                        "next" -> EditorInfo.IME_ACTION_NEXT
-                        "search" -> EditorInfo.IME_ACTION_SEARCH
-                        "send" -> EditorInfo.IME_ACTION_SEND
-                        else -> EditorInfo.IME_ACTION_DONE
+                    if (area) {
+                        EditorInfo.IME_FLAG_NO_ENTER_ACTION
+                    } else {
+                        when (props.string("submit_label") ?: "done") {
+                            "go" -> EditorInfo.IME_ACTION_GO
+                            "next" -> EditorInfo.IME_ACTION_NEXT
+                            "search" -> EditorInfo.IME_ACTION_SEARCH
+                            "send" -> EditorInfo.IME_ACTION_SEND
+                            else -> EditorInfo.IME_ACTION_DONE
+                        }
                     }
                 if (control.imeOptions != ime) control.imeOptions = ime
 

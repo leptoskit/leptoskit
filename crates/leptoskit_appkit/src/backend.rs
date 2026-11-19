@@ -27,7 +27,9 @@ use objc2_app_kit::NSAppearance;
 use objc2_app_kit::NSAppearanceCustomization;
 use objc2_app_kit::NSAppearanceNameAqua;
 use objc2_app_kit::NSAppearanceNameDarkAqua;
+use objc2_app_kit::NSAutoresizingMaskOptions;
 use objc2_app_kit::NSBezelStyle;
+use objc2_app_kit::NSBorderType;
 use objc2_app_kit::NSButton;
 use objc2_app_kit::NSButtonType;
 use objc2_app_kit::NSColor;
@@ -50,6 +52,7 @@ use objc2_app_kit::NSTextContentTypePassword;
 use objc2_app_kit::NSTextContentTypeUsername;
 use objc2_app_kit::NSTextField;
 use objc2_app_kit::NSTextFieldBezelStyle;
+use objc2_app_kit::NSTextView;
 use objc2_app_kit::NSView;
 use objc2_app_kit::NSViewBoundsDidChangeNotification;
 use objc2_app_kit::NSWindowOrderingMode;
@@ -77,6 +80,7 @@ pub use crate::views::EventListener;
 use crate::views::EventSink;
 use crate::views::EventSuppression;
 use crate::views::FlippedView;
+use crate::views::PlaceholderLabel;
 use crate::views::PressButton;
 use crate::views::RadioButton;
 use crate::views::RadioMember;
@@ -206,6 +210,14 @@ enum Control {
 	/// An editable text field, with the target of its action and delegate.
 	Input {
 		field: Retained<NSTextField>,
+		target: Retained<ActionTarget>,
+	},
+	/// A multi-line text view in its scroll view, the placeholder drawn over
+	/// it while it is empty, and the delegate its edits go to.
+	Area {
+		scroll: Retained<NSScrollView>,
+		text: Retained<NSTextView>,
+		placeholder: Retained<PlaceholderLabel>,
 		target: Retained<ActionTarget>,
 	},
 	/// An image view and the source it last loaded.
@@ -345,6 +357,7 @@ impl AppKitBackend {
 				build_progress(mtm, kind)
 			}
 			NativeKind::TextInput | NativeKind::PasswordInput => build_input(mtm, kind, target()),
+			NativeKind::TextArea => build_area(mtm, target()),
 			NativeKind::Image | NativeKind::Rive => build_image(mtm),
 			NativeKind::Vector => {
 				let view = VectorView::new(mtm);
@@ -687,6 +700,50 @@ fn build_input(
 	(label_view(&field), Control::Input { field, target })
 }
 
+/// A multi-line text view that wraps at its width and scrolls vertically
+/// inside its frame, whose edits go to `target`.
+fn build_area(
+	mtm: MainThreadMarker,
+	target: Retained<ActionTarget>,
+) -> (Retained<NSView>, Control) {
+	let scroll = NSScrollView::initWithFrame(NSScrollView::alloc(mtm), NSRect::ZERO);
+	scroll.setHasVerticalScroller(true);
+	scroll.setHasHorizontalScroller(false);
+	scroll.setAutohidesScrollers(true);
+
+	let text = NSTextView::initWithFrame(NSTextView::alloc(mtm), NSRect::ZERO);
+	text.setRichText(false);
+	text.setAllowsUndo(true);
+	text.setVerticallyResizable(true);
+	text.setHorizontallyResizable(false);
+	text.setAutoresizingMask(NSAutoresizingMaskOptions::ViewWidthSizable);
+
+	// SAFETY: a text view created by `initWithFrame:` owns a text container.
+	if let Some(container) = unsafe { text.textContainer() } {
+		container.setWidthTracksTextView(true);
+	}
+
+	// The widget keeps the target alive for as long as the view can
+	// message it.
+	text.setDelegate(Some(objc2::runtime::ProtocolObject::from_ref(&*target)));
+
+	let placeholder = PlaceholderLabel::new(mtm);
+	text.addSubview(&placeholder);
+	scroll.setDocumentView(Some(&text));
+	scroll.setWantsLayer(true);
+
+	let view = Retained::into_super(scroll.retain());
+	(
+		view,
+		Control::Area {
+			scroll,
+			text,
+			placeholder,
+			target,
+		},
+	)
+}
+
 /// The content type that tells autofill and password managers what a field
 /// holds, from its `autocomplete` hint.
 fn content_type(content: Option<TextContent>) -> Option<&'static NSTextContentType> {
@@ -925,6 +982,12 @@ fn apply_control(control: &mut Control, props: &NativeProps) {
 
 			field.setEnabled(enabled);
 		}
+		Control::Area {
+			scroll,
+			text,
+			placeholder,
+			target,
+		} => apply_area(scroll, text, placeholder, target, props, enabled),
 		Control::Image {
 			image_view,
 			source,
@@ -938,6 +1001,74 @@ fn apply_control(control: &mut Control, props: &NativeProps) {
 			}
 		}
 	}
+}
+
+/// Applies a `TextArea`'s props to its scroll view, text view, and the
+/// placeholder label drawn over the empty view.
+fn apply_area(
+	scroll: &NSScrollView,
+	text: &NSTextView,
+	placeholder: &PlaceholderLabel,
+	target: &ActionTarget,
+	props: &NativeProps,
+	enabled: bool,
+) {
+	target.sync_props(props);
+	let custom = props.is_custom_drawn();
+	scroll.setBorderType(if custom {
+		NSBorderType::NoBorder
+	} else {
+		NSBorderType::BezelBorder
+	});
+	scroll.setDrawsBackground(!custom);
+	text.setDrawsBackground(!custom);
+
+	let font = system_font(props.text_style());
+	text.setFont(Some(&font));
+	text.setTextColor(Some(&text_color(props.color)));
+	text.setAlignment(ns_alignment(props.text_style()));
+	text.setBaseWritingDirection(match props.text_style().direction {
+		leptoskit_yoga::Direction::Ltr => NSWritingDirection::LeftToRight,
+		leptoskit_yoga::Direction::Rtl => NSWritingDirection::RightToLeft,
+	});
+	// A read-only or disabled view refuses edits; only a disabled
+	// one also refuses selection.
+	text.setEditable(enabled && props.read_only != Some(true));
+	text.setSelectable(enabled);
+
+	let corrects = props.autocorrect != Some(false);
+	text.setAutomaticSpellingCorrectionEnabled(corrects);
+	text.setContinuousSpellCheckingEnabled(corrects);
+
+	let value = props
+		.value
+		.as_deref()
+		.or(props.text.as_deref())
+		.unwrap_or_default();
+	// Rewriting an unchanged value would move the caret while typing.
+	if text.string().to_string() != value {
+		text.setString(&NSString::from_str(value));
+	}
+
+	// A text view has no placeholder, so a label over it stands in
+	// while the value is empty, faded like a text field's.
+	let placeholder_color = props
+		.color
+		.map_or_else(NSColor::secondaryLabelColor, |color| {
+			ns_color(color)
+				.colorWithAlphaComponent(PLACEHOLDER_OPACITY * f64::from(color.alpha()) / 255.0)
+		});
+	placeholder.setAttributedStringValue(&attributed_string(
+		props.placeholder.as_deref().unwrap_or_default(),
+		props.text_style(),
+		&placeholder_color,
+	));
+	placeholder.sizeToFit();
+	// The text starts after the container's inset and its line
+	// fragment padding; the placeholder sits where the text would.
+	let inset = text.textContainerInset();
+	placeholder.setFrameOrigin(NSPoint::new(inset.width + 3.0, inset.height));
+	placeholder.setHidden(!value.is_empty() || props.placeholder.is_none());
 }
 
 /// Loads an image from a `source`: an `asset://` file in the bundle's
@@ -1229,6 +1360,10 @@ fn deactivate_control(control: &Control) {
 				field.setAction(None);
 				field.setDelegate(None);
 			}
+		}
+		Control::Area { text, target, .. } => {
+			target.invalidate();
+			text.setDelegate(None);
 		}
 		Control::Switch { switch, target } => {
 			target.invalidate();

@@ -106,6 +106,7 @@ fn invalid_leaf_commit_is_atomic() {
 		#[cfg(feature = "rive")]
 		NativeKind::Rive,
 		NativeKind::TextInput,
+		NativeKind::TextArea,
 		NativeKind::PasswordInput,
 		NativeKind::Switch,
 		NativeKind::Checkbox,
@@ -307,6 +308,87 @@ fn disabled_ancestors_reject_typed_control_events() {
 }
 
 #[test]
+fn text_areas_propose_edits_keep_identity_and_never_submit() {
+	let proposed = Arc::new(Mutex::new(Vec::<String>::new()));
+	let seen = proposed.clone();
+	let area = |value: &str| {
+		let seen = seen.clone();
+		TextArea()
+			.aria_label("Notes")
+			.class("w-40 h-20")
+			.value(value)
+			.on_change(move |value| seen.lock().unwrap().push(value.into()))
+	};
+	let mut surface = NativeSurface::new(HeadlessBackend::new());
+	surface.set_viewport(300.0, 200.0);
+	surface.set_root(&area("one"));
+	let root = surface.root().unwrap();
+
+	assert_eq!(surface.kind(root), NativeKind::TextArea);
+	assert_eq!(surface.layout(root).width, 160.0);
+	assert_eq!(surface.layout(root).height, 80.0);
+	assert_eq!(
+		surface.dispatch_event(
+			root,
+			&NativeEvent::Change {
+				value: "one\ntwo".into()
+			}
+		),
+		EventOutcome::Handled
+	);
+	assert_eq!(*proposed.lock().unwrap(), ["one\ntwo"]);
+	// Enter adds a line, so no backend sends a text area's submit.
+	assert_eq!(
+		surface.dispatch_event(
+			root,
+			&NativeEvent::Submit {
+				value: "one".into()
+			}
+		),
+		EventOutcome::Unhandled
+	);
+
+	surface.set_root(&area("one\ntwo"));
+	assert_eq!(surface.root(), Some(root));
+}
+
+#[test]
+fn single_line_fields_refuse_to_call_themselves_multiline() {
+	for kind in [NativeKind::TextInput, NativeKind::PasswordInput] {
+		assert_eq!(
+			Element::new(kind)
+				.aria_label("Notes")
+				.aria_multiline(true)
+				.validate(),
+			Err(ControlTreeError::MultilineTextInput { kind })
+		);
+		assert!(
+			Element::new(kind)
+				.aria_label("Notes")
+				.aria_multiline(false)
+				.validate()
+				.is_ok()
+		);
+	}
+
+	assert!(
+		TextArea()
+			.aria_label("Notes")
+			.aria_multiline(true)
+			.validate()
+			.is_ok()
+	);
+	assert_eq!(
+		ControlTreeError::MultilineTextInput {
+			kind: NativeKind::TextInput
+		}
+		.to_string(),
+		"text_input holds one line, so aria_multiline(true) misreports it: use TextArea for \
+		 multiple lines"
+	);
+}
+
+#[test]
 fn secure_fields_measure_single_line_values_and_update_without_replacement() {
 	let mut surface = NativeSurface::new(HeadlessBackend::new());
 	surface.set_viewport(300.0, 100.0);
@@ -374,6 +456,7 @@ fn native_kinds_round_trip_as_wire_names_and_accept_legacy_serialization() {
 		NativeKind::ActivityIndicator,
 		NativeKind::PasswordInput,
 		NativeKind::Pressable,
+		NativeKind::TextArea,
 		NativeKind::Custom("canvas"),
 	] {
 		let encoded = serde_json::to_string(&kind).unwrap();

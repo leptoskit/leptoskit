@@ -108,6 +108,7 @@ fn refused_widget_kinds() {
 	let cases: &[(&str, Element)] = &[
 		("ScrollView", Element::scroll_view()),
 		("TextInput", Element::text_input()),
+		("TextArea", Element::text_area()),
 		("PasswordInput", PasswordInput()),
 		("Checkbox", Checkbox(false)),
 		("Radio", Element::new(NativeKind::Radio)),

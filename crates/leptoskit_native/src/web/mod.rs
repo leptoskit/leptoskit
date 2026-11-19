@@ -330,8 +330,10 @@ impl Inherited {
 
 /// A read-only text field announces itself, the way `aria_read_only` does.
 fn announce_read_only(kind: NativeKind, props: &mut NativeProps) {
-	if matches!(kind, NativeKind::TextInput | NativeKind::PasswordInput)
-		&& props.read_only == Some(true)
+	if matches!(
+		kind,
+		NativeKind::TextInput | NativeKind::TextArea | NativeKind::PasswordInput
+	) && props.read_only == Some(true)
 	{
 		let aria = props.aria_mut();
 		aria.read_only = aria.read_only.or(Some(true));
@@ -929,7 +931,7 @@ fn typed_element(parts: NodeParts, attrs: impl Attribute + 'static) -> AnyView {
 		NativeKind::Camera => camera_element(props.camera, attrs),
 		NativeKind::Map => map_element(props.map, attrs),
 		NativeKind::LivePhoto => live_photo_element(props.live_photo, attrs),
-		NativeKind::TextInput | NativeKind::PasswordInput => {
+		NativeKind::TextInput | NativeKind::TextArea | NativeKind::PasswordInput => {
 			text_input(kind, props, text, enabled, chain, attrs)
 		}
 		NativeKind::Switch | NativeKind::Checkbox | NativeKind::Radio => {
@@ -994,6 +996,10 @@ fn text_input(
 	chain: Vec<Handlers>,
 	attrs: impl Attribute + 'static,
 ) -> AnyView {
+	if kind == NativeKind::TextArea {
+		return text_area(props, text, enabled, chain, attrs);
+	}
+
 	let value = props.value.unwrap_or(text);
 	// A shaped keyboard is a `type` where HTML has one, and an `inputmode`
 	// where it has none. A password field keeps its type whatever it asks
@@ -1051,6 +1057,43 @@ fn text_input(
 		.on(ev::input, move |event| {
 			controls::text_event(&event, &chain);
 		})
+		.add_any_attr(attrs)
+		.into_any()
+}
+
+/// A `<textarea>` whose edits propose values to the application, which owns
+/// the committed value. Enter adds a line, so it raises no `Submit`.
+fn text_area(
+	props: NativeProps,
+	text: String,
+	enabled: bool,
+	chain: Vec<Handlers>,
+	attrs: impl Attribute + 'static,
+) -> AnyView {
+	let value = props.value.unwrap_or(text);
+	let autocorrect = props.autocorrect.is_some_and(|autocorrect| !autocorrect);
+
+	html::textarea()
+		.disabled(!enabled)
+		.placeholder(props.placeholder.unwrap_or_default())
+		.attr("autocomplete", props.autocomplete)
+		.attr("readonly", props.read_only == Some(true))
+		.attr(
+			"maxlength",
+			props.max_length.map(|length| length.to_string()),
+		)
+		.attr("autocapitalize", props.capitalize.map(capitalize_value))
+		.attr("autocorrect", autocorrect.then_some("off"))
+		.attr("spellcheck", autocorrect.then_some("false"))
+		// The server writes the value as the element's text; the browser
+		// keeps the live value in a property, which `restore` reasserts.
+		.prop("value", value.clone())
+		.attr("data-lk-value", value.clone())
+		.directive(controls::restore_input, ())
+		.on(ev::input, move |event| {
+			controls::text_event(&event, &chain);
+		})
+		.child(value)
 		.add_any_attr(attrs)
 		.into_any()
 }

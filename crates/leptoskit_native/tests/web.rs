@@ -170,6 +170,49 @@ fn renders_semantic_controls_and_escapes_user_content() {
 }
 
 #[test]
+fn text_areas_render_a_textarea_with_their_lines_and_hints() {
+	let element = Element::view().children([
+		Element::text_area()
+			.value("one\n<two>")
+			.placeholder("Notes")
+			.with_props(|props| {
+				props.read_only = Some(true);
+				props.max_length = Some(40);
+				props.capitalize = Some(Capitalize::Sentences);
+				props.autocorrect = Some(false);
+				// A text area's return key adds a line: these two name
+				// a keyboard and a return key only single-line fields have.
+				props.keyboard = Some(Keyboard::Email);
+				props.submit_label = Some(SubmitLabel::Go);
+			}),
+		Element::text_area().accessibility_label("Plain"),
+	]);
+	let html = render(element).to_html();
+
+	let area = html.split("<textarea").nth(1).expect("first textarea");
+	let (tag, rest) = area.split_once('>').expect("opening tag");
+	assert!(tag.contains("placeholder=\"Notes\""), "{tag}");
+	assert!(tag.contains(" readonly"), "{tag}");
+	assert!(tag.contains("maxlength=\"40\""), "{tag}");
+	assert!(tag.contains("autocapitalize=\"sentences\""), "{tag}");
+	assert!(tag.contains("autocorrect=\"off\""), "{tag}");
+	assert!(tag.contains("spellcheck=\"false\""), "{tag}");
+	assert!(!tag.contains("type="), "{tag}");
+	assert!(!tag.contains("inputmode"), "{tag}");
+	assert!(!tag.contains("enterkeyhint"), "{tag}");
+	// The server writes the value as the element's escaped text.
+	assert!(rest.starts_with("one\n&lt;two&gt;</textarea>"), "{rest}");
+
+	let plain = html.split("<textarea").nth(2).expect("second textarea");
+	let (tag, rest) = plain.split_once('>').expect("opening tag");
+	assert!(tag.contains("aria-label=\"Plain\""), "{tag}");
+	assert!(!tag.contains("readonly"), "{tag}");
+	assert!(!tag.contains("maxlength"), "{tag}");
+	assert!(rest.starts_with("</textarea>"), "{rest}");
+	assert!(!html.contains("<input"));
+}
+
+#[test]
 fn typed_text_input_hints_render_exact_attributes() {
 	let element = Element::view().children([
 		Element::text_input().with_props(|props| {

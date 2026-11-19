@@ -450,6 +450,42 @@ What each platform honours:
 
 Text the application sets is never rewritten by capitalization or correction; they shape what the person types.
 
+### Take several lines of text
+
+A `TextInput` holds one line: Enter submits it, and long text scrolls sideways. For a note, a comment, or a message, use `TextArea`. Enter adds a line, long lines wrap, and the field scrolls its own content once the text is taller than the field.
+
+```rust
+view! {
+	<View class="gap-3 p-4">
+		<TextArea
+			value=draft
+			placeholder="Write a note"
+			aria_label="Note"
+			max_length=2000
+			class="w-full h-32"
+			on:change=set_draft
+		/>
+		<Button on:press=save>"Save"</Button>
+	</View>
+}
+```
+
+It is controlled the same way as `TextInput`: `on:change` receives the proposed text, lines separated by `\n` on every platform, and the field shows the `value` you render next. `placeholder`, `read_only`, `max_length`, `capitalize`, `autocorrect`, and `autocomplete` work as they do on a `TextInput`. Because Enter adds a line, a `TextArea` never raises a `Submit` event; give the form a button, or handle a key chord with `on:key` where the platform delivers key presses.
+
+Give it a height, such as `h-32`. Without one it is as tall as its text, so it starts one line tall and grows as lines are added.
+
+What each platform draws:
+
+- The web renders a `<textarea>`.
+- macOS draws an `NSTextView` inside an `NSScrollView`, and iOS a `UITextView`. Neither has a placeholder of its own, so leptoskit draws one over the empty text. On macOS, focus is reported when the person starts editing, not when they click into the field.
+- Android draws a multi-line `EditText` whose text starts at the top.
+- Linux draws a `gtk::TextView` inside a `gtk::ScrolledWindow`. GTK's text view has no placeholder, so none is shown; name the field with a label.
+- Windows draws a multi-line `EDIT` control with a vertical scroll bar. It shows no placeholder either, and honours only `read_only` and `max_length` of the hints.
+- The terminal draws a wrapping editor: Up and Down move between lines, Home and End move within one, and the view follows the caret.
+- HarmonyOS and the watch surfaces don't draw `TextArea`: HarmonyOS stops with an error and a watch surface refuses the tree.
+
+`keyboard` picks the on-screen keyboard on iOS and Android only, and `submit_label` is ignored, since the return key adds a line. A single-line field can't claim to be multi-line: `aria_multiline(true)` on a `TextInput` or `PasswordInput` fails validation and points you here.
+
 Use typed handlers for boolean and numeric controls. Keep the accepted value in your application state, then rebuild the screen after a change:
 
 ```rust

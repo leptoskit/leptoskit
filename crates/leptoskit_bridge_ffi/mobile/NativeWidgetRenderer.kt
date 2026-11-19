@@ -382,6 +382,10 @@ internal class NativeWidgetRenderer(
                     textInput(id, secure = true)
                 }
 
+                "text_area", "TextArea" -> {
+                    textArea(id)
+                }
+
                 "scroll_view", "ScrollView" -> {
                     NativeScrollView(context).apply {
                         addView(FrameLayout(context))
@@ -478,6 +482,8 @@ internal class NativeWidgetRenderer(
         visit(root)
         editors.forEachIndexed { index, editor ->
             val next = editors.getOrNull(index + 1)
+            // A text area's return key adds a line, so it names no action.
+            if (editor is NativeTextArea) return@forEachIndexed
             editor.imeOptions = if (next == null) EditorInfo.IME_ACTION_DONE else EditorInfo.IME_ACTION_NEXT
             editor.nextFocusForwardId = next?.id ?: View.NO_ID
         }
@@ -559,6 +565,21 @@ internal class NativeWidgetRenderer(
             }
         }
 
+        input.setOnFocusChangeListener { _, focused -> event(id, if (focused) FOCUS else BLUR, "") }
+
+        return input
+    }
+
+    /** Several lines of text: Enter adds a line, the text wraps, and the field scrolls its own content. */
+    private fun textArea(id: Long): EditText {
+        val input = NativeTextArea(context)
+        input.id = View.generateViewId()
+        input.isSingleLine = false
+        input.inputType = NativeTextArea.INPUT_TYPE
+        input.imeOptions = EditorInfo.IME_FLAG_NO_ENTER_ACTION
+        input.setHorizontallyScrolling(false)
+        input.isVerticalScrollBarEnabled = true
+        input.addTextChangedListener(InputWatcher(id, event))
         input.setOnFocusChangeListener { _, focused -> event(id, if (focused) FOCUS else BLUR, "") }
 
         return input
@@ -703,6 +724,16 @@ internal class PressButton(
         super.setPressed(pressed)
 
         if (changed) pressedChanged(pressed)
+    }
+}
+
+/** A multi-line field. The type tells the renderer to keep Enter for a new line. */
+internal class NativeTextArea(
+    context: Context,
+) : EditText(context) {
+    companion object {
+        const val INPUT_TYPE =
+            InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
     }
 }
 

@@ -295,6 +295,7 @@ fn control_message(
 			&& matches!(
 				widget.kind,
 				NativeKind::TextInput
+					| NativeKind::TextArea
 					| NativeKind::PasswordInput
 					| NativeKind::Button
 					| NativeKind::Pressable
@@ -505,9 +506,12 @@ fn frame_message(
 					})
 				}
 				(NativeKind::Radio, BN_CLICKED) => Some(NativeEvent::Toggle { checked: true }),
-				(NativeKind::TextInput | NativeKind::PasswordInput, EN_CHANGE) => {
+				(
+					NativeKind::TextInput | NativeKind::TextArea | NativeKind::PasswordInput,
+					EN_CHANGE,
+				) => {
 					Some(NativeEvent::Change {
-						value: window_text(control),
+						value: crate::backend::edit_text(widget.kind, control),
 					})
 				}
 				_ => None,

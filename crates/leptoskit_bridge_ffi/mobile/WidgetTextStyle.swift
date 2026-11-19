@@ -51,6 +51,41 @@ enum WidgetTextStyle {
         if let field = widget as? UITextField {
             applyField(props, to: field, font: font, alignment: alignment)
         }
+
+        if let area = widget as? MobileTextArea {
+            applyArea(props, to: area, font: font, alignment: alignment)
+        }
+    }
+
+    private static func applyArea(
+        _ props: WidgetProps, to area: MobileTextArea, font: UIFont, alignment: NSTextAlignment
+    ) {
+        let value = props.value ?? props.text ?? ""
+
+        if area.text != value { area.text = value }
+
+        area.hint.text = props.placeholder
+        area.hint.font = font
+        area.hint.textAlignment = alignment
+        area.hint.isHidden = !value.isEmpty
+        area.setNeedsLayout()
+        area.textContentType = contentType(props.textContent)
+        area.font = font
+        area.textColor = textColor(props)
+        area.textAlignment = alignment
+        // A read-only area refuses edits but stays selectable and copyable.
+        area.isEditable = props.enabled != false && props.readOnly != true
+        area.isSelectable = props.enabled != false
+        if let keyboard = props.keyboard {
+            area.keyboardType = keyboardType(keyboard)
+        }
+        if let capitalize = props.capitalize {
+            area.autocapitalizationType = capitalization(capitalize)
+        }
+        // Unset or `true` hands correction back to the platform's default.
+        let corrects = props.autocorrect != false
+        area.autocorrectionType = corrects ? .default : .no
+        area.spellCheckingType = corrects ? .default : .no
     }
 
     /// Text whose every line is `lineHeight` tall with its glyphs centered, as

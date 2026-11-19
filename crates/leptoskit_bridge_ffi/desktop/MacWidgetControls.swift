@@ -29,6 +29,96 @@ final class MacValueSlider: NSSlider {
     override func accessibilityPerformDecrement() -> Bool { step(false) }
 }
 
+/// Several lines of editable text: a text view inside a scroll view. Return
+/// adds a line, the text wraps at the view's width, and the view scrolls its
+/// own content. AppKit's text view has no placeholder, so a label over the
+/// empty text shows it.
+final class MacTextArea: NSScrollView, NSTextViewDelegate {
+    /// Lets clicks through to the text underneath.
+    private final class Hint: NSTextField {
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    }
+
+    let text = NSTextView()
+    private let hint = Hint(labelWithString: "")
+    private var maxLength: Int?
+    var onChange: ((String) -> Void)?
+    var onFocus: ((Bool) -> Void)?
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        hasVerticalScroller = true
+        autohidesScrollers = true
+        drawsBackground = false
+        text.isRichText = false
+        text.allowsUndo = true
+        text.drawsBackground = false
+        text.isVerticallyResizable = true
+        text.isHorizontallyResizable = false
+        text.autoresizingMask = [.width]
+        text.textContainer?.widthTracksTextView = true
+        text.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        text.delegate = self
+        documentView = text
+        hint.textColor = .placeholderTextColor
+        hint.isHidden = true
+        text.addSubview(hint)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { nil }
+
+    override func layout() {
+        super.layout()
+        let inset = text.textContainerInset
+        let padding = text.textContainer?.lineFragmentPadding ?? 0
+        hint.frame = NSRect(
+            x: inset.width + padding, y: inset.height,
+            width: max(0, text.bounds.width - 2 * (inset.width + padding)),
+            height: hint.intrinsicContentSize.height)
+    }
+
+    func apply(_ props: WidgetProps, font: NSFont, color: NSColor, alignment: NSTextAlignment) {
+        let value = props.value ?? props.text ?? ""
+
+        if text.string != value { text.string = value }
+        maxLength = props.maxLength
+        hint.stringValue = props.placeholder ?? ""
+        hint.font = font
+        hint.alignment = alignment
+        hint.isHidden = !value.isEmpty
+        text.font = font
+        text.textColor = color
+        text.alignment = alignment
+        // A read-only area refuses edits but stays selectable and copyable.
+        text.isEditable = props.enabled != false && props.readOnly != true
+        text.isSelectable = props.enabled != false
+        // Unset or `true` hands correction back to the person's own settings.
+        if props.autocorrect == false {
+            text.isAutomaticSpellingCorrectionEnabled = false
+            text.isContinuousSpellCheckingEnabled = false
+        }
+        borderType = props.background == nil && props.borderWidth == nil && props.cornerRadius == nil
+            ? .bezelBorder : .noBorder
+        needsLayout = true
+    }
+
+    func textDidChange(_ notification: Notification) {
+        var value = text.string
+        // The view accepts more characters than the app allows, so truncate
+        // to `maxLength` before the proposal leaves.
+        if let max = maxLength, value.count > max {
+            value = String(value.prefix(max))
+            text.string = value
+        }
+        hint.isHidden = !value.isEmpty
+        onChange?(value)
+    }
+
+    func textDidBeginEditing(_ notification: Notification) { onFocus?(true) }
+    func textDidEndEditing(_ notification: Notification) { onFocus?(false) }
+}
+
 extension MacWidgetRenderer {
     func makeControl(_ item: Change.Widget) throws -> NSView {
         switch item.kind {
