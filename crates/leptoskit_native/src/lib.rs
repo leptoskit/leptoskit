@@ -52,6 +52,7 @@ pub mod props;
 pub mod reactive;
 pub mod remember;
 pub mod reveal;
+pub mod shortcut;
 pub mod store;
 pub mod surface;
 pub mod tailwind;

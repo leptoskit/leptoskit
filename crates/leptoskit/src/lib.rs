@@ -201,6 +201,12 @@ pub mod remember {
 	pub use leptoskit_native::remember::*;
 }
 
+pub mod shortcut {
+	//! Keyboard shortcuts for the whole app, such as ⌘K to search, that work
+	//! wherever focus is: [`use_shortcut`] and [`Shortcut`].
+	pub use leptoskit_native::shortcut::*;
+}
+
 pub mod store {
 	//! Leptos stores: a state struct whose fields notify separately.
 	//!
@@ -565,6 +571,8 @@ pub mod prelude {
 	pub use leptoskit_native::reactive::WithUntracked;
 	pub use leptoskit_native::remember::remember;
 	pub use leptoskit_native::remember::remember_keyed;
+	pub use leptoskit_native::shortcut::Shortcut;
+	pub use leptoskit_native::shortcut::use_shortcut;
 	pub use leptoskit_native::tailwind::ClassError;
 	pub use leptoskit_native::tailwind::StyleContext;
 	pub use leptoskit_native::tailwind::Tailwind;
