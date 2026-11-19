@@ -2,6 +2,7 @@
 //! starts with the latest events the server read, then adds each one the
 //! admin's stream brings at the top.
 
+#[cfg(all(feature = "hydrate", target_arch = "wasm32"))]
 use leptos::prelude::Effect;
 use leptos::prelude::GetValue as _;
 use leptos::prelude::SetValue as _;
@@ -53,6 +54,10 @@ impl Watch {
 			next: StoredValue::new(live.events.len() as u64),
 		};
 
+		// The list follows the stream in the browser. `Effect::new` calls
+		// `spawn_local`, which panics on the server runtime, and `hydrate`
+		// is also on for a host `--all-features` build.
+		#[cfg(all(feature = "hydrate", target_arch = "wasm32"))]
 		if let Some(tail) = Tail::current() {
 			Effect::new(move |_| {
 				let arrived = tail.take();
