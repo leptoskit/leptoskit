@@ -34,6 +34,8 @@ table inet leptoskit {
   type filter hook input priority 0; policy drop;
   ct state established,related accept
   iifname lo accept
+  ip protocol icmp accept
+  ip6 nexthdr icmpv6 accept
   iifname { cni0, flannel-wg } accept
   ip saddr 192.0.2.0/24 tcp dport 22 accept
   ip saddr 192.0.2.0/24 tcp dport 6443 accept
@@ -48,8 +50,7 @@ cat > /etc/rancher/k3s/config.yaml <<'LEPTOSKIT_DOCUMENT'
   "cluster-init": true,
   "disable": [
     "traefik",
-    "servicelb",
-    "metrics-server"
+    "servicelb"
   ],
   "flannel-backend": "wireguard-native",
   "flannel-external-ip": true,
@@ -62,6 +63,7 @@ cat > /etc/rancher/k3s/config.yaml <<'LEPTOSKIT_DOCUMENT'
   "node-taint": [
     "leptoskit.dev/pool=tenant:PreferNoSchedule"
   ],
+  "secrets-encryption": true,
   "service-cidr": "10.43.0.0/16",
   "tls-san": [
     "203.0.113.10"

@@ -1,6 +1,5 @@
 ---
 source: crates/leptoskit_cloud_platform/tests/addons.rs
-assertion_line: 11
 expression: "files.iter().map(|(path, content)|\nformat!(\"# {path}\\n{content}\")).collect::<Vec<_>>().join(\"---\\n\")"
 ---
 # eu/growth/addons/00-namespaces-00.yaml
@@ -85,7 +84,7 @@ expression: "files.iter().map(|(path, content)|\nformat!(\"# {path}\\n{content}\
 {
   "apiVersion": "v1",
   "data": {
-    "requirements.json": "[\n  {\n    \"createdBy\": \"operator\",\n    \"keys\": [\n      \"ACCESS_KEY_ID\",\n      \"SECRET_ACCESS_KEY\"\n    ],\n    \"name\": \"object-storage\",\n    \"namespace\": \"database\",\n    \"purpose\": \"WAL archives and base backups\",\n    \"source\": {\n      \"access_key\": \"ACCESS_KEY_ID\",\n      \"kind\": \"kubernetes-secret\",\n      \"name\": \"object-storage\",\n      \"secret_key\": \"SECRET_ACCESS_KEY\"\n    }\n  },\n  {\n    \"createdBy\": \"operator\",\n    \"keys\": [\n      \"htpasswd\"\n    ],\n    \"name\": \"registry-auth\",\n    \"namespace\": \"registry\",\n    \"purpose\": \"Authenticated registry push and pull\",\n    \"source\": \"operator bcrypt htpasswd file\"\n  },\n  {\n    \"createdBy\": \"operator\",\n    \"keys\": [\n      \"ACCESS_KEY_ID\",\n      \"SECRET_ACCESS_KEY\"\n    ],\n    \"name\": \"object-storage\",\n    \"namespace\": \"registry\",\n    \"purpose\": \"Registry S3 storage\",\n    \"source\": {\n      \"access_key\": \"ACCESS_KEY_ID\",\n      \"kind\": \"kubernetes-secret\",\n      \"name\": \"object-storage\",\n      \"secret_key\": \"SECRET_ACCESS_KEY\"\n    }\n  },\n  {\n    \"createdBy\": \"cert-manager\",\n    \"keys\": [\n      \"tls.crt\",\n      \"tls.key\"\n    ],\n    \"name\": \"registry-tls\",\n    \"namespace\": \"registry\",\n    \"purpose\": \"Registry TLS\",\n    \"source\": \"Certificate registry\"\n  },\n  {\n    \"createdBy\": \"operator\",\n    \"keys\": [\n      \"api-token\"\n    ],\n    \"name\": \"cloudflare-dns\",\n    \"namespace\": \"cert-manager\",\n    \"purpose\": \"DNS-01 challenge\",\n    \"source\": \"Cloudflare token with zone DNS edit and zone read\"\n  },\n  {\n    \"createdBy\": \"cert-manager\",\n    \"keys\": [\n      \"tls.key\"\n    ],\n    \"name\": \"apps-acme-account\",\n    \"namespace\": \"cert-manager\",\n    \"purpose\": \"ACME account key\",\n    \"source\": \"cert-manager generates this; do not precreate\"\n  },\n  {\n    \"createdBy\": \"cert-manager\",\n    \"keys\": [\n      \"tls.crt\",\n      \"tls.key\"\n    ],\n    \"name\": \"apps-wildcard-tls\",\n    \"namespace\": \"kube-system\",\n    \"purpose\": \"Ingress default wildcard certificate\",\n    \"source\": \"Certificate apps-wildcard generates this; do not precreate\"\n  },\n  {\n    \"createdBy\": \"operator\",\n    \"keys\": [\n      \"token\"\n    ],\n    \"name\": \"cloudflare-tunnel\",\n    \"namespace\": \"kube-system\",\n    \"purpose\": \"Tunnel connector\",\n    \"source\": \"sensitive OpenTofu tunnel_token output\"\n  }\n]"
+    "requirements.json": "[\n  {\n    \"createdBy\": \"operator\",\n    \"keys\": [\n      \"ACCESS_KEY_ID\",\n      \"SECRET_ACCESS_KEY\"\n    ],\n    \"name\": \"object-storage\",\n    \"namespace\": \"database\",\n    \"purpose\": \"WAL archives and base backups\",\n    \"source\": {\n      \"access_key\": \"ACCESS_KEY_ID\",\n      \"kind\": \"kubernetes-secret\",\n      \"name\": \"object-storage\",\n      \"secret_key\": \"SECRET_ACCESS_KEY\"\n    }\n  },\n  {\n    \"createdBy\": \"operator\",\n    \"keys\": [\n      \"htpasswd\"\n    ],\n    \"name\": \"registry-auth\",\n    \"namespace\": \"registry\",\n    \"purpose\": \"Authenticated registry push and pull\",\n    \"source\": \"operator bcrypt htpasswd file\"\n  },\n  {\n    \"createdBy\": \"operator\",\n    \"keys\": [\n      \"ACCESS_KEY_ID\",\n      \"SECRET_ACCESS_KEY\"\n    ],\n    \"name\": \"object-storage\",\n    \"namespace\": \"registry\",\n    \"purpose\": \"Registry S3 storage\",\n    \"source\": {\n      \"access_key\": \"ACCESS_KEY_ID\",\n      \"kind\": \"kubernetes-secret\",\n      \"name\": \"object-storage\",\n      \"secret_key\": \"SECRET_ACCESS_KEY\"\n    }\n  },\n  {\n    \"createdBy\": \"operator\",\n    \"keys\": [\n      \"api-token\"\n    ],\n    \"name\": \"cloudflare-dns\",\n    \"namespace\": \"cert-manager\",\n    \"purpose\": \"DNS-01 challenge\",\n    \"source\": \"Cloudflare token with zone DNS edit and zone read\"\n  },\n  {\n    \"createdBy\": \"cert-manager\",\n    \"keys\": [\n      \"tls.key\"\n    ],\n    \"name\": \"apps-acme-account\",\n    \"namespace\": \"cert-manager\",\n    \"purpose\": \"ACME account key\",\n    \"source\": \"cert-manager generates this; do not precreate\"\n  },\n  {\n    \"createdBy\": \"cert-manager\",\n    \"keys\": [\n      \"tls.crt\",\n      \"tls.key\"\n    ],\n    \"name\": \"apps-wildcard-tls\",\n    \"namespace\": \"kube-system\",\n    \"purpose\": \"Ingress default wildcard certificate\",\n    \"source\": \"Certificate apps-wildcard generates this; do not precreate\"\n  },\n  {\n    \"createdBy\": \"operator\",\n    \"keys\": [\n      \"token\"\n    ],\n    \"name\": \"cloudflare-tunnel\",\n    \"namespace\": \"kube-system\",\n    \"purpose\": \"Tunnel connector\",\n    \"source\": \"sensitive OpenTofu tunnel_token output\"\n  }\n]"
   },
   "kind": "ConfigMap",
   "metadata": {
@@ -110,10 +109,15 @@ expression: "files.iter().map(|(path, content)|\nformat!(\"# {path}\\n{content}\
             "namespaceSelector": {
               "matchExpressions": [
                 {
-                  "key": "app.kubernetes.io/managed-by",
-                  "operator": "NotIn",
+                  "key": "kubernetes.io/metadata.name",
+                  "operator": "In",
                   "values": [
-                    "leptoskit-cloud"
+                    "kube-system",
+                    "cnpg-system",
+                    "database",
+                    "keda",
+                    "cert-manager",
+                    "registry"
                   ]
                 }
               ]
@@ -145,10 +149,15 @@ expression: "files.iter().map(|(path, content)|\nformat!(\"# {path}\\n{content}\
             "namespaceSelector": {
               "matchExpressions": [
                 {
-                  "key": "app.kubernetes.io/managed-by",
-                  "operator": "NotIn",
+                  "key": "kubernetes.io/metadata.name",
+                  "operator": "In",
                   "values": [
-                    "leptoskit-cloud"
+                    "kube-system",
+                    "cnpg-system",
+                    "database",
+                    "keda",
+                    "cert-manager",
+                    "registry"
                   ]
                 }
               ]
@@ -180,10 +189,15 @@ expression: "files.iter().map(|(path, content)|\nformat!(\"# {path}\\n{content}\
             "namespaceSelector": {
               "matchExpressions": [
                 {
-                  "key": "app.kubernetes.io/managed-by",
-                  "operator": "NotIn",
+                  "key": "kubernetes.io/metadata.name",
+                  "operator": "In",
                   "values": [
-                    "leptoskit-cloud"
+                    "kube-system",
+                    "cnpg-system",
+                    "database",
+                    "keda",
+                    "cert-manager",
+                    "registry"
                   ]
                 }
               ]
@@ -232,10 +246,15 @@ expression: "files.iter().map(|(path, content)|\nformat!(\"# {path}\\n{content}\
             "namespaceSelector": {
               "matchExpressions": [
                 {
-                  "key": "app.kubernetes.io/managed-by",
-                  "operator": "NotIn",
+                  "key": "kubernetes.io/metadata.name",
+                  "operator": "In",
                   "values": [
-                    "leptoskit-cloud"
+                    "kube-system",
+                    "cnpg-system",
+                    "database",
+                    "keda",
+                    "cert-manager",
+                    "registry"
                   ]
                 }
               ]
@@ -267,10 +286,15 @@ expression: "files.iter().map(|(path, content)|\nformat!(\"# {path}\\n{content}\
             "namespaceSelector": {
               "matchExpressions": [
                 {
-                  "key": "app.kubernetes.io/managed-by",
-                  "operator": "NotIn",
+                  "key": "kubernetes.io/metadata.name",
+                  "operator": "In",
                   "values": [
-                    "leptoskit-cloud"
+                    "kube-system",
+                    "cnpg-system",
+                    "database",
+                    "keda",
+                    "cert-manager",
+                    "registry"
                   ]
                 }
               ]
@@ -302,10 +326,15 @@ expression: "files.iter().map(|(path, content)|\nformat!(\"# {path}\\n{content}\
             "namespaceSelector": {
               "matchExpressions": [
                 {
-                  "key": "app.kubernetes.io/managed-by",
-                  "operator": "NotIn",
+                  "key": "kubernetes.io/metadata.name",
+                  "operator": "In",
                   "values": [
-                    "leptoskit-cloud"
+                    "kube-system",
+                    "cnpg-system",
+                    "database",
+                    "keda",
+                    "cert-manager",
+                    "registry"
                   ]
                 }
               ]
@@ -559,7 +588,67 @@ expression: "files.iter().map(|(path, content)|\nformat!(\"# {path}\\n{content}\
   ]
 }
 ---
-# eu/growth/addons/20-charts-09.yaml
+# eu/growth/addons/10-worker-rbac-09.yaml
+{
+  "apiVersion": "admissionregistration.k8s.io/v1",
+  "kind": "ValidatingAdmissionPolicy",
+  "metadata": {
+    "name": "leptoskit-cloud-worker-scope"
+  },
+  "spec": {
+    "failurePolicy": "Fail",
+    "matchConditions": [
+      {
+        "expression": "request.userInfo.username == 'system:serviceaccount:kube-system:leptoskit-cloud-worker'",
+        "name": "is-cloud-worker"
+      }
+    ],
+    "matchConstraints": {
+      "resourceRules": [
+        {
+          "apiGroups": [
+            "*"
+          ],
+          "apiVersions": [
+            "*"
+          ],
+          "operations": [
+            "CREATE",
+            "UPDATE",
+            "DELETE"
+          ],
+          "resources": [
+            "*"
+          ],
+          "scope": "*"
+        }
+      ]
+    },
+    "validations": [
+      {
+        "expression": "(request.kind.kind == 'Namespace' && request.name.startsWith('lk-')) || (request.namespace != '' && request.namespace.startsWith('lk-'))",
+        "message": "leptoskit-cloud-worker may only mutate lk-* tenant namespaces"
+      }
+    ]
+  }
+}
+---
+# eu/growth/addons/10-worker-rbac-10.yaml
+{
+  "apiVersion": "admissionregistration.k8s.io/v1",
+  "kind": "ValidatingAdmissionPolicyBinding",
+  "metadata": {
+    "name": "leptoskit-cloud-worker-scope"
+  },
+  "spec": {
+    "policyName": "leptoskit-cloud-worker-scope",
+    "validationActions": [
+      "Deny"
+    ]
+  }
+}
+---
+# eu/growth/addons/20-charts-11.yaml
 {
   "apiVersion": "helm.cattle.io/v1",
   "kind": "HelmChart",
@@ -571,12 +660,12 @@ expression: "files.iter().map(|(path, content)|\nformat!(\"# {path}\\n{content}\
     "chart": "cloudnative-pg",
     "repo": "https://cloudnative-pg.github.io/charts",
     "targetNamespace": "cnpg-system",
-    "valuesContent": "{\n  \"nodeSelector\": {\n    \"leptoskit.dev/pool\": \"platform\"\n  },\n  \"tolerations\": [\n    {\n      \"effect\": \"PreferNoSchedule\",\n      \"key\": \"leptoskit.dev/pool\",\n      \"operator\": \"Equal\",\n      \"value\": \"platform\"\n    }\n  ]\n}",
+    "valuesContent": "{\n  \"nodeSelector\": {\n    \"leptoskit.dev/pool\": \"platform\"\n  },\n  \"tolerations\": [\n    {\n      \"effect\": \"NoSchedule\",\n      \"key\": \"leptoskit.dev/pool\",\n      \"operator\": \"Equal\",\n      \"value\": \"platform\"\n    }\n  ]\n}",
     "version": "0.29.2"
   }
 }
 ---
-# eu/growth/addons/20-charts-10.yaml
+# eu/growth/addons/20-charts-12.yaml
 {
   "apiVersion": "helm.cattle.io/v1",
   "kind": "HelmChart",
@@ -588,12 +677,12 @@ expression: "files.iter().map(|(path, content)|\nformat!(\"# {path}\\n{content}\
     "chart": "keda",
     "repo": "https://kedacore.github.io/charts",
     "targetNamespace": "keda",
-    "valuesContent": "{\n  \"metricsServer\": {\n    \"nodeSelector\": {\n      \"leptoskit.dev/pool\": \"platform\"\n    },\n    \"tolerations\": [\n      {\n        \"effect\": \"PreferNoSchedule\",\n        \"key\": \"leptoskit.dev/pool\",\n        \"operator\": \"Equal\",\n        \"value\": \"platform\"\n      }\n    ]\n  },\n  \"nodeSelector\": {\n    \"leptoskit.dev/pool\": \"platform\"\n  },\n  \"operator\": {\n    \"nodeSelector\": {\n      \"leptoskit.dev/pool\": \"platform\"\n    },\n    \"tolerations\": [\n      {\n        \"effect\": \"PreferNoSchedule\",\n        \"key\": \"leptoskit.dev/pool\",\n        \"operator\": \"Equal\",\n        \"value\": \"platform\"\n      }\n    ]\n  },\n  \"tolerations\": [\n    {\n      \"effect\": \"PreferNoSchedule\",\n      \"key\": \"leptoskit.dev/pool\",\n      \"operator\": \"Equal\",\n      \"value\": \"platform\"\n    }\n  ],\n  \"webhooks\": {\n    \"nodeSelector\": {\n      \"leptoskit.dev/pool\": \"platform\"\n    },\n    \"tolerations\": [\n      {\n        \"effect\": \"PreferNoSchedule\",\n        \"key\": \"leptoskit.dev/pool\",\n        \"operator\": \"Equal\",\n        \"value\": \"platform\"\n      }\n    ]\n  }\n}",
+    "valuesContent": "{\n  \"metricsServer\": {\n    \"nodeSelector\": {\n      \"leptoskit.dev/pool\": \"platform\"\n    },\n    \"tolerations\": [\n      {\n        \"effect\": \"NoSchedule\",\n        \"key\": \"leptoskit.dev/pool\",\n        \"operator\": \"Equal\",\n        \"value\": \"platform\"\n      }\n    ]\n  },\n  \"nodeSelector\": {\n    \"leptoskit.dev/pool\": \"platform\"\n  },\n  \"operator\": {\n    \"nodeSelector\": {\n      \"leptoskit.dev/pool\": \"platform\"\n    },\n    \"tolerations\": [\n      {\n        \"effect\": \"NoSchedule\",\n        \"key\": \"leptoskit.dev/pool\",\n        \"operator\": \"Equal\",\n        \"value\": \"platform\"\n      }\n    ]\n  },\n  \"tolerations\": [\n    {\n      \"effect\": \"NoSchedule\",\n      \"key\": \"leptoskit.dev/pool\",\n      \"operator\": \"Equal\",\n      \"value\": \"platform\"\n    }\n  ],\n  \"webhooks\": {\n    \"nodeSelector\": {\n      \"leptoskit.dev/pool\": \"platform\"\n    },\n    \"tolerations\": [\n      {\n        \"effect\": \"NoSchedule\",\n        \"key\": \"leptoskit.dev/pool\",\n        \"operator\": \"Equal\",\n        \"value\": \"platform\"\n      }\n    ]\n  }\n}",
     "version": "2.21.1"
   }
 }
 ---
-# eu/growth/addons/20-charts-12.yaml
+# eu/growth/addons/20-charts-14.yaml
 {
   "apiVersion": "helm.cattle.io/v1",
   "kind": "HelmChart",
@@ -605,12 +694,12 @@ expression: "files.iter().map(|(path, content)|\nformat!(\"# {path}\\n{content}\
     "chart": "cert-manager",
     "repo": "https://charts.jetstack.io",
     "targetNamespace": "cert-manager",
-    "valuesContent": "{\n  \"cainjector\": {\n    \"nodeSelector\": {\n      \"leptoskit.dev/pool\": \"platform\"\n    },\n    \"tolerations\": [\n      {\n        \"effect\": \"PreferNoSchedule\",\n        \"key\": \"leptoskit.dev/pool\",\n        \"operator\": \"Equal\",\n        \"value\": \"platform\"\n      }\n    ]\n  },\n  \"crds\": {\n    \"enabled\": true\n  },\n  \"nodeSelector\": {\n    \"leptoskit.dev/pool\": \"platform\"\n  },\n  \"startupapicheck\": {\n    \"nodeSelector\": {\n      \"leptoskit.dev/pool\": \"platform\"\n    },\n    \"tolerations\": [\n      {\n        \"effect\": \"PreferNoSchedule\",\n        \"key\": \"leptoskit.dev/pool\",\n        \"operator\": \"Equal\",\n        \"value\": \"platform\"\n      }\n    ]\n  },\n  \"tolerations\": [\n    {\n      \"effect\": \"PreferNoSchedule\",\n      \"key\": \"leptoskit.dev/pool\",\n      \"operator\": \"Equal\",\n      \"value\": \"platform\"\n    }\n  ],\n  \"webhook\": {\n    \"nodeSelector\": {\n      \"leptoskit.dev/pool\": \"platform\"\n    },\n    \"tolerations\": [\n      {\n        \"effect\": \"PreferNoSchedule\",\n        \"key\": \"leptoskit.dev/pool\",\n        \"operator\": \"Equal\",\n        \"value\": \"platform\"\n      }\n    ]\n  }\n}",
+    "valuesContent": "{\n  \"cainjector\": {\n    \"nodeSelector\": {\n      \"leptoskit.dev/pool\": \"platform\"\n    },\n    \"tolerations\": [\n      {\n        \"effect\": \"NoSchedule\",\n        \"key\": \"leptoskit.dev/pool\",\n        \"operator\": \"Equal\",\n        \"value\": \"platform\"\n      }\n    ]\n  },\n  \"crds\": {\n    \"enabled\": true\n  },\n  \"nodeSelector\": {\n    \"leptoskit.dev/pool\": \"platform\"\n  },\n  \"startupapicheck\": {\n    \"nodeSelector\": {\n      \"leptoskit.dev/pool\": \"platform\"\n    },\n    \"tolerations\": [\n      {\n        \"effect\": \"NoSchedule\",\n        \"key\": \"leptoskit.dev/pool\",\n        \"operator\": \"Equal\",\n        \"value\": \"platform\"\n      }\n    ]\n  },\n  \"tolerations\": [\n    {\n      \"effect\": \"NoSchedule\",\n      \"key\": \"leptoskit.dev/pool\",\n      \"operator\": \"Equal\",\n      \"value\": \"platform\"\n    }\n  ],\n  \"webhook\": {\n    \"nodeSelector\": {\n      \"leptoskit.dev/pool\": \"platform\"\n    },\n    \"tolerations\": [\n      {\n        \"effect\": \"NoSchedule\",\n        \"key\": \"leptoskit.dev/pool\",\n        \"operator\": \"Equal\",\n        \"value\": \"platform\"\n      }\n    ]\n  }\n}",
     "version": "v1.21.3"
   }
 }
 ---
-# eu/growth/addons/20-charts-13.yaml
+# eu/growth/addons/20-charts-15.yaml
 {
   "apiVersion": "helm.cattle.io/v1",
   "kind": "HelmChart",
@@ -622,7 +711,7 @@ expression: "files.iter().map(|(path, content)|\nformat!(\"# {path}\\n{content}\
     "chart": "zot",
     "repo": "https://zotregistry.dev/helm-charts",
     "targetNamespace": "registry",
-    "valuesContent": "{\n  \"configFiles\": {\n    \"config.json\": \"{\\n  \\\"distSpecVersion\\\": \\\"1.1.1\\\",\\n  \\\"http\\\": {\\n    \\\"address\\\": \\\"0.0.0.0\\\",\\n    \\\"auth\\\": {\\n      \\\"htpasswd\\\": {\\n        \\\"path\\\": \\\"/auth/htpasswd\\\"\\n      }\\n    },\\n    \\\"port\\\": \\\"5000\\\"\\n  },\\n  \\\"log\\\": {\\n    \\\"level\\\": \\\"info\\\"\\n  },\\n  \\\"storage\\\": {\\n    \\\"dedupe\\\": false,\\n    \\\"rootDirectory\\\": \\\"/var/lib/registry\\\",\\n    \\\"storageDriver\\\": {\\n      \\\"bucket\\\": \\\"example-registry\\\",\\n      \\\"forcepathstyle\\\": true,\\n      \\\"name\\\": \\\"s3\\\",\\n      \\\"region\\\": \\\"example-region\\\",\\n      \\\"regionendpoint\\\": \\\"https://s3.example.com\\\",\\n      \\\"secure\\\": true,\\n      \\\"skipverify\\\": false\\n    }\\n  }\\n}\"\n  },\n  \"env\": [\n    {\n      \"name\": \"AWS_ACCESS_KEY_ID\",\n      \"valueFrom\": {\n        \"secretKeyRef\": {\n          \"key\": \"ACCESS_KEY_ID\",\n          \"name\": \"object-storage\"\n        }\n      }\n    },\n    {\n      \"name\": \"AWS_SECRET_ACCESS_KEY\",\n      \"valueFrom\": {\n        \"secretKeyRef\": {\n          \"key\": \"SECRET_ACCESS_KEY\",\n          \"name\": \"object-storage\"\n        }\n      }\n    }\n  ],\n  \"externalSecrets\": [\n    {\n      \"mountPath\": \"/auth\",\n      \"secretName\": \"registry-auth\"\n    }\n  ],\n  \"fullnameOverride\": \"zot\",\n  \"mountConfig\": true,\n  \"nodeSelector\": {\n    \"leptoskit.dev/pool\": \"platform\"\n  },\n  \"persistence\": true,\n  \"pvc\": {\n    \"storageClassName\": \"local-path\"\n  },\n  \"service\": {\n    \"port\": 5000,\n    \"type\": \"ClusterIP\"\n  },\n  \"tolerations\": [\n    {\n      \"effect\": \"PreferNoSchedule\",\n      \"key\": \"leptoskit.dev/pool\",\n      \"operator\": \"Equal\",\n      \"value\": \"platform\"\n    }\n  ]\n}",
+    "valuesContent": "{\n  \"configFiles\": {\n    \"config.json\": \"{\\n  \\\"distSpecVersion\\\": \\\"1.1.1\\\",\\n  \\\"http\\\": {\\n    \\\"address\\\": \\\"0.0.0.0\\\",\\n    \\\"auth\\\": {\\n      \\\"htpasswd\\\": {\\n        \\\"path\\\": \\\"/auth/htpasswd\\\"\\n      }\\n    },\\n    \\\"port\\\": \\\"5000\\\"\\n  },\\n  \\\"log\\\": {\\n    \\\"level\\\": \\\"info\\\"\\n  },\\n  \\\"storage\\\": {\\n    \\\"dedupe\\\": false,\\n    \\\"rootDirectory\\\": \\\"/var/lib/registry\\\",\\n    \\\"storageDriver\\\": {\\n      \\\"bucket\\\": \\\"example-registry\\\",\\n      \\\"forcepathstyle\\\": true,\\n      \\\"name\\\": \\\"s3\\\",\\n      \\\"region\\\": \\\"example-region\\\",\\n      \\\"regionendpoint\\\": \\\"https://s3.example.com\\\",\\n      \\\"secure\\\": true,\\n      \\\"skipverify\\\": false\\n    }\\n  }\\n}\"\n  },\n  \"env\": [\n    {\n      \"name\": \"AWS_ACCESS_KEY_ID\",\n      \"valueFrom\": {\n        \"secretKeyRef\": {\n          \"key\": \"ACCESS_KEY_ID\",\n          \"name\": \"object-storage\"\n        }\n      }\n    },\n    {\n      \"name\": \"AWS_SECRET_ACCESS_KEY\",\n      \"valueFrom\": {\n        \"secretKeyRef\": {\n          \"key\": \"SECRET_ACCESS_KEY\",\n          \"name\": \"object-storage\"\n        }\n      }\n    }\n  ],\n  \"externalSecrets\": [\n    {\n      \"mountPath\": \"/auth\",\n      \"secretName\": \"registry-auth\"\n    }\n  ],\n  \"fullnameOverride\": \"zot\",\n  \"mountConfig\": true,\n  \"nodeSelector\": {\n    \"leptoskit.dev/pool\": \"platform\"\n  },\n  \"persistence\": true,\n  \"pvc\": {\n    \"storageClassName\": \"local-path\"\n  },\n  \"service\": {\n    \"port\": 5000,\n    \"type\": \"ClusterIP\"\n  },\n  \"tolerations\": [\n    {\n      \"effect\": \"NoSchedule\",\n      \"key\": \"leptoskit.dev/pool\",\n      \"operator\": \"Equal\",\n      \"value\": \"platform\"\n    }\n  ]\n}",
     "version": "0.1.134"
   }
 }
@@ -639,24 +728,24 @@ expression: "files.iter().map(|(path, content)|\nformat!(\"# {path}\\n{content}\
     "chart": "traefik",
     "repo": "https://traefik.github.io/charts",
     "targetNamespace": "kube-system",
-    "valuesContent": "{\n  \"fullnameOverride\": \"traefik\",\n  \"nodeSelector\": {\n    \"leptoskit.dev/pool\": \"platform\"\n  },\n  \"ports\": {\n    \"web\": {\n      \"forwardedHeaders\": {\n        \"trustedIPs\": [\n          \"10.42.0.0/16\"\n        ]\n      }\n    },\n    \"websecure\": {\n      \"forwardedHeaders\": {\n        \"trustedIPs\": []\n      }\n    }\n  },\n  \"providers\": {\n    \"kubernetesIngress\": {\n      \"allowExternalNameServices\": true\n    }\n  },\n  \"service\": {\n    \"type\": \"ClusterIP\"\n  },\n  \"tolerations\": [\n    {\n      \"effect\": \"PreferNoSchedule\",\n      \"key\": \"leptoskit.dev/pool\",\n      \"operator\": \"Equal\",\n      \"value\": \"platform\"\n    }\n  ]\n}",
+    "valuesContent": "{\n  \"fullnameOverride\": \"traefik\",\n  \"nodeSelector\": {\n    \"leptoskit.dev/pool\": \"platform\"\n  },\n  \"ports\": {\n    \"web\": {\n      \"forwardedHeaders\": {\n        \"trustedIPs\": [\n          \"10.42.0.0/16\"\n        ]\n      }\n    },\n    \"websecure\": {\n      \"forwardedHeaders\": {\n        \"trustedIPs\": []\n      }\n    }\n  },\n  \"providers\": {\n    \"kubernetesIngress\": {\n      \"allowExternalNameServices\": true\n    }\n  },\n  \"service\": {\n    \"type\": \"ClusterIP\"\n  },\n  \"tolerations\": [\n    {\n      \"effect\": \"NoSchedule\",\n      \"key\": \"leptoskit.dev/pool\",\n      \"operator\": \"Equal\",\n      \"value\": \"platform\"\n    }\n  ]\n}",
     "version": "42.4.1"
   }
 }
 ---
-# eu/growth/addons/21-http-11.yaml
+# eu/growth/addons/21-http-13.yaml
 {
   "apiVersion": "helm.cattle.io/v1",
   "kind": "HelmChart",
   "metadata": {
-    "name": "http",
+    "name": "keda-add-ons-http",
     "namespace": "kube-system"
   },
   "spec": {
     "chart": "keda-add-ons-http",
     "repo": "https://kedacore.github.io/charts",
     "targetNamespace": "keda",
-    "valuesContent": "{\n  \"interceptor\": {\n    \"directPodRouting\": false,\n    \"nodeSelector\": {\n      \"leptoskit.dev/pool\": \"platform\"\n    },\n    \"tolerations\": [\n      {\n        \"effect\": \"PreferNoSchedule\",\n        \"key\": \"leptoskit.dev/pool\",\n        \"operator\": \"Equal\",\n        \"value\": \"platform\"\n      }\n    ]\n  },\n  \"operator\": {\n    \"nodeSelector\": {\n      \"leptoskit.dev/pool\": \"platform\"\n    },\n    \"tolerations\": [\n      {\n        \"effect\": \"PreferNoSchedule\",\n        \"key\": \"leptoskit.dev/pool\",\n        \"operator\": \"Equal\",\n        \"value\": \"platform\"\n      }\n    ]\n  },\n  \"scaler\": {\n    \"nodeSelector\": {\n      \"leptoskit.dev/pool\": \"platform\"\n    },\n    \"tolerations\": [\n      {\n        \"effect\": \"PreferNoSchedule\",\n        \"key\": \"leptoskit.dev/pool\",\n        \"operator\": \"Equal\",\n        \"value\": \"platform\"\n      }\n    ]\n  }\n}",
+    "valuesContent": "{\n  \"interceptor\": {\n    \"directPodRouting\": false,\n    \"nodeSelector\": {\n      \"leptoskit.dev/pool\": \"platform\"\n    },\n    \"tolerations\": [\n      {\n        \"effect\": \"NoSchedule\",\n        \"key\": \"leptoskit.dev/pool\",\n        \"operator\": \"Equal\",\n        \"value\": \"platform\"\n      }\n    ]\n  },\n  \"operator\": {\n    \"nodeSelector\": {\n      \"leptoskit.dev/pool\": \"platform\"\n    },\n    \"tolerations\": [\n      {\n        \"effect\": \"NoSchedule\",\n        \"key\": \"leptoskit.dev/pool\",\n        \"operator\": \"Equal\",\n        \"value\": \"platform\"\n      }\n    ]\n  },\n  \"scaler\": {\n    \"nodeSelector\": {\n      \"leptoskit.dev/pool\": \"platform\"\n    },\n    \"tolerations\": [\n      {\n        \"effect\": \"NoSchedule\",\n        \"key\": \"leptoskit.dev/pool\",\n        \"operator\": \"Equal\",\n        \"value\": \"platform\"\n      }\n    ]\n  }\n}",
     "version": "0.16.0"
   }
 }
@@ -742,7 +831,7 @@ expression: "files.iter().map(|(path, content)|\nformat!(\"# {path}\\n{content}\
       "podAntiAffinityType": "preferred",
       "tolerations": [
         {
-          "effect": "PreferNoSchedule",
+          "effect": "NoSchedule",
           "key": "leptoskit.dev/pool",
           "operator": "Equal",
           "value": "platform"
@@ -769,6 +858,7 @@ expression: "files.iter().map(|(path, content)|\nformat!(\"# {path}\\n{content}\
       },
       "retentionPolicy": "30d"
     },
+    "enableSuperuserAccess": true,
     "env": [
       {
         "name": "AWS_DEFAULT_REGION",
@@ -776,6 +866,14 @@ expression: "files.iter().map(|(path, content)|\nformat!(\"# {path}\\n{content}\
       }
     ],
     "instances": 1,
+    "postgresql": {
+      "parameters": {
+        "max_connections": "300"
+      },
+      "pg_hba": [
+        "hostssl all all 0.0.0.0/0 scram-sha-256"
+      ]
+    },
     "storage": {
       "size": "100Gi",
       "storageClass": "local-path"
@@ -801,68 +899,6 @@ expression: "files.iter().map(|(path, content)|\nformat!(\"# {path}\\n{content}\
   }
 }
 ---
-# eu/growth/addons/30-registry-14.yaml
-{
-  "apiVersion": "cert-manager.io/v1",
-  "kind": "Certificate",
-  "metadata": {
-    "name": "registry",
-    "namespace": "registry"
-  },
-  "spec": {
-    "dnsNames": [
-      "registry.apps.example.com"
-    ],
-    "issuerRef": {
-      "kind": "ClusterIssuer",
-      "name": "apps"
-    },
-    "secretName": "registry-tls"
-  }
-}
----
-# eu/growth/addons/30-registry-15.yaml
-{
-  "apiVersion": "networking.k8s.io/v1",
-  "kind": "Ingress",
-  "metadata": {
-    "name": "registry",
-    "namespace": "registry"
-  },
-  "spec": {
-    "ingressClassName": "traefik",
-    "rules": [
-      {
-        "host": "registry.apps.example.com",
-        "http": {
-          "paths": [
-            {
-              "backend": {
-                "service": {
-                  "name": "zot",
-                  "port": {
-                    "number": 5000
-                  }
-                }
-              },
-              "path": "/",
-              "pathType": "Prefix"
-            }
-          ]
-        }
-      }
-    ],
-    "tls": [
-      {
-        "hosts": [
-          "registry.apps.example.com"
-        ],
-        "secretName": "registry-tls"
-      }
-    ]
-  }
-}
----
 # eu/growth/addons/40-tunnel-20.yaml
 {
   "apiVersion": "apps/v1",
@@ -885,6 +921,7 @@ expression: "files.iter().map(|(path, content)|\nformat!(\"# {path}\\n{content}\
         }
       },
       "spec": {
+        "automountServiceAccountToken": false,
         "containers": [
           {
             "args": [
@@ -904,15 +941,42 @@ expression: "files.iter().map(|(path, content)|\nformat!(\"# {path}\\n{content}\
               }
             ],
             "image": "cloudflare/cloudflared:2026.11.0",
-            "name": "cloudflared"
+            "name": "cloudflared",
+            "resources": {
+              "limits": {
+                "cpu": "500m",
+                "memory": "256Mi"
+              },
+              "requests": {
+                "cpu": "50m",
+                "memory": "64Mi"
+              }
+            },
+            "securityContext": {
+              "allowPrivilegeEscalation": false,
+              "capabilities": {
+                "drop": [
+                  "ALL"
+                ]
+              },
+              "readOnlyRootFilesystem": true
+            }
           }
         ],
         "nodeSelector": {
           "leptoskit.dev/pool": "platform"
         },
+        "securityContext": {
+          "runAsGroup": 65532,
+          "runAsNonRoot": true,
+          "runAsUser": 65532,
+          "seccompProfile": {
+            "type": "RuntimeDefault"
+          }
+        },
         "tolerations": [
           {
-            "effect": "PreferNoSchedule",
+            "effect": "NoSchedule",
             "key": "leptoskit.dev/pool",
             "operator": "Equal",
             "value": "platform"

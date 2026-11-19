@@ -8,9 +8,11 @@ use crate::Generated;
 use crate::PlatformError;
 use crate::config::Cluster;
 use crate::config::CredentialRef;
+use crate::config::CustomDomains;
 use crate::config::EdgeMode;
 use crate::config::PlatformConfig;
 use crate::config::Pool;
+use crate::config::Registry;
 
 mod registry;
 
@@ -34,6 +36,32 @@ pub fn runtime_profile(
 		.extend([cluster.pod_cidr.clone(), cluster.service_cidr.clone()]);
 	profile.blocked_egress_cidrs.sort();
 	profile.blocked_egress_cidrs.dedup();
+	match config.edge.custom_domains {
+		CustomDomains::CloudflareSaas => {
+			profile.edge_terminated_custom_domains = true;
+			profile.cluster_issuer = None;
+		}
+		CustomDomains::CertManager => {
+			profile.edge_terminated_custom_domains = false;
+			profile.cluster_issuer = Some("apps-http01".to_owned());
+		}
+	}
+	if let Registry::External { pull_secret, .. } = &config.registry {
+		profile.image_pull_secret = Some(pull_secret.clone());
+	}
+	if cluster.nodes.values().any(|n| n.pool() == Pool::Tenant) {
+		profile
+			.tenant_node_selector
+			.insert("leptoskit.dev/pool".to_owned(), "tenant".to_owned());
+		profile
+			.tenant_tolerations
+			.push(leptoskit_cloud_runtime::TolerationSpec {
+				key: "leptoskit.dev/pool".to_owned(),
+				operator: "Equal".to_owned(),
+				value: Some("tenant".to_owned()),
+				effect: "PreferNoSchedule".to_owned(),
+			});
+	}
 	profile
 }
 
@@ -78,11 +106,12 @@ fn object(api: &str, kind: &str, name: &str, namespace: Option<&str>, body: Valu
 fn placement(cluster: &Cluster, desired: Pool) -> Value {
 	// The launch box has only a tenant label. Hard selectors must name a
 	// pool that exists. Build nodes remain exclusive.
+	let has_tenant = cluster.nodes.values().any(|n| n.pool() == Pool::Tenant);
 	let pool = if cluster.nodes.values().any(|n| n.pool() == desired) {
 		desired
 	} else if cluster.nodes.values().any(|n| n.pool() == Pool::Platform) {
 		Pool::Platform
-	} else if cluster.nodes.values().any(|n| n.pool() == Pool::Tenant) {
+	} else if has_tenant {
 		Pool::Tenant
 	} else {
 		Pool::Ingress
@@ -93,7 +122,12 @@ fn placement(cluster: &Cluster, desired: Pool) -> Value {
 		Pool::Tenant => "tenant",
 		Pool::Build => "build",
 	};
-	json!({"nodeSelector":{"leptoskit.dev/pool":name},"tolerations":[{"key":"leptoskit.dev/pool","operator":"Equal","value":name,"effect":"PreferNoSchedule"}]})
+	let effect = if pool == Pool::Build || (pool == Pool::Platform && has_tenant) {
+		"NoSchedule"
+	} else {
+		"PreferNoSchedule"
+	};
+	json!({"nodeSelector":{"leptoskit.dev/pool":name},"tolerations":[{"key":"leptoskit.dev/pool","operator":"Equal","value":name,"effect":effect}]})
 }
 
 fn chart(
@@ -164,7 +198,7 @@ fn common_charts(config: &PlatformConfig, platform: &Value) -> Result<Documents,
 		(
 			"21-http",
 			chart(
-				"http",
+				"keda-add-ons-http",
 				"keda",
 				"https://kedacore.github.io/charts",
 				"keda-add-ons-http",
@@ -186,25 +220,38 @@ fn common_charts(config: &PlatformConfig, platform: &Value) -> Result<Documents,
 	])
 }
 
-fn namespaces_and_worker() -> Result<Documents, PlatformError> {
-	let mut documents = namespaces_and_runtime();
-	let (role, binding) =
-		leptoskit_cloud_runtime::kubernetes::worker_rbac("kube-system", "leptoskit-cloud-worker");
-	documents.push(("10-worker-rbac", serde_json::to_value(role)?));
-	documents.push(("10-worker-rbac", serde_json::to_value(binding)?));
-	Ok(documents)
-}
-
-fn namespaces_and_runtime() -> Documents {
-	let mut documents = Vec::new();
-	for ns in [
+fn platform_namespaces(config: &PlatformConfig, edge: bool) -> Vec<&'static str> {
+	let mut namespaces = vec![
 		"kube-system",
 		"cnpg-system",
 		"database",
 		"keda",
 		"cert-manager",
-		"registry",
-	] {
+	];
+	if edge && matches!(config.registry, Registry::Zot { .. }) {
+		namespaces.push("registry");
+	}
+	namespaces
+}
+
+fn namespaces_and_worker(namespaces: &[&'static str]) -> Result<Documents, PlatformError> {
+	let mut documents = namespaces_and_runtime(namespaces);
+	let (role, binding) =
+		leptoskit_cloud_runtime::kubernetes::worker_rbac("kube-system", "leptoskit-cloud-worker");
+	documents.push(("10-worker-rbac", serde_json::to_value(role)?));
+	documents.push(("10-worker-rbac", serde_json::to_value(binding)?));
+	let (vap, vap_binding) = leptoskit_cloud_runtime::kubernetes::worker_admission_policy(
+		"kube-system",
+		"leptoskit-cloud-worker",
+	);
+	documents.push(("10-worker-rbac", serde_json::to_value(vap)?));
+	documents.push(("10-worker-rbac", serde_json::to_value(vap_binding)?));
+	Ok(documents)
+}
+
+fn namespaces_and_runtime(namespaces: &[&'static str]) -> Documents {
+	let mut documents = Vec::new();
+	for &ns in namespaces {
 		let level = if ns == "kube-system" {
 			"privileged"
 		} else {
@@ -227,6 +274,19 @@ fn namespaces_and_runtime() -> Documents {
 	documents
 }
 
+fn credential_keys(reference: &CredentialRef) -> (&str, &str, &str) {
+	match reference {
+		CredentialRef::KubernetesSecret {
+			name,
+			access_key,
+			secret_key,
+		} => (name.as_str(), access_key.as_str(), secret_key.as_str()),
+		CredentialRef::Environment { .. } => {
+			("object-storage", "ACCESS_KEY_ID", "SECRET_ACCESS_KEY")
+		}
+	}
+}
+
 /// Generate independent, ordered YAML documents per cluster without resolving
 /// secrets or contacting chart repositories.
 pub fn generate(config: &PlatformConfig) -> Result<Generated, PlatformError> {
@@ -241,15 +301,13 @@ pub fn generate(config: &PlatformConfig) -> Result<Generated, PlatformError> {
 					.any(|node| node.pool() != Pool::Build),
 				"add-ons require a non-build node",
 			)?;
-			let mut documents = namespaces_and_worker()?;
+			let edge = region == &config.default_region && name == &config.edge.cluster;
+			let namespaces = platform_namespaces(config, edge);
+			let mut documents = namespaces_and_worker(&namespaces)?;
 			let platform = placement(cluster, Pool::Platform);
 			documents.extend(common_charts(config, &platform)?);
-			documents.extend(registry::documents(
-				config,
-				&platform,
-				region == &config.default_region && name == &config.edge.cluster,
-			)?);
-			if region == &config.default_region && name == &config.edge.cluster {
+			documents.extend(registry::documents(config, &platform, edge)?);
+			if edge {
 				let mut traefik = placement(cluster, Pool::Ingress);
 				traefik["fullnameOverride"] = json!("traefik");
 				// Tenant Ingress uses the HTTP add-on's documented ExternalName
@@ -291,6 +349,9 @@ pub fn generate(config: &PlatformConfig) -> Result<Generated, PlatformError> {
 					)?,
 				));
 				documents.push(("30-certificates",object("cert-manager.io/v1","ClusterIssuer","apps",None,json!({"spec":{"acme":{"server":"https://acme-v02.api.letsencrypt.org/directory","email":config.addons.acme_email,"privateKeySecretRef":{"name":"apps-acme-account"},"solvers":[{"dns01":{"cloudflare":{"apiTokenSecretRef":{"name":config.addons.cloudflare_api_secret,"key":"api-token"}}}}]}}}))));
+				if config.edge.custom_domains == CustomDomains::CertManager {
+					documents.push(("30-certificates",object("cert-manager.io/v1","ClusterIssuer","apps-http01",None,json!({"spec":{"acme":{"server":"https://acme-v02.api.letsencrypt.org/directory","email":config.addons.acme_email,"privateKeySecretRef":{"name":"apps-http01-acme-account"},"solvers":[{"http01":{"ingress":{"ingressClassName":"traefik"}}}]}}}))));
+				}
 				documents.push(("30-certificates",object("cert-manager.io/v1","Certificate","apps-wildcard",Some("kube-system"),json!({"spec":{"secretName":"apps-wildcard-tls","issuerRef":{"name":"apps","kind":"ClusterIssuer"},"dnsNames":[format!("*.{}",config.apps_domain)]}}))));
 				documents.push((
 					"30-certificates",
@@ -304,31 +365,37 @@ pub fn generate(config: &PlatformConfig) -> Result<Generated, PlatformError> {
 				));
 				if config.edge.mode == EdgeMode::Tunnel {
 					let mut pod = platform.clone();
-					pod["containers"] = json!([{"name":"cloudflared","image":"cloudflare/cloudflared:2026.11.0","args":["tunnel","--no-autoupdate","run"],"env":[{"name":"TUNNEL_TOKEN","valueFrom":{"secretKeyRef":{"name":"cloudflare-tunnel","key":"token"}}}]}]);
+					pod["automountServiceAccountToken"] = json!(false);
+					pod["securityContext"] = json!({"runAsNonRoot":true,"runAsUser":65532,"runAsGroup":65532,"seccompProfile":{"type":"RuntimeDefault"}});
+					pod["containers"] = json!([{"name":"cloudflared","image":"cloudflare/cloudflared:2026.11.0","args":["tunnel","--no-autoupdate","run"],"env":[{"name":"TUNNEL_TOKEN","valueFrom":{"secretKeyRef":{"name":"cloudflare-tunnel","key":"token"}}}],"resources":{"requests":{"cpu":"50m","memory":"64Mi"},"limits":{"cpu":"500m","memory":"256Mi"}},"securityContext":{"allowPrivilegeEscalation":false,"readOnlyRootFilesystem":true,"capabilities":{"drop":["ALL"]}}}]);
 					documents.push(("40-tunnel",object("apps/v1","Deployment","cloudflared",Some("kube-system"),json!({"spec":{"replicas":2,"selector":{"matchLabels":{"app":"cloudflared"}},"template":{"metadata":{"labels":{"app":"cloudflared"}},"spec":pod}}}))));
 				}
 			}
-			let (secret, access, key) = match &config.object_storage.credentials {
-				CredentialRef::KubernetesSecret {
-					name,
-					access_key,
-					secret_key,
-				} => (name.as_str(), access_key.as_str(), secret_key.as_str()),
-				CredentialRef::Environment { .. } => {
-					("object-storage", "ACCESS_KEY_ID", "SECRET_ACCESS_KEY")
-				}
-			};
+			let (hot_secret, hot_access, hot_key) =
+				credential_keys(&config.object_storage.credentials);
+			let (backups_endpoint, backups_region, backups_cred_ref) =
+				config.object_storage.backups_store();
+			let (db_secret, db_access, db_key) = credential_keys(backups_cred_ref);
 			let mut required = vec![
-				json!({"namespace":"database","name":secret,"keys":[access,key],"purpose":"WAL archives and base backups","source":config.object_storage.credentials,"createdBy":"operator"}),
+				json!({"namespace":"database","name":db_secret,"keys":[db_access,db_key],"purpose":"WAL archives and base backups","source":backups_cred_ref,"createdBy":"operator"}),
 			];
-			if region == &config.default_region && name == &config.edge.cluster {
-				if let crate::config::Registry::Zot { auth_secret } = &config.registry {
+			if edge {
+				if let Registry::Zot {
+					auth_secret,
+					expose_ingress,
+				} = &config.registry
+				{
 					required.push(json!({"namespace":"registry","name":auth_secret,"keys":["htpasswd"],"purpose":"Authenticated registry push and pull","source":"operator bcrypt htpasswd file","createdBy":"operator"}));
-					required.push(json!({"namespace":"registry","name":secret,"keys":[access,key],"purpose":"Registry S3 storage","source":config.object_storage.credentials,"createdBy":"operator"}));
-					required.push(json!({"namespace":"registry","name":"registry-tls","keys":["tls.crt","tls.key"],"purpose":"Registry TLS","source":"Certificate registry","createdBy":"cert-manager"}));
+					required.push(json!({"namespace":"registry","name":hot_secret,"keys":[hot_access,hot_key],"purpose":"Registry S3 storage","source":config.object_storage.credentials,"createdBy":"operator"}));
+					if *expose_ingress {
+						required.push(json!({"namespace":"registry","name":"registry-tls","keys":["tls.crt","tls.key"],"purpose":"Registry TLS","source":"Certificate registry","createdBy":"cert-manager"}));
+					}
 				}
 				required.push(json!({"namespace":"cert-manager","name":config.addons.cloudflare_api_secret,"keys":["api-token"],"purpose":"DNS-01 challenge","source":"Cloudflare token with zone DNS edit and zone read","createdBy":"operator"}));
 				required.push(json!({"namespace":"cert-manager","name":"apps-acme-account","keys":["tls.key"],"purpose":"ACME account key","source":"cert-manager generates this; do not precreate","createdBy":"cert-manager"}));
+				if config.edge.custom_domains == CustomDomains::CertManager {
+					required.push(json!({"namespace":"cert-manager","name":"apps-http01-acme-account","keys":["tls.key"],"purpose":"ACME account key for customer HTTP-01 domains","source":"cert-manager generates this; do not precreate","createdBy":"cert-manager"}));
+				}
 				required.push(json!({"namespace":"kube-system","name":"apps-wildcard-tls","keys":["tls.crt","tls.key"],"purpose":"Ingress default wildcard certificate","source":"Certificate apps-wildcard generates this; do not precreate","createdBy":"cert-manager"}));
 				if config.edge.mode == EdgeMode::Tunnel {
 					required.push(json!({"namespace":"kube-system","name":"cloudflare-tunnel","keys":["token"],"purpose":"Tunnel connector","source":"sensitive OpenTofu tunnel_token output","createdBy":"operator"}));
@@ -345,24 +412,20 @@ pub fn generate(config: &PlatformConfig) -> Result<Generated, PlatformError> {
 				),
 			));
 			// Native Barman and affinity fields verified against the v1.30.2
-			// API.
+			// API. Superuser access is enabled so the cluster worker can
+			// provision isolated tenant databases and roles; pg_hba enforces
+			// TLS and SCRAM authentication.
 			let mut affinity = platform.clone();
 			affinity["podAntiAffinityType"] = json!("preferred");
-			documents.push(("30-database",object("postgresql.cnpg.io/v1","Cluster","shared",Some("database"),json!({"spec":{"instances":config.postgres.instances,"storage":{"size":config.postgres.storage_size,"storageClass":config.postgres.storage_class},"affinity":affinity,"backup":{"retentionPolicy":format!("{}d",config.postgres.retention_days),"barmanObjectStore":{"destinationPath":format!("s3://{}/{region}/{name}",config.postgres.wal_bucket),"endpointURL":config.object_storage.endpoint,"s3Credentials":{"accessKeyId":{"name":secret,"key":access},"secretAccessKey":{"name":secret,"key":key}},"wal":{"compression":"gzip"}}}}}))));
+			documents.push(("30-database",object("postgresql.cnpg.io/v1","Cluster","shared",Some("database"),json!({"spec":{"instances":config.postgres.instances,"enableSuperuserAccess":true,"postgresql":{"parameters":{"max_connections":config.postgres.max_connections.to_string()},"pg_hba":["hostssl all all 0.0.0.0/0 scram-sha-256"]},"storage":{"size":config.postgres.storage_size,"storageClass":config.postgres.storage_class},"affinity":affinity,"backup":{"retentionPolicy":format!("{}d",config.postgres.retention_days),"barmanObjectStore":{"destinationPath":format!("s3://{}/{region}/{name}",config.postgres.wal_bucket),"endpointURL":backups_endpoint,"s3Credentials":{"accessKeyId":{"name":db_secret,"key":db_access},"secretAccessKey":{"name":db_secret,"key":db_key}},"wal":{"compression":"gzip"}}}}}))));
 			documents.push(("30-database",object("postgresql.cnpg.io/v1","ScheduledBackup","shared-daily",Some("database"),json!({"spec":{"schedule":"0 0 2 * * *","backupOwnerReference":"self","cluster":{"name":"shared"},"method":"barmanObjectStore"}}))));
-			for ns in [
-				"kube-system",
-				"cnpg-system",
-				"database",
-				"keda",
-				"cert-manager",
-				"registry",
-			] {
+			let allowed_platform_namespaces: Vec<&str> = namespaces.clone();
+			for &ns in &namespaces {
 				// The runtime owns tenant default-deny and egress policies.
-				// Here protect the destination namespaces;
-				// policies are additive.
+				// Protect each destination namespace with an explicit allowlist
+				// of trusted platform namespaces instead of a denylist.
 				let mut ingress = vec![
-					json!({"from":[{"namespaceSelector":{"matchExpressions":[{"key":"app.kubernetes.io/managed-by","operator":"NotIn","values":["leptoskit-cloud"]}]}}]}),
+					json!({"from":[{"namespaceSelector":{"matchExpressions":[{"key":"kubernetes.io/metadata.name","operator":"In","values":allowed_platform_namespaces}]}}]}),
 				];
 				if ns == "database" {
 					ingress.push(json!({"from":[{"namespaceSelector":{"matchLabels":{"app.kubernetes.io/managed-by":"leptoskit-cloud"}}}],"ports":[{"protocol":"TCP","port":5432}]}));
@@ -382,7 +445,7 @@ pub fn generate(config: &PlatformConfig) -> Result<Generated, PlatformError> {
 			for (index, (phase, mut document)) in documents.into_iter().enumerate() {
 				if document["kind"] == "Cluster" {
 					document["spec"]["env"] =
-						json!([{"name":"AWS_DEFAULT_REGION","value":config.object_storage.region}]);
+						json!([{"name":"AWS_DEFAULT_REGION","value":backups_region}]);
 				}
 				files.insert(
 					format!("{region}/{name}/addons/{phase}-{index:02}.yaml"),

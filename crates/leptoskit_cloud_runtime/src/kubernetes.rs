@@ -15,6 +15,7 @@ use std::cmp::Reverse;
 use std::collections::BTreeMap;
 
 use k8s_openapi::ByteString;
+use k8s_openapi::api::admissionregistration::v1 as admission;
 use k8s_openapi::api::apps::v1 as apps;
 use k8s_openapi::api::autoscaling::v2 as autoscaling;
 use k8s_openapi::api::core::v1 as core;
@@ -24,6 +25,7 @@ use k8s_openapi::api::rbac::v1 as rbac;
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1 as meta;
 use k8s_openapi::apimachinery::pkg::util::intstr::IntOrString;
+use serde::Deserialize;
 use serde::Serialize;
 use sha2::Digest;
 use sha2::Sha256;
@@ -158,6 +160,80 @@ pub fn worker_rbac(
 	(permissions, binding)
 }
 
+/// Admission policy restricting the cluster worker's mutations to tenant
+/// namespaces named `lk-*`.
+///
+/// Kubernetes RBAC cannot restrict a `ClusterRole` to namespaces created in the
+/// future. This `ValidatingAdmissionPolicy` + binding denies any create,
+/// update, or delete sent by
+/// `system:serviceaccount:<namespace>:<service_account>` outside `lk-*`
+/// namespaces (and denies mutating non-`lk-*` `Namespace` objects). Read
+/// operations (`list`/`get`) are not evaluated by admission controllers;
+/// operators should still restrict access to the worker ServiceAccount.
+#[must_use]
+pub fn worker_admission_policy(
+	namespace: &str,
+	service_account: &str,
+) -> (
+	admission::ValidatingAdmissionPolicy,
+	admission::ValidatingAdmissionPolicyBinding,
+) {
+	let name = "leptoskit-cloud-worker-scope";
+	let subject = format!("system:serviceaccount:{namespace}:{service_account}");
+	let policy = admission::ValidatingAdmissionPolicy {
+		metadata: meta::ObjectMeta {
+			name: Some(name.to_owned()),
+			..Default::default()
+		},
+		spec: Some(admission::ValidatingAdmissionPolicySpec {
+			failure_policy: Some("Fail".to_owned()),
+			match_conditions: Some(vec![admission::MatchCondition {
+				name: "is-cloud-worker".to_owned(),
+				expression: format!("request.userInfo.username == '{subject}'"),
+			}]),
+			match_constraints: Some(admission::MatchResources {
+				resource_rules: Some(vec![admission::NamedRuleWithOperations {
+					api_groups: Some(vec!["*".to_owned()]),
+					api_versions: Some(vec!["*".to_owned()]),
+					operations: Some(vec![
+						"CREATE".to_owned(),
+						"UPDATE".to_owned(),
+						"DELETE".to_owned(),
+					]),
+					resources: Some(vec!["*".to_owned()]),
+					resource_names: None,
+					scope: Some("*".to_owned()),
+				}]),
+				..Default::default()
+			}),
+			validations: Some(vec![admission::Validation {
+				expression: "(request.kind.kind == 'Namespace' && request.name.startsWith('lk-')) \
+				             || (request.namespace != '' && request.namespace.startsWith('lk-'))"
+					.to_owned(),
+				message: Some(
+					"leptoskit-cloud-worker may only mutate lk-* tenant namespaces".to_owned(),
+				),
+				..Default::default()
+			}]),
+			..Default::default()
+		}),
+		status: None,
+	};
+	let binding = admission::ValidatingAdmissionPolicyBinding {
+		metadata: meta::ObjectMeta {
+			name: Some(name.to_owned()),
+			..Default::default()
+		},
+		spec: admission::ValidatingAdmissionPolicyBindingSpec {
+			policy_name: name.to_owned(),
+			validation_actions: vec!["Deny".to_owned()],
+			match_resources: None,
+			param_ref: None,
+		},
+	};
+	(policy, binding)
+}
+
 /// How a process's replicas are owned, decided once and read by both the
 /// Deployment and the scaling stage.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -170,10 +246,28 @@ enum Scaling {
 	Fixed,
 }
 
+/// Default size limit in MiB for the read-only-root `/tmp` `emptyDir` volume.
+pub const DEFAULT_TMP_SIZE_LIMIT_MIB: u32 = 128;
+
+const fn default_tmp_size_limit_mib() -> u32 {
+	DEFAULT_TMP_SIZE_LIMIT_MIB
+}
+
+/// A Kubernetes pod toleration rendered onto tenant pods so they schedule onto
+/// dedicated tenant nodes rather than control-plane or platform nodes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TolerationSpec {
+	pub key: String,
+	pub operator: String,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub value: Option<String>,
+	pub effect: String,
+}
+
 /// What a cluster looks like to the manifest generator: which edge fronts
 /// it, what certificates it can hand out, and which add-ons are installed.
 /// Operator configuration, not customer data.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ClusterProfile {
 	/// The Ingress class the edge serves, such as `nginx`.
 	pub ingress_class: String,
@@ -186,6 +280,11 @@ pub struct ClusterProfile {
 	pub wildcard_tls_secret: Option<String>,
 	/// The cert-manager cluster issuer that issues per-host certificates.
 	pub cluster_issuer: Option<String>,
+	/// When true (for example, Cloudflare for SaaS), custom domains terminate
+	/// TLS at the edge and do not annotate Ingress objects with a cert-manager
+	/// cluster issuer.
+	#[serde(default)]
+	pub edge_terminated_custom_domains: bool,
 	/// The namespace the cluster's DNS resolves from.
 	pub dns_namespace: String,
 	/// The ranges internet egress may not reach: the cluster's pod and
@@ -196,10 +295,22 @@ pub struct ClusterProfile {
 	/// Whether KEDA's HTTP add-on is installed, which is what lets a
 	/// process sleep at `min = 0` and wake on the first request.
 	pub keda_http: Option<HttpAddon>,
+	/// Optional node selector applied to every tenant pod (for example,
+	/// `leptoskit.dev/pool = tenant`).
+	#[serde(default)]
+	pub tenant_node_selector: BTreeMap<String, String>,
+	/// Optional tolerations applied to every tenant pod so it schedules on
+	/// tainted tenant pools without landing on control-plane nodes.
+	#[serde(default)]
+	pub tenant_tolerations: Vec<TolerationSpec>,
+	/// Size limit in MiB for the `/tmp` `emptyDir` volume and basis for
+	/// container `ephemeral-storage` bounds.
+	#[serde(default = "default_tmp_size_limit_mib")]
+	pub tmp_size_limit_mib: u32,
 }
 
 /// Service endpoints installed by the pinned HTTP add-on chart.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HttpAddon {
 	pub namespace: String,
 	pub interceptor_service: String,
@@ -220,10 +331,14 @@ impl Default for ClusterProfile {
 			ingress_namespace: String::new(),
 			wildcard_tls_secret: None,
 			cluster_issuer: None,
+			edge_terminated_custom_domains: false,
 			dns_namespace: "kube-system".to_owned(),
 			blocked_egress_cidrs: Vec::new(),
 			image_pull_secret: None,
 			keda_http: None,
+			tenant_node_selector: BTreeMap::new(),
+			tenant_tolerations: Vec::new(),
+			tmp_size_limit_mib: DEFAULT_TMP_SIZE_LIMIT_MIB,
 		}
 	}
 }
@@ -239,7 +354,8 @@ impl ClusterProfile {
 			ingress_class: "traefik".to_owned(),
 			ingress_namespace: "kube-system".to_owned(),
 			wildcard_tls_secret: Some("apps-wildcard-tls".to_owned()),
-			cluster_issuer: Some("apps".to_owned()),
+			cluster_issuer: Some("apps-http01".to_owned()),
+			edge_terminated_custom_domains: false,
 			dns_namespace: "kube-system".to_owned(),
 			image_pull_secret: None,
 			blocked_egress_cidrs: [
@@ -269,11 +385,16 @@ impl ClusterProfile {
 					),
 				]),
 			}),
+			tenant_node_selector: BTreeMap::new(),
+			tenant_tolerations: Vec::new(),
+			tmp_size_limit_mib: DEFAULT_TMP_SIZE_LIMIT_MIB,
 		}
 	}
 
 	/// Refuse missing namespace names, invalid endpoints and malformed IPv4
-	/// egress ranges. # Errors
+	/// egress ranges.
+	///
+	/// # Errors
 	/// Returns `ManifestError::Profile` for an unusable cluster profile.
 	pub fn validate(&self) -> Result<(), ManifestError> {
 		let valid_name = |name: &str| {
@@ -295,6 +416,11 @@ impl ClusterProfile {
 		{
 			return Err(ManifestError::Profile(
 				"invalid ingress or DNS name".to_owned(),
+			));
+		}
+		if self.tmp_size_limit_mib == 0 {
+			return Err(ManifestError::Profile(
+				"tmp_size_limit_mib must be positive".to_owned(),
 			));
 		}
 		if let Some(addon) = &self.keda_http
@@ -642,7 +768,7 @@ pub fn manifests(
 	let labels = labels(spec);
 	let mut objects = Vec::new();
 	objects.push(namespace_object(&namespace, &labels));
-	objects.extend(quota_objects(spec, &namespace, &labels));
+	objects.extend(quota_objects(spec, cluster, &namespace, &labels));
 	objects.extend(network_policies(spec, cluster, &namespace, &labels));
 	objects.push(service_account_object(&namespace, &labels));
 	objects.extend(secret_objects(spec, secrets, &namespace, &labels)?);
@@ -791,10 +917,13 @@ fn namespace_object(namespace: &str, labels: &BTreeMap<String, String>) -> Objec
 /// environment may take, and the most any one container may ask for.
 fn quota_objects(
 	spec: &ReleaseSpec,
+	cluster: &ClusterProfile,
 	namespace: &str,
 	labels: &BTreeMap<String, String>,
 ) -> Vec<Object> {
 	let quota = &spec.policy.quota;
+	let ephemeral_request_mib = 64_u32.min(cluster.tmp_size_limit_mib);
+	let ephemeral_limit_mib = cluster.tmp_size_limit_mib.saturating_mul(2);
 	let mut objects = vec![Object::ResourceQuota(core::ResourceQuota {
 		metadata: object_meta(Some(namespace), "quota", labels),
 		spec: Some(core::ResourceQuotaSpec {
@@ -803,6 +932,14 @@ fn quota_objects(
 				("limits.cpu".to_owned(), cpu_millis(quota.cpu_millis)),
 				("requests.memory".to_owned(), memory_mib(quota.memory_mib)),
 				("limits.memory".to_owned(), memory_mib(quota.memory_mib)),
+				(
+					"requests.ephemeral-storage".to_owned(),
+					memory_mib(ephemeral_request_mib.saturating_mul(quota.pods)),
+				),
+				(
+					"limits.ephemeral-storage".to_owned(),
+					memory_mib(ephemeral_limit_mib.saturating_mul(quota.pods)),
+				),
 				("pods".to_owned(), quantity(quota.pods.to_string())),
 				(
 					"requests.storage".to_owned(),
@@ -822,6 +959,10 @@ fn quota_objects(
 				max: Some(BTreeMap::from([
 					("cpu".to_owned(), cpu_millis(quota.cpu_millis)),
 					("memory".to_owned(), memory_mib(quota.memory_mib)),
+					(
+						"ephemeral-storage".to_owned(),
+						memory_mib(ephemeral_limit_mib),
+					),
 				])),
 				min: None,
 				default: None,
@@ -1241,8 +1382,23 @@ fn deployment_strategy(process: &Process) -> apps::DeploymentStrategy {
 }
 
 fn pod_spec(policy: &Policy, cluster: &ClusterProfile, process: &Process) -> core::PodSpec {
+	let tolerations = (!cluster.tenant_tolerations.is_empty()).then(|| {
+		cluster
+			.tenant_tolerations
+			.iter()
+			.map(|toleration| {
+				core::Toleration {
+					key: Some(toleration.key.clone()),
+					operator: Some(toleration.operator.clone()),
+					value: toleration.value.clone(),
+					effect: Some(toleration.effect.clone()),
+					toleration_seconds: None,
+				}
+			})
+			.collect()
+	});
 	core::PodSpec {
-		containers: vec![container(process)],
+		containers: vec![container(process, cluster)],
 		service_account_name: Some(SERVICE_ACCOUNT.to_owned()),
 		automount_service_account_token: Some(false),
 		runtime_class_name: policy.runtime_class.clone(),
@@ -1250,9 +1406,12 @@ fn pod_spec(policy: &Policy, cluster: &ClusterProfile, process: &Process) -> cor
 			.image_pull_secret
 			.as_ref()
 			.map(|name| vec![core::LocalObjectReference { name: name.clone() }]),
+		node_selector: (!cluster.tenant_node_selector.is_empty())
+			.then(|| cluster.tenant_node_selector.clone()),
+		tolerations,
 		security_context: Some(pod_security()),
 		termination_grace_period_seconds: Some(30),
-		volumes: Some(pod_volumes(process)),
+		volumes: Some(pod_volumes(process, cluster)),
 		..Default::default()
 	}
 }
@@ -1271,7 +1430,7 @@ fn pod_security() -> core::PodSecurityContext {
 	}
 }
 
-fn container(process: &Process) -> core::Container {
+fn container(process: &Process, cluster: &ClusterProfile) -> core::Container {
 	core::Container {
 		name: process.name.clone(),
 		image: Some(process.image.reference()),
@@ -1287,7 +1446,7 @@ fn container(process: &Process) -> core::Container {
 		env_from: container_env_from(process),
 		readiness_probe: Some(http_probe(&process.probes.ready, process.port, 5, 5)),
 		liveness_probe: Some(http_probe(&process.probes.live, process.port, 10, 10)),
-		resources: Some(container_resources(process)),
+		resources: Some(container_resources(process, cluster)),
 		security_context: Some(container_security()),
 		volume_mounts: Some(container_mounts(process)),
 		..Default::default()
@@ -1355,12 +1514,18 @@ fn container_env_from(process: &Process) -> Option<Vec<core::EnvFromSource>> {
 
 /// Memory's request equals its limit, so a burst never steals memory a
 /// neighbour counted on.
-fn container_resources(process: &Process) -> core::ResourceRequirements {
+fn container_resources(process: &Process, cluster: &ClusterProfile) -> core::ResourceRequirements {
+	let ephemeral_request_mib = 64_u32.min(cluster.tmp_size_limit_mib);
+	let ephemeral_limit_mib = cluster.tmp_size_limit_mib.saturating_mul(2);
 	core::ResourceRequirements {
 		limits: Some(BTreeMap::from([
 			(
 				"cpu".to_owned(),
 				cpu_millis(process.resources.cpu_limit_millis),
+			),
+			(
+				"ephemeral-storage".to_owned(),
+				memory_mib(ephemeral_limit_mib),
 			),
 			(
 				"memory".to_owned(),
@@ -1371,6 +1536,10 @@ fn container_resources(process: &Process) -> core::ResourceRequirements {
 			(
 				"cpu".to_owned(),
 				cpu_millis(process.resources.cpu_request_millis),
+			),
+			(
+				"ephemeral-storage".to_owned(),
+				memory_mib(ephemeral_request_mib),
 			),
 			(
 				"memory".to_owned(),
@@ -1402,14 +1571,14 @@ fn container_mounts(process: &Process) -> Vec<core::VolumeMount> {
 	mounts
 }
 
-fn pod_volumes(process: &Process) -> Vec<core::Volume> {
+fn pod_volumes(process: &Process, cluster: &ClusterProfile) -> Vec<core::Volume> {
 	let mut volumes = Vec::new();
 	if !mounts_tmp(process) {
 		volumes.push(core::Volume {
 			name: TMP_VOLUME.to_owned(),
 			empty_dir: Some(core::EmptyDirVolumeSource {
 				medium: None,
-				size_limit: None,
+				size_limit: Some(memory_mib(cluster.tmp_size_limit_mib)),
 			}),
 			..Default::default()
 		});
@@ -1784,6 +1953,15 @@ fn host_tls(
 			))
 		}
 		Tls::Issued => {
+			if cluster.edge_terminated_custom_domains {
+				return Ok((
+					Some(networking::IngressTLS {
+						hosts: Some(vec![hostname.to_owned()]),
+						secret_name: None,
+					}),
+					None,
+				));
+			}
 			let issuer = cluster.cluster_issuer.as_ref().ok_or_else(|| {
 				ManifestError::NoIssuer {
 					hostname: hostname.to_owned(),

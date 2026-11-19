@@ -29,7 +29,11 @@ pub(super) fn documents(
 	platform: &Value,
 	edge: bool,
 ) -> Result<Documents, PlatformError> {
-	let Registry::Zot { auth_secret } = &config.registry else {
+	let Registry::Zot {
+		auth_secret,
+		expose_ingress,
+	} = &config.registry
+	else {
 		return Ok(Vec::new());
 	};
 	if !edge {
@@ -53,19 +57,19 @@ pub(super) fn documents(
 		{"name":"AWS_ACCESS_KEY_ID","valueFrom":{"secretKeyRef":{"name":secret,"key":access}}},
 		{"name":"AWS_SECRET_ACCESS_KEY","valueFrom":{"secretKeyRef":{"name":secret,"key":key}}}
 	]);
-	Ok(vec![
-		(
-			"20-charts",
-			chart(
-				"zot",
-				"registry",
-				"https://zotregistry.dev/helm-charts",
-				"zot",
-				&config.addons.zot,
-				&values,
-			)?,
-		),
-		(
+	let mut docs = vec![(
+		"20-charts",
+		chart(
+			"zot",
+			"registry",
+			"https://zotregistry.dev/helm-charts",
+			"zot",
+			&config.addons.zot,
+			&values,
+		)?,
+	)];
+	if *expose_ingress {
+		docs.push((
 			"30-registry",
 			object(
 				"cert-manager.io/v1",
@@ -74,8 +78,8 @@ pub(super) fn documents(
 				Some("registry"),
 				json!({"spec":{"secretName":"registry-tls","issuerRef":{"name":"apps","kind":"ClusterIssuer"},"dnsNames":[host]}}),
 			),
-		),
-		(
+		));
+		docs.push((
 			"30-registry",
 			object(
 				"networking.k8s.io/v1",
@@ -84,6 +88,7 @@ pub(super) fn documents(
 				Some("registry"),
 				json!({"spec":{"ingressClassName":"traefik","tls":[{"hosts":[host],"secretName":"registry-tls"}],"rules":[{"host":host,"http":{"paths":[{"path":"/","pathType":"Prefix","backend":{"service":{"name":"zot","port":{"number":5000}}}}]}}]}}),
 			),
-		),
-	])
+		));
+	}
+	Ok(docs)
 }

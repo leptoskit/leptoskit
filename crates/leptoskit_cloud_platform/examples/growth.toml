@@ -16,7 +16,9 @@ service_cidr = "10.43.0.0/16"
 provider = "hetzner-cloud"
 role = "server"
 pool = "platform"
-server_type = "cx23"
+# cpx31 provides 160 GB SSD so etcd, Zot cache, and the 100Gi CNPG PVC fit
+# comfortably (cx23 only ships 40 GB disk).
+server_type = "cpx31"
 location = "fsn1"
 count = 3
 ssh_key_ids = [12345]
@@ -26,18 +28,21 @@ provider = "existing"
 role = "agent"
 pool = "tenant"
 public_address = "203.0.113.10"
+isolation_platform = "kvm"
 
 [regions.eu.clusters.growth.nodes.tenant-b]
 provider = "existing"
 role = "agent"
 pool = "tenant"
 public_address = "203.0.113.11"
+isolation_platform = "kvm"
 
 [regions.eu.clusters.growth.nodes.tenant-c]
 provider = "existing"
 role = "agent"
 pool = "tenant"
 public_address = "203.0.113.12"
+isolation_platform = "kvm"
 
 [regions.eu.clusters.growth.nodes.build]
 provider = "existing"

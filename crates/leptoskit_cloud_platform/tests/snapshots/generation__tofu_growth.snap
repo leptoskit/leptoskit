@@ -72,7 +72,7 @@ expression: content
               "service": "http://traefik.kube-system.svc.cluster.local:80"
             },
             {
-              "service": "http_status:404"
+              "service": "http://traefik.kube-system.svc.cluster.local:80"
             }
           ]
         },
@@ -610,11 +610,11 @@ expression: content
             "ipv6_enabled": false
           }
         ],
-        "server_type": "cx23",
+        "server_type": "cpx31",
         "ssh_keys": [
           "12345"
         ],
-        "user_data": "#cloud-config\n{\"package_update\":true,\"packages\":[\"ca-certificates\",\"curl\",\"unattended-upgrades\",\"nftables\",\"zstd\"],\"runcmd\":[\"sshd -t\",\"systemctl restart ssh\",\"systemctl enable --now nftables\",\"systemctl enable --now unattended-upgrades\"],\"ssh_pwauth\":false,\"write_files\":[{\"content\":\"PasswordAuthentication no\\nPermitRootLogin prohibit-password\\n\",\"path\":\"/etc/ssh/sshd_config.d/00-leptoskit.conf\"},{\"content\":\"table inet leptoskit { chain input { type filter hook input priority 0; policy drop; ct state established,related accept; iifname lo accept; ip saddr { 192.0.2.0/24 } tcp dport 22 accept; } }\",\"path\":\"/etc/nftables.conf\"}]}\n"
+        "user_data": "#cloud-config\n{\"package_update\":true,\"packages\":[\"ca-certificates\",\"curl\",\"unattended-upgrades\",\"nftables\",\"zstd\"],\"runcmd\":[\"sshd -t\",\"systemctl restart ssh\",\"systemctl enable --now nftables\",\"systemctl enable --now unattended-upgrades\"],\"ssh_pwauth\":false,\"write_files\":[{\"content\":\"PasswordAuthentication no\\nPermitRootLogin prohibit-password\\n\",\"path\":\"/etc/ssh/sshd_config.d/00-leptoskit.conf\"},{\"content\":\"table inet leptoskit { chain input { type filter hook input priority 0; policy drop; ct state established,related accept; iifname lo accept; ip protocol icmp accept; ip6 nexthdr icmpv6 accept; ip saddr { 192.0.2.0/24 } tcp dport 22 accept; } }\",\"path\":\"/etc/nftables.conf\"}]}\n"
       },
       "control_1": {
         "depends_on": [
@@ -642,11 +642,11 @@ expression: content
             "ipv6_enabled": false
           }
         ],
-        "server_type": "cx23",
+        "server_type": "cpx31",
         "ssh_keys": [
           "12345"
         ],
-        "user_data": "#cloud-config\n{\"package_update\":true,\"packages\":[\"ca-certificates\",\"curl\",\"unattended-upgrades\",\"nftables\",\"zstd\"],\"runcmd\":[\"sshd -t\",\"systemctl restart ssh\",\"systemctl enable --now nftables\",\"systemctl enable --now unattended-upgrades\"],\"ssh_pwauth\":false,\"write_files\":[{\"content\":\"PasswordAuthentication no\\nPermitRootLogin prohibit-password\\n\",\"path\":\"/etc/ssh/sshd_config.d/00-leptoskit.conf\"},{\"content\":\"table inet leptoskit { chain input { type filter hook input priority 0; policy drop; ct state established,related accept; iifname lo accept; ip saddr { 192.0.2.0/24 } tcp dport 22 accept; } }\",\"path\":\"/etc/nftables.conf\"}]}\n"
+        "user_data": "#cloud-config\n{\"package_update\":true,\"packages\":[\"ca-certificates\",\"curl\",\"unattended-upgrades\",\"nftables\",\"zstd\"],\"runcmd\":[\"sshd -t\",\"systemctl restart ssh\",\"systemctl enable --now nftables\",\"systemctl enable --now unattended-upgrades\"],\"ssh_pwauth\":false,\"write_files\":[{\"content\":\"PasswordAuthentication no\\nPermitRootLogin prohibit-password\\n\",\"path\":\"/etc/ssh/sshd_config.d/00-leptoskit.conf\"},{\"content\":\"table inet leptoskit { chain input { type filter hook input priority 0; policy drop; ct state established,related accept; iifname lo accept; ip protocol icmp accept; ip6 nexthdr icmpv6 accept; ip saddr { 192.0.2.0/24 } tcp dport 22 accept; } }\",\"path\":\"/etc/nftables.conf\"}]}\n"
       },
       "control_2": {
         "depends_on": [
@@ -674,11 +674,11 @@ expression: content
             "ipv6_enabled": false
           }
         ],
-        "server_type": "cx23",
+        "server_type": "cpx31",
         "ssh_keys": [
           "12345"
         ],
-        "user_data": "#cloud-config\n{\"package_update\":true,\"packages\":[\"ca-certificates\",\"curl\",\"unattended-upgrades\",\"nftables\",\"zstd\"],\"runcmd\":[\"sshd -t\",\"systemctl restart ssh\",\"systemctl enable --now nftables\",\"systemctl enable --now unattended-upgrades\"],\"ssh_pwauth\":false,\"write_files\":[{\"content\":\"PasswordAuthentication no\\nPermitRootLogin prohibit-password\\n\",\"path\":\"/etc/ssh/sshd_config.d/00-leptoskit.conf\"},{\"content\":\"table inet leptoskit { chain input { type filter hook input priority 0; policy drop; ct state established,related accept; iifname lo accept; ip saddr { 192.0.2.0/24 } tcp dport 22 accept; } }\",\"path\":\"/etc/nftables.conf\"}]}\n"
+        "user_data": "#cloud-config\n{\"package_update\":true,\"packages\":[\"ca-certificates\",\"curl\",\"unattended-upgrades\",\"nftables\",\"zstd\"],\"runcmd\":[\"sshd -t\",\"systemctl restart ssh\",\"systemctl enable --now nftables\",\"systemctl enable --now unattended-upgrades\"],\"ssh_pwauth\":false,\"write_files\":[{\"content\":\"PasswordAuthentication no\\nPermitRootLogin prohibit-password\\n\",\"path\":\"/etc/ssh/sshd_config.d/00-leptoskit.conf\"},{\"content\":\"table inet leptoskit { chain input { type filter hook input priority 0; policy drop; ct state established,related accept; iifname lo accept; ip protocol icmp accept; ip6 nexthdr icmpv6 accept; ip saddr { 192.0.2.0/24 } tcp dport 22 accept; } }\",\"path\":\"/etc/nftables.conf\"}]}\n"
       }
     }
   },

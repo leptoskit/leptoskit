@@ -206,6 +206,7 @@ fn existing_ha_requires_private_addresses_and_one_provider() {
 				pool: leptoskit_cloud_platform::config::Pool::Platform,
 				public_address: address.parse().unwrap(),
 				private_address: None,
+				isolation_platform: None,
 			},
 		);
 	}
@@ -235,4 +236,57 @@ fn existing_ha_requires_private_addresses_and_one_provider() {
 		}
 	}
 	config.validate().unwrap();
+}
+
+#[test]
+fn cold_storage_max_connections_and_per_node_isolation() {
+	use leptoskit_cloud_platform::config::ColdObjectStorage;
+	use leptoskit_cloud_platform::config::CredentialRef;
+	use leptoskit_cloud_platform::config::GvisorPlatform;
+	use leptoskit_cloud_platform::config::Node;
+
+	let mut config = PlatformConfig::parse(include_str!("../examples/growth.toml")).unwrap();
+	// Valid hot/cold split (e.g. R2 hot + B2 cold for WAL/backups).
+	config.object_storage.cold = Some(ColdObjectStorage {
+		endpoint: "https://s3.us-west-004.backblazeb2.com".into(),
+		region: "us-west-004".into(),
+		credentials: CredentialRef::KubernetesSecret {
+			name: "b2-backups".into(),
+			access_key: "ACCESS_KEY_ID".into(),
+			secret_key: "SECRET_ACCESS_KEY".into(),
+		},
+	});
+	config.validate().unwrap();
+	let (endpoint, region, _) = config.object_storage.backups_store();
+	assert_eq!(endpoint, "https://s3.us-west-004.backblazeb2.com");
+	assert_eq!(region, "us-west-004");
+
+	// Cold endpoint must be HTTPS.
+	config.object_storage.cold.as_mut().unwrap().endpoint = "http://insecure.example.com".into();
+	assert!(config.validate().is_err());
+	config.object_storage.cold = None;
+
+	// max_connections below 100 is rejected.
+	config.postgres.max_connections = 50;
+	assert!(config.validate().is_err());
+	config.postgres.max_connections = 300;
+	config.validate().unwrap();
+
+	// Cloud VM cannot override to kvm, while existing bare-metal nodes can.
+	if let Node::HetznerCloud {
+		isolation_platform, ..
+	} = config
+		.regions
+		.get_mut("eu")
+		.unwrap()
+		.clusters
+		.get_mut("growth")
+		.unwrap()
+		.nodes
+		.get_mut("control")
+		.unwrap()
+	{
+		*isolation_platform = Some(GvisorPlatform::Kvm);
+	}
+	assert!(config.validate().is_err());
 }

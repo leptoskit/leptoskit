@@ -1,6 +1,5 @@
 ---
 source: crates/leptoskit_cloud_runtime/tests/manifests.rs
-assertion_line: 344
 expression: as_yaml(&objects)
 ---
 apiVersion: v1
@@ -31,9 +30,11 @@ metadata:
 spec:
   hard:
     limits.cpu: 1000m
+    limits.ephemeral-storage: 512Mi
     limits.memory: 256Mi
     pods: '2'
     requests.cpu: 1000m
+    requests.ephemeral-storage: 128Mi
     requests.memory: 256Mi
     requests.storage: 1Gi
 ---
@@ -52,6 +53,7 @@ spec:
   limits:
   - max:
       cpu: 1000m
+      ephemeral-storage: 256Mi
       memory: 256Mi
     type: Container
 ---
@@ -250,9 +252,11 @@ spec:
         resources:
           limits:
             cpu: 500m
+            ephemeral-storage: 256Mi
             memory: 128Mi
           requests:
             cpu: 100m
+            ephemeral-storage: 64Mi
             memory: 128Mi
         securityContext:
           allowPrivilegeEscalation: false
@@ -271,7 +275,8 @@ spec:
       serviceAccountName: app
       terminationGracePeriodSeconds: 30
       volumes:
-      - emptyDir: {}
+      - emptyDir:
+          sizeLimit: 128Mi
         name: tmp
 ---
 apiVersion: v1

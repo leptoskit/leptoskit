@@ -1,6 +1,5 @@
 ---
 source: crates/leptoskit_cloud_runtime/tests/manifests.rs
-assertion_line: 409
 expression: as_yaml(&objects)
 ---
 apiVersion: v1
@@ -31,9 +30,11 @@ metadata:
 spec:
   hard:
     limits.cpu: 14000m
+    limits.ephemeral-storage: 3072Mi
     limits.memory: 4096Mi
     pods: '12'
     requests.cpu: 14000m
+    requests.ephemeral-storage: 768Mi
     requests.memory: 4096Mi
     requests.storage: 10Gi
 ---
@@ -52,6 +53,7 @@ spec:
   limits:
   - max:
       cpu: 14000m
+      ephemeral-storage: 256Mi
       memory: 4096Mi
     type: Container
 ---
@@ -327,9 +329,11 @@ spec:
         resources:
           limits:
             cpu: 1000m
+            ephemeral-storage: 256Mi
             memory: 256Mi
           requests:
             cpu: 250m
+            ephemeral-storage: 64Mi
             memory: 256Mi
         securityContext:
           allowPrivilegeEscalation: false
@@ -348,7 +352,8 @@ spec:
       serviceAccountName: app
       terminationGracePeriodSeconds: 30
       volumes:
-      - emptyDir: {}
+      - emptyDir:
+          sizeLimit: 128Mi
         name: tmp
 ---
 apiVersion: apps/v1
@@ -418,9 +423,11 @@ spec:
         resources:
           limits:
             cpu: 2000m
+            ephemeral-storage: 256Mi
             memory: 512Mi
           requests:
             cpu: 500m
+            ephemeral-storage: 64Mi
             memory: 512Mi
         securityContext:
           allowPrivilegeEscalation: false
@@ -439,7 +446,8 @@ spec:
       serviceAccountName: app
       terminationGracePeriodSeconds: 30
       volumes:
-      - emptyDir: {}
+      - emptyDir:
+          sizeLimit: 128Mi
         name: tmp
 ---
 apiVersion: apps/v1
@@ -496,9 +504,11 @@ spec:
         resources:
           limits:
             cpu: 2000m
+            ephemeral-storage: 256Mi
             memory: 512Mi
           requests:
             cpu: 500m
+            ephemeral-storage: 64Mi
             memory: 512Mi
         securityContext:
           allowPrivilegeEscalation: false
@@ -519,7 +529,8 @@ spec:
       serviceAccountName: app
       terminationGracePeriodSeconds: 30
       volumes:
-      - emptyDir: {}
+      - emptyDir:
+          sizeLimit: 128Mi
         name: tmp
       - name: data
         persistentVolumeClaim:
