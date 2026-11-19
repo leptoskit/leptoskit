@@ -423,6 +423,10 @@ pub struct Line {
 	pub mark: Mark,
 	/// The configuration key this line declares, for linked highlighting.
 	pub key: Option<String>,
+	/// Whether the last builder change changed this line. Only the browser
+	/// marks it, comparing a page with the one it replaced.
+	#[serde(default, skip_serializing_if = "std::ops::Not::not")]
+	pub changed: bool,
 }
 
 /// How a code line stands out.
@@ -443,6 +447,7 @@ impl Line {
 			text: text.into(),
 			mark: Mark::Plain,
 			key: None,
+			changed: false,
 		}
 	}
 
@@ -452,6 +457,7 @@ impl Line {
 			text: text.into(),
 			mark,
 			key: None,
+			changed: false,
 		}
 	}
 
@@ -580,13 +586,16 @@ pub fn code_block(lines: &[Line], copy_as: &str) -> Element {
 		));
 	let mut block = View().class(style::CODE_BLOCK).test_id("code").child(head);
 	let workings = crate::workings::Workings::current();
-	// The first line a plan row linked scrolls into view.
+	// The first line a plan row linked scrolls into view, and so does the
+	// changed line the drawer names.
 	let mut revealed = false;
+	let mut revealed_change = false;
 
 	for (index, line) in lines.iter().enumerate() {
 		let wash = match line.mark {
 			Mark::Added => "bg-[#5fd08a]/15",
 			Mark::Removed => "bg-[#ff8a9e]/15",
+			Mark::Plain if line.changed => "bg-[#5ef2c2]/15",
 			Mark::Plain => "",
 		};
 		let mut row = View()
@@ -632,6 +641,16 @@ pub fn code_block(lines: &[Line], copy_as: &str) -> Element {
 			} else {
 				"removed"
 			});
+		} else if line.changed {
+			row = row.aria_description("changed");
+
+			if let Some(workings) = workings
+				&& !revealed_change
+				&& workings.is_change_target(&line.text)
+			{
+				revealed_change = true;
+				row = row.reveal_on(workings.change_reveal(), ScrollAlign::Nearest);
+			}
 		}
 
 		block = block.child(row);

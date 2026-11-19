@@ -70,6 +70,25 @@ pub struct Tab {
 }
 
 impl Station {
+	/// Whether the last builder change changed any of its lines.
+	#[must_use]
+	pub fn changed(&self) -> bool {
+		self.lines().any(|line| line.changed)
+	}
+
+	/// Every line of its code, tab after tab.
+	pub fn lines(&self) -> impl Iterator<Item = &Line> {
+		let (lines, tabs): (&[Line], &[Tab]) = match &self.body {
+			Body::Code(lines, _) => (lines, &[]),
+			Body::Tabs(tabs) => (&[], tabs),
+			_ => (&[], &[]),
+		};
+
+		lines
+			.iter()
+			.chain(tabs.iter().flat_map(|tab| tab.lines.iter()))
+	}
+
 	/// A station.
 	pub fn new(
 		name: impl Into<String>,
@@ -118,6 +137,13 @@ pub struct Workings {
 	linked: RwSignal<Option<String>>,
 	/// Scrolls the first linked line into view.
 	reveal: Reveal,
+	/// What the last builder change changed, as the open drawer says it:
+	/// `Ask changed: interval: Interval::Week`.
+	change: RwSignal<String>,
+	/// The text of the changed line the drawer shows.
+	change_target: RwSignal<Option<String>>,
+	/// Scrolls that line into the drawer's view.
+	change_reveal: Reveal,
 }
 
 /// How long a Copy button says "Copied".
@@ -139,6 +165,9 @@ impl Workings {
 			tabs: StoredValue::new(Vec::new()),
 			linked: RwSignal::new(None),
 			reveal: Reveal::new(),
+			change: RwSignal::new(String::new()),
+			change_target: RwSignal::new(None),
+			change_reveal: Reveal::new(),
 		}
 	}
 
@@ -204,6 +233,47 @@ impl Workings {
 		self.reveal
 	}
 
+	/// Says what a builder change changed, and scrolls the line `target`
+	/// into the open drawer's view; `None` says nothing.
+	pub(crate) fn announce_change(&self, status: Option<String>, target: Option<String>) {
+		self.change.set(status.unwrap_or_default());
+		let reveal = target.is_some();
+		self.change_target.set(target);
+
+		if reveal {
+			self.change_reveal.request();
+		}
+	}
+
+	/// What the last builder change changed, while a drawer is open.
+	#[must_use]
+	pub fn change(&self) -> String {
+		self.change.get()
+	}
+
+	/// Whether `text` is the changed line the drawer shows.
+	#[must_use]
+	pub fn is_change_target(&self, text: &str) -> bool {
+		self.change_target
+			.with(|target| target.as_deref() == Some(text))
+	}
+
+	/// Scrolls the changed line into the drawer's view.
+	#[must_use]
+	pub fn change_reveal(&self) -> Reveal {
+		self.change_reveal
+	}
+
+	/// Opens a station on a phone, where stations start as headers.
+	pub(crate) fn open_station(&self, key: &str) {
+		if !self
+			.stations
+			.with_untracked(|open| open.iter().any(|station| station == key))
+		{
+			self.stations.update(|open| open.push(key.to_owned()));
+		}
+	}
+
 	/// Closes the open drawer and gives focus back to what opened it.
 	pub fn hide(&self) {
 		if self.open.get_untracked().is_none() {
@@ -213,6 +283,8 @@ impl Workings {
 		let open = self.open.get_untracked();
 		self.open.set(None);
 		self.linked.set(None);
+		self.change.set(String::new());
+		self.change_target.set(None);
 
 		let remembered = browser::take_focus();
 
@@ -390,9 +462,12 @@ pub fn panel(drawer: &Drawer) -> Element {
 				.child(Text(drawer.title.clone()).class("text-xs text-[#9d93a8]"))
 				// What a builder change just changed.
 				.child(
-					Status("")
-						.class("text-xs font-semibold text-[#5ef2c2]")
-						.test_id("drawer-changed"),
+					Status(match workings {
+						Some(workings) if workings.is_open(&drawer.id) => workings.change(),
+						_ => String::new(),
+					})
+					.class("text-xs font-semibold text-[#5ef2c2]")
+					.test_id("drawer-changed"),
 				),
 		)
 		.child(close);
@@ -481,6 +556,11 @@ fn station_view(drawer: &str, station: &Station, index: usize, count: usize) -> 
 	let mut view = View()
 		.class("relative flex-col gap-2 pb-1.5 pl-7 pt-4")
 		.test_id(format!("station:{}", station.name.to_lowercase()));
+
+	// A station whose code the last builder change changed says so.
+	if station.changed() {
+		view = view.aria_description("changed");
+	}
 
 	if let Some(line) = line {
 		view = view.child(View().class(line).aria_hidden(true));
@@ -590,6 +670,13 @@ fn station_body(drawer: &str, station: &Station, view: Element) -> Element {
 /// script picks another.
 fn ask_tabs(drawer: &str, station: &Station, tabs: &[Tab]) -> [Element; 2] {
 	let workings = Workings::current();
+
+	if let Some(workings) = workings
+		&& !tabs.is_empty()
+	{
+		return live_ask_tabs(workings, drawer, station, tabs);
+	}
+
 	let selected = |index: usize, tab: &Tab| {
 		match workings {
 			Some(workings) => workings.ask.with(|ask| *ask == tab.name.to_lowercase()),
@@ -649,6 +736,65 @@ fn ask_tabs(drawer: &str, station: &Station, tabs: &[Tab]) -> [Element; 2] {
 				.id(id("ask-panel", tab))
 				.aria_labelled_by([id("ask-tab", tab)])
 				.test_id(format!("ask-panel:{}", tab.name.to_lowercase()))
+				.child(components::code_block(&tab.lines, &tab.copy_as)),
+		);
+	}
+
+	[row, panels]
+}
+
+/// The Ask tabs on a page this crate runs: a tab set, so the arrow keys,
+/// Home and End move between them, and one tab picks every Ask station's.
+fn live_ask_tabs(
+	workings: Workings,
+	drawer: &str,
+	station: &Station,
+	tabs: &[Tab],
+) -> [Element; 2] {
+	let names: Vec<String> = tabs.iter().map(|tab| tab.name.to_lowercase()).collect();
+	let selected = workings
+		.ask
+		.with(|ask| names.iter().position(|name| name == ask))
+		.unwrap_or(0);
+	let set = leptoskit::aria::Tabs::new(
+		format!("ask-{drawer}-{}", station.name.to_lowercase()).replace(
+			|character: char| !character.is_ascii_alphanumeric() && character != '-',
+			"-",
+		),
+		tabs.len(),
+		selected,
+	);
+	let mut row = set
+		.list({
+			let names = names.clone();
+			move |index| {
+				if let Some(name) = names.get(index) {
+					workings.select_ask(name);
+				}
+			}
+		})
+		.class("flex-row gap-1.5")
+		.aria_label(format!("{} as", station.name));
+	let mut panels = View().class("flex-col");
+
+	for (index, (tab, name)) in tabs.iter().zip(&names).enumerate() {
+		row = row.child(
+			set.tab(index, tab.name.clone())
+				.class(
+					"rounded-lg border px-3 py-1 text-[13px] font-semibold cursor-pointer \
+					 hover:text-white",
+				)
+				.class(if index == selected {
+					"border-[#5ef2c2] text-[#5ef2c2]"
+				} else {
+					"border-[#4a3f58] text-[#c9c0d0]"
+				})
+				.test_id(format!("ask-tab:{name}")),
+		);
+		panels = panels.child(
+			set.panel(index)
+				.class("flex-col")
+				.test_id(format!("ask-panel:{name}"))
 				.child(components::code_block(&tab.lines, &tab.copy_as)),
 		);
 	}

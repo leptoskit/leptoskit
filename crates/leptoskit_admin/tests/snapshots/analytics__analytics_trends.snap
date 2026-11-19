@@ -31,48 +31,48 @@ main [main]
           "Total count"
         button [menu-toggle]
           "+ Add series"
-        div [menu-panel]
-          a [menu-item] label="$pageview" href=/_leptoskit/admin/analytics/trends?compare=1&amp;from=2026-10-05&amp;interval=week&amp;math=total&amp;s0=note_created&amp;s1=%24pageview&amp;to=2026-11-02
+        div [menu-panel] role=menu
+          a [menu-item] role=menuitem label="$pageview" href=/_leptoskit/admin/analytics/trends?compare=1&amp;from=2026-10-05&amp;interval=week&amp;math=total&amp;s0=note_created&amp;s1=%24pageview&amp;to=2026-11-02
             "$pageview"
             "20"
-          a [menu-item] label="signed_up" href=/_leptoskit/admin/analytics/trends?compare=1&amp;from=2026-10-05&amp;interval=week&amp;math=total&amp;s0=note_created&amp;s1=signed_up&amp;to=2026-11-02
+          a [menu-item] role=menuitem label="signed_up" href=/_leptoskit/admin/analytics/trends?compare=1&amp;from=2026-10-05&amp;interval=week&amp;math=total&amp;s0=note_created&amp;s1=signed_up&amp;to=2026-11-02
             "signed_up"
             "struct · 6"
-          a [menu-item] label="$identify" href=/_leptoskit/admin/analytics/trends?compare=1&amp;from=2026-10-05&amp;interval=week&amp;math=total&amp;s0=note_created&amp;s1=%24identify&amp;to=2026-11-02
+          a [menu-item] role=menuitem label="$identify" href=/_leptoskit/admin/analytics/trends?compare=1&amp;from=2026-10-05&amp;interval=week&amp;math=total&amp;s0=note_created&amp;s1=%24identify&amp;to=2026-11-02
             "$identify"
             "6"
-          a [menu-item] label="checkout_started" href=/_leptoskit/admin/analytics/trends?compare=1&amp;from=2026-10-05&amp;interval=week&amp;math=total&amp;s0=note_created&amp;s1=checkout_started&amp;to=2026-11-02
+          a [menu-item] role=menuitem label="checkout_started" href=/_leptoskit/admin/analytics/trends?compare=1&amp;from=2026-10-05&amp;interval=week&amp;math=total&amp;s0=note_created&amp;s1=checkout_started&amp;to=2026-11-02
             "checkout_started"
             "struct · 4"
-          a [menu-item] label="payment_submitted" href=/_leptoskit/admin/analytics/trends?compare=1&amp;from=2026-10-05&amp;interval=week&amp;math=total&amp;s0=note_created&amp;s1=payment_submitted&amp;to=2026-11-02
+          a [menu-item] role=menuitem label="payment_submitted" href=/_leptoskit/admin/analytics/trends?compare=1&amp;from=2026-10-05&amp;interval=week&amp;math=total&amp;s0=note_created&amp;s1=payment_submitted&amp;to=2026-11-02
             "payment_submitted"
             "struct · 3"
-          a [menu-item] label="checkout_completed" href=/_leptoskit/admin/analytics/trends?compare=1&amp;from=2026-10-05&amp;interval=week&amp;math=total&amp;s0=note_created&amp;s1=checkout_completed&amp;to=2026-11-02
+          a [menu-item] role=menuitem label="checkout_completed" href=/_leptoskit/admin/analytics/trends?compare=1&amp;from=2026-10-05&amp;interval=week&amp;math=total&amp;s0=note_created&amp;s1=checkout_completed&amp;to=2026-11-02
             "checkout_completed"
             "struct · 2"
       "Breakdown"
       button [menu-toggle]
         "None ▾"
-      div [menu-panel]
-        a [menu-item] label="None" href=/_leptoskit/admin/analytics/trends?compare=1&amp;from=2026-10-05&amp;interval=week&amp;math=total&amp;s0=note_created&amp;to=2026-11-02
+      div [menu-panel] role=menu
+        a [menu-item] role=menuitem label="None" href=/_leptoskit/admin/analytics/trends?compare=1&amp;from=2026-10-05&amp;interval=week&amp;math=total&amp;s0=note_created&amp;to=2026-11-02
           "None"
-        a [menu-item] label="words (from note_created)" href=/_leptoskit/admin/analytics/trends?by=words&amp;compare=1&amp;from=2026-10-05&amp;interval=week&amp;math=total&amp;s0=note_created&amp;to=2026-11-02
+        a [menu-item] role=menuitem label="words (from note_created)" href=/_leptoskit/admin/analytics/trends?by=words&amp;compare=1&amp;from=2026-10-05&amp;interval=week&amp;math=total&amp;s0=note_created&amp;to=2026-11-02
           "words (from note_created)"
-        a [menu-item] label="shared (from note_created)" href=/_leptoskit/admin/analytics/trends?by=shared&amp;compare=1&amp;from=2026-10-05&amp;interval=week&amp;math=total&amp;s0=note_created&amp;to=2026-11-02
+        a [menu-item] role=menuitem label="shared (from note_created)" href=/_leptoskit/admin/analytics/trends?by=shared&amp;compare=1&amp;from=2026-10-05&amp;interval=week&amp;math=total&amp;s0=note_created&amp;to=2026-11-02
           "shared (from note_created)"
-        a [menu-item] label="Channel (session)" href=/_leptoskit/admin/analytics/trends?by=session%3Achannel&amp;compare=1&amp;from=2026-10-05&amp;interval=week&amp;math=total&amp;s0=note_created&amp;to=2026-11-02
+        a [menu-item] role=menuitem label="Channel (session)" href=/_leptoskit/admin/analytics/trends?by=session%3Achannel&amp;compare=1&amp;from=2026-10-05&amp;interval=week&amp;math=total&amp;s0=note_created&amp;to=2026-11-02
           "Channel (session)"
-        a [menu-item] label="Browser (session)" href=/_leptoskit/admin/analytics/trends?by=session%3Abrowser&amp;compare=1&amp;from=2026-10-05&amp;interval=week&amp;math=total&amp;s0=note_created&amp;to=2026-11-02
+        a [menu-item] role=menuitem label="Browser (session)" href=/_leptoskit/admin/analytics/trends?by=session%3Abrowser&amp;compare=1&amp;from=2026-10-05&amp;interval=week&amp;math=total&amp;s0=note_created&amp;to=2026-11-02
           "Browser (session)"
-        a [menu-item] label="Operating system (session)" href=/_leptoskit/admin/analytics/trends?by=session%3Aos&amp;compare=1&amp;from=2026-10-05&amp;interval=week&amp;math=total&amp;s0=note_created&amp;to=2026-11-02
+        a [menu-item] role=menuitem label="Operating system (session)" href=/_leptoskit/admin/analytics/trends?by=session%3Aos&amp;compare=1&amp;from=2026-10-05&amp;interval=week&amp;math=total&amp;s0=note_created&amp;to=2026-11-02
           "Operating system (session)"
-        a [menu-item] label="Device (session)" href=/_leptoskit/admin/analytics/trends?by=session%3Adevice_type&amp;compare=1&amp;from=2026-10-05&amp;interval=week&amp;math=total&amp;s0=note_created&amp;to=2026-11-02
+        a [menu-item] role=menuitem label="Device (session)" href=/_leptoskit/admin/analytics/trends?by=session%3Adevice_type&amp;compare=1&amp;from=2026-10-05&amp;interval=week&amp;math=total&amp;s0=note_created&amp;to=2026-11-02
           "Device (session)"
-        a [menu-item] label="Referrer (session)" href=/_leptoskit/admin/analytics/trends?by=session%3Areferrer_domain&amp;compare=1&amp;from=2026-10-05&amp;interval=week&amp;math=total&amp;s0=note_created&amp;to=2026-11-02
+        a [menu-item] role=menuitem label="Referrer (session)" href=/_leptoskit/admin/analytics/trends?by=session%3Areferrer_domain&amp;compare=1&amp;from=2026-10-05&amp;interval=week&amp;math=total&amp;s0=note_created&amp;to=2026-11-02
           "Referrer (session)"
-        a [menu-item] label="UTM source (session)" href=/_leptoskit/admin/analytics/trends?by=session%3Autm_source&amp;compare=1&amp;from=2026-10-05&amp;interval=week&amp;math=total&amp;s0=note_created&amp;to=2026-11-02
+        a [menu-item] role=menuitem label="UTM source (session)" href=/_leptoskit/admin/analytics/trends?by=session%3Autm_source&amp;compare=1&amp;from=2026-10-05&amp;interval=week&amp;math=total&amp;s0=note_created&amp;to=2026-11-02
           "UTM source (session)"
-        a [menu-item] label="Entry page (session)" href=/_leptoskit/admin/analytics/trends?by=session%3Aentry_pathname&amp;compare=1&amp;from=2026-10-05&amp;interval=week&amp;math=total&amp;s0=note_created&amp;to=2026-11-02
+        a [menu-item] role=menuitem label="Entry page (session)" href=/_leptoskit/admin/analytics/trends?by=session%3Aentry_pathname&amp;compare=1&amp;from=2026-10-05&amp;interval=week&amp;math=total&amp;s0=note_created&amp;to=2026-11-02
           "Entry page (session)"
       div [note:breakdown]
         "Breakdowns split each line by a property. Try one your struct sends, like plan: it comes straight from its fields."
@@ -152,6 +152,7 @@ aside [drawer-aside] label="Workings"
           "Emit"
           "the event catalogue"
         button [station-toggle] label="Emit station"
+          "▾"
         div [station-body]
           "note_created"
           "is a Rust type in your app, so its properties are its fields and a misspelled one fails when it compiles. This is the shape the app last registered; the service doesn't record where in your code it's sent from."
@@ -194,6 +195,7 @@ aside [drawer-aside] label="Workings"
           "Send"
           "the latest note_created, re-encoded here"
         button [station-toggle] label="Send station"
+          "▾"
         div [station-body]
           "Typed events send no property names, so this one is 85 bytes instead of 208: 59.1% smaller. Measured as one event alone in a batch; a real batch shares its context and session between events, so it shrinks further."
           div [code]
@@ -237,6 +239,7 @@ aside [drawer-aside] label="Workings"
           "Store"
           "events on sqlite"
         button [station-toggle] label="Store station"
+          "▾"
         div [station-body]
           "Events land in"
           "events"
@@ -305,6 +308,7 @@ aside [drawer-aside] label="Workings"
           "Ask"
           "the query"
         button [station-toggle] label="Ask station"
+          "▾"
         div [station-body]
           "Every insight is one value of the typed"
           "Query"
@@ -814,6 +818,7 @@ aside [drawer-aside] label="Workings"
           "Draw"
           "rows → chart"
         button [station-toggle] label="Draw station"
+          "▾"
         div [station-body]
           "4 rows per line came back, one per week; 1 line drawn; the previous period had nothing in it, so there's no dashed line. The page re-reads it when new events arrive."
           div [code]

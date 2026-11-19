@@ -179,6 +179,16 @@ async fn page(world: &World, browser: &mut Browser, path: &str) -> (StatusCode, 
 	(status, text(response).await)
 }
 
+/// The model of the page at `path`, as a builder asks for the next one.
+async fn page_model(world: &World, browser: &mut Browser, path: &str) -> (StatusCode, String) {
+	let request = axum::http::Request::get(path).header("x-admin-page", "json");
+	let response = browser
+		.send(&world.admin, ADMIN, request, axum::body::Body::empty())
+		.await;
+	let status = response.status();
+	(status, text(response).await)
+}
+
 /// The value of `attribute` on the element with `test_id`: the first such
 /// element, or the last when `last`.
 fn attribute_on(html: &str, test_id: &str, attribute: &str, last: bool) -> String {
@@ -497,6 +507,7 @@ async fn a_wrong_token_is_refused_and_the_page_says_so() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+#[expect(clippy::too_many_lines, reason = "every page, one after another")]
 async fn every_page_reads_the_service_as_the_app() {
 	let (world, analytics) = seeded().await;
 	let mut ada = world.ada().await;
@@ -529,6 +540,23 @@ async fn every_page_reads_the_service_as_the_app() {
 	.await;
 	assert!(html.contains("struct"), "note_created has a Rust type");
 	snapshot("analytics_trends", &html);
+
+	// A builder changing in place asks for the next page's model instead.
+	let (status, json) = page_model(
+		&world,
+		&mut ada,
+		&format!("{BASE}/analytics/trends?{RANGE}&interval=day"),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	let model: Value = serde_json::from_str(&json).unwrap();
+	let insight = &model["Insight"];
+	assert_eq!(insight["kind"], "trends");
+	assert_eq!(insight["path"], format!("{BASE}/analytics/trends"));
+	assert_eq!(insight["address"]["interval"], "day");
+	assert_eq!(insight["query"]["interval"], "day");
+	assert!(insight["answer"]["Ok"].is_object(), "{json}");
+	assert_eq!(insight["drawer"]["id"], "trends");
 
 	let (_, html) = page(
 		&world,
@@ -950,5 +978,28 @@ async fn pages_for_the_script() {
 		let (status, html) = page(&world, &mut ada, &path).await;
 		assert_eq!(status, StatusCode::OK, "{path}");
 		std::fs::write(directory.join(file), html).unwrap();
+	}
+
+	// The builders change in place: each page as a model, and two with
+	// their Workings open.
+	for (name, query) in [
+		("trends-day", "interval=day"),
+		("trends-week", "interval=week"),
+		("trends-pageviews", "s0=%24pageview&interval=day"),
+		(
+			"trends-channels",
+			"s0=%24pageview&interval=day&by=session:channel",
+		),
+	] {
+		let path = format!("{BASE}/analytics/trends?{RANGE}&{query}");
+		let (status, json) = page_model(&world, &mut ada, &path).await;
+		assert_eq!(status, StatusCode::OK, "{path}");
+		std::fs::write(directory.join(format!("{name}.json")), json).unwrap();
+
+		if matches!(name, "trends-day" | "trends-week") {
+			let (status, html) = page(&world, &mut ada, &format!("{path}&workings=trends")).await;
+			assert_eq!(status, StatusCode::OK, "{path}");
+			std::fs::write(directory.join(format!("{name}-workings.html")), html).unwrap();
+		}
 	}
 }

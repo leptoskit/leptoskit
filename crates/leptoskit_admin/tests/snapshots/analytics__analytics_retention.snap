@@ -27,23 +27,23 @@ main [main]
       "struct"
       button [menu-toggle]
         "Change ▾"
-      div [menu-panel]
-        a [menu-item] label="$pageview" href=/_leptoskit/admin/analytics/retention?from=2026-10-05&amp;kind=first&amp;period=week&amp;return=note_created&amp;start=%24pageview&amp;to=2026-11-02
+      div [menu-panel] role=menu
+        a [menu-item] role=menuitem label="$pageview" href=/_leptoskit/admin/analytics/retention?from=2026-10-05&amp;kind=first&amp;period=week&amp;return=note_created&amp;start=%24pageview&amp;to=2026-11-02
           "$pageview"
           "20"
-        a [menu-item] label="note_created" href=/_leptoskit/admin/analytics/retention?from=2026-10-05&amp;kind=first&amp;period=week&amp;return=note_created&amp;start=note_created&amp;to=2026-11-02
+        a [menu-item] role=menuitem label="note_created" href=/_leptoskit/admin/analytics/retention?from=2026-10-05&amp;kind=first&amp;period=week&amp;return=note_created&amp;start=note_created&amp;to=2026-11-02
           "note_created"
           "struct · 11"
-        a [menu-item] label="$identify" href=/_leptoskit/admin/analytics/retention?from=2026-10-05&amp;kind=first&amp;period=week&amp;return=note_created&amp;start=%24identify&amp;to=2026-11-02
+        a [menu-item] role=menuitem label="$identify" href=/_leptoskit/admin/analytics/retention?from=2026-10-05&amp;kind=first&amp;period=week&amp;return=note_created&amp;start=%24identify&amp;to=2026-11-02
           "$identify"
           "6"
-        a [menu-item] label="checkout_started" href=/_leptoskit/admin/analytics/retention?from=2026-10-05&amp;kind=first&amp;period=week&amp;return=note_created&amp;start=checkout_started&amp;to=2026-11-02
+        a [menu-item] role=menuitem label="checkout_started" href=/_leptoskit/admin/analytics/retention?from=2026-10-05&amp;kind=first&amp;period=week&amp;return=note_created&amp;start=checkout_started&amp;to=2026-11-02
           "checkout_started"
           "struct · 4"
-        a [menu-item] label="payment_submitted" href=/_leptoskit/admin/analytics/retention?from=2026-10-05&amp;kind=first&amp;period=week&amp;return=note_created&amp;start=payment_submitted&amp;to=2026-11-02
+        a [menu-item] role=menuitem label="payment_submitted" href=/_leptoskit/admin/analytics/retention?from=2026-10-05&amp;kind=first&amp;period=week&amp;return=note_created&amp;start=payment_submitted&amp;to=2026-11-02
           "payment_submitted"
           "struct · 3"
-        a [menu-item] label="checkout_completed" href=/_leptoskit/admin/analytics/retention?from=2026-10-05&amp;kind=first&amp;period=week&amp;return=note_created&amp;start=checkout_completed&amp;to=2026-11-02
+        a [menu-item] role=menuitem label="checkout_completed" href=/_leptoskit/admin/analytics/retention?from=2026-10-05&amp;kind=first&amp;period=week&amp;return=note_created&amp;start=checkout_completed&amp;to=2026-11-02
           "checkout_completed"
           "struct · 2"
       "and came back to do"
@@ -51,23 +51,23 @@ main [main]
       "struct"
       button [menu-toggle]
         "Change ▾"
-      div [menu-panel]
-        a [menu-item] label="$pageview" href=/_leptoskit/admin/analytics/retention?from=2026-10-05&amp;kind=first&amp;period=week&amp;return=%24pageview&amp;start=signed_up&amp;to=2026-11-02
+      div [menu-panel] role=menu
+        a [menu-item] role=menuitem label="$pageview" href=/_leptoskit/admin/analytics/retention?from=2026-10-05&amp;kind=first&amp;period=week&amp;return=%24pageview&amp;start=signed_up&amp;to=2026-11-02
           "$pageview"
           "20"
-        a [menu-item] label="signed_up" href=/_leptoskit/admin/analytics/retention?from=2026-10-05&amp;kind=first&amp;period=week&amp;return=signed_up&amp;start=signed_up&amp;to=2026-11-02
+        a [menu-item] role=menuitem label="signed_up" href=/_leptoskit/admin/analytics/retention?from=2026-10-05&amp;kind=first&amp;period=week&amp;return=signed_up&amp;start=signed_up&amp;to=2026-11-02
           "signed_up"
           "struct · 6"
-        a [menu-item] label="$identify" href=/_leptoskit/admin/analytics/retention?from=2026-10-05&amp;kind=first&amp;period=week&amp;return=%24identify&amp;start=signed_up&amp;to=2026-11-02
+        a [menu-item] role=menuitem label="$identify" href=/_leptoskit/admin/analytics/retention?from=2026-10-05&amp;kind=first&amp;period=week&amp;return=%24identify&amp;start=signed_up&amp;to=2026-11-02
           "$identify"
           "6"
-        a [menu-item] label="checkout_started" href=/_leptoskit/admin/analytics/retention?from=2026-10-05&amp;kind=first&amp;period=week&amp;return=checkout_started&amp;start=signed_up&amp;to=2026-11-02
+        a [menu-item] role=menuitem label="checkout_started" href=/_leptoskit/admin/analytics/retention?from=2026-10-05&amp;kind=first&amp;period=week&amp;return=checkout_started&amp;start=signed_up&amp;to=2026-11-02
           "checkout_started"
           "struct · 4"
-        a [menu-item] label="payment_submitted" href=/_leptoskit/admin/analytics/retention?from=2026-10-05&amp;kind=first&amp;period=week&amp;return=payment_submitted&amp;start=signed_up&amp;to=2026-11-02
+        a [menu-item] role=menuitem label="payment_submitted" href=/_leptoskit/admin/analytics/retention?from=2026-10-05&amp;kind=first&amp;period=week&amp;return=payment_submitted&amp;start=signed_up&amp;to=2026-11-02
           "payment_submitted"
           "struct · 3"
-        a [menu-item] label="checkout_completed" href=/_leptoskit/admin/analytics/retention?from=2026-10-05&amp;kind=first&amp;period=week&amp;return=checkout_completed&amp;start=signed_up&amp;to=2026-11-02
+        a [menu-item] role=menuitem label="checkout_completed" href=/_leptoskit/admin/analytics/retention?from=2026-10-05&amp;kind=first&amp;period=week&amp;return=checkout_completed&amp;start=signed_up&amp;to=2026-11-02
           "checkout_completed"
           "struct · 2"
       "Counts"
@@ -147,6 +147,7 @@ aside [drawer-aside] label="Workings"
           "Emit"
           "the event catalogue"
         button [station-toggle] label="Emit station"
+          "▾"
         div [station-body]
           "signed_up"
           "is a Rust type in your app, so its properties are its fields and a misspelled one fails when it compiles. This is the shape the app last registered; the service doesn't record where in your code it's sent from."
@@ -189,6 +190,7 @@ aside [drawer-aside] label="Workings"
           "Send"
           "the latest signed_up, re-encoded here"
         button [station-toggle] label="Send station"
+          "▾"
         div [station-body]
           "Typed events send no property names, so this one is 77 bytes instead of 196: 60.7% smaller. Measured as one event alone in a batch; a real batch shares its context and session between events, so it shrinks further."
           div [code]
@@ -232,6 +234,7 @@ aside [drawer-aside] label="Workings"
           "Store"
           "events, person_distinct_ids, person_overrides on sqlite"
         button [station-toggle] label="Store station"
+          "▾"
         div [station-body]
           "Events land in"
           "events"
@@ -344,6 +347,7 @@ aside [drawer-aside] label="Workings"
           "Ask"
           "the query"
         button [station-toggle] label="Ask station"
+          "▾"
         div [station-body]
           "Every insight is one value of the typed"
           "Query"
@@ -937,6 +941,7 @@ aside [drawer-aside] label="Workings"
           "Draw"
           "rows → chart"
         button [station-toggle] label="Draw station"
+          "▾"
         div [station-body]
           "4 cohorts came back, each a row of returns per week. A cell is that period's returns over the cohort's size, shaded in one hue so darker means more stayed; the top row is the mean, weighted by each cohort's size."
           div [code]

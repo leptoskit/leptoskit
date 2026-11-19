@@ -126,18 +126,27 @@ function serve(directory, clientDirectory) {
 							headers: { "content-type": "text/javascript" },
 						},
 					);
-				case `${BASE}/analytics/trends`:
-					if (url.searchParams.get("by") === "session:channel") {
-						return page("trends-channels.html");
-					}
-					if (url.searchParams.get("s0") === "$pageview") {
-						return page("trends-pageviews.html");
+				case `${BASE}/analytics/trends`: {
+					const name = url.searchParams.get("by") === "session:channel"
+						? "trends-channels"
+						: url.searchParams.get("s0") === "$pageview"
+						? "trends-pageviews"
+						: url.searchParams.get("interval") === "week"
+						? "trends-week"
+						: "trends-day";
+					// A builder changing in place asks for the page's model.
+					if (request.headers.get("x-admin-page") === "json") {
+						return new Response(
+							await Deno.readFile(`${directory}/${name}.json`),
+							{ headers: { "content-type": "application/json" } },
+						);
 					}
 					return page(
-						url.searchParams.get("interval") === "week"
-							? "trends-week.html"
-							: "trends-day.html",
+						url.searchParams.get("workings") === "trends"
+							? `${name}-workings.html`
+							: `${name}.html`,
 					);
+				}
 				case `${BASE}/analytics/live`:
 					return page("live.html");
 				case `${BASE}/analytics/library`:
@@ -188,6 +197,17 @@ function serve(directory, clientDirectory) {
 						headers: { "content-type": "text/event-stream" },
 					});
 				}
+				case `${BASE}/api/analytics/dashboards`:
+					if (request.method === "GET") {
+						return Response.json({
+							dashboards: [{ id: "d1", name: "Growth", cards: 2 }],
+						});
+					}
+					posted.push({ path: url.pathname, body: await request.json() });
+					return Response.json({ href: `${BASE}/analytics/library` });
+				case `${BASE}/api/analytics/insights`:
+					posted.push({ path: url.pathname, body: await request.json() });
+					return Response.json({ href: `${BASE}/analytics/library` });
 				case `${BASE}/api/preferences`:
 					posted.push({ path: url.pathname, body: await request.json() });
 					return Response.json({});
@@ -284,6 +304,14 @@ async function open(page, url, { width = 1280, height = 900 } = {}) {
 	await page.until("() => document.readyState === 'complete'", "the page");
 }
 
+/** Waits for the pages' Wasm to pick up `what` the server drew. */
+function hydrated(page, what) {
+	return page.until(
+		"() => document.documentElement.hasAttribute('data-hydrated')",
+		`${what} hydrates`,
+	);
+}
+
 const KEYS = {
 	k: 75,
 	Tab: 9,
@@ -326,9 +354,14 @@ Deno.test("a breakdown has the same colours after a builder change as after a re
 			page,
 			`${site.origin}${BASE}/analytics/trends?s0=%24pageview&interval=day`,
 		);
+		await hydrated(page, "the builder");
 		await page.evaluate("window.beforeSwap = true");
 		await page.click(
 			'[data-testid="menu-toggle"][aria-description="breakdown"]',
+		);
+		await page.until(
+			`() => document.querySelector('[data-testid="menu-panel"]:popover-open [data-testid="menu-item"][href*="by=session%3Achannel"]')`,
+			"the breakdown menu opens",
 		);
 		await page.click('[data-testid="menu-item"][href*="by=session%3Achannel"]');
 		await page.until(
@@ -448,6 +481,7 @@ Deno.test("confirmation dialogs contain focus and restore their opener without c
 		assert(!(await sheetOpen()), "Cancel closes the dialog");
 
 		await open(page, `${site.origin}${BASE}/analytics/trends`);
+		await hydrated(page, "the builder");
 		// Pointer activation need not focus the opener (notably in Safari).
 		await page.evaluate(
 			"document.querySelector('[data-testid=\"save-insight\"]').click()",
@@ -468,10 +502,18 @@ Deno.test("confirmation dialogs contain focus and restore their opener without c
 		await press(page, "Tab");
 		assert(await focused(page) === "confirm-input", "Tab wraps to the input");
 		await press(page, "Escape");
-		assert(
-			await focused(page) === "save-insight",
-			"pointer activation also restores the opener",
-		);
+		try {
+			await page.until(
+				`() => document.activeElement?.getAttribute("data-testid") === "save-insight"`,
+				"pointer activation also restores the opener",
+			);
+		} catch {
+			throw new Error(
+				`pointer activation also restores the opener: focus is on ${await focused(
+					page,
+				)}, the sheet is ${(await sheetOpen()) ? "open" : "closed"}`,
+			);
+		}
 	});
 });
 
@@ -530,8 +572,9 @@ Deno.test("the Ask tabs are tabs: selection, arrow keys, Home, and End", async (
 	await withBrowser(async (page, site) => {
 		await open(
 			page,
-			`${site.origin}${BASE}/analytics/trends?interval=week#workings=trends`,
+			`${site.origin}${BASE}/analytics/trends?interval=week&workings=trends`,
 		);
+		await hydrated(page, "the builder");
 		const state = () =>
 			page.evaluate(`(() => {
 				const drawer = document.querySelector('[data-testid="drawer:trends"]');
@@ -721,29 +764,32 @@ Deno.test("a builder change shows what it changed in the open drawer, and nothin
 	await withBrowser(async (page, site) => {
 		await open(
 			page,
-			`${site.origin}${BASE}/analytics/trends?interval=day#workings=trends`,
+			`${site.origin}${BASE}/analytics/trends?interval=day&workings=trends`,
 		);
+		await hydrated(page, "the builder");
+		await page.evaluate("window.beforeSwap = true");
 		await page.evaluate(
 			`document.querySelector('[data-testid="main"] a[aria-label="Week"]').focus()`,
 		);
 		await press(page, "Enter");
 		await page.until(
-			"() => location.search.includes('interval=week') && document.querySelector('[data-testid=\"drawer:trends\"] [data-changed]')",
-			"the page swaps in place and washes the changed lines",
+			`() => location.search.includes('interval=week') && document.querySelector('[data-testid="drawer:trends"] [aria-description="changed"]')`,
+			"the page changes in place and washes the changed lines",
 		);
 		const result = await page.until(
 			`() => {
 			const drawer = document.querySelector('[data-testid="drawer:trends"]');
 			const scroller = drawer.querySelector('[data-testid="drawer-scroll"]');
-			const line = drawer.querySelector('[data-testid="station:ask"] [data-changed]');
+			const line = drawer.querySelector('[data-testid="station:ask"] [data-testid^="code-line"][aria-description="changed"]');
 			const box = line?.getBoundingClientRect();
 			const view = scroller.getBoundingClientRect();
 			const settled = box && box.top >= view.top && box.bottom <= view.bottom;
 			return settled && {
-				status: drawer.querySelector('[data-testid="drawer-changed"]').textContent,
-				marked: drawer.querySelector('[data-testid="station:ask"]').hasAttribute("data-changed-station"),
+				status: drawer.querySelector('[data-testid="drawer-changed"]').textContent.trim(),
+				marked: drawer.querySelector('[data-testid="station:ask"]').getAttribute("aria-description"),
 				mainScroll: document.querySelector('[data-testid="main"]').scrollTop,
 				focus: document.activeElement.getAttribute("aria-label"),
+				title: document.title,
 			};
 		}`,
 			"the changed Ask line scrolls into the drawer's view",
@@ -753,24 +799,128 @@ Deno.test("a builder change shows what it changed in the open drawer, and nothin
 				result.status.includes("Interval::Week"),
 			`the drawer says what changed: ${result.status}`,
 		);
-		assert(result.marked, "the Ask station is marked changed");
+		assert(result.marked === "changed", "the Ask station is marked changed");
 		assert(result.mainScroll === 0, "the page itself didn't scroll");
 		assert(result.focus === "Week", `focus stays on Week, not ${result.focus}`);
+		assert(
+			await page.evaluate("window.beforeSwap === true"),
+			"the builder changed without a reload",
+		);
+
+		// Back brings the day back, in place.
+		await page.evaluate("history.back()");
+		await page.until(
+			`() => location.search.includes('interval=day') && document.querySelector('[data-testid="main"] a[aria-label="Day"]')?.getAttribute("aria-current") === "page"`,
+			"Back shows the day again",
+		);
+		assert(
+			await page.evaluate("window.beforeSwap === true"),
+			"Back changed it in place too",
+		);
 
 		// With the drawer closed, a change doesn't open or announce anything.
 		await press(page, "Escape");
+		await page.until(
+			`() => document.querySelector('[data-testid="drawer:trends"]')?.getClientRects().length === 0`,
+			"the drawer closes",
+		);
 		await page.evaluate(
-			`document.querySelector('[data-testid="main"] a[aria-label="Day"]').click()`,
+			`document.querySelector('[data-testid="main"] a[aria-label="Week"]').click()`,
 		);
 		await page.until(
-			"() => location.search.includes('interval=day')",
-			"the page swaps back",
+			`() => location.search.includes('interval=week') && document.querySelector('[data-testid="main"] a[aria-label="Week"]')?.getAttribute("aria-current") === "page"`,
+			"the page changes again",
 		);
 		const quiet = await page.evaluate(`({
-			open: document.documentElement.hasAttribute("data-admin-drawer"),
+			open: document.querySelector('[data-testid="drawer:trends"]').getClientRects().length > 0,
 			status: document.querySelector('[data-testid="drawer:trends"] [data-testid="drawer-changed"]').textContent.trim(),
 		})`);
 		assert(!quiet.open && quiet.status === "", JSON.stringify(quiet));
+	});
+});
+
+Deno.test("Save and Add to dashboard ask through the sheet, then open what they made", async () => {
+	await withBrowser(async (page, site) => {
+		await open(page, `${site.origin}${BASE}/analytics/trends?interval=week`);
+		await hydrated(page, "the builder");
+		await page.click('[data-testid="add-to-dashboard"]');
+		await page.until(
+			`() => document.querySelector('[data-testid="confirm-choices"]')`,
+			"the dashboards to choose from",
+		);
+		const sheet = await page.evaluate(`({
+			choices: Array.from(document.querySelectorAll('[data-testid="confirm-choices"] [role="radio"]'))
+				.map((radio) => [radio.textContent.trim(), radio.getAttribute("aria-checked")]),
+			field: document.querySelector('[data-testid="confirm-input"]').disabled,
+		})`);
+		assert(
+			JSON.stringify(sheet.choices) ===
+				JSON.stringify([["Growth (2 cards)", "true"], [
+					"A new dashboard",
+					"false",
+				]]),
+			`the dashboards, the first chosen: ${JSON.stringify(sheet.choices)}`,
+		);
+		assert(sheet.field, "a new dashboard's name waits for that choice");
+		await page.click(
+			'[data-testid="confirm-choices"] [role="radio"]:last-child',
+		);
+		await page.until(
+			`() => !document.querySelector('[data-testid="confirm-input"]').disabled`,
+			"choosing a new dashboard takes its name",
+		);
+		await page.click(
+			'[data-testid="confirm-choices"] [role="radio"]:first-child',
+		);
+		let navigated = page.once("Page.loadEventFired");
+		await page.click('[data-testid="confirm-yes"]');
+		await navigated;
+		assert(
+			await page.evaluate("location.pathname") === `${BASE}/analytics/library`,
+			"the dashboard's library opens",
+		);
+		const added = site.posted.find((post) =>
+			post.path === `${BASE}/api/analytics/dashboards`
+		);
+		assert(
+			added?.body.dashboard === "d1" && added.body.dashboard_name === null &&
+				added.body.kind === "trends" && added.body.insight === null &&
+				added.body.params.interval === "week",
+			`it adds this trend to Growth: ${JSON.stringify(added)}`,
+		);
+
+		await open(page, `${site.origin}${BASE}/analytics/trends?interval=week`);
+		await hydrated(page, "the builder");
+		await page.click('[data-testid="save-insight"]');
+		await page.until(
+			`() => document.activeElement?.getAttribute("data-testid") === "confirm-input"`,
+			"the name, ready to change",
+		);
+		assert(
+			await page.evaluate(
+				`document.querySelector('[data-testid="confirm-input"]').value !== ""`,
+			),
+			"the name starts as the suggested one",
+		);
+		await page.evaluate(`(() => {
+			const input = document.querySelector('[data-testid="confirm-input"]');
+			input.select();
+		})()`);
+		await page.send("Input.insertText", { text: "Weekly notes" });
+		navigated = page.once("Page.loadEventFired");
+		await press(page, "Enter");
+		await navigated;
+		assert(
+			await page.evaluate("location.pathname") === `${BASE}/analytics/library`,
+			"the saved insight's library opens",
+		);
+		const saved = site.posted.find((post) =>
+			post.path === `${BASE}/api/analytics/insights`
+		);
+		assert(
+			saved?.body.name === "Weekly notes" && saved.body.kind === "trends",
+			`it saves under the typed name: ${JSON.stringify(saved)}`,
+		);
 	});
 });
 
@@ -778,9 +928,10 @@ Deno.test("on a phone, stations are headers you open, and Copy covers no code", 
 	await withBrowser(async (page, site) => {
 		await open(
 			page,
-			`${site.origin}${BASE}/analytics/trends?interval=day#workings=trends`,
+			`${site.origin}${BASE}/analytics/trends?interval=day&workings=trends`,
 			{ width: 400, height: 860 },
 		);
+		await hydrated(page, "the builder");
 		const stations = () =>
 			page.evaluate(
 				`Array.from(document.querySelectorAll('[data-testid="drawer:trends"] [data-testid^="station:"]')).map((station) => ({
@@ -819,7 +970,7 @@ Deno.test("on a phone, stations are headers you open, and Copy covers no code", 
 			`document.querySelector('[data-testid="main"] a[aria-label="Week"]').click()`,
 		);
 		await page.until(
-			`() => document.querySelector('[data-testid="drawer:trends"] [data-testid="station:ask"]')?.hasAttribute("data-open")`,
+			`() => document.querySelector('[data-testid="drawer:trends"] [data-testid="station:ask"] [data-testid="station-toggle"]')?.getAttribute("aria-expanded") === "true"`,
 			"the changed station opens",
 		);
 		const after = (await stations()).find((station) =>
@@ -1096,7 +1247,9 @@ Deno.test("People and a person are the pages' own Rust: search, export, and a de
 
 		await open(page, `${site.origin}${BASE}/analytics/people/someone`);
 		await hydrated("the person hydrates");
-		const name = await page.evaluate("document.querySelector('h1').textContent");
+		const name = await page.evaluate(
+			"document.querySelector('h1').textContent",
+		);
 
 		// Export is a download the browser makes once the person agrees.
 		const downloads = await Deno.makeTempDir({ prefix: "admin-downloads-" });
@@ -1121,7 +1274,8 @@ Deno.test("People and a person are the pages' own Rust: search, export, and a de
 		await page.click('[data-testid="confirm-yes"]');
 		for (
 			let tries = 0;
-			!site.posted.some((entry) => entry.path.endsWith("/export")) && tries < 100;
+			!site.posted.some((entry) => entry.path.endsWith("/export")) &&
+			tries < 100;
 			tries++
 		) {
 			await new Promise((resolve) => setTimeout(resolve, 50));

@@ -2,11 +2,15 @@
 //! address is its query, and the people behind any point of one.
 //!
 //! Every control is a link to the same page with one parameter changed.
-//! The script fetches it in place so the Workings drawer stays open and
-//! washes the lines of code that changed.
+//! The pages crate draws a builder and, in the browser, fetches the next
+//! one's model in place, so the Workings drawer stays open and marks the
+//! lines of code that changed.
 
 use leptoskit::prelude::*;
 pub(crate) use leptoskit_admin_pages::analytics::insights::*;
+use leptoskit_admin_pages::model::Page;
+use leptoskit_admin_pages::model::insight::Insight;
+use leptoskit_admin_pages::model::insight::Saved;
 use leptoskit_analytics::query::ActorPoint;
 use leptoskit_analytics::query::ActorsQuery;
 use leptoskit_analytics::query::Answer;
@@ -20,6 +24,7 @@ use leptoskit_analytics::service::query::InsightView;
 
 use super::Connection;
 use super::Context;
+use super::Shown;
 use super::format;
 use super::params;
 use super::params::Defaults;
@@ -55,19 +60,15 @@ pub(crate) async fn sample(connection: &Connection, name: Option<String>) -> Opt
 	}
 }
 
-/// A builder page: the controls, the chart, and its Workings.
-#[expect(clippy::too_many_lines, reason = "one page, top to bottom")]
-pub(crate) async fn page(cx: &Context<'_>, kind: Kind, saved: Option<InsightView>) -> Screen {
+/// A builder page: the query its address asks for, what the service
+/// answered, and its Workings. The pages crate draws it.
+pub(crate) async fn page(cx: &Context<'_>, kind: Kind, saved: Option<InsightView>) -> Shown {
 	if !super::has_events(cx.facts) {
-		return super::listening(kind.title(), kind.section(), kind.shows());
+		return super::listening(kind.title(), kind.section(), kind.shows()).into();
 	}
 
 	let definitions = super::definitions(cx.facts);
 	let notes = super::notes(cx.preferences);
-	let builder = Builder {
-		definitions: &definitions,
-		notes: &notes,
-	};
 	let defaults = Defaults::from(&definitions);
 	let (path, query) = match &saved {
 		Some(saved) if !params::has_query(cx.params) => {
@@ -89,8 +90,7 @@ pub(crate) async fn page(cx: &Context<'_>, kind: Kind, saved: Option<InsightView
 			)
 		}
 	};
-	let params = params::of(&query);
-	let here = params::href(&path, &params);
+	let here = params::href(&path, &params::of(&query));
 	let (answer, sample) = tokio::join!(
 		cx.connection.run(query.clone()),
 		sample(cx.connection, stations::focus_event(&query)),
@@ -108,153 +108,16 @@ pub(crate) async fn page(cx: &Context<'_>, kind: Kind, saved: Option<InsightView
 		}
 		None => format!("{} · new · updates live", kind.title()),
 	};
-
-	let builder = match kind {
-		Kind::Trends => trends_builder(&path, &params, &query, &builder),
-		Kind::Funnels => funnels_builder(&path, &params, &query, &builder),
-		Kind::Retention => retention_builder(&path, &params, &query, &builder),
-	};
-	let drawer_id = kind.slug();
-	let (body, drawn, aside) = match &answer {
-		Ok(answer) => {
-			match (&answer.result, kind) {
-				(QueryResult::Trends(result), Kind::Trends) => {
-					let view = trend_view(&query, result, &here, false, None);
-					let interval = match &query {
-						Query::Trends(trends) => {
-							match trends.interval {
-								Interval::Hour => "hourly",
-								Interval::Week => "weekly",
-								Interval::Month => "monthly",
-								Interval::Day => "daily",
-							}
-						}
-						_ => "",
-					};
-					(
-						View()
-							.class("flex-col gap-4")
-							.child(view.chart)
-							.child(view.table),
-						view.drawn,
-						interval.to_owned(),
-					)
-				}
-				(QueryResult::Funnels(result), Kind::Funnels) => {
-					let (chart, drawn) = funnel_view(&query, result, &here, "h-64");
-					let first = result.steps.first();
-					let last = result.steps.last();
-					let within = match &query {
-						Query::Funnels(funnel) => {
-							funnel.window_seconds.map_or_else(String::new, |seconds| {
-								match seconds {
-									86_400 => " within a day".to_owned(),
-									seconds if seconds % 86_400 == 0 => {
-										format!(" within {} days", seconds / 86_400)
-									}
-									#[expect(
-										clippy::cast_precision_loss,
-										reason = "a window in seconds, for display"
-									)]
-									seconds => format!(" within {}", format::duration(seconds as f64)),
-								}
-							})
-						}
-						_ => String::new(),
-					};
-					let caption = format!(
-						"of people who did {} went on to {}{within}",
-						first.map_or("the first step", |step| step.name.as_str()),
-						last.map_or("the last step", |step| step.name.as_str()),
-					);
-					let summary = format!(
-						"{} of {} people{}",
-						format::thousands(last.map_or(0, |step| step.count)),
-						format::thousands(first.map_or(0, |step| step.count)),
-						result
-							.median_seconds_to_convert
-							.map_or_else(String::new, |seconds| {
-								format!(" · median {} to convert", format::duration(seconds))
-							})
-					);
-					(
-						View()
-							.class("flex-col gap-4")
-							.child(
-								View()
-									.class("flex-row flex-wrap items-end gap-x-6 gap-y-1")
-									.test_id("funnel-summary")
-									.child(
-										View()
-											.class("min-w-[16rem] flex-1 flex-col")
-											.child(
-												Text(format::share(result.overall_conversion))
-													.class(style::HERO_NUMBER),
-											)
-											.child(Text(caption).class(style::SECONDARY)),
-									)
-									.child(
-										Text(summary).class(style::SECONDARY).class("tabular-nums"),
-									),
-							)
-							.child(
-								View()
-									.class("overflow-scroll")
-									.child(View().class("min-w-[520px]").child(chart)),
-							),
-						drawn,
-						"people".to_owned(),
-					)
-				}
-				(QueryResult::Retention(result), Kind::Retention) => {
-					let (grid, drawn) = retention_view(&query, result, &here);
-					(grid, drawn, "% of each cohort".to_owned())
-				}
-				_ => {
-					(
-						components::status_word(
-							Tone::Bad,
-							"The service answered a different kind of query.",
-						),
-						Drawn {
-							sentence: String::new(),
-							rows: Vec::new(),
-						},
-						String::new(),
-					)
-				}
-			}
-		}
-		Err(failure) => {
-			(
-				View()
-					.class("flex-col gap-2")
-					.test_id("query-error")
-					.child(components::status_word(Tone::Bad, "This query didn't run"))
-					.child(Text(failure.0.clone()).class(style::BODY)),
-				Drawn {
-					sentence: "Nothing was drawn: the query didn't run.".to_owned(),
-					rows: Vec::new(),
-				},
-				String::new(),
-			)
-		}
-	};
-	let chart_title = match &query {
-		Query::Trends(trends) => {
-			trends
-				.series
-				.iter()
-				.map(|series| series.event.as_str())
-				.collect::<Vec<_>>()
-				.join(" vs ")
-		}
-		Query::Funnels(funnels) => format!("{} steps", funnels.steps.len()),
-		Query::Retention(retention) => {
-			format!("{} → {}", retention.start_event, retention.return_event)
-		}
-		_ => String::new(),
-	};
+	// The drawer explains the chart, so it needs how the rows were drawn.
+	let (_, drawn, _) = answered(
+		kind,
+		&query,
+		answer
+			.as_ref()
+			.map(|answer| &answer.result)
+			.map_err(|failure| failure.0.as_str()),
+		&here,
+	);
 	let focus = stations::focus_event(&query).unwrap_or_default();
 	let source = format!(
 		"{} → {}",
@@ -265,14 +128,8 @@ pub(crate) async fn page(cx: &Context<'_>, kind: Kind, saved: Option<InsightView
 		},
 		kind.title()
 	);
-	let chart = components::card(chart_title)
-		.aside(aside)
-		.workings(drawer_id, source)
-		.test_id("chart-card")
-		.child(body)
-		.build();
 	let drawer = stations::drawer(stations::Source {
-		id: drawer_id,
+		id: kind.slug(),
 		title: format!("{name} · {} insight · live", kind.title()),
 		query: &query,
 		answer: answer.as_ref().ok(),
@@ -282,29 +139,28 @@ pub(crate) async fn page(cx: &Context<'_>, kind: Kind, saved: Option<InsightView
 		drawn,
 	});
 
-	let content = View()
-		.class("flex-col gap-5")
-		.test_id("live-refresh")
-		.child(super::header(
-			&name,
-			&subtitle,
-			actions(
-				kind,
-				saved.as_ref().map(|saved| saved.id.to_string()).as_deref(),
-				&name,
-			),
-		))
-		.child(range_chips(&path, &params))
-		.child(builder)
-		.child(chart);
-
-	Screen {
-		title: name,
-		section: kind.section(),
-		content,
-		drawers: vec![drawer],
-		open: None,
-	}
+	Page::Insight(Box::new(Insight {
+		kind,
+		path,
+		address: cx.params.clone(),
+		query,
+		saved: saved.map(|saved| {
+			Saved {
+				id: saved.id.to_string(),
+				created_by: saved.created_by,
+			}
+		}),
+		name,
+		subtitle,
+		answer: answer
+			.map(|answer| answer.result)
+			.map_err(|failure| failure.0),
+		definitions,
+		notes,
+		source,
+		drawer,
+	}))
+	.into()
 }
 
 /// The people behind a point.

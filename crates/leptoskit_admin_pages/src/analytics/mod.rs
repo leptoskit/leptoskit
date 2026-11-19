@@ -7,7 +7,9 @@ pub mod draw;
 pub mod format;
 pub mod insights;
 pub mod params;
+pub mod swap;
 
+use leptoskit::native::Placement;
 use leptoskit::prelude::*;
 use serde::Deserialize;
 use serde::Serialize;
@@ -84,7 +86,7 @@ pub fn chip(label: &str, value: &str, href: String, on: bool) -> Element {
 
 	content = content.child(Text(value.to_owned()).class("font-semibold text-[var(--admin-ink)]"));
 	let mut link = Pressable(format!("{label} {value}").trim().to_owned())
-		.href(href)
+		.href(href.clone())
 		.class("rounded-full hover:bg-[var(--admin-sunken)]")
 		.child(content);
 
@@ -92,7 +94,7 @@ pub fn chip(label: &str, value: &str, href: String, on: bool) -> Element {
 		link = link.aria_current(leptoskit::native::Current::Page);
 	}
 
-	link
+	swap::link(link, href)
 }
 
 /// A row of links where one is chosen: `Day | Week`.
@@ -124,7 +126,7 @@ pub fn segmented(label: &str, options: &[(String, String, bool)]) -> Element {
 			link = link.aria_current(leptoskit::native::Current::Page);
 		}
 
-		row = row.child(link);
+		row = row.child(swap::link(link, href.clone()));
 	}
 
 	View()
@@ -133,51 +135,93 @@ pub fn segmented(label: &str, options: &[(String, String, bool)]) -> Element {
 		.child(row)
 }
 
+/// One choice in a [`menu`]: a link to the page it leads to.
+pub struct MenuItem {
+	pub label: String,
+	/// What sits at the item's end: `struct · 4`.
+	pub detail: Option<String>,
+	pub href: String,
+}
+
+impl MenuItem {
+	#[must_use]
+	pub fn new(label: impl Into<String>, detail: Option<String>, href: String) -> Self {
+		Self {
+			label: label.into(),
+			detail,
+			href,
+		}
+	}
+}
+
 /// A control that opens a list over the content beneath it: `+ Add
-/// series`, `Breakdown`. The script opens one at a time and closes it on a
-/// press anywhere else.
-pub fn menu(label: &str, test_id: &str, items: Vec<Element>) -> Element {
-	View()
-		.class("relative flex-col")
-		.child(
+/// series`, `Breakdown`. It is a [`Menu`](leptoskit::aria::Menu): one open
+/// at a time, the arrow keys move through it, and Escape or a press
+/// elsewhere closes it. Each item is a link the builder follows in place.
+pub fn menu(label: &str, id: &str, items: Vec<MenuItem>) -> Element {
+	let swap = swap::Swap::current();
+	let open = swap.is_some_and(|swap| swap.is_menu_open(id));
+	let mut menu = leptoskit::aria::Menu::new(format!("menu-{id}"), open)
+		.button(
 			Button(label.to_owned())
-				.aria_expanded(false)
 				.class(
 					"self-start rounded-lg px-1 py-1 text-sm font-semibold \
 					 text-[var(--admin-ink)] cursor-pointer hover:bg-[var(--admin-sunken)]",
 				)
 				.test_id("menu-toggle")
-				.aria_description(test_id.to_owned()),
+				.aria_description(id.to_owned()),
 		)
-		.child(
-			View()
-				.class(
-					"absolute left-0 top-[100%] mt-1 max-h-72 w-72 flex-col gap-0.5 \
-					 overflow-scroll rounded-xl border border-[var(--admin-line)] \
-					 bg-[var(--admin-surface)] p-1.5",
-				)
-				.test_id("menu-panel")
-				.children(items),
-		)
-}
+		.placement(Placement::BelowStart);
+	let hrefs: Vec<String> = items.iter().map(|item| item.href.clone()).collect();
 
-/// One item in a [`menu`].
-pub fn menu_item(label: &str, detail: Option<&str>, href: String) -> Element {
-	let mut row = View()
-		.class("flex-row items-center gap-2 px-2 py-1.5")
-		.child(
-			Text(label.to_owned()).class("min-w-0 flex-1 truncate text-sm text-[var(--admin-ink)]"),
-		);
+	for item in items {
+		let mut row = View()
+			.class("flex-row items-center gap-2 px-2 py-1.5")
+			.child(
+				Text(item.label.clone())
+					.class("min-w-0 flex-1 truncate text-sm text-[var(--admin-ink)]"),
+			);
 
-	if let Some(detail) = detail {
-		row = row.child(Text(detail.to_owned()).class(style::LABEL));
+		if let Some(detail) = &item.detail {
+			row = row.child(Text(detail.clone()).class(style::LABEL));
+		}
+
+		let href = item.href;
+		menu = menu
+			.item(item.label, move || {
+				if let Some(swap) = swap {
+					swap.go(href.clone(), true);
+				}
+			})
+			.content(row);
 	}
 
-	Pressable(label.to_owned())
-		.href(href)
-		.class("cursor-pointer rounded-lg hover:bg-[var(--admin-sunken)]")
-		.test_id("menu-item")
-		.child(row)
+	if let Some(swap) = swap {
+		let id = id.to_owned();
+		menu = menu.on_toggle(move |open| swap.set_menu(&id, open));
+	}
+
+	// The menu names its parts by id; the tests know them by test id, and
+	// each item keeps its address, which works without the page's Wasm.
+	let mut menu = Element::from(menu).class("relative flex-col");
+
+	if let Some(list) = menu.children.get_mut(1) {
+		let mut panel = std::mem::replace(list, View()).test_id("menu-panel").class(
+			"max-h-72 w-72 flex-col gap-0.5 overflow-scroll rounded-xl border \
+			 border-[var(--admin-line)] bg-[var(--admin-surface)] p-1.5",
+		);
+
+		for (item, href) in panel.children.iter_mut().zip(hrefs) {
+			*item = std::mem::replace(item, View())
+				.href(href)
+				.class("cursor-pointer rounded-lg hover:bg-[var(--admin-sunken)]")
+				.test_id("menu-item");
+		}
+
+		*list = panel;
+	}
+
+	menu
 }
 
 /// A stat tile: label, hero number, a sparkline, and the change.

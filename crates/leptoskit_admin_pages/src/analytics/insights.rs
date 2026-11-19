@@ -13,12 +13,14 @@ use leptoskit_analytics::query::FunnelsResult;
 use leptoskit_analytics::query::Interval;
 use leptoskit_analytics::query::Math;
 use leptoskit_analytics::query::Query;
+use leptoskit_analytics::query::QueryResult;
 use leptoskit_analytics::query::RetentionKind;
 use leptoskit_analytics::query::RetentionResult;
 use leptoskit_analytics::query::TrendsResult;
 
 use super::Definition;
 use super::Drawn;
+use super::MenuItem;
 use super::draw;
 use super::format;
 use super::params;
@@ -26,7 +28,6 @@ use super::params::Defaults;
 use super::params::Params;
 use crate::BASE;
 use crate::components;
-use crate::components::Kind as ButtonKind;
 use crate::model::Section;
 use crate::style;
 
@@ -48,7 +49,8 @@ impl Builder<'_> {
 }
 
 /// Which builder.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Kind {
 	Trends,
 	Funnels,
@@ -157,7 +159,7 @@ fn event_menu(
 	skip: &[String],
 	make: impl Fn(&str) -> String,
 ) -> Element {
-	let items: Vec<Element> = definitions
+	let items = definitions
 		.iter()
 		.filter(|definition| definition.volume > 0 && !skip.contains(&definition.name))
 		.map(|definition| {
@@ -166,7 +168,7 @@ fn event_menu(
 				if definition.typed() { "struct · " } else { "" },
 				format::thousands(definition.volume)
 			);
-			super::menu_item(&definition.name, Some(&detail), make(&definition.name))
+			MenuItem::new(&definition.name, Some(detail), make(&definition.name))
 		})
 		.collect();
 	super::menu(label, test_id, items)
@@ -236,15 +238,15 @@ fn breakdown_label(params: &Params, definitions: &[Definition], event: &str) -> 
 }
 
 fn breakdown_menu(path: &str, params: &Params, definitions: &[Definition], event: &str) -> Element {
-	let mut items = vec![super::menu_item(
+	let mut items = vec![MenuItem::new(
 		"None",
 		None,
 		params::href(path, &params::without(params, "by")),
 	)];
 
 	for (value, label) in breakdown_options(definitions, event) {
-		items.push(super::menu_item(
-			&label,
+		items.push(MenuItem::new(
+			label,
 			None,
 			params::href(path, &params::with(params, "by", value)),
 		));
@@ -289,30 +291,6 @@ pub fn range_chips(path: &str, params: &Params) -> Element {
 	}
 
 	row
-}
-
-/// The page heading's actions: add to a dashboard, then save.
-pub fn actions(kind: Kind, saved: Option<&str>, name: &str) -> Vec<Element> {
-	vec![
-		Button("Add to dashboard")
-			.class(ButtonKind::Secondary.class_name())
-			.aria_description(name.to_owned())
-			.test_id("add-to-dashboard"),
-		components::raised(
-			Button(if saved.is_some() {
-				"Save changes"
-			} else {
-				"Save"
-			})
-			.class(ButtonKind::Primary.class_name())
-			.aria_description(format!(
-				"{}|{}|{name}",
-				kind.slug(),
-				saved.unwrap_or_default()
-			))
-			.test_id("save-insight"),
-		),
-	]
 }
 
 /// The name a new insight starts with.
@@ -867,12 +845,14 @@ pub fn trends_builder(path: &str, params: &Params, query: &Query, cx: &Builder<'
 				.filter(|(other, _)| *other != index)
 				.map(|(_, name)| name.clone())
 				.collect();
-			row = row.child(
+			let href = params::href(path, &params::with_list(params, "s", &rest));
+			row = row.child(super::swap::link(
 				Pressable(format!("Remove {name}"))
-					.href(params::href(path, &params::with_list(params, "s", &rest)))
+					.href(href.clone())
 					.class("cursor-pointer rounded-md px-1.5 hover:bg-[var(--admin-line)]")
 					.child(Text("×").class("text-base text-[var(--admin-ink-3)]")),
-			);
+				href,
+			));
 		}
 
 		series = series.child(row);
@@ -1002,12 +982,14 @@ fn steps_editor(path: &str, params: &Params, steps: &[String], cx: &Builder<'_>)
 				.filter(|(other, _)| *other != index)
 				.map(|(_, name)| name.clone())
 				.collect();
-			row = row.child(
+			let href = params::href(path, &params::with_list(params, "s", &rest));
+			row = row.child(super::swap::link(
 				Pressable(format!("Remove step {}", index + 1))
-					.href(params::href(path, &params::with_list(params, "s", &rest)))
+					.href(href.clone())
 					.class("cursor-pointer rounded-md px-1.5 hover:bg-[var(--admin-line)]")
 					.child(Text("×").class("text-base text-[var(--admin-ink-3)]")),
-			);
+				href,
+			));
 		}
 
 		list = list.child(row);
@@ -1189,4 +1171,160 @@ pub fn retention_builder(path: &str, params: &Params, query: &Query, cx: &Builde
 /// filters by.
 pub fn session_filter(key: &str, value: &str) -> String {
 	params::filter_value(FilterSource::Session, key, value)
+}
+
+/// What a builder's chart card shows for what its query answered: the
+/// chart, how its rows became it, and the card's aside (`weekly`,
+/// `people`).
+pub fn answered(
+	kind: Kind,
+	query: &Query,
+	answer: Result<&QueryResult, &str>,
+	here: &str,
+) -> (Element, Drawn, String) {
+	let answer = match answer {
+		Ok(answer) => answer,
+		Err(failure) => {
+			return (
+				View()
+					.class("flex-col gap-2")
+					.test_id("query-error")
+					.child(components::status_word(
+						components::Tone::Bad,
+						"This query didn't run",
+					))
+					.child(Text(failure.to_owned()).class(style::BODY)),
+				Drawn {
+					sentence: "Nothing was drawn: the query didn't run.".to_owned(),
+					rows: Vec::new(),
+				},
+				String::new(),
+			);
+		}
+	};
+
+	match (answer, kind) {
+		(QueryResult::Trends(result), Kind::Trends) => {
+			let view = trend_view(query, result, here, false, None);
+			let interval = match query {
+				Query::Trends(trends) => {
+					match trends.interval {
+						Interval::Hour => "hourly",
+						Interval::Week => "weekly",
+						Interval::Month => "monthly",
+						Interval::Day => "daily",
+					}
+				}
+				_ => "",
+			};
+			(
+				View()
+					.class("flex-col gap-4")
+					.child(view.chart)
+					.child(view.table),
+				view.drawn,
+				interval.to_owned(),
+			)
+		}
+		(QueryResult::Funnels(result), Kind::Funnels) => {
+			let (chart, drawn) = funnel_view(query, result, here, "h-64");
+			let first = result.steps.first();
+			let last = result.steps.last();
+			let within = match query {
+				Query::Funnels(funnel) => {
+					funnel.window_seconds.map_or_else(String::new, |seconds| {
+						match seconds {
+							86_400 => " within a day".to_owned(),
+							seconds if seconds % 86_400 == 0 => {
+								format!(" within {} days", seconds / 86_400)
+							}
+							#[expect(
+								clippy::cast_precision_loss,
+								reason = "a window in seconds, for display"
+							)]
+							seconds => format!(" within {}", format::duration(seconds as f64)),
+						}
+					})
+				}
+				_ => String::new(),
+			};
+			let caption = format!(
+				"of people who did {} went on to {}{within}",
+				first.map_or("the first step", |step| step.name.as_str()),
+				last.map_or("the last step", |step| step.name.as_str()),
+			);
+			let summary = format!(
+				"{} of {} people{}",
+				format::thousands(last.map_or(0, |step| step.count)),
+				format::thousands(first.map_or(0, |step| step.count)),
+				result
+					.median_seconds_to_convert
+					.map_or_else(String::new, |seconds| {
+						format!(" · median {} to convert", format::duration(seconds))
+					})
+			);
+			(
+				View()
+					.class("flex-col gap-4")
+					.child(
+						View()
+							.class("flex-row flex-wrap items-end gap-x-6 gap-y-1")
+							.test_id("funnel-summary")
+							.child(
+								View()
+									.class("min-w-[16rem] flex-1 flex-col")
+									.child(
+										Text(format::share(result.overall_conversion))
+											.class(style::HERO_NUMBER),
+									)
+									.child(Text(caption).class(style::SECONDARY)),
+							)
+							.child(Text(summary).class(style::SECONDARY).class("tabular-nums")),
+					)
+					.child(
+						View()
+							.class("overflow-scroll")
+							.child(View().class("min-w-[520px]").child(chart)),
+					),
+				drawn,
+				"people".to_owned(),
+			)
+		}
+		(QueryResult::Retention(result), Kind::Retention) => {
+			let (grid, drawn) = retention_view(query, result, here);
+			(grid, drawn, "% of each cohort".to_owned())
+		}
+		_ => {
+			(
+				components::status_word(
+					components::Tone::Bad,
+					"The service answered a different kind of query.",
+				),
+				Drawn {
+					sentence: String::new(),
+					rows: Vec::new(),
+				},
+				String::new(),
+			)
+		}
+	}
+}
+
+/// The chart card's title: `note_created vs $pageview`, `3 steps`.
+pub fn chart_title(query: &Query) -> String {
+	match query {
+		Query::Trends(trends) => {
+			trends
+				.series
+				.iter()
+				.map(|series| series.event.as_str())
+				.collect::<Vec<_>>()
+				.join(" vs ")
+		}
+		Query::Funnels(funnels) => format!("{} steps", funnels.steps.len()),
+		Query::Retention(retention) => {
+			format!("{} → {}", retention.start_event, retention.return_event)
+		}
+		_ => String::new(),
+	}
 }

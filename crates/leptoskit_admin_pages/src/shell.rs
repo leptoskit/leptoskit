@@ -31,6 +31,7 @@ use crate::BASE;
 use crate::components;
 use crate::confirm::Confirm;
 use crate::model::Model;
+use crate::model::Page;
 use crate::model::Section;
 use crate::model::Viewer;
 use crate::style;
@@ -538,8 +539,10 @@ pub fn matching(targets: &[Target], query: &str) -> Vec<Target> {
 /// What the chrome around every page changes, and the page it frames.
 #[derive(Clone)]
 pub struct Shell {
-	/// The page's model.
+	/// The page's model, as the server sent it.
 	pub model: Arc<Model>,
+	/// The page shown now: the model's, until a builder changes in place.
+	pub(crate) page: RwSignal<Page>,
 	/// Workings mode and the page's drawers.
 	pub workings: Workings,
 	/// `light` or `dark` once the person chose one.
@@ -572,6 +575,7 @@ impl Shell {
 				model.page.drawers().first().map(|drawer| drawer.id.clone()),
 			),
 			appearance: RwSignal::new(model.viewer.appearance.clone()),
+			page: RwSignal::new(model.page.clone()),
 			model: Arc::new(model),
 			menu_open: RwSignal::new(false),
 			query: RwSignal::new(String::new()),
@@ -654,7 +658,7 @@ impl Shell {
 	#[must_use]
 	pub fn frame(&self, content: Element) -> Element {
 		let viewer = &self.model.viewer;
-		let section = self.model.page.section();
+		let section = self.page.with(Page::section);
 		let main = View()
 			.class("min-w-0 flex-1 overflow-scroll")
 			.role(Role::Main)
@@ -684,8 +688,10 @@ impl Shell {
 					.child(rail(viewer, &section))
 					.child(main)
 					.children({
-						let drawers = self.model.page.drawers();
-						(!drawers.is_empty()).then(|| workings::aside(drawers))
+						self.page.with(|page| {
+							let drawers = page.drawers();
+							(!drawers.is_empty()).then(|| workings::aside(drawers))
+						})
 					}),
 			)
 			.child(tab_bar(
@@ -694,17 +700,17 @@ impl Shell {
 				search_open().on_press(move || find.find()),
 			))
 			.children(
-				matches!(
-					self.model.page,
-					crate::model::Page::Project(_) | crate::model::Page::Person(_)
-				)
-				.then(|| self.confirm.view()),
+				self.page
+					.with(|page| {
+						matches!(page, Page::Project(_) | Page::Person(_) | Page::Insight(_))
+					})
+					.then(|| self.confirm.view()),
 			)
 	}
 
 	fn top_bar(&self) -> Element {
 		let viewer = &self.model.viewer;
-		let section = self.model.page.section();
+		let section = self.page.with(Page::section);
 
 		View()
 			.class(
@@ -1079,7 +1085,7 @@ mod tests {
 					}),
 					..viewer(&["notes-production", "notes-staging"])
 				},
-				page: crate::model::Page::Glossary,
+				page: Page::Glossary,
 				open: None,
 			});
 			// Search with and without matches, and the account menu open.
