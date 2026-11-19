@@ -223,8 +223,11 @@ Safari has no side panel or developer tools panel, and can't replace the new tab
 `leptoskit dev` runs the extension beside your other platforms, in Chrome for Testing, the build of Chrome meant for automation: Chrome 137 and later no longer load an unpacked extension from the command line. Install it once:
 
 ```bash
-npx @puppeteer/browsers install chrome@stable chromedriver@stable --path ~/.cache/puppeteer
+npx @puppeteer/browsers install chrome@stable --path ~/.cache/puppeteer
+npx @puppeteer/browsers install chromedriver@stable --path ~/.cache/puppeteer
 ```
+
+The installer takes one browser a run, so chromedriver needs its own. Install both together: a chromedriver drives only the Chrome of its own major version.
 
 Or set `LEPTOSKIT_CHROME`, and `LEPTOSKIT_CHROMEDRIVER`, to the executables you have. `leptoskit doctor` reports the browser tools it finds.
 
