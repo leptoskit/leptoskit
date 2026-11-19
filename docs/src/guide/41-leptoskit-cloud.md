@@ -73,6 +73,8 @@ Every `lk cloud` subcommand accepts `--json`, `--org <slug>`, `--project <slug>`
 | `lk cloud usage [--period YYYY-MM]`                                                     | Shows monthly compute, build, database, and transfer usage                                             |
 | `lk cloud publish <store>... [--submit] [--detach]`                                     | Queues store publication on a configured build worker                                                  |
 
+Like `cargo`, `lk cloud` also dispatches external subcommands: any executable named `leptoskit-cloud-<name>` installed beside `lk` or on `PATH` can be run as `lk cloud <name> [ARGS]...` (for example `lk cloud platform up ...`, `lk cloud worker run ...`, or `lk cloud control serve ...` for self-hosted cloud operators).
+
 <Callout kind="note" title="Secrets stay out of shell history">
 
 `lk cloud secret set` never takes a secret value as a positional argument. Pipe the value over standard input (`printf '%s' "$VALUE" | lk cloud secret set STRIPE_KEY`) or pass `--from-env STRIPE_KEY`. Secret values are never printed back in JSON or logs.

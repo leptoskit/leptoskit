@@ -6,7 +6,7 @@
 
 <!-- {/cloudWorkerSummary} -->
 
-It pairs with a control plane, asks it for jobs, runs one at a time under a lease, batches job logs, and reports outcomes, environment status, and runtime logs back to the control plane. When `--build-command` is omitted, it defaults to its built-in `leptoskit-cloud-worker build-app` OCI builder (supporting persistent `--build-cache-dir` and optional `--build-sandbox` isolation wrappers). A cluster's worker doesn't take backups yet.
+It pairs with a control plane, asks it for jobs, runs one at a time under a lease, batches job logs, and reports outcomes, environment status, and runtime logs back to the control plane. When `--build-command` is omitted, it defaults to its built-in `leptoskit-cloud-worker build-app` OCI builder (supporting persistent `--build-cache-dir` and optional `--build-sandbox` isolation wrappers). Once installed beside `lk` or on `PATH`, you can also run it via `lk cloud worker <command>`. A cluster's worker doesn't take backups yet.
 
 ## Pairing
 

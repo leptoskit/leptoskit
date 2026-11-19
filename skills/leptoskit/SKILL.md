@@ -64,6 +64,7 @@ lk cloud logs --follow
 - Manage configuration with `lk cloud var set|list|unset`, `lk cloud secret set <NAME> --from-env <VAR>` (never pass secret values as positional CLI arguments), `lk cloud domain add|verify|list|remove`, `lk cloud env create|update|list|delete`, `lk cloud db show|backups|backup|restore`, `lk cloud rollback <n>`, and `lk cloud usage`.
 - Declare application object-storage buckets under `[cloud.storage.buckets.<name>]` (`public`, `max_size_gb`) in `leptoskit.toml`.
 - Every `lk cloud` command supports `--json`, `--org`, `--project`, and `-e / --environment`.
+- Operator binaries installed beside `lk` or on `PATH` dispatch Cargo-style via `lk cloud <name>` (`lk cloud platform`, `lk cloud worker`, `lk cloud control`).
 
 ## Self-hosted infrastructure and analytics (`lk infra`)
 
