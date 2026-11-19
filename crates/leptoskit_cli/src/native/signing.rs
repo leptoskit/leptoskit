@@ -42,6 +42,35 @@ pub const ANDROID_KEY_ALIAS: &str = "LEPTOSKIT_ANDROID_KEY_ALIAS";
 /// The upload key's password.
 pub const ANDROID_KEY_PASSWORD: &str = "LEPTOSKIT_ANDROID_KEY_PASSWORD";
 
+/// The environment variables one Android release keystore is read from,
+/// and where to make one. The generated `build.gradle.kts` reads the four
+/// `LEPTOSKIT_ANDROID_*` names, so every store's build hands Gradle its own
+/// keystore's values under those names, in that one tool's environment.
+pub(crate) struct KeystoreVars {
+	/// The keystore's absolute path.
+	pub(crate) keystore: &'static str,
+	/// The keystore itself, base64-encoded, in place of its path.
+	pub(crate) keystore_base64: &'static str,
+	/// The keystore's password.
+	pub(crate) keystore_password: &'static str,
+	/// The signing key's alias in the keystore.
+	pub(crate) key_alias: &'static str,
+	/// The signing key's password.
+	pub(crate) key_password: &'static str,
+	/// Where to make one, quoted by the error that names what's missing.
+	pub(crate) how: &'static str,
+}
+
+/// Google Play's upload key, which Gradle signs the App Bundle with.
+pub(crate) const PLAY_KEYSTORE: KeystoreVars = KeystoreVars {
+	keystore: ANDROID_KEYSTORE,
+	keystore_base64: ANDROID_KEYSTORE_BASE64,
+	keystore_password: ANDROID_KEYSTORE_PASSWORD,
+	key_alias: ANDROID_KEY_ALIAS,
+	key_password: ANDROID_KEY_PASSWORD,
+	how: crate::publish::play::KEYSTORE_HOW,
+};
+
 /// The Apple Developer team that signs the iOS app; `native.apple_team_id`
 /// when unset.
 pub const IOS_TEAM_ID: &str = "LEPTOSKIT_IOS_TEAM_ID";
@@ -115,7 +144,8 @@ pub(crate) fn resolve(
 
 	match target {
 		Target::Android | Target::AndroidX86_64 | Target::Quest => {
-			AndroidSigning::resolve(root, env).map(|signing| Some(Signing::Android(signing)))
+			AndroidSigning::resolve(root, env, &PLAY_KEYSTORE)
+				.map(|signing| Some(Signing::Android(signing)))
 		}
 		Target::Ios => {
 			IosSigning::resolve(root, config, options, env)
@@ -127,7 +157,12 @@ pub(crate) fn resolve(
 
 /// Refuses `path` inside the project's repository: signing material is
 /// never read from it, so it can't be committed.
-fn outside_repository(root: &Path, path: &Path, variable: &str, instead: &str) -> Result<()> {
+pub(crate) fn outside_repository(
+	root: &Path,
+	path: &Path,
+	variable: &str,
+	instead: &str,
+) -> Result<()> {
 	let repository = crate::git::command(root)
 		.args(["rev-parse", "--show-toplevel"])
 		.stderr(std::process::Stdio::null())
@@ -150,7 +185,11 @@ fn outside_repository(root: &Path, path: &Path, variable: &str, instead: &str) -
 }
 
 /// Writes `bytes` to a new file at `path`, readable only by this user.
-fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
+///
+/// # Errors
+///
+/// When the file can't be created or written.
+pub(crate) fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
 	use std::io::Write as _;
 
 	let mut options = std::fs::OpenOptions::new();
@@ -176,6 +215,11 @@ pub(crate) struct AndroidSigning {
 }
 
 impl AndroidSigning {
+	/// The keystore's path, which Gradle reads.
+	pub(crate) fn path(&self) -> &Path {
+		&self.keystore
+	}
+
 	/// The upload key from the environment. The three passwords and the
 	/// alias stay there: Gradle reads them itself.
 	///
@@ -183,20 +227,16 @@ impl AndroidSigning {
 	///
 	/// When a variable is missing, the keystore is unreadable, inside the
 	/// repository, or the debug keystore.
-	pub(crate) fn resolve(root: &Path, env: Env<'_>) -> Result<Self> {
-		let path = env(ANDROID_KEYSTORE);
-		let encoded = env(ANDROID_KEYSTORE_BASE64);
+	pub(crate) fn resolve(root: &Path, env: Env<'_>, vars: &KeystoreVars) -> Result<Self> {
+		let path = env(vars.keystore);
+		let encoded = env(vars.keystore_base64);
 		let mut missing = Vec::new();
 
 		if path.is_none() && encoded.is_none() {
-			missing.push(format!("{ANDROID_KEYSTORE} (or {ANDROID_KEYSTORE_BASE64})"));
+			missing.push(format!("{} (or {})", vars.keystore, vars.keystore_base64));
 		}
 
-		for name in [
-			ANDROID_KEYSTORE_PASSWORD,
-			ANDROID_KEY_ALIAS,
-			ANDROID_KEY_PASSWORD,
-		] {
+		for name in [vars.keystore_password, vars.key_alias, vars.key_password] {
 			if env(name).is_none() {
 				missing.push(name.to_owned());
 			}
@@ -213,41 +253,46 @@ impl AndroidSigning {
 				format!("these aren't set: {}", missing.join(", "))
 			},
 			if missing.len() == 1 { "it" } else { "them" },
-			crate::publish::play::KEYSTORE_HOW
+			vars.how
 		);
 		anyhow::ensure!(
 			path.is_none() || encoded.is_none(),
-			"both {ANDROID_KEYSTORE} and {ANDROID_KEYSTORE_BASE64} are set; set only one"
+			"both {} and {} are set; set only one",
+			vars.keystore,
+			vars.keystore_base64
 		);
 		anyhow::ensure!(
-			!env(ANDROID_KEY_ALIAS)
+			!env(vars.key_alias)
 				.unwrap_or_default()
 				.trim()
 				.eq_ignore_ascii_case(DEBUG_ALIAS),
-			"{ANDROID_KEY_ALIAS} names Android's debug key, which no store takes; sign the \
-			 release with your upload key"
+			"{} names Android's debug key, which no store takes; sign the release with your \
+			 upload key",
+			vars.key_alias
 		);
 
 		if let Some(path) = path {
 			let path = PathBuf::from(path.trim());
 			anyhow::ensure!(
 				path.is_file(),
-				"{ANDROID_KEYSTORE} names a file that doesn't exist or can't be read; set it to \
-				 the keystore's absolute path"
+				"{} names a file that doesn't exist or can't be read; set it to the keystore's \
+				 absolute path",
+				vars.keystore
 			);
 			anyhow::ensure!(
 				path.file_name().is_none_or(|name| name != "debug.keystore"),
-				"{ANDROID_KEYSTORE} names Android's debug keystore, which no store takes; sign \
-				 the release with your upload key"
+				"{} names Android's debug keystore, which no store takes; sign the release with \
+				 your upload key",
+				vars.keystore
 			);
 			outside_repository(
 				root,
 				&path,
-				ANDROID_KEYSTORE,
-				&format!("set {ANDROID_KEYSTORE_BASE64} to its contents instead"),
+				vars.keystore,
+				&format!("set {} to its contents instead", vars.keystore_base64),
 			)?;
 			let keystore = std::fs::canonicalize(&path)
-				.with_context(|| format!("{ANDROID_KEYSTORE} names a file that can't be read"))?;
+				.with_context(|| format!("{} names a file that can't be read", vars.keystore))?;
 
 			return Ok(Self {
 				keystore,
@@ -264,8 +309,8 @@ impl AndroidSigning {
 		// secret's.
 		let bytes = base64::engine::general_purpose::STANDARD
 			.decode(encoded)
-			.map_err(|_| anyhow::anyhow!("{ANDROID_KEYSTORE_BASE64} isn't base64"))?;
-		anyhow::ensure!(!bytes.is_empty(), "{ANDROID_KEYSTORE_BASE64} is empty");
+			.map_err(|_| anyhow::anyhow!("{} isn't base64", vars.keystore_base64))?;
+		anyhow::ensure!(!bytes.is_empty(), "{} is empty", vars.keystore_base64);
 		let temporary = tempfile::Builder::new()
 			.prefix("leptoskit-keystore-")
 			.tempdir()
@@ -386,12 +431,12 @@ pub(crate) fn clear_android_outputs(android: &Path) -> Result<()> {
 	Ok(())
 }
 
-/// The signed APK and App Bundle Gradle made, checked to be signed.
+/// The release APK Gradle made, checked to be signed.
 ///
 /// # Errors
 ///
-/// When either is missing or unsigned.
-pub(crate) fn signed_android_outputs(android: &Path) -> Result<(PathBuf, PathBuf)> {
+/// When it is missing or unsigned.
+pub(crate) fn signed_apk(android: &Path) -> Result<PathBuf> {
 	let apks = android.join(APK_DIR);
 	anyhow::ensure!(
 		!apks.join("app-release-unsigned.apk").exists(),
@@ -409,6 +454,16 @@ pub(crate) fn signed_android_outputs(android: &Path) -> Result<(PathBuf, PathBuf
 		"{} isn't signed with an APK signature",
 		apk.display()
 	);
+	Ok(apk)
+}
+
+/// The signed APK and App Bundle Gradle made, checked to be signed.
+///
+/// # Errors
+///
+/// When either is missing or unsigned.
+pub(crate) fn signed_android_outputs(android: &Path) -> Result<(PathBuf, PathBuf)> {
+	let apk = signed_apk(android)?;
 	let bundle = android.join(BUNDLE_DIR).join("app-release.aab");
 	anyhow::ensure!(
 		bundle.is_file(),

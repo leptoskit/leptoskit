@@ -31,6 +31,9 @@ pub struct PublishConfig {
 	/// Google Play, for the Android App Bundle.
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub play: Option<PlayStore>,
+	/// The Solana dApp Store, for the release-signed Android APK.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub solana: Option<SolanaStore>,
 }
 
 /// An app in Google Play Console, created once there. Its package name is
@@ -55,6 +58,73 @@ impl Default for PlayStore {
 			track: "internal".to_owned(),
 			rollout: None,
 		}
+	}
+}
+
+/// The version of Solana Mobile's publishing tool an upload runs, when
+/// `[publish.solana]` doesn't name one.
+pub const DEFAULT_CLI_VERSION: &str = "1.0.1";
+
+/// An app in the Solana dApp Store's Publisher Portal, created once there.
+/// Updates are matched by `native.package_id`, the Android package name
+/// inside the APK.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields, default)]
+pub struct SolanaStore {
+	/// The Solana RPC address the wallet's balance is checked against,
+	/// `https://…`. Defaults to Solana Labs' public mainnet RPC.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub rpc_url: Option<String>,
+	/// The version of `@solana-mobile/dapp-store-cli` an upload runs, such
+	/// as `1.0.1`. A plain semantic version: the tool is pinned, so never a
+	/// range or a tag.
+	pub cli_version: String,
+}
+
+impl Default for SolanaStore {
+	fn default() -> Self {
+		Self {
+			rpc_url: None,
+			cli_version: DEFAULT_CLI_VERSION.to_owned(),
+		}
+	}
+}
+
+impl SolanaStore {
+	/// The first problem with this table, in words.
+	fn problem(&self) -> Option<String> {
+		if let Some(url) = self.rpc_url.as_deref() {
+			let addressed = url.strip_prefix("https://").is_some_and(|rest| {
+				!rest
+					.split(['/', '?', '#'])
+					.next()
+					.unwrap_or_default()
+					.is_empty()
+			});
+			if !addressed {
+				return Some(format!(
+					"publish.solana.rpc_url `{url}` must be an HTTPS address, such as \
+					 https://api.mainnet-beta.solana.com"
+				));
+			}
+		}
+
+		let plain = self.cli_version.split('.').count() == 3
+			&& self
+				.cli_version
+				.split('.')
+				.all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()));
+
+		if !plain {
+			return Some(format!(
+				"publish.solana.cli_version `{}` must be a plain semantic version, such as \
+				 {DEFAULT_CLI_VERSION}; the tool is pinned, so never a range or a tag",
+				self.cli_version
+			));
+		}
+
+		None
 	}
 }
 
@@ -156,7 +226,15 @@ pub struct FirefoxStore {
 }
 
 /// The stores `leptoskit publish` knows, as the command line names them.
-pub const STORES: [&str; 6] = ["chrome", "edge", "firefox", "app_store", "macos", "play"];
+pub const STORES: [&str; 7] = [
+	"chrome",
+	"edge",
+	"firefox",
+	"app_store",
+	"macos",
+	"play",
+	"solana",
+];
 
 impl PublishConfig {
 	/// Whether no store is configured.
@@ -192,6 +270,10 @@ impl PublishConfig {
 
 		if self.play.is_some() {
 			stores.push("play");
+		}
+
+		if self.solana.is_some() {
+			stores.push("solana");
 		}
 
 		stores
@@ -239,7 +321,27 @@ impl PublishConfig {
 			return Some(problem);
 		}
 
-		self.play.as_ref().and_then(|play| play_problem(play, app))
+		if let Some(play) = self.play.as_ref()
+			&& let Some(problem) = play_problem(play, app)
+		{
+			return Some(problem);
+		}
+
+		if let Some(solana) = self.solana.as_ref() {
+			if !app.platforms.contains(&crate::Platform::Android) {
+				return Some(
+					"publish.solana needs `android` in app.platforms: the dApp Store takes the \
+					 release-signed Android APK"
+						.into(),
+				);
+			}
+
+			if let Some(problem) = solana.problem() {
+				return Some(problem);
+			}
+		}
+
+		None
 	}
 }
 
@@ -460,6 +562,57 @@ mod tests {
 		assert_eq!(config.publish.play.unwrap().rollout, Some(0.1));
 		let error = toml("rollout = 1.0\n").unwrap_err();
 		assert!(error.contains("between 0 and 1"), "{error}");
+	}
+
+	#[test]
+	fn the_dapp_store_needs_android_and_a_plain_cli_version() {
+		let toml = |platforms: &str, table: &str| {
+			LeptoskitConfig::from_toml(
+				&format!("[app]\nplatforms = {platforms}\n[publish.solana]\n{table}"),
+				Path::new("notes"),
+			)
+			.map_err(|error| error.to_string())
+		};
+		let config = toml("[\"web\", \"android\"]", "").unwrap();
+		assert_eq!(config.publish.stores(), ["solana"]);
+		let store = config.publish.solana.unwrap();
+		assert_eq!(store.cli_version, super::DEFAULT_CLI_VERSION);
+		assert_eq!(store.rpc_url, None);
+
+		// A custom RPC address and CLI version are taken as written.
+		let config = toml(
+			"[\"web\", \"android\"]",
+			"rpc_url = \"https://rpc.example\"\ncli_version = \"1.2.3\"\n",
+		)
+		.unwrap();
+		let store = config.publish.solana.unwrap();
+		assert_eq!(store.rpc_url.as_deref(), Some("https://rpc.example"));
+		assert_eq!(store.cli_version, "1.2.3");
+
+		// The store publishes the Android APK, so it needs the platform.
+		let error = toml("[\"web\"]", "").unwrap_err();
+		assert!(error.contains("`android` in app.platforms"), "{error}");
+
+		// The tool is pinned: ranges and tags are refused.
+		for version in ["^1.0.1", "latest", "1.0", "1.0.1-beta.1", ""] {
+			let error = toml(
+				"[\"web\", \"android\"]",
+				&format!("cli_version = \"{version}\"\n"),
+			)
+			.unwrap_err();
+			assert!(
+				error.contains("plain semantic version"),
+				"{version}: {error}"
+			);
+		}
+
+		// The balance check talks to an HTTPS RPC.
+		let error = toml(
+			"[\"web\", \"android\"]",
+			"rpc_url = \"http://api.mainnet-beta.solana.com\"\n",
+		)
+		.unwrap_err();
+		assert!(error.contains("must be an HTTPS address"), "{error}");
 	}
 
 	/// A config that builds an extension, so the extension stores apply.

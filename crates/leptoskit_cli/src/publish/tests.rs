@@ -22,18 +22,18 @@ use super::secrets::Secret;
 
 /// One request the fake store received.
 #[derive(Clone, Debug)]
-struct Seen {
-	method: String,
-	path: String,
-	query: String,
-	authorization: String,
-	content_type: String,
-	body: Vec<u8>,
+pub(crate) struct Seen {
+	pub(crate) method: String,
+	pub(crate) path: String,
+	pub(crate) query: String,
+	pub(crate) authorization: String,
+	pub(crate) content_type: String,
+	pub(crate) body: Vec<u8>,
 }
 
 type Answer = Box<dyn Fn(&Seen, usize) -> Response + Send + Sync>;
 
-struct StoreServer {
+pub(crate) struct StoreServer {
 	requests: Arc<Mutex<Vec<Seen>>>,
 	shutdown: Option<tokio::sync::oneshot::Sender<()>>,
 	thread: Option<std::thread::JoinHandle<()>>,
@@ -60,7 +60,7 @@ impl Drop for StoreServer {
 
 /// A store on loopback: `answer` gets each request and how many came
 /// before it. Dropping the server stops and joins its thread.
-fn store(answer: Answer) -> (String, StoreServer) {
+pub(crate) fn store(answer: Answer) -> (String, StoreServer) {
 	let seen: Arc<Mutex<Vec<Seen>>> = Arc::default();
 	let recorded = Arc::clone(&seen);
 	let answer = Arc::new(answer);
@@ -121,7 +121,7 @@ fn store(answer: Answer) -> (String, StoreServer) {
 	)
 }
 
-fn json(value: serde_json::Value) -> Response {
+pub(crate) fn json(value: serde_json::Value) -> Response {
 	axum::Json(value).into_response()
 }
 
@@ -1137,10 +1137,16 @@ fn the_release_workflow_passes_every_credential() {
 	let workflow = crate::new_project::release_workflow();
 
 	for needed in &super::NEEDED {
-		// The keystore is a file, decoded from its own secret.
+		// The keystores are files, decoded from their own secrets.
 		if needed.name == super::play::KEYSTORE {
 			assert!(workflow.contains("secrets.LEPTOSKIT_ANDROID_KEYSTORE_BASE64"));
 			assert!(workflow.contains("LEPTOSKIT_ANDROID_KEYSTORE=$RUNNER_TEMP/upload.jks"));
+			continue;
+		}
+
+		if needed.name == super::solana::KEYSTORE {
+			assert!(workflow.contains("secrets.LEPTOSKIT_SOLANA_KEYSTORE_BASE64"));
+			assert!(workflow.contains("LEPTOSKIT_SOLANA_KEYSTORE=$RUNNER_TEMP/dappstore.jks"));
 			continue;
 		}
 
@@ -3642,6 +3648,635 @@ fn the_play_listing_sends_text_images_and_the_icon() {
 	let icon_body = &seen[seen.len() - 1].body;
 	let icon = image::load_from_memory(icon_body).unwrap();
 	assert_eq!((icon.width(), icon.height()), (512, 512));
+}
+
+/// A project the Solana dApp Store checks and builds: the Commonplace
+/// Gradle script, a phone ABI, and listing text within the store's limits.
+fn solana_project(summary: &str) -> (tempfile::TempDir, leptoskit_config::LeptoskitConfig) {
+	let root = tempfile::tempdir().unwrap();
+	let en = root.path().join("store/en-US");
+	std::fs::create_dir_all(&en).unwrap();
+	std::fs::write(en.join("summary.md"), summary).unwrap();
+	std::fs::write(en.join("release_notes.md"), "Faster sync.").unwrap();
+	std::fs::write(
+		root.path().join("store/listing.toml"),
+		"name = \"Clipper\"\nhomepage = \"https://clipper.example\"\nsupport = \
+		 \"help@clipper.example\"\nprivacy_policy = \"https://clipper.example/privacy\"\n",
+	)
+	.unwrap();
+	std::fs::write(
+		root.path().join("icon.svg"),
+		r#"<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><rect width="100" height="100" fill="black"/></svg>"#,
+	)
+	.unwrap();
+	// Prepared for phones, as an upload prepares it.
+	std::fs::create_dir_all(root.path().join(".leptoskit/android")).unwrap();
+	std::fs::write(root.path().join(".leptoskit/android/abi.txt"), "arm64-v8a").unwrap();
+	std::fs::create_dir_all(root.path().join("android/app")).unwrap();
+	std::fs::write(root.path().join("android/Cargo.toml"), "").unwrap();
+	let example =
+		std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/commonplace");
+	std::fs::copy(
+		example.join("android/app/build.gradle.kts"),
+		root.path().join("android/app/build.gradle.kts"),
+	)
+	.unwrap();
+	// Four previews, the store's minimum.
+	let previews = root.path().join("store/screenshots/solana-previews");
+	std::fs::create_dir_all(&previews).unwrap();
+
+	for name in [
+		"01-projects.png",
+		"02-reading.png",
+		"03-citing.png",
+		"04-search.png",
+	] {
+		std::fs::write(
+			previews.join(name),
+			super::images::tests::png(1080, 1920, 255),
+		)
+		.unwrap();
+	}
+
+	let config = leptoskit_config::LeptoskitConfig::from_toml(
+		"[app]\nname = \"Clipper\"\nversion = \"1.4.0\"\nplatforms = [\"web\", \"android\"]\nicon \
+		 = \"icon.svg\"\n\n[native]\npackage_id = \"com.example.clipper\"\n\n[publish.solana]\n",
+		root.path(),
+	)
+	.unwrap();
+	(root, config)
+}
+
+/// A Solana session's run of the `solana` store on `root`'s project, with
+/// no credentials and a [`super::tools::Recorder`] instead of any tool.
+fn solana_publish(
+	root: &std::path::Path,
+	config: &leptoskit_config::LeptoskitConfig,
+	store: &super::listing::Store,
+	args: &super::PublishArgs,
+) -> anyhow::Result<(String, Vec<super::Step>)> {
+	let session = super::Session {
+		args,
+		root,
+		config,
+		credentials: &super::Credentials::default(),
+		store,
+		http: &Http::default(),
+		runner: &super::tools::Recorder::default(),
+		extension: None,
+		name: super::display_name(config),
+		version: super::apple_version(config),
+		submit: false,
+	};
+	session.publish("solana")
+}
+
+fn solana_args(dry_run: bool, submit: bool, build: super::BuildNumber) -> super::PublishArgs {
+	super::PublishArgs {
+		stores: vec!["solana".to_owned()],
+		dry_run,
+		submit,
+		staged: false,
+		yes: true,
+		json: false,
+		credentials: None,
+		build_number: build,
+	}
+}
+
+/// A 64-number keypair credential, `solana-keygen new`'s JSON.
+fn keypair_credential() -> String {
+	let numbers: Vec<String> = (0..64).map(|index| index.to_string()).collect();
+	format!("[{}]", numbers.join(","))
+}
+
+#[test]
+fn a_solana_dry_run_checks_everything_and_sends_nothing() {
+	let (root, config) = solana_project("Clip quotes from anything you read.");
+	let store = super::listing::Store::load(root.path()).unwrap();
+	let args = solana_args(true, false, super::BuildNumber::Number(42));
+	let (summary, steps) = solana_publish(root.path(), &config, &store, &args).unwrap();
+
+	assert_eq!(
+		summary,
+		"Clipper 1.4.0 is checked; an upload builds the release APK signed with your dApp Store \
+		 key (versionCode 42) and submits it for review with the dapp-store tool. Its screenshots \
+		 are checked: 4 images for solana-previews. Nothing was built or sent."
+	);
+	assert!(steps.iter().all(|step| step.store == "solana"));
+
+	let mut settings = insta::Settings::clone_current();
+	settings.add_filter(r"\\", "/");
+	let _guard = settings.bind_to_scope();
+	let report = super::Report {
+		stores: vec![super::Status {
+			store: "solana".to_owned(),
+			summary,
+		}],
+		steps,
+	};
+	insta::assert_snapshot!(report.text());
+}
+
+#[test]
+fn solana_refuses_store_text_and_missing_notes_before_anything_builds() {
+	// The short description is at most 50 characters.
+	let (root, config) =
+		solana_project("This summary is far too long for the Solana dApp Store's listing.");
+	let store = super::listing::Store::load(root.path()).unwrap();
+	let args = solana_args(true, false, super::BuildNumber::Auto);
+	let error = solana_publish(root.path(), &config, &store, &args)
+		.unwrap_err()
+		.to_string();
+	assert!(
+		error.contains("the short description has 65 characters"),
+		"{error}"
+	);
+	assert!(error.contains("takes at most 50"), "{error}");
+
+	// The release notes are the tool's "What's New", which it takes with
+	// every release.
+	let (root, config) = solana_project("Clip quotes from anything you read.");
+	std::fs::remove_file(root.path().join("store/en-US/release_notes.md")).unwrap();
+	let store = super::listing::Store::load(root.path()).unwrap();
+	let error = solana_publish(root.path(), &config, &store, &args)
+		.unwrap_err()
+		.to_string();
+	assert!(error.contains("What's New"), "{error}");
+	assert!(error.contains("release_notes.md"), "{error}");
+}
+#[test]
+fn solana_steps_ask_for_the_onboarding_the_listing_and_the_release() {
+	let empty = super::listing::Store::default();
+	let run = |submitted: bool, screenshots: &[super::images::Set]| {
+		super::solana_steps(&super::SolanaRun {
+			package: "com.example.clipper",
+			address: Some("Addr111"),
+			apk: ".leptoskit/publish/solana/app-release.apk",
+			submitted,
+			store: &empty,
+			screenshots,
+		})
+	};
+
+	let steps = run(false, &[]);
+	assert!(
+		steps[0].what.contains("Publisher Portal account"),
+		"{steps:?}"
+	);
+	assert_eq!(
+		steps[0].url.as_deref(),
+		Some("https://publish.solanamobile.com")
+	);
+	assert_eq!(steps[0].by, super::steps::Who::Person);
+	assert!(
+		steps
+			.iter()
+			.any(|step| step.what.contains("publisher wallet"))
+	);
+	let app = steps
+		.iter()
+		.find(|step| step.what.contains("app details form"))
+		.expect("an app step");
+	assert_eq!(
+		app.enter[0],
+		super::field("Package name", "com.example.clipper")
+	);
+	assert!(app.enter.iter().any(|field| {
+		field.label == "Name" && field.value.contains("add name to store/listing.toml")
+	}));
+	assert!(
+		steps
+			.iter()
+			.any(|step| step.what.contains("App NFT mint transaction"))
+	);
+	assert!(
+		steps
+			.iter()
+			.any(|step| step.what.contains("LEPTOSKIT_PUBLISH_SOLANA_API_KEY"))
+	);
+	let funding = steps
+		.iter()
+		.find(|step| step.what.contains("Fund the publishing wallet"))
+		.expect("a funding step");
+	assert_eq!(funding.enter[0].value, "Addr111");
+	assert!(funding.url.is_none());
+	// Without images, the listing step asks for the icon, the banner, and
+	// the previews; the name is a project file.
+	// Without listing text or images, the listing step asks for all five.
+	let listing = steps
+		.iter()
+		.find(|step| step.what.contains("listing is missing"))
+		.expect("a listing step");
+	assert_eq!(
+		listing
+			.enter
+			.iter()
+			.map(|field| field.label.as_str())
+			.collect::<Vec<_>>(),
+		["Name", "Short description", "Icon", "Banner", "Previews"]
+	);
+	assert!(steps.last().unwrap().what.contains("Decide to release it"));
+
+	// With the previews present, they leave the listing step's asks.
+	let previews = sets(&["solana-previews"]);
+	let steps = run(false, &previews);
+	let listing = steps
+		.iter()
+		.find(|step| step.what.contains("listing is missing"))
+		.expect("a listing step");
+	assert!(!listing.enter.iter().any(|field| field.label == "Previews"));
+
+	// Submitted: the release decision goes, and the rejection loop is what
+	// is left.
+	let steps = run(true, &[]);
+	assert!(steps[0].what.contains("rejects the release"), "{steps:?}");
+	assert!(
+		!steps
+			.iter()
+			.any(|step| step.what.contains("Decide to release"))
+	);
+	assert!(
+		steps[0]
+			.enter
+			.iter()
+			.any(|field| field.label == "Privacy policy")
+	);
+}
+
+#[test]
+fn the_wallet_balance_is_checked_before_anything_builds() {
+	let (base, seen) = store(Box::new(|_, _| {
+		json(serde_json::json!({
+			"jsonrpc": "2.0", "id": 1, "result": { "context": { "slot": 7 }, "value": 20_000_000 },
+		}))
+	}));
+	super::solana_balance(&Http::default(), &base, "Addr111").unwrap();
+	assert_eq!(seen.lock().unwrap().len(), 1);
+
+	// Too little to mint the release NFT: the error names the address and
+	// the amount.
+	let (base, _server) = store(Box::new(|_, _| {
+		json(serde_json::json!({ "jsonrpc": "2.0", "id": 1, "result": { "value": 10 } }))
+	}));
+	let error = super::solana_balance(&Http::default(), &base, "Addr111")
+		.unwrap_err()
+		.to_string();
+	assert!(error.contains("Addr111 holds 10 lamports"), "{error}");
+	assert!(error.contains("0.016 SOL"), "{error}");
+	assert!(error.contains("Fund Addr111"), "{error}");
+
+	// An outage is a warning: the run continues, and the tool checks again.
+	let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+	let address = listener.local_addr().unwrap();
+	drop(listener);
+	super::solana_balance(&Http::default(), &format!("http://{address}"), "Addr111").unwrap();
+}
+
+#[test]
+fn the_rpc_override_names_the_balance_server() {
+	let default = leptoskit_config::publish::SolanaStore::default();
+	assert_eq!(
+		super::solana_rpc(&default, None),
+		super::solana::DEFAULT_RPC_URL,
+		"the public mainnet RPC is the default"
+	);
+	let configured = leptoskit_config::publish::SolanaStore {
+		rpc_url: Some("https://rpc.example".to_owned()),
+		cli_version: "1.0.1".to_owned(),
+	};
+	assert_eq!(super::solana_rpc(&configured, None), "https://rpc.example");
+	// The override wins, and an empty one counts as unset.
+	assert_eq!(
+		super::solana_rpc(&configured, Some("http://127.0.0.1:1".to_owned())),
+		"http://127.0.0.1:1"
+	);
+	assert_eq!(
+		super::solana_rpc(&configured, Some("   ".to_owned())),
+		"https://rpc.example"
+	);
+}
+
+/// Credentials read from a file outside the project, with the names and
+/// values given. The file is read at once, so its directory doesn't outlive
+/// the call.
+fn credentials(pairs: &[(&str, &str)]) -> super::Credentials {
+	use std::fmt::Write as _;
+
+	let directory = tempfile::tempdir().unwrap();
+	let mut text = String::new();
+
+	for (name, value) in pairs {
+		let _ = writeln!(text, "{name} = \"{value}\"");
+	}
+
+	std::fs::write(directory.path().join("credentials.toml"), text).unwrap();
+	super::Credentials::load(
+		Some(&directory.path().join("credentials.toml")),
+		std::path::Path::new("/nowhere"),
+	)
+	.unwrap()
+}
+
+#[test]
+fn the_dapp_store_refuses_the_play_keystore_and_x86_only_builds() {
+	let root = tempfile::tempdir().unwrap();
+	let keys = tempfile::tempdir().unwrap();
+	let play_jks = keys.path().join("upload.jks");
+	std::fs::write(&play_jks, b"one key").unwrap();
+	let dappstore_jks = keys.path().join("dappstore.jks");
+	std::fs::write(&dappstore_jks, b"another key").unwrap();
+	let play = super::play::KEYSTORE;
+	let solana = super::solana::KEYSTORE;
+
+	// Different keys pass the check.
+	let both = credentials(&[
+		(play, play_jks.display().to_string().as_str()),
+		(solana, dappstore_jks.display().to_string().as_str()),
+	]);
+	super::solana::refuse_the_play_keystore(root.path(), &both).unwrap();
+
+	// The same file is the same key, and so is the same base64 content.
+	let same = credentials(&[
+		(play, dappstore_jks.display().to_string().as_str()),
+		(solana, dappstore_jks.display().to_string().as_str()),
+	]);
+	let error = super::solana::refuse_the_play_keystore(root.path(), &same)
+		.unwrap_err()
+		.to_string();
+	assert!(
+		error.contains("refuses the key Google Play signs with"),
+		"{error}"
+	);
+	assert!(error.contains("keytool"), "{error}");
+
+	let encoded = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, b"one key");
+	let base64 = credentials(&[
+		(
+			crate::native::signing::ANDROID_KEYSTORE_BASE64,
+			encoded.as_str(),
+		),
+		(super::solana::KEYSTORE_BASE64, encoded.as_str()),
+	]);
+	let error = super::solana::refuse_the_play_keystore(root.path(), &base64)
+		.unwrap_err()
+		.to_string();
+	assert!(
+		error.contains("refuses the key Google Play signs with"),
+		"{error}"
+	);
+
+	// One keystore set, or none: nothing to compare.
+	let only_play = credentials(&[(play, play_jks.display().to_string().as_str())]);
+	super::solana::refuse_the_play_keystore(root.path(), &only_play).unwrap();
+	super::solana::refuse_the_play_keystore(root.path(), &super::Credentials::default()).unwrap();
+
+	// The ABI list names the build the store takes.
+	super::solana::check_abis(root.path()).unwrap();
+	let abi = root.path().join(".leptoskit/android/abi.txt");
+	std::fs::create_dir_all(abi.parent().unwrap()).unwrap();
+	std::fs::write(&abi, "x86_64").unwrap();
+	let error = super::solana::check_abis(root.path())
+		.unwrap_err()
+		.to_string();
+	assert!(error.contains("arm64-v8a"), "{error}");
+	assert!(error.contains("x86_64 emulator build"), "{error}");
+	std::fs::write(&abi, "arm64-v8a").unwrap();
+	super::solana::check_abis(root.path()).unwrap();
+}
+
+/// A file `signed_apk` accepts: ZIP bytes whose central directory is
+/// preceded by an APK signing block's magic.
+fn fake_signed_apk(path: &std::path::Path) {
+	let mut bytes = vec![0_u8; 62];
+	bytes[24..40].copy_from_slice(b"APK Sig Block 42");
+	// End of central directory: size 0, at offset 40.
+	bytes[40..44].copy_from_slice(&[0x50, 0x4b, 0x05, 0x06]);
+	bytes[56..60].copy_from_slice(&40_u32.to_le_bytes());
+	std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+	std::fs::write(path, bytes).unwrap();
+}
+
+/// Records every tool, and writes a signed APK where Gradle would.
+struct BuildingRecorder {
+	inner: super::tools::Recorder,
+	android: std::path::PathBuf,
+}
+
+impl super::tools::Runner for BuildingRecorder {
+	fn run(&self, tool: &super::tools::Tool) -> anyhow::Result<()> {
+		self.inner.run(tool)?;
+		fake_signed_apk(
+			&self
+				.android
+				.join("app/build/outputs/apk/release/app-release.apk"),
+		);
+		Ok(())
+	}
+
+	fn output(&self, tool: &super::tools::Tool) -> anyhow::Result<String> {
+		self.inner.output(tool)
+	}
+}
+
+/// The run's build and send, on a recorder, with a no-op prepare.
+fn solana_send_recorded(
+	root: &std::path::Path,
+	submit: bool,
+	keypair: &super::solana::KeypairFile,
+) -> anyhow::Result<(String, String, super::tools::Recorder)> {
+	let signing = super::solana::Signing {
+		keystore: Secret::new("/keys/dappstore.jks".into()),
+		keystore_password: Secret::new("store-pass".into()),
+		key_alias: Secret::new("dappstore".into()),
+		key_password: Secret::new("key-pass".into()),
+	};
+	let android = crate::native::host_dir(root, crate::native::Target::Android);
+	let recorder = BuildingRecorder {
+		inner: super::tools::Recorder::default(),
+		android,
+	};
+	let send = super::SolanaSend {
+		root,
+		runner: &recorder,
+		submit,
+		build_number: Some(42),
+		signing,
+		keypair,
+		api_key: Secret::new("portal-key".into()),
+		cli_version: "1.0.1",
+		notes: "Faster sync.",
+		name: "Clipper",
+		version: "1.4.0",
+	};
+	let (summary, apk) = super::solana_send(&send, || Ok(()))?;
+	let recorder = BuildingRecorder {
+		inner: recorder.inner,
+		android: std::path::PathBuf::new(),
+	};
+	Ok((summary, apk, recorder.inner))
+}
+
+#[test]
+fn the_send_builds_once_and_submits_through_one_recorded_invocation() {
+	let (root, _config) = solana_project("Clip quotes from anything you read.");
+	let keypair =
+		super::solana::KeypairFile::resolve(root.path(), &Secret::new(keypair_credential()))
+			.unwrap();
+
+	// Without --submit: the build alone, and nothing sent.
+	let (summary, apk, seen) = solana_send_recorded(root.path(), false, &keypair).unwrap();
+	assert!(
+		summary.contains("nothing was sent")
+			&& summary.contains("leptoskit publish solana --submit"),
+		"{summary}"
+	);
+	assert_eq!(apk, ".leptoskit/publish/solana/app-release.apk");
+	assert_eq!(seen.seen.borrow().len(), 1, "no submit invocation");
+	let gradle = &seen.seen.borrow()[0];
+	assert!(gradle.program.ends_with("gradlew") || gradle.program.ends_with("gradlew.bat"));
+	assert_eq!(
+		gradle.args,
+		[
+			"--no-daemon",
+			"--console=plain",
+			"--quiet",
+			"assembleRelease",
+			"-Pleptoskit.versionCode=42"
+		]
+	);
+	// The dApp Store keystore reaches Gradle under the names its script
+	// reads, in this one tool's environment.
+	let names: Vec<&str> = gradle.env.iter().map(|(name, _)| *name).collect();
+	assert_eq!(
+		names,
+		[
+			crate::native::signing::ANDROID_KEYSTORE,
+			crate::native::signing::ANDROID_KEYSTORE_PASSWORD,
+			crate::native::signing::ANDROID_KEY_ALIAS,
+			crate::native::signing::ANDROID_KEY_PASSWORD,
+		]
+	);
+	let keystore = gradle
+		.env
+		.iter()
+		.find(|(name, _)| *name == crate::native::signing::ANDROID_KEYSTORE)
+		.map(|(_, value)| value.expose())
+		.unwrap();
+	assert!(keystore.ends_with("dappstore.jks"), "{keystore}");
+	assert!(!format!("{gradle:?}").contains("store-pass"), "{gradle:?}");
+
+	// With --submit: the official tool, over the same runner.
+	let (summary, _, seen) = solana_send_recorded(root.path(), true, &keypair).unwrap();
+	assert!(
+		summary.contains("is submitted to the Solana dApp Store and is in review"),
+		"{summary}"
+	);
+	assert!(summary.contains("1 to 2 business days"), "{summary}");
+	let seen = seen.seen.borrow();
+	assert_eq!(seen.len(), 2);
+	let submit = &seen[1];
+	assert_eq!(submit.program, "npx");
+	let copied = root
+		.path()
+		.join(".leptoskit/publish/solana/app-release.apk");
+	assert_eq!(
+		submit.args,
+		[
+			"--yes",
+			"@solana-mobile/dapp-store-cli@1.0.1",
+			"--apk-file",
+			copied.display().to_string().as_str(),
+			"--keypair",
+			keypair.path().display().to_string().as_str(),
+			"--whats-new",
+			"Faster sync.",
+		]
+	);
+	assert!(
+		copied.is_file(),
+		"the built APK is kept for the run's report"
+	);
+	// The portal API key rides only in this tool's environment.
+	assert_eq!(submit.env.len(), 1);
+	assert_eq!(submit.env[0].0, super::solana::API_KEY_ENV);
+	assert_eq!(submit.env[0].1.expose(), "portal-key");
+	assert!(
+		seen.iter().take(1).all(|tool| {
+			!tool
+				.env
+				.iter()
+				.any(|(name, _)| *name == super::solana::API_KEY_ENV)
+		}),
+		"the key rides only on the tool's invocation"
+	);
+
+	// No secret reaches any output: the summary, the tools' Debug, or the
+	// report. `KeypairFile` has no `Debug` at all, so its bytes can't print.
+	let report = super::Report {
+		stores: vec![super::Status {
+			store: "solana".to_owned(),
+			summary: summary.clone(),
+		}],
+		steps: Vec::new(),
+	};
+	let outputs = [
+		summary,
+		report.text(),
+		report.markdown(),
+		format!("{seen:?}"),
+	];
+	let keypair_json = keypair_credential();
+
+	for output in &outputs {
+		for secret in ["portal-key", "store-pass", "key-pass", &keypair_json] {
+			assert!(!output.contains(secret), "{secret} leaked into: {output}");
+		}
+	}
+}
+
+#[test]
+fn the_send_builds_for_the_store_version_code_and_the_apk_is_kept() {
+	// Without --build-number, Gradle stamps the APK the version.properties
+	// it was given carries.
+	let (root, _config) = solana_project("Clip quotes from anything you read.");
+	let keypair =
+		super::solana::KeypairFile::resolve(root.path(), &Secret::new(keypair_credential()))
+			.unwrap();
+	let signing = super::solana::Signing {
+		keystore: Secret::new("/keys/dappstore.jks".into()),
+		keystore_password: Secret::new("store-pass".into()),
+		key_alias: Secret::new("dappstore".into()),
+		key_password: Secret::new("key-pass".into()),
+	};
+	let android = crate::native::host_dir(root.path(), crate::native::Target::Android);
+	let recorder = BuildingRecorder {
+		inner: super::tools::Recorder::default(),
+		android: android.clone(),
+	};
+	let send = super::SolanaSend {
+		root: root.path(),
+		runner: &recorder,
+		submit: false,
+		build_number: None,
+		signing,
+		keypair: &keypair,
+		api_key: Secret::new("portal-key".into()),
+		cli_version: "1.0.1",
+		notes: "Faster sync.",
+		name: "Clipper",
+		version: "1.4.0",
+	};
+	super::solana_send(&send, || Ok(())).unwrap();
+	let gradle = &recorder.inner.seen.borrow()[0];
+	assert!(
+		!gradle
+			.args
+			.iter()
+			.any(|arg| arg.starts_with("-Pleptoskit.versionCode")),
+		"{:?}",
+		gradle.args
+	);
 }
 
 /// A macOS-only project, so `leptoskit publish macos --dry-run` runs without

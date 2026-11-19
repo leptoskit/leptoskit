@@ -39,13 +39,16 @@ fn project() -> tempfile::TempDir {
 	tempfile::tempdir().unwrap()
 }
 
+/// Resolves Google Play's upload key, the variables an Android release
+/// signs with.
+fn android(root: &Path, env: impl Fn(&str) -> Option<String>) -> Result<AndroidSigning> {
+	AndroidSigning::resolve(root, &env, &PLAY_KEYSTORE)
+}
+
 #[test]
 fn an_android_release_without_the_upload_key_names_every_missing_variable() {
 	let root = project();
-	let error = AndroidSigning::resolve(root.path(), &env(&[]))
-		.err()
-		.unwrap()
-		.to_string();
+	let error = android(root.path(), env(&[])).err().unwrap().to_string();
 
 	for name in [
 		ANDROID_KEYSTORE,
@@ -61,9 +64,9 @@ fn an_android_release_without_the_upload_key_names_every_missing_variable() {
 
 	// One missing password is named alone, and no value set is printed.
 	let (_directory, path) = keystore();
-	let error = AndroidSigning::resolve(
+	let error = android(
 		root.path(),
-		&env(&[
+		env(&[
 			(ANDROID_KEYSTORE, &path),
 			(ANDROID_KEYSTORE_PASSWORD, "store-secret"),
 			(ANDROID_KEY_ALIAS, "upload"),
@@ -81,9 +84,9 @@ fn an_android_release_without_the_upload_key_names_every_missing_variable() {
 fn an_android_release_takes_the_keystore_by_path_outside_the_repository() {
 	let root = project();
 	let (_directory, path) = keystore();
-	let signing = AndroidSigning::resolve(
+	let signing = android(
 		root.path(),
-		&env(&with_passwords(&[(ANDROID_KEYSTORE, &path)])),
+		env(&with_passwords(&[(ANDROID_KEYSTORE, &path)])),
 	)
 	.unwrap();
 	assert_eq!(
@@ -96,9 +99,9 @@ fn an_android_release_takes_the_keystore_by_path_outside_the_repository() {
 	let inside = root.path().join("signing/upload.jks");
 	std::fs::create_dir_all(inside.parent().unwrap()).unwrap();
 	std::fs::write(&inside, b"keystore").unwrap();
-	let error = AndroidSigning::resolve(
+	let error = android(
 		root.path(),
-		&env(&with_passwords(&[(
+		env(&with_passwords(&[(
 			ANDROID_KEYSTORE,
 			&inside.display().to_string(),
 		)])),
@@ -110,9 +113,9 @@ fn an_android_release_takes_the_keystore_by_path_outside_the_repository() {
 	assert!(error.contains(ANDROID_KEYSTORE_BASE64), "{error}");
 
 	// So is a path to nothing.
-	let error = AndroidSigning::resolve(
+	let error = android(
 		root.path(),
-		&env(&with_passwords(&[(
+		env(&with_passwords(&[(
 			ANDROID_KEYSTORE,
 			"/nowhere/upload.jks",
 		)])),
@@ -127,9 +130,9 @@ fn an_android_release_takes_the_keystore_by_path_outside_the_repository() {
 fn an_android_release_refuses_the_debug_key() {
 	let root = project();
 	let (_directory, path) = keystore();
-	let error = AndroidSigning::resolve(
+	let error = android(
 		root.path(),
-		&env(&[
+		env(&[
 			(ANDROID_KEYSTORE, &path),
 			(ANDROID_KEYSTORE_PASSWORD, "android"),
 			(ANDROID_KEY_ALIAS, "AndroidDebugKey"),
@@ -144,9 +147,9 @@ fn an_android_release_refuses_the_debug_key() {
 	let directory = tempfile::tempdir().unwrap();
 	let debug = directory.path().join("debug.keystore");
 	std::fs::write(&debug, b"keystore").unwrap();
-	let error = AndroidSigning::resolve(
+	let error = android(
 		root.path(),
-		&env(&with_passwords(&[(
+		env(&with_passwords(&[(
 			ANDROID_KEYSTORE,
 			&debug.display().to_string(),
 		)])),
@@ -163,9 +166,9 @@ fn a_base64_keystore_is_written_privately_and_removed_after_the_build() {
 	let encoded = base64::engine::general_purpose::STANDARD.encode(b"keystore bytes");
 	// Line breaks, as `base64` wraps its output, are ignored.
 	let wrapped = format!("{}\n{}", &encoded[..8], &encoded[8..]);
-	let signing = AndroidSigning::resolve(
+	let signing = android(
 		root.path(),
-		&env(&with_passwords(&[(ANDROID_KEYSTORE_BASE64, &wrapped)])),
+		env(&with_passwords(&[(ANDROID_KEYSTORE_BASE64, &wrapped)])),
 	)
 	.unwrap();
 	let path = signing.keystore.clone();
@@ -180,9 +183,9 @@ fn a_base64_keystore_is_written_privately_and_removed_after_the_build() {
 	drop(signing);
 	assert!(!path.exists(), "removed when the build is done");
 
-	let error = AndroidSigning::resolve(
+	let error = android(
 		root.path(),
-		&env(&with_passwords(&[(
+		env(&with_passwords(&[(
 			ANDROID_KEYSTORE_BASE64,
 			"not base64 at all!",
 		)])),
@@ -193,9 +196,9 @@ fn a_base64_keystore_is_written_privately_and_removed_after_the_build() {
 	assert_eq!(error, format!("{ANDROID_KEYSTORE_BASE64} isn't base64"));
 
 	let (_directory, keystore) = keystore();
-	let error = AndroidSigning::resolve(
+	let error = android(
 		root.path(),
-		&env(&with_passwords(&[
+		env(&with_passwords(&[
 			(ANDROID_KEYSTORE, &keystore),
 			(ANDROID_KEYSTORE_BASE64, &encoded),
 		])),
@@ -210,9 +213,9 @@ fn a_base64_keystore_is_written_privately_and_removed_after_the_build() {
 fn gradle_gets_the_keystore_path_in_its_environment_and_no_secret_on_its_command_line() {
 	let root = project();
 	let (_directory, path) = keystore();
-	let signing = AndroidSigning::resolve(
+	let signing = android(
 		root.path(),
-		&env(&with_passwords(&[(ANDROID_KEYSTORE, &path)])),
+		env(&with_passwords(&[(ANDROID_KEYSTORE, &path)])),
 	)
 	.unwrap();
 	let android = Path::new("/app/android");

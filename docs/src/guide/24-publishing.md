@@ -4,7 +4,7 @@ Use [Monosecret](secrets.md) to manage the server and deployment credentials in 
 
 Getting an app into a store is where a release usually loses a day. Every store has its own upload API, its own version rules, its own review form, and pages that can only be filled in by hand. `leptoskit publish` does the uploading, and finishes by telling you exactly what is left in each store's dashboard, with the text to paste.
 
-Today it publishes [browser extensions](../platforms/extension.md) to the Chrome Web Store, Microsoft Edge Add-ons, and addons.mozilla.org, [iOS apps](../platforms/ios.md) to TestFlight and the App Store, [Android apps](../platforms/android.md) to Google Play, and [macOS apps](../platforms/macos.md) as notarized downloads.
+Today it publishes [browser extensions](../platforms/extension.md) to the Chrome Web Store, Microsoft Edge Add-ons, and addons.mozilla.org, [iOS apps](../platforms/ios.md) to TestFlight and the App Store, [Android apps](../platforms/android.md) to Google Play and the [Solana dApp Store](#the-solana-dapp-store), and [macOS apps](../platforms/macos.md) as notarized downloads.
 
 ## An example
 
@@ -42,6 +42,7 @@ Every store has two steps:
   - in App Store Connect, a build in TestFlight, for the testers in the groups you name;
   - in Google Play, a draft release on the track you name;
   - for macOS, a notarized `.dmg` and `.zip` in `.leptoskit/publish/macos/`.
+  - the Solana dApp Store has no draft: without `--submit`, the signed APK is built, checked, and kept in `.leptoskit/publish/solana/`, and nothing is sent.
 
   Nobody else sees it yet.
 - **Submit.** `--submit` sends it for review, and then to users. In a terminal, it asks once more first; `--yes` skips the question for scripts, and CI never asks. `--staged` keeps an approved Chrome Web Store version until you publish it by hand.
@@ -50,14 +51,15 @@ Each run builds what it uploads in release mode, so a stale build is never uploa
 
 ## Credentials
 
-| Store                  | Environment variables                                                                                                                                                                                                                             | Where to get them                                                                                                                                                                       |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Chrome Web Store       | `LEPTOSKIT_PUBLISH_CHROME_SERVICE_ACCOUNT`: the JSON key, or its path                                                                                                                                                                             | A Google Cloud service account, added in the developer dashboard under **Account**, **API access**                                                                                      |
-| Microsoft Edge Add-ons | `LEPTOSKIT_PUBLISH_EDGE_CLIENT_ID` and `LEPTOSKIT_PUBLISH_EDGE_API_KEY`                                                                                                                                                                           | Partner Center's **Publish API** page. Keys expire after 72 days.                                                                                                                       |
-| addons.mozilla.org     | `LEPTOSKIT_PUBLISH_FIREFOX_JWT_ISSUER` and `LEPTOSKIT_PUBLISH_FIREFOX_JWT_SECRET`                                                                                                                                                                 | The add-on developer hub's **API keys** page                                                                                                                                            |
-| App Store Connect      | `LEPTOSKIT_PUBLISH_APPLE_ISSUER_ID`, `LEPTOSKIT_PUBLISH_APPLE_KEY_ID`, and `LEPTOSKIT_PUBLISH_APPLE_KEY`: the `.p8` file's path, or its contents                                                                                                  | **Users and Access**, **Integrations**, **App Store Connect API**: a team key with the App Manager role                                                                                 |
-| Developer ID (macOS)   | `LEPTOSKIT_PUBLISH_MACOS_IDENTITY`: the certificate's name, plus the three App Store Connect variables, which notarize the app                                                                                                                    | A **Developer ID Application** certificate, made in Xcode under **Settings**, **Accounts**, **Manage Certificates**; `security find-identity -v -p codesigning` shows its name          |
-| Google Play            | `LEPTOSKIT_PUBLISH_PLAY_SERVICE_ACCOUNT`: the JSON key, or its path; and the upload key: `LEPTOSKIT_ANDROID_KEYSTORE` (its absolute path), `LEPTOSKIT_ANDROID_KEYSTORE_PASSWORD`, `LEPTOSKIT_ANDROID_KEY_ALIAS`, `LEPTOSKIT_ANDROID_KEY_PASSWORD` | A Google Cloud service account with the Google Play Android Developer API turned on, invited in Play Console under **Users and permissions**; the upload key from `keytool -genkeypair` |
+| Store                  | Environment variables                                                                                                                                                                                                                                                                                                                                                                              | Where to get them                                                                                                                                                                                                         |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Chrome Web Store       | `LEPTOSKIT_PUBLISH_CHROME_SERVICE_ACCOUNT`: the JSON key, or its path                                                                                                                                                                                                                                                                                                                              | A Google Cloud service account, added in the developer dashboard under **Account**, **API access**                                                                                                                        |
+| Microsoft Edge Add-ons | `LEPTOSKIT_PUBLISH_EDGE_CLIENT_ID` and `LEPTOSKIT_PUBLISH_EDGE_API_KEY`                                                                                                                                                                                                                                                                                                                            | Partner Center's **Publish API** page. Keys expire after 72 days.                                                                                                                                                         |
+| addons.mozilla.org     | `LEPTOSKIT_PUBLISH_FIREFOX_JWT_ISSUER` and `LEPTOSKIT_PUBLISH_FIREFOX_JWT_SECRET`                                                                                                                                                                                                                                                                                                                  | The add-on developer hub's **API keys** page                                                                                                                                                                              |
+| App Store Connect      | `LEPTOSKIT_PUBLISH_APPLE_ISSUER_ID`, `LEPTOSKIT_PUBLISH_APPLE_KEY_ID`, and `LEPTOSKIT_PUBLISH_APPLE_KEY`: the `.p8` file's path, or its contents                                                                                                                                                                                                                                                   | **Users and Access**, **Integrations**, **App Store Connect API**: a team key with the App Manager role                                                                                                                   |
+| Developer ID (macOS)   | `LEPTOSKIT_PUBLISH_MACOS_IDENTITY`: the certificate's name, plus the three App Store Connect variables, which notarize the app                                                                                                                                                                                                                                                                     | A **Developer ID Application** certificate, made in Xcode under **Settings**, **Accounts**, **Manage Certificates**; `security find-identity -v -p codesigning` shows its name                                            |
+| Google Play            | `LEPTOSKIT_PUBLISH_PLAY_SERVICE_ACCOUNT`: the JSON key, or its path; and the upload key: `LEPTOSKIT_ANDROID_KEYSTORE` (its absolute path), `LEPTOSKIT_ANDROID_KEYSTORE_PASSWORD`, `LEPTOSKIT_ANDROID_KEY_ALIAS`, `LEPTOSKIT_ANDROID_KEY_PASSWORD`                                                                                                                                                  | A Google Cloud service account with the Google Play Android Developer API turned on, invited in Play Console under **Users and permissions**; the upload key from `keytool -genkeypair`                                   |
+| Solana dApp Store      | `LEPTOSKIT_PUBLISH_SOLANA_API_KEY`: a Publisher Portal API key; `LEPTOSKIT_PUBLISH_SOLANA_KEYPAIR`: the publisher wallet's keypair file, or its JSON; and the signing keystore: `LEPTOSKIT_SOLANA_KEYSTORE` (its absolute path, or the keystore itself in `LEPTOSKIT_SOLANA_KEYSTORE_BASE64`), `LEPTOSKIT_SOLANA_KEYSTORE_PASSWORD`, `LEPTOSKIT_SOLANA_KEY_ALIAS`, `LEPTOSKIT_SOLANA_KEY_PASSWORD` | The Publisher Portal's **Settings**, **API keys** (`publish.solanamobile.com`); a new wallet from `solana-keygen new`, dedicated to publishing; a keystore from `keytool -genkeypair` that is **not** the Google Play one |
 
 Set them in the environment, or put them in a TOML file outside the project and pass `--credentials <file>`. A file inside the project is refused unless git ignores it. Values are never printed, in output or in errors. (Xcode prints its own command line, which shows the App Store key's ID and issuer ID, but never the key.)
 
@@ -126,6 +128,33 @@ Google Play can't create an app through its API, and takes API uploads only afte
 
 - the store listing's images until `store/` has them;
 - App content: the privacy policy, and the data safety, content rating, target audience, and ads declarations, which are the account holder's.
+
+## The Solana dApp Store
+
+The Solana dApp Store distributes Android apps to Solana Mobile's Seeker and Saga phones. Publishing an update is one run of Solana Mobile's official `dapp-store` command line tool, which uploads the APK, mints the release NFT, and submits the release for review. The tool has no draft stage, so `leptoskit publish solana` without `--submit` builds the signed APK, runs every check, and stops — nothing is sent until `--submit`.
+
+The app must already exist in the [Publisher Portal](https://publish.solanamobile.com), matched by the Android package name the APK carries (`native.package_id`). The first app is created in the portal by hand: the account, the publisher profile, KYC or KYB, the publisher wallet, the app details, and the App NFT mint. The steps after each run walk through all of it.
+
+```toml
+[publish.solana]
+# Everything here is optional:
+# rpc_url = "https://your-mainnet-rpc.example" # for the balance check; the public RPC is the default
+# cli_version = "1.0.1" # the pinned version of @solana-mobile/dapp-store-cli
+```
+
+```bash
+leptoskit publish solana          # build the signed APK and check everything; send nothing
+leptoskit publish solana --submit # submit the release for review
+```
+
+An upload:
+
+1. checks the listing (a name of 25 characters and a short description of 50 at most, and "What's New" written in `store/en-US/release_notes.md`), the listing images from `store/screenshots/`, that the dApp Store keystore isn't your Google Play key, that the build supports `arm64-v8a`, and that the keypair parses;
+2. reads the publishing wallet's balance from the Solana RPC and refuses to build under 0.016 SOL, which minting the release NFT costs; an RPC outage is only a warning, and the tool checks the balance again itself;
+3. builds the release APK with Gradle, signed with the dApp Store keystore, and copies it to `.leptoskit/publish/solana/`. The keystore's values reach Gradle only in that one build's environment, under the same `LEPTOSKIT_ANDROID_*` names the script reads;
+4. with `--submit`, runs `npx --yes @solana-mobile/dapp-store-cli` with the APK, the keypair, and "What's New". The portal API key rides only in that one tool's environment, and the tool's own output is captured rather than echoed.
+
+The store takes an APK (not an App Bundle) of at most 2 GB that supports `arm64-v8a`, signed with a key that must differ from your Google Play upload key — an APK signed with the Play key is rejected. Each update needs a changed `versionName` (`app.version`) and a `versionCode` one higher than the store's, which the portal checks: pass `--build-number <n>` to set it. After `--submit`, updates are reviewed in 1 to 2 business days (a new app takes 3 to 4), and the result arrives by email. If a review is rejected, the email names the cause — most often a publisher site that doesn't load or Terms of Use and privacy policy addresses that aren't public — and fixing it is a step the run prints.
 
 ## A notarized macOS download
 
@@ -201,9 +230,10 @@ What goes up with each upload:
 | App Store              | description, keywords, summary (as promotional text), support and homepage addresses, privacy policy, What's New, screenshots | category                                                     |
 | Google Play            | name, summary (as the short description), description, release notes, icon, feature graphic, screenshots                      | nothing in the listing                                       |
 | addons.mozilla.org     | name, summary, description, screenshots                                                                                       | privacy policy                                               |
+| Solana dApp Store      | What's New, as the tool's text                                                                                                | the whole listing: the portal's form and its images          |
 | Chrome Web Store, Edge | release notes, on Edge                                                                                                        | the whole listing, screenshots too: their APIs don't edit it |
 
-Text a store would refuse as too long fails before anything is built: Google Play takes an 80-character summary and a 30-character name, the App Store 100 bytes of keywords and a 170-character summary, and addons.mozilla.org a 250-character summary.
+Text a store would refuse as too long fails before anything is built: Google Play takes an 80-character summary and a 30-character name, the App Store 100 bytes of keywords and a 170-character summary, addons.mozilla.org a 250-character summary, and the Solana dApp Store a 25-character name and a 50-character short description.
 
 ```toml
 # store/permissions.toml
@@ -344,11 +374,14 @@ Each size's name says which store it is for, and `leptoskit publish` uploads the
 | `android-phone`                         | Google Play, phone screenshots                                         |
 | `android-tablet-7`, `android-tablet-10` | Google Play, 7-inch and 10-inch tablet screenshots                     |
 | `play-feature-graphic`                  | Google Play's feature graphic: one 1024×500 image, which you make      |
+| `solana-icon`                           | Solana dApp Store's icon: one 512×512 image, no transparency           |
+| `solana-banner`                         | Solana dApp Store's banner: one 1200×600 image                         |
+| `solana-previews`                       | Solana dApp Store's previews: 4 to 8 images, all one size              |
 | `chrome-1280x800`, `chrome-640x400`     | addons.mozilla.org (uploaded); the Chrome Web Store and Edge (by hand) |
 
 App Store sizes may be upright or on their side. App Store Connect asks for the 6.3-inch iPhone size, and the 13-inch iPad for an app that runs on iPad, which leptoskit's iOS apps do; it scales those down for the smaller sizes. Google Play takes up to 8 screenshots per size, each side 320 to 3840 pixels and the long side at most twice the short one, and asks for at least two phone screenshots. addons.mozilla.org uses the first of the `chrome-` sizes that has screenshots, for a listed add-on.
 
-Before anything is built or uploaded, and with `--dry-run` too, every image is checked against its store: the size, how many (10 per App Store size), and transparency, which the App Store and Google Play refuse. A PNG saved with an alpha channel but no transparent pixels is sent without the channel. A folder leptoskit doesn't know is refused, so a misspelled size isn't silently left out, and `leptoskit publish screenshots` refuses one in `screenshots.toml` before capturing anything. The Chrome Web Store and Edge have no API for images, so their steps name the folder to upload from.
+Before anything is built or uploaded, and with `--dry-run` too, every image is checked against its store: the size, how many (10 per App Store size, 4 to 8 of one size for the Solana dApp Store's previews), and transparency, which the App Store, Google Play, and the Solana dApp Store's icon refuse. A PNG saved with an alpha channel but no transparent pixels is sent without the channel. A folder leptoskit doesn't know is refused, so a misspelled size isn't silently left out, and `leptoskit publish screenshots` refuses one in `screenshots.toml` before capturing anything. The Chrome Web Store and Edge have no API for images, so their steps name the folder to upload from.
 
 ## Publish from CI
 
@@ -358,8 +391,9 @@ Before anything is built or uploaded, and with `--dry-run` too, every image is c
 leptoskit publish workflow
 ```
 
-1. Add each credential `leptoskit publish credentials` lists as a repository secret, under the same name (**Settings**, **Secrets and variables**, **Actions**). Three are files, stored base64-encoded instead:
+1. Add each credential `leptoskit publish credentials` lists as a repository secret, under the same name (**Settings**, **Secrets and variables**, **Actions**). Four are files, stored base64-encoded instead:
    - `LEPTOSKIT_ANDROID_KEYSTORE_BASE64`: the upload keystore (`base64 -i upload.jks`), in place of `LEPTOSKIT_ANDROID_KEYSTORE`;
+   - `LEPTOSKIT_SOLANA_KEYSTORE_BASE64`: the dApp Store signing keystore (`base64 -i dappstore.jks`), in place of `LEPTOSKIT_SOLANA_KEYSTORE`;
    - `LEPTOSKIT_MACOS_CERTIFICATE_BASE64` and `LEPTOSKIT_MACOS_CERTIFICATE_PASSWORD`: the Developer ID certificate, exported from Keychain Access as a `.p12`, and its password.
 2. Raise `app.version`, commit, and tag the commit with the same version:
 
@@ -367,7 +401,7 @@ leptoskit publish workflow
    git tag v1.4.0 && git push origin v1.4.0
    ```
 
-The workflow runs on a Mac, checks that the tag matches `app.version`, installs the CLI version that wrote it, and sets up only what the configured stores need: the Android SDK and upload key for Google Play, the certificate for a macOS download. A tag only uploads. To submit, run the workflow by hand from the **Actions** tab with **submit** checked. The run's summary shows "What to do next", and the macOS download is kept with the run.
+The workflow runs on a Mac, checks that the tag matches `app.version`, installs the CLI version that wrote it, and sets up only what the configured stores need: the Android SDK and upload key for Google Play, Node and the dApp Store signing key for the Solana dApp Store, the certificate for a macOS download. A tag only uploads. To submit, run the workflow by hand from the **Actions** tab with **submit** checked. The run's summary shows "What to do next", and the macOS download is kept with the run.
 
 ## Let an agent finish the release
 

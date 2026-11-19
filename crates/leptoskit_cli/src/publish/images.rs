@@ -14,7 +14,7 @@ use anyhow::Result;
 use super::screenshots::DIR;
 
 /// What sizes a store takes for one folder.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Rule {
 	/// Exactly one of these sizes, `(width, height)`, and, when `rotated`,
 	/// each turned on its side too.
@@ -22,6 +22,9 @@ pub enum Rule {
 		sizes: &'static [(u32, u32)],
 		rotated: bool,
 	},
+	/// Any one size, as long as every image in the folder shares it: the
+	/// Solana dApp Store's previews, whose first image sets the size.
+	SameSize,
 	/// Google Play's screenshots: each side 320 to 3840 pixels, the long one
 	/// at most twice the short one.
 	PlayScreenshot,
@@ -37,6 +40,9 @@ pub struct Target {
 	/// addons.mozilla.org. The browser stores' are uploaded by hand.
 	pub kind: &'static str,
 	pub rule: Rule,
+	/// The fewest images the store takes, when the folder has any at all. A
+	/// folder that is missing or empty is left out, and the steps ask for it.
+	pub min: Option<usize>,
 	/// The most images the store takes for it.
 	pub max: Option<usize>,
 	/// The largest file the store takes, in bytes.
@@ -55,6 +61,7 @@ const fn apple(folder: &'static str, kind: &'static str, sizes: &'static [(u32, 
 			sizes,
 			rotated: true,
 		},
+		min: None,
 		max: Some(10),
 		max_bytes: None,
 		opaque: true,
@@ -67,6 +74,7 @@ const fn play(folder: &'static str, kind: &'static str) -> Target {
 		folder,
 		kind,
 		rule: Rule::PlayScreenshot,
+		min: None,
 		max: Some(8),
 		max_bytes: Some(8 * 1024 * 1024),
 		opaque: true,
@@ -87,9 +95,33 @@ const fn browser(
 			sizes: size,
 			rotated: false,
 		},
+		min: None,
 		max,
 		max_bytes: None,
 		opaque: false,
+	}
+}
+
+/// One listing image for the Solana dApp Store, uploaded by hand in the
+/// Publisher Portal: the size is fixed, every image is at most 3 MB, and
+/// `min` asks for the previews' four.
+const fn solana(
+	folder: &'static str,
+	kind: &'static str,
+	rule: Rule,
+	min: Option<usize>,
+	max: Option<usize>,
+	opaque: bool,
+) -> Target {
+	Target {
+		store: "solana",
+		folder,
+		kind,
+		rule,
+		min,
+		max,
+		max_bytes: Some(3 * 1024 * 1024),
+		opaque,
 	}
 }
 
@@ -139,6 +171,7 @@ pub const TARGETS: &[Target] = &[
 			sizes: &[(1024, 500)],
 			rotated: false,
 		},
+		min: None,
 		max: Some(1),
 		max_bytes: None,
 		opaque: true,
@@ -150,6 +183,39 @@ pub const TARGETS: &[Target] = &[
 	// screenshots.
 	browser("firefox", "chrome-1280x800", CHROME_LARGE, None),
 	browser("firefox", "chrome-640x400", CHROME_SMALL, None),
+	// The Solana dApp Store's listing images, uploaded by hand in the
+	// Publisher Portal: the icon with no transparency, the banner, and four
+	// to eight previews that all share one size.
+	solana(
+		"solana-icon",
+		"icon",
+		Rule::Sizes {
+			sizes: &[(512, 512)],
+			rotated: false,
+		},
+		None,
+		Some(1),
+		true,
+	),
+	solana(
+		"solana-banner",
+		"banner",
+		Rule::Sizes {
+			sizes: &[(1200, 600)],
+			rotated: false,
+		},
+		None,
+		Some(1),
+		false,
+	),
+	solana(
+		"solana-previews",
+		"previews",
+		Rule::SameSize,
+		Some(4),
+		Some(8),
+		false,
+	),
 ];
 
 /// One image, ready to send.
@@ -211,6 +277,17 @@ pub fn load(root: &Path, store: &str) -> Result<Vec<Set>> {
 			continue;
 		}
 
+		if let Some(min) = target.min
+			&& files.len() < min
+		{
+			problems.push(format!(
+				"{DIR}/{} has {} images; {} takes at least {min}",
+				target.folder,
+				files.len(),
+				store_name(store)
+			));
+		}
+
 		if let Some(max) = target.max
 			&& files.len() > max
 		{
@@ -234,6 +311,23 @@ pub fn load(root: &Path, store: &str) -> Result<Vec<Set>> {
 					));
 				}
 			}
+		}
+
+		if target.rule == Rule::SameSize
+			&& let Some(first) = images.first()
+			&& let Some(other) = images
+				.iter()
+				.find(|image| (image.width, image.height) != (first.width, first.height))
+		{
+			problems.push(format!(
+				"{DIR}/{} mixes {}×{} and {}×{} images; {} takes previews that all share one size",
+				target.folder,
+				first.width,
+				first.height,
+				other.width,
+				other.height,
+				store_name(store)
+			));
 		}
 
 		sets.push(Set { target, images });
@@ -306,6 +400,9 @@ fn image(path: &Path, target: &Target) -> Result<Image> {
 			);
 		}
 
+		// The previews' shared size is checked once for the whole folder.
+		Rule::SameSize => {}
+
 		Rule::PlayScreenshot => {
 			let (short, long) = (width.min(height), width.max(height));
 			anyhow::ensure!(
@@ -366,6 +463,7 @@ fn store_name(store: &str) -> &'static str {
 		"firefox" => "addons.mozilla.org",
 		"chrome" => "the Chrome Web Store",
 		"edge" => "Edge Add-ons",
+		"solana" => "the Solana dApp Store",
 		_ => "the store",
 	}
 }
@@ -542,6 +640,77 @@ pub mod tests {
 		);
 		assert!(
 			error.contains("play-feature-graphic/01.png: it is 1024×512"),
+			"{error}"
+		);
+	}
+
+	#[test]
+	fn the_dapp_store_takes_an_opaque_icon_a_banner_and_previews_of_one_size() {
+		let png = png;
+		let root = project(&[
+			("solana-icon/01.png", png(512, 512, 255)),
+			("solana-banner/01.png", png(1200, 600, 255)),
+			("solana-previews/01-projects.png", png(1080, 1920, 255)),
+			("solana-previews/02-reading.png", png(1080, 1920, 255)),
+			("solana-previews/03-citing.png", png(1080, 1920, 255)),
+			("solana-previews/04-search.png", png(1080, 1920, 255)),
+		]);
+		let sets = load(root.path(), "solana").unwrap();
+		assert_eq!(sets.len(), 3);
+		let names: Vec<&str> = sets.iter().map(|set| set.target.folder).collect();
+		assert_eq!(names, ["solana-icon", "solana-banner", "solana-previews"]);
+		assert_eq!(
+			describe(&sets),
+			"1 image for solana-icon, 1 image for solana-banner, 4 images for solana-previews"
+		);
+
+		// The icon refuses transparency, a wrong size, and the previews
+		// refuse a count above eight and a mix of sizes.
+		let mut files = vec![
+			("solana-icon/01.png".to_owned(), png(511, 512, 255)),
+			("solana-icon/transparent.png".to_owned(), png(512, 512, 0)),
+		];
+		for index in 1..=9 {
+			files.push((
+				format!("solana-previews/{index:02}.png"),
+				png(1080, 1920, 255),
+			));
+		}
+		files.push(("solana-previews/10.png".to_owned(), png(1080, 1921, 255)));
+		let root = project(&files);
+		let error = load(root.path(), "solana").unwrap_err().to_string();
+		assert!(
+			error.contains(
+				"solana-icon/01.png: it is 511×512; the Solana dApp Store takes 512×512 for \
+				 solana-icon"
+			),
+			"{error}"
+		);
+		assert!(
+			error.contains("solana-icon/transparent.png: it has transparent pixels"),
+			"{error}"
+		);
+		assert!(
+			error.contains(
+				"store/screenshots/solana-previews has 10 images; the Solana dApp Store takes at \
+				 most 8"
+			),
+			"{error}"
+		);
+		assert!(
+			error.contains("mixes 1080×1920 and 1080×1921 images"),
+			"{error}"
+		);
+
+		// Three previews is too few, when the folder has any at all.
+		let root = project(&[
+			("solana-previews/01.png", png(1080, 1920, 255)),
+			("solana-previews/02.png", png(1080, 1920, 255)),
+			("solana-previews/03.png", png(1080, 1920, 255)),
+		]);
+		let error = load(root.path(), "solana").unwrap_err().to_string();
+		assert!(
+			error.contains("solana-previews has 3 images; the Solana dApp Store takes at least 4"),
 			"{error}"
 		);
 	}

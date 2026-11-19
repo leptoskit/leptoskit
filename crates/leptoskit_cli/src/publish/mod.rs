@@ -20,6 +20,7 @@ pub mod macos;
 pub mod play;
 pub mod screenshots;
 pub mod secrets;
+pub mod solana;
 pub mod steps;
 pub mod tools;
 
@@ -33,6 +34,7 @@ use leptoskit_config::LeptoskitConfig;
 
 use self::listing::Store;
 use self::secrets::Credentials;
+use self::secrets::Secret;
 use self::steps::Field;
 use self::steps::Report;
 use self::steps::Status;
@@ -43,8 +45,9 @@ use self::steps::Who;
 #[derive(Debug, Clone, clap::Args)]
 #[allow(clippy::struct_excessive_bools, reason = "each is a command-line flag")]
 pub struct PublishArgs {
-	/// The stores: `chrome`, `edge`, `firefox`, `app_store`, `macos`, and
-	/// `play`; every store `[publish]` configures when omitted.
+	/// The stores: `chrome`, `edge`, `firefox`, `app_store`, `macos`,
+	/// `play`, and `solana`; every store `[publish]` configures when
+	/// omitted.
 	/// `credentials` lists the credentials each configured store needs,
 	/// `screenshots` captures the stores' screenshots, and `workflow` writes
 	/// the GitHub Actions workflow that publishes on a version tag, instead.
@@ -112,7 +115,7 @@ struct Needed {
 	how: &'static str,
 }
 
-const NEEDED: [Needed; 17] = [
+const NEEDED: [Needed; 23] = [
 	Needed {
 		store: "chrome",
 		name: chrome::CREDENTIAL,
@@ -197,6 +200,36 @@ const NEEDED: [Needed; 17] = [
 		store: "play",
 		name: play::KEY_PASSWORD,
 		how: play::KEYSTORE_HOW,
+	},
+	Needed {
+		store: "solana",
+		name: solana::API_KEY,
+		how: solana::API_KEY_HOW,
+	},
+	Needed {
+		store: "solana",
+		name: solana::KEYPAIR,
+		how: solana::KEYPAIR_HOW,
+	},
+	Needed {
+		store: "solana",
+		name: solana::KEYSTORE,
+		how: solana::KEYSTORE_HOW,
+	},
+	Needed {
+		store: "solana",
+		name: solana::KEYSTORE_PASSWORD,
+		how: solana::KEYSTORE_HOW,
+	},
+	Needed {
+		store: "solana",
+		name: solana::KEY_ALIAS,
+		how: solana::KEYSTORE_HOW,
+	},
+	Needed {
+		store: "solana",
+		name: solana::KEY_PASSWORD,
+		how: solana::KEYSTORE_HOW,
 	},
 ];
 
@@ -1125,6 +1158,453 @@ impl Session<'_> {
 }
 
 impl Session<'_> {
+	/// The Solana dApp Store: checks, the signed APK, and — with `--submit` —
+	/// Solana Mobile's official tool, whose one invocation submits the
+	/// release for review. The tool has no draft stage, so without
+	/// `--submit` nothing is sent.
+	fn solana(&self) -> Result<(String, Vec<Step>)> {
+		let settings = self.config.publish.solana.clone().unwrap_or_default();
+		self.fits("solana")?;
+		let screenshots = images::load(self.root, "solana")?;
+		solana::check_abis(self.root)?;
+		solana::refuse_the_play_keystore(self.root, self.credentials)?;
+		// The tool submits every release with "What's New" text, shown to
+		// users.
+		let notes = self.store.release_notes.clone().context(
+			"the Solana dApp Store takes \"What's New\" text with every release; write it in \
+			 store/en-US/release_notes.md",
+		)?;
+		let rpc = solana_rpc(&settings, std::env::var(solana::RPC_OVERRIDE).ok());
+
+		if self.args.dry_run {
+			// The keypair is parsed when its credential is set, so a typo
+			// fails before anything builds.
+			if let Some(credential) = self.credentials.get(solana::KEYPAIR) {
+				solana::KeypairFile::resolve(self.root, &credential)?;
+			}
+
+			let code = match self.args.build_number {
+				BuildNumber::Auto => "the one the APK carries".to_owned(),
+				BuildNumber::Number(number) => number.to_string(),
+			};
+			let address = self
+				.credentials
+				.get(solana::KEYPAIR)
+				.map(|credential| solana::KeypairFile::resolve(self.root, &credential))
+				.transpose()?
+				.map(|keypair| keypair.address());
+
+			return Ok((
+				format!(
+					"{} {} is checked; an upload builds the release APK signed with your dApp \
+					 Store key (versionCode {code}) and submits it for review with the dapp-store \
+					 tool.{} Nothing was built or sent.",
+					self.name,
+					self.version,
+					checked_images(&screenshots)
+				),
+				solana_steps(&SolanaRun {
+					package: &self.config.native.package_id,
+					address: address.as_deref(),
+					apk: ".leptoskit/publish/solana/app-release.apk",
+					submitted: false,
+					store: self.store,
+					screenshots: &screenshots,
+				}),
+			));
+		}
+
+		// A real run: every credential is required here, so a missing one is
+		// named before anything builds.
+		let api_key = self
+			.credentials
+			.require(solana::API_KEY, solana::API_KEY_HOW)?;
+		let credential = self
+			.credentials
+			.require(solana::KEYPAIR, solana::KEYPAIR_HOW)?;
+		let keypair = solana::KeypairFile::resolve(self.root, &credential)?;
+		let keystore = crate::native::signing::AndroidSigning::resolve(
+			self.root,
+			&|name| {
+				self.credentials
+					.get(name)
+					.map(|secret| secret.expose().to_owned())
+			},
+			&solana::KEYSTORE_VARS,
+		)?;
+		let signing = solana::Signing {
+			keystore: Secret::new(keystore.path().display().to_string()),
+			keystore_password: self
+				.credentials
+				.require(solana::KEYSTORE_PASSWORD, solana::KEYSTORE_HOW)?,
+			key_alias: self
+				.credentials
+				.require(solana::KEY_ALIAS, solana::KEYSTORE_HOW)?,
+			key_password: self
+				.credentials
+				.require(solana::KEY_PASSWORD, solana::KEYSTORE_HOW)?,
+		};
+
+		// Minting the release NFT costs about 0.015 SOL of rent and fees,
+		// and the tool refuses to start without it, so the wallet is funded
+		// before the build. An RPC outage only warns: the tool reads the
+		// balance again itself, and a release must not stop on one.
+		let address = keypair.address();
+		solana_balance(self.http, &rpc, &address)?;
+		let send = SolanaSend {
+			root: self.root,
+			runner: self.runner,
+			submit: self.submit,
+			build_number: match self.args.build_number {
+				BuildNumber::Auto => None,
+				BuildNumber::Number(number) => Some(number),
+			},
+			signing,
+			keypair: &keypair,
+			api_key,
+			cli_version: &settings.cli_version,
+			notes: &notes,
+			name: &self.name,
+			version: &self.version,
+		};
+		let (summary, apk) = solana_send(&send, || {
+			crate::native::run(crate::native::NativeCommand::Prepare {
+				target: crate::native::Target::Android,
+				release: true,
+			})
+		})?;
+
+		Ok((
+			summary,
+			solana_steps(&SolanaRun {
+				package: &self.config.native.package_id,
+				address: Some(&address),
+				apk: &apk,
+				submitted: self.submit,
+				store: self.store,
+				screenshots: &screenshots,
+			}),
+		))
+	}
+}
+
+/// What one Solana dApp Store run sends.
+struct SolanaSend<'a> {
+	root: &'a Path,
+	runner: &'a dyn tools::Runner,
+	submit: bool,
+	/// The `versionCode` Gradle stamps, when `--build-number` named one. The
+	/// store takes one more than its own highest, which the portal checks.
+	build_number: Option<u64>,
+	signing: solana::Signing,
+	keypair: &'a solana::KeypairFile,
+	api_key: Secret,
+	cli_version: &'a str,
+	notes: &'a str,
+	name: &'a str,
+	version: &'a str,
+}
+
+/// Builds the signed APK and, with `--submit`, runs the official tool.
+/// `prepare` stands in for `native prepare android --release`, which tests
+/// replace with a no-op so no guest is compiled.
+///
+/// # Errors
+///
+/// When the prepare, the build, or the tool fails.
+fn solana_send(
+	run: &SolanaSend<'_>,
+	prepare: impl FnOnce() -> Result<()>,
+) -> Result<(String, String)> {
+	let android = crate::native::host_dir(run.root, crate::native::Target::Android);
+	let out = run.root.join(OUTPUT).join("solana");
+	std::fs::create_dir_all(&out)?;
+	prepare()?;
+	// The phone build is the only one the store takes; the prepare above
+	// writes the ABI list, so an x86-only configuration is named now.
+	solana::check_abis(run.root)?;
+	crate::native::signing::clear_android_outputs(&android)?;
+	run.runner
+		.run(&solana::apk(&android, &run.signing, run.build_number))?;
+	let built = crate::native::signing::signed_apk(&android)?;
+	let copied = out.join("app-release.apk");
+	std::fs::copy(&built, &copied)
+		.with_context(|| format!("could not copy {} to {}", built.display(), copied.display()))?;
+
+	if !run.submit {
+		return Ok((
+			format!(
+				"{} {} is built as a signed APK at {}; nothing was sent. Run `leptoskit publish \
+				 solana --submit` to submit it for review.",
+				run.name,
+				run.version,
+				copied.strip_prefix(run.root).unwrap_or(&copied).display()
+			),
+			".leptoskit/publish/solana/app-release.apk".to_owned(),
+		));
+	}
+
+	// The tool's output is captured and dropped, not echoed: it runs with
+	// the portal API key in its environment, and its own printing never
+	// reaches the terminal. Its failure names the command to check.
+	let _ = run.runner.output(&solana::submit(
+		&copied,
+		run.keypair,
+		run.notes,
+		run.api_key.clone(),
+		run.cli_version,
+	))?;
+	Ok((
+		format!(
+			"{} {} is submitted to the Solana dApp Store and is in review; updates are reviewed \
+			 in 1 to 2 business days.",
+			run.name, run.version
+		),
+		".leptoskit/publish/solana/app-release.apk".to_owned(),
+	))
+}
+
+/// The RPC address the wallet's balance is read from: the environment's
+/// override, the configuration's, or the public mainnet RPC.
+fn solana_rpc(
+	settings: &leptoskit_config::publish::SolanaStore,
+	override_from: Option<String>,
+) -> String {
+	override_from
+		.filter(|url| !url.trim().is_empty())
+		.unwrap_or_else(|| {
+			settings
+				.rpc_url
+				.clone()
+				.unwrap_or_else(|| solana::DEFAULT_RPC_URL.to_owned())
+		})
+}
+
+/// The wallet's balance, checked against what minting the release NFT
+/// costs. An RPC outage is a warning, as the official tool's own preflight
+/// is, not a failure.
+///
+/// # Errors
+///
+/// When the balance is under the tool's minimum.
+fn solana_balance(http: &http::Http, rpc: &str, address: &str) -> Result<()> {
+	match solana::balance(http, rpc, address) {
+		Ok(lamports) => {
+			anyhow::ensure!(
+				lamports >= solana::MIN_BALANCE_LAMPORTS,
+				"{address} holds {lamports} lamports; the release NFT's mint needs about 0.016 \
+				 SOL ({min} lamports), and the dapp-store tool refuses to start without it. Fund \
+				 {address} first",
+				min = solana::MIN_BALANCE_LAMPORTS
+			);
+		}
+		Err(error) => {
+			eprintln!(
+				"warning: could not read {address}'s balance from {rpc}: {error:#}; the \
+				 dapp-store tool checks it again before it submits"
+			);
+		}
+	}
+
+	Ok(())
+}
+
+/// What one Solana dApp Store run did, for its steps.
+struct SolanaRun<'a> {
+	/// The Android package name the portal matches the app by.
+	package: &'a str,
+	/// The publishing wallet's address, when its keypair is set.
+	address: Option<&'a str>,
+	/// The built APK's path in the project.
+	apk: &'a str,
+	submitted: bool,
+	store: &'a Store,
+	/// The images in `store/screenshots/`, which the portal's listing takes.
+	screenshots: &'a [images::Set],
+}
+
+/// What the Solana dApp Store can't do: its onboarding, its listing, and
+/// the release decision are portal and wallet steps.
+fn solana_steps(run: &SolanaRun<'_>) -> Vec<Step> {
+	let portal = "https://publish.solanamobile.com".to_owned();
+	let address = run
+		.address
+		.unwrap_or("(set LEPTOSKIT_PUBLISH_SOLANA_KEYPAIR to a funded Solana keypair)");
+	let has = |folder: &str| {
+		run.screenshots
+			.iter()
+			.any(|set| set.target.folder == folder)
+	};
+	let mut steps = Vec::new();
+
+	if run.submitted {
+		// In review; what is left is what happens after a rejection.
+		steps.push(step(
+			"solana",
+			Who::Agent,
+			"If the review rejects the release, fix the cause its email names — most often a \
+			 publisher site that doesn't load, or Terms of Use and privacy policy addresses that \
+			 are broken or not public — and run `leptoskit publish solana --submit` again.",
+			Some(portal),
+			vec![
+				field("Website", homepage(run.store)),
+				field("Terms of Use", "(a public HTTPS page the portal checks)"),
+				field("Privacy policy", privacy_policy(run.store)),
+			],
+			"the rejection email names the cause, and only a new submission clears it",
+			"the release shows as published in the portal",
+		));
+		return steps;
+	}
+
+	steps.extend([
+		step(
+			"solana",
+			Who::Person,
+			"Create the Publisher Portal account and the publisher profile, and pass KYC \
+			 (individual) or KYB (company).",
+			Some(portal.clone()),
+			Vec::new(),
+			"identity verification has no API, and needs the account holder",
+			"the portal lets you add a dApp",
+		),
+		step(
+			"solana",
+			Who::Person,
+			"Connect the publisher wallet in the portal: a new Solana wallet dedicated to \
+			 publishing, which every future submission of this app must sign with.",
+			Some(portal.clone()),
+			vec![field("Wallet address", address)],
+			"wallet custody is the account holder's, and losing the wallet blocks every future \
+			 submission",
+			"the portal shows the wallet connected",
+		),
+		step(
+			"solana",
+			Who::Agent,
+			"Create the app in the portal: the app details form and its listing images.",
+			Some(portal.clone()),
+			vec![
+				field("Package name", run.package),
+				field(
+					"Name",
+					run.store.listing.name.clone().unwrap_or_else(|| {
+						"(add name to store/listing.toml, 25 characters at most)".to_owned()
+					}),
+				),
+				field(
+					"Short description",
+					run.store.summary.clone().unwrap_or_else(|| {
+						"(write it in store/en-US/summary.md, 50 characters at most)".to_owned()
+					}),
+				),
+				field("Website", homepage(run.store)),
+				field(
+					"Support email",
+					run.store.listing.support.clone().unwrap_or_default(),
+				),
+				field("Terms of Use", "(a public HTTPS page the portal checks)"),
+				field("Privacy policy", privacy_policy(run.store)),
+				field(
+					"Icon",
+					"store/screenshots/solana-icon/*.png (512×512, no transparency)",
+				),
+				field("Banner", "store/screenshots/solana-banner/*.png (1200×600)"),
+				field(
+					"Previews",
+					"store/screenshots/solana-previews/*.png (4 to 8, all one size)",
+				),
+			],
+			"the first app and its listing are created in the portal; the official tool only \
+			 updates an app that already exists there, matched by the package name",
+			"the app exists with its App NFT minted",
+		),
+		step(
+			"solana",
+			Who::Person,
+			"Approve the App NFT mint transaction in the connected wallet, and every signing \
+			 request the portal raises after it.",
+			Some(portal.clone()),
+			Vec::new(),
+			"the mint is a Solana transaction only the wallet's holder can sign",
+			"the portal shows the app's App NFT minted",
+		),
+		step(
+			"solana",
+			Who::Person,
+			"Create the portal API key, and set it as LEPTOSKIT_PUBLISH_SOLANA_API_KEY.",
+			Some("https://publish.solanamobile.com/dashboard/settings/api-keys".to_owned()),
+			Vec::new(),
+			"an API key is created by the signed-in account holder",
+			"`leptoskit publish credentials` lists it as set",
+		),
+		step(
+			"solana",
+			Who::Person,
+			"Fund the publishing wallet with about 0.02 SOL; the dapp-store tool refuses to start \
+			 below 0.016 SOL, which minting the release NFT costs.",
+			None,
+			vec![field("Wallet address", address)],
+			"only the wallet's holder can move its SOL",
+			"`leptoskit publish solana` gets past the balance check",
+		),
+	]);
+	let listing = missing(&[
+		(
+			"Name",
+			run.store.listing.name.is_some(),
+			"add name to store/listing.toml, 25 characters at most",
+		),
+		(
+			"Short description",
+			run.store.summary.is_some(),
+			"write it in store/en-US/summary.md, 50 characters at most",
+		),
+		(
+			"Icon",
+			has("solana-icon"),
+			"put one 512×512 image in store/screenshots/solana-icon/",
+		),
+		(
+			"Banner",
+			has("solana-banner"),
+			"put one 1200×600 image in store/screenshots/solana-banner/",
+		),
+		(
+			"Previews",
+			has("solana-previews"),
+			"put four to eight images of one size in store/screenshots/solana-previews/",
+		),
+	]);
+
+	if !listing.is_empty() {
+		steps.push(step(
+			"solana",
+			Who::Agent,
+			"Add what the app's listing is missing to the project, and upload again.",
+			Some(portal.clone()),
+			listing,
+			"the portal's listing form and its images have no API, and the official tool takes \
+			 none of them",
+			"the portal's listing shows them",
+		));
+	}
+
+	steps.push(step(
+		"solana",
+		Who::Person,
+		"Decide to release it, then run `leptoskit publish solana --submit`, which submits the \
+		 release for review.",
+		None,
+		vec![field("Release", run.apk)],
+		"submitting mints the release NFT and sends the app to review, which is the account \
+		 holder's decision",
+		"the portal shows the release in review",
+	));
+	steps
+}
+
+impl Session<'_> {
 	/// Sets the `en-US` listing inside `edit`: its text, images, and icon.
 	fn play_listing(
 		&self,
@@ -1580,6 +2060,7 @@ impl Session<'_> {
 			"app_store" => self.app_store()?,
 			"macos" => self.macos()?,
 			"play" => self.play()?,
+			"solana" => self.solana()?,
 			other => anyhow::bail!("`{other}` isn't a store leptoskit publish publishes to"),
 		};
 
@@ -1731,6 +2212,15 @@ fn privacy_policy(store: &Store) -> String {
 		.privacy_policy
 		.clone()
 		.unwrap_or_else(|| "(add privacy_policy to store/listing.toml)".to_owned())
+}
+
+/// The app's website, as the Solana dApp Store's portal form takes it.
+fn homepage(store: &Store) -> String {
+	store
+		.listing
+		.homepage
+		.clone()
+		.unwrap_or_else(|| "(add homepage to store/listing.toml)".to_owned())
 }
 
 /// The browser stores' screenshots, which are uploaded by hand: the folder
