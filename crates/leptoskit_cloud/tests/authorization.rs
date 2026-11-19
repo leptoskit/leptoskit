@@ -526,7 +526,7 @@ impl Fixture {
 			"rpc.inbox" => json!({ "limit": 10 }),
 			"rpc.mark_read" | "rpc.job_status" | "rpc.cancel_job" => json!({ "id": nothing }),
 			"rpc.mark_all_read" | "whoami" | "organizations" | "claim" | "clusters" | "workers"
-			| "jobs" => json!({}),
+			| "jobs" | "plans" => json!({}),
 			"rpc.service_token" => json!({ "service": "billing" }),
 			"create_organization" => json!({ "slug": "new-team", "name": "New team" }),
 			"accept_invitation" => json!({ "token": "0".repeat(64) }),
@@ -709,7 +709,6 @@ impl Fixture {
 					"confirm": "web/staging",
 				})
 			}
-			"plans" => json!({}),
 			"usage" => json!({ "organization": organization }),
 			"set_spend_cap" => json!({ "organization": organization, "cap": 100 }),
 			"register_cluster" => json!({ "name": "eu-two", "region": "eu-central" }),

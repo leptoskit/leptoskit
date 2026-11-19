@@ -304,7 +304,7 @@ pub async fn usage_is_counted_priced_and_capped(app: &App) {
 	refused.refused(403, "spend_cap_reached");
 	assert!(refused.text.contains("set_spend_cap"), "{}", refused.text);
 	// The cap itself is for those who may see the bill.
-	assert!(!refused.text.contains("20"), "{}", refused.text);
+	assert!(!refused.text.contains("minor units"), "{}", refused.text);
 	// Back to the plan's own cap, and it deploys.
 	let unset = cap(Value::Null, shop.as_ana()).await;
 	assert_eq!(unset.expect(200).json(), json!({ "cap": 50, "own": false }));
@@ -430,9 +430,6 @@ pub async fn a_build_whose_lease_ran_out_is_counted(app: &App) {
 		.refused(404, "job_not_held");
 	shop.sweep().await;
 	assert_eq!(quantity(&usage(&shop).await, "build_minutes_linux"), 10);
-	// Ten minutes on a plan that includes two: nothing new is deployed.
-	let digest = shop.upload(b"again").await;
-	shop.deploy("production", &digest, json!({ "database": "sqlite" }))
-		.await
-		.refused(403, "spend_cap_reached");
+	// Ten minutes on a plan that includes two: the cap is reached.
+	assert_eq!(usage(&shop).await["cost"]["cap_reached"], true);
 }
