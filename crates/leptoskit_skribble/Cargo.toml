@@ -1,0 +1,29 @@
+[package]
+name = "leptoskit_skribble"
+version = "0.3.0"
+# Private until `skribble_core` is on crates.io: a published crate cannot
+# depend on a git revision. Remove this line and add the crate to the
+# monochange group once skribble releases `skribble_core`.
+publish = false
+authors.workspace = true
+categories = ["gui", "graphics", "visualization"]
+edition.workspace = true
+homepage.workspace = true
+keywords = ["leptoskit", "skribble", "hand-drawn", "sketch", "design-system"]
+license.workspace = true
+readme = "readme.md"
+repository.workspace = true
+rust-version.workspace = true
+description = "Hand-drawn components, charts, and maps for leptoskit, drawn by skribble's framework-free Rust core and rendered as native vectors on every platform."
+
+[dependencies]
+leptoskit = { workspace = true }
+skribble_core = { workspace = true }
+
+[dev-dependencies]
+leptos = { workspace = true, features = ["ssr"] }
+leptoskit_native = { workspace = true, features = ["web"] }
+leptoskit_testing = { workspace = true }
+
+[lints]
+workspace = true

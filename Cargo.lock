@@ -7908,6 +7908,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "leptoskit_skribble"
+version = "0.3.0"
+dependencies = [
+ "leptos",
+ "leptoskit",
+ "leptoskit_native",
+ "leptoskit_testing",
+ "skribble_core",
+]
+
+[[package]]
 name = "leptoskit_table"
 version = "0.3.0"
 dependencies = [
@@ -11703,9 +11714,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "33f4fe9184a62d842c9ef383018f3306d8ba224fd9d836f56d7288308847c256"
 
 [[package]]
+name = "skribble_core"
+version = "0.1.0"
+source = "git+https://github.com/openbudgetfun/skribble?rev=fc845c2a1a0ce1c157ac79134815ddfb67904415#fc845c2a1a0ce1c157ac79134815ddfb67904415"
+dependencies = [
+ "skribble_rough",
+]
+
+[[package]]
 name = "skribble_rough"
-version = "0.0.1"
-source = "git+https://github.com/openbudgetfun/skribble?rev=00845d0d2a1c07a126079453de342811ee1cff64#00845d0d2a1c07a126079453de342811ee1cff64"
+version = "0.1.0"
+source = "git+https://github.com/openbudgetfun/skribble?rev=fc845c2a1a0ce1c157ac79134815ddfb67904415#fc845c2a1a0ce1c157ac79134815ddfb67904415"
 
 [[package]]
 name = "slab"
