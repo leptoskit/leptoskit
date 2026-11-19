@@ -17,6 +17,8 @@
 //!   and never retries it or calls it failed;
 //! - fails a backup whose lease ran out: nothing was promised, and another can
 //!   be asked for;
+//! - gives up on a backup or a restore no worker has claimed for an hour, so
+//!   neither runs long after it was asked for;
 //! - fails a build nobody claimed for
 //!   [`ShippingSettings::unclaimed_build`](super::ShippingSettings::unclaimed_build)
 //!   with `builder_unavailable`. A release waits for its cluster's worker as
@@ -393,7 +395,7 @@ pub struct Swept {
 	/// Builds queued again after their lease ran out.
 	pub retried: u32,
 	/// Builds given up on: out of attempts, or never claimed. Backups
-	/// whose worker went quiet.
+	/// whose worker went quiet, and backups and restores never claimed.
 	pub abandoned: u32,
 	/// Releases, removals, and restores whose outcome is now unknown.
 	pub unknown: u32,
@@ -522,6 +524,7 @@ pub(crate) async fn sweep(services: &Services) -> rpc::Result<Swept> {
 
 	swept.archives = sweep_archives(services).await?;
 	swept.log_chunks = sweep_logs(services).await?;
+	swept.abandoned += backups::sweep_unclaimed(db, SWEEP_BATCH).await?;
 	swept.backups = backups::sweep(db, SWEEP_BATCH).await?;
 	Ok(swept)
 }

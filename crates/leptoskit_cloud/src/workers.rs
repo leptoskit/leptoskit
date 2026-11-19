@@ -604,6 +604,12 @@ pub enum BackupOutcome {
 ///    on the old database, and answers `Failed`.
 ///
 /// So `Failed` always means the database is as it was.
+///
+/// `location` is what a worker of this cluster once reported, and the
+/// control plane can't check it. Before restoring, the worker makes sure
+/// the dump there is one taken of `database`, from what it recorded with
+/// the dump when it took it, and fails the restore when it isn't: a
+/// location alone is never proof of whose data a dump holds.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct RestoreDatabaseInput {
 	pub environment: RuntimeValue<EnvironmentRef>,

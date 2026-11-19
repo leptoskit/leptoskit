@@ -238,6 +238,35 @@ pub async fn a_backup_is_taken_and_listed(app: &App) {
 		list(&shop, "production").await["backups"][0]["state"],
 		"failed"
 	);
+	// Neither is an address with a password in it, anywhere.
+	app.call("create_backup", place(&shop, "production"), shop.as_ana())
+		.await
+		.expect(200);
+	let job = shop.cluster.take().await;
+	shop.cluster
+		.finish(
+			&job,
+			json!({
+				"kind": "backup_database",
+				"result": "taken",
+				"location": "https://dumper:c0ffee33@dumps.example/one",
+				"bytes": 1,
+			}),
+		)
+		.await
+		.expect(200);
+	assert_eq!(
+		list(&shop, "production").await["backups"][0]["state"],
+		"failed"
+	);
+	assert_eq!(
+		app.find_in_every_table("c0ffee33").await,
+		Vec::<String>::new()
+	);
+	assert_eq!(
+		app.find_in_every_table("[2Jone").await,
+		Vec::<String>::new()
+	);
 
 	for count in 2..=10 {
 		back_up(&shop, "production", &format!("more-{count}")).await;
@@ -250,7 +279,7 @@ pub async fn a_backup_is_taken_and_listed(app: &App) {
 		list(&shop, "production").await["backups"]
 			.as_array()
 			.map(Vec::len),
-		Some(12)
+		Some(13)
 	);
 
 	// Expired backups are forgotten, and make room.
@@ -265,7 +294,7 @@ pub async fn a_backup_is_taken_and_listed(app: &App) {
 		.expect("expire them");
 	assert_eq!(list(&shop, "production").await["backups"], json!([]));
 	let swept = shop.sweep().await;
-	assert_eq!(swept.backups, 12, "{swept:?}");
+	assert_eq!(swept.backups, 13, "{swept:?}");
 	back_up(&shop, "production", "after").await;
 }
 
@@ -611,6 +640,48 @@ pub async fn a_quiet_worker_fails_a_backup_and_leaves_a_restore_unknown(app: &Ap
 	let settled = list(&shop, "production").await;
 	assert_eq!(settled["restore"]["state"], "restored");
 	assert_eq!(settled["backups"][0]["kind"], "before_restore");
+
+	// A restore, and a backup, that no worker takes for an hour is given
+	// up on: it never runs later, over what was written since.
+	let wait_an_hour = || {
+		async {
+			Job::update()
+				.filter(|job| job.state.eq(leptoskit_cloud::operator::JobState::Queued))
+				.set(
+					|job| job.queued_at,
+					leptoskit_db::now() - chrono::TimeDelta::minutes(61),
+				)
+				.run(&app.system())
+				.await
+				.expect("age the queue");
+		}
+	};
+	restore().await.expect(200);
+	assert_eq!(shop.sweep().await.abandoned, 0);
+	wait_an_hour().await;
+	assert_eq!(shop.sweep().await.abandoned, 1);
+	assert_eq!(shop.cluster.claim().await, None);
+	let given_up = list(&shop, "production").await["restore"].clone();
+	assert_eq!(given_up["state"], "failed");
+	assert!(
+		given_up["failure"]
+			.as_str()
+			.is_some_and(|failure| failure.contains("didn't take it in time")),
+		"{given_up}"
+	);
+	app.call("create_backup", place(&shop, "production"), shop.as_ana())
+		.await
+		.expect(200);
+	wait_an_hour().await;
+	assert_eq!(shop.sweep().await.abandoned, 1);
+	assert_eq!(shop.cluster.claim().await, None);
+	assert_eq!(
+		list(&shop, "production").await["backups"][0]["state"],
+		"failed"
+	);
+	shop.deploy("production", &digest, json!({ "database": "postgres" }))
+		.await
+		.expect(200);
 }
 
 /// Deleting an environment gives up on a backup nobody has taken, forgets

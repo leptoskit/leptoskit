@@ -573,14 +573,19 @@ pub(crate) async fn reconcile(
 				},
 			)));
 			row.save(cx.tx()).await?;
+			// Its environment takes jobs again.
+			woke = true;
 		}
 		(JobKind::RestoreDatabase, Reconciliation::NotApplied { detail }) => {
 			// The environment runs on the database it had.
 			row.state = JobState::Done;
 			row.outcome = Json(Some(JobOutcome::RestoreDatabase(RestoreOutcome::Failed {
-				reason: format!("an operator found it hadn't been restored: {detail}"),
+				reason: super::backups::reason(&format!(
+					"an operator found it hadn't been restored: {detail}"
+				)),
 			})));
 			row.save(cx.tx()).await?;
+			woke = true;
 		}
 		(JobKind::BuildServer, _) => {
 			return Err(rpc::Error::server("a build is never unknown"));

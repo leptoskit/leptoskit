@@ -65,6 +65,11 @@ use crate::workers::RuntimeValue;
 /// The longest a failure's reason is kept, in bytes.
 const MAX_REASON_LEN: usize = 300;
 
+/// How long a backup or a restore waits for its cluster's worker before
+/// it is given up on. A restore asked for while the worker is away must
+/// not run days later, over everything written since.
+const UNCLAIMED: std::time::Duration = std::time::Duration::from_hours(1);
+
 /// The most backups one answer lists. An environment keeps fewer: at most
 /// [`MAX_BACKUPS`] taken on request, the ones restores took, and the ones
 /// that failed, none for longer than [`BACKUP_KEEP_DAYS`] days.
@@ -78,7 +83,7 @@ fn keep() -> chrono::TimeDelta {
 
 /// A worker's reason as it is kept: with what a log line would have
 /// redacted replaced, control characters written out, and cut short.
-fn reason(text: &str) -> String {
+pub(crate) fn reason(text: &str) -> String {
 	let text = super::logs::plain(&super::logs::scrub(text.trim()));
 
 	if text.len() <= MAX_REASON_LEN {
@@ -130,7 +135,7 @@ fn restore_summary(job: &Job) -> Option<RestoreSummary> {
 		JobState::Abandoned => {
 			(
 				RestoreState::Failed,
-				Some("it was given up on before its cluster's worker took it".to_owned()),
+				Some("its cluster's worker didn't take it in time".to_owned()),
 			)
 		}
 	};
@@ -198,16 +203,27 @@ pub(crate) async fn refuse_restoring(
 	db: &impl leptoskit_db::Read,
 	environment: &Environment,
 ) -> rpc::Result<()> {
-	match under_way(db, environment.id).await? {
-		Some(job) if job.kind == JobKind::RestoreDatabase => {
-			Err(rpc::Error::conflict(format!(
-				"database_restoring: a backup is being restored over `{}`'s database; wait for it \
-				 to finish before deploying",
-				environment.name
-			)))
-		}
-		_ => Ok(()),
+	let environment_id = environment.id;
+	let restoring = Job::query()
+		.filter(|job| {
+			job.environment_id.eq(Some(environment_id))
+				& job.kind.eq(JobKind::RestoreDatabase)
+				& (job.state.eq(JobState::Queued)
+					| job.state.eq(JobState::Leased)
+					| job.state.eq(JobState::Unknown))
+		})
+		.exists(db)
+		.await?;
+
+	if restoring {
+		return Err(rpc::Error::conflict(format!(
+			"database_restoring: a backup is being restored over `{}`'s database; wait for it to \
+			 finish before deploying",
+			environment.name
+		)));
 	}
+
+	Ok(())
 }
 
 /// `environment`'s database, once a release has made it.
@@ -471,9 +487,15 @@ pub(crate) async fn restore_backup(
 				"backup_unavailable: backup {backup} failed, so there is nothing to restore"
 			)));
 		}
-		_ => {
+		(BackupState::Complete, Some(_)) if row.expires_at <= now => {
 			return Err(rpc::Error::conflict(format!(
 				"backup_unavailable: backup {backup} has expired"
+			)));
+		}
+		_ => {
+			return Err(rpc::Error::conflict(format!(
+				"backup_unavailable: backup {backup} isn't of the database `{environment_name}` \
+				 has now"
 			)));
 		}
 	};
@@ -497,6 +519,25 @@ pub(crate) async fn restore_backup(
 
 	if let Some(why) = unrestorable(&row, &placement) {
 		return Err(unavailable(why));
+	}
+
+	// Each restore leaves a dump of what it replaced, kept as long as any
+	// backup: they are counted too.
+	let replaced = DatabaseBackup::query()
+		.filter(|row| {
+			row.environment_id.eq(environment_id)
+				& row.kind.eq(BackupKind::BeforeRestore)
+				& row.expires_at.gt(now)
+		})
+		.count(cx.tx())
+		.await?;
+
+	if replaced >= MAX_BACKUPS {
+		return Err(rpc::Error::conflict(format!(
+			"too_many_backups: `{}` keeps {MAX_BACKUPS} backups that restores took already, each \
+			 for {BACKUP_KEEP_DAYS} days; wait for the oldest to expire",
+			environment.name
+		)));
 	}
 
 	let job = jobs::queue(
@@ -546,19 +587,100 @@ async fn row_for(tx: &Tx, job: &Job) -> rpc::Result<Option<DatabaseBackup>> {
 		return Ok(None);
 	};
 	let id = Id::<DatabaseBackup>::from_uuid(input.backup);
+	let Some(environment) = job.environment_id else {
+		return Ok(None);
+	};
 	Ok(DatabaseBackup::query()
-		.filter(|row| row.id.eq(id) & row.state.eq(BackupState::Pending))
+		.filter(|row| {
+			row.id.eq(id) & row.environment_id.eq(environment) & row.state.eq(BackupState::Pending)
+		})
 		.first(tx)
 		.await?)
 }
 
 /// Whether `taken` can be kept: a location is the worker's own words, but
-/// it is short and printable.
+/// it is short, printable, and nothing a log line would redact, such as an
+/// address with a password in it.
 fn keepable(taken: &BackupTaken) -> bool {
 	!taken.location.is_empty()
 		&& taken.location.chars().count() <= MAX_BACKUP_LOCATION
 		&& !taken.location.chars().any(char::is_control)
+		&& super::logs::scrub(&taken.location) == taken.location
 		&& i64::try_from(taken.bytes).is_ok()
+}
+
+/// A backup's or a restore's outcome as it is kept, before the job's row,
+/// a backup's row, or an answer holds any of it: a reason is scrubbed and
+/// cut, a dump whose location can't be kept is a backup that failed, and a
+/// restore's dump whose location can't be kept is left out.
+pub(crate) fn kept(outcome: JobOutcome) -> JobOutcome {
+	match outcome {
+		JobOutcome::BackupDatabase(BackupOutcome::Taken(taken)) if !keepable(&taken) => {
+			JobOutcome::BackupDatabase(BackupOutcome::Failed {
+				reason: "its cluster's worker said where it is in a way that can't be kept"
+					.to_owned(),
+			})
+		}
+		JobOutcome::BackupDatabase(BackupOutcome::Failed { reason: why }) => {
+			JobOutcome::BackupDatabase(BackupOutcome::Failed {
+				reason: reason(&why),
+			})
+		}
+		JobOutcome::RestoreDatabase(RestoreOutcome::Restored { before_restore }) => {
+			JobOutcome::RestoreDatabase(RestoreOutcome::Restored {
+				before_restore: before_restore.filter(keepable),
+			})
+		}
+		JobOutcome::RestoreDatabase(RestoreOutcome::Failed { reason: why }) => {
+			JobOutcome::RestoreDatabase(RestoreOutcome::Failed {
+				reason: reason(&why),
+			})
+		}
+		outcome => outcome,
+	}
+}
+
+/// Gives up on backups and restores no worker has taken for
+/// [`UNCLAIMED`]: up to `batch` of them. Answers how many.
+///
+/// # Errors
+///
+/// When the database fails.
+pub(crate) async fn sweep_unclaimed(db: &leptoskit_db::Db, batch: u64) -> rpc::Result<u32> {
+	let stale = leptoskit_db::now() - delta(UNCLAIMED);
+	let unclaimed = Job::query()
+		.filter(|job| {
+			job.state.eq(JobState::Queued)
+				& (job.kind.eq(JobKind::BackupDatabase) | job.kind.eq(JobKind::RestoreDatabase))
+				& job.queued_at.lt(stale)
+		})
+		.limit(batch)
+		.all(db)
+		.await?;
+	let mut abandoned = 0;
+
+	for candidate in unclaimed {
+		let id = candidate.id;
+		let gone = jobs::serializable(db, move |tx| {
+			Box::pin(async move {
+				let Some(mut job) = Job::query()
+					.filter(|job| job.id.eq(id) & job.state.eq(JobState::Queued))
+					.first(tx)
+					.await?
+				else {
+					return Ok(false);
+				};
+				job.state = JobState::Abandoned;
+				job.save(tx).await?;
+				backup_abandoned(tx, &job, "its cluster's worker didn't take it in time").await?;
+				Ok(true)
+			})
+		})
+		.await?;
+		abandoned += u32::from(gone);
+	}
+
+	Ok(abandoned)
 }
 
 /// What a backup's outcome does to its row.

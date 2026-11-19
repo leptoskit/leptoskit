@@ -764,7 +764,7 @@ pub(crate) async fn finish(
 	let caller = worker(cx.context())?;
 	let services = services(cx.context())?;
 	// Before anything keeps it: the job's row, the sheet, an event.
-	let outcome = scrubbed(outcome, &services.shipping().redactions);
+	let outcome = super::backups::kept(scrubbed(outcome, &services.shipping().redactions));
 	let tx = cx.tx();
 	live_worker(tx, caller).await?;
 	let worker_id = caller.id;
