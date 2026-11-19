@@ -1,0 +1,14 @@
+{
+	"node_addresses": {
+		"sensitive": false,
+		"type": [
+			"object",
+			{ "control-0": "string", "control-1": "string", "control-2": "string" }
+		],
+		"value": {
+			"control-0": "192.0.2.10",
+			"control-1": "192.0.2.11",
+			"control-2": "192.0.2.12"
+		}
+	}
+}

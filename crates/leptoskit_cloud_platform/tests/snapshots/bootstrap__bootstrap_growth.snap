@@ -1,0 +1,898 @@
+---
+source: crates/leptoskit_cloud_platform/tests/bootstrap.rs
+expression: snapshot
+---
+=== eu/growth/build-0.sh ===
+#!/bin/sh
+set -eu
+umask 077
+# Supply a shared join token in /etc/rancher/k3s/join-token before running.
+test -s /etc/rancher/k3s/join-token
+test "$(uname -m)" = x86_64
+. /etc/os-release
+test "$ID:$VERSION_ID" = ubuntu:24.04
+chmod 600 /etc/rancher/k3s/join-token
+apt-get update
+DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl nftables unattended-upgrades zstd
+modprobe wireguard
+modprobe br_netfilter
+printf 'net.ipv4.ip_forward=1\n' > /etc/sysctl.d/90-leptoskit.conf
+sysctl --system
+mkdir -p /etc/rancher/k3s /var/lib/rancher/k3s/agent/etc/containerd /etc/containerd /etc/ssh/sshd_config.d
+cat > /etc/ssh/sshd_config.d/00-leptoskit.conf <<'LEPTOSKIT_DOCUMENT'
+PasswordAuthentication no
+PermitRootLogin prohibit-password
+
+LEPTOSKIT_DOCUMENT
+cat > /etc/nftables.conf <<'LEPTOSKIT_DOCUMENT'
+add table inet leptoskit
+flush table inet leptoskit
+table inet leptoskit {
+ chain input {
+  type filter hook input priority 0; policy drop;
+  ct state established,related accept
+  iifname lo accept
+  iifname { cni0, flannel-wg } accept
+  ip saddr 192.0.2.0/24 tcp dport 22 accept
+  ip saddr 192.0.2.10/32 udp dport 51820 accept
+  ip saddr 192.0.2.11/32 udp dport 51820 accept
+  ip saddr 192.0.2.12/32 udp dport 51820 accept
+  ip saddr 203.0.113.10/32 udp dport 51820 accept
+  ip saddr 203.0.113.11/32 udp dport 51820 accept
+  ip saddr 203.0.113.12/32 udp dport 51820 accept
+ }
+}
+
+LEPTOSKIT_DOCUMENT
+cat > /etc/rancher/k3s/config.yaml <<'LEPTOSKIT_DOCUMENT'
+{
+  "node-external-ip": "198.51.100.10",
+  "node-ip": "198.51.100.10",
+  "node-label": [
+    "leptoskit.dev/pool=build"
+  ],
+  "node-name": "build-0",
+  "node-taint": [
+    "leptoskit.dev/pool=build:NoSchedule"
+  ],
+  "server": "https://192.0.2.10:6443",
+  "token-file": "/etc/rancher/k3s/join-token"
+}
+LEPTOSKIT_DOCUMENT
+cat > /var/lib/rancher/k3s/agent/etc/containerd/config-v3.toml.tmpl <<'LEPTOSKIT_DOCUMENT'
+{{ template "base" . }}
+[plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.runsc]
+  runtime_type = "io.containerd.runsc.v1"
+[plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.runsc.options]
+  TypeUrl = "io.containerd.runsc.v1.options"
+  ConfigPath = "/etc/containerd/runsc.toml"
+
+LEPTOSKIT_DOCUMENT
+cat > /etc/containerd/runsc.toml <<'LEPTOSKIT_DOCUMENT'
+[runsc_config]
+  platform = "systrap"
+
+LEPTOSKIT_DOCUMENT
+cat > /etc/systemd/system/leptoskit-k3s.service <<'LEPTOSKIT_DOCUMENT'
+[Unit]
+Description=LeptosKit k3s agent
+Wants=network-online.target
+After=network-online.target nftables.service
+ConditionPathExists=/etc/rancher/k3s/join-token
+[Service]
+Type=notify
+ExecStart=/usr/local/bin/k3s agent
+Restart=always
+RestartSec=5
+KillMode=process
+Delegate=yes
+LimitNOFILE=1048576
+TasksMax=infinity
+[Install]
+WantedBy=multi-user.target
+
+LEPTOSKIT_DOCUMENT
+nft -c -f /etc/nftables.conf
+nft -f /etc/nftables.conf
+sshd -t
+systemctl restart ssh
+systemctl enable nftables
+systemctl enable --now unattended-upgrades
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+cd "$work"
+curl -fLsS 'https://github.com/k3s-io/k3s/releases/download/v1.35.10+k3s1/k3s' -o k3s
+printf '%s  k3s\n' '5cd49f0faca5b2ea4355d4761e7b1445b8aa05cd50e612fd9c370551db49e5e2' | sha256sum -c -
+install -m 755 k3s /usr/local/bin/k3s
+curl -fLsS 'https://storage.googleapis.com/gvisor/releases/release/20261116.0/x86_64/gvisor.tar.zstd' -o gvisor.tar.zstd
+printf '%s  gvisor.tar.zstd\n' 'a34261504066142b6c1cc4d1813bb2d092761675416e350edc98c4cc66469b63b6f41acdeed09681b6c717c00e80e437f5f2f9c8d37705b8a9260632867c2b7d' | sha512sum -c -
+tar --zstd -xf gvisor.tar.zstd -C /usr/local/bin
+systemctl daemon-reload
+systemctl enable leptoskit-k3s
+systemctl restart leptoskit-k3s
+
+
+=== eu/growth/control-0.cloud-init.yaml ===
+#cloud-config
+{
+  "runcmd": [
+    [
+      "/usr/local/sbin/leptoskit-bootstrap"
+    ]
+  ],
+  "write_files": [
+    {
+      "content": "#!/bin/sh\nset -eu\numask 077\n# Supply a shared join token in /etc/rancher/k3s/join-token before running.\ntest -s /etc/rancher/k3s/join-token\ntest \"$(uname -m)\" = x86_64\n. /etc/os-release\ntest \"$ID:$VERSION_ID\" = ubuntu:24.04\nchmod 600 /etc/rancher/k3s/join-token\napt-get update\nDEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl nftables unattended-upgrades zstd\nmodprobe wireguard\nmodprobe br_netfilter\nprintf 'net.ipv4.ip_forward=1\\n' > /etc/sysctl.d/90-leptoskit.conf\nsysctl --system\nmkdir -p /etc/rancher/k3s /var/lib/rancher/k3s/agent/etc/containerd /etc/containerd /etc/ssh/sshd_config.d\ncat > /etc/ssh/sshd_config.d/00-leptoskit.conf <<'LEPTOSKIT_DOCUMENT'\nPasswordAuthentication no\nPermitRootLogin prohibit-password\n\nLEPTOSKIT_DOCUMENT\ncat > /etc/nftables.conf <<'LEPTOSKIT_DOCUMENT'\nadd table inet leptoskit\nflush table inet leptoskit\ntable inet leptoskit {\n chain input {\n  type filter hook input priority 0; policy drop;\n  ct state established,related accept\n  iifname lo accept\n  iifname { cni0, flannel-wg } accept\n  ip saddr 192.0.2.0/24 tcp dport 22 accept\n  ip saddr 192.0.2.0/24 tcp dport 6443 accept\n  ip saddr 198.51.100.10/32 udp dport 51820 accept\n  ip saddr 198.51.100.10/32 tcp dport 6443 accept\n  ip saddr 192.0.2.11/32 udp dport 51820 accept\n  ip saddr 10.44.0.12/32 tcp dport 6443 accept\n  ip saddr 10.44.0.12/32 tcp dport 2379-2380 accept\n  ip saddr 10.44.0.12/32 tcp dport 10250 accept\n  ip saddr 192.0.2.12/32 udp dport 51820 accept\n  ip saddr 10.44.0.13/32 tcp dport 6443 accept\n  ip saddr 10.44.0.13/32 tcp dport 2379-2380 accept\n  ip saddr 10.44.0.13/32 tcp dport 10250 accept\n  ip saddr 203.0.113.10/32 udp dport 51820 accept\n  ip saddr 203.0.113.10/32 tcp dport 6443 accept\n  ip saddr 203.0.113.11/32 udp dport 51820 accept\n  ip saddr 203.0.113.11/32 tcp dport 6443 accept\n  ip saddr 203.0.113.12/32 udp dport 51820 accept\n  ip saddr 203.0.113.12/32 tcp dport 6443 accept\n }\n}\n\nLEPTOSKIT_DOCUMENT\ncat > /etc/rancher/k3s/config.yaml <<'LEPTOSKIT_DOCUMENT'\n{\n  \"advertise-address\": \"10.44.0.11\",\n  \"cluster-cidr\": \"10.42.0.0/16\",\n  \"cluster-init\": true,\n  \"disable\": [\n    \"traefik\",\n    \"servicelb\",\n    \"metrics-server\"\n  ],\n  \"flannel-backend\": \"wireguard-native\",\n  \"flannel-external-ip\": true,\n  \"node-external-ip\": \"192.0.2.10\",\n  \"node-ip\": \"10.44.0.11\",\n  \"node-label\": [\n    \"leptoskit.dev/pool=platform\"\n  ],\n  \"node-name\": \"control-0\",\n  \"node-taint\": [\n    \"leptoskit.dev/pool=platform:PreferNoSchedule\"\n  ],\n  \"service-cidr\": \"10.43.0.0/16\",\n  \"tls-san\": [\n    \"192.0.2.10\"\n  ],\n  \"token-file\": \"/etc/rancher/k3s/join-token\"\n}\nLEPTOSKIT_DOCUMENT\ncat > /var/lib/rancher/k3s/agent/etc/containerd/config-v3.toml.tmpl <<'LEPTOSKIT_DOCUMENT'\n{{ template \"base\" . }}\n[plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.runsc]\n  runtime_type = \"io.containerd.runsc.v1\"\n[plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.runsc.options]\n  TypeUrl = \"io.containerd.runsc.v1.options\"\n  ConfigPath = \"/etc/containerd/runsc.toml\"\n\nLEPTOSKIT_DOCUMENT\ncat > /etc/containerd/runsc.toml <<'LEPTOSKIT_DOCUMENT'\n[runsc_config]\n  platform = \"systrap\"\n\nLEPTOSKIT_DOCUMENT\ncat > /etc/systemd/system/leptoskit-k3s.service <<'LEPTOSKIT_DOCUMENT'\n[Unit]\nDescription=LeptosKit k3s server\nWants=network-online.target\nAfter=network-online.target nftables.service\nConditionPathExists=/etc/rancher/k3s/join-token\n[Service]\nType=notify\nExecStart=/usr/local/bin/k3s server\nRestart=always\nRestartSec=5\nKillMode=process\nDelegate=yes\nLimitNOFILE=1048576\nTasksMax=infinity\n[Install]\nWantedBy=multi-user.target\n\nLEPTOSKIT_DOCUMENT\nnft -c -f /etc/nftables.conf\nnft -f /etc/nftables.conf\nsshd -t\nsystemctl restart ssh\nsystemctl enable nftables\nsystemctl enable --now unattended-upgrades\nwork=$(mktemp -d)\ntrap 'rm -rf \"$work\"' EXIT\ncd \"$work\"\ncurl -fLsS 'https://github.com/k3s-io/k3s/releases/download/v1.35.10+k3s1/k3s' -o k3s\nprintf '%s  k3s\\n' '5cd49f0faca5b2ea4355d4761e7b1445b8aa05cd50e612fd9c370551db49e5e2' | sha256sum -c -\ninstall -m 755 k3s /usr/local/bin/k3s\ncurl -fLsS 'https://storage.googleapis.com/gvisor/releases/release/20261116.0/x86_64/gvisor.tar.zstd' -o gvisor.tar.zstd\nprintf '%s  gvisor.tar.zstd\\n' 'a34261504066142b6c1cc4d1813bb2d092761675416e350edc98c4cc66469b63b6f41acdeed09681b6c717c00e80e437f5f2f9c8d37705b8a9260632867c2b7d' | sha512sum -c -\ntar --zstd -xf gvisor.tar.zstd -C /usr/local/bin\nsystemctl daemon-reload\nsystemctl enable leptoskit-k3s\nsystemctl restart leptoskit-k3s\n",
+      "path": "/usr/local/sbin/leptoskit-bootstrap",
+      "permissions": "0700"
+    }
+  ]
+}
+
+
+=== eu/growth/control-0.sh ===
+#!/bin/sh
+set -eu
+umask 077
+# Supply a shared join token in /etc/rancher/k3s/join-token before running.
+test -s /etc/rancher/k3s/join-token
+test "$(uname -m)" = x86_64
+. /etc/os-release
+test "$ID:$VERSION_ID" = ubuntu:24.04
+chmod 600 /etc/rancher/k3s/join-token
+apt-get update
+DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl nftables unattended-upgrades zstd
+modprobe wireguard
+modprobe br_netfilter
+printf 'net.ipv4.ip_forward=1\n' > /etc/sysctl.d/90-leptoskit.conf
+sysctl --system
+mkdir -p /etc/rancher/k3s /var/lib/rancher/k3s/agent/etc/containerd /etc/containerd /etc/ssh/sshd_config.d
+cat > /etc/ssh/sshd_config.d/00-leptoskit.conf <<'LEPTOSKIT_DOCUMENT'
+PasswordAuthentication no
+PermitRootLogin prohibit-password
+
+LEPTOSKIT_DOCUMENT
+cat > /etc/nftables.conf <<'LEPTOSKIT_DOCUMENT'
+add table inet leptoskit
+flush table inet leptoskit
+table inet leptoskit {
+ chain input {
+  type filter hook input priority 0; policy drop;
+  ct state established,related accept
+  iifname lo accept
+  iifname { cni0, flannel-wg } accept
+  ip saddr 192.0.2.0/24 tcp dport 22 accept
+  ip saddr 192.0.2.0/24 tcp dport 6443 accept
+  ip saddr 198.51.100.10/32 udp dport 51820 accept
+  ip saddr 198.51.100.10/32 tcp dport 6443 accept
+  ip saddr 192.0.2.11/32 udp dport 51820 accept
+  ip saddr 10.44.0.12/32 tcp dport 6443 accept
+  ip saddr 10.44.0.12/32 tcp dport 2379-2380 accept
+  ip saddr 10.44.0.12/32 tcp dport 10250 accept
+  ip saddr 192.0.2.12/32 udp dport 51820 accept
+  ip saddr 10.44.0.13/32 tcp dport 6443 accept
+  ip saddr 10.44.0.13/32 tcp dport 2379-2380 accept
+  ip saddr 10.44.0.13/32 tcp dport 10250 accept
+  ip saddr 203.0.113.10/32 udp dport 51820 accept
+  ip saddr 203.0.113.10/32 tcp dport 6443 accept
+  ip saddr 203.0.113.11/32 udp dport 51820 accept
+  ip saddr 203.0.113.11/32 tcp dport 6443 accept
+  ip saddr 203.0.113.12/32 udp dport 51820 accept
+  ip saddr 203.0.113.12/32 tcp dport 6443 accept
+ }
+}
+
+LEPTOSKIT_DOCUMENT
+cat > /etc/rancher/k3s/config.yaml <<'LEPTOSKIT_DOCUMENT'
+{
+  "advertise-address": "10.44.0.11",
+  "cluster-cidr": "10.42.0.0/16",
+  "cluster-init": true,
+  "disable": [
+    "traefik",
+    "servicelb",
+    "metrics-server"
+  ],
+  "flannel-backend": "wireguard-native",
+  "flannel-external-ip": true,
+  "node-external-ip": "192.0.2.10",
+  "node-ip": "10.44.0.11",
+  "node-label": [
+    "leptoskit.dev/pool=platform"
+  ],
+  "node-name": "control-0",
+  "node-taint": [
+    "leptoskit.dev/pool=platform:PreferNoSchedule"
+  ],
+  "service-cidr": "10.43.0.0/16",
+  "tls-san": [
+    "192.0.2.10"
+  ],
+  "token-file": "/etc/rancher/k3s/join-token"
+}
+LEPTOSKIT_DOCUMENT
+cat > /var/lib/rancher/k3s/agent/etc/containerd/config-v3.toml.tmpl <<'LEPTOSKIT_DOCUMENT'
+{{ template "base" . }}
+[plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.runsc]
+  runtime_type = "io.containerd.runsc.v1"
+[plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.runsc.options]
+  TypeUrl = "io.containerd.runsc.v1.options"
+  ConfigPath = "/etc/containerd/runsc.toml"
+
+LEPTOSKIT_DOCUMENT
+cat > /etc/containerd/runsc.toml <<'LEPTOSKIT_DOCUMENT'
+[runsc_config]
+  platform = "systrap"
+
+LEPTOSKIT_DOCUMENT
+cat > /etc/systemd/system/leptoskit-k3s.service <<'LEPTOSKIT_DOCUMENT'
+[Unit]
+Description=LeptosKit k3s server
+Wants=network-online.target
+After=network-online.target nftables.service
+ConditionPathExists=/etc/rancher/k3s/join-token
+[Service]
+Type=notify
+ExecStart=/usr/local/bin/k3s server
+Restart=always
+RestartSec=5
+KillMode=process
+Delegate=yes
+LimitNOFILE=1048576
+TasksMax=infinity
+[Install]
+WantedBy=multi-user.target
+
+LEPTOSKIT_DOCUMENT
+nft -c -f /etc/nftables.conf
+nft -f /etc/nftables.conf
+sshd -t
+systemctl restart ssh
+systemctl enable nftables
+systemctl enable --now unattended-upgrades
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+cd "$work"
+curl -fLsS 'https://github.com/k3s-io/k3s/releases/download/v1.35.10+k3s1/k3s' -o k3s
+printf '%s  k3s\n' '5cd49f0faca5b2ea4355d4761e7b1445b8aa05cd50e612fd9c370551db49e5e2' | sha256sum -c -
+install -m 755 k3s /usr/local/bin/k3s
+curl -fLsS 'https://storage.googleapis.com/gvisor/releases/release/20261116.0/x86_64/gvisor.tar.zstd' -o gvisor.tar.zstd
+printf '%s  gvisor.tar.zstd\n' 'a34261504066142b6c1cc4d1813bb2d092761675416e350edc98c4cc66469b63b6f41acdeed09681b6c717c00e80e437f5f2f9c8d37705b8a9260632867c2b7d' | sha512sum -c -
+tar --zstd -xf gvisor.tar.zstd -C /usr/local/bin
+systemctl daemon-reload
+systemctl enable leptoskit-k3s
+systemctl restart leptoskit-k3s
+
+
+=== eu/growth/control-1.cloud-init.yaml ===
+#cloud-config
+{
+  "runcmd": [
+    [
+      "/usr/local/sbin/leptoskit-bootstrap"
+    ]
+  ],
+  "write_files": [
+    {
+      "content": "#!/bin/sh\nset -eu\numask 077\n# Supply a shared join token in /etc/rancher/k3s/join-token before running.\ntest -s /etc/rancher/k3s/join-token\ntest \"$(uname -m)\" = x86_64\n. /etc/os-release\ntest \"$ID:$VERSION_ID\" = ubuntu:24.04\nchmod 600 /etc/rancher/k3s/join-token\napt-get update\nDEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl nftables unattended-upgrades zstd\nmodprobe wireguard\nmodprobe br_netfilter\nprintf 'net.ipv4.ip_forward=1\\n' > /etc/sysctl.d/90-leptoskit.conf\nsysctl --system\nmkdir -p /etc/rancher/k3s /var/lib/rancher/k3s/agent/etc/containerd /etc/containerd /etc/ssh/sshd_config.d\ncat > /etc/ssh/sshd_config.d/00-leptoskit.conf <<'LEPTOSKIT_DOCUMENT'\nPasswordAuthentication no\nPermitRootLogin prohibit-password\n\nLEPTOSKIT_DOCUMENT\ncat > /etc/nftables.conf <<'LEPTOSKIT_DOCUMENT'\nadd table inet leptoskit\nflush table inet leptoskit\ntable inet leptoskit {\n chain input {\n  type filter hook input priority 0; policy drop;\n  ct state established,related accept\n  iifname lo accept\n  iifname { cni0, flannel-wg } accept\n  ip saddr 192.0.2.0/24 tcp dport 22 accept\n  ip saddr 192.0.2.0/24 tcp dport 6443 accept\n  ip saddr 198.51.100.10/32 udp dport 51820 accept\n  ip saddr 198.51.100.10/32 tcp dport 6443 accept\n  ip saddr 192.0.2.10/32 udp dport 51820 accept\n  ip saddr 10.44.0.11/32 tcp dport 6443 accept\n  ip saddr 10.44.0.11/32 tcp dport 2379-2380 accept\n  ip saddr 10.44.0.11/32 tcp dport 10250 accept\n  ip saddr 192.0.2.12/32 udp dport 51820 accept\n  ip saddr 10.44.0.13/32 tcp dport 6443 accept\n  ip saddr 10.44.0.13/32 tcp dport 2379-2380 accept\n  ip saddr 10.44.0.13/32 tcp dport 10250 accept\n  ip saddr 203.0.113.10/32 udp dport 51820 accept\n  ip saddr 203.0.113.10/32 tcp dport 6443 accept\n  ip saddr 203.0.113.11/32 udp dport 51820 accept\n  ip saddr 203.0.113.11/32 tcp dport 6443 accept\n  ip saddr 203.0.113.12/32 udp dport 51820 accept\n  ip saddr 203.0.113.12/32 tcp dport 6443 accept\n }\n}\n\nLEPTOSKIT_DOCUMENT\ncat > /etc/rancher/k3s/config.yaml <<'LEPTOSKIT_DOCUMENT'\n{\n  \"advertise-address\": \"10.44.0.12\",\n  \"cluster-cidr\": \"10.42.0.0/16\",\n  \"disable\": [\n    \"traefik\",\n    \"servicelb\",\n    \"metrics-server\"\n  ],\n  \"flannel-backend\": \"wireguard-native\",\n  \"flannel-external-ip\": true,\n  \"node-external-ip\": \"192.0.2.11\",\n  \"node-ip\": \"10.44.0.12\",\n  \"node-label\": [\n    \"leptoskit.dev/pool=platform\"\n  ],\n  \"node-name\": \"control-1\",\n  \"node-taint\": [\n    \"leptoskit.dev/pool=platform:PreferNoSchedule\"\n  ],\n  \"server\": \"https://10.44.0.11:6443\",\n  \"service-cidr\": \"10.43.0.0/16\",\n  \"tls-san\": [\n    \"192.0.2.10\"\n  ],\n  \"token-file\": \"/etc/rancher/k3s/join-token\"\n}\nLEPTOSKIT_DOCUMENT\ncat > /var/lib/rancher/k3s/agent/etc/containerd/config-v3.toml.tmpl <<'LEPTOSKIT_DOCUMENT'\n{{ template \"base\" . }}\n[plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.runsc]\n  runtime_type = \"io.containerd.runsc.v1\"\n[plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.runsc.options]\n  TypeUrl = \"io.containerd.runsc.v1.options\"\n  ConfigPath = \"/etc/containerd/runsc.toml\"\n\nLEPTOSKIT_DOCUMENT\ncat > /etc/containerd/runsc.toml <<'LEPTOSKIT_DOCUMENT'\n[runsc_config]\n  platform = \"systrap\"\n\nLEPTOSKIT_DOCUMENT\ncat > /etc/systemd/system/leptoskit-k3s.service <<'LEPTOSKIT_DOCUMENT'\n[Unit]\nDescription=LeptosKit k3s server\nWants=network-online.target\nAfter=network-online.target nftables.service\nConditionPathExists=/etc/rancher/k3s/join-token\n[Service]\nType=notify\nExecStart=/usr/local/bin/k3s server\nRestart=always\nRestartSec=5\nKillMode=process\nDelegate=yes\nLimitNOFILE=1048576\nTasksMax=infinity\n[Install]\nWantedBy=multi-user.target\n\nLEPTOSKIT_DOCUMENT\nnft -c -f /etc/nftables.conf\nnft -f /etc/nftables.conf\nsshd -t\nsystemctl restart ssh\nsystemctl enable nftables\nsystemctl enable --now unattended-upgrades\nwork=$(mktemp -d)\ntrap 'rm -rf \"$work\"' EXIT\ncd \"$work\"\ncurl -fLsS 'https://github.com/k3s-io/k3s/releases/download/v1.35.10+k3s1/k3s' -o k3s\nprintf '%s  k3s\\n' '5cd49f0faca5b2ea4355d4761e7b1445b8aa05cd50e612fd9c370551db49e5e2' | sha256sum -c -\ninstall -m 755 k3s /usr/local/bin/k3s\ncurl -fLsS 'https://storage.googleapis.com/gvisor/releases/release/20261116.0/x86_64/gvisor.tar.zstd' -o gvisor.tar.zstd\nprintf '%s  gvisor.tar.zstd\\n' 'a34261504066142b6c1cc4d1813bb2d092761675416e350edc98c4cc66469b63b6f41acdeed09681b6c717c00e80e437f5f2f9c8d37705b8a9260632867c2b7d' | sha512sum -c -\ntar --zstd -xf gvisor.tar.zstd -C /usr/local/bin\nsystemctl daemon-reload\nsystemctl enable leptoskit-k3s\nsystemctl restart leptoskit-k3s\n",
+      "path": "/usr/local/sbin/leptoskit-bootstrap",
+      "permissions": "0700"
+    }
+  ]
+}
+
+
+=== eu/growth/control-1.sh ===
+#!/bin/sh
+set -eu
+umask 077
+# Supply a shared join token in /etc/rancher/k3s/join-token before running.
+test -s /etc/rancher/k3s/join-token
+test "$(uname -m)" = x86_64
+. /etc/os-release
+test "$ID:$VERSION_ID" = ubuntu:24.04
+chmod 600 /etc/rancher/k3s/join-token
+apt-get update
+DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl nftables unattended-upgrades zstd
+modprobe wireguard
+modprobe br_netfilter
+printf 'net.ipv4.ip_forward=1\n' > /etc/sysctl.d/90-leptoskit.conf
+sysctl --system
+mkdir -p /etc/rancher/k3s /var/lib/rancher/k3s/agent/etc/containerd /etc/containerd /etc/ssh/sshd_config.d
+cat > /etc/ssh/sshd_config.d/00-leptoskit.conf <<'LEPTOSKIT_DOCUMENT'
+PasswordAuthentication no
+PermitRootLogin prohibit-password
+
+LEPTOSKIT_DOCUMENT
+cat > /etc/nftables.conf <<'LEPTOSKIT_DOCUMENT'
+add table inet leptoskit
+flush table inet leptoskit
+table inet leptoskit {
+ chain input {
+  type filter hook input priority 0; policy drop;
+  ct state established,related accept
+  iifname lo accept
+  iifname { cni0, flannel-wg } accept
+  ip saddr 192.0.2.0/24 tcp dport 22 accept
+  ip saddr 192.0.2.0/24 tcp dport 6443 accept
+  ip saddr 198.51.100.10/32 udp dport 51820 accept
+  ip saddr 198.51.100.10/32 tcp dport 6443 accept
+  ip saddr 192.0.2.10/32 udp dport 51820 accept
+  ip saddr 10.44.0.11/32 tcp dport 6443 accept
+  ip saddr 10.44.0.11/32 tcp dport 2379-2380 accept
+  ip saddr 10.44.0.11/32 tcp dport 10250 accept
+  ip saddr 192.0.2.12/32 udp dport 51820 accept
+  ip saddr 10.44.0.13/32 tcp dport 6443 accept
+  ip saddr 10.44.0.13/32 tcp dport 2379-2380 accept
+  ip saddr 10.44.0.13/32 tcp dport 10250 accept
+  ip saddr 203.0.113.10/32 udp dport 51820 accept
+  ip saddr 203.0.113.10/32 tcp dport 6443 accept
+  ip saddr 203.0.113.11/32 udp dport 51820 accept
+  ip saddr 203.0.113.11/32 tcp dport 6443 accept
+  ip saddr 203.0.113.12/32 udp dport 51820 accept
+  ip saddr 203.0.113.12/32 tcp dport 6443 accept
+ }
+}
+
+LEPTOSKIT_DOCUMENT
+cat > /etc/rancher/k3s/config.yaml <<'LEPTOSKIT_DOCUMENT'
+{
+  "advertise-address": "10.44.0.12",
+  "cluster-cidr": "10.42.0.0/16",
+  "disable": [
+    "traefik",
+    "servicelb",
+    "metrics-server"
+  ],
+  "flannel-backend": "wireguard-native",
+  "flannel-external-ip": true,
+  "node-external-ip": "192.0.2.11",
+  "node-ip": "10.44.0.12",
+  "node-label": [
+    "leptoskit.dev/pool=platform"
+  ],
+  "node-name": "control-1",
+  "node-taint": [
+    "leptoskit.dev/pool=platform:PreferNoSchedule"
+  ],
+  "server": "https://10.44.0.11:6443",
+  "service-cidr": "10.43.0.0/16",
+  "tls-san": [
+    "192.0.2.10"
+  ],
+  "token-file": "/etc/rancher/k3s/join-token"
+}
+LEPTOSKIT_DOCUMENT
+cat > /var/lib/rancher/k3s/agent/etc/containerd/config-v3.toml.tmpl <<'LEPTOSKIT_DOCUMENT'
+{{ template "base" . }}
+[plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.runsc]
+  runtime_type = "io.containerd.runsc.v1"
+[plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.runsc.options]
+  TypeUrl = "io.containerd.runsc.v1.options"
+  ConfigPath = "/etc/containerd/runsc.toml"
+
+LEPTOSKIT_DOCUMENT
+cat > /etc/containerd/runsc.toml <<'LEPTOSKIT_DOCUMENT'
+[runsc_config]
+  platform = "systrap"
+
+LEPTOSKIT_DOCUMENT
+cat > /etc/systemd/system/leptoskit-k3s.service <<'LEPTOSKIT_DOCUMENT'
+[Unit]
+Description=LeptosKit k3s server
+Wants=network-online.target
+After=network-online.target nftables.service
+ConditionPathExists=/etc/rancher/k3s/join-token
+[Service]
+Type=notify
+ExecStart=/usr/local/bin/k3s server
+Restart=always
+RestartSec=5
+KillMode=process
+Delegate=yes
+LimitNOFILE=1048576
+TasksMax=infinity
+[Install]
+WantedBy=multi-user.target
+
+LEPTOSKIT_DOCUMENT
+nft -c -f /etc/nftables.conf
+nft -f /etc/nftables.conf
+sshd -t
+systemctl restart ssh
+systemctl enable nftables
+systemctl enable --now unattended-upgrades
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+cd "$work"
+curl -fLsS 'https://github.com/k3s-io/k3s/releases/download/v1.35.10+k3s1/k3s' -o k3s
+printf '%s  k3s\n' '5cd49f0faca5b2ea4355d4761e7b1445b8aa05cd50e612fd9c370551db49e5e2' | sha256sum -c -
+install -m 755 k3s /usr/local/bin/k3s
+curl -fLsS 'https://storage.googleapis.com/gvisor/releases/release/20261116.0/x86_64/gvisor.tar.zstd' -o gvisor.tar.zstd
+printf '%s  gvisor.tar.zstd\n' 'a34261504066142b6c1cc4d1813bb2d092761675416e350edc98c4cc66469b63b6f41acdeed09681b6c717c00e80e437f5f2f9c8d37705b8a9260632867c2b7d' | sha512sum -c -
+tar --zstd -xf gvisor.tar.zstd -C /usr/local/bin
+systemctl daemon-reload
+systemctl enable leptoskit-k3s
+systemctl restart leptoskit-k3s
+
+
+=== eu/growth/control-2.cloud-init.yaml ===
+#cloud-config
+{
+  "runcmd": [
+    [
+      "/usr/local/sbin/leptoskit-bootstrap"
+    ]
+  ],
+  "write_files": [
+    {
+      "content": "#!/bin/sh\nset -eu\numask 077\n# Supply a shared join token in /etc/rancher/k3s/join-token before running.\ntest -s /etc/rancher/k3s/join-token\ntest \"$(uname -m)\" = x86_64\n. /etc/os-release\ntest \"$ID:$VERSION_ID\" = ubuntu:24.04\nchmod 600 /etc/rancher/k3s/join-token\napt-get update\nDEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl nftables unattended-upgrades zstd\nmodprobe wireguard\nmodprobe br_netfilter\nprintf 'net.ipv4.ip_forward=1\\n' > /etc/sysctl.d/90-leptoskit.conf\nsysctl --system\nmkdir -p /etc/rancher/k3s /var/lib/rancher/k3s/agent/etc/containerd /etc/containerd /etc/ssh/sshd_config.d\ncat > /etc/ssh/sshd_config.d/00-leptoskit.conf <<'LEPTOSKIT_DOCUMENT'\nPasswordAuthentication no\nPermitRootLogin prohibit-password\n\nLEPTOSKIT_DOCUMENT\ncat > /etc/nftables.conf <<'LEPTOSKIT_DOCUMENT'\nadd table inet leptoskit\nflush table inet leptoskit\ntable inet leptoskit {\n chain input {\n  type filter hook input priority 0; policy drop;\n  ct state established,related accept\n  iifname lo accept\n  iifname { cni0, flannel-wg } accept\n  ip saddr 192.0.2.0/24 tcp dport 22 accept\n  ip saddr 192.0.2.0/24 tcp dport 6443 accept\n  ip saddr 198.51.100.10/32 udp dport 51820 accept\n  ip saddr 198.51.100.10/32 tcp dport 6443 accept\n  ip saddr 192.0.2.10/32 udp dport 51820 accept\n  ip saddr 10.44.0.11/32 tcp dport 6443 accept\n  ip saddr 10.44.0.11/32 tcp dport 2379-2380 accept\n  ip saddr 10.44.0.11/32 tcp dport 10250 accept\n  ip saddr 192.0.2.11/32 udp dport 51820 accept\n  ip saddr 10.44.0.12/32 tcp dport 6443 accept\n  ip saddr 10.44.0.12/32 tcp dport 2379-2380 accept\n  ip saddr 10.44.0.12/32 tcp dport 10250 accept\n  ip saddr 203.0.113.10/32 udp dport 51820 accept\n  ip saddr 203.0.113.10/32 tcp dport 6443 accept\n  ip saddr 203.0.113.11/32 udp dport 51820 accept\n  ip saddr 203.0.113.11/32 tcp dport 6443 accept\n  ip saddr 203.0.113.12/32 udp dport 51820 accept\n  ip saddr 203.0.113.12/32 tcp dport 6443 accept\n }\n}\n\nLEPTOSKIT_DOCUMENT\ncat > /etc/rancher/k3s/config.yaml <<'LEPTOSKIT_DOCUMENT'\n{\n  \"advertise-address\": \"10.44.0.13\",\n  \"cluster-cidr\": \"10.42.0.0/16\",\n  \"disable\": [\n    \"traefik\",\n    \"servicelb\",\n    \"metrics-server\"\n  ],\n  \"flannel-backend\": \"wireguard-native\",\n  \"flannel-external-ip\": true,\n  \"node-external-ip\": \"192.0.2.12\",\n  \"node-ip\": \"10.44.0.13\",\n  \"node-label\": [\n    \"leptoskit.dev/pool=platform\"\n  ],\n  \"node-name\": \"control-2\",\n  \"node-taint\": [\n    \"leptoskit.dev/pool=platform:PreferNoSchedule\"\n  ],\n  \"server\": \"https://10.44.0.11:6443\",\n  \"service-cidr\": \"10.43.0.0/16\",\n  \"tls-san\": [\n    \"192.0.2.10\"\n  ],\n  \"token-file\": \"/etc/rancher/k3s/join-token\"\n}\nLEPTOSKIT_DOCUMENT\ncat > /var/lib/rancher/k3s/agent/etc/containerd/config-v3.toml.tmpl <<'LEPTOSKIT_DOCUMENT'\n{{ template \"base\" . }}\n[plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.runsc]\n  runtime_type = \"io.containerd.runsc.v1\"\n[plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.runsc.options]\n  TypeUrl = \"io.containerd.runsc.v1.options\"\n  ConfigPath = \"/etc/containerd/runsc.toml\"\n\nLEPTOSKIT_DOCUMENT\ncat > /etc/containerd/runsc.toml <<'LEPTOSKIT_DOCUMENT'\n[runsc_config]\n  platform = \"systrap\"\n\nLEPTOSKIT_DOCUMENT\ncat > /etc/systemd/system/leptoskit-k3s.service <<'LEPTOSKIT_DOCUMENT'\n[Unit]\nDescription=LeptosKit k3s server\nWants=network-online.target\nAfter=network-online.target nftables.service\nConditionPathExists=/etc/rancher/k3s/join-token\n[Service]\nType=notify\nExecStart=/usr/local/bin/k3s server\nRestart=always\nRestartSec=5\nKillMode=process\nDelegate=yes\nLimitNOFILE=1048576\nTasksMax=infinity\n[Install]\nWantedBy=multi-user.target\n\nLEPTOSKIT_DOCUMENT\nnft -c -f /etc/nftables.conf\nnft -f /etc/nftables.conf\nsshd -t\nsystemctl restart ssh\nsystemctl enable nftables\nsystemctl enable --now unattended-upgrades\nwork=$(mktemp -d)\ntrap 'rm -rf \"$work\"' EXIT\ncd \"$work\"\ncurl -fLsS 'https://github.com/k3s-io/k3s/releases/download/v1.35.10+k3s1/k3s' -o k3s\nprintf '%s  k3s\\n' '5cd49f0faca5b2ea4355d4761e7b1445b8aa05cd50e612fd9c370551db49e5e2' | sha256sum -c -\ninstall -m 755 k3s /usr/local/bin/k3s\ncurl -fLsS 'https://storage.googleapis.com/gvisor/releases/release/20261116.0/x86_64/gvisor.tar.zstd' -o gvisor.tar.zstd\nprintf '%s  gvisor.tar.zstd\\n' 'a34261504066142b6c1cc4d1813bb2d092761675416e350edc98c4cc66469b63b6f41acdeed09681b6c717c00e80e437f5f2f9c8d37705b8a9260632867c2b7d' | sha512sum -c -\ntar --zstd -xf gvisor.tar.zstd -C /usr/local/bin\nsystemctl daemon-reload\nsystemctl enable leptoskit-k3s\nsystemctl restart leptoskit-k3s\n",
+      "path": "/usr/local/sbin/leptoskit-bootstrap",
+      "permissions": "0700"
+    }
+  ]
+}
+
+
+=== eu/growth/control-2.sh ===
+#!/bin/sh
+set -eu
+umask 077
+# Supply a shared join token in /etc/rancher/k3s/join-token before running.
+test -s /etc/rancher/k3s/join-token
+test "$(uname -m)" = x86_64
+. /etc/os-release
+test "$ID:$VERSION_ID" = ubuntu:24.04
+chmod 600 /etc/rancher/k3s/join-token
+apt-get update
+DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl nftables unattended-upgrades zstd
+modprobe wireguard
+modprobe br_netfilter
+printf 'net.ipv4.ip_forward=1\n' > /etc/sysctl.d/90-leptoskit.conf
+sysctl --system
+mkdir -p /etc/rancher/k3s /var/lib/rancher/k3s/agent/etc/containerd /etc/containerd /etc/ssh/sshd_config.d
+cat > /etc/ssh/sshd_config.d/00-leptoskit.conf <<'LEPTOSKIT_DOCUMENT'
+PasswordAuthentication no
+PermitRootLogin prohibit-password
+
+LEPTOSKIT_DOCUMENT
+cat > /etc/nftables.conf <<'LEPTOSKIT_DOCUMENT'
+add table inet leptoskit
+flush table inet leptoskit
+table inet leptoskit {
+ chain input {
+  type filter hook input priority 0; policy drop;
+  ct state established,related accept
+  iifname lo accept
+  iifname { cni0, flannel-wg } accept
+  ip saddr 192.0.2.0/24 tcp dport 22 accept
+  ip saddr 192.0.2.0/24 tcp dport 6443 accept
+  ip saddr 198.51.100.10/32 udp dport 51820 accept
+  ip saddr 198.51.100.10/32 tcp dport 6443 accept
+  ip saddr 192.0.2.10/32 udp dport 51820 accept
+  ip saddr 10.44.0.11/32 tcp dport 6443 accept
+  ip saddr 10.44.0.11/32 tcp dport 2379-2380 accept
+  ip saddr 10.44.0.11/32 tcp dport 10250 accept
+  ip saddr 192.0.2.11/32 udp dport 51820 accept
+  ip saddr 10.44.0.12/32 tcp dport 6443 accept
+  ip saddr 10.44.0.12/32 tcp dport 2379-2380 accept
+  ip saddr 10.44.0.12/32 tcp dport 10250 accept
+  ip saddr 203.0.113.10/32 udp dport 51820 accept
+  ip saddr 203.0.113.10/32 tcp dport 6443 accept
+  ip saddr 203.0.113.11/32 udp dport 51820 accept
+  ip saddr 203.0.113.11/32 tcp dport 6443 accept
+  ip saddr 203.0.113.12/32 udp dport 51820 accept
+  ip saddr 203.0.113.12/32 tcp dport 6443 accept
+ }
+}
+
+LEPTOSKIT_DOCUMENT
+cat > /etc/rancher/k3s/config.yaml <<'LEPTOSKIT_DOCUMENT'
+{
+  "advertise-address": "10.44.0.13",
+  "cluster-cidr": "10.42.0.0/16",
+  "disable": [
+    "traefik",
+    "servicelb",
+    "metrics-server"
+  ],
+  "flannel-backend": "wireguard-native",
+  "flannel-external-ip": true,
+  "node-external-ip": "192.0.2.12",
+  "node-ip": "10.44.0.13",
+  "node-label": [
+    "leptoskit.dev/pool=platform"
+  ],
+  "node-name": "control-2",
+  "node-taint": [
+    "leptoskit.dev/pool=platform:PreferNoSchedule"
+  ],
+  "server": "https://10.44.0.11:6443",
+  "service-cidr": "10.43.0.0/16",
+  "tls-san": [
+    "192.0.2.10"
+  ],
+  "token-file": "/etc/rancher/k3s/join-token"
+}
+LEPTOSKIT_DOCUMENT
+cat > /var/lib/rancher/k3s/agent/etc/containerd/config-v3.toml.tmpl <<'LEPTOSKIT_DOCUMENT'
+{{ template "base" . }}
+[plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.runsc]
+  runtime_type = "io.containerd.runsc.v1"
+[plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.runsc.options]
+  TypeUrl = "io.containerd.runsc.v1.options"
+  ConfigPath = "/etc/containerd/runsc.toml"
+
+LEPTOSKIT_DOCUMENT
+cat > /etc/containerd/runsc.toml <<'LEPTOSKIT_DOCUMENT'
+[runsc_config]
+  platform = "systrap"
+
+LEPTOSKIT_DOCUMENT
+cat > /etc/systemd/system/leptoskit-k3s.service <<'LEPTOSKIT_DOCUMENT'
+[Unit]
+Description=LeptosKit k3s server
+Wants=network-online.target
+After=network-online.target nftables.service
+ConditionPathExists=/etc/rancher/k3s/join-token
+[Service]
+Type=notify
+ExecStart=/usr/local/bin/k3s server
+Restart=always
+RestartSec=5
+KillMode=process
+Delegate=yes
+LimitNOFILE=1048576
+TasksMax=infinity
+[Install]
+WantedBy=multi-user.target
+
+LEPTOSKIT_DOCUMENT
+nft -c -f /etc/nftables.conf
+nft -f /etc/nftables.conf
+sshd -t
+systemctl restart ssh
+systemctl enable nftables
+systemctl enable --now unattended-upgrades
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+cd "$work"
+curl -fLsS 'https://github.com/k3s-io/k3s/releases/download/v1.35.10+k3s1/k3s' -o k3s
+printf '%s  k3s\n' '5cd49f0faca5b2ea4355d4761e7b1445b8aa05cd50e612fd9c370551db49e5e2' | sha256sum -c -
+install -m 755 k3s /usr/local/bin/k3s
+curl -fLsS 'https://storage.googleapis.com/gvisor/releases/release/20261116.0/x86_64/gvisor.tar.zstd' -o gvisor.tar.zstd
+printf '%s  gvisor.tar.zstd\n' 'a34261504066142b6c1cc4d1813bb2d092761675416e350edc98c4cc66469b63b6f41acdeed09681b6c717c00e80e437f5f2f9c8d37705b8a9260632867c2b7d' | sha512sum -c -
+tar --zstd -xf gvisor.tar.zstd -C /usr/local/bin
+systemctl daemon-reload
+systemctl enable leptoskit-k3s
+systemctl restart leptoskit-k3s
+
+
+=== eu/growth/tenant-a-0.sh ===
+#!/bin/sh
+set -eu
+umask 077
+# Supply a shared join token in /etc/rancher/k3s/join-token before running.
+test -s /etc/rancher/k3s/join-token
+test "$(uname -m)" = x86_64
+. /etc/os-release
+test "$ID:$VERSION_ID" = ubuntu:24.04
+chmod 600 /etc/rancher/k3s/join-token
+apt-get update
+DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl nftables unattended-upgrades zstd
+modprobe wireguard
+modprobe br_netfilter
+printf 'net.ipv4.ip_forward=1\n' > /etc/sysctl.d/90-leptoskit.conf
+sysctl --system
+mkdir -p /etc/rancher/k3s /var/lib/rancher/k3s/agent/etc/containerd /etc/containerd /etc/ssh/sshd_config.d
+cat > /etc/ssh/sshd_config.d/00-leptoskit.conf <<'LEPTOSKIT_DOCUMENT'
+PasswordAuthentication no
+PermitRootLogin prohibit-password
+
+LEPTOSKIT_DOCUMENT
+cat > /etc/nftables.conf <<'LEPTOSKIT_DOCUMENT'
+add table inet leptoskit
+flush table inet leptoskit
+table inet leptoskit {
+ chain input {
+  type filter hook input priority 0; policy drop;
+  ct state established,related accept
+  iifname lo accept
+  iifname { cni0, flannel-wg } accept
+  ip saddr 192.0.2.0/24 tcp dport 22 accept
+  ip saddr 198.51.100.10/32 udp dport 51820 accept
+  ip saddr 192.0.2.10/32 udp dport 51820 accept
+  ip saddr 192.0.2.11/32 udp dport 51820 accept
+  ip saddr 192.0.2.12/32 udp dport 51820 accept
+  ip saddr 203.0.113.11/32 udp dport 51820 accept
+  ip saddr 203.0.113.12/32 udp dport 51820 accept
+ }
+}
+
+LEPTOSKIT_DOCUMENT
+cat > /etc/rancher/k3s/config.yaml <<'LEPTOSKIT_DOCUMENT'
+{
+  "node-external-ip": "203.0.113.10",
+  "node-ip": "203.0.113.10",
+  "node-label": [
+    "leptoskit.dev/pool=tenant"
+  ],
+  "node-name": "tenant-a-0",
+  "node-taint": [
+    "leptoskit.dev/pool=tenant:PreferNoSchedule"
+  ],
+  "server": "https://192.0.2.10:6443",
+  "token-file": "/etc/rancher/k3s/join-token"
+}
+LEPTOSKIT_DOCUMENT
+cat > /var/lib/rancher/k3s/agent/etc/containerd/config-v3.toml.tmpl <<'LEPTOSKIT_DOCUMENT'
+{{ template "base" . }}
+[plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.runsc]
+  runtime_type = "io.containerd.runsc.v1"
+[plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.runsc.options]
+  TypeUrl = "io.containerd.runsc.v1.options"
+  ConfigPath = "/etc/containerd/runsc.toml"
+
+LEPTOSKIT_DOCUMENT
+cat > /etc/containerd/runsc.toml <<'LEPTOSKIT_DOCUMENT'
+[runsc_config]
+  platform = "systrap"
+
+LEPTOSKIT_DOCUMENT
+cat > /etc/systemd/system/leptoskit-k3s.service <<'LEPTOSKIT_DOCUMENT'
+[Unit]
+Description=LeptosKit k3s agent
+Wants=network-online.target
+After=network-online.target nftables.service
+ConditionPathExists=/etc/rancher/k3s/join-token
+[Service]
+Type=notify
+ExecStart=/usr/local/bin/k3s agent
+Restart=always
+RestartSec=5
+KillMode=process
+Delegate=yes
+LimitNOFILE=1048576
+TasksMax=infinity
+[Install]
+WantedBy=multi-user.target
+
+LEPTOSKIT_DOCUMENT
+nft -c -f /etc/nftables.conf
+nft -f /etc/nftables.conf
+sshd -t
+systemctl restart ssh
+systemctl enable nftables
+systemctl enable --now unattended-upgrades
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+cd "$work"
+curl -fLsS 'https://github.com/k3s-io/k3s/releases/download/v1.35.10+k3s1/k3s' -o k3s
+printf '%s  k3s\n' '5cd49f0faca5b2ea4355d4761e7b1445b8aa05cd50e612fd9c370551db49e5e2' | sha256sum -c -
+install -m 755 k3s /usr/local/bin/k3s
+curl -fLsS 'https://storage.googleapis.com/gvisor/releases/release/20261116.0/x86_64/gvisor.tar.zstd' -o gvisor.tar.zstd
+printf '%s  gvisor.tar.zstd\n' 'a34261504066142b6c1cc4d1813bb2d092761675416e350edc98c4cc66469b63b6f41acdeed09681b6c717c00e80e437f5f2f9c8d37705b8a9260632867c2b7d' | sha512sum -c -
+tar --zstd -xf gvisor.tar.zstd -C /usr/local/bin
+systemctl daemon-reload
+systemctl enable leptoskit-k3s
+systemctl restart leptoskit-k3s
+
+
+=== eu/growth/tenant-b-0.sh ===
+#!/bin/sh
+set -eu
+umask 077
+# Supply a shared join token in /etc/rancher/k3s/join-token before running.
+test -s /etc/rancher/k3s/join-token
+test "$(uname -m)" = x86_64
+. /etc/os-release
+test "$ID:$VERSION_ID" = ubuntu:24.04
+chmod 600 /etc/rancher/k3s/join-token
+apt-get update
+DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl nftables unattended-upgrades zstd
+modprobe wireguard
+modprobe br_netfilter
+printf 'net.ipv4.ip_forward=1\n' > /etc/sysctl.d/90-leptoskit.conf
+sysctl --system
+mkdir -p /etc/rancher/k3s /var/lib/rancher/k3s/agent/etc/containerd /etc/containerd /etc/ssh/sshd_config.d
+cat > /etc/ssh/sshd_config.d/00-leptoskit.conf <<'LEPTOSKIT_DOCUMENT'
+PasswordAuthentication no
+PermitRootLogin prohibit-password
+
+LEPTOSKIT_DOCUMENT
+cat > /etc/nftables.conf <<'LEPTOSKIT_DOCUMENT'
+add table inet leptoskit
+flush table inet leptoskit
+table inet leptoskit {
+ chain input {
+  type filter hook input priority 0; policy drop;
+  ct state established,related accept
+  iifname lo accept
+  iifname { cni0, flannel-wg } accept
+  ip saddr 192.0.2.0/24 tcp dport 22 accept
+  ip saddr 198.51.100.10/32 udp dport 51820 accept
+  ip saddr 192.0.2.10/32 udp dport 51820 accept
+  ip saddr 192.0.2.11/32 udp dport 51820 accept
+  ip saddr 192.0.2.12/32 udp dport 51820 accept
+  ip saddr 203.0.113.10/32 udp dport 51820 accept
+  ip saddr 203.0.113.12/32 udp dport 51820 accept
+ }
+}
+
+LEPTOSKIT_DOCUMENT
+cat > /etc/rancher/k3s/config.yaml <<'LEPTOSKIT_DOCUMENT'
+{
+  "node-external-ip": "203.0.113.11",
+  "node-ip": "203.0.113.11",
+  "node-label": [
+    "leptoskit.dev/pool=tenant"
+  ],
+  "node-name": "tenant-b-0",
+  "node-taint": [
+    "leptoskit.dev/pool=tenant:PreferNoSchedule"
+  ],
+  "server": "https://192.0.2.10:6443",
+  "token-file": "/etc/rancher/k3s/join-token"
+}
+LEPTOSKIT_DOCUMENT
+cat > /var/lib/rancher/k3s/agent/etc/containerd/config-v3.toml.tmpl <<'LEPTOSKIT_DOCUMENT'
+{{ template "base" . }}
+[plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.runsc]
+  runtime_type = "io.containerd.runsc.v1"
+[plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.runsc.options]
+  TypeUrl = "io.containerd.runsc.v1.options"
+  ConfigPath = "/etc/containerd/runsc.toml"
+
+LEPTOSKIT_DOCUMENT
+cat > /etc/containerd/runsc.toml <<'LEPTOSKIT_DOCUMENT'
+[runsc_config]
+  platform = "systrap"
+
+LEPTOSKIT_DOCUMENT
+cat > /etc/systemd/system/leptoskit-k3s.service <<'LEPTOSKIT_DOCUMENT'
+[Unit]
+Description=LeptosKit k3s agent
+Wants=network-online.target
+After=network-online.target nftables.service
+ConditionPathExists=/etc/rancher/k3s/join-token
+[Service]
+Type=notify
+ExecStart=/usr/local/bin/k3s agent
+Restart=always
+RestartSec=5
+KillMode=process
+Delegate=yes
+LimitNOFILE=1048576
+TasksMax=infinity
+[Install]
+WantedBy=multi-user.target
+
+LEPTOSKIT_DOCUMENT
+nft -c -f /etc/nftables.conf
+nft -f /etc/nftables.conf
+sshd -t
+systemctl restart ssh
+systemctl enable nftables
+systemctl enable --now unattended-upgrades
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+cd "$work"
+curl -fLsS 'https://github.com/k3s-io/k3s/releases/download/v1.35.10+k3s1/k3s' -o k3s
+printf '%s  k3s\n' '5cd49f0faca5b2ea4355d4761e7b1445b8aa05cd50e612fd9c370551db49e5e2' | sha256sum -c -
+install -m 755 k3s /usr/local/bin/k3s
+curl -fLsS 'https://storage.googleapis.com/gvisor/releases/release/20261116.0/x86_64/gvisor.tar.zstd' -o gvisor.tar.zstd
+printf '%s  gvisor.tar.zstd\n' 'a34261504066142b6c1cc4d1813bb2d092761675416e350edc98c4cc66469b63b6f41acdeed09681b6c717c00e80e437f5f2f9c8d37705b8a9260632867c2b7d' | sha512sum -c -
+tar --zstd -xf gvisor.tar.zstd -C /usr/local/bin
+systemctl daemon-reload
+systemctl enable leptoskit-k3s
+systemctl restart leptoskit-k3s
+
+
+=== eu/growth/tenant-c-0.sh ===
+#!/bin/sh
+set -eu
+umask 077
+# Supply a shared join token in /etc/rancher/k3s/join-token before running.
+test -s /etc/rancher/k3s/join-token
+test "$(uname -m)" = x86_64
+. /etc/os-release
+test "$ID:$VERSION_ID" = ubuntu:24.04
+chmod 600 /etc/rancher/k3s/join-token
+apt-get update
+DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl nftables unattended-upgrades zstd
+modprobe wireguard
+modprobe br_netfilter
+printf 'net.ipv4.ip_forward=1\n' > /etc/sysctl.d/90-leptoskit.conf
+sysctl --system
+mkdir -p /etc/rancher/k3s /var/lib/rancher/k3s/agent/etc/containerd /etc/containerd /etc/ssh/sshd_config.d
+cat > /etc/ssh/sshd_config.d/00-leptoskit.conf <<'LEPTOSKIT_DOCUMENT'
+PasswordAuthentication no
+PermitRootLogin prohibit-password
+
+LEPTOSKIT_DOCUMENT
+cat > /etc/nftables.conf <<'LEPTOSKIT_DOCUMENT'
+add table inet leptoskit
+flush table inet leptoskit
+table inet leptoskit {
+ chain input {
+  type filter hook input priority 0; policy drop;
+  ct state established,related accept
+  iifname lo accept
+  iifname { cni0, flannel-wg } accept
+  ip saddr 192.0.2.0/24 tcp dport 22 accept
+  ip saddr 198.51.100.10/32 udp dport 51820 accept
+  ip saddr 192.0.2.10/32 udp dport 51820 accept
+  ip saddr 192.0.2.11/32 udp dport 51820 accept
+  ip saddr 192.0.2.12/32 udp dport 51820 accept
+  ip saddr 203.0.113.10/32 udp dport 51820 accept
+  ip saddr 203.0.113.11/32 udp dport 51820 accept
+ }
+}
+
+LEPTOSKIT_DOCUMENT
+cat > /etc/rancher/k3s/config.yaml <<'LEPTOSKIT_DOCUMENT'
+{
+  "node-external-ip": "203.0.113.12",
+  "node-ip": "203.0.113.12",
+  "node-label": [
+    "leptoskit.dev/pool=tenant"
+  ],
+  "node-name": "tenant-c-0",
+  "node-taint": [
+    "leptoskit.dev/pool=tenant:PreferNoSchedule"
+  ],
+  "server": "https://192.0.2.10:6443",
+  "token-file": "/etc/rancher/k3s/join-token"
+}
+LEPTOSKIT_DOCUMENT
+cat > /var/lib/rancher/k3s/agent/etc/containerd/config-v3.toml.tmpl <<'LEPTOSKIT_DOCUMENT'
+{{ template "base" . }}
+[plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.runsc]
+  runtime_type = "io.containerd.runsc.v1"
+[plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.runsc.options]
+  TypeUrl = "io.containerd.runsc.v1.options"
+  ConfigPath = "/etc/containerd/runsc.toml"
+
+LEPTOSKIT_DOCUMENT
+cat > /etc/containerd/runsc.toml <<'LEPTOSKIT_DOCUMENT'
+[runsc_config]
+  platform = "systrap"
+
+LEPTOSKIT_DOCUMENT
+cat > /etc/systemd/system/leptoskit-k3s.service <<'LEPTOSKIT_DOCUMENT'
+[Unit]
+Description=LeptosKit k3s agent
+Wants=network-online.target
+After=network-online.target nftables.service
+ConditionPathExists=/etc/rancher/k3s/join-token
+[Service]
+Type=notify
+ExecStart=/usr/local/bin/k3s agent
+Restart=always
+RestartSec=5
+KillMode=process
+Delegate=yes
+LimitNOFILE=1048576
+TasksMax=infinity
+[Install]
+WantedBy=multi-user.target
+
+LEPTOSKIT_DOCUMENT
+nft -c -f /etc/nftables.conf
+nft -f /etc/nftables.conf
+sshd -t
+systemctl restart ssh
+systemctl enable nftables
+systemctl enable --now unattended-upgrades
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+cd "$work"
+curl -fLsS 'https://github.com/k3s-io/k3s/releases/download/v1.35.10+k3s1/k3s' -o k3s
+printf '%s  k3s\n' '5cd49f0faca5b2ea4355d4761e7b1445b8aa05cd50e612fd9c370551db49e5e2' | sha256sum -c -
+install -m 755 k3s /usr/local/bin/k3s
+curl -fLsS 'https://storage.googleapis.com/gvisor/releases/release/20261116.0/x86_64/gvisor.tar.zstd' -o gvisor.tar.zstd
+printf '%s  gvisor.tar.zstd\n' 'a34261504066142b6c1cc4d1813bb2d092761675416e350edc98c4cc66469b63b6f41acdeed09681b6c717c00e80e437f5f2f9c8d37705b8a9260632867c2b7d' | sha512sum -c -
+tar --zstd -xf gvisor.tar.zstd -C /usr/local/bin
+systemctl daemon-reload
+systemctl enable leptoskit-k3s
+systemctl restart leptoskit-k3s
