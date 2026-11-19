@@ -608,9 +608,46 @@ fn is_safe_href(href: &str) -> bool {
 		.any(|allowed| scheme.eq_ignore_ascii_case(allowed))
 }
 
+/// Whether a file name can be suggested to a browser as it stands: one path
+/// segment with no controls.
+fn is_safe_file_name(name: &str) -> bool {
+	!name.is_empty()
+		&& name != "."
+		&& name != ".."
+		&& !name
+			.chars()
+			.any(|character| character.is_control() || matches!(character, '/' | '\\'))
+}
+
+/// Where a link opens, set with [`Element::target`](crate::Element::target).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum LinkTarget {
+	/// In place of the page the link is on. This is what a link does when
+	/// nothing is set.
+	#[default]
+	SameTab,
+	/// In a new browser tab, leaving the page as it is.
+	NewTab,
+}
+
+impl LinkTarget {
+	/// The name stored in [`NativeProps::extra`].
+	const fn wire_name(self) -> &'static str {
+		match self {
+			Self::SameTab => "same_tab",
+			Self::NewTab => "new_tab",
+		}
+	}
+}
+
 impl NativeProps {
+	/// The key in [`extra`](Self::extra) that holds the file name of a
+	/// download link.
+	pub const DOWNLOAD: &'static str = "download";
 	/// The key in [`extra`](Self::extra) that holds a link target.
 	pub const HREF: &'static str = "href";
+	/// The key in [`extra`](Self::extra) that holds where a link opens.
+	pub const LINK_TARGET: &'static str = "link_target";
 	/// The key in [`extra`](Self::extra) that holds a test identifier.
 	pub const TEST_ID: &'static str = "test_id";
 
@@ -652,6 +689,43 @@ impl NativeProps {
 	pub fn href(&self) -> Option<&str> {
 		match self.extra.get(Self::HREF) {
 			Some(PropValue::Str(href)) if is_safe_href(href) => Some(href),
+			_ => None,
+		}
+	}
+
+	/// Where the link opens, as set by
+	/// [`Element::target`](crate::Element::target). Anything else in
+	/// [`extra`](Self::extra) reads as [`LinkTarget::SameTab`].
+	#[must_use]
+	pub fn link_target(&self) -> LinkTarget {
+		match self.extra.get(Self::LINK_TARGET) {
+			Some(PropValue::Str(target)) if target == LinkTarget::NewTab.wire_name() => {
+				LinkTarget::NewTab
+			}
+			_ => LinkTarget::SameTab,
+		}
+	}
+
+	/// Records where the link opens. The default leaves no entry behind.
+	pub(crate) fn set_link_target(&mut self, target: LinkTarget) {
+		if target == LinkTarget::SameTab {
+			self.extra.remove(Self::LINK_TARGET);
+		} else {
+			self.extra.insert(
+				Self::LINK_TARGET.to_owned(),
+				PropValue::Str(target.wire_name().to_owned()),
+			);
+		}
+	}
+
+	/// The file name set by [`Element::download`](crate::Element::download),
+	/// when it is a plain name. An empty name, one with a `/`, a `\\` or a
+	/// control character, and `.` or `..` return `None`, and the link is
+	/// then an ordinary link.
+	#[must_use]
+	pub fn download(&self) -> Option<&str> {
+		match self.extra.get(Self::DOWNLOAD) {
+			Some(PropValue::Str(name)) if is_safe_file_name(name) => Some(name),
 			_ => None,
 		}
 	}

@@ -149,6 +149,11 @@ guest = [
 	"leptoskit_devtools?/guest",
 	"leptoskit_3d?/guest",
 ]
+# A pressed link with no handler of its own opens outside a native app, in
+# the person's browser, mail or phone app, through `leptoskit_plugin_linking`.
+# A guest also needs `linking` in `native.plugins`. The web follows links
+# without it.
+links = ["leptoskit_native/links"]
 # GPU 3D scenes: `leptoskit::scene3d`, whose `client::Scene` a `Scene3d` view
 # shows. `guest` sends its ops to the native host; `web` draws them in the
 # page. A native app built with it gets the bridge's `scene3d` feature and

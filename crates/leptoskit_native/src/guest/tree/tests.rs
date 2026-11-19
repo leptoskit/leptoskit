@@ -288,6 +288,37 @@ fn handlers_bubble_after_unhandled_children_and_stop_after_consumption() {
 }
 
 #[test]
+fn a_press_finds_the_link_around_it() {
+	let mut tree = Tree::default();
+	let mut host = RecordedHost::default();
+	tree.update(
+		Element::view().children([
+			crate::components::Pressable("Example")
+				.href("https://example.com/")
+				.child(Element::text("Example")),
+			crate::components::Pressable("Plain").child(Element::text("Plain")),
+			Element::text("Outside"),
+		]),
+		&mut host,
+	);
+	let children = host.nodes[&tree.root.unwrap()].children.clone();
+	let label = host.nodes[&children[0]].children[0];
+
+	for inside in [children[0], label] {
+		assert_eq!(
+			tree.pressed_link(inside).as_deref(),
+			Some("https://example.com/")
+		);
+	}
+
+	// A pressable with no link, text outside any pressable, and a node
+	// that is gone have nothing to follow.
+	assert_eq!(tree.pressed_link(children[1]), None);
+	assert_eq!(tree.pressed_link(children[2]), None);
+	assert_eq!(tree.pressed_link(999), None);
+}
+
+#[test]
 fn disabled_ancestor_rejects_events_and_missing_targets_are_unhandled() {
 	let mut tree = Tree::default();
 	let mut host = RecordedHost::default();

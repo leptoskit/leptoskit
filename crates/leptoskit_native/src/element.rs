@@ -1281,7 +1281,12 @@ impl Element {
 	/// The web renders it as an `<a href>`, so the browser can open it in a
 	/// new tab and crawlers can follow it, while a plain click still runs the
 	/// `on_press` handler instead of leaving the page. Native platforms keep
-	/// it a pressable and ignore the target.
+	/// it a pressable. With the `links` feature, pressing one that has no
+	/// `on_press` handler opens an absolute link in the person's browser,
+	/// mail or phone app, through `leptoskit_plugin_linking`.
+	///
+	/// [`Self::target`] opens the link in a new tab, and [`Self::download`]
+	/// saves it as a file.
 	///
 	/// Accepts relative URLs, fragments, and HTTP(S), mailto, tel, or sms URLs.
 	/// Empty targets, whitespace, controls, backslashes, and other schemes
@@ -1291,6 +1296,61 @@ impl Element {
 		self.props
 			.extra
 			.insert(NativeProps::HREF.to_owned(), PropValue::Str(href.into()));
+		self
+	}
+
+	/// Says where a link made with [`Self::href`] opens.
+	///
+	/// With [`LinkTarget::NewTab`](crate::LinkTarget::NewTab) the web opens
+	/// the link in a new tab that cannot reach back into this page
+	/// (`target="_blank" rel="noopener noreferrer"`), and tells screen
+	/// reader users that it opens in a new tab. A native app opens every
+	/// link outside itself, so the target changes nothing there.
+	///
+	/// ```
+	/// use leptoskit_native::LinkTarget;
+	/// use leptoskit_native::components::Pressable;
+	/// use leptoskit_native::components::Text;
+	///
+	/// let link = Pressable("Open the admin")
+	/// 	.href("https://admin.example.com/")
+	/// 	.target(LinkTarget::NewTab)
+	/// 	.child(Text("Open the admin ↗"));
+	/// assert_eq!(link.props.link_target(), LinkTarget::NewTab);
+	/// ```
+	#[must_use]
+	pub fn target(mut self, target: crate::LinkTarget) -> Self {
+		self.props.set_link_target(target);
+		self
+	}
+
+	/// Makes a link made with [`Self::href`] save its target as a file
+	/// called `file_name`, instead of opening it.
+	///
+	/// The web renders `<a href download>`. A browser only honours the
+	/// name for a file from the page's own site; for another site it uses
+	/// the name that server sends.
+	///
+	/// The name is one file name, not a path: an empty name, or one with a
+	/// `/`, a `\\` or a control character, is ignored and the link opens as
+	/// usual.
+	///
+	/// ```
+	/// use leptoskit_native::components::Pressable;
+	/// use leptoskit_native::components::Text;
+	///
+	/// let export = Pressable("Export")
+	/// 	.href("/people/7/export")
+	/// 	.download("person-7.json")
+	/// 	.child(Text("Export"));
+	/// assert_eq!(export.props.download(), Some("person-7.json"));
+	/// ```
+	#[must_use]
+	pub fn download(mut self, file_name: impl Into<String>) -> Self {
+		self.props.extra.insert(
+			NativeProps::DOWNLOAD.to_owned(),
+			PropValue::Str(file_name.into()),
+		);
 		self
 	}
 

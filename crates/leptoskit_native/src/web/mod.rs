@@ -571,11 +571,7 @@ fn render_node(
 	announce_read_only(kind, &mut props);
 	let test_id = props.test_id().map(str::to_owned);
 	let enabled = parent_enabled && props.enabled.unwrap_or(true);
-	// A pressable with an href is a link: an `<a>` the browser can open in
-	// a new tab, whose plain clicks the app handles in place.
-	let href = (kind == NativeKind::Pressable)
-		.then(|| props.href().map(str::to_owned))
-		.flatten();
+	let href = link_href(kind, &mut props);
 	let link = href.is_some();
 	// Hidden subtrees stay hidden: assistive technology ignores descendants of
 	// an `aria-hidden` element, and the attribute on each node keeps the
@@ -756,6 +752,32 @@ fn scoped_sheet(
 		classes.css_scoped(&selector),
 		styles::control(&selector, kind, styles_active),
 	)
+}
+
+/// The target of a pressable that is a link: an `<a>` the browser can open
+/// in a new tab, whose plain clicks the app handles in place.
+///
+/// A link that opens in a new tab also says so to screen reader users,
+/// after anything the app already says about it. Sighted people get that
+/// hint from the link's own text or icon.
+fn link_href(kind: NativeKind, props: &mut NativeProps) -> Option<String> {
+	const HINT: &str = "Opens in a new tab";
+
+	if kind != NativeKind::Pressable {
+		return None;
+	}
+
+	let href = props.href()?.to_owned();
+
+	if props.link_target() == crate::LinkTarget::NewTab {
+		let aria = props.aria_mut();
+		aria.description = Some(match aria.description.take() {
+			Some(description) => format!("{description} {HINT}"),
+			None => HINT.to_owned(),
+		});
+	}
+
+	Some(href)
 }
 
 /// The DOM listeners every node carries, which translate browser events into
@@ -1071,8 +1093,18 @@ fn typed_element(parts: NodeParts, attrs: impl Attribute + 'static) -> AnyView {
 			match href {
 				// A disabled link has no target, so it cannot be followed.
 				Some(href) => {
+					// A new tab gets no handle on this page and is not told
+					// where the person came from.
+					let new_tab = enabled && props.link_target() == crate::LinkTarget::NewTab;
+					let download = enabled
+						.then(|| props.download().map(str::to_owned))
+						.flatten();
+
 					html::a()
 						.href(enabled.then_some(href))
+						.target(new_tab.then_some("_blank"))
+						.rel(new_tab.then_some("noopener noreferrer"))
+						.download(download)
 						.child(children)
 						.add_any_attr(attrs)
 						.into_any()

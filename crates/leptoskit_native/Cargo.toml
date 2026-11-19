@@ -20,6 +20,7 @@ leptoskit_3d = { workspace = true }
 leptoskit_animation = { workspace = true }
 leptoskit_devtools_protocol = { workspace = true, optional = true }
 leptoskit_log = { workspace = true }
+leptoskit_plugin_linking = { workspace = true, optional = true }
 leptoskit_rive = { workspace = true }
 leptoskit_yoga = { workspace = true }
 reactive_graph = { workspace = true }
@@ -64,8 +65,9 @@ required-features = ["web"]
 [features]
 default = []
 devtools = ["dep:leptoskit_devtools_protocol"]
+links = ["dep:leptoskit_plugin_linking"]
 rive = ["leptoskit_rive/native", "leptoskit_rive/web"]
-guest = ["serde", "dep:serde_json", "dep:futures"]
+guest = ["serde", "dep:serde_json", "dep:futures", "leptoskit_plugin_linking?/guest"]
 serde = ["dep:serde", "dep:serde_json", "leptoskit_yoga/serde", "leptoskit_rive/serde", "leptoskit_animation/serde"]
 svg = ["dep:roxmltree"]
 web = ["dep:leptos", "dep:sha2", "dep:wasm-bindgen", "dep:web-sys", "leptoskit_log/web"]

@@ -143,3 +143,86 @@ fn an_href_makes_a_pressable_a_link_without_changing_native_rendering() {
 	let root = surface.root().unwrap();
 	assert_eq!(surface.props(root).href(), Some("/notes/42"));
 }
+
+#[test]
+fn a_press_on_a_link_inside_the_app_is_left_to_the_app() {
+	use std::sync::Arc;
+	use std::sync::atomic::AtomicUsize;
+	use std::sync::atomic::Ordering;
+
+	use leptoskit_native::EventOutcome;
+	use leptoskit_native::NativeEvent;
+
+	let presses = Arc::new(AtomicUsize::new(0));
+	let mut surface = NativeSurface::new(HeadlessBackend::new());
+	surface.set_viewport(200.0, 120.0);
+	surface.set_root(
+		&View().children([
+			// A relative link is a place inside the app: nothing opens it for
+			// the app, with or without the `links` feature.
+			Pressable("Open note").href("/notes/42").child(Text("Open")),
+			// A handler takes the press before any link is followed.
+			Pressable("Docs")
+				.href("https://example.com/docs")
+				.on_press({
+					let presses = Arc::clone(&presses);
+					move || {
+						presses.fetch_add(1, Ordering::SeqCst);
+					}
+				})
+				.child(Text("Docs")),
+			// A disabled link is not followed.
+			Pressable("Closed")
+				.href("https://example.com/closed")
+				.enabled(false)
+				.child(Text("Closed")),
+		]),
+	);
+	let root = surface.root().unwrap();
+	let children = surface.children(root).to_vec();
+
+	assert_eq!(
+		surface.dispatch_event(children[0], &NativeEvent::Press),
+		EventOutcome::Unhandled
+	);
+	assert_eq!(
+		surface.dispatch_event(children[1], &NativeEvent::Press),
+		EventOutcome::Handled
+	);
+	assert_eq!(presses.load(Ordering::SeqCst), 1);
+	assert_eq!(
+		surface.dispatch_event(children[2], &NativeEvent::Press),
+		EventOutcome::Unhandled
+	);
+}
+
+/// Hands a link to the desktop's launcher, which opens a browser where
+/// there is one, so it is run by hand.
+#[cfg(all(
+	feature = "links",
+	any(target_os = "macos", target_os = "windows", target_os = "linux")
+))]
+#[test]
+#[ignore = "opens the default browser"]
+fn a_press_on_an_outside_link_opens_it() {
+	use leptoskit_native::EventOutcome;
+	use leptoskit_native::NativeEvent;
+
+	let mut surface = NativeSurface::new(HeadlessBackend::new());
+	surface.set_viewport(200.0, 60.0);
+	surface.set_root(
+		&Pressable("Example")
+			.href("https://example.com/")
+			.child(Text("Example")),
+	);
+	let root = surface.root().unwrap();
+	let label = surface.children(root)[0];
+
+	// A press on the link's content follows the link around it.
+	assert_eq!(
+		surface.dispatch_event(label, &NativeEvent::Press),
+		EventOutcome::Handled
+	);
+	// Give the launcher's thread time to hand the link over.
+	std::thread::sleep(std::time::Duration::from_millis(500));
+}
