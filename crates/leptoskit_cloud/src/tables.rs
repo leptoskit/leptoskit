@@ -558,6 +558,9 @@ pub struct StatusReport {
 	pub cluster_id: Id<Cluster>,
 	pub observed: Json<leptoskit_cloud_runtime::Observed>,
 	pub reported_at: Timestamp,
+	/// The time the environment's compute is counted up to: `reported_at`,
+	/// less the part of a second the last report left over.
+	pub metered_at: Option<Timestamp>,
 }
 
 /// A variable an environment's processes start with: a name and a value

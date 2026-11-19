@@ -317,6 +317,10 @@ impl Plan {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Limits {
+	/// Organisations on this plan one person may make, their own included.
+	/// Read from the plan new organisations start on.
+	#[serde(default)]
+	pub organizations: Option<u64>,
 	/// Projects.
 	#[serde(default)]
 	pub projects: Option<u64>,

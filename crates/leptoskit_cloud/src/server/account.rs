@@ -193,6 +193,12 @@ pub(crate) async fn create_organization(
 
 	check_organization_slug(&slug)?;
 	let name = check_name(&name)?;
+	super::billing::refuse_another_organization(
+		cx.tx(),
+		services(cx.context())?.shipping(),
+		*account,
+	)
+	.await?;
 	let organization = NewOrganization {
 		slug: slug.clone(),
 		name,

@@ -19,8 +19,8 @@ use super::shipping::built;
 
 /// A catalogue for the tests: ten minor units a build minute, one for a
 /// hundred seconds of the smallest size. Hobby is free, with two build
-/// minutes, one project and no custom domains. Pro includes twenty minor
-/// units of usage and caps what comes after at fifty.
+/// minutes, one project, no custom domains, and two organisations a person. Pro
+/// includes twenty minor units of usage and caps what comes after at fifty.
 pub fn catalogue() -> Catalogue {
 	leptoskit_cloud::server::catalogue_from_json(
 		r#"{
@@ -29,7 +29,7 @@ pub fn catalogue() -> Catalogue {
 				{
 					"id": "hobby", "name": "Hobby", "monthly": 0,
 					"allowances": { "build_minutes_linux": 2 },
-					"limits": { "projects": 1, "custom_domains": 0 }
+					"limits": { "organizations": 2, "projects": 1, "custom_domains": 0 }
 				},
 				{
 					"id": "pro", "name": "Pro", "monthly": 2000, "included_usage": 20,
@@ -99,13 +99,14 @@ fn quantity(report: &Value, meter: &str) -> u64 {
 }
 
 /// Has the cluster's worker report `replicas` ready replicas of the app,
-/// `seconds` after its report before.
+/// `seconds` after its usage was last counted. The report names the app
+/// twice, which counts it no more than the release may run.
 async fn report(shop: &Shop<'_>, environment: &str, replicas: u32, seconds: i64) {
 	StatusReport::update()
 		.filter(|row| row.id.is_not_null())
 		.set(
-			|row| row.reported_at,
-			leptoskit_db::now() - chrono::TimeDelta::seconds(seconds),
+			|row| row.metered_at,
+			Some(leptoskit_db::now() - chrono::TimeDelta::seconds(seconds)),
 		)
 		.run(&shop.app.system())
 		.await
@@ -117,6 +118,13 @@ async fn report(shop: &Shop<'_>, environment: &str, replicas: u32, seconds: i64)
 			"environment": { "slug": "production", "id": environment },
 		},
 		"processes": [
+			{
+				"name": "app",
+				"ready_replicas": replicas,
+				"desired_replicas": replicas,
+				"image": "registry.example.test/app@sha256:aa",
+				"state": "Ready",
+			},
 			{
 				"name": "app",
 				"ready_replicas": replicas,
@@ -295,6 +303,8 @@ pub async fn usage_is_counted_priced_and_capped(app: &App) {
 		.await;
 	refused.refused(403, "spend_cap_reached");
 	assert!(refused.text.contains("set_spend_cap"), "{}", refused.text);
+	// The cap itself is for those who may see the bill.
+	assert!(!refused.text.contains("20"), "{}", refused.text);
 	// Back to the plan's own cap, and it deploys.
 	let unset = cap(Value::Null, shop.as_ana()).await;
 	assert_eq!(unset.expect(200).json(), json!({ "cap": 50, "own": false }));
@@ -362,6 +372,16 @@ pub async fn a_plans_limits_are_counted(app: &App) {
 			shop.as_ana(),
 		)
 	};
+	// Hobby: one person makes two organisations on it, their own included.
+	let found = |slug: &str| {
+		app.call(
+			"create_organization",
+			json!({ "slug": slug, "name": slug }),
+			shop.as_ana(),
+		)
+	};
+	found("ana-and-co").await.expect(200);
+	found("ana-and-more").await.refused(403, "quota_exceeded");
 	// Hobby: the one project `Shop` made, and no custom domain.
 	create("second").await.refused(403, "quota_exceeded");
 	let refused = attach("notes", "www.notes.example").await;
@@ -378,4 +398,41 @@ pub async fn a_plans_limits_are_counted(app: &App) {
 	attach("second", "api.second.example")
 		.await
 		.refused(403, "quota_exceeded");
+}
+
+/// A build attempt whose worker went quiet is counted up to the end of the
+/// lease it held: a build that never ends isn't free.
+pub async fn a_build_whose_lease_ran_out_is_counted(app: &App) {
+	let shop = Shop::open(app).await;
+	let digest = shop.upload(b"never ends").await;
+	shop.deploy("production", &digest, json!({ "database": "sqlite" }))
+		.await
+		.expect(200);
+	let job = shop.build.take().await;
+	Job::update()
+		.filter(|job| job.claimed_at.is_not_null())
+		.set(
+			|job| job.claimed_at,
+			Some(leptoskit_db::now() - chrono::TimeDelta::seconds(9 * 60 + 30)),
+		)
+		.run(&shop.app.system())
+		.await
+		.expect("age the claim");
+	assert_eq!(quantity(&usage(&shop).await, "build_minutes_linux"), 0);
+	shop.lapse_leases().await;
+	shop.sweep().await;
+	// Nine and a half minutes, less the second the lease ended before now.
+	assert_eq!(quantity(&usage(&shop).await, "build_minutes_linux"), 10);
+	// Its late answer isn't counted again, and neither is another sweep.
+	shop.build
+		.finish(&job, built(&job, b"never ends", &[]))
+		.await
+		.refused(404, "job_not_held");
+	shop.sweep().await;
+	assert_eq!(quantity(&usage(&shop).await, "build_minutes_linux"), 10);
+	// Ten minutes on a plan that includes two: nothing new is deployed.
+	let digest = shop.upload(b"again").await;
+	shop.deploy("production", &digest, json!({ "database": "sqlite" }))
+		.await
+		.refused(403, "spend_cap_reached");
 }

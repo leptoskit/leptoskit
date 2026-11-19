@@ -559,3 +559,10 @@ async fn a_plans_limits_are_counted() {
 	let app = support::app_with(db, |config| config.catalogue = Some(billing::catalogue())).await;
 	billing::a_plans_limits_are_counted(&app).await;
 }
+
+#[tokio::test]
+async fn a_build_whose_lease_ran_out_is_counted() {
+	let db = leptoskit_db::testing::sqlite_migrated(leptoskit_cloud::MIGRATIONS).await;
+	let app = support::app_with(db, |config| config.catalogue = Some(billing::catalogue())).await;
+	billing::a_build_whose_lease_ran_out_is_counted(&app).await;
+}

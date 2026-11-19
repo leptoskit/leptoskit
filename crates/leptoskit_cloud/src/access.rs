@@ -75,7 +75,7 @@ pub enum Role {
 	/// Projects and environments, but not who is in the organisation.
 	#[db(rename = "developer")]
 	Developer,
-	/// The plan and invoices, when billing arrives; reads everything else.
+	/// Usage, the bill and the spend cap; reads everything else.
 	#[db(rename = "billing")]
 	Billing,
 	/// Reads everything except secret values.
@@ -162,7 +162,7 @@ pub enum TokenScope {
 	Manage,
 	/// Store publishing, when it arrives. Reads, today.
 	Publish,
-	/// The plan and invoices, when billing arrives. Reads, today.
+	/// Usage and the bill. The spend cap is a person's to set.
 	Billing,
 	/// Deleting projects and environments. Members and tokens are a
 	/// person's to manage, whatever a token's scopes.

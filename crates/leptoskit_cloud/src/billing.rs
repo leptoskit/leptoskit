@@ -38,6 +38,8 @@ pub struct MeterQuantity {
 /// What an organisation on a plan may have at once. `None` is no limit.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct PlanLimits {
+	/// Organisations on this plan one person may make, their own included.
+	pub organizations: Option<u64>,
 	pub projects: Option<u64>,
 	pub custom_domains: Option<u64>,
 }
@@ -106,8 +108,12 @@ pub struct UsageBill {
 	pub spend_cap: Option<u64>,
 	/// Whether the organisation set that cap itself.
 	pub own_spend_cap: bool,
-	/// Whether `over` has reached the cap, so `deploy` is refused.
+	/// Whether `over` has reached the cap, so `deploy` is refused. On a plan
+	/// that costs nothing, any usage in `unpriced` reaches it too.
 	pub cap_reached: bool,
+	/// The meters with usage beyond the plan's allowance that the catalogue
+	/// has no price for: they are in `lines` at no cost.
+	pub unpriced: Vec<String>,
 }
 
 /// What a month's usage costs, or why nothing can say.

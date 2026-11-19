@@ -225,6 +225,7 @@ impl Control {
 		let cli_client_id = cli_client(&idp).await?;
 		check_apps_domain(&config.apps_domain)?;
 		check_registry(&config.registry)?;
+		check_catalogue(config.catalogue.as_ref())?;
 		let store = ObjectStore::new(&config.storage, &origin)
 			.map_err(|error| ControlError::Config(error.to_string()))?;
 		let services = Services::new(
@@ -337,6 +338,23 @@ impl Control {
 	/// When the database or the store fails.
 	pub async fn sweep(&self) -> leptoskit_rpc::Result<Swept> {
 		jobs::sweep(&self.services).await
+	}
+}
+
+/// `Config` when `catalogue` lacks the plan every organisation starts on:
+/// without it none of them would be capped or limited, and nothing would
+/// say so.
+fn check_catalogue(catalogue: Option<&Catalogue>) -> Result<(), ControlError> {
+	let starting = super::personal::STARTING_PLAN;
+
+	match catalogue {
+		Some(catalogue) if catalogue.plan(starting).is_none() => {
+			Err(ControlError::Config(format!(
+				"the price catalogue has no `{starting}` plan, the one every organisation starts \
+				 on"
+			)))
+		}
+		_ => Ok(()),
 	}
 }
 

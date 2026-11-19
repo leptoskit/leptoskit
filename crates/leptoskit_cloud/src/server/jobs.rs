@@ -42,6 +42,7 @@ use super::Services;
 use super::backups;
 use super::delta;
 use super::deployments;
+use super::metering;
 use super::storage::Bucket;
 use crate::archive::Digest;
 use crate::deployments::AppFacts;
@@ -330,6 +331,8 @@ pub(crate) async fn deployment_ref(
 ///
 /// When the database fails.
 pub(crate) async fn lapse(tx: &Tx, mut job: Job, reason: &str) -> rpc::Result<Lapsed> {
+	let now = leptoskit_db::now();
+	let held_until = job.lease_expires_at.map_or(now, |expires| expires.min(now));
 	job.lease_expires_at = None;
 
 	if job.kind == JobKind::BackupDatabase {
@@ -349,6 +352,10 @@ pub(crate) async fn lapse(tx: &Tx, mut job: Job, reason: &str) -> rpc::Result<La
 
 		return Ok(Lapsed::Unknown);
 	}
+
+	// The attempt used a build worker until its lease ended, finished or
+	// not: a build that never ends is counted like one that does.
+	metering::build_ended(tx, &job, held_until).await?;
 
 	if job.cancel_requested || job.attempt >= job.max_attempts {
 		job.state = JobState::Abandoned;

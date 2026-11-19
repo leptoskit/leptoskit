@@ -568,4 +568,11 @@ mod billing {
 			billing::a_plans_limits_are_counted(&app).await;
 		}
 	}
+
+	#[tokio::test]
+	async fn a_build_whose_lease_ran_out_is_counted() {
+		if let Some((_postgres, app)) = app().await {
+			billing::a_build_whose_lease_ran_out_is_counted(&app).await;
+		}
+	}
 }

@@ -6,6 +6,7 @@
 //! is *unpriced*: usage is still counted and shown, and nothing is capped
 //! or limited, because nothing says what the cap or the limit would be.
 
+use leptoskit_auth::Account;
 use leptoskit_db::Id;
 use leptoskit_rpc as rpc;
 
@@ -97,6 +98,7 @@ fn plan_summary(plan: &Plan) -> PlanSummary {
 			})
 			.collect(),
 		limits: PlanLimits {
+			organizations: plan.limits.organizations,
 			projects: plan.limits.projects,
 			custom_domains: plan.limits.custom_domains,
 		},
@@ -104,6 +106,10 @@ fn plan_summary(plan: &Plan) -> PlanSummary {
 	}
 }
 
+#[expect(
+	clippy::unused_async,
+	reason = "an operation's body is awaited, whatever it does"
+)]
 pub(crate) async fn plans(cx: &rpc::QueryCx) -> rpc::Result<PlanList> {
 	caller(cx.context())?;
 	let services = services(cx.context())?;
@@ -167,6 +173,16 @@ fn bill(catalogue: &Catalogue, plan: &Plan, usage: Usage, own: Option<i64>) -> U
 	);
 	let over = estimate.usage - estimate.included;
 	let (spend_cap, own_spend_cap) = effective_cap(plan, own);
+	// Usage the catalogue has no price for costs nothing here, and a plan
+	// that costs nothing includes none of it: an allowance always has a
+	// price.
+	let unpriced: Vec<String> = estimate
+		.lines
+		.iter()
+		.filter(|line| line.unit_price.is_none() && line.billable > 0)
+		.map(|line| line.meter.to_string())
+		.collect();
+	let free_and_unpriced = plan.is_free() && !unpriced.is_empty();
 	UsageBill {
 		currency: estimate.currency.as_str().to_owned(),
 		plan_price: estimate.plan_price,
@@ -191,7 +207,8 @@ fn bill(catalogue: &Catalogue, plan: &Plan, usage: Usage, own: Option<i64>) -> U
 		own_spend_cap,
 		// Past what the plan includes, and at the cap: a cap of zero is
 		// reached by the first minor unit, and not before.
-		cap_reached: spend_cap.is_some_and(|cap| over > 0 && over >= cap),
+		cap_reached: free_and_unpriced || spend_cap.is_some_and(|cap| over > 0 && over >= cap),
+		unpriced,
 	}
 }
 
@@ -359,7 +376,7 @@ pub(crate) async fn refuse_over_cap(
 		return Ok(());
 	}
 
-	let cap = bill.spend_cap.unwrap_or_default();
+	// The cap itself is for those who may see the bill: `usage` shows it.
 	Err(rpc::Error::forbidden(if plan.is_free() {
 		format!(
 			"spend_cap_reached: `{}` has used everything the `{}` plan includes this month \
@@ -369,12 +386,50 @@ pub(crate) async fn refuse_over_cap(
 		)
 	} else {
 		format!(
-			"spend_cap_reached: `{}`'s usage this month ({month}) has reached its spend cap of \
-			 {cap} {} minor units beyond what the `{}` plan includes; an owner or a billing \
-			 member can raise it with `set_spend_cap`. What runs keeps running",
-			organization.slug, bill.currency, plan.id
+			"spend_cap_reached: `{}`'s usage this month ({month}) has reached its spend cap \
+			 beyond what the `{}` plan includes; an owner or a billing member can see it with \
+			 `usage` and raise it with `set_spend_cap`. What runs keeps running",
+			organization.slug, plan.id
 		)
 	}))
+}
+
+/// `Forbidden` (`quota_exceeded`) when `account` has made as many
+/// organisations on the starting plan as that plan lets one person make.
+/// Every allowance and limit is an organisation's, so without this one
+/// person has as many of each as they care to make organisations.
+///
+/// # Errors
+///
+/// That, or when the database fails.
+pub(crate) async fn refuse_another_organization(
+	db: &impl leptoskit_db::Read,
+	shipping: &Shipping,
+	account: Id<Account>,
+) -> rpc::Result<()> {
+	let plan = super::personal::STARTING_PLAN;
+	let Some(limit) = shipping
+		.catalogue
+		.as_ref()
+		.and_then(|catalogue| catalogue.plan(plan))
+		.and_then(|plan| plan.limits.organizations)
+	else {
+		return Ok(());
+	};
+	let count = Organization::query()
+		.filter(|row| row.created_by.eq(account) & row.plan.eq(plan))
+		.count(db)
+		.await?;
+
+	if count >= limit {
+		return Err(rpc::Error::forbidden(format!(
+			"quota_exceeded: one person can make {limit} organisation{} on the `{plan}` plan, \
+			 their own included, and you have made that many",
+			if limit == 1 { "" } else { "s" },
+		)));
+	}
+
+	Ok(())
 }
 
 /// `Forbidden` (`quota_exceeded`) when `organization` has as many projects
@@ -467,8 +522,8 @@ pub(crate) async fn refuse_another_domain(
 			)
 		} else {
 			format!(
-				"quota_exceeded: the `{}` plan allows {limit} custom domain{}, and `{}` has \
-				 {count}",
+				"quota_exceeded: the `{}` plan allows {limit} custom domain{}, and `{}` has that \
+				 many over all its projects",
 				organization.plan,
 				if limit == 1 { "" } else { "s" },
 				organization.slug
@@ -501,6 +556,12 @@ mod tests {
 		}
 	}
 
+	fn seconds(size: crate::size::Size, count: u64) -> Usage {
+		let mut usage = Usage::default();
+		usage.add(Meter::Compute(size), count);
+		usage
+	}
+
 	fn catalogue(plans: Vec<Plan>) -> Catalogue {
 		Catalogue::new(
 			Currency::parse("usd").expect("a currency"),
@@ -531,6 +592,21 @@ mod tests {
 			(over.over, over.spend_cap, over.cap_reached),
 			(1, Some(0), true)
 		);
+	}
+
+	#[test]
+	fn usage_without_a_price_stops_a_free_plan_and_is_named() {
+		let free = plan("hobby", Some(0), 0, None);
+		let pro = plan("pro", Some(2000), 0, Some(50));
+		let catalogue = catalogue(vec![free.clone(), pro.clone()]);
+		let used = seconds(crate::size::Size::S, 1);
+		let on_free = bill(&catalogue, &free, used.clone(), None);
+		assert_eq!(on_free.over, 0);
+		assert_eq!(on_free.unpriced, ["compute_seconds_s"]);
+		assert!(on_free.cap_reached);
+		let on_pro = bill(&catalogue, &pro, used, None);
+		assert_eq!(on_pro.unpriced, ["compute_seconds_s"]);
+		assert!(!on_pro.cap_reached);
 	}
 
 	#[test]

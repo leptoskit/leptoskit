@@ -5,13 +5,16 @@
 //!
 //! - **Build minutes.** When a build worker finishes an attempt at a build, the
 //!   time from its claim to its finish, by the control plane's clock, rounded
-//!   up to a whole minute. An attempt whose worker went quiet is not counted:
-//!   nobody should pay for a worker that died.
+//!   up to a whole minute. An attempt whose worker went quiet is counted up to
+//!   the end of the lease it last held: a build that never ends, or runs to its
+//!   deadline, used the worker all that time.
 //! - **Compute seconds.** When a cluster's worker reports what an environment
 //!   runs, each process's ready replicas times the seconds since the report
-//!   before, at the size the live deployment planned for it. A gap longer than
-//!   [`MAX_SAMPLE`] counts as [`MAX_SAMPLE`]: a worker that was away isn't
-//!   billed for by guessing what ran meanwhile.
+//!   before, at the size the live deployment planned for it, and never more
+//!   replicas than the release may run. A gap longer than [`MAX_SAMPLE`] counts
+//!   as [`MAX_SAMPLE`]: a worker that was away isn't billed for by guessing
+//!   what ran meanwhile. Whole seconds are counted, and the part of a second
+//!   left over is carried to the next report.
 //!
 //! Every count is written in the transaction that records what it counts,
 //! so a report or a finish that is retried is never counted twice.
@@ -148,15 +151,16 @@ fn build_minutes(claimed: Timestamp, finished: Timestamp) -> u64 {
 	seconds.div_ceil(60).max(1)
 }
 
-/// Counts the attempt at the build `job` that its worker has just
-/// finished, however it ended.
+/// Counts the attempt at the build `job` that ended at `ended`, however it
+/// ended: its worker finished it, or the lease it held ran out.
 ///
 /// # Errors
 ///
 /// When the database fails.
-pub(crate) async fn build_finished(
+pub(crate) async fn build_ended(
 	tx: &impl leptoskit_db::Connection,
 	job: &Job,
+	ended: Timestamp,
 ) -> leptoskit_db::Result<()> {
 	let Some(claimed) = job.claimed_at else {
 		return Ok(());
@@ -176,19 +180,36 @@ pub(crate) async fn build_finished(
 		job.organization_id,
 		project.unwrap_or_else(no_project),
 		Meter::LinuxBuildMinutes,
-		build_minutes(claimed, leptoskit_db::now()),
+		build_minutes(claimed, ended),
 	)
 	.await
 }
 
-/// The seconds a report at `now` is counted for, after one at `previous`.
-fn sample_seconds(previous: Timestamp, now: Timestamp) -> u64 {
-	u64::try_from((now - previous).min(MAX_SAMPLE).num_seconds()).unwrap_or_default()
+/// The whole seconds a report at `now` is counted for, after everything up
+/// to `metered` was counted, and where the count now stands: the part of a
+/// second left over waits for the next report.
+fn sample(metered: Timestamp, now: Timestamp) -> (u64, Timestamp) {
+	let gap = now - metered;
+
+	if gap >= MAX_SAMPLE {
+		return (
+			u64::try_from(MAX_SAMPLE.num_seconds()).unwrap_or_default(),
+			now,
+		);
+	}
+
+	let seconds = gap.num_seconds().max(0);
+	(
+		u64::try_from(seconds).unwrap_or_default(),
+		metered + chrono::TimeDelta::seconds(seconds),
+	)
 }
 
-/// Counts what `observed` says `environment` ran since its worker's
-/// report at `previous`: nothing for a first report, and nothing for a
-/// process the live deployment didn't plan.
+/// Counts what `observed` says `environment` ran since `metered`, the time
+/// its usage was last counted up to, and answers the time it is counted up
+/// to now. Nothing is counted for a process the live deployment didn't
+/// plan, and a process is never counted for more replicas than the release
+/// may run, however many times the report names it.
 ///
 /// # Errors
 ///
@@ -197,14 +218,14 @@ pub(crate) async fn observed(
 	tx: &impl leptoskit_db::Connection,
 	project: &Project,
 	environment: &Environment,
-	previous: Timestamp,
+	metered: Timestamp,
 	now: Timestamp,
 	observed: &Observed,
-) -> leptoskit_db::Result<()> {
-	let seconds = sample_seconds(previous, now);
+) -> leptoskit_db::Result<Timestamp> {
+	let (seconds, counted_to) = sample(metered, now);
 
 	if seconds == 0 {
-		return Ok(());
+		return Ok(counted_to);
 	}
 
 	let environment_id = environment.id;
@@ -213,22 +234,19 @@ pub(crate) async fn observed(
 		.first(tx)
 		.await?
 	else {
-		return Ok(());
+		return Ok(counted_to);
 	};
 	let mut usage = Usage::default();
 
-	for process in &observed.processes {
-		let Some(planned) = live
-			.plan
-			.0
+	for planned in &live.plan.0.processes {
+		let ready = observed
 			.processes
 			.iter()
-			.find(|planned| planned.name == process.name)
-		else {
-			continue;
-		};
-		// Never more than the release may run, whatever the report says.
-		let replicas = u64::from(process.ready_replicas)
+			.filter(|process| process.name == planned.name)
+			.fold(0_u64, |sum, process| {
+				sum.saturating_add(u64::from(process.ready_replicas))
+			});
+		let replicas = ready
 			.min(u64::from(planned.max.max(planned.min)))
 			.min(MAX_REPLICAS);
 		usage.add(
@@ -241,7 +259,7 @@ pub(crate) async fn observed(
 		record(tx, project.organization_id, project.id, meter, quantity).await?;
 	}
 
-	Ok(())
+	Ok(counted_to)
 }
 
 #[cfg(test)]
@@ -287,9 +305,28 @@ mod tests {
 	#[test]
 	fn a_report_is_counted_for_at_most_five_minutes() {
 		let previous = at("2026-11-18T10:00:00Z");
-		assert_eq!(sample_seconds(previous, at("2026-11-18T10:00:30Z")), 30);
-		assert_eq!(sample_seconds(previous, at("2026-11-18T10:05:00Z")), 300);
-		assert_eq!(sample_seconds(previous, at("2026-11-18T18:00:00Z")), 300);
-		assert_eq!(sample_seconds(previous, at("2026-11-18T09:00:00Z")), 0);
+		let later = at("2026-11-18T10:00:30Z");
+		assert_eq!(sample(previous, later), (30, later));
+		let capped = at("2026-11-18T18:00:00Z");
+		assert_eq!(sample(previous, capped), (300, capped));
+		assert_eq!(sample(previous, at("2026-11-18T09:00:00Z")), (0, previous));
+	}
+
+	#[test]
+	fn the_part_of_a_second_left_over_is_carried() {
+		let start = at("2026-11-18T10:00:00Z");
+		let mut metered = start;
+		let mut counted = 0;
+
+		// Ten reports 600 ms apart are six seconds, not none and not ten.
+		for report in 1..=10 {
+			let now = start + chrono::TimeDelta::milliseconds(600 * report);
+			let (seconds, to) = sample(metered, now);
+			counted += seconds;
+			metered = to;
+		}
+
+		assert_eq!(counted, 6);
+		assert_eq!(metered, at("2026-11-18T10:00:06Z"));
 	}
 }
