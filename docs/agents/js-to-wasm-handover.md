@@ -43,7 +43,7 @@ One pull request per item. Every backend is kept in step, with AppKit as the ref
 | 6  | `Modal` and `Popover`                                       | G1       | #896, open  |
 | 7  | Scroll into view                                            | G4       | #913, open  |
 | 8  | A clock hook                                                | G6       | #914, open  |
-| 9  | Typed refusals in the rpc client (status, code, retry time) | G8       | PRNUM, open |
+| 9  | Typed refusals in the rpc client (status, code, retry time) | G8       | #918, open  |
 | 10 | Streams without a database                                  | G3       | not started |
 | 11 | The ⌘ key on the web                                        | G7a      | not started |
 | 12 | New-tab and download links                                  | G14, G15 | not started |
@@ -199,7 +199,7 @@ G6. `leptoskit_use::use_clock(interval)` returns a `Clock` that advances by itse
 - **Not run:** a native guest. There the loop uses the timer plugin through `leptoskit_query`'s `guest` feature, which the query cache already relies on.
 - **Limit to know for the conversions:** the timer stops on owner cleanup. A leptos component on the web has an owner that is cleaned when it leaves. A native guest keeps its owner for as long as it runs, so a clock made in a screen there keeps ticking after the screen leaves; make one for the app. A view function that rebuilds starts a new clock on each run, and `remember(|| use_clock(…))` does not fix that on the web, because the closure runs under the owner of the first build, which is cleaned on the next. A clock that a rebuilt screen can keep would be a new API, and has not been asked for.
 
-### `feat/rpc-typed-refusals` (PRNUM): stacked on `feat/clock-hook`
+### `feat/rpc-typed-refusals` (#918): stacked on `feat/clock-hook`
 
 G8. `rpc::Error::rate_limited(wait)` (429) and `rpc::Error::refused(code, message)` (409, or any status through the variant) reach the caller as `FnError::Refused { status, code, message, retry_after }`.
 
