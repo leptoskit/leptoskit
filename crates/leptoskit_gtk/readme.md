@@ -45,6 +45,8 @@ Every node has a zero-minimum outer GTK frame with exact Yoga geometry. Native i
 
 The backend renders containers, labels and text runs, images, vector drawings, scroll documents, buttons and rich pressables, editable and secure fields, switches, checkboxes, grouped radios, sliders, progress bars, and activity indicators as GTK widgets. Pango provides native text shaping and measurement, including declared writing direction. `GtkTextMeasurer` copies the font-metric hinting GTK applies on the host display; after a window moves to a display with a different scale, call `NativeSurface::refresh_text_measurer`. Images load local file paths and file URLs. Vector drawings paint their paths with cairo after mapping the view box onto the frame, so stroke widths stay in layout units; they paint past the frame unless the element clips. A labelled drawing is an accessible image; an unlabelled one is decorative. The host's explicit color scheme updates GTK's display-wide native theme preference.
 
+A `Modal` shows in a modal, undecorated `gtk::Window` above the window its parent is in, and a `Popover` in a `gtk::Popover` hung from the tree's root frame at the place layout gave it, so neither one's frame sits in its parent's. Escape, the window manager's close and a press outside a popover dispatch `NativeEvent::Dismiss` and leave the overlay up: the next tree closes it. `overlay_shown`, `overlay_window` and `overlay_popover` let tests check this. An overlay needs a window, so one that is open before `open_window` shows with it. A host that puts `view(root)` in a window of its own gets overlays on the first commit after that window is mapped.
+
 GTK sliders use a normalized numeric accessibility range of `0..1`, matching GTK4's native accessibility setters; their accessible value text and spoken description expose the shared numeric value and bounds. The description also reaches older GTK4 AT-SPI implementations that omit value text from their numeric interface. Typed events always use the shared `f64` range and canonical step grid. Radios publish group position relations and a spoken position description because GTK4.8 does not export those relations as AT-SPI attributes. Pressable descendants remain decorative in the accessibility tree.
 
 Requires GTK 4.6 or newer; verified on GTK 4.8.3. On Debian/Ubuntu, install `libgtk-4-dev`, `pkg-config`, `xvfb`, `xauth`, `dbus-x11`, `at-spi2-core`, `fonts-dejavu-core`, and `xdotool`. Run the native harness with the command under "Use it" below.
@@ -71,7 +73,7 @@ Initialize GTK on the application thread, construct `GtkBackend`, and hand it to
 
 ```sh
 GDK_BACKEND=x11 GSK_RENDERER=cairo dbus-run-session -- xvfb-run -a \
-  cargo test -p leptoskit_gtk --test widgets
+  cargo test -p leptoskit_gtk --test widgets --test overlays
 ```
 
 ## Learn more

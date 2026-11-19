@@ -32,6 +32,9 @@ mod imp {
 		pub(super) css: gtk::CssProvider,
 		pub(super) resize: RefCell<Option<ResizeListener>>,
 		pub(super) last_size: Cell<(i32, i32)>,
+		/// Popovers hanging from this frame. GTK leaves presenting them to
+		/// the widget they hang from.
+		pub(super) popovers: RefCell<Vec<gtk::Popover>>,
 	}
 
 	#[glib::object_subclass]
@@ -46,6 +49,10 @@ mod imp {
 		fn dispose(&self) {
 			for child in self.children.take() {
 				child.widget.unparent();
+			}
+
+			for popover in self.popovers.take() {
+				popover.unparent();
 			}
 		}
 	}
@@ -107,6 +114,10 @@ mod imp {
 				child
 					.widget
 					.allocate(allocated_width, allocated_height, -1, Some(transform));
+			}
+
+			for popover in self.popovers.borrow().iter() {
+				popover.present();
 			}
 
 			if self.last_size.replace((width, height)) != (width, height)
@@ -254,6 +265,24 @@ impl Frame {
 		}
 
 		self.queue_allocate();
+	}
+
+	/// Makes a popover this frame's own, placed in this frame's coordinates.
+	pub(crate) fn hang(&self, popover: &gtk::Popover) {
+		popover.set_parent(self);
+		self.imp().popovers.borrow_mut().push(popover.clone());
+	}
+
+	/// Lets go of a popover hung with [`Frame::hang`].
+	pub(crate) fn unhang(&self, popover: &gtk::Popover) {
+		self.imp()
+			.popovers
+			.borrow_mut()
+			.retain(|hung| hung != popover);
+
+		if popover.parent().as_ref() == Some(self.upcast_ref()) {
+			popover.unparent();
+		}
 	}
 
 	pub fn position(&self, widget: &impl IsA<gtk::Widget>, rect: graphene::Rect) {

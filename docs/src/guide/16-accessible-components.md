@@ -167,7 +167,8 @@ One `Dialog` carries the id, the title, and an optional description. `dialog.tit
 - **macOS:** a sheet on the window, which keeps clicks and the keyboard to itself and gives focus back. Escape asks to close.
 - **iOS:** a form sheet, which VoiceOver stays inside. A swipe down, Escape on a hardware keyboard and the VoiceOver escape gesture ask to close.
 - **Android:** a dialog in a window of its own, which TalkBack and the keyboard stay inside. The Back gesture, Escape and a touch outside ask to close.
-- **Windows and Linux (GTK):** drawn over the screen, but Tab still leaves the dialog and nothing asks to close it. Close it from its own buttons.
+- **Linux (GTK):** a modal window above the app's own, which Tab and the screen reader stay inside. Escape asks to close.
+- **Windows:** drawn over the screen, but Tab still leaves the dialog and nothing asks to close it. Close it from its own buttons.
 
 `dialog.container(open)` is the older form: a dialog laid out in the page where you put it, shown or collapsed, with no top layer and no focus handling. Use it for a panel that is a dialog in name only, such as an inline confirmation inside a card. It is not marked `aria-modal`, because nothing keeps focus inside it.
 
@@ -204,7 +205,8 @@ The list is a [`Popover`](07-shared-components.md#show-a-dialog-or-a-menu-above-
 - **macOS:** the list opens in an `NSPopover` at the button. A press on an action runs it, and Escape or a press outside closes the menu. The arrow keys do nothing yet, because macOS does not deliver key presses to the app.
 - **iOS:** the list opens in a popover at the button. A press on an action runs it, and a press outside closes the menu. The arrow keys do nothing yet, because iOS does not deliver key presses to the app.
 - **Android:** the list opens in a popup window at the button. A press on an action runs it, and a touch outside or the Back gesture closes the menu. The arrow keys do nothing yet, because Android does not deliver key presses to the app.
-- **Windows and Linux (GTK):** the list shows beside the button and a press on an action runs it and closes the list. The arrow keys, Escape and a press outside do nothing yet, so the button and the actions are how it closes.
+- **Linux (GTK):** the list opens in a popover at the button, with focus on the first action. A press on an action runs it, and Escape or a press outside closes the menu. The arrow keys do nothing yet, because the GTK backend does not deliver key presses to the app.
+- **Windows:** the list shows beside the button and a press on an action runs it and closes the list. The arrow keys, Escape and a press outside do nothing yet, so the button and the actions are how it closes.
 
 A menu is for actions. For a choice that stays chosen, such as a theme or a sort order, use a `RadioGroup`.
 
