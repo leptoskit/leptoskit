@@ -354,6 +354,14 @@ pub struct NativeSurface<B: NativeBackend> {
 	/// The newest focus request sent to the backend. Serials only grow, so
 	/// an older one is a request that was already carried out.
 	focus_answered: u64,
+	/// The newest reveal request carried out, as for focus.
+	reveal_answered: u64,
+	/// The reveals this commit asks for, waiting for layout.
+	reveals: Vec<(NodeId, crate::RevealRequest)>,
+	/// Where each scroll view is scrolled to, as far as the surface knows:
+	/// from the scroll events dispatched through it, and from the offsets it
+	/// has sent.
+	scrolled: RefCell<std::collections::HashMap<NodeId, (f32, f32)>>,
 	#[cfg(feature = "devtools")]
 	devtools: Devtools,
 }
@@ -382,6 +390,9 @@ impl<B: NativeBackend> NativeSurface<B> {
 			pressed: None,
 			gestures: RefCell::default(),
 			focus_answered: 0,
+			reveal_answered: 0,
+			reveals: Vec::new(),
+			scrolled: RefCell::default(),
 			#[cfg(feature = "devtools")]
 			devtools: Devtools::default(),
 		}

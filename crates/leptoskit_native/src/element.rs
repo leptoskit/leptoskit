@@ -1654,6 +1654,41 @@ impl Element {
 		self
 	}
 
+	/// Scrolls this element into view once each time `reveal` is
+	/// [requested](crate::Reveal::request), after the commit that follows:
+	/// the nearest `ScrollView` around it scrolls, or the page on the web.
+	/// `align` says where the element ends up. Between requests the person
+	/// scrolls freely.
+	///
+	/// ```
+	/// use leptoskit_native::Reveal;
+	/// use leptoskit_native::ScrollAlign;
+	/// use leptoskit_native::components::Text;
+	///
+	/// # reactive_graph::owner::Owner::new().with(|| {
+	/// let to_notice = Reveal::new();
+	/// let notice = Text("Saved.").reveal_on(&to_notice, ScrollAlign::Nearest);
+	/// assert_eq!(notice.props.reveal, None);
+	///
+	/// // Later, in a handler: the next build carries the request.
+	/// to_notice.request();
+	/// let notice = Text("Saved.").reveal_on(&to_notice, ScrollAlign::Nearest);
+	/// assert_eq!(notice.props.reveal.unwrap().align, ScrollAlign::Nearest);
+	/// # });
+	/// ```
+	#[must_use]
+	pub fn reveal_on(
+		mut self,
+		reveal: impl std::borrow::Borrow<crate::Reveal>,
+		align: crate::ScrollAlign,
+	) -> Self {
+		self.props.reveal = reveal
+			.borrow()
+			.serial()
+			.map(|serial| crate::RevealRequest { serial, align });
+		self
+	}
+
 	/// Scrolls a scroll view's content to `offset` whenever the offset
 	/// changes, like a feed that follows a live position or a "back to top"
 	/// button. Between changes the person scrolls freely; the view's

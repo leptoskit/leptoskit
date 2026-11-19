@@ -71,6 +71,9 @@ struct State {
 	/// The windows already listening for Escape and for a press outside a
 	/// popover.
 	watched: Vec<glib::WeakRef<gtk::Window>>,
+	/// The scroll views given a new offset, scrolled once the batch's
+	/// layout says how far each one can go.
+	scrolls: Vec<NodeId>,
 }
 
 struct Host {
@@ -740,6 +743,7 @@ impl NativeBackend for GtkBackend {
 
 		self.applying = false;
 		update_scroll_extents(&self.state.borrow());
+		scroll_to_offsets(&mut self.state.borrow_mut());
 		sync_hosts(&mut self.state.borrow_mut());
 		self.refresh();
 		drop(guard);
@@ -901,12 +905,27 @@ impl NativeBackend for GtkBackend {
 			})
 		});
 		connect(&self.state, id, &widget);
-		self.state.borrow_mut().widgets.insert(id, widget);
+		let mut state = self.state.borrow_mut();
+
+		if kind == NativeKind::ScrollView && props.scroll_offset.is_some() {
+			state.scrolls.push(id);
+		}
+
+		state.widgets.insert(id, widget);
+		drop(state);
 		self.refresh_if_unbatched();
 	}
 
 	fn update_props(&mut self, id: NodeId, props: &NativeProps) {
-		if let Some(widget) = self.state.borrow_mut().widgets.get_mut(&id) {
+		let mut state = self.state.borrow_mut();
+		let mut scrolls = false;
+
+		if let Some(widget) = state.widgets.get_mut(&id) {
+			// A scroll view scrolls when its offset changes, and not again
+			// while it holds the same one.
+			scrolls = widget.kind == NativeKind::ScrollView
+				&& props.scroll_offset.is_some()
+				&& props.scroll_offset != widget.props.scroll_offset;
 			widget.props = props.clone();
 
 			if widget.kind == NativeKind::Vector {
@@ -914,7 +933,18 @@ impl NativeBackend for GtkBackend {
 			}
 		}
 
+		if scrolls {
+			state.scrolls.push(id);
+		}
+
+		drop(state);
 		self.refresh_if_unbatched();
+
+		if !self.applying {
+			let state = &mut *self.state.borrow_mut();
+			update_scroll_extents(state);
+			scroll_to_offsets(state);
+		}
 	}
 
 	fn update_layout(&mut self, id: NodeId, x: f32, y: f32, width: f32, height: f32) {
@@ -1463,6 +1493,36 @@ fn update_scroll_extents(state: &State) {
 		widget
 			.content
 			.set_extent(width.ceil() as i32, height.ceil() as i32);
+	}
+}
+
+/// Scrolls each scroll view that was given a new offset. GTK does not
+/// animate an adjustment, so an animated offset arrives at once.
+fn scroll_to_offsets(state: &mut State) {
+	for id in std::mem::take(&mut state.scrolls) {
+		let Some(widget) = state.widgets.get(&id) else {
+			continue;
+		};
+		let (Some(offset), Some(scroll)) = (
+			widget.props.scroll_offset,
+			widget.control.downcast_ref::<gtk::ScrolledWindow>(),
+		) else {
+			continue;
+		};
+		let (width, height) = widget.content.extent().unwrap_or_default();
+
+		for (adjustment, extent, value) in [
+			(scroll.hadjustment(), width, offset.x),
+			(scroll.vadjustment(), height, offset.y),
+		] {
+			// The content's new extent reaches the adjustment when GTK next
+			// allocates. Until then the old one would stop the scroll short.
+			if adjustment.upper() < f64::from(extent) {
+				adjustment.set_upper(f64::from(extent));
+			}
+
+			adjustment.set_value(f64::from(value.max(0.0)));
+		}
 	}
 }
 

@@ -111,6 +111,9 @@ pub struct UIKitBackend {
 	animations_active: Cell<bool>,
 	/// Every live `Modal` and `Popover`, in the order they were created.
 	overlays: Vec<NodeId>,
+	/// The scroll views given a new offset, scrolled once the batch's
+	/// layout says how far each one can go.
+	scrolls: Vec<NodeId>,
 }
 
 impl std::fmt::Debug for UIKitBackend {
@@ -263,6 +266,7 @@ impl UIKitBackend {
 			applying: false,
 			animations_active: Cell::new(true),
 			overlays: Vec::new(),
+			scrolls: Vec::new(),
 		}
 	}
 
@@ -537,6 +541,7 @@ impl UIKitBackend {
 
 	fn refresh(&mut self) {
 		self.refresh_scrolls();
+		self.scroll_to_offsets();
 		self.refresh_radios();
 
 		for widget in self.widgets.iter_mut().flatten() {
@@ -560,6 +565,31 @@ impl UIKitBackend {
 
 				scroll.setContentSize(size);
 			}
+		}
+	}
+
+	/// Scrolls each scroll view that was given a new offset, as far as its
+	/// content allows.
+	fn scroll_to_offsets(&mut self) {
+		for id in std::mem::take(&mut self.scrolls) {
+			let Some(widget) = self.widgets.get(id.index()).and_then(Option::as_ref) else {
+				continue;
+			};
+			let (Some(offset), Control::Scroll { scroll, .. }) =
+				(widget.props.scroll_offset, &widget.control)
+			else {
+				continue;
+			};
+			let visible = widget.view.bounds().size;
+			let extent = scroll.contentSize();
+			let point = CGPoint::new(
+				f64::from(offset.x).clamp(0.0, (extent.width - visible.width).max(0.0)),
+				f64::from(offset.y).clamp(0.0, (extent.height - visible.height).max(0.0)),
+			);
+			let animated = offset.animated
+				&& self.animations_active.get()
+				&& UIView::areAnimationsEnabled(self.mtm);
+			scroll.setContentOffset_animated(point, animated);
 		}
 	}
 
@@ -1663,6 +1693,10 @@ impl NativeBackend for UIKitBackend {
 		let mut widget = self.build(id, kind);
 		apply_props(&mut widget, props, self.mtm);
 
+		if kind == NativeKind::ScrollView && props.scroll_offset.is_some() {
+			self.scrolls.push(id);
+		}
+
 		if self.widgets.len() <= id.index() {
 			self.widgets.resize_with(id.index() + 1, || None);
 		}
@@ -1678,7 +1712,18 @@ impl NativeBackend for UIKitBackend {
 	fn update_props(&mut self, id: NodeId, props: &NativeProps) {
 		let _events = self.sink.suppress();
 		let mtm = self.mtm;
-		apply_props(self.widget_mut(id), props, mtm);
+		let widget = self.widget_mut(id);
+		// A scroll view scrolls when its offset changes, and not again while
+		// it holds the same one.
+		let scrolls = widget.kind == NativeKind::ScrollView
+			&& props.scroll_offset.is_some()
+			&& props.scroll_offset != widget.props.scroll_offset;
+		apply_props(widget, props, mtm);
+
+		if scrolls {
+			self.scrolls.push(id);
+		}
+
 		self.refresh_unbatched();
 	}
 

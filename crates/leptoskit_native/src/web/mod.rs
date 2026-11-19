@@ -113,6 +113,7 @@ pub fn render(element: Element) -> AnyView {
 		.unwrap_or_else(|error| panic!("invalid leptoskit element tree: {error}"));
 	let wants_focus = asks_for_focus(&element);
 	let scrolls = sets_scroll_offset(&element);
+	let reveals = asks_to_reveal(&element);
 	let mut sheets = BTreeMap::new();
 	let mut labels = labels::Labels::default();
 	labels.collect(std::slice::from_ref(&element));
@@ -140,6 +141,10 @@ pub fn render(element: Element) -> AnyView {
 
 	if scrolls {
 		scroll_after_render();
+	}
+
+	if reveals {
+		reveal_after_render();
 	}
 
 	overlay::sync_after_render();
@@ -206,6 +211,88 @@ fn asks_for_focus(element: &Element) -> bool {
 /// Whether any element in the tree sets a scroll offset.
 fn sets_scroll_offset(element: &Element) -> bool {
 	element.props.scroll_offset.is_some() || element.children.iter().any(sets_scroll_offset)
+}
+
+/// Whether any element in the tree asks to be scrolled into view.
+fn asks_to_reveal(element: &Element) -> bool {
+	element.props.reveal.is_some() || element.children.iter().any(asks_to_reveal)
+}
+
+/// Scrolls the element carrying the newest reveal request into view, once
+/// the new DOM is in place, when the renderer has not carried that request
+/// out yet. Requests are numbered in the order they are made, so the
+/// highest number carried out is all there is to remember, and an element
+/// rebuilt with a request it already answered leaves the person's own
+/// scrolling alone.
+///
+/// The browser scrolls every scrolling ancestor that hides the element,
+/// the page included. It glides there unless the person asked their system
+/// for less motion.
+fn reveal_after_render() {
+	#[cfg(target_arch = "wasm32")]
+	queue_microtask(|| {
+		thread_local! {
+			static ANSWERED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+		}
+
+		let Some(window) = web_sys::window() else {
+			return;
+		};
+		let Some(document) = window.document() else {
+			return;
+		};
+		let Ok(candidates) = document.query_selector_all("[data-lk-reveal]") else {
+			return;
+		};
+		let newest = (0..candidates.length())
+			.filter_map(|index| candidates.item(index)?.dyn_into::<web_sys::Element>().ok())
+			.filter_map(|element| {
+				let request = element.get_attribute("data-lk-reveal")?;
+				let (serial, align) = request.split_once(' ')?;
+				Some((serial.parse::<u64>().ok()?, align.to_owned(), element))
+			})
+			.max_by_key(|(serial, ..)| *serial);
+		let Some((serial, align, target)) = newest.filter(|(serial, ..)| *serial > ANSWERED.get())
+		else {
+			return;
+		};
+		ANSWERED.set(serial);
+
+		let still = window
+			.match_media("(prefers-reduced-motion: reduce)")
+			.ok()
+			.flatten()
+			.is_some_and(|query| query.matches());
+		let options = web_sys::ScrollIntoViewOptions::new();
+		options.set_block(match align.as_str() {
+			"start" => web_sys::ScrollLogicalPosition::Start,
+			"center" => web_sys::ScrollLogicalPosition::Center,
+			"end" => web_sys::ScrollLogicalPosition::End,
+			_ => web_sys::ScrollLogicalPosition::Nearest,
+		});
+		options.set_inline(web_sys::ScrollLogicalPosition::Nearest);
+		options.set_behavior(if still {
+			web_sys::ScrollBehavior::Instant
+		} else {
+			web_sys::ScrollBehavior::Smooth
+		});
+		target.scroll_into_view_with_scroll_into_view_options(&options);
+	});
+}
+
+/// The attributes that carry an element's one-shot requests to the page:
+/// to take focus, and to be scrolled into view.
+fn one_shot_attributes(focus: Option<String>, reveal: Option<String>) -> impl Attribute {
+	(
+		custom_attribute("data-lk-focus-request", focus),
+		custom_attribute("data-lk-reveal", reveal),
+	)
+}
+
+/// The `data-lk-reveal` value: the request's serial, then where the element
+/// ends up.
+fn reveal_target(reveal: crate::RevealRequest) -> String {
+	format!("{} {}", reveal.serial, reveal.align.as_str())
 }
 
 /// The `data-lk-scroll` value naming a scroll target, which the renderer
@@ -532,6 +619,7 @@ fn render_node(
 	let focused = props.focused == Some(true);
 	let scroll = props.scroll_offset.map(scroll_target);
 	let focus_request = props.focus_request.as_ref().map(u64::to_string);
+	let reveal = props.reveal.map(reveal_target);
 	// Every sheet is in by now: the children's were added above.
 	let render_scope = root.then(|| root_scope(sheets));
 
@@ -540,7 +628,7 @@ fn render_node(
 		custom_attribute("data-lk-style", scope),
 		custom_attribute("data-lk-motion", motion_scope),
 		custom_attribute("data-lk-focus", focused.then_some("true")),
-		custom_attribute("data-lk-focus-request", focus_request),
+		one_shot_attributes(focus_request, reveal),
 		custom_attribute("data-lk-scroll", scroll),
 		custom_attribute("for", label_for),
 		custom_attribute("class", classes),

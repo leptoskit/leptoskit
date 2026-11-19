@@ -149,6 +149,10 @@ mod linux {
 				scroll_and_disabled_hidden_ancestors,
 			),
 			(
+				"a_scroll_view_scrolls_to_an_offset_and_to_a_revealed_row",
+				a_scroll_view_scrolls_to_an_offset_and_to_a_revealed_row,
+			),
+			(
 				"pango_metrics_and_worker_measurement",
 				pango_metrics_and_worker_measurement,
 			),
@@ -1278,6 +1282,60 @@ mod linux {
 		assert!(!button.is_sensitive());
 
 		assert!(!events.borrow().iter().any(|(id, _)| *id == disabled));
+	}
+
+	fn a_scroll_view_scrolls_to_an_offset_and_to_a_revealed_row() {
+		use leptoskit_native::RevealRequest;
+		use leptoskit_native::ScrollAlign;
+		use leptoskit_native::ScrollOffset;
+
+		// A 96-tall view of ten 48-tall rows.
+		let rows = |offset: Option<f32>, reveal: Option<RevealRequest>| {
+			let view = ScrollView().class("w-40 h-24").children((0..10).map(|row| {
+				View()
+					.class("h-12 shrink-0")
+					.with_props(|props| props.reveal = reveal.filter(|_| row == 6))
+			}));
+
+			View().child(match offset {
+				Some(offset) => view.scroll_offset(ScrollOffset::new(0.0, offset)),
+				None => view,
+			})
+		};
+		let mounted = mounted(&rows(None, None));
+		let scroll = native::<gtk::ScrolledWindow>(&mounted, child(&mounted, 0));
+		let position = || scroll.vadjustment().value();
+		assert!(position().abs() < f64::EPSILON);
+
+		mounted
+			.surface
+			.borrow_mut()
+			.set_root(&rows(Some(120.0), None));
+		pump();
+		assert!((position() - 120.0).abs() < f64::EPSILON, "{}", position());
+
+		// The person scrolls on, and the offset the view still holds does
+		// not pull them back.
+		scroll.vadjustment().set_value(40.0);
+		pump();
+		mounted
+			.surface
+			.borrow_mut()
+			.set_root(&rows(Some(120.0), None));
+		pump();
+		assert!((position() - 40.0).abs() < f64::EPSILON, "{}", position());
+
+		// Row 6 starts at 288, and its end comes to the view's end.
+		let reveal = RevealRequest {
+			serial: 1,
+			align: ScrollAlign::Nearest,
+		};
+		mounted
+			.surface
+			.borrow_mut()
+			.set_root(&rows(Some(120.0), Some(reveal)));
+		pump();
+		assert!((position() - 240.0).abs() < f64::EPSILON, "{}", position());
 	}
 
 	fn pango_metrics_and_worker_measurement() {

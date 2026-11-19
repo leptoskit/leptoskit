@@ -924,6 +924,29 @@ fn a_focus_request_is_written_where_the_browser_can_carry_it_out() {
 }
 
 #[test]
+fn a_reveal_is_written_where_the_browser_can_carry_it_out() {
+	use leptoskit_native::Reveal;
+	use leptoskit_native::ScrollAlign;
+
+	let page = reactive_graph::owner::Owner::new().with(|| {
+		let to_notice = Reveal::new();
+		let before = render(Text("Saved.").reveal_on(to_notice, ScrollAlign::Center)).to_html();
+		assert!(!before.contains("data-lk-reveal"), "{before}");
+
+		to_notice.request();
+		render(Text("Saved.").reveal_on(to_notice, ScrollAlign::Center)).to_html()
+	});
+	let (_, request) = page
+		.split_once("data-lk-reveal=\"")
+		.unwrap_or_else(|| panic!("{page}"));
+	let (request, _) = request.split_once('"').unwrap();
+	let (serial, align) = request.split_once(' ').unwrap();
+
+	assert!(serial.parse::<u64>().unwrap() > 0, "{page}");
+	assert_eq!(align, "center");
+}
+
+#[test]
 fn a_modal_is_a_dialog_and_a_popover_carries_the_popover_attribute() {
 	use leptoskit_native::Placement;
 	use leptoskit_native::components::Button;

@@ -146,7 +146,7 @@ impl<B: NativeBackend> NativeSurface<B> {
 			);
 		}
 
-		let props = self.props_to_send(&element.props);
+		let props = self.props_to_send(id, &element.props);
 		// A backend with no overlays of its own shows one as a container.
 		let overlay = matches!(element.kind, NativeKind::Modal | NativeKind::Popover);
 		let kind = if overlay && !self.backend.presents_overlays() {
@@ -236,12 +236,21 @@ impl<B: NativeBackend> NativeSurface<B> {
 	/// commit that makes it: every later update leaves it out, and so does a
 	/// widget created while it still holds a request already carried out.
 	/// Backends then move focus once and the person can move on.
-	fn props_to_send(&mut self, props: &NativeProps) -> NativeProps {
+	///
+	/// A reveal request never travels. The surface answers it once layout
+	/// knows where the widget is, by scrolling the scroll view that holds it.
+	fn props_to_send(&mut self, id: NodeId, props: &NativeProps) -> NativeProps {
 		let mut props = props.clone();
 
 		match props.focus_request {
 			Some(serial) if serial > self.focus_answered => self.focus_answered = serial,
 			_ => props.focus_request = None,
+		}
+
+		if let Some(reveal) = props.reveal.take()
+			&& reveal.serial > self.reveal_answered
+		{
+			self.reveals.push((id, reveal));
 		}
 
 		props
@@ -252,7 +261,7 @@ impl<B: NativeBackend> NativeSurface<B> {
 		if self.shadows[id.index()].props != element.props {
 			self.shadows[id.index()].props = element.props.clone();
 			self.update_text_measure(id, element);
-			let props = self.props_to_send(&element.props);
+			let props = self.props_to_send(id, &element.props);
 			out.push(Mutation::UpdateProps { id, props });
 		}
 
@@ -358,6 +367,7 @@ impl<B: NativeBackend> NativeSurface<B> {
 
 		self.frames[id.index()] = None;
 		self.hit_areas[id.index()] = HitArea::DETACHED;
+		self.scrolled.borrow_mut().remove(&id);
 		out.push(Mutation::Delete { id });
 	}
 }

@@ -37,6 +37,7 @@ impl<B: NativeBackend> NativeSurface<B> {
 		self.overlays.clear();
 		self.collect_frames(root, 0.0, 0.0, &mut frames);
 		self.place_popovers(&mut frames);
+		self.scroll_to_reveals(&mut frames);
 		self.backend.apply(&frames);
 		#[cfg(feature = "devtools")]
 		{
@@ -45,6 +46,77 @@ impl<B: NativeBackend> NativeSurface<B> {
 			if let Some(observer) = &mut self.devtools.observer {
 				observer(&commit);
 			}
+		}
+	}
+
+	/// Answers the reveals this commit asked for, now that every frame is
+	/// known: the nearest scroll view around each revealed node is given
+	/// the offset that brings the node into view.
+	///
+	/// A backend scrolls when a scroll view's offset changes. Asking twice
+	/// for the same place, with the person scrolling away in between, is
+	/// still two reveals, so the offset is cleared first.
+	fn scroll_to_reveals(&mut self, out: &mut MutationList) {
+		for (id, reveal) in std::mem::take(&mut self.reveals) {
+			// Every request made since the last commit is new, whatever
+			// order the tree holds them in.
+			self.reveal_answered = self.reveal_answered.max(reveal.serial);
+			let align = reveal.align;
+
+			if !self.is_committed(id) {
+				continue;
+			}
+
+			let mut view = self.shadows[id.index()].parent;
+
+			while let Some(candidate) = view
+				&& self.shadows[candidate.index()].kind != NativeKind::ScrollView
+			{
+				view = self.shadows[candidate.index()].parent;
+			}
+
+			let Some(view) = view else {
+				continue;
+			};
+			let target = self.hit_areas[id.index()];
+			let frame = self.hit_areas[view.index()];
+			let known = self.scrolled.borrow().get(&view).copied();
+			let (current_x, current_y) = known.unwrap_or_else(|| {
+				self.shadows[view.index()]
+					.props
+					.scroll_offset
+					.map_or((0.0, 0.0), |offset| (offset.x, offset.y))
+			});
+			// Across the way the view scrolls, the least movement is right
+			// whatever was asked for along it.
+			let x = crate::ScrollAlign::Nearest.offset(
+				target.left - frame.left,
+				target.width,
+				frame.width,
+				current_x,
+			);
+			let y = align.offset(
+				target.top - frame.top,
+				target.height,
+				frame.height,
+				current_y,
+			);
+
+			if (x, y) == (current_x, current_y) {
+				continue;
+			}
+
+			let mut props = self.shadows[view.index()].props.clone();
+			props.focus_request = None;
+			props.reveal = None;
+			props.scroll_offset = None;
+			out.push(Mutation::UpdateProps {
+				id: view,
+				props: props.clone(),
+			});
+			props.scroll_offset = Some(crate::ScrollOffset::new(x, y).animated());
+			out.push(Mutation::UpdateProps { id: view, props });
+			self.scrolled.borrow_mut().insert(view, (x, y));
 		}
 	}
 
