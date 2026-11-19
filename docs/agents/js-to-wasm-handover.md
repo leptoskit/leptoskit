@@ -219,7 +219,7 @@ G3. A `#[rpc::stream]` body can take `rpc::StreamCx` (the caller, no database), 
 - **Not run:** the Postgres suites (`initdb` won't run as root here), a browser or native client against `LiveStreams`, and `#[rpc::stream(resumable)]` on `LiveStreams` (the same `StreamSet` path as `Live`, which the SQLite suites cover).
 - **For the demo:** its three feeds become `#[rpc::stream]` bodies taking `StreamCx`, served by `LiveStreams` beside the demo's own routes. The bounded-window reconnect maps onto `resumable`.
 
-### `feat/key-meta` (#PRNUM): stacked on `feat/streams-without-db`
+### `feat/key-meta` (#924): stacked on `feat/streams-without-db`
 
 G7a. `KeyPress` has a `meta` field and `KeyPress::meta()`, and `KeyPress::is_primary()` is ⌘ on Apple and Ctrl elsewhere. The web no longer drops ⌘ keys before `on_key`; a key no handler takes is not prevented, so the browser's own ⌘ shortcuts still work.
 
