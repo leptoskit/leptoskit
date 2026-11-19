@@ -75,6 +75,101 @@ pub struct PlatformConfig {
 	pub addons: Addons,
 	/// SSH/API administrators, never an unrestricted default.
 	pub admin_cidrs: Vec<String>,
+	/// Optional in-cluster `LeptosKit` Cloud control plane deployment
+	/// (`50-control-plane` manifests).
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub control_plane: Option<ControlPlaneConfig>,
+	/// Optional in-cluster cluster and build worker deployments
+	/// (`60-workers` manifests).
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub workers: Option<WorkersConfig>,
+}
+
+/// `[control_plane]`: in-cluster `leptoskit-cloud-control` deployment,
+/// dedicated CNPG database, migration job, and Ingress.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ControlPlaneConfig {
+	/// Pinned container image reference (prefer `@sha256:…` digest pin).
+	pub image: String,
+	/// Control plane Deployment replicas (defaults to 1).
+	#[serde(default = "default_one")]
+	pub replicas: u16,
+	/// Dedicated CNPG Postgres instances for control-plane metadata.
+	#[serde(default = "default_one")]
+	pub db_instances: u16,
+	/// Storage size for the control-plane CNPG cluster (e.g. `20Gi`).
+	#[serde(default = "default_control_db_size")]
+	pub db_storage_size: String,
+	/// Optional Kubernetes Secret name containing control-plane keys
+	/// (`LEPTOSKIT_CLOUD_AUTH_KEYS`, `LEPTOSKIT_CLOUD_VAULT_KEYS`, etc.).
+	#[serde(default = "default_control_secret")]
+	pub secret_name: String,
+	/// Optional email address idempotently promoted to operator on first boot
+	/// (`LEPTOSKIT_CLOUD_BOOTSTRAP_OPERATOR_EMAIL`).
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub bootstrap_operator_email: Option<String>,
+	/// Whether S3 checksum headers are sent
+	/// (`LEPTOSKIT_CLOUD_S3_CHECKSUM_HEADERS`).
+	#[serde(default = "default_true")]
+	pub s3_checksum_headers: bool,
+	/// Header set by the edge proxy carrying the single client IP (defaults to
+	/// `cf-connecting-ip` behind Cloudflare).
+	#[serde(default = "default_client_ip_header")]
+	pub client_ip_header: String,
+}
+
+/// `[workers]`: in-cluster `leptoskit-cloud-worker` Deployments (cluster role
+/// and optional rootless `BuildKit` build worker).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkersConfig {
+	/// Pinned image reference for the cluster worker
+	/// (`leptoskit-cloud-worker`).
+	pub cluster_image: String,
+	/// Optional pinned image reference for the build worker
+	/// (`leptoskit-cloud-builder`). When omitted, no in-cluster build worker
+	/// Deployment is emitted.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub build_image: Option<String>,
+	/// Persistent cache PVC size for the build worker (e.g. `40Gi`).
+	#[serde(default = "default_build_cache_size")]
+	pub build_cache_size: String,
+	/// Allow scheduling the build worker on shared nodes when no dedicated
+	/// `Pool::Build` node exists (useful for single-box launch clusters).
+	#[serde(default)]
+	pub allow_build_on_shared_node: bool,
+	/// Seconds between cluster worker `report_status` scrapes (default 30).
+	#[serde(default = "default_status_interval")]
+	pub status_interval_seconds: u64,
+}
+
+const fn default_one() -> u16 {
+	1
+}
+
+const fn default_true() -> bool {
+	true
+}
+
+fn default_control_db_size() -> String {
+	"20Gi".into()
+}
+
+fn default_control_secret() -> String {
+	"control-secrets".into()
+}
+
+fn default_client_ip_header() -> String {
+	"cf-connecting-ip".into()
+}
+
+fn default_build_cache_size() -> String {
+	"40Gi".into()
+}
+
+const fn default_status_interval() -> u64 {
+	30
 }
 
 /// Region's cluster map.
@@ -633,6 +728,43 @@ impl PlatformConfig {
 				)?;
 				require(slug(name), "cluster name must be a slug")?;
 				cluster.validate(self.isolation.platform)?;
+			}
+		}
+		self.validate_workloads()
+	}
+
+	fn validate_workloads(&self) -> Result<(), PlatformError> {
+		if let Some(cp) = &self.control_plane {
+			require(
+				!cp.image.trim().is_empty() && !cp.image.ends_with(":latest"),
+				"control_plane.image must be a pinned image reference (not :latest)",
+			)?;
+			require(
+				cp.replicas > 0 && cp.db_instances > 0,
+				"control_plane replicas and db_instances must be positive",
+			)?;
+			require(
+				slug(&cp.secret_name),
+				"control_plane.secret_name must be a valid Kubernetes secret slug",
+			)?;
+			require(
+				!cp.client_ip_header.eq_ignore_ascii_case("x-forwarded-for")
+					&& !cp.client_ip_header.eq_ignore_ascii_case("forwarded"),
+				"control_plane.client_ip_header must name a single-IP proxy header, never \
+				 x-forwarded-for or forwarded",
+			)?;
+		}
+		if let Some(workers) = &self.workers {
+			require(
+				!workers.cluster_image.trim().is_empty()
+					&& !workers.cluster_image.ends_with(":latest"),
+				"workers.cluster_image must be a pinned image reference (not :latest)",
+			)?;
+			if let Some(build_image) = &workers.build_image {
+				require(
+					!build_image.trim().is_empty() && !build_image.ends_with(":latest"),
+					"workers.build_image must be a pinned image reference (not :latest)",
+				)?;
 			}
 		}
 		Ok(())
