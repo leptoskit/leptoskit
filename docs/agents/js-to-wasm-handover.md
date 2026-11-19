@@ -40,7 +40,7 @@ One pull request per item. Every backend is kept in step, with AppKit as the ref
 | 3  | Labels that focus their fields                              | G13      | #879, open  |
 | 4  | One-shot focus requests                                     | G2       | #887, open  |
 | 5  | Arrow-key navigation for tabs, radio groups and menus       | G5       | #892, open  |
-| 6  | `Modal` and `Popover`                                       | G1       | in progress |
+| 6  | `Modal` and `Popover` (native presentations still to come)  | G1       | #896, open  |
 | 7  | Scroll into view                                            | G4       | not started |
 | 8  | A clock hook                                                | G6       | not started |
 | 9  | Typed refusals in the rpc client (status, code, retry time) | G8       | not started |
@@ -110,6 +110,17 @@ The first part of G1: the API, the shared surface, the web and the terminal. The
 - **Run on Linux:** `leptoskit_native`'s `tests/overlay.rs` and the markup test in `tests/web.rs`; two Chrome tests in `tests/web_browser.rs`; `leptoskit_tui`'s `tests/overlays.rs` through the real host loop.
 - **Native:** nothing has run. AppKit, UIKit, GTK, Windows, Android and the Swift and Kotlin renderers only receive a `View`, so the change to them is the two new match arms. Nothing there asks to dismiss an overlay, moves focus into it, or lifts it out of a clipping parent.
 - **Not tested:** hydrating a server-rendered `<dialog open>` into a modal. The code path is the same `sync` the Chrome tests run, but no test starts from server markup.
+
+### `feat/aria-menu` (#901): stacked on `feat/overlays`
+
+The second part of G1: the two `leptoskit_aria` components the audit names.
+
+- **`Menu`** (`crates/leptoskit_aria/src/menu.rs`): `Menu::new(id, open).button(el).item(label, on_select)`, plus `.content(el)` for the last item, `.placement(..)` and `.on_toggle(Fn(bool))`. It becomes a `View` holding the button (`{id}-button`, `aria-haspopup="menu"`, `aria-expanded`, `aria-controls`) and a `Popover` with the `menu` role (`{id}-menu`) whose items are `Pressable`s with the `menuitem` role, `tab_index(-1)` and one `FocusRequest` each. Arrow keys go through `roving::target`; Tab closes. The audit sketched `new`, `button` and `item` only: `on_toggle` is how the app's open state hears the button, a choice and a dismissal, and `content` and `placement` pass through to what is underneath.
+- **`Dialog::modal(open)`** returns `Element::modal(open)` with the dialog's id and its title and description references. `container(open)` is unchanged.
+- **Terminal:** `input::tab` dismisses the top popover when Tab would move focus out of it, `TuiBackend::can_take_focus` lets focus requests and `initial_focus` reach `tab_index(-1)` controls, and `paint` underlines only the focused `Pressable` (it underlined all of them, which hid which menu item had focus).
+- **Run on Linux:** `leptoskit_aria`'s `tests/components.rs` (headless), `tests/terminal.rs` (the real terminal host loop: open, arrows, choose, Escape, Tab, focus return) and the new `tests/web.rs` in Chrome (added to `test:browser`); `leptoskit_tui`'s `tests/overlays.rs` and `tests/render.rs`.
+- **Native:** nothing has run and nothing native changed. A menu there is a popover drawn in place whose items press; keys and dismissal wait for the native presentations.
+- **Not tested:** real Escape and a real pointer press outside a menu in Chrome. The test hides the popover the way the browser does and checks that the menu hears it.
 
 ### `feat/public-demo`: no pull request
 

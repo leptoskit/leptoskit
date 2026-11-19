@@ -304,6 +304,39 @@ fn escape_closes_a_popover_and_focus_goes_back_to_its_anchor() {
 }
 
 #[test]
+fn tab_moves_inside_a_popover_and_closes_it_on_the_way_out() {
+	let keys = |tabs: usize| {
+		let mut keys = vec![plain(KeyCode::Tab), plain(KeyCode::Enter)];
+		keys.extend((0..tabs).map(|_| plain(KeyCode::Tab)));
+		keys
+	};
+	let page = Arc::new(Mutex::new(Page::default()));
+	let inside = session(menu(&page), keys(1));
+	let frame = inside.frames.last().unwrap();
+
+	assert_eq!(page.lock().unwrap().log, ["menu"]);
+	assert!(is_focused(frame, "Sign out"), "{:#?}", inside.lines());
+
+	// Past the last control the popover closes, and focus goes back to
+	// where it was before the popover opened.
+	let page = Arc::new(Mutex::new(Page::default()));
+	let left = session(menu(&page), keys(2));
+	let frame = left.frames.last().unwrap();
+
+	assert_eq!(page.lock().unwrap().log, ["menu", "dismissed"]);
+	assert!(find(frame, "Profile").is_none(), "{:#?}", left.lines());
+	assert!(is_focused(frame, "Menu"));
+
+	// Shift-tab from the first control leaves the same way.
+	let page = Arc::new(Mutex::new(Page::default()));
+	let mut back = keys(0);
+	back.push(plain(KeyCode::BackTab));
+	session(menu(&page), back);
+
+	assert_eq!(page.lock().unwrap().log, ["menu", "dismissed"]);
+}
+
+#[test]
 fn a_press_outside_a_popover_closes_it_and_still_lands() {
 	let page = Arc::new(Mutex::new(Page::default()));
 	let opened = session(

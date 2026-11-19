@@ -249,6 +249,17 @@ impl TuiBackend {
 		None
 	}
 
+	/// Whether the app can move focus to a widget: one of a kind that takes
+	/// focus, enabled and showing, and inside the open modal when there is
+	/// one. A negative `tab_index` only takes a widget out of the Tab
+	/// order, as in a browser, so a menu's items can still be given focus.
+	fn can_take_focus(&self, id: NodeId) -> bool {
+		self.node(id)
+			.is_some_and(|node| crate::focus::focusable_kind(node.kind))
+			&& crate::focus::path_active(self, id)
+			&& self.top_modal().is_none_or(|modal| self.within(id, modal))
+	}
+
 	/// Moves focus into each overlay that opened in the last commit and
 	/// back out of each one that closed. An opening overlay's
 	/// `initial_focus` takes focus, or else the first focusable widget
@@ -288,7 +299,7 @@ impl TuiBackend {
 				.and_then(|node| node.props.overlay.as_ref())
 				.and_then(|overlay| overlay.initial_focus.as_deref())
 				.and_then(|wanted| self.node_with_id(wanted))
-				.filter(|target| ring.contains(target));
+				.filter(|&target| self.can_take_focus(target));
 			let target =
 				named.or_else(|| ring.iter().copied().find(|&target| self.within(target, id)));
 			let modal = self
@@ -618,7 +629,7 @@ impl NativeBackend for TuiBackend {
 		// `focused(true)` still takes it back, as it does after any commit.
 		if let Some(node) = mutations
 			.focus_target()
-			.filter(|node| self.focusables().contains(node))
+			.filter(|&node| self.can_take_focus(node))
 		{
 			let events = self.set_focus(Some(node));
 			self.pending.extend(events);

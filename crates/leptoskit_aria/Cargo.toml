@@ -10,7 +10,7 @@ license.workspace = true
 readme = "readme.md"
 repository.workspace = true
 rust-version.workspace = true
-description = "Headless accessible components for the leptoskit element tree: disclosure, toggle buttons, tabs, labeled fields, and dialogs wired for the web and every native backend."
+description = "Headless accessible components for the leptoskit element tree: disclosure, toggle buttons, tabs, labeled fields, dialogs, and menus wired for the web and every native backend."
 
 [dependencies]
 leptoskit_native = { workspace = true }
@@ -20,6 +20,15 @@ leptoskit_yoga = { workspace = true }
 leptoskit_testing = { workspace = true }
 leptoskit_tui = { workspace = true }
 reactive_graph = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+js-sys = { workspace = true }
+leptos = { workspace = true, features = ["csr"] }
+leptoskit_native = { workspace = true, features = ["web"] }
+wasm-bindgen = { workspace = true }
+wasm-bindgen-futures = { workspace = true }
+wasm-bindgen-test = { workspace = true }
+web-sys = { workspace = true, features = ["Document", "Element", "HtmlElement", "KeyboardEvent", "KeyboardEventInit", "Window"] }
 
 [lints]
 workspace = true

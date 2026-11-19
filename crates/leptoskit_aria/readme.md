@@ -1,7 +1,7 @@
 <h1 align="center">leptoskit_aria</h1>
 
 <p align="center">
-  <strong>leptoskit_aria</strong> provides headless accessible components for the shared element tree: disclosure, toggle buttons, tabs, labeled fields, and dialogs with roles and state wired for web and native.
+  <strong>leptoskit_aria</strong> provides headless accessible components for the shared element tree: disclosure, toggle buttons, tabs, labeled fields, dialogs, and menus with roles and state wired for web and native.
 </p>
 
 <br>
@@ -48,9 +48,10 @@ Use the crate directly or enable `leptoskit`'s `aria` feature and import `leptos
 | `Tabs`                                 | Tabs with selection, arrow keys, set position, and panel relationships.     |
 | `RadioGroup`                           | A choice of one among cards or rows, as one Tab stop with arrow keys.       |
 | `Field`                                | Label, help text, and error wiring for any input element.                   |
-| `Dialog`                               | A dialog container named by its title and described by its description.     |
+| `Dialog`                               | A dialog named by its title and described by its description.               |
+| `Menu`                                 | A button that opens a list of actions, with arrow keys and focus return.    |
 
-Components are plain functions, or small values like `Field`, `Tabs`, and `Dialog`, built from current state plus callbacks, matching the leptoskit rebuild model: screens own state — signals, atomics, or otherwise — and re-render the tree when it changes. The parts are separate elements so layout stays the app's choice.
+Components are plain functions, or small values like `Field`, `Tabs`, `Dialog`, and `Menu`, built from current state plus callbacks, matching the leptoskit rebuild model: screens own state — signals, atomics, or otherwise — and re-render the tree when it changes. The parts are separate elements so layout stays the app's choice.
 
 ## How it fits
 

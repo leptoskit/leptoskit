@@ -587,10 +587,12 @@ The placements are `BelowStart` (the default), `Below`, `BelowEnd`, `AboveStart`
 
 In builder code these are `Modal(open)` and `Popover(anchor, open)`, with `.on_dismiss(...)`, `.initial_focus(...)` and `.placement(...)`.
 
+For a confirmation with a title and a description, or a menu of actions with arrow keys, [`Dialog` and `Menu`](16-accessible-components.md#dialog) build on these and do the wiring for you.
+
 What each platform does:
 
 - **Web.** A `Modal` is a `<dialog>` opened with `showModal()`. The browser puts it above the page, makes the page behind it inert, keeps Tab inside it, and gives focus back when it closes. A server writes a modal that starts open as `<dialog open>`, so it is on screen before any script runs. A `Popover` is an element with `popover="auto"`, placed from its anchor's rectangle and kept beside it while the page scrolls. A popover that starts open appears once the page hydrates.
-- **Terminal.** Overlays are drawn last, over everything. Tab stays inside an open modal, Escape asks the overlay on top to close, a click on a modal's backdrop or outside a popover asks too, and closing gives focus back.
+- **Terminal.** Overlays are drawn last, over everything. Tab stays inside an open modal, Escape asks the overlay on top to close, a click on a modal's backdrop or outside a popover asks too, and closing gives focus back. Tab moves between the controls in a popover, and asks it to close when it would carry focus out.
 - **macOS, iOS, Android, Linux and Windows.** For now an overlay is drawn as a layer in the right place, over what comes before it in the tree, and presses do not pass through an open modal. The rest is not there yet: nothing asks to dismiss it, so close it from a control inside; focus is not moved or kept inside; and a parent that clips or scrolls cuts it off. Put overlays at the top level of the screen until these platforms present them as sheets, popovers and windows of their own.
 - **Watch surfaces** refuse a tree that holds a `Modal` or a `Popover`.
 

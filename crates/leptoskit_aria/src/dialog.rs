@@ -14,11 +14,34 @@ use leptoskit_yoga::Display;
 /// container; the renderer's validation rejects a container whose title
 /// element is missing.
 ///
-/// The dialog is not marked `aria-modal`. A modal dialog promises that focus
-/// stays inside it, and the renderer cannot contain focus yet (see the
-/// accessibility guide), so the promise would hide the page from screen
-/// readers while keyboard focus still leaves. An app that contains focus
-/// itself can chain `.aria_modal(true)` onto the container.
+/// [`Dialog::modal`] is the dialog most apps want: it sits above the screen,
+/// blocks what is behind it, keeps focus inside, and closes on Escape.
+/// [`Dialog::container`] is a dialog in the flow of the page, which does
+/// none of that and so is not marked `aria-modal`: that mark promises focus
+/// stays inside.
+///
+/// ```
+/// use leptoskit_aria::Dialog;
+/// use leptoskit_native::NativeKind;
+/// use leptoskit_native::components::Button;
+/// use leptoskit_native::components::View;
+///
+/// let dialog = Dialog::new("discard", "Discard draft?").description("This cannot be undone.");
+/// let screen = dialog
+/// 	.modal(true)
+/// 	.initial_focus("keep")
+/// 	.on_dismiss(|| ())
+/// 	.child(
+/// 		View()
+/// 			.child(dialog.title_element(2))
+/// 			.children(dialog.description_element())
+/// 			.child(Button("Keep editing").id("keep")),
+/// 	);
+///
+/// assert_eq!(screen.kind, NativeKind::Modal);
+/// assert_eq!(screen.props.aria().labelled_by, ["discard-title"]);
+/// assert!(screen.validate().is_ok());
+/// ```
 ///
 /// ```
 /// use leptoskit_aria::Dialog;
@@ -79,6 +102,23 @@ impl Dialog {
 		} else {
 			dialog.with_style(|style| style.display = Display::None)
 		}
+	}
+
+	/// The dialog as a [`Modal`](leptoskit_native::components::Modal):
+	/// above the screen while `open`, named by the title and described by
+	/// the description. Chain `.on_dismiss(...)` to hear Escape and a press
+	/// on the backdrop, and `.initial_focus(id)` to pick what takes focus.
+	///
+	/// The modal covers the screen and is the backdrop, so style it to dim
+	/// what is behind and put the panel inside it, with the title and
+	/// description in the panel. It stays mounted while closed.
+	#[must_use]
+	#[track_caller]
+	pub fn modal(&self, open: bool) -> Element {
+		Element::modal(open)
+			.id(self.id.clone())
+			.aria_labelled_by([self.title_id()])
+			.aria_described_by(self.description.as_ref().map(|_| self.description_id()))
 	}
 
 	/// The title element: a heading at `level`, starting at one.
