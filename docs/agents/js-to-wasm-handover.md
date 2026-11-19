@@ -256,6 +256,7 @@ Found while converting sign-in: on the web every screen rebuild replaced each la
 
 - **Run here:** `leptoskit_auth` unit tests for the parameter, a router test that `POST /auth/oauth/start` with `"prompt": "login"` puts `prompt=login` on the URL, clippy for `leptoskit_auth` with every feature, and the CLI's auth page template tests. The Postgres tests can't run here (the container is root).
 - **For the admin:** "Switch account" is `sign_in_with_provider()` with `prompt: Some(Prompt::Login)`, replacing `admin.mjs`'s edit of the returned URL.
+
 ### `feat/document-title`: G10
 
 `leptoskit_router::set_title(&str)` sets `document.title` in a browser (the router's `web` feature on Wasm) and does nothing elsewhere. Fragments are left out, as the audit recommends: the admin moves `#workings=` to a query parameter.
@@ -264,7 +265,17 @@ Found while converting sign-in: on the web every screen rebuild replaced each la
 - **Not done:** native window titles. AppKit, GTK and Windows set a title only when the window opens, and nothing carries a later one from the app to the host. That needs a backend hook and a bridge message for guests. Nothing in the admin needs it.
 - **For the admin:** AD-24's title on a builder swap is `set_title` in the effect that follows the route; the server's shell writes the first `<title>`.
 
-### `feat/public-demo`: pull request #856 (draft)
+### `feat/app-shortcuts`: G7b, part 1 (the web)
+
+`use_shortcut(Shortcut, run)` in `crates/leptoskit_native/src/shortcut.rs`, re-exported as `leptoskit::shortcut` and in the prelude. `Shortcut::key("w")`, `Shortcut::primary("k")` (⌘ on Apple, Ctrl elsewhere, through `KeyPress::is_primary`), `.shift()`, `.alt()` and `.unless_typing()`. Registrations live in a thread-local list; each call site holds one through `remember`, so a rebuild replaces its `run`, and the entry leaves when the screen or owner goes. The newest match wins. `shortcut::dispatch(&KeyPress, typing)` is what a host calls for a key no element handled.
+
+- **Web:** one `window` `keydown` listener (`web/shortcuts.rs`), installed by the first `use_shortcut`. An element whose `on_key` handled the key stopped it and prevented its default, so it never arrives; a shortcut that runs prevents the default. "Typing" is a text `<input>`, a `<textarea>`, a `<select>` or editable content.
+- **Run here:** two unit tests (matching, and the newest wins and leaves with its owner), the module's doc test, the new browser test `app_shortcuts_work_wherever_focus_is_and_yield_to_handled_keys` in headless Chrome, and clippy for `leptoskit_native` on the host and on Wasm.
+- **Not run:** Firefox (CI's geckodriver job runs `web_browser`).
+- **Delegation caveat:** leptos's `delegation` feature (off in this workspace) puts element handlers on a `window` listener too. If an app turned it on and called `use_shortcut` before any element registered a `keydown` handler, the shortcut listener would run first. Nothing here turns it on.
+- **Part 2, not done: native key delivery.** No native host delivers keys to `on_key` or to shortcuts yet, so `use_shortcut` does nothing there. The audit's G7 lists the hooks per platform (AppKit `keyDown:` and a local monitor, UIKit `pressesBegan` and `keyCommands`, Android `dispatchKeyEvent`, GTK `EventControllerKey`, Win32 `WM_KEYDOWN`). Each must fill `KeyPress::meta`, call the element's handlers first, then `shortcut::dispatch`. A Wasm guest in a native host needs the host to say which modifier is primary (see `feat/key-meta`). The admin conversion needs only the web, so this waits.
+
+### `feat/public-demo`: pull request #856 (merged)
 
 Twenty-three commits: the public demo service. One process serves one UTC day's generation, resets itself at midnight by re-executing in the same PID, gives each browser its own visitor pass, inbox and real sign-in, hands off to the admin, and lets visitors save private notes that emit one real `note_created` analytics event. [public-demo.md](public-demo.md) on that branch is the operator contract.
 

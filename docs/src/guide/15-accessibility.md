@@ -138,6 +138,33 @@ The handle is `Copy`, so any number of handlers can capture it. Give one handle 
 
 On macOS, Windows, iOS and Android the widget does not hear a `Focus` event for a move the app asked for, because events are held back while an update is applied. The web, the terminal and GTK deliver it.
 
+### Keyboard shortcuts for the whole app
+
+`on_key` hears keys pressed inside an element, which suits a field or a list. A shortcut such as ⌘K to search should work wherever focus is, even when nothing has focus, so it belongs to the app. Call `use_shortcut` in a component:
+
+```rust
+#[component]
+fn Notes() -> impl IntoView {
+	let search = FocusRequest::new();
+	let drawer = RwSignal::new(false);
+
+	use_shortcut(Shortcut::primary("k"), move || search.request());
+	use_shortcut(Shortcut::key("w").unless_typing(), move || drawer.update(|open| *open = !*open));
+	use_shortcut(Shortcut::key("w").shift().unless_typing(), move || drawer.set(false));
+
+	view! {
+		<TextInput aria_label="Search" focus_on=search />
+	}
+}
+```
+
+`Shortcut::primary` holds the platform's command key: ⌘ on Apple devices and Ctrl everywhere else, the same rule as `KeyPress::is_primary`. Add `.shift()` or `.alt()` for more modifiers. A letter matches in either case, so `Shortcut::key("w").shift()` is Shift+W. `unless_typing()` leaves the key alone while the person types in a text field, so a plain letter stays a letter there.
+
+A shortcut lasts as long as the component that made it, and the latest `run` replaces the last one when the screen builds again. When two shortcuts match the same key, the one made last runs, so a screen's own shortcut wins over the app's. A key an element's `on_key` handles never reaches a shortcut, so a dialog that takes Enter or Escape keeps it. A shortcut that runs takes the key from the browser, so ⌘K does not also open the browser's search.
+
+- **Web:** shortcuts listen on the window.
+- **Native and terminal:** hosts don't deliver keys to shortcuts yet, so a shortcut does nothing there for now.
+
 A plain container with a `role` or an `aria_label` becomes one accessibility element, merging its content the way React Native's `accessible` does — VoiceOver and TalkBack read the card below as a single item:
 
 ```rust,ignore

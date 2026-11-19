@@ -2061,6 +2061,106 @@ async fn command_keys_reach_handlers_and_the_rest_stay_the_browsers() {
 }
 
 #[wasm_bindgen_test]
+async fn app_shortcuts_work_wherever_focus_is_and_yield_to_handled_keys() {
+	use leptoskit_native::shortcut::Shortcut;
+	use leptoskit_native::shortcut::use_shortcut;
+
+	let parent = container();
+	let (searches, drawers, escapes) = (
+		Arc::new(AtomicUsize::new(0)),
+		Arc::new(AtomicUsize::new(0)),
+		Arc::new(AtomicUsize::new(0)),
+	);
+	let app = Owner::new();
+	app.with(|| {
+		let searches = Arc::clone(&searches);
+		use_shortcut(Shortcut::primary("k"), move || {
+			searches.fetch_add(1, Ordering::SeqCst);
+		});
+		let drawers = Arc::clone(&drawers);
+		use_shortcut(Shortcut::key("w").unless_typing(), move || {
+			drawers.fetch_add(1, Ordering::SeqCst);
+		});
+		let escapes = Arc::clone(&escapes);
+		use_shortcut(Shortcut::key("Escape"), move || {
+			escapes.fetch_add(1, Ordering::SeqCst);
+		});
+	});
+	let mount = mount_to(parent.clone(), || {
+		render(
+			View()
+				.on_key(|key| {
+					if key.key == "Escape" {
+						EventOutcome::Handled
+					} else {
+						EventOutcome::Unhandled
+					}
+				})
+				.child(leptoskit_native::components::TextArea().aria_label("Note")),
+		)
+	});
+	tick().await;
+	next_frame().await;
+	let field: web_sys::HtmlTextAreaElement = find(&parent, "textarea");
+	let body = document().body().unwrap();
+
+	let apple = web_sys::window()
+		.unwrap()
+		.navigator()
+		.platform()
+		.is_ok_and(|platform| platform.starts_with("Mac") || platform.starts_with("iP"));
+	// Whether the browser keeps the key: false once something took it.
+	let press = |target: &web_sys::EventTarget, key: &str, primary: bool| {
+		let options = web_sys::KeyboardEventInit::new();
+		options.set_key(key);
+		options.set_meta_key(primary && apple);
+		options.set_ctrl_key(primary && !apple);
+		options.set_bubbles(true);
+		options.set_cancelable(true);
+		target
+			.dispatch_event(
+				&web_sys::KeyboardEvent::new_with_keyboard_event_init_dict("keydown", &options)
+					.unwrap(),
+			)
+			.unwrap()
+	};
+
+	assert!(
+		!press(&body, "k", true),
+		"the shortcut takes the key from the browser"
+	);
+	assert_eq!(searches.load(Ordering::SeqCst), 1, "with focus nowhere");
+	assert!(press(&body, "k", false), "a plain k is not ⌘K");
+	assert_eq!(searches.load(Ordering::SeqCst), 1);
+	assert!(!press(&field, "k", true));
+	assert_eq!(searches.load(Ordering::SeqCst), 2, "and while typing");
+
+	assert!(!press(&body, "w", false));
+	assert_eq!(drawers.load(Ordering::SeqCst), 1);
+	assert!(
+		press(&field, "w", false),
+		"a letter typed in a field stays a letter"
+	);
+	assert_eq!(drawers.load(Ordering::SeqCst), 1);
+
+	press(&field, "Escape", false);
+	assert_eq!(
+		escapes.load(Ordering::SeqCst),
+		0,
+		"the element's own handler kept the key"
+	);
+	assert!(!press(&body, "Escape", false));
+	assert_eq!(escapes.load(Ordering::SeqCst), 1);
+
+	app.cleanup();
+	assert!(press(&body, "k", true), "a shortcut leaves with its owner");
+	assert_eq!(searches.load(Ordering::SeqCst), 2);
+
+	drop(mount);
+	parent.remove();
+}
+
+#[wasm_bindgen_test]
 async fn links_open_in_a_new_tab_or_save_a_file_when_asked() {
 	use leptoskit_native::LinkTarget;
 

@@ -45,6 +45,8 @@ mod overlay;
 #[cfg(feature = "rive")]
 mod rive;
 mod semantics;
+#[cfg(target_arch = "wasm32")]
+pub(crate) mod shortcuts;
 mod styles;
 mod vector;
 
