@@ -61,6 +61,14 @@ After it's due the service refuses with a conflict — what someone has already 
 
 A send to a topic, a condition, or everyone can have far more rows than one write should touch. Cancelling one with more than 500 answers how many it stops, stops the send's pushes at once, and cancels the rows themselves in the background, a batch at a time; asked again before they are all done, it answers how many are left.
 
+### A send that repeats
+
+The service has no recurring send. A send happens once, at `visible_at` or now. For a message that goes out every morning or every Monday, your server makes one send each time, from whatever scheduler it already runs: a cron job, or a queue worker.
+
+- Give each occurrence its own idempotency key that names the occurrence, like `daily-digest-2026-11-19`. A job that runs twice for the same day then sends once, and tomorrow's run is a new send.
+- Give every occurrence the same [`label`](#browse-the-sends-you-made), so you can list them together.
+- For "9:00 in each person's own time zone", make the day's send a [local-time send](audiences.md#send-at-each-persons-local-time). Your scheduler still runs once a day.
+
 ## Track a large send
 
 A recipients send answers with its final counts because it finished inside the call. A topic, condition, or everyone send answers `fanning_out` and keeps working — so ask it how it's going, and try the whole thing without spending it:

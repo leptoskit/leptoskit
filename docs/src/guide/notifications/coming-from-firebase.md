@@ -292,7 +292,7 @@ Check this list against what your app uses before you start. None of these has a
 
 **Sending**
 
-- **No recurring sends.** A send that repeats daily is a send your server makes each day.
+- **No recurring sends.** A send that repeats daily is a send your server makes each day, from its own scheduler: see [a send that repeats](sending.md#a-send-that-repeats).
 - **No batch of different messages in one call**, like `sendEach`. Each send is one call.
 - **No send to a raw token.** `send_test` reaches one device by its endpoint id, for testing only.
 - **No localization keys.** [Variants](shaping-messages.md#say-it-in-each-persons-language) cover translated text; a device cannot resolve a key from its own string tables.
