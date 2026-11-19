@@ -354,6 +354,10 @@ impl NativeBackend for AndroidBackend {
 		Arc::clone(&self.measurer)
 	}
 
+	fn presents_overlays(&self) -> bool {
+		true
+	}
+
 	fn set_dark_mode(&mut self, dark: bool) {
 		self.vm
 			.attach_current_thread()
@@ -513,6 +517,7 @@ pub extern "system" fn Java_dev_leptoskit_widgets_WidgetHost_nativeEvent(
 		}
 		10 => NativeEvent::PressIn,
 		11 => NativeEvent::PressOut,
+		12 => NativeEvent::Dismiss,
 		_ => return,
 	};
 

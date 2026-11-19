@@ -74,6 +74,12 @@ internal class WidgetProps(
      */
     val focusRequest: Long? = rest?.takeUnless { it.isNull("focus_request") }?.getLong("focus_request")
 
+    /** The `id` the app gave the element; it travels in [rest]. */
+    val name: String? = rest?.takeUnless { it.isNull("id") }?.getString("id")
+
+    /** Whether a `Modal` or `Popover` is showing; it travels in [rest]. */
+    val overlay: OverlayState? = rest?.optJSONObject("overlay")?.let(OverlayState::fromJson)
+
     /** Where a scroll view's content is scrolled to; it travels in [rest]. */
     val scrollOffset: ScrollOffset? = rest?.optJSONObject("scroll_offset")?.let(ScrollOffset::fromJson)
 

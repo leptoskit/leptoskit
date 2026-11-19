@@ -268,5 +268,49 @@ class NativeControlsTest {
             assertFalse(code.isFocused)
         }
 
+    @Test
+    fun anOverlayKeepsItsPlaceAndWaitsForAWindow() =
+        onMain {
+            val root = FrameLayout(InstrumentationRegistry.getInstrumentation().targetContext)
+            val events = mutableListOf<Int>()
+            val renderer = NativeWidgetRenderer(root, { _, kind, _ -> events.add(kind) })
+            renderer.render(
+                RenderBatch(
+                    1,
+                    listOf(
+                        RenderMutation.Create(1, "view", WidgetProps()),
+                        RenderMutation.Create(2, "modal", props("""{"overlay":{"open":true}}""")),
+                        RenderMutation.Create(3, "view", WidgetProps()),
+                        RenderMutation.Create(4, "popover", props("""{"overlay":{"open":false,"anchor":"menu"}}""")),
+                        RenderMutation.Create(5, "view", WidgetProps()),
+                        RenderMutation.InsertChild(1, 2, 0),
+                        RenderMutation.InsertChild(2, 3, 0),
+                        RenderMutation.InsertChild(1, 4, 1),
+                        RenderMutation.InsertChild(1, 5, 2),
+                    ),
+                ),
+            )
+            val content = root.getChildAt(0) as FrameLayout
+            // Each overlay holds a place, so the view after them is still the third child.
+            assertEquals(3, content.childCount)
+            val modal = content.getChildAt(0) as NativeOverlayView
+            val popover = content.getChildAt(1) as NativeOverlayView
+            assertEquals(View.GONE, modal.visibility)
+            assertEquals(0, modal.childCount)
+            assertEquals(1, modal.content.childCount)
+            assertEquals(0, popover.content.childCount)
+            assertTrue(checkNotNull(modal.state).open)
+            assertFalse(checkNotNull(popover.state).open)
+
+            // The root is in no window, so an open overlay has nowhere to show and nothing asks to close.
+            assertFalse(modal.showing)
+            assertFalse(popover.showing)
+            renderer.render(RenderBatch(null, listOf(RenderMutation.UpdateProps(4, props("""{"overlay":{"open":true}}""")))))
+            assertFalse(popover.showing)
+            renderer.render(RenderBatch(null, listOf(RenderMutation.RemoveChild(1, 2), RenderMutation.Delete(2))))
+            assertEquals(2, content.childCount)
+            assertTrue(events.isEmpty())
+        }
+
     private fun props(json: String) = WidgetProps.fromJson(JSONObject(json))
 }

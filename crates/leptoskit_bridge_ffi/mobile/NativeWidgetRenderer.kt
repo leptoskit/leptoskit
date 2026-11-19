@@ -61,6 +61,9 @@ internal class NativeWidgetRenderer(
     private val widgets = mutableMapOf<Long, View>()
     private val controlProps = mutableMapOf<Long, WidgetProps>()
 
+    /** The `id` the app gave each widget that has one, which overlays name as what takes focus. */
+    private val names = mutableMapOf<Long, String>()
+
     /**
      * Deleted plain containers and labels, kept for the next screen to reuse
      * as React Native does: constructing a `TextView` costs far more than
@@ -112,6 +115,7 @@ internal class NativeWidgetRenderer(
         devtools = null
         onRiveViewportChange = null
         widgets.values.forEach {
+            (it as? NativeOverlayView)?.hide()
             (it as? ImageView)?.setImageDrawable(null)
             (it as? NativeScene3dView)?.close()
             (it as? NativeVideoView)?.close()
@@ -126,6 +130,7 @@ internal class NativeWidgetRenderer(
 
         widgets.clear()
         controlProps.clear()
+        names.clear()
 
         recycledViews.clear()
         recycledTexts.clear()
@@ -182,6 +187,7 @@ internal class NativeWidgetRenderer(
             retargeted.forEach(NativeScrollView::scrollToTarget)
             updateCanvas(batch.root)
             configureEditors()
+            presentOverlays()
             moveFocus()
         } finally {
             retargeted.clear()
@@ -201,6 +207,63 @@ internal class NativeWidgetRenderer(
 
         view.requestFocus()
         view.performAccessibilityAction(AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS, null)
+    }
+
+    /**
+     * Shows each open `Modal` and `Popover` and takes down each closed one,
+     * once the views they hold are in place. An overlay needs a window: until
+     * its place in the tree is attached to one, it stays down.
+     */
+    private fun presentOverlays() {
+        // Lowest id first, so an overlay inside another finds the outer one already on screen.
+        for (id in widgets.keys.sorted()) {
+            val overlay = widgets[id] as? NativeOverlayView ?: continue
+
+            if (!overlay.present(root)) continue
+            val name = overlay.state?.initialFocus ?: continue
+            val target = names.entries.firstOrNull { it.value == name }?.let { widgets[it.key] } ?: continue
+            target.requestFocus()
+            target.performAccessibilityAction(AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS, null)
+        }
+    }
+
+    /** A place holder in the tree whose content Android shows in a dialog or a popup window. */
+    private fun overlay(
+        id: Long,
+        hangs: Boolean,
+    ): NativeOverlayView =
+        NativeOverlayView(context, hangs) { event(id, DISMISS, "") }.apply {
+            onWindowChange = {
+                if (!applying && widgets[id] === this) {
+                    applying = true
+                    try {
+                        presentOverlays()
+                    } finally {
+                        applying = false
+                    }
+                }
+            }
+        }
+
+    /**
+     * Applies a widget's props to the view that shows it: an overlay's style
+     * goes on what it presents, not on its place in the tree.
+     */
+    private fun style(
+        id: Long,
+        view: View,
+        item: WidgetProps,
+    ) {
+        if (item.name == null) names.remove(id) else names[id] = item.name
+
+        if (view !is NativeOverlayView) {
+            props.apply(view, item)
+
+            return
+        }
+        props.apply(view.content, item)
+        view.state = item.overlay
+        view.styled()
     }
 
     /** Notes a scroll view's target when it differs from the last one it received. */
@@ -259,7 +322,7 @@ internal class NativeWidgetRenderer(
                 rememberControl(change.id, view, change.props)
                 if (change.props.focusRequest != null) focusTarget = change.id
                 motion.touch(change.id, view, change.props)
-                props.apply(view, change.props)
+                style(change.id, view, change.props)
                 retarget(view, change.props.scrollOffset)
                 (view as? NativeScene3dView)?.show(change.props.scene3d)
                 (view as? NativeVideoView)?.show(change.props.video)
@@ -278,6 +341,8 @@ internal class NativeWidgetRenderer(
 
             is RenderMutation.RemoveChild -> {
                 val child = widgets[change.child] ?: return
+                // An overlay off the tree has nothing to show over.
+                (child as? NativeOverlayView)?.hide()
                 val parent = child.parent as? ViewGroup
                 // A view exiting, or inside one, stays whole until its exit ends.
                 if (!motion.exiting(child) && (parent == null || !motion.exit(change.child, child, parent))) detach(child)
@@ -286,10 +351,12 @@ internal class NativeWidgetRenderer(
             is RenderMutation.Delete -> {
                 riveBitmaps.remove(change.id)
                 controlProps.remove(change.id)
+                names.remove(change.id)
                 if (focusTarget == change.id) focusTarget = null
 
                 val view = widgets.remove(change.id) ?: return
                 if (view is NativeRiveImage) view.setImageDrawable(null)
+                if (view is NativeOverlayView) view.hide()
 
                 if (view is NativeScene3dView) view.close()
                 if (view is NativeVideoView) view.close()
@@ -448,6 +515,14 @@ internal class NativeWidgetRenderer(
                     NativeLivePhotoView(context)
                 }
 
+                "modal", "Modal" -> {
+                    overlay(id, hangs = false)
+                }
+
+                "popover", "Popover" -> {
+                    overlay(id, hangs = true)
+                }
+
                 else -> {
                     // GTK draws an unknown or custom kind as an empty container.
                     // Stopping the tree here took the whole activity down.
@@ -459,7 +534,7 @@ internal class NativeWidgetRenderer(
         rememberControl(id, widget, item.props)
         if (item.props.focusRequest != null) focusTarget = id
         motion.touch(id, widget, item.props, isNew = true)
-        props.apply(widget, item.props)
+        style(id, widget, item.props)
         retarget(widget, item.props.scrollOffset)
 
         (widget as? NativeScene3dView)?.show(item.props.scene3d)
@@ -618,6 +693,13 @@ internal class NativeWidgetRenderer(
         val width = ceil(x + item.width * density).toInt() - left
         val height = ceil(y + item.height * density).toInt() - top
         val view = widget(item.id)
+
+        // Android places an overlay's window, so its frame is kept, not applied.
+        if (view is NativeOverlayView) {
+            view.place(left, top, width, height)
+
+            return
+        }
         val params = view.layoutParams as? FrameLayout.LayoutParams
 
         // The stroke scale uses this continuous size. The view's pixel box is
@@ -648,7 +730,12 @@ internal class NativeWidgetRenderer(
 
     private fun insert(item: RenderMutation.InsertChild) {
         val parent = widget(item.parent) as ViewGroup
-        val container = if (parent is ScrollView) parent.getChildAt(0) as ViewGroup else parent
+        val container =
+            when (parent) {
+                is ScrollView -> parent.getChildAt(0) as ViewGroup
+                is NativeOverlayView -> parent.content
+                else -> parent
+            }
         val child = widget(item.child)
         motion.cancelExit(child)
         detach(child)
@@ -681,6 +768,7 @@ internal class NativeWidgetRenderer(
         const val SCROLL = 5
         const val PRESS_IN = 8
         const val PRESS_OUT = 9
+        const val DISMISS = 10
     }
 }
 

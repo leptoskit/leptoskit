@@ -85,6 +85,7 @@ pub(crate) const ANDROID: &[&str] = &[
 	"mobile/NativeServiceWakeBroker.kt",
 	"mobile/NativePluginJobs.kt",
 	"mobile/NativeWidgetRenderer.kt",
+	"mobile/NativeOverlayView.kt",
 	"mobile/RenderBatch.kt",
 	"mobile/NativeWidgetProps.kt",
 	"mobile/NativeTextMeasurer.kt",

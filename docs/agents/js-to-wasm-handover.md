@@ -40,7 +40,7 @@ One pull request per item. Every backend is kept in step, with AppKit as the ref
 | 3  | Labels that focus their fields                              | G13      | #879, open  |
 | 4  | One-shot focus requests                                     | G2       | #887, open  |
 | 5  | Arrow-key navigation for tabs, radio groups and menus       | G5       | #892, open  |
-| 6  | `Modal` and `Popover` (native presentations still to come)  | G1       | #896, open  |
+| 6  | `Modal` and `Popover` (GTK and Windows still to come)       | G1       | #896, open  |
 | 7  | Scroll into view                                            | G4       | not started |
 | 8  | A clock hook                                                | G6       | not started |
 | 9  | Typed refusals in the rpc client (status, code, retry time) | G8       | not started |
@@ -132,7 +132,7 @@ The third part of G1, for macOS: both renderers.
 - **Tests that CI's macOS runners will be the first to run:** `crates/leptoskit_appkit/tests/overlays.rs` (real windows) and `controller-tests/MacOverlayTests.swift`. Expect to fix things there. The assertions most likely to need adjusting are the ones about AppKit's own behaviour: `attachedSheet` right after `beginSheet`, a popover showing from a window that was only ordered front, and which side a popover lands on.
 - **Known limits:** a popover is centred on its anchor (no start or end alignment). A sheet has no outside press. Arrow keys in a `Menu` still do nothing on macOS, because neither renderer delivers `on_key`. `AppKitBackend::snapshot_png` renders without a window, so an open overlay is not in a snapshot.
 
-### `feat/overlays-uikit`: stacked on `feat/overlays-appkit`
+### `feat/overlays-uikit` (#906): stacked on `feat/overlays-appkit`
 
 The third part of G1, for iOS: both renderers.
 
@@ -143,6 +143,18 @@ The third part of G1, for iOS: both renderers.
 - **Compiled here:** the Rust side, cross-linted for `aarch64-apple-ios` with clippy, the probe included. **Not compiled here:** any Swift. **Run here:** nothing.
 - **Tests that CI's iOS job will be the first to run:** `overlays` in `crates/leptoskit_uikit/examples/native_probe.rs` and `ios-controls/OverlayControls.swift`. Both switch animations off and expect a presentation, and a dismissal, to be in place when the call returns. If UIKit defers either even without animation, those assertions need `until`.
 - **Known limits:** a popover is centred on its anchor. On an iPhone the sheet is the full "large" height however little the modal holds (a custom detent needs iOS 16; the crate supports 15). Arrow keys in a `Menu` do nothing, because neither renderer delivers `on_key`.
+
+### `feat/overlays-android`: stacked on `feat/overlays-uikit`
+
+The third part of G1, for Android: both hosts.
+
+- **`leptoskit_android`** returns `true` from `presents_overlays` and maps event code `12` to `Dismiss`. In `android/WidgetHost.kt` a node with `presented` set never has its view added to its parent's: `InsertChild` skips it and counts only the siblings that are not overlays. `refreshOverlays` runs at the end of each `apply` and from `mount`. A `Modal` is a `ModalDialog`, a `Dialog` whose `cancel()` only emits `Dismiss`, so Back, Escape and a touch outside all ask and nothing closes. Its content view is as large as the union of the modal's children, and the modal's own view is shifted by negative margins so those children land at the dialog's corner. A `Popover` is a focusable `PopupWindow` shown with `showAtLocation` at the frame layout gave it. Its touch interceptor emits `Dismiss` for a touch outside and consumes it.
+- **Back on a popup cannot be refused** without subclassing the popup's decor view, so the popup closes, `setOnDismissListener` emits `Dismiss`, and the host shows it again at once if the tree still has it open (`suppress { refreshOverlays() }`). The Kotlin renderer for generated apps cannot do that, because its events reach the app asynchronously: there the popup returns with the next batch.
+- **The Kotlin renderer** (`mobile/NativeOverlayView.kt`, in the CLI's `platform_sources::ANDROID`, `Package.swift`'s exclude list and `setup/android_widget_paint`) keeps a `GONE` place holder in the tree and puts children into its `content`, as the Swift renderers do. `WidgetProps` gains `name` (the element's `id`) and `overlay`. Its `DISMISS` is `10`, the bridge's code; the crate's is `12`. The bridge records with `presenting_overlays()` on macOS, iOS and Android.
+- **Two fixes this branch needed were pushed to the pull requests that broke the build**, and are cherry-picked here: `import android.text.InputFilter` in `WidgetHost.kt` (#852) and the `Dismiss` arm in `src/probe.rs` (#896). The branches between do not have them until the stack merges in order.
+- **Checked here:** `WidgetHost.kt`, `ProbeActivity.kt` and every Kotlin file under `mobile/` and `android/` type-check with `kotlinc` against the API 34 `android.jar` (one error that was already there: `VANILLA_ICE_CREAM` is API 35). `ktlint` is clean. The Rust side is cross-linted for `aarch64-linux-android` with the `probe` feature. **Run here:** nothing: there is no emulator.
+- **Tests that CI's Android jobs will be the first to run:** `verifyOverlays` in `android-tests/ProbeActivity.kt` (a real Activity: dialog size and place, popup place, Back and outside touches ask, a removed popover comes down) and `anOverlayKeepsItsPlaceAndWaitsForAWindow` in the bridge's `NativeControlsTest.kt`, which has no window and so checks only the tree.
+- **Known limits:** arrow keys in a `Menu` do nothing, because neither host delivers `on_key`. A dialog needs an Activity. A modal's own background is not drawn.
 
 ### `feat/public-demo`: no pull request
 
