@@ -48,12 +48,12 @@ It turns the drawings of [skribble](https://openbudgetfun.github.io/skribble/), 
 
 skribble owns [`skribble_core`](https://github.com/openbudgetfun/skribble/tree/main/rust/core): the rough engine, the theme and colourways, and every drawing as framework-neutral path data (`InkDrawing`). This crate owns everything that is leptoskit's: elements, Tailwind classes, layout, events, and accessibility. When leptoskit changes, only this crate changes; when skribble draws something new, `leptoskit_skribble::ink::layer` renders it before a component exists.
 
-The crate is private until `skribble_core` is published to crates.io, because a published crate cannot depend on a git revision. Use it from this workspace, or depend on it by git.
-
 ## Use it
 
 ```rust
 use leptoskit::prelude::*;
+// leptoskit's prelude has a `Theme` of its own, so name skribble's.
+use leptoskit_skribble::Theme;
 use leptoskit_skribble::*;
 
 pub fn welcome(on_start: impl Fn() + Send + Sync + 'static) -> Element {

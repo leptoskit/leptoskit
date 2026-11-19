@@ -7,10 +7,6 @@ edition.workspace = true
 homepage.workspace = true
 keywords = ["leptoskit", "skribble", "hand-drawn", "sketch", "design-system"]
 license.workspace = true
-# Private until `skribble_core` is on crates.io: a published crate cannot
-# depend on a git revision. Remove this line and add the crate to the
-# monochange group once skribble releases `skribble_core`.
-publish = false
 readme = "readme.md"
 repository.workspace = true
 rust-version.workspace = true

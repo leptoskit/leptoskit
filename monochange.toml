@@ -194,6 +194,7 @@ packages = [
 	"leptoskit_query",
 	"leptoskit_virtual",
 	"leptoskit_table",
+	"leptoskit_skribble",
 	"leptoskit_agent_ui",
 	"leptoskit_rive",
 	"leptoskit_rive_runtime",
@@ -703,6 +704,10 @@ path = "crates/leptoskit_virtual"
 
 [package.leptoskit_table]
 path = "crates/leptoskit_table"
+type = "cargo"
+
+[package.leptoskit_skribble]
+path = "crates/leptoskit_skribble"
 type = "cargo"
 
 [package.leptoskit_agent_ui]
