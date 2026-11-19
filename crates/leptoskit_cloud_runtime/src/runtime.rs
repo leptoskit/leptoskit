@@ -7,8 +7,8 @@
 //! `dyn Runtime` works with no extra machinery: the control plane holds one
 //! runtime per cluster behind the same trait object.
 //!
-//! This module carries no cluster access of its own. The Kubernetes adapter
-//! is a later slice; [`crate::testing::Fake`] is here for tests now.
+//! This module carries no cluster access of its own. The `kube` feature
+//! provides the cluster adapter; [`crate::testing::Fake`] records test calls.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -46,6 +46,16 @@ pub struct ObservedProcess {
 	pub desired_replicas: u32,
 	/// The image the process's pods were started with.
 	pub image: String,
+	/// Sum of restart counts on existing pods owned by the current
+	/// `ReplicaSet`. Replaced pods take their counts with them; kubelet can
+	/// reset a count.
+	#[serde(default)]
+	pub observed_restarts: u64,
+	/// Latest OOM termination retained in those pods' current or last container
+	/// states, milliseconds since Unix epoch. This is evidence, not an OOM
+	/// total.
+	#[serde(default)]
+	pub last_oom_kill: Option<i64>,
 	pub state: ProcessState,
 }
 
@@ -88,6 +98,9 @@ pub struct LogQuery {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LogLine {
+	/// Pod that wrote the line; absent for adapters without pods.
+	#[serde(default)]
+	pub pod: Option<String>,
 	/// The process that wrote the line.
 	pub process: String,
 	/// When the line was written, in milliseconds since the Unix epoch. A

@@ -208,7 +208,8 @@ pub enum Egress {
 }
 
 /// The most an environment may take from the cluster, over all its
-/// processes at full scale.
+/// processes at full scale plus one surge pod per process without volumes.
+/// Processes with volumes use `Recreate` and require no surge capacity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Quota {
@@ -216,6 +217,39 @@ pub struct Quota {
 	pub memory_mib: u32,
 	pub pods: u32,
 	pub storage_gib: u32,
+}
+
+impl Quota {
+	/// Minimum quota for full scale and simultaneous rolling updates.
+	/// CPU counts limits, memory counts requests (which equal limits), and
+	/// storage counts each claim once. Arithmetic saturates at `u32::MAX`;
+	/// validation still rejects totals that exceed the representable quota.
+	#[must_use]
+	pub fn for_processes(processes: &[Process]) -> Self {
+		let [cpu, memory, pods, storage] = quota_totals(processes);
+		let bounded = |value: u64| u32::try_from(value).unwrap_or(u32::MAX);
+		Self {
+			cpu_millis: bounded(cpu),
+			memory_mib: bounded(memory),
+			pods: bounded(pods),
+			storage_gib: bounded(storage),
+		}
+	}
+}
+
+fn quota_totals(processes: &[Process]) -> [u64; 4] {
+	let mut totals = [0u64; 4];
+	for process in processes {
+		let replicas = u64::from(process.scale.max) + u64::from(process.volumes.is_empty());
+		totals[0] =
+			totals[0].saturating_add(replicas * u64::from(process.resources.cpu_limit_millis));
+		totals[1] = totals[1].saturating_add(replicas * u64::from(process.resources.memory_mib));
+		totals[2] = totals[2].saturating_add(replicas);
+		for volume in &process.volumes {
+			totals[3] = totals[3].saturating_add(u64::from(volume.size_gib));
+		}
+	}
+	totals
 }
 
 /// A database the processes may reach: the namespace it runs in and the
@@ -379,25 +413,11 @@ impl ReleaseSpec {
 	}
 
 	/// The totals are what the environment may take at full scale: every
-	/// process at its maximum replica count. Storage counts each volume
-	/// once, not per replica — a claim is shared, and a process with
-	/// volumes cannot scale past one replica anyway.
+	/// process at its maximum replica count plus its rolling surge. Storage
+	/// counts each volume once, not per replica — a claim is shared, and a
+	/// process with volumes cannot scale past one replica anyway.
 	fn validate_quota(&self) -> Result<(), SpecError> {
-		let mut cpu_millis = 0u64;
-		let mut memory_mib = 0u64;
-		let mut pods = 0u64;
-		let mut storage_gib = 0u64;
-		for process in &self.processes {
-			let replicas = u64::from(process.scale.max);
-			cpu_millis += replicas * u64::from(process.resources.cpu_limit_millis);
-			memory_mib += replicas * u64::from(process.resources.memory_mib);
-			pods += replicas;
-			storage_gib += process
-				.volumes
-				.iter()
-				.map(|v| u64::from(v.size_gib))
-				.sum::<u64>();
-		}
+		let [cpu_millis, memory_mib, pods, storage_gib] = quota_totals(&self.processes);
 
 		let quota = &self.policy.quota;
 		if cpu_millis > u64::from(quota.cpu_millis) {
@@ -653,8 +673,8 @@ mod tests {
 				runtime_class: Some("gvisor".to_owned()),
 				egress: Egress::Internet,
 				quota: Quota {
-					cpu_millis: 500,
-					memory_mib: 128,
+					cpu_millis: 1000,
+					memory_mib: 256,
 					pods: 2,
 					storage_gib: 1,
 				},
@@ -692,6 +712,35 @@ mod tests {
 	#[test]
 	fn a_valid_spec_passes() {
 		assert_passes(&base_spec(), "the base spec");
+	}
+
+	#[test]
+	fn minimum_quota_includes_surge_but_not_for_recreate() {
+		let mut spec = base_spec();
+		spec.processes[0].scale.min = 1;
+		spec.processes[0].scale.sleep = false;
+		spec.policy.quota = Quota::for_processes(&spec.processes);
+		assert_eq!(
+			spec.policy.quota,
+			Quota {
+				cpu_millis: 1000,
+				memory_mib: 256,
+				pods: 2,
+				storage_gib: 0,
+			}
+		);
+		assert_passes(&spec, "one xs plus its surge pod");
+		spec.policy.quota.pods -= 1;
+		assert!(matches!(spec.validate(), Err(SpecError::QuotaPods { .. })));
+		spec.processes[0].volumes.push(Volume {
+			name: "data".to_owned(),
+			mount_path: "/data".to_owned(),
+			size_gib: 1,
+		});
+		spec.policy.quota = Quota::for_processes(&spec.processes);
+		assert_eq!(spec.policy.quota.pods, 1);
+		assert_eq!(spec.policy.quota.cpu_millis, 500);
+		assert_passes(&spec, "recreate does not surge");
 	}
 
 	#[test]
@@ -788,9 +837,9 @@ mod tests {
 			sleep: false,
 		};
 		spec.policy.quota = Quota {
-			cpu_millis: 2500,
-			memory_mib: 640,
-			pods: 5,
+			cpu_millis: 3000,
+			memory_mib: 768,
+			pods: 6,
 			storage_gib: 1,
 		};
 		assert_passes(&spec, "min below max");
@@ -856,7 +905,7 @@ mod tests {
 		assert!(matches!(
 			assert_fails(&spec, "cpu"),
 			SpecError::QuotaCpu {
-				used: 1000,
+				used: 1500,
 				allowed: 999
 			}
 		));
@@ -867,12 +916,12 @@ mod tests {
 			max: 2,
 			sleep: false,
 		};
-		spec.policy.quota.cpu_millis = 1000;
+		spec.policy.quota.cpu_millis = 1500;
 		spec.policy.quota.memory_mib = 255;
 		assert!(matches!(
 			assert_fails(&spec, "memory"),
 			SpecError::QuotaMemory {
-				used: 256,
+				used: 384,
 				allowed: 255
 			}
 		));
@@ -883,13 +932,13 @@ mod tests {
 			max: 2,
 			sleep: false,
 		};
-		spec.policy.quota.cpu_millis = 1000;
-		spec.policy.quota.memory_mib = 256;
+		spec.policy.quota.cpu_millis = 1500;
+		spec.policy.quota.memory_mib = 384;
 		spec.policy.quota.pods = 1;
 		assert!(matches!(
 			assert_fails(&spec, "pods"),
 			SpecError::QuotaPods {
-				used: 2,
+				used: 3,
 				allowed: 1
 			}
 		));
@@ -921,9 +970,9 @@ mod tests {
 			sleep: false,
 		};
 		spec.policy.quota = Quota {
-			cpu_millis: 1000,
-			memory_mib: 256,
-			pods: 2,
+			cpu_millis: 1500,
+			memory_mib: 384,
+			pods: 3,
 			storage_gib: 0,
 		};
 		assert_passes(&spec, "an exact fit");

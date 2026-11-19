@@ -1,5 +1,6 @@
 ---
 source: crates/leptoskit_cloud_runtime/tests/manifests.rs
+assertion_line: 409
 expression: as_yaml(&objects)
 ---
 apiVersion: v1
@@ -29,10 +30,10 @@ metadata:
   namespace: lk-0b64f478d99c825f63ac
 spec:
   hard:
-    limits.cpu: 12000m
+    limits.cpu: 14000m
     limits.memory: 4096Mi
     pods: '12'
-    requests.cpu: 12000m
+    requests.cpu: 14000m
     requests.memory: 4096Mi
     requests.storage: 10Gi
 ---
@@ -50,7 +51,7 @@ metadata:
 spec:
   limits:
   - max:
-      cpu: 12000m
+      cpu: 14000m
       memory: 4096Mi
     type: Container
 ---
@@ -113,7 +114,7 @@ spec:
   - from:
     - namespaceSelector:
         matchLabels:
-          kubernetes.io/metadata.name: ingress-nginx
+          kubernetes.io/metadata.name: kube-system
     ports:
     - port: 8080
       protocol: TCP
@@ -140,7 +141,7 @@ spec:
   - from:
     - namespaceSelector:
         matchLabels:
-          kubernetes.io/metadata.name: ingress-nginx
+          kubernetes.io/metadata.name: kube-system
     ports:
     - port: 3110
       protocol: TCP
@@ -219,7 +220,7 @@ spec:
     to:
     - namespaceSelector:
         matchLabels:
-          kubernetes.io/metadata.name: postgres-shared
+          kubernetes.io/metadata.name: database
   podSelector: {}
   policyTypes:
   - Egress
@@ -372,6 +373,8 @@ spec:
     type: RollingUpdate
   template:
     metadata:
+      annotations:
+        leptoskit.cloud/secrets-checksum: 315ff17516210baa878f1306ee3331a63a55b2ba967d277676481ad3405e4df0
       labels:
         app.kubernetes.io/managed-by: leptoskit-cloud
         app.kubernetes.io/name: search
@@ -666,7 +669,7 @@ metadata:
   name: notes.acme.dev
   namespace: lk-0b64f478d99c825f63ac
 spec:
-  ingressClassName: nginx
+  ingressClassName: traefik
   rules:
   - host: notes.acme.dev
     http:
@@ -688,13 +691,12 @@ spec:
   tls:
   - hosts:
     - notes.acme.dev
-    secretName: leptoskit-wildcard-tls
 ---
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   annotations:
-    cert-manager.io/cluster-issuer: leptoskit-ca
+    cert-manager.io/cluster-issuer: apps
   labels:
     app.kubernetes.io/managed-by: leptoskit-cloud
     leptoskit.cloud/deployment: '2'
@@ -704,7 +706,7 @@ metadata:
   name: search.acme.dev
   namespace: lk-0b64f478d99c825f63ac
 spec:
-  ingressClassName: nginx
+  ingressClassName: traefik
   rules:
   - host: search.acme.dev
     http:

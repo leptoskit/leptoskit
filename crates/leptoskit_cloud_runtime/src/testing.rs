@@ -128,6 +128,8 @@ impl Fake {
 			(0, ProcessState::Pending)
 		};
 		ObservedProcess {
+			observed_restarts: 0,
+			last_oom_kill: None,
 			name: process.name.clone(),
 			ready_replicas: ready,
 			desired_replicas: desired,
@@ -329,9 +331,9 @@ mod tests {
 				runtime_class: None,
 				egress: crate::spec::Egress::None,
 				quota: crate::spec::Quota {
-					cpu_millis: 1000,
-					memory_mib: 256,
-					pods: 2,
+					cpu_millis: 1500,
+					memory_mib: 384,
+					pods: 3,
 					storage_gib: 1,
 				},
 				database: None,
@@ -434,16 +436,19 @@ mod tests {
 	fn logs_follow_the_query() {
 		let fake = Fake::new();
 		fake.push_log(LogLine {
+			pod: None,
 			process: "app".to_owned(),
 			at_millis: 1_000,
 			message: "first".to_owned(),
 		});
 		fake.push_log(LogLine {
+			pod: None,
 			process: "search".to_owned(),
 			at_millis: 2_000,
 			message: "second".to_owned(),
 		});
 		fake.push_log(LogLine {
+			pod: None,
 			process: "app".to_owned(),
 			at_millis: 3_000,
 			message: "third".to_owned(),

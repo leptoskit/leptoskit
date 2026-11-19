@@ -1,5 +1,6 @@
 ---
 source: crates/leptoskit_cloud_runtime/tests/manifests.rs
+assertion_line: 344
 expression: as_yaml(&objects)
 ---
 apiVersion: v1
@@ -29,11 +30,11 @@ metadata:
   namespace: lk-0b64f478d99c825f63ac
 spec:
   hard:
-    limits.cpu: 500m
-    limits.memory: 128Mi
+    limits.cpu: 1000m
+    limits.memory: 256Mi
     pods: '2'
-    requests.cpu: 500m
-    requests.memory: 128Mi
+    requests.cpu: 1000m
+    requests.memory: 256Mi
     requests.storage: 1Gi
 ---
 apiVersion: v1
@@ -50,8 +51,8 @@ metadata:
 spec:
   limits:
   - max:
-      cpu: 500m
-      memory: 128Mi
+      cpu: 1000m
+      memory: 256Mi
     type: Container
 ---
 apiVersion: networking.k8s.io/v1
@@ -113,7 +114,11 @@ spec:
   - from:
     - namespaceSelector:
         matchLabels:
-          kubernetes.io/metadata.name: ingress-nginx
+          kubernetes.io/metadata.name: keda
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/component: interceptor
+          app.kubernetes.io/name: http-add-on
     ports:
     - port: 8080
       protocol: TCP
@@ -290,8 +295,49 @@ spec:
     app.kubernetes.io/name: app
   type: ClusterIP
 ---
-apiVersion: http.keda.sh/v1alpha1
-kind: HTTPScaledObject
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: leptoskit-cloud
+    leptoskit.cloud/deployment: '1'
+    leptoskit.cloud/environment: production
+    leptoskit.cloud/organization: acme
+    leptoskit.cloud/project: notes
+  name: http-interceptor
+  namespace: lk-0b64f478d99c825f63ac
+spec:
+  externalName: keda-add-ons-http-interceptor-proxy.keda.svc.cluster.local
+  ports:
+  - port: 8080
+  type: ExternalName
+---
+apiVersion: http.keda.sh/v1beta1
+kind: InterceptorRoute
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: leptoskit-cloud
+    leptoskit.cloud/deployment: '1'
+    leptoskit.cloud/environment: production
+    leptoskit.cloud/organization: acme
+    leptoskit.cloud/project: notes
+  name: app
+  namespace: lk-0b64f478d99c825f63ac
+spec:
+  target:
+    service: app
+    port: 80
+  rules:
+  - hosts:
+    - notes.leptoskit.app
+    paths:
+    - value: /
+  scalingMetric:
+    concurrency:
+      targetValue: 100
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
 metadata:
   labels:
     app.kubernetes.io/managed-by: leptoskit-cloud
@@ -306,15 +352,13 @@ spec:
     name: app
     apiVersion: apps/v1
     kind: Deployment
-  replicasMin: 0
-  replicasMax: 1
+  minReplicaCount: 0
+  maxReplicaCount: 1
   triggers:
-  - type: http
+  - type: external-push
     metadata:
-      hosts: notes.leptoskit.app
-      pathPrefixes: /
-      port: '80'
-      service: app
+      interceptorRoute: app
+      scalerAddress: keda-add-ons-http-external-scaler.keda.svc.cluster.local:9090
 ---
 apiVersion: networking.k8s.io/v1
 kind: Ingress
@@ -328,19 +372,18 @@ metadata:
   name: notes.leptoskit.app
   namespace: lk-0b64f478d99c825f63ac
 spec:
-  ingressClassName: nginx
+  ingressClassName: traefik
   rules:
   - host: notes.leptoskit.app
     http:
       paths:
       - backend:
           service:
-            name: app
+            name: http-interceptor
             port:
-              number: 80
+              number: 8080
         path: /
         pathType: Prefix
   tls:
   - hosts:
     - notes.leptoskit.app
-    secretName: leptoskit-wildcard-tls

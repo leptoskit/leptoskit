@@ -2,12 +2,12 @@
 //! environment as plain data, the boundary a place that runs environments
 //! sits behind, and the Kubernetes manifests for one release.
 //!
-//! Nothing here talks to a cluster. [`ReleaseSpec`] is the whole release —
+//! [`ReleaseSpec`] is the whole release —
 //! processes, routes, policy — that the control plane builds and a
 //! [`Runtime`] applies; [`manifests`] turns it into the objects a
 //! Kubernetes cluster needs, and the `testing` feature's [`Fake`] records
-//! what an adapter was asked to do. The cluster adapter over `kube` and the
-//! local process adapter are later slices.
+//! what an adapter was asked to do. The `kube` feature adds the cluster
+//! adapter; the local process adapter is a later slice.
 //!
 //! # Features
 //!
@@ -15,6 +15,7 @@
 //! | --- | --- |
 //! | none | [`spec`] and [`runtime`]: pure data, safe in a browser build |
 //! | `kubernetes` | [`kubernetes`]: the manifest generator and its types |
+//! | `kube` | the authenticated Kubernetes cluster adapter |
 //! | `testing` | [`testing`]: the recording fake |
 //!
 //! The crate depends on nothing else in the cloud: the dependency direction
@@ -22,6 +23,11 @@
 
 pub mod runtime;
 pub mod spec;
+
+#[cfg(feature = "kube")]
+pub mod cluster;
+#[cfg(feature = "kube")]
+pub use cluster::Cluster;
 
 #[cfg(feature = "kubernetes")]
 pub mod kubernetes;

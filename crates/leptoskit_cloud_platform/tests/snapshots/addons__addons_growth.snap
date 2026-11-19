@@ -1,5 +1,6 @@
 ---
 source: crates/leptoskit_cloud_platform/tests/addons.rs
+assertion_line: 11
 expression: "files.iter().map(|(path, content)|\nformat!(\"# {path}\\n{content}\")).collect::<Vec<_>>().join(\"---\\n\")"
 ---
 # eu/growth/addons/00-namespaces-00.yaml
@@ -80,7 +81,7 @@ expression: "files.iter().map(|(path, content)|\nformat!(\"# {path}\\n{content}\
   }
 }
 ---
-# eu/growth/addons/01-secrets-19.yaml
+# eu/growth/addons/01-secrets-21.yaml
 {
   "apiVersion": "v1",
   "data": {
@@ -93,7 +94,7 @@ expression: "files.iter().map(|(path, content)|\nformat!(\"# {path}\\n{content}\
   }
 }
 ---
-# eu/growth/addons/10-policies-22.yaml
+# eu/growth/addons/10-policies-24.yaml
 {
   "apiVersion": "networking.k8s.io/v1",
   "kind": "NetworkPolicy",
@@ -128,7 +129,7 @@ expression: "files.iter().map(|(path, content)|\nformat!(\"# {path}\\n{content}\
   }
 }
 ---
-# eu/growth/addons/10-policies-23.yaml
+# eu/growth/addons/10-policies-25.yaml
 {
   "apiVersion": "networking.k8s.io/v1",
   "kind": "NetworkPolicy",
@@ -163,7 +164,7 @@ expression: "files.iter().map(|(path, content)|\nformat!(\"# {path}\\n{content}\
   }
 }
 ---
-# eu/growth/addons/10-policies-24.yaml
+# eu/growth/addons/10-policies-26.yaml
 {
   "apiVersion": "networking.k8s.io/v1",
   "kind": "NetworkPolicy",
@@ -215,7 +216,7 @@ expression: "files.iter().map(|(path, content)|\nformat!(\"# {path}\\n{content}\
   }
 }
 ---
-# eu/growth/addons/10-policies-25.yaml
+# eu/growth/addons/10-policies-27.yaml
 {
   "apiVersion": "networking.k8s.io/v1",
   "kind": "NetworkPolicy",
@@ -250,7 +251,7 @@ expression: "files.iter().map(|(path, content)|\nformat!(\"# {path}\\n{content}\
   }
 }
 ---
-# eu/growth/addons/10-policies-26.yaml
+# eu/growth/addons/10-policies-28.yaml
 {
   "apiVersion": "networking.k8s.io/v1",
   "kind": "NetworkPolicy",
@@ -285,7 +286,7 @@ expression: "files.iter().map(|(path, content)|\nformat!(\"# {path}\\n{content}\
   }
 }
 ---
-# eu/growth/addons/10-policies-27.yaml
+# eu/growth/addons/10-policies-29.yaml
 {
   "apiVersion": "networking.k8s.io/v1",
   "kind": "NetworkPolicy",
@@ -320,7 +321,7 @@ expression: "files.iter().map(|(path, content)|\nformat!(\"# {path}\\n{content}\
   }
 }
 ---
-# eu/growth/addons/10-policies-28.yaml
+# eu/growth/addons/10-policies-30.yaml
 {
   "apiVersion": "networking.k8s.io/v1",
   "kind": "NetworkPolicy",
@@ -373,7 +374,192 @@ expression: "files.iter().map(|(path, content)|\nformat!(\"# {path}\\n{content}\
   }
 }
 ---
-# eu/growth/addons/20-charts-07.yaml
+# eu/growth/addons/10-worker-rbac-07.yaml
+{
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "ClusterRole",
+  "metadata": {
+    "name": "leptoskit-cloud-runtime"
+  },
+  "rules": [
+    {
+      "apiGroups": [
+        ""
+      ],
+      "resources": [
+        "namespaces"
+      ],
+      "verbs": [
+        "get",
+        "patch",
+        "delete"
+      ]
+    },
+    {
+      "apiGroups": [
+        ""
+      ],
+      "resources": [
+        "resourcequotas",
+        "limitranges",
+        "serviceaccounts",
+        "secrets",
+        "services"
+      ],
+      "verbs": [
+        "list",
+        "patch",
+        "delete"
+      ]
+    },
+    {
+      "apiGroups": [
+        ""
+      ],
+      "resources": [
+        "persistentvolumeclaims"
+      ],
+      "verbs": [
+        "patch"
+      ]
+    },
+    {
+      "apiGroups": [
+        ""
+      ],
+      "resources": [
+        "pods"
+      ],
+      "verbs": [
+        "list"
+      ]
+    },
+    {
+      "apiGroups": [
+        ""
+      ],
+      "resources": [
+        "pods/log"
+      ],
+      "verbs": [
+        "get"
+      ]
+    },
+    {
+      "apiGroups": [
+        "apps"
+      ],
+      "resources": [
+        "deployments"
+      ],
+      "verbs": [
+        "list",
+        "patch",
+        "delete"
+      ]
+    },
+    {
+      "apiGroups": [
+        "apps"
+      ],
+      "resources": [
+        "replicasets"
+      ],
+      "verbs": [
+        "list"
+      ]
+    },
+    {
+      "apiGroups": [
+        "networking.k8s.io"
+      ],
+      "resources": [
+        "networkpolicies",
+        "ingresses"
+      ],
+      "verbs": [
+        "list",
+        "patch",
+        "delete"
+      ]
+    },
+    {
+      "apiGroups": [
+        "autoscaling"
+      ],
+      "resources": [
+        "horizontalpodautoscalers"
+      ],
+      "verbs": [
+        "list",
+        "patch",
+        "delete"
+      ]
+    },
+    {
+      "apiGroups": [
+        "http.keda.sh"
+      ],
+      "resources": [
+        "interceptorroutes"
+      ],
+      "verbs": [
+        "list",
+        "patch",
+        "delete"
+      ]
+    },
+    {
+      "apiGroups": [
+        "keda.sh"
+      ],
+      "resources": [
+        "scaledobjects"
+      ],
+      "verbs": [
+        "list",
+        "patch",
+        "delete"
+      ]
+    },
+    {
+      "apiGroups": [
+        "policy"
+      ],
+      "resources": [
+        "poddisruptionbudgets"
+      ],
+      "verbs": [
+        "list",
+        "patch",
+        "delete"
+      ]
+    }
+  ]
+}
+---
+# eu/growth/addons/10-worker-rbac-08.yaml
+{
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "ClusterRoleBinding",
+  "metadata": {
+    "name": "leptoskit-cloud-runtime"
+  },
+  "roleRef": {
+    "apiGroup": "rbac.authorization.k8s.io",
+    "kind": "ClusterRole",
+    "name": "leptoskit-cloud-runtime"
+  },
+  "subjects": [
+    {
+      "kind": "ServiceAccount",
+      "name": "leptoskit-cloud-worker",
+      "namespace": "kube-system"
+    }
+  ]
+}
+---
+# eu/growth/addons/20-charts-09.yaml
 {
   "apiVersion": "helm.cattle.io/v1",
   "kind": "HelmChart",
@@ -390,7 +576,7 @@ expression: "files.iter().map(|(path, content)|\nformat!(\"# {path}\\n{content}\
   }
 }
 ---
-# eu/growth/addons/20-charts-08.yaml
+# eu/growth/addons/20-charts-10.yaml
 {
   "apiVersion": "helm.cattle.io/v1",
   "kind": "HelmChart",
@@ -407,7 +593,7 @@ expression: "files.iter().map(|(path, content)|\nformat!(\"# {path}\\n{content}\
   }
 }
 ---
-# eu/growth/addons/20-charts-10.yaml
+# eu/growth/addons/20-charts-12.yaml
 {
   "apiVersion": "helm.cattle.io/v1",
   "kind": "HelmChart",
@@ -424,7 +610,7 @@ expression: "files.iter().map(|(path, content)|\nformat!(\"# {path}\\n{content}\
   }
 }
 ---
-# eu/growth/addons/20-charts-11.yaml
+# eu/growth/addons/20-charts-13.yaml
 {
   "apiVersion": "helm.cattle.io/v1",
   "kind": "HelmChart",
@@ -441,7 +627,7 @@ expression: "files.iter().map(|(path, content)|\nformat!(\"# {path}\\n{content}\
   }
 }
 ---
-# eu/growth/addons/20-charts-14.yaml
+# eu/growth/addons/20-charts-16.yaml
 {
   "apiVersion": "helm.cattle.io/v1",
   "kind": "HelmChart",
@@ -453,12 +639,12 @@ expression: "files.iter().map(|(path, content)|\nformat!(\"# {path}\\n{content}\
     "chart": "traefik",
     "repo": "https://traefik.github.io/charts",
     "targetNamespace": "kube-system",
-    "valuesContent": "{\n  \"fullnameOverride\": \"traefik\",\n  \"nodeSelector\": {\n    \"leptoskit.dev/pool\": \"platform\"\n  },\n  \"ports\": {\n    \"web\": {\n      \"forwardedHeaders\": {\n        \"trustedIPs\": [\n          \"10.42.0.0/16\"\n        ]\n      }\n    },\n    \"websecure\": {\n      \"forwardedHeaders\": {\n        \"trustedIPs\": []\n      }\n    }\n  },\n  \"service\": {\n    \"type\": \"ClusterIP\"\n  },\n  \"tolerations\": [\n    {\n      \"effect\": \"PreferNoSchedule\",\n      \"key\": \"leptoskit.dev/pool\",\n      \"operator\": \"Equal\",\n      \"value\": \"platform\"\n    }\n  ]\n}",
+    "valuesContent": "{\n  \"fullnameOverride\": \"traefik\",\n  \"nodeSelector\": {\n    \"leptoskit.dev/pool\": \"platform\"\n  },\n  \"ports\": {\n    \"web\": {\n      \"forwardedHeaders\": {\n        \"trustedIPs\": [\n          \"10.42.0.0/16\"\n        ]\n      }\n    },\n    \"websecure\": {\n      \"forwardedHeaders\": {\n        \"trustedIPs\": []\n      }\n    }\n  },\n  \"providers\": {\n    \"kubernetesIngress\": {\n      \"allowExternalNameServices\": true\n    }\n  },\n  \"service\": {\n    \"type\": \"ClusterIP\"\n  },\n  \"tolerations\": [\n    {\n      \"effect\": \"PreferNoSchedule\",\n      \"key\": \"leptoskit.dev/pool\",\n      \"operator\": \"Equal\",\n      \"value\": \"platform\"\n    }\n  ]\n}",
     "version": "42.4.1"
   }
 }
 ---
-# eu/growth/addons/21-http-09.yaml
+# eu/growth/addons/21-http-11.yaml
 {
   "apiVersion": "helm.cattle.io/v1",
   "kind": "HelmChart",
@@ -475,7 +661,7 @@ expression: "files.iter().map(|(path, content)|\nformat!(\"# {path}\\n{content}\
   }
 }
 ---
-# eu/growth/addons/30-certificates-15.yaml
+# eu/growth/addons/30-certificates-17.yaml
 {
   "apiVersion": "cert-manager.io/v1",
   "kind": "ClusterIssuer",
@@ -505,7 +691,7 @@ expression: "files.iter().map(|(path, content)|\nformat!(\"# {path}\\n{content}\
   }
 }
 ---
-# eu/growth/addons/30-certificates-16.yaml
+# eu/growth/addons/30-certificates-18.yaml
 {
   "apiVersion": "cert-manager.io/v1",
   "kind": "Certificate",
@@ -525,7 +711,7 @@ expression: "files.iter().map(|(path, content)|\nformat!(\"# {path}\\n{content}\
   }
 }
 ---
-# eu/growth/addons/30-certificates-17.yaml
+# eu/growth/addons/30-certificates-19.yaml
 {
   "apiVersion": "traefik.io/v1alpha1",
   "kind": "TLSStore",
@@ -540,7 +726,7 @@ expression: "files.iter().map(|(path, content)|\nformat!(\"# {path}\\n{content}\
   }
 }
 ---
-# eu/growth/addons/30-database-20.yaml
+# eu/growth/addons/30-database-22.yaml
 {
   "apiVersion": "postgresql.cnpg.io/v1",
   "kind": "Cluster",
@@ -597,7 +783,7 @@ expression: "files.iter().map(|(path, content)|\nformat!(\"# {path}\\n{content}\
   }
 }
 ---
-# eu/growth/addons/30-database-21.yaml
+# eu/growth/addons/30-database-23.yaml
 {
   "apiVersion": "postgresql.cnpg.io/v1",
   "kind": "ScheduledBackup",
@@ -615,7 +801,7 @@ expression: "files.iter().map(|(path, content)|\nformat!(\"# {path}\\n{content}\
   }
 }
 ---
-# eu/growth/addons/30-registry-12.yaml
+# eu/growth/addons/30-registry-14.yaml
 {
   "apiVersion": "cert-manager.io/v1",
   "kind": "Certificate",
@@ -635,7 +821,7 @@ expression: "files.iter().map(|(path, content)|\nformat!(\"# {path}\\n{content}\
   }
 }
 ---
-# eu/growth/addons/30-registry-13.yaml
+# eu/growth/addons/30-registry-15.yaml
 {
   "apiVersion": "networking.k8s.io/v1",
   "kind": "Ingress",
@@ -677,7 +863,7 @@ expression: "files.iter().map(|(path, content)|\nformat!(\"# {path}\\n{content}\
   }
 }
 ---
-# eu/growth/addons/40-tunnel-18.yaml
+# eu/growth/addons/40-tunnel-20.yaml
 {
   "apiVersion": "apps/v1",
   "kind": "Deployment",

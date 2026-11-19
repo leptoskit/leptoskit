@@ -28,7 +28,8 @@ use leptoskit_cloud_runtime::Scale;
 use leptoskit_cloud_runtime::SecretValues;
 use leptoskit_cloud_runtime::Tls;
 use leptoskit_cloud_runtime::Volume;
-use leptoskit_cloud_runtime::kubernetes::HttpScaledObject;
+use leptoskit_cloud_runtime::kubernetes::HttpAddon;
+use leptoskit_cloud_runtime::kubernetes::ScaledObject;
 use leptoskit_cloud_runtime::manifests;
 
 /// The digest of the word `test`, in the form a release names.
@@ -93,10 +94,10 @@ fn resources_m() -> Resources {
 /// own clusters look like.
 fn cluster() -> ClusterProfile {
 	ClusterProfile {
-		ingress_class: "nginx".to_owned(),
-		ingress_namespace: "ingress-nginx".to_owned(),
-		wildcard_tls_secret: Some("leptoskit-wildcard-tls".to_owned()),
-		cluster_issuer: Some("leptoskit-ca".to_owned()),
+		ingress_class: "traefik".to_owned(),
+		ingress_namespace: "kube-system".to_owned(),
+		wildcard_tls_secret: Some("apps-wildcard-tls".to_owned()),
+		cluster_issuer: Some("apps".to_owned()),
 		dns_namespace: "kube-system".to_owned(),
 		blocked_egress_cidrs: vec![
 			"10.0.0.0/8".to_owned(),
@@ -104,7 +105,23 @@ fn cluster() -> ClusterProfile {
 			"192.168.0.0/16".to_owned(),
 		],
 		image_pull_secret: None,
-		keda_http: true,
+		keda_http: Some(HttpAddon {
+			namespace: "keda".to_owned(),
+			interceptor_service: "keda-add-ons-http-interceptor-proxy".to_owned(),
+			interceptor_port: 8080,
+			scaler_service: "keda-add-ons-http-external-scaler".to_owned(),
+			scaler_port: 9090,
+			interceptor_labels: BTreeMap::from([
+				(
+					"app.kubernetes.io/component".to_owned(),
+					"interceptor".to_owned(),
+				),
+				(
+					"app.kubernetes.io/name".to_owned(),
+					"http-add-on".to_owned(),
+				),
+			]),
+		}),
 	}
 }
 
@@ -146,8 +163,8 @@ fn minimal_sleeping_app() -> (ReleaseSpec, ClusterProfile, SecretValues) {
 			runtime_class: Some("gvisor".to_owned()),
 			egress: Egress::Internet,
 			quota: Quota {
-				cpu_millis: 500,
-				memory_mib: 128,
+				cpu_millis: 1000,
+				memory_mib: 256,
 				pods: 2,
 				storage_gib: 1,
 			},
@@ -263,13 +280,13 @@ fn app_with_services() -> (ReleaseSpec, ClusterProfile, SecretValues) {
 			runtime_class: Some("gvisor".to_owned()),
 			egress: Egress::Internet,
 			quota: Quota {
-				cpu_millis: 12000,
+				cpu_millis: 14000,
 				memory_mib: 4096,
 				pods: 12,
 				storage_gib: 10,
 			},
 			database: Some(DatabaseAccess {
-				namespace: "postgres-shared".to_owned(),
+				namespace: "database".to_owned(),
 				port: 5432,
 			}),
 		},
@@ -318,11 +335,52 @@ fn a_minimal_sleeping_app() {
 			"ServiceAccount",
 			"Deployment",
 			"Service",
-			"HTTPScaledObject",
+			"Service",
+			"InterceptorRoute",
+			"ScaledObject",
 			"Ingress",
 		]
 	);
 	insta::assert_snapshot!(as_yaml(&objects));
+}
+
+#[test]
+fn one_xs_app_has_room_for_its_rolling_surge() {
+	let (mut spec, cluster, secrets) = minimal_sleeping_app();
+	spec.processes[0].scale.min = 1;
+	spec.processes[0].scale.sleep = false;
+	spec.policy.quota = Quota::for_processes(&spec.processes);
+	let objects = build(&spec, &cluster, &secrets);
+	let quota = objects
+		.iter()
+		.find_map(|object| {
+			match object {
+				Object::ResourceQuota(quota) => quota.spec.as_ref()?.hard.as_ref(),
+				_ => None,
+			}
+		})
+		.expect("quota");
+	assert_eq!(quota["pods"].0, "2");
+	assert_eq!(quota["limits.cpu"].0, "1000m");
+	assert_eq!(quota["limits.memory"].0, "256Mi");
+	let deployment = objects
+		.iter()
+		.find_map(|object| {
+			match object {
+				Object::Deployment(deployment) => deployment.spec.as_ref(),
+				_ => None,
+			}
+		})
+		.expect("deployment");
+	let rolling = deployment
+		.strategy
+		.as_ref()
+		.and_then(|strategy| strategy.rolling_update.as_ref())
+		.expect("rolling update");
+	assert_eq!(
+		rolling.max_surge,
+		Some(k8s_openapi::apimachinery::pkg::util::intstr::IntOrString::Int(1))
+	);
 }
 
 #[test]
@@ -356,7 +414,7 @@ fn the_refusals() {
 	let (spec, mut cluster, secrets) = minimal_sleeping_app();
 
 	// Sleep on a cluster without the HTTP add-on.
-	cluster.keda_http = false;
+	cluster.keda_http = None;
 	let error = manifests(&spec, &cluster, &secrets).expect_err("no add-on");
 	assert!(matches!(error, ManifestError::SleepWithoutScaler { ref process } if process == "app"));
 	assert!(error.to_string().contains("cannot sleep"), "{}", error);
@@ -456,15 +514,10 @@ fn every_spec_builds_the_same_manifests_the_same_way() {
 			};
 			spec.policy.egress = Egress::None;
 			spec.policy.database = Some(DatabaseAccess {
-				namespace: "postgres-shared".to_owned(),
+				namespace: "database".to_owned(),
 				port: 5432,
 			});
-			spec.policy.quota = Quota {
-				cpu_millis: 500,
-				memory_mib: 128,
-				pods: 2,
-				storage_gib: 1,
-			};
+			spec.policy.quota = Quota::for_processes(&spec.processes);
 			("private".to_owned(), spec, cluster, secrets, vec![])
 		},
 		{
@@ -484,7 +537,7 @@ fn every_spec_builds_the_same_manifests_the_same_way() {
 				sleep: false,
 			};
 			spec.routes[0].tls = Tls::Issued;
-			cluster.keda_http = false;
+			cluster.keda_http = None;
 			spec.policy.quota = Quota {
 				cpu_millis: 500,
 				memory_mib: 128,
@@ -619,7 +672,7 @@ fn the_sleeper_wakes_on_its_routes() {
 		.iter()
 		.find_map(|object| {
 			match object {
-				Object::HttpScaledObject(HttpScaledObject { spec: scaled, .. }) => Some(scaled),
+				Object::ScaledObject(ScaledObject { spec: scaled, .. }) => Some(scaled),
 				_ => None,
 			}
 		})
@@ -628,14 +681,144 @@ fn the_sleeper_wakes_on_its_routes() {
 	assert_eq!(keda.replicas_max, 1);
 	let trigger = &keda.triggers[0];
 	assert_eq!(
-		trigger.metadata.get("hosts").map(String::as_str),
-		Some("notes.leptoskit.app")
-	);
-	assert_eq!(trigger.metadata.get("port").map(String::as_str), Some("80"));
-	assert_eq!(
-		trigger.metadata.get("service").map(String::as_str),
+		trigger.metadata.get("interceptorRoute").map(String::as_str),
 		Some("app")
 	);
+	assert_eq!(trigger.kind, "external-push");
+	let route = objects
+		.iter()
+		.find_map(|object| {
+			match object {
+				Object::InterceptorRoute(route) => Some(route),
+				_ => None,
+			}
+		})
+		.unwrap();
+	assert_eq!(route.api_version, "http.keda.sh/v1beta1");
+	assert_eq!(route.spec.target.service, "app");
+	assert_eq!(route.spec.target.port, 80);
+	assert_eq!(route.spec.rules[0].hosts, ["notes.leptoskit.app"]);
+	assert_eq!(route.spec.rules[0].paths[0].value, "/");
+	let ingress = objects
+		.iter()
+		.find_map(|object| {
+			match object {
+				Object::Ingress(ingress) => ingress.spec.as_ref(),
+				_ => None,
+			}
+		})
+		.unwrap();
+	let backend = ingress.rules.as_ref().unwrap()[0]
+		.http
+		.as_ref()
+		.unwrap()
+		.paths[0]
+		.backend
+		.service
+		.as_ref()
+		.unwrap();
+	assert_eq!(backend.name, "http-interceptor");
+	assert_eq!(backend.port.as_ref().unwrap().number, Some(8080));
+	let external = objects
+		.iter()
+		.find_map(|object| {
+			match object {
+				Object::Service(service)
+					if service.metadata.name.as_deref() == Some("http-interceptor") =>
+				{
+					service.spec.as_ref()
+				}
+				_ => None,
+			}
+		})
+		.unwrap();
+	assert_eq!(external.type_.as_deref(), Some("ExternalName"));
+	assert_eq!(
+		external.external_name.as_deref(),
+		Some("keda-add-ons-http-interceptor-proxy.keda.svc.cluster.local")
+	);
+	let policy = objects
+		.iter()
+		.find_map(|object| {
+			match object {
+				Object::NetworkPolicy(policy)
+					if policy.metadata.name.as_deref() == Some("allow-from-ingress-app") =>
+				{
+					policy.spec.as_ref()
+				}
+				_ => None,
+			}
+		})
+		.unwrap();
+	let peers = policy.ingress.as_ref().unwrap()[0].from.as_ref().unwrap();
+	assert_eq!(peers.len(), 1);
+	assert_eq!(
+		peers[0]
+			.namespace_selector
+			.as_ref()
+			.unwrap()
+			.match_labels
+			.as_ref()
+			.unwrap()["kubernetes.io/metadata.name"],
+		"keda"
+	);
+	assert_eq!(
+		peers[0]
+			.pod_selector
+			.as_ref()
+			.unwrap()
+			.match_labels
+			.as_ref()
+			.unwrap()["app.kubernetes.io/component"],
+		"interceptor"
+	);
+}
+
+#[test]
+fn secret_changes_only_roll_processes_that_use_them() {
+	let (spec, cluster, secrets) = app_with_services();
+	let before = build(&spec, &cluster, &secrets);
+	let changed = SecretValues::new(BTreeMap::from([(
+		"search-token".to_owned(),
+		"changed-secret".to_owned(),
+	)]));
+	let after = build(&spec, &cluster, &changed);
+	for name in ["app", "search", "files"] {
+		let template = |objects: &[Object]| {
+			objects
+				.iter()
+				.find_map(|object| {
+					match object {
+						Object::Deployment(deployment)
+							if deployment.metadata.name.as_deref() == Some(name) =>
+						{
+							Some(deployment.spec.as_ref().unwrap().template.clone())
+						}
+						_ => None,
+					}
+				})
+				.unwrap()
+		};
+		assert_eq!(template(&before) == template(&after), name != "search");
+	}
+}
+
+#[test]
+fn platform_defaults_validate_and_use_the_controller_certificate() {
+	let profile = ClusterProfile::platform_defaults();
+	profile.validate().unwrap();
+	let (spec, _, secrets) = minimal_sleeping_app();
+	for object in build(&spec, &profile, &secrets) {
+		if let Object::Ingress(ingress) = object {
+			let spec = ingress.spec.unwrap();
+			assert_eq!(spec.ingress_class_name.as_deref(), Some("traefik"));
+			assert_eq!(spec.tls.unwrap()[0].secret_name, None);
+		}
+	}
+	assert!(ClusterProfile::default().validate().is_err());
+	let mut invalid = profile;
+	invalid.keda_http.as_mut().unwrap().interceptor_port = 0;
+	assert!(invalid.validate().is_err());
 }
 
 /// Where a `kubectl` is installed, the snapshots are real Kubernetes. Run

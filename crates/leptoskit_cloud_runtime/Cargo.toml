@@ -16,22 +16,29 @@ name = "manifests"
 required-features = ["kubernetes"]
 
 [dependencies]
+chrono = { workspace = true, optional = true }
 # The Kubernetes bindings, behind the `kubernetes` feature below: the base
 # never compiles them, so the wasm client of the cloud dashboard reads the
 # spec without them. Secrets ride in `k8s-openapi`'s `ByteString`, which
 # serializes as base64, so the feature needs no encoder of its own.
 k8s-openapi = { workspace = true, optional = true }
+kube = { workspace = true, optional = true }
 # The base: pure data with no features on, safe in a browser build. `uuid`
 # carries the workspace's `js` feature, so ids generate on
 # wasm32-unknown-unknown too.
 serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true, optional = true }
 sha2 = { workspace = true }
 thiserror = { workspace = true }
+tokio = { workspace = true, optional = true, features = ["time"] }
 uuid = { workspace = true, features = ["serde", "v7"] }
 # The `kubernetes` feature's YAML writer.
 yaml_serde = { workspace = true, optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+axum = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "net", "sync"] }
 # `block_on` for the fake adapter's futures, and snapshots for the manifests.
 futures = { workspace = true }
 insta = { workspace = true }
@@ -41,6 +48,7 @@ default = []
 # Kubernetes manifests for one release: the objects, their deterministic
 # order, and the refusals a plain cluster cannot honor.
 kubernetes = ["dep:k8s-openapi", "dep:yaml_serde"]
+kube = ["kubernetes", "dep:kube", "dep:chrono", "dep:serde_json", "dep:tokio"]
 # A recording fake: every call is kept, specs are validated, and a test
 # scripts what a rollout should look like. No dependency beyond the base.
 testing = []
