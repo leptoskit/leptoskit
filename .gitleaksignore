@@ -177,3 +177,4 @@ db5d7ccc5a4cb505d5de42d105b687104b48d638:.audit/deep-audit-2026-11-07/acceptance
 db5d7ccc5a4cb505d5de42d105b687104b48d638:.audit/deep-audit-2026-11-07/acceptance-ledger.json:generic-api-key:646
 db5d7ccc5a4cb505d5de42d105b687104b48d638:.audit/deep-audit-2026-11-07/auth-workspace-checkpoint/checkpoint.json:generic-api-key:33
 db5d7ccc5a4cb505d5de42d105b687104b48d638:.audit/deep-audit-2026-11-07/auth-workspace-checkpoint/checkpoint.json:generic-api-key:34
+101b2ee1e7acf5a060554a6a0bd7c9f597ff7903:crates/leptoskit_cloud_worker/src/publish.rs:generic-api-key:413
