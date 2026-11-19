@@ -10,13 +10,14 @@
 //!   credential headers, and both wire codecs end to end.
 //! - **Played**: the OS boundary — the `notifications` plugin's methods 7 and 8
 //!   answer scripted APNs snapshots through the plugin's own codec, and method
-//!   9 the device details the OS reports, and method 10 the batches of taps,
-//!   shown notifications, and data messages a host received — and the service —
-//!   the `http` plugin answers scripted JSON for the RPC routes the client
-//!   really addresses, with a destination-deduping, quota-refusing,
-//!   receipt-replaying stand-in that keeps the real service's ownership rules:
-//!   a renewal of an enrollment the person no longer holds answers "gone" and
-//!   registers nothing. No real APNs, no real server, no device.
+//!   9 the device details the OS reports, method 11 the APNs environment a
+//!   signed build names, and method 10 the batches of taps, shown
+//!   notifications, and data messages a host received — and the service — the
+//!   `http` plugin answers scripted JSON for the RPC routes the client really
+//!   addresses, with a destination-deduping, quota-refusing, receipt-replaying
+//!   stand-in that keeps the real service's ownership rules: a renewal of an
+//!   enrollment the person no longer holds answers "gone" and registers
+//!   nothing. No real APNs, no real server, no device.
 //!
 //! Runs as `test:plugins:guest` does, from the wasm the script builds.
 
@@ -31,6 +32,7 @@ use leptoskit_bridge::PluginId;
 use leptoskit_native::EventOutcome;
 use leptoskit_native::HeadlessBackend;
 use leptoskit_plugin_http::protocol;
+use leptoskit_plugin_notifications::ApsEnvironment;
 use leptoskit_plugin_notifications::DeviceInfo;
 use leptoskit_plugin_notifications::DeviceToken;
 use leptoskit_plugin_notifications::FcmToken;
@@ -66,10 +68,14 @@ enum Answer {
 
 /// What the fake OS answers for one `DEVICE` read, in order; the last one
 /// repeats, and with none scripted the device reports nothing.
-/// `Unavailable` is a host that predates the method.
+/// `Unavailable` is a host that predates the method. `Signed` is an Apple
+/// host that also names the APNs environment its build is signed for: only
+/// a script with one registers that method, so every other run plays a host
+/// without it.
 #[derive(Clone)]
 enum Device {
 	Reports(DeviceInfo),
+	Signed(DeviceInfo, ApsEnvironment),
 	Unavailable,
 }
 
@@ -373,10 +379,17 @@ fn run_receiving(
 	const REMOTE_REGISTER: MethodId = MethodId(8);
 	const DEVICE: MethodId = MethodId(9);
 	const RECEIVED: MethodId = MethodId(10);
+	const APS_ENVIRONMENT: MethodId = MethodId(11);
 
 	let mut host = WasmHost::<HeadlessBackend>::headless(wasm).expect("compile the guest");
 	let report = register(&mut host, REPORT, &[ASK, PANICKED, STEP]);
 	let mut methods = vec![REMOTE_TOKEN, REMOTE_REGISTER, DEVICE];
+	if devices
+		.iter()
+		.any(|device| matches!(device, Device::Signed(..)))
+	{
+		methods.push(APS_ENVIRONMENT);
+	}
 	if inbox.is_some() {
 		methods.push(RECEIVED);
 	}
@@ -458,8 +471,18 @@ fn run_receiving(
 							reported = next;
 						}
 						match &reported {
-							Device::Reports(info) => Ok(info.encode().expect("the plugin codec")),
+							Device::Reports(info) | Device::Signed(info, _) => {
+								Ok(info.encode().expect("the plugin codec"))
+							}
 							Device::Unavailable => Err(Error::Unavailable),
+						}
+					}
+					APS_ENVIRONMENT => {
+						match &reported {
+							Device::Signed(_, environment) => {
+								Ok(Bytes::copy_from_slice(&environment.encode()))
+							}
+							Device::Reports(_) | Device::Unavailable => Err(Error::Unavailable),
 						}
 					}
 					RECEIVED => {
@@ -1089,6 +1112,59 @@ fn changed_details_are_sent_once_under_the_same_endpoint() {
 			.iter()
 			.any(|line| line.starts_with("revoke(")),
 		"a details change retires nothing"
+	);
+}
+
+/// An Apple host names the APNs environment its build is signed for, and
+/// the enrollment carries it: a development build says `sandbox`. The same
+/// token under a build signed for distribution sends the details once more,
+/// and the launch after that sends nothing.
+#[test]
+#[ignore = "run by test:plugins:guest, which compiles the wasm fixture"]
+fn an_apple_build_reports_the_apns_environment_it_is_signed_for() {
+	let first = token(11);
+	let info = DeviceInfo {
+		locale: Some("en_GB".into()),
+		time_zone: None,
+		app_version: Some("2.1.0".into()),
+	};
+	let run = run_with(
+		&guest(),
+		9,
+		vec![
+			Answer::Token(first.clone()),
+			Answer::Token(first.clone()),
+			Answer::Token(first.clone()),
+		],
+		vec![
+			Device::Signed(info.clone(), ApsEnvironment::Development),
+			Device::Signed(info, ApsEnvironment::Production),
+		],
+		Service::new(),
+	);
+	let id = run.service.destinations[&first];
+
+	assert_eq!(
+		run.steps,
+		vec![
+			format!("enroll=ok:{id}"),
+			format!("reconcile=ok:kept:{id}"),
+			format!("reconcile=ok:kept:{id}"),
+		]
+	);
+	let environments: Vec<_> = run
+		.service
+		.details
+		.iter()
+		.map(|details| details["apns_environment"].clone())
+		.collect();
+	assert_eq!(
+		environments,
+		vec![
+			serde_json::json!("sandbox"),
+			serde_json::json!("production")
+		],
+		"each build's environment sent once; the unchanged launch sent nothing"
 	);
 }
 

@@ -45,7 +45,7 @@ secrets = [
 | `LEPTOSKIT_NOTIFICATIONS_APNS_KEY_ID`                | that key's id                                                                                                                                      |
 | `LEPTOSKIT_NOTIFICATIONS_APNS_TEAM_ID`               | your team id                                                                                                                                       |
 | `LEPTOSKIT_NOTIFICATIONS_APNS_TOPIC`                 | your app's bundle id                                                                                                                               |
-| `LEPTOSKIT_NOTIFICATIONS_APNS_ENVIRONMENT`           | `sandbox` for development-signed builds, `production` for TestFlight, store, and notarized builds                                                  |
+| `LEPTOSKIT_NOTIFICATIONS_APNS_ENVIRONMENT`           | the default: `sandbox` or `production`, for a device whose build did not say which it is signed for                                                |
 | `LEPTOSKIT_NOTIFICATIONS_FCM_SERVICE_ACCOUNT`        | the contents of the service-account JSON file the Firebase console issues                                                                          |
 | `LEPTOSKIT_NOTIFICATIONS_WEB_PUSH_VAPID_PRIVATE_KEY` | the VAPID private key: 32 bytes, base64url                                                                                                         |
 | `LEPTOSKIT_NOTIFICATIONS_WEB_PUSH_VAPID_PUBLIC_KEY`  | the VAPID public key: 65 bytes, base64url — the same key your web app passes to `browser::EnrollOptions::new`                                      |
@@ -149,7 +149,7 @@ aps-environment = "development"
 
 The `aps-environment` line is the opt-in. It is a string — Apple's entitlement takes exactly `development` or `production`, not a boolean — and generation writes it into `.leptoskit/ios/App.entitlements`. The value has to agree with the provisioning profile the build is signed with. With Xcode's automatic signing, which is what a leptoskit iOS build uses unless you configured manual signing, **keep `development`, for TestFlight and store builds too**: Xcode signs the archive with a development profile, and the export step re-signs it with your distribution profile, which is what puts the production environment into the build people install. Set `production` only when your own manual signing uses a distribution profile for the build itself. If a release build stops with a message that the provisioning profile doesn't match the `aps-environment` entitlement, this line is the one to change.
 
-What decides where a device registers is the signature of the build that is installed, not this line: a build run from Xcode registers with Apple's sandbox, and a TestFlight or App Store build registers with production. The notifications service's `LEPTOSKIT_NOTIFICATIONS_APNS_ENVIRONMENT` has to name the same one, so a service that serves TestFlight and store builds runs with `production`. An app without the setting generates exactly as before, with no push entitlement: selecting the notifications plugin for local banners never turns an app into a push-enabled one. No provisioning or certificate access happens in the build.
+What decides where a device registers is the signature of the build that is installed, not this line: a build run from Xcode registers with Apple's sandbox, and a TestFlight or App Store build registers with production. The app tells the service which one: at enrollment the iOS and macOS hosts read the environment the installed build is signed for, and the service pushes each device through that environment's server. So one service can serve a build run from Xcode and a store build at once; see [development and store builds on one service](#development-and-store-builds-on-one-service). An app without the setting generates exactly as before, with no push entitlement: selecting the notifications plugin for local banners never turns an app into a push-enabled one. No provisioning or certificate access happens in the build.
 
 The generated app delegate already forwards the OS's answers: `didRegisterForRemoteNotificationsWithDeviceToken` and `didFailToRegisterForRemoteNotificationsWithError` land in the notifications plugin's in-memory broker, which survives the early callbacks that can arrive before the plugin and its guest exist. The token is held in memory only — the OS hands it out again on the next launch — and Apple's bytes are forwarded as exact lower-case hex, of whatever length the OS chooses; nothing assumes the historical 32 bytes, and nothing is invented on failure.
 
@@ -263,7 +263,7 @@ So a push-enabled Mac app needs:
 - **A provisioning profile**, named by `provisioning-profile` as a path under your project. Create it in your Apple developer account for this app's bundle id (`native.package_id`) with the Push Notifications capability, and download it. Generation stops, naming the setting, when `aps-environment` is set and the profile isn't configured or isn't there. The build copies it into the app as `Contents/embedded.provisionprofile` before signing.
 - **A signing identity** for local builds, in the `LEPTOSKIT_MACOS_IDENTITY` environment variable: the certificate's name as `security find-identity -v -p codesigning` lists it, such as `Apple Development: Your Name (TEAMID)`. `leptoskit build --platform macos` and `leptoskit dev --platform macos` stop without it rather than ad-hoc sign an app that can't launch. `leptoskit build --release --platform macos --unsigned` still builds, ad-hoc signed and without the push entitlement, for measuring or testing everything but push.
 
-The profile and the environment go together. For local work use a **macOS development** profile with `aps-environment = "development"`: it registers with Apple's sandbox, and it runs only on the Macs listed in the profile. For `leptoskit publish macos` switch both: a **Developer ID** profile with `aps-environment = "production"`. The distribution embeds that profile, signs with your `LEPTOSKIT_PUBLISH_MACOS_IDENTITY`, and registers with production. Either way the value must match the notifications service's `LEPTOSKIT_NOTIFICATIONS_APNS_ENVIRONMENT`. leptoskit copies the profile and checks that it is there; it doesn't read what the profile grants, so a profile for another bundle id, another environment, or one without the push capability is something macOS reports only when the app launches.
+The profile and the environment go together. For local work use a **macOS development** profile with `aps-environment = "development"`: it registers with Apple's sandbox, and it runs only on the Macs listed in the profile. For `leptoskit publish macos` switch both: a **Developer ID** profile with `aps-environment = "production"`. The distribution embeds that profile, signs with your `LEPTOSKIT_PUBLISH_MACOS_IDENTITY`, and registers with production. The app reads the environment from the embedded profile and reports it at enrollment, so the service pushes a development build through the sandbox and a distributed build through production. leptoskit copies the profile and checks that it is there; it doesn't read what the profile grants, so a profile for another bundle id, another environment, or one without the push capability is something macOS reports only when the app launches.
 
 An app without the `aps-environment` setting generates and signs exactly as before, with no push entitlement and no profile: selecting the notifications plugin for local banners never turns an app into a push-enabled one.
 
@@ -276,6 +276,41 @@ let enrollment = native::enroll().await?;
 ```
 
 One honest limitation: the stock **menu-bar host** (a `[native] mode = "menu-bar"` app that keeps the generated status-item lifecycle) carries no forwarding delegate, so its registration answers stay "unconfirmed", and it installs no notification-centre delegate either, so it shows no banner while it runs and hears no taps — a push-enabled app wants the standard windowed host, or its own delegate wired to the plugin's `noteDeviceToken`, `noteRegistrationFailure`, `installDelegate`, and `noteRemoteNotification`. And what a push does while the app is **closed** is the OS's work, as on iOS: APNs shows the alert and your durable inbox row is already in the service. A push that arrives while the app is open shows its banner, and a tap reaches your code through the [receiver](receiving.md#know-what-was-tapped-and-what-arrived). As everywhere, provider acceptance is only ever proven by a real Mac with real credentials, which this setup doesn't exercise — and the same goes for the signing above: the profile and identity steps follow Apple's code-signing rules, but they haven't been run against a real Apple developer account as part of leptoskit's own testing, so treat your first push-enabled Mac build as the check.
+
+## Development and store builds on one service
+
+Apple runs two push servers. A device token is known to one of them: the sandbox for a build signed for development, production for every other build. A token sent to the wrong one is refused, and the delivery ends as `operator_configuration`.
+
+The service picks the server for each device. At enrollment the iOS and macOS hosts read which environment the installed build is signed for, and the enrollment carries it with the other [device details](audiences.md#what-a-device-says-about-itself). Your app writes no code for it. So a build you run from Xcode and the build your testers have from TestFlight can enroll with the same service, and each is pushed through its own server.
+
+What the app reports:
+
+| The installed build                                                          | Reports                                                                     | Pushed through                                              |
+| ---------------------------------------------------------------------------- | --------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| runs in the iOS simulator                                                    | `sandbox`                                                                   | Apple's sandbox server                                      |
+| has an embedded provisioning profile: run from Xcode, ad hoc, or a Mac build | what the profile's `aps-environment` says, where `development` is `sandbox` | the server it names                                         |
+| is an iOS build from TestFlight or the App Store                             | `production`                                                                | Apple's production server                                   |
+| could not tell, or predates this report                                      | nothing                                                                     | the server `LEPTOSKIT_NOTIFICATIONS_APNS_ENVIRONMENT` names |
+
+`LEPTOSKIT_NOTIFICATIONS_APNS_ENVIRONMENT` is the default, for a device that reported nothing. Set it to what most of your devices are: `production` for a service people use.
+
+Three things stay the same for both environments, because the service has one of each: the `.p8` key, the team id, and the topic. So both builds need the same bundle id, and the key must be allowed to use both servers. A key that Apple restricted to one environment when you created it is refused by the other, which also shows as [`operator_configuration`](troubleshooting.md#when-the-reason-is-operator_configuration).
+
+The environment is reported again when it changes, at the next launch, like the other details. [`person_endpoints`](audiences.md#know-your-audience-before-you-send) and the person's own `push_endpoints` show it as `device.apns_environment`. Conditions do not read it.
+
+A call that registers or imports an APNs token itself can name the environment in the same place:
+
+```rust
+use leptoskit_notifications::push::ApnsEnvironment;
+use leptoskit_notifications::push::DeviceDetails;
+
+let device = DeviceDetails {
+    apns_environment: Some(ApnsEnvironment::Sandbox),
+    ..DeviceDetails::default()
+};
+```
+
+The service keeps the environment only for an APNs endpoint. On an FCM token or a browser subscription it is dropped.
 
 ## Enroll a browser
 

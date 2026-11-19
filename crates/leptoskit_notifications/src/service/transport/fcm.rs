@@ -44,6 +44,7 @@ use crate::service::transport::Boundary;
 use crate::service::transport::Message;
 use crate::service::transport::Outcome;
 use crate::service::transport::Shaped;
+use crate::service::transport::Target;
 use crate::service::transport::Transport;
 use crate::service::transport::WireRequest;
 use crate::service::transport::WireResponse;
@@ -326,10 +327,12 @@ enum AccessFailure {
 impl Transport for Fcm {
 	fn attempt<'a>(
 		&'a self,
-		credential: &'a str,
+		target: Target<'a>,
 		message: &'a Message,
 	) -> Pin<Box<dyn Future<Output = Outcome> + Send + 'a>> {
 		let send = async move {
+			let credential = target.credential;
+
 			// Size is checked on the payload before any network work,
 			// trimmed in the shared order; past the id-only envelope it
 			// is a terminal clear result with nothing sent.

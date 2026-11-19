@@ -20,14 +20,9 @@
 //! subscribe themselves to — nothing being open is the default — and
 //! [`Retention`], how long the service keeps what it no longer needs.
 
-/// APNs's two servers.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ApnsEnvironment {
-	/// The development server, for builds run from a development topic.
-	Sandbox,
-	/// The production server.
-	Production,
-}
+/// APNs's two servers: the one the service uses for an endpoint whose
+/// device reported no environment of its own.
+pub use crate::push::ApnsEnvironment;
 
 /// The APNs transport's configuration: the operator's `.p8` key, the ids
 /// that name it, the app's topic, and which server to talk to.

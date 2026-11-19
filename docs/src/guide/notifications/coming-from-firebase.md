@@ -238,7 +238,7 @@ let report = call_as_app(ImportPushEndpoints {
 A call takes at most 500 entries, so send your table in batches. What to import:
 
 - **Android:** the FCM registration tokens, as `PushCredential::Fcm`. They stay valid because the service's FCM service account is in the same Firebase project.
-- **iOS, when your server holds APNs device tokens:** import them as `PushCredential::Apns`.
+- **iOS, when your server holds APNs device tokens:** import them as `PushCredential::Apns`. A token from a store or TestFlight build belongs to Apple's production server. If your table also holds tokens from development builds, set `apns_environment` in each entry's `device`, as in [development and store builds on one service](push-setup.md#development-and-store-builds-on-one-service); an entry without it uses the service's `LEPTOSKIT_NOTIFICATIONS_APNS_ENVIRONMENT`.
 - **iOS, when your server holds only FCM tokens:** import them as `PushCredential::Fcm` too. The service sends them through FCM, which forwards to APNs for as long as your Firebase project keeps its APNs key. `device.platform` reads `fcm` for these.
 - **Browsers:** nothing. A Web Push subscription cannot be imported; see the next step.
 
@@ -275,7 +275,7 @@ In the same release, add the [`Receiver`](receiving.md) loop so taps keep openin
 Before you stop sending through Firebase, each of these should be true:
 
 - The service runs, and `notifications_overview` shows each platform you need as configured.
-- The APNs environment of the service matches the builds you ship (`production` for TestFlight and the App Store).
+- `LEPTOSKIT_NOTIFICATIONS_APNS_ENVIRONMENT` is `production`, which is what an imported APNs token and an older app version use. An updated app reports its own environment.
 - The FCM service account and `google-services.json` are from the same Firebase project.
 - Topics and attributes are copied from your own records.
 - Your token table is imported, and you have looked at what the import skipped.
@@ -292,7 +292,7 @@ Check this list against what your app uses before you start. None of these has a
 
 **Sending**
 
-- **No recurring sends.** A send that repeats daily is a send your server makes each day.
+- **No recurring sends.** A send that repeats daily is a send your server makes each day, from its own scheduler: see [a send that repeats](sending.md#a-send-that-repeats).
 - **No batch of different messages in one call**, like `sendEach`. Each send is one call.
 - **No send to a raw token.** `send_test` reaches one device by its endpoint id, for testing only.
 - **No localization keys.** [Variants](shaping-messages.md#say-it-in-each-persons-language) cover translated text; a device cannot resolve a key from its own string tables.
@@ -302,7 +302,6 @@ Check this list against what your app uses before you start. None of these has a
 
 - **No import of browser subscriptions.** [`import_push_endpoints`](#moving-step-by-step) takes FCM and APNs tokens. A browser subscribes again when the person next clicks, as in step 4.
 - **An imported iOS FCM token and the same phone's own APNs enrollment are two endpoints.** The service cannot tell that they are one device, and your server cannot revoke a single endpoint: `revoke_person_endpoints` removes all of a person's.
-- **One APNs environment per service.** Development builds and store builds cannot share one service.
 - **No iOS Notification Service Extension is generated**, so a push's image is not shown on iOS or macOS until you add an extension of your own.
 - **Android channels you created under Firebase are reached only by `android.raw_channel_id`.** `android.channel_id` names a channel made with the plugin, which keeps its channels under the `leptoskit.notifications.` prefix. For a channel your earlier app created as `orders`, send `raw_channel_id: "orders"`, and keep the code that creates the channel. The plugin cannot configure or list such a channel.
 - **Android enrollment uses the FCM registration token**, not the Firebase installation id that Firebase is moving to.

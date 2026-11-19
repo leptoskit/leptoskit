@@ -62,6 +62,65 @@ struct SystemDeviceFacts: DeviceFacts {
     }
 }
 
+/// Which APNs environment the running build is signed for, as
+/// `APS_ENVIRONMENT` (method 11) answers it. A device token is known only
+/// to that environment's server.
+enum ApsEnvironment: UInt32 {
+    case unknown = 0
+    case development = 1
+    case production = 2
+
+    /// The environment a provisioning profile's bytes name, or `nil` when
+    /// they name none. A profile is a signed envelope around a property
+    /// list, which is read from between its own markers.
+    static func named(inProfile profile: Data) -> ApsEnvironment? {
+        guard let start = profile.range(of: Data("<?xml".utf8)),
+              let end = profile.range(of: Data("</plist>".utf8), in: start.lowerBound..<profile.endIndex),
+              let list = try? PropertyListSerialization.propertyList(
+                  from: profile.subdata(in: start.lowerBound..<end.upperBound),
+                  options: [],
+                  format: nil
+              ),
+              let entitlements = (list as? [String: Any])?["Entitlements"] as? [String: Any] else {
+            return nil
+        }
+
+        // iOS spells the entitlement `aps-environment`; macOS prefixes it.
+        let named = entitlements["aps-environment"] ?? entitlements["com.apple.developer.aps-environment"]
+
+        switch named as? String {
+        case "development":
+            return .development
+        case "production":
+            return .production
+        default:
+            return nil
+        }
+    }
+
+    /// The running build's environment. A simulator registers with the
+    /// sandbox. A build with an embedded provisioning profile is what the
+    /// profile says. An iOS build without one came through TestFlight or
+    /// the App Store, which strip the profile and sign for production.
+    static func current(bundle: Bundle = .main) -> ApsEnvironment {
+        #if targetEnvironment(simulator)
+        return .development
+        #elseif os(macOS)
+        let url = bundle.bundleURL.appendingPathComponent("Contents/embedded.provisionprofile")
+
+        guard let profile = try? Data(contentsOf: url) else { return .unknown }
+
+        return named(inProfile: profile) ?? .unknown
+        #else
+        let url = bundle.bundleURL.appendingPathComponent("embedded.mobileprovision")
+
+        guard let profile = try? Data(contentsOf: url) else { return .production }
+
+        return named(inProfile: profile) ?? .unknown
+        #endif
+    }
+}
+
 @MainActor
 private struct SystemRemoteRegistrar: RemoteRegistrar {
     func register() async {
@@ -438,11 +497,11 @@ private final class SystemNotificationService: NotificationService {
 public final class NotificationsPlugin: NativePlugin {
     public let name = "notifications"
     // The iOS and macOS hosts advertise the remote methods, the device
-    // details enrollment sends, and what the app received; the other hosts
-    // keep the local-only set.
+    // details enrollment sends, what the app received, and the build's
+    // APNs environment; the other hosts keep the local-only set.
     // The dispatcher answers Unavailable for anything `methods` omits.
     #if os(iOS) || os(macOS)
-    public let methods: [UInt32] = [0, 1, 2, 3, 6, 7, 8, 9, 10]
+    public let methods: [UInt32] = [0, 1, 2, 3, 6, 7, 8, 9, 10, 11]
     #else
     public let methods: [UInt32] = [0, 1, 2, 3, 6]
     #endif
@@ -585,6 +644,12 @@ public final class NotificationsPlugin: NativePlugin {
         // and macOS hosts, whose delegates feed the received broker.
         case 10:
             return try await received(payload: payload)
+        // Method 11 is dispatched where `methods` advertises it: the iOS
+        // and macOS hosts, whose builds are signed for one APNs
+        // environment.
+        case 11:
+            guard payload.count == 0 else { throw PluginError.invalidArgument }
+            return Self.encodeApsEnvironment(ApsEnvironment.current())
         default:
             throw PluginError.unavailable
         }
@@ -622,6 +687,14 @@ public final class NotificationsPlugin: NativePlugin {
             }
             waited += Self.receivedWaitSliceNanos
         }
+    }
+
+    /// Encodes an `APS_ENVIRONMENT` reply: the answer's number as four
+    /// little-endian bytes.
+    static func encodeApsEnvironment(_ environment: ApsEnvironment) -> Data {
+        var little = environment.rawValue.littleEndian
+
+        return withUnsafeBytes(of: &little) { Data($0) }
     }
 
     /// Encodes a `DEVICE` reply: three length-prefixed UTF-8 strings —

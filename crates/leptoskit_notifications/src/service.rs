@@ -132,7 +132,9 @@ pub(crate) struct TestTargets {
 /// What [`TestTargets`] reads.
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub(crate) struct Targets {
-	endpoints: Vec<(Uuid, String, String)>,
+	/// Each live endpoint's id, platform, credential, and the APNs
+	/// environment its device reported.
+	endpoints: Vec<(Uuid, String, String, Option<crate::push::ApnsEnvironment>)>,
 	unread: Option<u64>,
 	/// The locale the person reads variants in, when one is known.
 	locale: Option<String>,
@@ -176,7 +178,15 @@ impl rpc::Operation for TestTargets {
 		Ok(Targets {
 			endpoints: endpoints
 				.into_iter()
-				.map(|endpoint| (endpoint.id, endpoint.platform, endpoint.credential))
+				.map(|endpoint| {
+					let environment = endpoint.apns_environment();
+					(
+						endpoint.id,
+						endpoint.platform,
+						endpoint.credential,
+						environment,
+					)
+				})
 				.collect(),
 			unread,
 			locale,
@@ -2706,11 +2716,21 @@ pub(crate) async fn send_test(
 
 	let mut outcomes = Vec::with_capacity(targets.endpoints.len());
 
-	for (id, platform, credential) in targets.endpoints {
+	for (id, platform, credential, apns_environment) in targets.endpoints {
 		let platform = crate::push::PushPlatform::from_str_value(&platform)
 			.unwrap_or(crate::push::PushPlatform::Apns);
 		let attempt = match runtime.transport(platform) {
-			Some(transport) => transport.attempt(&credential, &message).await,
+			Some(transport) => {
+				transport
+					.attempt(
+						transport::Target {
+							credential: &credential,
+							apns_environment,
+						},
+						&message,
+					)
+					.await
+			}
 			None => {
 				transport::Outcome::Ended {
 					reason: crate::push::DeliveryReason::TransportUnavailable,
