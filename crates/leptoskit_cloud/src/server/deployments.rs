@@ -386,7 +386,7 @@ async fn place(
 }
 
 /// The verified archive `digest` names in `organization`.
-async fn verified_archive(
+pub(crate) async fn verified_archive(
 	tx: &Tx,
 	organization: Id<Organization>,
 	digest: &Digest,
@@ -1708,14 +1708,16 @@ pub(crate) async fn before_removal(
 	if unsettled {
 		return Err(rpc::Error::conflict(format!(
 			"deployment_in_flight: `{}`'s cluster is still applying or removing a release, or \
-			 backing up or restoring its database, or an operator hasn't reconciled one; wait for \
-			 it before deleting the environment",
+			 backing up or restoring its database, or it is publishing to a store, or an operator \
+			 hasn't reconciled one; wait for it before deleting the environment",
 			environment.name
 		)));
 	}
 
-	// A backup or a restore nobody has taken isn't worth taking now.
+	// A backup, a restore, or a publish nobody has taken isn't worth taking
+	// now.
 	super::backups::abandon_queued(tx, environment_id).await?;
+	super::publishing::abandon_queued(tx, environment_id).await?;
 
 	let Some(placement) = Placement::query()
 		.filter(|placement| placement.environment_id.eq(environment_id))

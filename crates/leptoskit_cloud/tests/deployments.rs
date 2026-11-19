@@ -23,6 +23,7 @@ use support::config;
 use support::databases;
 use support::domains;
 use support::limits;
+use support::publishing;
 use support::review;
 use support::shipping;
 use support::shipping::Shop;
@@ -31,6 +32,16 @@ use tokio_tungstenite::MaybeTlsStream;
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
+
+#[tokio::test]
+async fn a_publish_carries_its_stores_credentials() {
+	publishing::a_publish_carries_its_stores_credentials(&support::app().await).await;
+}
+
+#[tokio::test]
+async fn a_publish_is_never_run_twice() {
+	publishing::a_publish_is_never_run_twice(&support::app().await).await;
+}
 
 #[tokio::test]
 async fn a_deployment_goes_live() {

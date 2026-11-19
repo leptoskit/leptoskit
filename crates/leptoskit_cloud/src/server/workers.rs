@@ -55,6 +55,8 @@ use crate::workers::MAX_LOG_LINES;
 use crate::workers::MAX_STATUS_LOG_LINES;
 use crate::workers::MAX_WAIT_SECONDS;
 use crate::workers::PairedWorker;
+use crate::workers::PublishOutcome;
+use crate::workers::PublishReport;
 use crate::workers::ReleaseOutcome;
 use crate::workers::Renewed;
 use crate::workers::RestoreOutcome;
@@ -318,7 +320,7 @@ async fn claim_job(cx: &rpc::MutationCx) -> rpc::Result<Option<Assignment>> {
 	}
 
 	let kinds: Vec<JobKind> = match row.role {
-		WorkerRole::Build => vec![JobKind::BuildServer],
+		WorkerRole::Build => vec![JobKind::BuildServer, JobKind::Publish],
 		WorkerRole::Cluster => {
 			vec![
 				JobKind::Release,
@@ -405,7 +407,25 @@ async fn claim_job(cx: &rpc::MutationCx) -> rpc::Result<Option<Assignment>> {
 	job.lease_expires_at = Some(lease_until(&job, now, &settings));
 	// A release's secrets: leased to this job, in this transaction, so no
 	// value is sent unless the lease and its record commit.
-	let secrets = if job.kind == JobKind::Release {
+	let secrets = if job.kind == JobKind::Publish {
+		match super::publishing::credentials(tx, services, &job, worker_id).await? {
+			Ok(secrets) => secrets,
+			Err(why) => {
+				// Nothing was leased and nothing started: the publish
+				// fails, saying why, and this worker asks again.
+				job.state = JobState::Abandoned;
+				job.worker_id = None;
+				job.attempt -= 1;
+				job.claimed_at = None;
+				job.lease_expires_at = None;
+				job.outcome = Json(Some(JobOutcome::Publish(PublishOutcome::Failed {
+					reason: why,
+				})));
+				job.save(tx).await?;
+				return Ok(None);
+			}
+		}
+	} else if job.kind == JobKind::Release {
 		match super::deployments::release_secrets(tx, services, &job, worker_id).await? {
 			Ok(secrets) => secrets,
 			Err(why) => {
@@ -428,10 +448,10 @@ async fn claim_job(cx: &rpc::MutationCx) -> rpc::Result<Option<Assignment>> {
 	job.save(tx).await?;
 	let attempt = u32::try_from(job.attempt).unwrap_or(u32::MAX);
 
-	if job.kind == JobKind::BuildServer {
-		super::deployments::build_claimed(tx, &job, attempt).await?;
-	} else {
-		super::deployments::release_claimed(tx, &job, attempt).await?;
+	match job.kind {
+		JobKind::BuildServer => super::deployments::build_claimed(tx, &job, attempt).await?,
+		JobKind::Publish => {}
+		_ => super::deployments::release_claimed(tx, &job, attempt).await?,
 	}
 
 	Ok(Some(Assignment {
@@ -457,6 +477,7 @@ fn lease_until(
 		(JobKind::BuildServer, Some(claimed)) => {
 			lease.min(claimed + delta(settings.build_deadline))
 		}
+		(JobKind::Publish, Some(claimed)) => lease.min(claimed + delta(settings.publish_deadline)),
 		_ => lease,
 	}
 }
@@ -629,11 +650,18 @@ async fn append_chunk(cx: &rpc::MutationCx, args: AppendChunk) -> rpc::Result<St
 		)));
 	}
 
-	let (Some(deployment), Some(environment)) = (job.deployment_id, job.environment_id) else {
-		return Err(rpc::Error::invalid(
-			"log_unavailable: only a build keeps a log; a cluster worker reports lines with \
-			 `report_status`",
-		));
+	// A build's log is its deployment's; a publish's is its own.
+	let (deployment, environment) = match (job.kind, job.deployment_id, job.environment_id) {
+		(JobKind::BuildServer, Some(deployment), Some(environment)) => {
+			(Some(deployment), environment)
+		}
+		(JobKind::Publish, None, Some(environment)) => (None, environment),
+		_ => {
+			return Err(rpc::Error::invalid(
+				"log_unavailable: only a build or a publish keeps a log; a cluster worker reports \
+				 lines with `report_status`",
+			));
+		}
 	};
 	let settings = services.shipping().settings;
 	let bytes = i64::from(args.bytes);
@@ -650,7 +678,10 @@ async fn append_chunk(cx: &rpc::MutationCx, args: AppendChunk) -> rpc::Result<St
 	charge_log(tx, job.organization_id, bytes, &settings).await?;
 	job.log_bytes += bytes;
 	job.save(tx).await?;
-	let first_line = next_line(tx, |chunk| chunk.deployment_id.eq(Some(deployment))).await?;
+	let first_line = match deployment {
+		Some(deployment) => next_line(tx, |chunk| chunk.deployment_id.eq(Some(deployment))).await?,
+		None => next_line(tx, |chunk| chunk.job_id.eq(Some(job_id))).await?,
+	};
 	let key = log_key(
 		job.organization_id.uuid(),
 		environment.uuid(),
@@ -660,7 +691,7 @@ async fn append_chunk(cx: &rpc::MutationCx, args: AppendChunk) -> rpc::Result<St
 		kind: LogKind::Build,
 		organization_id: job.organization_id,
 		environment_id: environment,
-		deployment_id: Some(deployment),
+		deployment_id: deployment,
 		job_id: Some(job_id),
 		attempt,
 		seq,
@@ -744,8 +775,16 @@ fn scrubbed(mut outcome: JobOutcome, secrets: &[String]) -> JobOutcome {
 		)
 		| JobOutcome::DestroyEnvironment(DestroyOutcome::Failed { reason })
 		| JobOutcome::BackupDatabase(BackupOutcome::Failed { reason })
-		| JobOutcome::RestoreDatabase(RestoreOutcome::Failed { reason }) => reason,
-		JobOutcome::BuildServer(_)
+		| JobOutcome::RestoreDatabase(RestoreOutcome::Failed { reason })
+		| JobOutcome::Publish(PublishOutcome::Failed { reason }) => reason,
+		JobOutcome::Publish(PublishOutcome::Published(report)) => {
+			let report = std::mem::take(report);
+			return JobOutcome::Publish(PublishOutcome::Published(redacted_report(
+				report, secrets,
+			)));
+		}
+		JobOutcome::Publish(PublishOutcome::Stopped)
+		| JobOutcome::BuildServer(_)
 		| JobOutcome::Release(ReleaseOutcome::Applied)
 		| JobOutcome::DestroyEnvironment(DestroyOutcome::Destroyed)
 		| JobOutcome::BackupDatabase(BackupOutcome::Taken(_))
@@ -753,6 +792,86 @@ fn scrubbed(mut outcome: JobOutcome, secrets: &[String]) -> JobOutcome {
 	};
 	*reason = logs::redact_lines(&[reason.as_str()], secrets).remove(0);
 	outcome
+}
+
+/// `outcome` with each of `values`, the values leased to its job, hidden
+/// in every text, as the worker should already have.
+fn hide_leased(outcome: JobOutcome, values: &[String]) -> JobOutcome {
+	let values: Vec<String> = values
+		.iter()
+		.filter(|value| value.trim().len() >= 8)
+		.map(|value| value.trim().to_owned())
+		.collect();
+
+	if values.is_empty() {
+		return outcome;
+	}
+
+	let hide = |text: &mut String| {
+		for value in &values {
+			if text.contains(value.as_str()) {
+				*text = text.replace(value.as_str(), "[redacted]");
+			}
+		}
+	};
+
+	match outcome {
+		JobOutcome::Publish(PublishOutcome::Failed { mut reason }) => {
+			hide(&mut reason);
+			JobOutcome::Publish(PublishOutcome::Failed { reason })
+		}
+		JobOutcome::Publish(PublishOutcome::Published(mut report)) => {
+			for status in &mut report.stores {
+				hide(&mut status.summary);
+			}
+
+			for step in &mut report.steps {
+				hide(&mut step.what);
+				hide(&mut step.why);
+				hide(&mut step.done_when);
+
+				if let Some(url) = &mut step.url {
+					hide(url);
+				}
+
+				for field in &mut step.enter {
+					hide(&mut field.label);
+					hide(&mut field.value);
+				}
+			}
+
+			JobOutcome::Publish(PublishOutcome::Published(report))
+		}
+		outcome => outcome,
+	}
+}
+
+/// `report` with every text redacted as a log line is.
+fn redacted_report(mut report: PublishReport, secrets: &[String]) -> PublishReport {
+	let redact = |text: &mut String| {
+		*text = logs::redact_lines(&[text.as_str()], secrets).remove(0);
+	};
+
+	for status in &mut report.stores {
+		redact(&mut status.summary);
+	}
+
+	for step in &mut report.steps {
+		redact(&mut step.what);
+		redact(&mut step.why);
+		redact(&mut step.done_when);
+
+		if let Some(url) = &mut step.url {
+			redact(url);
+		}
+
+		for field in &mut step.enter {
+			redact(&mut field.label);
+			redact(&mut field.value);
+		}
+	}
+
+	report
 }
 
 pub(crate) async fn finish(
@@ -778,6 +897,16 @@ pub(crate) async fn finish(
 		.filter(|row| row.attempt == i64::from(attempt))
 	else {
 		return Err(not_held(job));
+	};
+
+	// A publish's report and reason held to their bounds, and the values
+	// leased to this attempt hidden, whatever the worker sent.
+	let outcome = match (outcome, &row.input.0) {
+		(JobOutcome::Publish(outcome), jobs::StoredInput::Publish { stores, .. }) => {
+			let leased = super::config::leased_values(tx, services, &row).await?;
+			hide_leased(JobOutcome::Publish(outcome.bounded(stores)), &leased)
+		}
+		(outcome, _) => outcome,
 	};
 
 	if outcome.kind() != row.kind {
@@ -816,7 +945,7 @@ pub(crate) async fn finish(
 		// A build's lease past its end holds nothing, even before the
 		// sweeper sees it: the build is the sweeper's to offer again.
 		JobState::Leased
-			if row.kind == JobKind::BuildServer
+			if matches!(row.kind, JobKind::BuildServer | JobKind::Publish)
 				&& row
 					.lease_expires_at
 					.is_none_or(|expires| expires <= leptoskit_db::now()) =>
@@ -867,6 +996,9 @@ pub(crate) async fn finish(
 		}
 		JobOutcome::RestoreDatabase(outcome) => {
 			super::backups::restore_finished(tx, &row, outcome).await?;
+		}
+		JobOutcome::Publish(_) => {
+			super::metering::build_ended(tx, &row, leptoskit_db::now()).await?;
 		}
 	}
 

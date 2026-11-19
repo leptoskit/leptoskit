@@ -233,6 +233,18 @@ const NEEDED: [Needed; 23] = [
 	},
 ];
 
+/// The credential that stands in for `name`: a keystore's bytes, base64
+/// encoded, for its file's path.
+fn alternative(name: &str) -> Option<&'static str> {
+	match name {
+		crate::native::signing::ANDROID_KEYSTORE => {
+			Some(crate::native::signing::ANDROID_KEYSTORE_BASE64)
+		}
+		solana::KEYSTORE => Some(solana::KEYSTORE_BASE64),
+		_ => None,
+	}
+}
+
 /// An API's address: the store's own, or an override for a proxy or a
 /// test server, such as `LEPTOSKIT_PUBLISH_CHROME_API`. Whatever address
 /// this names receives the store's credentials and signed tokens, so only
@@ -292,6 +304,11 @@ pub fn run(args: &PublishArgs) -> Result<()> {
 			.iter()
 			.filter(|needed| stores.contains(&needed.store))
 		{
+			// A keystore may be given as its file's path or as its bytes.
+			if alternative(needed.name).is_some_and(|other| credentials.get(other).is_some()) {
+				continue;
+			}
+
 			credentials.require(needed.name, needed.how)?;
 		}
 	}
@@ -2146,7 +2163,9 @@ fn list_credentials(stores: &[&str], credentials: &Credentials) -> String {
 		.iter()
 		.filter(|needed| stores.contains(&needed.store))
 	{
-		let state = if credentials.get(needed.name).is_some() {
+		let state = if credentials.get(needed.name).is_some()
+			|| alternative(needed.name).is_some_and(|other| credentials.get(other).is_some())
+		{
 			"set"
 		} else {
 			"missing"

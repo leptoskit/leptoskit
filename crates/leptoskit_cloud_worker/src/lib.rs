@@ -6,10 +6,10 @@
 //! at a time, renews its lease while it runs, sends its log, and reports
 //! how it ended.
 //!
-//! This crate holds the loop every role shares, the `build` role, and the
-//! `cluster` role ([`cluster`]): releases and removals, with each
-//! environment's managed Postgres database. Native builds, store
-//! publishing, backups and restores aren't built.
+//! This crate holds the loop every role shares, the `build` role with
+//! store publishing ([`CommandPublisher`]), and the `cluster` role
+//! ([`cluster`]): releases and removals, with each environment's managed
+//! Postgres database. Backups and restores aren't built.
 //!
 //! # What a build is here
 //!
@@ -50,6 +50,7 @@ pub mod cluster;
 mod command;
 mod logs;
 pub mod postgres;
+mod publish;
 mod run;
 mod state;
 
@@ -67,6 +68,8 @@ pub use command::CommandBuilder;
 pub use command::kill_running_build;
 pub use logs::LogSink;
 pub use postgres::Postgres;
+pub use publish::CommandPublisher;
+pub use publish::PublishRequest;
 pub use run::Ended;
 pub use run::RunError;
 pub use run::Settings;

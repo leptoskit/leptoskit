@@ -450,6 +450,19 @@ pub const OPERATIONS: &[(&str, Requirement)] = &[
 	("begin_upload", Requirement::Project(Permission::Deploy)),
 	("complete_upload", Requirement::Project(Permission::Deploy)),
 	("deploy", Requirement::Project(Permission::Deploy)),
+	("publish", Requirement::Project(Permission::Deploy)),
+	(
+		"publication",
+		Requirement::Project(Permission::ViewProjects),
+	),
+	(
+		"publications",
+		Requirement::Project(Permission::ViewProjects),
+	),
+	(
+		"publication_log",
+		Requirement::Project(Permission::ViewProjects),
+	),
 	(
 		"preview_release",
 		Requirement::Project(Permission::ViewProjects),

@@ -14,6 +14,7 @@ pub mod config;
 pub mod databases;
 pub mod domains;
 pub mod limits;
+pub mod publishing;
 pub mod review;
 pub mod scenarios;
 pub mod shipping;

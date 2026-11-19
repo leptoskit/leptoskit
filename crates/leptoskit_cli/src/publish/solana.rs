@@ -195,6 +195,7 @@ impl KeypairFile {
 			});
 		}
 
+		super::secrets::refuse_path(KEYPAIR)?;
 		let path = PathBuf::from(value);
 		anyhow::ensure!(
 			path.is_file(),
@@ -337,6 +338,7 @@ fn keystore_bytes(
 	);
 
 	if let Some(path) = path {
+		super::secrets::refuse_path(name)?;
 		let path = PathBuf::from(path.expose().trim());
 		anyhow::ensure!(
 			path.is_file(),

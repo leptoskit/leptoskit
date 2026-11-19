@@ -37,6 +37,7 @@ pub(crate) mod operator;
 mod payments;
 mod personal;
 pub mod projects;
+pub(crate) mod publishing;
 mod secret;
 pub(crate) mod status;
 mod storage;
@@ -173,6 +174,10 @@ pub struct ShippingSettings {
 	/// The longest one attempt at a build may run, from its claim:
 	/// renewing never takes its lease past this.
 	pub build_deadline: Duration,
+	/// The longest one publish may run, from its claim: past a worker's
+	/// own limit for the program, two hours by default, and the fetch
+	/// before it.
+	pub publish_deadline: Duration,
 	/// The most log bytes one build may send, over all its attempts.
 	pub build_log_cap: u64,
 	/// The most build log bytes one organisation may keep at once; they
@@ -202,6 +207,7 @@ impl Default for ShippingSettings {
 			runtime_logs: Duration::from_hours(7 * 24),
 			storage_cap: 5 * 1024 * 1024 * 1024,
 			build_deadline: Duration::from_hours(2),
+			publish_deadline: Duration::from_hours(3),
 			build_log_cap: 64 * 1024 * 1024,
 			organization_log_cap: 2 * 1024 * 1024 * 1024,
 			backup_cap: 20 * 1024 * 1024 * 1024,

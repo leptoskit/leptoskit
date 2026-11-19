@@ -286,6 +286,17 @@ pub async fn register_cluster(app: &App, ops: &str, name: &str) -> Value {
 /// Issues a pairing with `pairing` as the operator, and pairs a worker
 /// called `name` with it.
 pub async fn pair<'a>(app: &'a App, ops: &str, pairing: Value, name: &str) -> Worker<'a> {
+	pair_with(app, ops, pairing, name, &["linux", "x86_64"]).await
+}
+
+/// [`pair`], declaring `capabilities`.
+pub async fn pair_with<'a>(
+	app: &'a App,
+	ops: &str,
+	pairing: Value,
+	name: &str,
+	capabilities: &[&str],
+) -> Worker<'a> {
 	let issued = app
 		.call("issue_pairing", pairing, As::Session(ops))
 		.await
@@ -295,7 +306,7 @@ pub async fn pair<'a>(app: &'a App, ops: &str, pairing: Value, name: &str) -> Wo
 	let paired = app
 		.call(
 			"pair",
-			json!({ "code": code, "name": name, "capabilities": ["linux", "x86_64"] }),
+			json!({ "code": code, "name": name, "capabilities": capabilities }),
 			As::Nobody,
 		)
 		.await

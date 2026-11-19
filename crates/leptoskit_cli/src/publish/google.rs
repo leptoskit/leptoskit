@@ -35,6 +35,7 @@ pub fn access_token(
 	let text = if text.starts_with('{') {
 		text.to_owned()
 	} else {
+		super::secrets::refuse_path(name)?;
 		std::fs::read_to_string(text)
 			.with_context(|| format!("{name} names a file that can't be read"))?
 	};

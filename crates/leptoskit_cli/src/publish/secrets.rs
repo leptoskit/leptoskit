@@ -133,6 +133,25 @@ impl Credentials {
 	}
 }
 
+/// Set to `1` by a cloud worker: a credential must hold its contents, and
+/// one that names a file is refused, since the file would be the worker's.
+pub const CONTENTS_ONLY: &str = "LEPTOSKIT_PUBLISH_CONTENTS_ONLY";
+
+/// Refuses `name` naming a file, when [`CONTENTS_ONLY`] says only
+/// contents are taken.
+///
+/// # Errors
+///
+/// When only contents are taken.
+pub fn refuse_path(name: &str) -> Result<()> {
+	anyhow::ensure!(
+		std::env::var(CONTENTS_ONLY).as_deref() != Ok("1"),
+		"{name} names a file, and here a credential must hold its contents: set it to the file's \
+		 contents"
+	);
+	Ok(())
+}
+
 fn now() -> u64 {
 	SystemTime::now()
 		.duration_since(UNIX_EPOCH)

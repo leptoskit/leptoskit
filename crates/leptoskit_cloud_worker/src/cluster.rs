@@ -263,6 +263,11 @@ impl ClusterRole {
 					steps: Vec::new(),
 				})
 			}
+			JobInput::Publish(_) => {
+				JobOutcome::Publish(leptoskit_cloud::workers::PublishOutcome::Failed {
+					reason: "a cluster's worker doesn't publish".to_owned(),
+				})
+			}
 		}
 	}
 

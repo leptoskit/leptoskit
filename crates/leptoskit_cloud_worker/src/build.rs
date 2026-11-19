@@ -94,11 +94,39 @@ pub(crate) enum SourceError {
 	Workspace(#[from] std::io::Error),
 }
 
+/// A job's source archive: where to fetch it, and what it must be.
+#[derive(Clone, Copy)]
+pub(crate) struct Archive<'a> {
+	pub(crate) download: &'a leptoskit_cloud::workers::Download,
+	pub(crate) digest: &'a Digest,
+	pub(crate) size: u64,
+}
+
+impl<'a> From<&'a BuildServerInput> for Archive<'a> {
+	fn from(input: &'a BuildServerInput) -> Self {
+		Self {
+			download: &input.archive,
+			digest: &input.digest,
+			size: input.size,
+		}
+	}
+}
+
+impl<'a> From<&'a leptoskit_cloud::workers::PublishInput> for Archive<'a> {
+	fn from(input: &'a leptoskit_cloud::workers::PublishInput) -> Self {
+		Self {
+			download: &input.archive,
+			digest: &input.digest,
+			size: input.size,
+		}
+	}
+}
+
 /// Downloads `input`'s archive to `file`, refusing a byte more than the
 /// job says it has and anything whose SHA-256 isn't the job's.
 async fn download(
 	http: &reqwest::Client,
-	input: &BuildServerInput,
+	input: Archive<'_>,
 	file: &Path,
 ) -> Result<(), SourceError> {
 	let unavailable = |error: reqwest::Error| {
@@ -111,7 +139,7 @@ async fn download(
 	};
 	// The source is the organisation's own: it travels encrypted, or
 	// stays on this machine.
-	if !url::Url::parse(&input.archive.url).is_ok_and(|url| crate::client::private_transport(&url))
+	if !url::Url::parse(&input.download.url).is_ok_and(|url| crate::client::private_transport(&url))
 	{
 		return Err(SourceError::Wrong(
 			"the source archive's address isn't https".to_owned(),
@@ -119,7 +147,7 @@ async fn download(
 	}
 
 	let mut response = http
-		.get(&input.archive.url)
+		.get(&input.download.url)
 		.timeout(DOWNLOAD_TIMEOUT)
 		.send()
 		.await
@@ -167,7 +195,7 @@ async fn download(
 /// exist yet, using `scratch` for the download.
 pub(crate) async fn fetch(
 	http: &reqwest::Client,
-	input: &BuildServerInput,
+	input: Archive<'_>,
 	source: &Path,
 	scratch: &Path,
 ) -> Result<archive::Unpacked, SourceError> {
@@ -272,7 +300,7 @@ mod tests {
 		let input = input(store(status, served).await, promised);
 		let result = fetch(
 			&reqwest::Client::new(),
-			&input,
+			(&input).into(),
 			&directory.path().join("source"),
 			&scratch,
 		)
@@ -338,7 +366,7 @@ mod tests {
 		let input = input("http://store.example.test/presigned".to_owned(), &bytes);
 		let refused = fetch(
 			&reqwest::Client::new(),
-			&input,
+			(&input).into(),
 			&directory.path().join("source"),
 			&scratch,
 		)
