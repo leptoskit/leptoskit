@@ -60,6 +60,7 @@ Every example lives in the leptoskit repository, most under `examples/`:
 | [`observatory`](https://github.com/leptoskit/leptoskit/tree/main/examples/observatory)                                          | A star catalogue and a year of sky observations: [tables](guide/18-tables.md) and [virtualized lists](guide/17-virtualized-lists.md)                                                       | A macOS or Linux window, or headlessly on any platform                                      |
 | [`postcard`](https://github.com/leptoskit/leptoskit/tree/main/examples/postcard)                                                | A postcard in five languages: [typed translations](guide/19-localization.md) with plurals, selects, fallback, and right-to-left layout                                                     | A macOS or Linux window, or headlessly on any platform                                      |
 | [`scene3d`](https://github.com/leptoskit/leptoskit/tree/main/examples/scene3d)                                                  | Turntable: a skinned character swaying as it turns on a stand, in a [3D scene](guide/33-3d-scenes.md)                                                                                      | The browser with `leptoskit dev`, and the generated iOS, macOS, and Android apps            |
+| [`sketchnote`](https://github.com/leptoskit/leptoskit/tree/main/examples/sketchnote)                                            | Sketchnote, a notebook page where drawings sit between the paragraphs: the canvist editor with ink, pens, and undo                                                                         | The browser with `leptoskit dev`                                                            |
 | [`harbor`](https://github.com/leptoskit/leptoskit/tree/main/examples/harbor)                                                    | A departure board: [queries](guide/11-fetching-data.md), hooks, and [server functions](guide/06-server-functions.md) with a [generated client](guide/13-sharing-the-rpc.md)                | The host, headlessly                                                                        |
 | [`exact`](https://github.com/leptoskit/leptoskit/tree/main/examples/exact)                                                      | The example apps from Exact: Caltrain, a calendar, galleries, a chat, and the rest of that list                                                                                            | A headless summary on every platform, and the browser                                       |
 | [`huddle`](https://github.com/leptoskit/leptoskit/tree/main/examples/huddle)                                                    | A team chat and task board: [live queries, channels, and presence](guide/24-real-time.md), [jobs, actions, and the inbox](guide/24-background-work.md), and [sign-in](guide/23-sign-in.md) | The browser, macOS, iOS, and Linux, against its own server; Fly or Compose to deploy        |
@@ -73,6 +74,7 @@ The gallery, Observatory, Postcard, and Field play on this page, as the same web
 - `harbor` reads its board through server functions, and it has no browser client: it prints what a screen reader would read.
 - `islands` renders on a server and hydrates islands of it in the browser.
 - `counter` and `release_lifecycle` run headlessly and print what they do.
+- `sketchnote` has no player on this page yet. `leptoskit dev` in its folder opens it in a browser.
 
 Run any of them yourself with the commands below.
 
@@ -136,6 +138,18 @@ cd examples/scene3d
 leptoskit dev                   # in the browser, with WebGPU or WebGL2
 cargo test -p scene3d_example   # the screen, the model, and one drawn frame
 ```
+
+### sketchnote
+
+Sketchnote is a notebook page for the things that are quicker to draw than to describe. It opens on a walk written up with one sketch already in it. **Add a sketch** puts a fresh sheet where the caret is, the round buttons pick a colour, **Fine** and **Marker** pick a nib, and every stroke is one step of **Undo**.
+
+```bash
+cd examples/sketchnote
+leptoskit dev                      # in the browser
+cargo test -p sketchnote_example   # the screen, the page it ships, and the buttons
+```
+
+The page is one [canvist](https://github.com/canvist/canvist) editor from the `leptoskit_canvist` crate, with its `ink` feature. The editor draws itself in the browser only for now: the other platforms show the same screen around an empty view.
 
 ### Exact's examples
 

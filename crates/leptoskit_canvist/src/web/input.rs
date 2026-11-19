@@ -25,6 +25,9 @@ use super::editor;
 use super::host::Host;
 use super::host::Listen;
 
+#[cfg(feature = "ink")]
+pub(super) mod ink;
+
 /// Keys that only move the selection, which a read-only editor still
 /// handles (with any modifiers) so people can select text to copy.
 const NAVIGATION_KEYS: [&str; 8] = [
@@ -91,8 +94,13 @@ pub(super) fn listen(host: &Rc<Host>) {
 	host.on(textarea, "input", |host, _| clear_field(host), how);
 	host.on(canvas, "pointerdown", pointer_down, how);
 	host.on(canvas, "pointermove", pointer_move, how);
-	host.on(canvas, "pointerup", |host, _| release(host), how);
-	host.on(canvas, "pointercancel", |host, _| release(host), how);
+	host.on(canvas, "pointerup", |host, _| release(host, true), how);
+	host.on(canvas, "pointercancel", |host, _| release(host, false), how);
+	#[cfg(feature = "ink")]
+	{
+		host.on(canvas, "touchstart", ink::touch_start, how);
+		host.on(canvas, "pointerleave", |host, _| ink::leave(host), how);
+	}
 	// On the text field, not the container: the clipboard events of other
 	// controls an app puts inside the container are theirs.
 	host.on(
@@ -257,6 +265,12 @@ fn pointer_down(host: &Rc<Host>, event: &Event) {
 	}
 
 	let point = host.document_point(f64::from(event.client_x()), f64::from(event.client_y()));
+
+	#[cfg(feature = "ink")]
+	if ink::press(host, event, point) {
+		return;
+	}
+
 	let clicks = count(host, event);
 	// Keep focus in the text field rather than letting the press blur it.
 	event.prevent_default();
@@ -293,12 +307,19 @@ fn count(host: &Host, event: &PointerEvent) -> u32 {
 }
 
 fn pointer_move(host: &Rc<Host>, event: &Event) {
-	let Some(event) = event
-		.dyn_ref::<PointerEvent>()
-		.filter(|_| host.pressed.get())
-	else {
+	let Some(event) = event.dyn_ref::<PointerEvent>() else {
 		return;
 	};
+
+	#[cfg(feature = "ink")]
+	if ink::moved(host, event) {
+		return;
+	}
+
+	if !host.pressed.get() {
+		return;
+	}
+
 	let point = host.document_point(f64::from(event.client_x()), f64::from(event.client_y()));
 
 	if let Some(change) = host.edit(|editor, session| editor.pointer_move(session, point)) {
@@ -306,8 +327,17 @@ fn pointer_move(host: &Rc<Host>, event: &Event) {
 	}
 }
 
-fn release(host: &Host) {
+/// The pointer was released, or with `finished` false the browser took it
+/// away.
+#[cfg_attr(
+	not(feature = "ink"),
+	expect(unused_variables, reason = "only a stroke ends differently")
+)]
+fn release(host: &Rc<Host>, finished: bool) {
 	host.pressed.set(false);
+
+	#[cfg(feature = "ink")]
+	ink::release(host, finished);
 
 	if let Ok(mut editor) = host.editor.try_borrow_mut() {
 		editor.pointer_up();

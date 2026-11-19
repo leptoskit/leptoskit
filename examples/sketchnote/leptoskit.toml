@@ -1,0 +1,19 @@
+#:schema https://leptoskit.dev/schemas/leptoskit.v0.schema.json
+
+schema_version = 0
+
+# `leptoskit dev` here serves the notebook in the browser: the library's
+# Wasm client, built with `csr`, mounted by `web/index.html`.
+[app]
+name = "sketchnote_web"
+
+[build]
+client_package = "sketchnote_example"
+features = ["csr"]
+
+[lint]
+markup = "view"
+
+[lint.rules]
+markup_style = "deny"
+component_attribute = "deny"

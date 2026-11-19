@@ -436,6 +436,21 @@ impl Painter {
 		let context = self.context.clone();
 		context.begin_path();
 
+		// A stroke of one point is a dot. A line from a point to itself has
+		// no length, and not every browser gives it round ends.
+		if let [x, y] = points {
+			let _ = context.arc(
+				f64::from(*x),
+				f64::from(*y - top),
+				f64::from(width) / 2.0,
+				0.0,
+				std::f64::consts::TAU,
+			);
+			self.fill_color(color);
+			context.fill();
+			return;
+		}
+
 		for (index, [x, y]) in points.as_chunks::<2>().0.iter().enumerate() {
 			let (x, y) = (f64::from(*x), f64::from(*y - top));
 

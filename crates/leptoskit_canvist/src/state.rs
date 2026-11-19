@@ -10,6 +10,7 @@ use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering;
 
 use crate::session;
+use crate::session::Action;
 use crate::session::Session;
 use crate::session::Shared;
 
@@ -82,8 +83,16 @@ impl fmt::Display for Format {
 }
 
 /// What an editor can hold and do.
+///
+/// Start from a set and add to it. What can be added depends on the Cargo
+/// features the app turned on, so an editor never carries code for content
+/// the app does not use.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct Extensions(Kind);
+pub struct Extensions {
+	kind: Kind,
+	#[cfg(feature = "ink")]
+	ink: bool,
+}
 
 /// The extension sets on offer. Private, so new sets are not breaking
 /// changes.
@@ -97,11 +106,122 @@ impl Extensions {
 	/// and undo and redo.
 	#[must_use]
 	pub const fn paragraphs() -> Self {
-		Self(Kind::Paragraphs)
+		Self {
+			kind: Kind::Paragraphs,
+			#[cfg(feature = "ink")]
+			ink: false,
+		}
+	}
+
+	/// Add freehand drawings that sit between paragraphs.
+	///
+	/// [`CanvistState::insert_drawing`] puts an empty drawing at the caret,
+	/// and people draw on it with a mouse, a pen or a finger, in the pen
+	/// [`CanvistState::set_pen`] chose. Every stroke is one step of undo.
+	/// Drawings are saved in the document, in Markdown and JSON alike.
+	///
+	/// ```
+	/// use leptoskit_canvist::CanvistState;
+	/// use leptoskit_canvist::Extensions;
+	///
+	/// let note = CanvistState::new(Extensions::paragraphs().ink());
+	///
+	/// assert_eq!(note.insert_drawing(), Ok(true));
+	/// assert!(!note.is_empty());
+	/// # note.dispose();
+	/// ```
+	#[cfg(feature = "ink")]
+	#[must_use]
+	pub const fn ink(self) -> Self {
+		Self { ink: true, ..self }
 	}
 
 	pub(crate) const fn kind(self) -> Kind {
-		self.0
+		self.kind
+	}
+
+	#[cfg(feature = "ink")]
+	pub(crate) const fn has_ink(self) -> bool {
+		self.ink
+	}
+}
+
+/// What the next stroke of a drawing is drawn with.
+///
+/// ```
+/// use leptoskit_canvist::Pen;
+///
+/// let marker = Pen::new().color(0xe1, 0x1d, 0x48).width(12.0);
+/// # let _ = marker;
+/// ```
+#[cfg(feature = "ink")]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Pen {
+	color: Option<[u8; 3]>,
+	width: Option<f32>,
+}
+
+#[cfg(feature = "ink")]
+impl Pen {
+	/// A fine pen in the colour of the text, so its strokes stay readable
+	/// when the page switches between light and dark.
+	#[must_use]
+	pub const fn new() -> Self {
+		Self {
+			color: None,
+			width: None,
+		}
+	}
+
+	/// Draw in this colour instead of the text's.
+	#[must_use]
+	pub const fn color(self, red: u8, green: u8, blue: u8) -> Self {
+		Self {
+			color: Some([red, green, blue]),
+			..self
+		}
+	}
+
+	/// Draw lines this wide. A drawing is 1000 units across however wide
+	/// the editor is, so a line keeps its weight on a phone and on a wide
+	/// screen; a fine pen is 4. A width that is not a positive number
+	/// leaves the pen as fine as it was made.
+	#[must_use]
+	pub const fn width(self, width: f32) -> Self {
+		if width.is_finite() && width > 0.0 {
+			Self {
+				width: Some(width),
+				..self
+			}
+		} else {
+			self
+		}
+	}
+
+	/// The colour as `#rrggbb`, when the pen has its own.
+	#[cfg(any(test, all(feature = "web", target_arch = "wasm32")))]
+	pub(crate) fn hex(self) -> Option<String> {
+		self.color
+			.map(|[red, green, blue]| format!("#{red:02x}{green:02x}{blue:02x}"))
+	}
+
+	/// The colour, when the pen has its own.
+	#[cfg(all(feature = "web", target_arch = "wasm32"))]
+	pub(crate) const fn rgb(self) -> Option<[u8; 3]> {
+		self.color
+	}
+
+	/// The width in drawing units, when the pen has its own.
+	#[cfg(all(feature = "web", target_arch = "wasm32"))]
+	pub(crate) const fn units(self) -> Option<f32> {
+		self.width
+	}
+}
+
+#[cfg(feature = "ink")]
+impl Default for Pen {
+	fn default() -> Self {
+		Self::new()
 	}
 }
 
@@ -139,6 +259,9 @@ pub enum CanvistError {
 	Host(String),
 	/// canvist failed in a way the caller did not cause.
 	Engine(String),
+	/// The editor was made without the extension this needs, which is named
+	/// here: `ink`, for one.
+	Missing(&'static str),
 }
 
 impl fmt::Display for CanvistError {
@@ -150,6 +273,9 @@ impl fmt::Display for CanvistError {
 			}
 			Self::Host(reason) => write!(formatter, "the editor cannot be shown here: {reason}"),
 			Self::Engine(reason) => write!(formatter, "the editor failed: {reason}"),
+			Self::Missing(extension) => {
+				write!(formatter, "the editor was made without `{extension}`")
+			}
 		}
 	}
 }
@@ -298,6 +424,74 @@ impl CanvistState {
 	pub fn revision(self) -> u64 {
 		self.session()
 			.map_or(0, |session| session::lock(&session).revision())
+	}
+
+	/// Undo the last change, as Ctrl+Z or Cmd+Z does, so an app can offer a
+	/// button where there is no keyboard. Returns whether there was
+	/// anything to undo.
+	pub fn undo(self) -> bool {
+		self.act(Action::Undo).unwrap_or(false)
+	}
+
+	/// Redo the change that was last undone. Returns whether there was one.
+	pub fn redo(self) -> bool {
+		self.act(Action::Redo).unwrap_or(false)
+	}
+
+	/// Put an empty drawing at the caret, between the paragraphs there: a
+	/// paragraph the caret is in the middle of is split around it.
+	///
+	/// Returns whether a drawing went in; none does while a drawing itself
+	/// is selected. Listeners hear of the change, and undo takes the drawing
+	/// out again. People then draw on it with the pointer, unless the editor
+	/// is read-only.
+	///
+	/// A drawing is as wide as the editor and two fifths as tall.
+	///
+	/// # Errors
+	///
+	/// [`CanvistError::Missing`] when the editor was made without
+	/// [`Extensions::ink`], and [`CanvistError::Disposed`] when it is gone.
+	#[cfg(feature = "ink")]
+	pub fn insert_drawing(self) -> Result<bool, CanvistError> {
+		self.act(Action::InsertDrawing)
+	}
+
+	/// Draw the strokes that follow with `pen`. Strokes already drawn keep
+	/// the pen they were drawn with.
+	#[cfg(feature = "ink")]
+	pub fn set_pen(self, pen: Pen) {
+		if let Some(session) = self.session() {
+			session::lock(&session).pen = pen;
+		}
+	}
+
+	/// The pen the next stroke is drawn with.
+	#[cfg(feature = "ink")]
+	#[must_use]
+	pub fn pen(self) -> Pen {
+		self.session()
+			.map_or_else(Pen::new, |session| session::lock(&session).pen)
+	}
+
+	/// Do `action` through the host that shows the editor, so what is on
+	/// screen follows, or to the document alone when nothing shows it.
+	/// Returns whether anything changed.
+	fn act(self, action: Action) -> Result<bool, CanvistError> {
+		let session = self.session().ok_or(CanvistError::Disposed)?;
+
+		#[cfg(all(feature = "web", target_arch = "wasm32"))]
+		if let Some(shown) = crate::web::act(self.0, action) {
+			return shown;
+		}
+
+		let change = session::lock(&session).act(action)?;
+
+		if let Some(change) = change {
+			session::notify(&session, change);
+		}
+
+		Ok(change.is_some())
 	}
 
 	/// Move keyboard focus to the editor, without scrolling to it. It does
@@ -544,6 +738,110 @@ mod tests {
 			.expect("plain text");
 		assert!(!state.is_empty());
 		state.dispose();
+	}
+
+	#[test]
+	fn undo_and_redo_are_heard_and_say_when_they_run_out() {
+		let state = CanvistState::new(Extensions::paragraphs());
+		let calls = Arc::new(AtomicUsize::new(0));
+		state.on_change({
+			let calls = Arc::clone(&calls);
+			move |_| {
+				calls.fetch_add(1, Ordering::Relaxed);
+			}
+		});
+
+		assert!(!state.undo(), "a new document has nothing to undo");
+		assert!(!state.redo());
+		assert_eq!(calls.load(Ordering::Relaxed), 0);
+	}
+
+	#[cfg(feature = "ink")]
+	#[test]
+	fn a_drawing_goes_in_and_comes_out_with_undo() {
+		let state = CanvistState::new(Extensions::paragraphs().ink());
+		state.load(Format::Text, "above").expect("plain text");
+		let heard = Arc::new(Mutex::new(Vec::new()));
+		state.on_change({
+			let heard = Arc::clone(&heard);
+			move |change: Change| heard.lock().expect("no panics").push(change.revision)
+		});
+
+		assert_eq!(state.insert_drawing(), Ok(true));
+		assert_eq!(*heard.lock().expect("no panics"), [2]);
+
+		let json = now(state.export(Format::Json)).expect("a live editor");
+		// Plain text has no way to write a drawing, and leaves it out.
+		assert_eq!(now(state.export(Format::Text)), Ok("above".into()));
+		assert!(json.contains(r#""type":"ink""#), "{json}");
+
+		assert!(state.undo());
+		assert_eq!(now(state.export(Format::Text)), Ok("above".into()));
+		assert!(state.redo());
+		assert_eq!(now(state.export(Format::Json)), Ok(json));
+		state.dispose();
+	}
+
+	#[cfg(feature = "ink")]
+	#[test]
+	fn drawings_survive_markdown_and_json() {
+		let json = r##"{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"A sketch:"}]},{"type":"ink","attrs":{"height":300,"strokes":[{"color":"#e11d48","points":[10.0,20.0,200.5,120.0],"width":12.0}]}},{"type":"paragraph","content":[{"type":"text","text":"Done."}]}]}"##;
+		let state = CanvistState::new(Extensions::paragraphs().ink());
+		state.load(Format::Json, json).expect("a document with ink");
+		let markdown = now(state.export(Format::Markdown)).expect("a live editor");
+
+		assert!(markdown.starts_with("A sketch:\n\n<figure data-type=\"ink\""));
+		assert!(markdown.ends_with("</figure>\n\nDone."));
+
+		let copy = CanvistState::new(Extensions::paragraphs().ink());
+		copy.load(Format::Markdown, &markdown)
+			.expect("its own Markdown");
+
+		assert_eq!(
+			now(copy.export(Format::Json)),
+			now(state.export(Format::Json))
+		);
+		state.dispose();
+		copy.dispose();
+	}
+
+	#[cfg(feature = "ink")]
+	#[test]
+	fn an_editor_without_ink_refuses_drawings() {
+		let state = CanvistState::new(Extensions::paragraphs());
+
+		assert_eq!(state.insert_drawing(), Err(CanvistError::Missing("ink")));
+		assert_eq!(
+			CanvistError::Missing("ink").to_string(),
+			"the editor was made without `ink`"
+		);
+
+		let error = state
+			.load(Format::Json, r#"{"type":"doc","content":[{"type":"ink"}]}"#)
+			.expect_err("the schema has no drawings");
+		assert!(matches!(error, CanvistError::Parse { .. }), "{error:?}");
+
+		state.dispose();
+		assert_eq!(state.insert_drawing(), Err(CanvistError::Disposed));
+	}
+
+	#[cfg(feature = "ink")]
+	#[test]
+	fn a_pen_keeps_a_sensible_width_and_writes_its_colour() {
+		let state = CanvistState::new(Extensions::paragraphs().ink());
+
+		assert_eq!(state.pen(), Pen::new());
+		assert_eq!(state.pen().hex(), None);
+
+		let marker = Pen::new().color(0xe1, 0x1d, 0x48).width(12.0);
+		state.set_pen(marker);
+
+		assert_eq!(state.pen(), marker);
+		assert_eq!(marker.hex().as_deref(), Some("#e11d48"));
+		assert_eq!(marker.width(0.0), marker, "a pen cannot be made no width");
+		assert_eq!(marker.width(f32::NAN), marker);
+		state.dispose();
+		assert_eq!(state.pen(), Pen::default());
 	}
 
 	#[test]

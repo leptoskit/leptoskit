@@ -11,6 +11,10 @@ use std::sync::PoisonError;
 use canvist_extension_document::Document;
 use canvist_extension_hard_break::HardBreak;
 use canvist_extension_history::History;
+#[cfg(feature = "ink")]
+use canvist_extension_ink::Ink;
+#[cfg(feature = "ink")]
+use canvist_extension_ink::InkHandle;
 use canvist_extension_paragraph::Paragraph;
 use canvist_headless::Doc;
 use canvist_headless::Engine;
@@ -24,6 +28,8 @@ use crate::CanvistError;
 use crate::Change;
 use crate::Extensions;
 use crate::Format;
+#[cfg(feature = "ink")]
+use crate::Pen;
 use crate::state::Kind;
 
 /// Something to call with every [`Change`].
@@ -32,14 +38,34 @@ pub(crate) type Listener = Arc<dyn Fn(Change) + Send + Sync>;
 /// A session shared between a handle and the host that draws it.
 pub(crate) type Shared = Arc<Mutex<Session>>;
 
+/// What the extensions an editor was made with let code do to it.
+#[derive(Clone, Copy)]
+struct Handles {
+	#[cfg(feature = "ink")]
+	ink: Option<InkHandle>,
+}
+
+/// A change an app makes through the handle rather than a person through
+/// the keyboard or the pointer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Action {
+	Undo,
+	Redo,
+	#[cfg(feature = "ink")]
+	InsertDrawing,
+}
+
 /// The engine, the document, and what the app asked of the editor.
 pub(crate) struct Session {
-	engine: Engine,
+	engine: Engine<Handles>,
 	pub(crate) doc: Doc,
 	listeners: Vec<(u64, Listener)>,
 	next_listener: u64,
 	pub(crate) read_only: bool,
 	pub(crate) placeholder: String,
+	/// What the next stroke of a drawing is drawn with.
+	#[cfg(feature = "ink")]
+	pub(crate) pen: Pen,
 	revision: u64,
 }
 
@@ -56,13 +82,18 @@ impl Session {
 	pub(crate) fn new(extensions: Extensions, platform: Platform) -> Result<Self, CanvistError> {
 		let engine = match extensions.kind() {
 			Kind::Paragraphs => {
-				Engine::new(|builder| {
+				Engine::new(move |builder| {
 					builder.add(Document);
 					builder.add(BaseKeymap);
 					builder.add(UndoInputRule);
 					builder.add(Paragraph);
 					builder.add(HardBreak);
 					builder.add(History);
+
+					Handles {
+						#[cfg(feature = "ink")]
+						ink: extensions.has_ink().then(|| builder.add(Ink)),
+					}
 				})
 			}
 		}
@@ -77,8 +108,34 @@ impl Session {
 			next_listener: 0,
 			read_only: false,
 			placeholder: String::new(),
+			#[cfg(feature = "ink")]
+			pen: Pen::new(),
 			revision: 0,
 		})
+	}
+
+	/// The handle to this editor's drawings, when it was made with ink.
+	#[cfg(feature = "ink")]
+	pub(crate) fn ink(&self) -> Option<InkHandle> {
+		self.engine.handles().ink
+	}
+
+	/// Do `action` to a document no host is showing. `None` when it changed
+	/// nothing.
+	pub(crate) fn act(&mut self, action: Action) -> Result<Option<Change>, CanvistError> {
+		let applied = match action {
+			Action::Undo => self.doc.undo(),
+			Action::Redo => self.doc.redo(),
+			#[cfg(feature = "ink")]
+			Action::InsertDrawing => {
+				let ink = self.ink().ok_or(CanvistError::Missing("ink"))?;
+				self.doc
+					.run(&ink.insert(canvist_extension_ink::DEFAULT_HEIGHT))
+			}
+		}
+		.map_err(|error| engine_error(&error))?;
+
+		Ok(applied.then(|| self.changed(true, true)))
 	}
 
 	/// Replace the document with `input` read as `format`. The undo history

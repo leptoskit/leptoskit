@@ -95,6 +95,7 @@ use web_sys::HtmlElement;
 
 use crate::CanvistError;
 use crate::CanvistState;
+use crate::session::Action;
 
 /// An editor on screen. Dropping it takes the editor off the page.
 ///
@@ -168,6 +169,15 @@ pub(crate) fn document_replaced(id: u32) {
 /// The app changed read-only or the placeholder of the editor with `id`.
 pub(crate) fn options_changed(id: u32) {
 	host::with(id, None, host::Host::apply_options);
+}
+
+/// Make a change to the editor with `id` through the host that shows it.
+/// `None` when nothing shows it, and the change is the document's alone.
+pub(crate) fn act(id: u32, action: Action) -> Option<Result<bool, CanvistError>> {
+	let mut shown = None;
+	host::with(id, None, |host| shown = Some(host.act(action)));
+
+	shown
 }
 
 /// Move keyboard focus to the editor with `id`.
