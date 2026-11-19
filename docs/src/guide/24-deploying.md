@@ -1,6 +1,19 @@
 # Deploying a server
 
-## Provision hosts for a deployment graph
+This guide covers the **self-hosted** deployment track (`lk infra` + OpenTofu + Kamal) for running leptoskit apps on your own Hetzner, DigitalOcean, or Linux servers. If you want managed hosting directly from `leptoskit.toml` without provisioning VMs yourself, start with [LeptosKit Cloud](41-leptoskit-cloud.md).
+
+<!-- {=deploymentTracks} -->
+
+| Track                         | Best for                                                                               | Primary commands                                                                     | What it manages                                                                                                                                                       |
+| ----------------------------- | -------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **LeptosKit Cloud** (managed) | Shipping fast with zero infrastructure boilerplate, including from AI agents           | `lk cloud login`, `lk cloud launch`, `lk deploy`, `lk cloud status`, `lk cloud logs` | Source archiving, OCI builds, rolling releases, scale-to-zero, managed Postgres, secrets vault, custom domains, and usage metering from `[cloud]` in `leptoskit.toml` |
+| **Self-hosted** (`lk infra`)  | Running on your own Hetzner, DigitalOcean, or Linux servers with full provider control | `lk infra generate`, `lk infra plan`, `lk infra apply`, `lk deploy`                  | OpenTofu VMs/networks/Cloudflare tunnels, Kamal app + Postgres containers, and encrypted Restic backups (`infra.mode = "graph"` is experimental)                      |
+
+`lk console` is the legacy operator-enrolled deployment dashboard and agent API; new projects should pick either **LeptosKit Cloud** (`lk cloud`) or **Self-hosted** (`lk infra`).
+
+<!-- {/deploymentTracks} -->
+
+## Provision hosts for a deployment graph (experimental)
 
 If your project already declares frontend placement under `[infra.frontends.<name>]`, services and their hosts with `infra.mode = "graph"`, you can review and provision those hosts through the same CLI:
 

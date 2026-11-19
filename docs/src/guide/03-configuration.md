@@ -266,6 +266,41 @@ Each table has exactly one source:
 
 The service's own `[package.metadata.leptoskit.service]` sets its defaults, and the table can override `bin`, `features`, `port`, `public`, `routes`, `database`, `pool`, `env`, `secrets`, `volumes`, and `bind`. `trust` (`"first-party"` or `"isolated"`) and `forward_identity` (whether the service [learns who is signed in](32-services.md#knowing-who-is-signed-in), on by default for first-party services) are only set here. The table's name must be the `name` the service's manifest declares, and can't be `volume` or start with `volume-`. A `url` service takes only `bind`, `trust`, and `forward_identity`: it can't be `public`, because browsers reach public services on your app's own address, and nothing forwards those requests to another server yet, so call it from your app's server instead. [Services](32-services.md#settings) explains each key.
 
+## `[cloud]`
+
+Configures managed deployments on [LeptosKit Cloud](41-leptoskit-cloud.md). When `project` is set, `lk deploy` ships directly to LeptosKit Cloud.
+
+```toml
+[cloud]
+project = "notes"
+# organization = "acme"
+region = "eu-central"
+
+[cloud.database]
+size = "xs"
+backups = "daily"
+
+[cloud.storage.buckets.uploads]
+public = false
+max_size_gb = 20
+
+[cloud.environments.production]
+size = "s"
+min = 1
+max = 3
+sleep = "never"
+```
+
+| Key                              | Default                                                | Meaning                                                                                                                                                                               |
+| -------------------------------- | ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `project`                        | none                                                   | Linked cloud project slug; written automatically by `lk cloud launch` or `lk cloud link`.                                                                                             |
+| `organization`                   | personal org                                           | Organization slug; omit to target your personal organization.                                                                                                                         |
+| `url`                            | hosted cloud                                           | Custom control-plane origin (`https://…`), for self-hosted control planes.                                                                                                            |
+| `region`                         | cloud default                                          | Deployment region slug (for example `"eu-central"`).                                                                                                                                  |
+| `[cloud.database]`               | `size = "xs"`, `backups = "daily"`                     | Managed Postgres size (`"xs"`, `"s"`, `"m"`, `"l"`) and backup schedule (`"off"`, `"daily"`).                                                                                         |
+| `[cloud.storage.buckets.<name>]` | none                                                   | Declares an application object-storage bucket (`public = true \| false`, optional positive `max_size_gb`).                                                                            |
+| `[cloud.environments.<name>]`    | `size = "xs"`, `min = 1`, `max = 1`, `sleep = "never"` | Per-environment process sizing, replica bounds (`max` up to 20), scale-to-zero (`"when-idle"` requires `min = 0`), custom domains, and per-service overrides under `services.<name>`. |
+
 ## Using the configuration from Rust
 
 `leptoskit_config` is the library behind the file, so tools and build scripts read exactly what the CLI reads:

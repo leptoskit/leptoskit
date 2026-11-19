@@ -32,6 +32,7 @@
 - [Accessible components](guide/16-accessible-components.md)
 - [Forms](guide/19-forms.md)
 - [Security and scale](guide/16-security-and-scale.md)
+- [LeptosKit Cloud](guide/41-leptoskit-cloud.md)
 - [Deploying a server](guide/24-deploying.md)
 - [Several targets in one application](guide/34-application-targets.md)
 - [Applications in one workspace](guide/33-workspaces.md)

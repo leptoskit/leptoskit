@@ -38,10 +38,9 @@ events that the app commits through `NativeSurface`.
 
 <!-- {@appSummary} -->
 
-One `LeptosKit` component tree manages hosted installations from the web and native
-iOS/Android clients. The accompanying `leptoskit-cloud` binary hosts accounts, Stripe
-billing, per-account deployment journals, encrypted `OpenTofu` state and the worker API.
-Customer code runs on a dedicated outbound worker, using the existing CLI engine.
+Legacy operator-enrolled deployment console and public website crate. One `LeptosKit`
+component tree manages hosted `lk console` installations from web and native clients. New
+`LeptosKit` Cloud deployments use `leptoskit_cloud` and `leptoskit_cloud_app`.
 
 <!-- {/appSummary} -->
 
@@ -1543,3 +1542,47 @@ Experimental Meta Quest / Oculus platform extension: host stubs and the
 capability manifest. Packaging and `OpenXR` install are not implemented yet.
 
 <!-- {/oculusPlatformSummary} -->
+
+<!-- {@cloudSummary} -->
+
+Shared types, deterministic source archive, price estimator, authorization matrix, and
+control-plane backend for `LeptosKit` Cloud. Feature-free builds compile for
+`wasm32-unknown-unknown`; the `server` feature provides typed RPC routes, envelope-encrypted
+secrets, deployments, domains, managed Postgres records, metering, and Stripe billing.
+
+<!-- {/cloudSummary} -->
+
+<!-- {@cloudRuntimeSummary} -->
+
+Desired-state `ReleaseSpec`, `Runtime` adapter trait, deterministic Kubernetes manifest
+generator, and `kube` cluster adapter for `LeptosKit` Cloud environments: gVisor sandboxing,
+default-deny `NetworkPolicy`, KEDA HTTP scale-to-zero, CPU autoscaling, custom-domain TLS,
+bounded log reads, and environment status observation.
+
+<!-- {/cloudRuntimeSummary} -->
+
+<!-- {@cloudPlatformSummary} -->
+
+Operator provisioning tool (`leptoskit-cloud-platform`) for `LeptosKit` Cloud clusters:
+generates inspectable `OpenTofu` JSON, two-phase hardened k3s + gVisor node bootstrap
+scripts, Kubernetes add-ons (CloudNativePG, KEDA, cert-manager, Traefik, Zot, cloudflared,
+control plane, and workers), and orchestrates end-to-end installs via `leptoskit-cloud-platform up`.
+
+<!-- {/cloudPlatformSummary} -->
+
+<!-- {@cloudWorkerSummary} -->
+
+`LeptosKit` Cloud execution worker (`leptoskit-cloud-worker`) supporting the `build` role
+(with the built-in `build-app` OCI builder and optional store publishing) and the `cluster`
+role (Kubernetes rollouts, shared Postgres provisioning, periodic status and runtime log
+reporting, and `--reconcile-on-start` recovery).
+
+<!-- {/cloudWorkerSummary} -->
+
+<!-- {@cloudAppSummary} -->
+
+Production binary (`leptoskit-cloud-control`) and hydrated web console for `LeptosKit`
+Cloud. Wraps `leptoskit_cloud`'s server routes, OAuth/OIDC device login, readiness probes,
+database migrations, operator bootstrapping, and S3/Stripe/SMTP environment validation.
+
+<!-- {/cloudAppSummary} -->

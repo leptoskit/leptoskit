@@ -1,10 +1,9 @@
 //! <!-- {=appSummary|trim|linePrefix:"//! ":true} -->
 //!
-//! One `LeptosKit` component tree manages hosted installations from the web and
-//! native iOS/Android clients. The accompanying `leptoskit-cloud` binary hosts
-//! accounts, Stripe billing, per-account deployment journals, encrypted
-//! `OpenTofu` state and the worker API. Customer code runs on a dedicated
-//! outbound worker, using the existing CLI engine.
+//! Legacy operator-enrolled deployment console and public website crate. One
+//! `LeptosKit` component tree manages hosted `lk console` installations from
+//! web and native clients. New `LeptosKit` Cloud deployments use
+//! `leptoskit_cloud` and `leptoskit_cloud_app`.
 //!
 //! <!-- {/appSummary} -->
 pub mod client;

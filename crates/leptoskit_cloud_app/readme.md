@@ -1,6 +1,12 @@
 # leptoskit_cloud_app
 
-LeptosKit Cloud's control plane, as a program: `leptoskit-cloud-control`. The control plane itself (its operations, sign-in, the CLI's device login, and its routes) is `leptoskit_cloud`'s `server` feature; this crate reads the operator's environment, refuses a configuration that is incomplete or unsafe, and runs the commands. It is not published.
+<!-- {=cloudAppSummary} -->
+
+Production binary (`leptoskit-cloud-control`) and hydrated web console for `LeptosKit` Cloud. Wraps `leptoskit_cloud`'s server routes, OAuth/OIDC device login, readiness probes, database migrations, operator bootstrapping, and S3/Stripe/SMTP environment validation.
+
+<!-- {/cloudAppSummary} -->
+
+It is not published. Build production images with `--features production` (which enables `ssr` + `postgres` together), or run locally in development mode:
 
 ```sh
 cargo run -p leptoskit_cloud_app --features server -- serve --dev
@@ -8,14 +14,15 @@ cargo run -p leptoskit_cloud_app --features server -- serve --dev
 
 ## Commands
 
-| Command                   | What it does                                                                                                      |
-| ------------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| `serve`                   | Serves the control plane. Refuses a database with pending migrations, or with migrations this build doesn't know. |
-| `serve --dev`             | Development: see below. Development builds only.                                                                  |
-| `migrate`                 | Applies pending migrations, SQLite or Postgres by the URL.                                                        |
-| `operator grant <email>`  | Makes the person who verified `<email>` an operator. They must have signed in once. Recorded in the audit log.    |
-| `operator revoke <email>` | Stops them being an operator.                                                                                     |
-| `operator list`           | Lists operators by address.                                                                                       |
+| Command                      | What it does                                                                                                                     |
+| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `serve`                      | Serves the control plane. Refuses a database with pending migrations, or with migrations this build doesn't know.                |
+| `serve --dev`                | Development: see below. Development builds only.                                                                                 |
+| `migrate`                    | Applies pending migrations, SQLite or Postgres by the URL.                                                                       |
+| `operator bootstrap <email>` | Non-interactively ensures an account exists for `<email>` and grants it operator privileges (ideal for first-cluster bootstrap). |
+| `operator grant <email>`     | Makes the person who verified `<email>` an operator. They must have signed in once. Recorded in the audit log.                   |
+| `operator revoke <email>`    | Stops them being an operator.                                                                                                    |
+| `operator list`              | Lists operators by address.                                                                                                      |
 
 `serve` prints one line, `listening on <address>`, once it is listening, and never prints a secret. It stops on Ctrl-C or `SIGTERM`: `/readyz` fails first, the live socket drains, and requests in flight get 20 seconds.
 

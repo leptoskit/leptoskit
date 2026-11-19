@@ -9,28 +9,65 @@ A leptoskit app is one tree of components (`View`, `Text`, `Button`, …) styled
 
 The `leptoskit` command (or `lk`) does the work. Run it from the project root. `leptoskit --help` and `leptoskit <command> --help` describe every flag.
 
-| Task                        | Command                                                                                                          |
-| --------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| Start a project             | `leptoskit new my_app` (`--db postgres` / `sqlite`, `--extension`, `--auth`, `--frontends` [=landing,app,admin]) |
-| Check the machine           | `leptoskit doctor` (per-platform tools; `--all` for every platform this machine can build)                       |
-| Run every platform, live    | `leptoskit dev` (`--platform web`, `ios`, `extension`, …)                                                        |
-| Build one platform          | `leptoskit build --platform <platform> [--release]`                                                              |
-| Test a browser extension    | `leptoskit test extension`                                                                                       |
-| Database migrations         | `leptoskit db migration create <name>`, `leptoskit db check`                                                     |
-| Release to the stores       | `leptoskit publish [stores] [--dry-run] [--submit]`                                                              |
-| Update screens over the air | `leptoskit codepush release --platform ios`                                                                      |
+| Task                        | Command                                                                                                                            |
+| --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| Start a project             | `lk new my_app` (`--web-only`, `--cloud`, `--db postgres` / `sqlite`, `--extension`, `--auth`, `--frontends` [=landing,app,admin]) |
+| Check the machine           | `lk doctor` (per-platform tools; `--all` for every platform this machine can build)                                                |
+| Run every platform, live    | `lk dev` (`--platform web`, `ios`, `extension`, …)                                                                                 |
+| Build one platform          | `lk build --platform <platform> [--release]`                                                                                       |
+| Test a browser extension    | `lk test extension`                                                                                                                |
+| Database migrations         | `lk db migration create <name>`, `lk db check`                                                                                     |
+| Ship to LeptosKit Cloud     | `lk cloud login`, `lk cloud launch`, `lk deploy`, `lk cloud status`, `lk cloud logs --follow`                                      |
+| Self-host on your own VMs   | `lk infra generate`, `lk infra plan`, `lk infra apply`, `lk deploy`                                                                |
+| Release to the stores       | `lk publish [stores] [--dry-run] [--submit]` (or `lk cloud publish` on a configured build worker)                                  |
+| Update screens over the air | `lk codepush release --platform ios`                                                                                               |
 
 ## Working rules
 
-- Read `leptoskit.toml` first: `[app].platforms`, `[extension]`, `[publish]`, and `[db]` decide what the commands do.
-- `leptoskit new` writes a full-stack app: SSR by default (`app.render = "ssr"`), the file router (`[[plugins]] name = "router"`), a web server, and native app runners (iOS, Android, macOS, Windows, Linux, terminal). `--platform` only picks the default destination; there is no frontend-only flag. For a web-only app, set `platforms = ["web"]` (and `default_platform = "web"`) in `leptoskit.toml` after scaffolding and keep `render = "ssr"`. For separate marketing / product / admin deployments, use `leptoskit new shop --frontends landing,app,admin` (see the workspaces guide). `leptoskit lint` then skips clippy on host crates that are not in `app.platforms`, so you do not need GTK or native prepare just to get a green deny-warnings run. You may also drop unused host crates from `[workspace].members` to keep the tree lean. Keep Cargo `default-features = false` until you need a feature; leave the router plugin on unless the app truly has no screens. See the small-bundles guide before turning on islands, split budgets, or extra plugins.
-- Default screens live under the app crate's `src/routes/` (`index.rs`, `_layout.rs`, …). The router plugin regenerates `src/routes.rs` on `leptoskit dev` / `build` (or `leptoskit plugin:router routes`); do not edit that generated module by hand. For non-route modules that need a different file per platform, use `leptoskit::platform_module!` (see the creating guide).
+- Read `leptoskit.toml` first: `[app].platforms`, `[cloud]`, `[infra]`, `[extension]`, `[publish]`, and `[db]` decide what the commands do.
+- `lk new` writes a full-stack app: SSR by default (`app.render = "ssr"`), the file router (`[[plugins]] name = "router"`), a web server, and native app runners (iOS, Android, macOS, Windows, Linux, terminal). Pass `--web-only` to scaffold `app.platforms = ["web"]` without mobile/desktop host folders, and `--cloud` to emit a starter `[cloud]` table and default `--auth` without `--db` to Postgres instead of SQLite.
+- For separate marketing / product / admin deployments in one repository, use `lk new shop --frontends landing,app,admin` — it combines cleanly with `--db`, `--auth`, `--web-only`, and `--cloud` (wiring database and sign-in onto `apps/app`, or the first frontend when `app` is omitted).
+- `lk lint` skips clippy on host crates that are not in `app.platforms`, so you do not need GTK or native prepare for a green `--deny-warnings` run. Keep Cargo `default-features = false` until you need a feature; leave the router plugin on unless the app truly has no screens.
+- Default screens live under the app crate's `src/routes/` (`index.rs`, `_layout.rs`, …). The router plugin regenerates `src/routes.rs` on `lk dev` / `build` (or `lk plugin:router routes`); do not edit that generated module by hand. For non-route modules that need a different file per platform, use `leptoskit::platform_module!`.
 - New projects pin a `rust-toolchain.toml` so `edition = "2024"` builds even when rustup's default toolchain is older. Prefer that pin (or the matching SDK channel when using `--sdk-path`) over a stale global default.
 - Tailwind classes are checked when a screen renders: an unsupported class panics with its name. Use the ones the project already uses, or check the CSS coverage page of the docs.
 - Generated output lives in `.leptoskit/` and `dist/`; never edit it.
-- Secrets never go in `leptoskit.toml`. Credentials come from the environment or a file outside the project.
+- Secrets never go in `leptoskit.toml`. Credentials come from the environment, `lk cloud secret set` (stdin / `--from-env`), or a file outside the project. If `monosecret` is not installed locally, `lk dev` warns and continues using process environment variables.
 
-## Infrastructure and analytics
+## Shipping to LeptosKit Cloud
+
+When shipping a new app (or any app with `[cloud]` in `leptoskit.toml`), prefer **LeptosKit Cloud** first:
+
+<!-- {=cloudQuickstart} -->
+
+```sh
+# 1. Create a cloud-ready app (add --web-only to skip mobile/desktop runners)
+lk new notes --cloud --auth --web-only
+cd notes
+
+# 2. Sign in to LeptosKit Cloud in your browser
+lk cloud login
+
+# 3. Create & link the project, preview monthly cost, and ship the first release
+lk cloud launch
+
+# 4. Ship subsequent changes, check readiness, and stream logs
+lk deploy
+lk cloud status
+lk cloud logs --follow
+```
+
+<!-- {/cloudQuickstart} -->
+
+- When `[cloud].project` is set, plain `lk deploy` ships directly to LeptosKit Cloud (pack → upload → build → rollout).
+- Use `lk cloud estimate` before deploying to preview the resolved plan and monthly cost.
+- Manage configuration with `lk cloud var set|list|unset`, `lk cloud secret set <NAME> --from-env <VAR>` (never pass secret values as positional CLI arguments), `lk cloud domain add|verify|list|remove`, `lk cloud env create|update|list|delete`, `lk cloud db show|backups|backup|restore`, `lk cloud rollback <n>`, and `lk cloud usage`.
+- Declare application object-storage buckets under `[cloud.storage.buckets.<name>]` (`public`, `max_size_gb`) in `leptoskit.toml`.
+- Every `lk cloud` command supports `--json`, `--org`, `--project`, and `-e / --environment`.
+
+## Self-hosted infrastructure and analytics (`lk infra`)
+
+Use `lk infra` when the owner explicitly wants to host on their own Hetzner, DigitalOcean, or Linux servers (`infra.mode = "graph"` is experimental):
 
 - `.tf`/`.tofu` files are Terraform/OpenTofu infrastructure configuration. Keep app-owned resource additions next to the generated configuration; never silently overwrite edited generated files. Review `lk infra plan` before applying. Preserve remote-state locks and protected data resources.
 - `lk infra plugins` returns a versioned built-in capability catalog with app features, runtime bindings, secret names and data ownership. Native runtime bridge plugins are a separate extension mechanism.
@@ -119,15 +156,26 @@ tester.get_by_text("Count: 1")?;
 assert!(tester.query_by_text("Count: 0")?.is_none());
 ```
 
-## Debug a running app
+## Debug and ship via `lk mcp`
 
-When something looks wrong in an app running under `leptoskit dev`, read the app instead of guessing from the code. The `leptoskit mcp` server's devtools tools talk to the hub `leptoskit dev` starts:
+When something looks wrong in an app running under `leptoskit dev`, read the app instead of guessing from the code. The `leptoskit mcp` (`lk mcp`) server exposes both local DevTools/device tools and LeptosKit Cloud tools:
+
+### Local DevTools and devices (talks to `leptoskit dev`)
 
 1. `devtools_sessions` lists the running apps and their platforms.
 2. `inspect_tree` (with `depth`, and `root` to look inside one node) shows each node's kind, text, classes, frame, and the source line that built it. Use the frame and the source line to find the code to change. `leptoskit debug` prints the same tree.
 3. `inspect_node` and `explain_styles` give one node's details and the Tailwind classes styling it.
 4. `query_cache` shows what data the screen has; `navigate` opens a route; `set_state` changes named state the app exposes to the devtools (with `leptoskit::devtools::expose`, which reports from web and native apps alike); `highlight` with `all_sessions` marks the same node on every platform.
 5. `runtime_errors` lists failed plugin calls and server attempts. `performance` lists render commits. `read_logs` reads Android or iOS simulator logs, and `screenshot` returns a capture where the platform allows one.
+
+### LeptosKit Cloud and database tools
+
+6. `db_check` validates migrations and database configuration before shipping.
+7. `cloud_estimate` previews the resolved release plan and monthly cost without deploying.
+8. `cloud_deploy` packs, uploads, and deploys the current project (supports `environment`, `detach`, `org`, `project`, `url`).
+9. `cloud_status` reads an environment's live HTTPS hostname and process readiness.
+10. `cloud_logs` reads recent runtime logs (`process`, `since_minutes`, `contains`, `limit`).
+11. `cloud_secrets_list` returns configured secret names and version metadata only — never secret values.
 
 `leptoskit device sanity` installs and opens a native app, then injects tap, long press, pan, and pinch where that target can. `leptoskit device install` and `leptoskit device open` do the two steps on their own.
 
@@ -142,22 +190,11 @@ Read the one the task needs:
 
 ## More
 
+- LeptosKit Cloud guide: https://leptoskit.dev/docs/guide/41-leptoskit-cloud.html
 - Linting rules and configuration: https://leptoskit.dev/docs/guide/23-linting.html
 - How markup maps to builder calls: https://leptoskit.dev/docs/reference/view.html
 - The components: https://leptoskit.dev/docs/reference/components.html
 
-## Managed deployment service
+## Legacy operator-enrolled console (`lk console`)
 
-- For a trusted self-hosted worker, use `lk console serve --project PATH`. The same service hosts the LeptosKit dashboard, durable jobs and fleet analytics.
-- Link an app with `lk console connect --url URL`, using a credential supplied through its secret store. The URL goes in `infra.control_url`; credentials are kept outside the repository. Normal `lk deploy`, `lk infra plan`, `lk infra apply` and `lk infra analytics` then use the service.
-- A Git-commit deploy is built in a temporary checkout. Push the commit to the registered origin first. Infra intent must match registered policy; change that policy and re-plan before introducing new resources or bindings.
-- Preserve the returned operation and plan IDs. Retrying an identical pending request reconnects; a different plan cannot reuse the original approval. Investigate interrupted operations before retrying provider or data changes.
-- Connected releases receive scoped analytics credentials automatically. Read fleet coverage, retained time range, source provenance and export health. Reporting instance counts do not prove the whole deployment is reporting.
-- The service is single-owner. Register only trusted repositories, keep worker credentials private, and use separate read/deploy/ingest keys for agents.
-
-## Hosted deployment accounts
-
-- The hosted LeptosKit app uses the same `lk console connect` and deployment API as the self-hosted service. Account/scoped keys include their account prefix; keep that prefix when storing credentials. Never put credentials in TOML.
-- Select `infra.hosted_state = true` for the hosted locking HTTP backend. It conflicts with `infra.state`; migrate an existing backend explicitly before changing it. A dedicated `lk console worker` receives state credentials through child environments and must not share provider credentials or a Docker daemon across unrelated customers.
-- Pair a worker with a ten-minute single-use grant supplied by its secret store. Preserve its private pending journal. Lost responses and interrupted execution require reconciliation, not automatic resubmission under a new intent.
-- Customer-owned and LeptosKit-managed DigitalOcean installations share the CLI flow. Managed capacity is operator-provisioned with a reviewed budget; subscription checkout does not provision arbitrary paid resources or imply bundled cloud usage.
+`lk console` (`lk console serve`, `lk console connect`, `lk console worker`, `infra.control_url`, `infra.hosted_state = true`) is the legacy operator-enrolled deployment dashboard for self-hosted `lk infra` installations. For new projects, use **LeptosKit Cloud** (`lk cloud`) or **Self-hosted** (`lk infra`). When maintaining an existing `lk console` installation, keep account/scoped keys outside TOML, push commits to the registered origin before deploying, preserve returned operation/plan IDs, and reconcile interrupted operations before retrying.
