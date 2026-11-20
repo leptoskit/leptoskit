@@ -91,6 +91,7 @@ extension UIKitControls {
         record(dismissed() == [3, 3] && sheet.isShown, "escape asks too, and the app decides")
 
         try render(#"{"UpdateProps":{"id":3,"props":{"background":255,"overlay":{"open":false}}}}"#)
+        settle { page.presentedViewController == nil }
         record(!sheet.isShown, "closing the modal takes the sheet down")
         record(page.presentedViewController == nil, "the page presents nothing after the modal closes")
     }
@@ -122,6 +123,18 @@ extension UIKitControls {
         record(dismissed() == [5], "a press outside asks the app to close the popover")
 
         try render(#"{"RemoveChild":{"parent":1,"child":5}},{"Delete":{"id":5}}"#)
+        settle { page.presentedViewController == nil }
         record(page.presentedViewController == nil, "removing an open popover takes it down")
+    }
+
+    /// UIKit can finish taking a presentation down on a later turn of the run loop, even without
+    /// animation, so a check after a close lets the run loop turn until `done` holds, for two seconds
+    /// at most.
+    private func settle(until done: () -> Bool) {
+        let deadline = Date().addingTimeInterval(2)
+
+        while !done(), Date() < deadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+        }
     }
 }
