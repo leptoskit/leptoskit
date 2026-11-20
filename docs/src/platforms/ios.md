@@ -95,9 +95,26 @@ The app downloads the release when the user asks for an update, tries it, and ke
 
 A `focused(true)` request takes effect when the property changes. After the user dismisses the keyboard, unrelated renders do not focus the field again. Set focus to false and then true to request focus again. A [`FocusRequest`](../guide/15-accessibility.md#move-focus-once) says the same thing directly: each `request()` raises the keyboard on its text field once, and on any other widget it moves the VoiceOver cursor there.
 
-## Home-screen widgets
+## Home-screen, Lock Screen, and Control Center widgets
 
-The [`home-widgets`](plugin-inventory.md) plugin publishes a bounded text snapshot and asks WidgetKit to reload timelines. Your app still owns the Widget extension target and its SwiftUI views. Share an App Group between the host and the extension so the extension can read the snapshot the plugin wrote; without that group, capability reports that the shared store is not ready. WidgetKit cannot say whether a kind is pinned, so `installed` always answers `Unknown`.
+The [`home-widgets`](plugin-inventory.md) plugin publishes bounded snapshots and asks WidgetKit to reload timelines. Use `leptoskit_plugin_home_widgets::surfaces` for:
+
+- **Lock Screen accessory widgets**: `SurfaceKind::LockScreenCircular`, `LockScreenRectangular`, and `LockScreenInline` with multi-entry `TimelineSchedule`s and `ReloadPolicy`.
+- **iOS 18+ Control Center controls**: `ControlCenterControl` (`ControlKind::Toggle` and `ControlKind::Button`) with SF Symbol names and interactive `WidgetAction` deep links.
+
+Your app still owns the Widget Extension target and its SwiftUI views. Share an App Group between the host and the extension so the extension can read the snapshot the plugin wrote; without that group, capability reports that the shared store is not ready. WidgetKit cannot say whether a kind is pinned, so `installed` always answers `Unknown`.
+
+For Dynamic Island layouts, `leptoskit_plugin_live_activities::island` models `DynamicIslandLayout` (compact leading/trailing, minimal, expanded regions, and `#RRGGBB` keyline tint) and `ActivitySchedule` (stale dates, relevance score, and push-to-start flag).
+
+## App Intents, Spotlight, Handoff, and iPadOS chrome
+
+`leptoskit_plugin_app_shortcuts::integrations` models Apple-native system integrations alongside launcher quick actions:
+
+- **App Intents & Siri Shortcuts**: `AppIntentDefinition` (title, short title, up to 8 voice phrases, SF Symbol, and deep link).
+- **CoreSpotlight search indexing**: `SpotlightItem` (domain, keywords, deep link, expiration).
+- **Handoff / Continuity**: `UserActivity` (`NSUserActivity` type, HTTPS webpage fallback, Handoff/Spotlight/Siri prediction flags).
+- **Incoming Share Extensions**: `IncomingShare` and `SharedAttachment` (bounded to 32 attachments).
+- **iOS & iPadOS chrome**: `StatusBarConfig`, `SheetDetent` (`Medium`, `Large`, `Fraction`), and `MultiSceneConfig` with `PencilPreference`.
 
 ## Menu bar and hardware keyboard commands
 

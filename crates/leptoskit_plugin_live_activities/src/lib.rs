@@ -20,6 +20,12 @@ use leptoskit_bridge::MethodId;
 use leptoskit_bridge::codec::Decoder;
 use leptoskit_bridge::codec::Encoder;
 
+pub mod island;
+pub use island::ActivitySchedule;
+pub use island::AndroidLiveUpdate;
+pub use island::DynamicIslandLayout;
+pub use island::ProgressSegment;
+
 /// Native registration name.
 pub const NAME: &str = "live-activities";
 /// Empty payload; whether `ActivityKit` currently allows Live Activities.
