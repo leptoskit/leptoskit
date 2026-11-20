@@ -200,9 +200,85 @@ pub struct ClusterRole {
 	/// by environment ID, so periodic status and runtime-log reports keep
 	/// `environment_status`, `runtime_logs`, and compute metering current.
 	tracked: Arc<std::sync::Mutex<BTreeMap<uuid::Uuid, EnvironmentRef>>>,
-	/// Last reported log line timestamp (`at_millis`) per environment so
-	/// periodic scrapes only forward newly written lines.
-	last_log_millis: Arc<std::sync::Mutex<BTreeMap<uuid::Uuid, i64>>>,
+	/// Per-environment log cursor tracking each pod's last accepted timestamp
+	/// and exact messages seen at that millisecond so multi-pod scrapes and
+	/// same-millisecond bursts are neither dropped nor duplicated.
+	log_cursors: Arc<std::sync::Mutex<BTreeMap<uuid::Uuid, EnvLogCursor>>>,
+}
+
+#[derive(Clone, Debug, Default)]
+struct EnvLogCursor {
+	last_scrape: Option<std::time::Instant>,
+	by_pod: BTreeMap<String, PodCursor>,
+}
+
+#[derive(Clone, Debug)]
+struct PodCursor {
+	at_millis: i64,
+	seen_messages: std::collections::BTreeSet<String>,
+}
+
+impl EnvLogCursor {
+	fn since_seconds(&self) -> u64 {
+		match self.last_scrape {
+			Some(previous) => {
+				previous
+					.elapsed()
+					.as_secs()
+					.saturating_add(15)
+					.clamp(30, 3600)
+			}
+			None => 300,
+		}
+	}
+
+	fn is_unseen(&self, line: &leptoskit_cloud_runtime::LogLine) -> bool {
+		let pod_key = pod_cursor_key(line);
+		match self.by_pod.get(pod_key) {
+			None => true,
+			Some(cursor) if line.at_millis > cursor.at_millis => true,
+			Some(cursor) if line.at_millis == cursor.at_millis => {
+				!cursor.seen_messages.contains(&line.message)
+			}
+			Some(_) => false,
+		}
+	}
+
+	fn advance<'a>(
+		&mut self,
+		accepted: impl IntoIterator<Item = &'a leptoskit_cloud_runtime::LogLine>,
+	) {
+		self.last_scrape = Some(std::time::Instant::now());
+		for line in accepted {
+			let pod_key = pod_cursor_key(line).to_owned();
+			match self.by_pod.get_mut(&pod_key) {
+				Some(cursor) if line.at_millis > cursor.at_millis => {
+					cursor.at_millis = line.at_millis;
+					cursor.seen_messages.clear();
+					cursor.seen_messages.insert(line.message.clone());
+				}
+				Some(cursor) if line.at_millis == cursor.at_millis => {
+					cursor.seen_messages.insert(line.message.clone());
+				}
+				Some(_) => {}
+				None => {
+					let mut seen_messages = std::collections::BTreeSet::new();
+					seen_messages.insert(line.message.clone());
+					self.by_pod.insert(
+						pod_key,
+						PodCursor {
+							at_millis: line.at_millis,
+							seen_messages,
+						},
+					);
+				}
+			}
+		}
+	}
+}
+
+fn pod_cursor_key(line: &leptoskit_cloud_runtime::LogLine) -> &str {
+	line.pod.as_deref().unwrap_or(line.process.as_str())
 }
 
 impl std::fmt::Debug for ClusterRole {
@@ -227,7 +303,7 @@ impl ClusterRole {
 			databases: None,
 			bounds: Bounds::default(),
 			tracked: Arc::default(),
-			last_log_millis: Arc::default(),
+			log_cursors: Arc::default(),
 		}
 	}
 
@@ -258,9 +334,29 @@ impl ClusterRole {
 		if let Ok(mut guard) = self.tracked.lock() {
 			guard.remove(&environment_id);
 		}
-		if let Ok(mut guard) = self.last_log_millis.lock() {
+		if let Ok(mut guard) = self.log_cursors.lock() {
 			guard.remove(&environment_id);
 		}
+	}
+
+	/// Re-hydrates tracked environments from the control plane on startup so
+	/// periodic status reporting, runtime logs, and compute metering resume
+	/// immediately after a cluster worker pod restarts.
+	///
+	/// # Errors
+	///
+	/// Returns [`crate::client::CallError`] if the control plane cannot be
+	/// reached or rejects the worker's key.
+	pub async fn rehydrate(
+		&self,
+		control: &crate::client::Control,
+	) -> Result<usize, crate::client::CallError> {
+		let placed = control.cluster_environments().await?;
+		let count = placed.len();
+		for entry in placed {
+			self.track(entry.environment.0);
+		}
+		Ok(count)
 	}
 
 	/// Snapshot of environments currently tracked for status reporting.
@@ -314,14 +410,15 @@ impl ClusterRole {
 				}
 			};
 
-			let since = self
-				.last_log_millis
+			let cursor = self
+				.log_cursors
 				.lock()
 				.ok()
-				.and_then(|guard| guard.get(&env_id).copied());
+				.and_then(|guard| guard.get(&env_id).cloned())
+				.unwrap_or_default();
 			let query = leptoskit_cloud_runtime::LogQuery {
 				process: None,
-				since_seconds: Some(if since.is_some() { 90 } else { 300 }),
+				since_seconds: Some(cursor.since_seconds()),
 				limit: Some(limit),
 			};
 			let mut log_lines = match runtime.logs(&environment, &query).await {
@@ -335,22 +432,30 @@ impl ClusterRole {
 				}
 			};
 
-			if let Some(last_millis) = since {
-				log_lines.retain(|line| line.at_millis > last_millis);
-			}
+			// Sort chronologically across pods before deduplicating and
+			// capping so oldest lines are dropped first and newer lines stay
+			// in order.
+			log_lines.sort_by(|left, right| {
+				left.at_millis
+					.cmp(&right.at_millis)
+					.then_with(|| pod_cursor_key(left).cmp(pod_cursor_key(right)))
+					.then_with(|| left.process.cmp(&right.process))
+			});
+			log_lines.retain(|line| cursor.is_unseen(line));
 			if log_lines.len() > leptoskit_cloud::workers::MAX_STATUS_LOG_LINES {
 				let drop_count = log_lines.len() - leptoskit_cloud::workers::MAX_STATUS_LOG_LINES;
 				log_lines.drain(..drop_count);
 			}
-			let newest_millis = log_lines.iter().map(|line| line.at_millis).max();
 
+			let sent = log_lines.clone();
 			let outcome = control.report_status(env_id, observed, log_lines).await;
 			match &outcome {
-				Ok(_) => {
-					if let Some(newest) = newest_millis
-						&& let Ok(mut guard) = self.last_log_millis.lock()
-					{
-						guard.insert(env_id, newest);
+				Ok(received) => {
+					let accepted = usize::try_from(received.log_lines)
+						.unwrap_or(sent.len())
+						.min(sent.len());
+					if let Ok(mut guard) = self.log_cursors.lock() {
+						guard.entry(env_id).or_default().advance(&sent[..accepted]);
 					}
 				}
 				Err(error) if error.is("environment_not_found") => {
@@ -635,5 +740,42 @@ mod tests {
 			database_name(&environment),
 			"env_0193a5b07c1d7e2f8a9b0c1d2e3f4a5b"
 		);
+	}
+
+	#[test]
+	fn env_log_cursor_deduplicates_per_pod_and_preserves_same_ms_bursts() {
+		let line = |at_millis: i64, pod: &str, message: &str| {
+			leptoskit_cloud_runtime::LogLine {
+				at_millis,
+				process: "app".to_owned(),
+				pod: Some(pod.to_owned()),
+				message: message.to_owned(),
+			}
+		};
+		let mut cursor = EnvLogCursor::default();
+		assert_eq!(cursor.since_seconds(), 300);
+
+		let first_a = line(1_000, "app-0", "listening");
+		let second_a = line(1_000, "app-0", "ready");
+		let first_b = line(950, "app-1", "booting");
+
+		assert!(cursor.is_unseen(&first_a));
+		assert!(cursor.is_unseen(&second_a));
+		assert!(cursor.is_unseen(&first_b));
+
+		// Simulate only the first line from app-0 being accepted in a batch.
+		cursor.advance([&first_a]);
+
+		assert!(!cursor.is_unseen(&first_a));
+		// Same-millisecond burst from the same pod is still unseen.
+		assert!(cursor.is_unseen(&second_a));
+		// Earlier timestamp from a second pod is NOT masked by app-0's cursor.
+		assert!(cursor.is_unseen(&first_b));
+
+		cursor.advance([&second_a, &first_b]);
+		assert!(!cursor.is_unseen(&second_a));
+		assert!(!cursor.is_unseen(&first_b));
+		assert!(cursor.is_unseen(&line(1_001, "app-0", "request")));
+		assert!((30..=3600).contains(&cursor.since_seconds()));
 	}
 }

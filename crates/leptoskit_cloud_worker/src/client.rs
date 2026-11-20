@@ -395,6 +395,20 @@ impl Control {
 		)
 		.await
 	}
+
+	/// Lists every environment placed on this cluster worker's cluster so
+	/// periodic status reporting, runtime logs, and compute metering resume
+	/// immediately after a worker restart.
+	///
+	/// # Errors
+	///
+	/// [`CallError`]; `cluster_worker_required` for a build worker.
+	pub async fn cluster_environments(
+		&self,
+	) -> Result<Vec<workers::ClusterEnvironment>, CallError> {
+		self.call(&workers::ClusterEnvironments {}, Duration::ZERO)
+			.await
+	}
 }
 
 #[cfg(test)]

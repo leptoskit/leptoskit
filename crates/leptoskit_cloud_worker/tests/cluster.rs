@@ -458,3 +458,69 @@ async fn reconcile_on_start_clears_stale_cluster_marker() {
 	);
 	assert!(!directory.path().join("state/job.json").exists());
 }
+
+/// A fresh cluster worker (as after a pod restart) that never ran the
+/// deployment itself rehydrates placed environments from the control plane
+/// and resumes periodic status reporting immediately.
+#[tokio::test(flavor = "multi_thread")]
+async fn fresh_cluster_worker_rehydrates_and_reports_status() {
+	let app = support::app().await;
+	let shop = Shop::open(&app).await;
+	let fake = Arc::new(Fake::new());
+
+	// First worker deploys production so the environment is placed on the
+	// cluster.
+	let first_dir = tempfile::tempdir().expect("first dir");
+	let first = cluster_worker(
+		&shop,
+		Recorded {
+			fake: Arc::clone(&fake),
+			never_ready: false,
+		},
+		Bounds::default(),
+		&first_dir,
+	);
+	let digest = shop.upload(b"notes-rehydrate").await;
+	shop.deploy("production", &digest, json!({}))
+		.await
+		.expect(200);
+	let build = shop.build.take().await;
+	shop.build
+		.finish(&build, support::shipping::built(&build, b"image", &[]))
+		.await
+		.expect(200);
+	first.step().await.expect("applies release");
+	drop(first);
+
+	// Brand-new worker process starts with an empty in-memory tracked set.
+	let second_dir = tempfile::tempdir().expect("second dir");
+	let second = cluster_worker(
+		&shop,
+		Recorded {
+			fake: Arc::clone(&fake),
+			never_ready: false,
+		},
+		Bounds::default(),
+		&second_dir,
+	);
+	assert_eq!(second.report_status_once().await, 0);
+	assert_eq!(second.rehydrate_cluster().await.expect("rehydrates"), 1);
+	assert_eq!(second.report_status_once().await, 1);
+
+	let status = app
+		.call(
+			"environment_status",
+			json!({
+				"organization": shop.org,
+				"project": "notes",
+				"environment": "production",
+			}),
+			shop.as_ana(),
+		)
+		.await
+		.expect(200)
+		.json();
+	assert_eq!(status["processes"][0]["name"], "app");
+	assert_eq!(status["processes"][0]["state"]["state"], "ready");
+	assert!(status["reported_at"].is_string());
+}

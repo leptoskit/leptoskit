@@ -320,7 +320,37 @@ pub fn load_cluster_profile(
 		profile.tmp_size_limit_mib = limit.max(1);
 	}
 
+	profile
+		.validate()
+		.map_err(|error| CommandError::Usage(error.to_string()))?;
+
 	Ok(profile)
+}
+
+/// Environment variables automatically forwarded to the built-in `build-app`
+/// subcommand when `--build-command` is omitted, so `CommandBuilder`'s
+/// cleared environment never strips builder configuration or registry auth.
+const BUILTIN_BUILDER_ENV_VARS: &[&str] = &[
+	"LEPTOSKIT_CLOUD_BUILDER_BACKEND",
+	"LEPTOSKIT_CLOUD_BUILDER_LK_BIN",
+	"LEPTOSKIT_CLOUD_BUILDER_PLATFORM",
+	"LEPTOSKIT_CLOUD_BUILDER_INSECURE_REGISTRY",
+	"LEPTOSKIT_CLOUD_BUILDER_PORT",
+	"DOCKER_CONFIG",
+	"BUILDKIT_HOST",
+	"XDG_RUNTIME_DIR",
+];
+
+fn effective_build_env(explicit: Vec<String>, using_builtin: bool) -> Vec<String> {
+	let mut passed = explicit;
+	if using_builtin {
+		for &name in BUILTIN_BUILDER_ENV_VARS {
+			if !passed.iter().any(|existing| existing == name) {
+				passed.push(name.to_owned());
+			}
+		}
+	}
+	passed
 }
 
 async fn pair(arguments: Pair) -> Result<(), CommandError> {
@@ -354,7 +384,7 @@ async fn pair(arguments: Pair) -> Result<(), CommandError> {
 	Ok(())
 }
 
-async fn run(arguments: Run, shutdown: watch::Receiver<bool>) -> Result<(), CommandError> {
+fn validate_run_args(arguments: &Run) -> Result<(), CommandError> {
 	if arguments.build_timeout_minutes == 0
 		|| arguments.publish_timeout_minutes == 0
 		|| arguments.rollout_timeout_minutes == 0
@@ -369,6 +399,30 @@ async fn run(arguments: Run, shutdown: watch::Receiver<bool>) -> Result<(), Comm
 			"a rollout may take {MOST_ROLLOUT_MINUTES} minutes at most"
 		)));
 	}
+
+	if arguments
+		.build_sandbox
+		.first()
+		.is_some_and(|head| head.trim().is_empty())
+	{
+		return Err(CommandError::Usage(
+			"--build-sandbox program cannot be empty".to_owned(),
+		));
+	}
+
+	if arguments.postgres_url.is_some()
+		&& !(1..=1000).contains(&arguments.postgres_connection_limit)
+	{
+		return Err(CommandError::Usage(
+			"--postgres-connection-limit must be between 1 and 1000".to_owned(),
+		));
+	}
+
+	Ok(())
+}
+
+async fn run(arguments: Run, shutdown: watch::Receiver<bool>) -> Result<(), CommandError> {
+	validate_run_args(&arguments)?;
 
 	let state = State::open(&arguments.state)?;
 	let identity = state.identity()?;
@@ -388,6 +442,7 @@ async fn run(arguments: Run, shutdown: watch::Receiver<bool>) -> Result<(), Comm
 
 	let worker = match identity.role {
 		WorkerRole::Build => {
+			let using_builtin = arguments.build_command.is_none();
 			let (program, args) = if let Some(program) = arguments.build_command {
 				(program, arguments.build_arguments)
 			} else {
@@ -400,8 +455,9 @@ async fn run(arguments: Run, shutdown: watch::Receiver<bool>) -> Result<(), Comm
 				args.extend(arguments.build_arguments);
 				(self_bin, args)
 			};
+			let pass = effective_build_env(arguments.build_environment, using_builtin);
 			let mut builder = CommandBuilder::new(program, args)
-				.pass(arguments.build_environment)
+				.pass(pass)
 				.sandbox(arguments.build_sandbox)
 				.timeout(Duration::from_secs(
 					arguments.build_timeout_minutes.saturating_mul(60),
@@ -578,5 +634,45 @@ mod tests {
 				.contains(&"10.42.0.0/16".to_owned())
 		);
 		assert_eq!(loaded.tmp_size_limit_mib, 256);
+	}
+
+	#[test]
+	fn rejects_invalid_blocked_egress_cidr_on_profile_load() {
+		let Command::Run(args) = Command::parse_from([
+			"leptoskit-cloud-worker",
+			"run",
+			"--state",
+			"/tmp/state",
+			"--blocked-egress-cidr",
+			"not-a-cidr",
+		]) else {
+			panic!("expected Run");
+		};
+		let error = load_cluster_profile(&args).expect_err("invalid CIDR should fail");
+		assert!(
+			error.to_string().contains("CIDR"),
+			"unexpected error: {error}"
+		);
+	}
+
+	#[test]
+	fn builtin_builder_auto_forwards_config_env_without_duplicates() {
+		let custom = effective_build_env(vec!["CUSTOM_VAR".to_owned()], false);
+		assert_eq!(custom, vec!["CUSTOM_VAR"]);
+
+		let builtin = effective_build_env(
+			vec!["DOCKER_CONFIG".to_owned(), "CUSTOM_VAR".to_owned()],
+			true,
+		);
+		assert_eq!(
+			builtin
+				.iter()
+				.filter(|name| name.as_str() == "DOCKER_CONFIG")
+				.count(),
+			1
+		);
+		assert!(builtin.contains(&"CUSTOM_VAR".to_owned()));
+		assert!(builtin.contains(&"LEPTOSKIT_CLOUD_BUILDER_BACKEND".to_owned()));
+		assert!(builtin.contains(&"BUILDKIT_HOST".to_owned()));
 	}
 }

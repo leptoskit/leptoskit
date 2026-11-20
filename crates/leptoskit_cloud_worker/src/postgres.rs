@@ -105,6 +105,8 @@ impl Postgres {
 
 		if tls {
 			config.ssl_mode(tokio_postgres::config::SslMode::Require);
+		} else if !all_hosts_loopback(&config) {
+			return Err(AddressError);
 		}
 
 		config.connect_timeout(TIMEOUT);
@@ -119,10 +121,10 @@ impl Postgres {
 	}
 
 	/// Sets how many concurrent connections each environment's role may open
-	/// (at least 1; defaults to [`CONNECTION_LIMIT`]).
+	/// (clamped to `1..=1000`; defaults to [`CONNECTION_LIMIT`]).
 	#[must_use]
 	pub fn connection_limit(mut self, limit: u32) -> Self {
-		self.connection_limit = limit.max(1);
+		self.connection_limit = limit.clamp(1, 1000);
 		self
 	}
 
@@ -213,10 +215,13 @@ impl Postgres {
 			if let Err(error) = result {
 				let insufficient_privilege =
 					error.code().is_some_and(|code| code.code() == "42501");
-				if self.allow_unowned_system_databases && insufficient_privilege {
+				if self.allow_unowned_system_databases
+					&& insufficient_privilege
+					&& is_allowed_unowned_system_db(&name)
+				{
 					eprintln!(
 						"leptoskit-cloud-worker: warning: administrator cannot revoke PUBLIC on \
-						 unowned database `{name}` (42501); continuing because \
+						 unowned system database `{name}` (42501); continuing because \
 						 --postgres-allow-unowned-system-dbs is enabled"
 					);
 					continue;
@@ -234,7 +239,12 @@ impl Postgres {
 			.collect();
 
 		if !open.is_empty() {
-			if self.allow_unowned_system_databases {
+			let disallowed: Vec<&str> = open
+				.iter()
+				.map(String::as_str)
+				.filter(|name| !is_allowed_unowned_system_db(name))
+				.collect();
+			if self.allow_unowned_system_databases && disallowed.is_empty() {
 				eprintln!(
 					"leptoskit-cloud-worker: warning: system database(s) {} remain open to PUBLIC \
 					 because the administrator does not own them; enable superuser access (e.g. \
@@ -242,11 +252,16 @@ impl Postgres {
 					open.join(", ")
 				);
 			} else {
-				return Err(format!(
-					"the server's {} database is still open to every role, and the administrator \
-					 couldn't close it (grant superuser access, e.g. CNPG enableSuperuserAccess: \
-					 true, or pass --postgres-allow-unowned-system-dbs on managed Postgres)",
+				let blocked = if self.allow_unowned_system_databases {
+					disallowed.join(", ")
+				} else {
 					open.join(", ")
+				};
+				return Err(format!(
+					"the server's {blocked} database is still open to every role, and the \
+					 administrator couldn't close it (grant superuser access, e.g. CNPG \
+					 enableSuperuserAccess: true, or pass --postgres-allow-unowned-system-dbs for \
+					 unowned postgres/template1 on managed Postgres)"
 				));
 			}
 		}
@@ -287,13 +302,13 @@ impl Postgres {
 			client
 				.batch_execute(&format!("ALTER ROLE {role} WITH {attributes}"))
 				.await
-				.map_err(|_| "its role couldn't be updated".to_owned())?;
+				.map_err(|error| format!("its role couldn't be updated: {}", said(&error)))?;
 			reset_role(&client, &step.role).await?;
 		} else {
 			client
 				.batch_execute(&format!("CREATE ROLE {role} WITH {attributes}"))
 				.await
-				.map_err(|_| "its role couldn't be made".to_owned())?;
+				.map_err(|error| format!("its role couldn't be made: {}", said(&error)))?;
 		}
 
 		let owner: Option<String> = client
@@ -448,6 +463,39 @@ impl Databases for Postgres {
 	}
 }
 
+/// System databases that an unprivileged administrator on a managed Postgres
+/// provider may legitimately be unable to `REVOKE ... FROM PUBLIC` on. Any
+/// other open database (such as an operator's `app` or `cloud` database) is
+/// still treated as a hard error.
+const ALLOWED_UNOWNED_SYSTEM_DBS: &[&str] = &["postgres", "template1"];
+
+fn is_allowed_unowned_system_db(name: &str) -> bool {
+	ALLOWED_UNOWNED_SYSTEM_DBS.contains(&name)
+}
+
+/// Returns true only when every configured host is loopback (or a local Unix
+/// domain socket), enforcing the contract that `sslmode=disable` is accepted
+/// for same-machine servers only.
+fn all_hosts_loopback(config: &tokio_postgres::Config) -> bool {
+	let hosts = config.get_hosts();
+	if hosts.is_empty() {
+		return false;
+	}
+	hosts.iter().all(|host| {
+		match host {
+			tokio_postgres::config::Host::Tcp(name) => {
+				let trimmed = name.trim_matches(['[', ']']);
+				trimmed.eq_ignore_ascii_case("localhost")
+					|| trimmed
+						.parse::<std::net::IpAddr>()
+						.is_ok_and(|ip| ip.is_loopback())
+			}
+			#[cfg(unix)]
+			tokio_postgres::config::Host::Unix(_) => true,
+		}
+	})
+}
+
 /// Refuses a name that isn't an environment's, `env_` and 32 lower-case
 /// hex digits: whatever the control plane says, the worker never alters,
 /// or drops, the administrator or anything else on the server that isn't
@@ -477,7 +525,8 @@ fn said(error: &tokio_postgres::Error) -> String {
 
 /// Classifies a Postgres connection error without ever printing connection
 /// URLs or passwords: separates TLS certificate/handshake failures, auth
-/// rejections, and network reachability failures.
+/// rejections, and network reachability failures by walking the full error
+/// source chain.
 fn describe_connect_error(error: &tokio_postgres::Error, tls_enabled: bool) -> String {
 	if let Some(code) = error.code() {
 		return match code.code() {
@@ -491,20 +540,30 @@ fn describe_connect_error(error: &tokio_postgres::Error, tls_enabled: bool) -> S
 		};
 	}
 
-	let lower = error.to_string().to_ascii_lowercase();
+	let mut chain = String::new();
+	let mut current: Option<&(dyn std::error::Error + 'static)> = Some(error);
+	while let Some(err) = current {
+		if !chain.is_empty() {
+			chain.push(' ');
+		}
+		chain.push_str(&err.to_string().to_ascii_lowercase());
+		current = err.source();
+	}
+
 	if tls_enabled
-		&& (lower.contains("tls")
-			|| lower.contains("certificate")
-			|| lower.contains("cert")
-			|| lower.contains("handshake")
-			|| lower.contains("invalid peer"))
+		&& (chain.contains("tls")
+			|| chain.contains("certificate")
+			|| chain.contains("cert")
+			|| chain.contains("handshake")
+			|| chain.contains("invalid peer")
+			|| chain.contains("unknown issuer"))
 	{
 		return "TLS verification with the Postgres server failed (mount the cluster CA with \
 		        --postgres-ca / LEPTOSKIT_CLOUD_WORKER_POSTGRES_CA)"
 			.to_owned();
 	}
 
-	if lower.contains("timed out") || lower.contains("timeout") {
+	if chain.contains("timed out") || chain.contains("timeout") {
 		return "connecting to the Postgres server timed out".to_owned();
 	}
 
@@ -564,10 +623,34 @@ mod tests {
 				SslMode::Disable,
 				false,
 			),
+			(
+				"postgres://admin:pw@127.0.0.1/postgres?sslmode=disable",
+				SslMode::Disable,
+				false,
+			),
+			(
+				"postgres://admin:pw@[::1]/postgres?sslmode=disable",
+				SslMode::Disable,
+				false,
+			),
 		] {
 			let postgres = Postgres::new(address).expect("an address");
 			assert_eq!(postgres.config.get_ssl_mode(), mode, "{address}");
 			assert_eq!(postgres.tls, tls, "{address}");
+		}
+	}
+
+	#[test]
+	fn sslmode_disable_rejects_remote_hosts() {
+		for address in [
+			"postgres://admin:pw@db.internal/postgres?sslmode=disable",
+			"postgres://admin:pw@10.0.0.5/postgres?sslmode=disable",
+			"postgres://admin:pw@localhost,db.internal/postgres?sslmode=disable",
+		] {
+			assert!(
+				Postgres::new(address).is_err(),
+				"expected {address} to be rejected when sslmode=disable"
+			);
 		}
 	}
 
@@ -589,5 +672,19 @@ mod tests {
 
 		let postgres = postgres.connection_limit(40);
 		assert_eq!(postgres.connection_limit, 40);
+
+		let postgres = postgres.connection_limit(9_999);
+		assert_eq!(postgres.connection_limit, 1_000);
+	}
+
+	#[test]
+	fn only_known_system_databases_are_exempt_when_unowned() {
+		assert!(is_allowed_unowned_system_db("postgres"));
+		assert!(is_allowed_unowned_system_db("template1"));
+		assert!(!is_allowed_unowned_system_db("app"));
+		assert!(!is_allowed_unowned_system_db("cloud"));
+		assert!(!is_allowed_unowned_system_db(
+			"env_0123456789abcdef0123456789abcdef"
+		));
 	}
 }
