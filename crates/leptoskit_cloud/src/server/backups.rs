@@ -861,9 +861,26 @@ pub(crate) async fn sweep(db: &leptoskit_db::Db, batch: u64) -> rpc::Result<u32>
 		.await?;
 	let mut deleted = 0;
 
-	for row in expired {
-		row.destroy(db).await?;
-		deleted += 1;
+	for candidate in expired {
+		let id = candidate.id;
+		let removed = jobs::serializable(db, move |tx| {
+			Box::pin(async move {
+				let now = leptoskit_db::now();
+				let Some(row) = DatabaseBackup::query()
+					.filter(|row| row.id.eq(id) & row.expires_at.lt(now))
+					.first(tx)
+					.await?
+				else {
+					return Ok(false);
+				};
+				row.destroy(tx).await?;
+				Ok(true)
+			})
+		})
+		.await?;
+		if removed {
+			deleted += 1;
+		}
 	}
 
 	Ok(deleted)

@@ -405,6 +405,8 @@ pub(crate) async fn update_environment(
 	scale
 		.check()
 		.map_err(|error| rpc::Error::invalid(format!("invalid_scale: {error}")))?;
+	let services = services(cx.context())?;
+	super::billing::refuse_scale_above_plan(services.shipping(), &access.organization, &scale)?;
 
 	if row.scale.0 != scale {
 		row.scale = Json(scale);
@@ -418,6 +420,12 @@ pub(crate) async fn update_environment(
 				error.into()
 			}
 		})?;
+		if access.require(Permission::Deploy).is_ok() {
+			Box::pin(super::deployments::apply_live_scale(
+				cx, &access, &project, &row,
+			))
+			.await?;
+		}
 		audit::record(
 			cx.tx(),
 			&Actor::from(&access.caller),

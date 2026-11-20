@@ -87,6 +87,8 @@ web = ["dep:leptos", "leptoskit/web", "leptoskit_router/web"]
 # The server renders the console's pages beside the API, and serves the
 # client the browser hydrates them with.
 ssr = ["server", "web", "leptos/ssr", "leptoskit/server", "leptoskit_router/ssr"]
+# Production control plane: SSR console + Postgres + SQLite support.
+production = ["ssr", "postgres"]
 # The browser: hydrates the server's pages.
 hydrate = [
 	"web",

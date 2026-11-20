@@ -537,15 +537,18 @@ pub struct LogChunk {
 	pub created_at: Timestamp,
 }
 
-/// The build log bytes an organisation keeps: every chunk's bytes from
-/// when it is indexed until it is deleted, held to the organisation's log
-/// cap. One row per organisation, made by its first chunk.
+/// The log bytes an organisation keeps: every chunk's bytes from when it is
+/// indexed until it is deleted, held to the organisation's build and runtime
+/// log caps. One row per organisation, made by its first chunk.
 #[table(name = "log_usage")]
 pub struct LogUsage {
 	pub id: Id<Self>,
 	#[db(unique, no_foreign_key)]
 	pub organization_id: Id<Organization>,
 	pub bytes: i64,
+	/// Unexpired runtime log bytes kept across this organisation's
+	/// environments.
+	pub runtime_bytes: Option<i64>,
 }
 
 /// What a cluster worker last reported an environment runs.

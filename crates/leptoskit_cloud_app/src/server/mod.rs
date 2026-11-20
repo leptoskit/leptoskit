@@ -125,6 +125,13 @@ pub async fn run(command: Command, vars: Vars<'_>) -> Result<(), Error> {
 				println!("applied {name}");
 			}
 
+			if let Some(email) = config::bootstrap_operator_email(vars)?
+				&& leptoskit_cloud::server::operators(&db).await?.is_empty()
+			{
+				leptoskit_cloud::server::bootstrap_operator(&db, &email).await?;
+				println!("bootstrapped operator {email}");
+			}
+
 			Ok(())
 		}
 		Command::Operator(command) => {
@@ -170,6 +177,12 @@ async fn serve(config: ServeConfig) -> Result<(), Error> {
 		db.migrate(migrations(&config.database)).await?;
 	} else {
 		ready(&db, &config.database).await?;
+	}
+
+	if let Some(email) = &config.bootstrap_operator_email
+		&& leptoskit_cloud::server::operators(&db).await?.is_empty()
+	{
+		leptoskit_cloud::server::bootstrap_operator(&db, email).await?;
 	}
 
 	let listener = tokio::net::TcpListener::bind(config.bind)

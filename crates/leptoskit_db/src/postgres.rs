@@ -36,11 +36,11 @@ pub(crate) struct Pool {
 impl Pool {
 	/// Builds the pool; connections open lazily, on first use.
 	pub(crate) fn connect(url: &str, options: PoolOptions) -> Result<Self> {
-		let config: tokio_postgres::Config = url.parse().map_err(DbError::connection)?;
-		let manager = if config.get_ssl_mode() == SslMode::Disable {
-			Manager::new(config, tokio_postgres::NoTls)
+		let parsed = parse_url(url)?;
+		let manager = if parsed.config.get_ssl_mode() == SslMode::Disable {
+			Manager::new(parsed.config, tokio_postgres::NoTls)
 		} else {
-			Manager::new(config, tls()?)
+			Manager::new(parsed.config, tls(parsed.root_cert.as_deref())?)
 		};
 
 		let pool = deadpool_postgres::Pool::builder(manager)
@@ -358,21 +358,44 @@ async fn execute(client: &Object, statement: Statement) -> Result<u64> {
 /// client is dropped. Keepalives notice a dead peer within a minute or so,
 /// rather than the operating system's two hours.
 pub(crate) async fn session_client(url: &str) -> Result<tokio_postgres::Client> {
-	let mut config: tokio_postgres::Config = url.parse().map_err(DbError::connection)?;
-	config
+	let mut parsed = parse_url(url)?;
+	parsed
+		.config
 		.keepalives_idle(std::time::Duration::from_secs(30))
 		.keepalives_interval(std::time::Duration::from_secs(10))
 		.keepalives_retries(3);
 
-	if config.get_ssl_mode() == SslMode::Disable {
-		let (client, connection) = config.connect(tokio_postgres::NoTls).await.map_err(error)?;
+	if parsed.config.get_ssl_mode() == SslMode::Disable {
+		let (client, connection) = parsed
+			.config
+			.connect(tokio_postgres::NoTls)
+			.await
+			.map_err(error)?;
 		tokio::spawn(connection);
 		Ok(client)
 	} else {
-		let (client, connection) = config.connect(tls()?).await.map_err(error)?;
+		let connector = tls(parsed.root_cert.as_deref())?;
+		let (client, connection) = parsed.config.connect(connector).await.map_err(error)?;
 		tokio::spawn(connection);
 		Ok(client)
 	}
+}
+
+/// Acquires a non-blocking session-scoped Postgres advisory lock for `key` on
+/// a dedicated connection outside the pool. Returns `Ok(Some(client))` when
+/// acquired (releasing the lock when `client` is dropped) or `Ok(None)` when
+/// another session already holds `key`.
+pub(crate) async fn try_advisory_lock(
+	url: &str,
+	key: i64,
+) -> Result<Option<tokio_postgres::Client>> {
+	let client = session_client(url).await?;
+	let row = client
+		.query_one("SELECT pg_try_advisory_lock($1)", &[&key])
+		.await
+		.map_err(error)?;
+	let acquired: bool = row.get(0);
+	if acquired { Ok(Some(client)) } else { Ok(None) }
 }
 
 /// A driver error as the database layer reports it.
@@ -380,10 +403,98 @@ pub(crate) fn driver_error(failure: tokio_postgres::Error) -> DbError {
 	error(failure)
 }
 
-/// TLS with the webpki roots, for hosted databases.
-fn tls() -> Result<tokio_postgres_rustls::MakeRustlsConnect> {
+/// Parsed Postgres connection parameters plus an optional custom CA PEM file
+/// (`sslrootcert` query parameter or `PGSSLROOTCERT` environment variable).
+struct ParsedUrl {
+	config: tokio_postgres::Config,
+	root_cert: Option<std::path::PathBuf>,
+}
+
+fn parse_url(url: &str) -> Result<ParsedUrl> {
+	let (clean_url, from_url) = extract_sslrootcert(url);
+	let config: tokio_postgres::Config = clean_url.parse().map_err(DbError::connection)?;
+	let root_cert = from_url.or_else(|| {
+		std::env::var_os("PGSSLROOTCERT")
+			.filter(|value| !value.is_empty())
+			.map(std::path::PathBuf::from)
+	});
+	Ok(ParsedUrl { config, root_cert })
+}
+
+/// Strips `sslrootcert=...` from a Postgres URI query string (which
+/// `tokio-postgres` does not parse itself) and returns the cleaned URI plus
+/// the decoded certificate path if present.
+fn extract_sslrootcert(url: &str) -> (String, Option<std::path::PathBuf>) {
+	let Some((prefix, rest)) = url.split_once('?') else {
+		return (url.to_owned(), None);
+	};
+	let (query, fragment) = match rest.split_once('#') {
+		Some((q, f)) => (q, Some(f)),
+		None => (rest, None),
+	};
+	let mut kept = Vec::new();
+	let mut root_cert = None;
+	for pair in query.split('&') {
+		if pair.is_empty() {
+			continue;
+		}
+		if let Some(raw_value) = pair.strip_prefix("sslrootcert=") {
+			let decoded = percent_decode(raw_value);
+			if !decoded.is_empty() {
+				root_cert = Some(std::path::PathBuf::from(decoded));
+			}
+		} else {
+			kept.push(pair);
+		}
+	}
+	let mut rebuilt = prefix.to_owned();
+	if !kept.is_empty() {
+		rebuilt.push('?');
+		rebuilt.push_str(&kept.join("&"));
+	}
+	if let Some(fragment) = fragment {
+		rebuilt.push('#');
+		rebuilt.push_str(fragment);
+	}
+	(rebuilt, root_cert)
+}
+
+fn percent_decode(input: &str) -> String {
+	let bytes = input.as_bytes();
+	let mut out = Vec::with_capacity(bytes.len());
+	let mut idx = 0;
+	while idx < bytes.len() {
+		if bytes[idx] == b'%'
+			&& idx + 2 < bytes.len()
+			&& let (Some(hi), Some(lo)) = (hex_nibble(bytes[idx + 1]), hex_nibble(bytes[idx + 2]))
+		{
+			out.push((hi << 4) | lo);
+			idx += 3;
+			continue;
+		}
+		out.push(bytes[idx]);
+		idx += 1;
+	}
+	String::from_utf8_lossy(&out).into_owned()
+}
+
+const fn hex_nibble(byte: u8) -> Option<u8> {
+	match byte {
+		b'0'..=b'9' => Some(byte - b'0'),
+		b'a'..=b'f' => Some(byte - b'a' + 10),
+		b'A'..=b'F' => Some(byte - b'A' + 10),
+		_ => None,
+	}
+}
+
+/// TLS with the webpki roots plus any custom CA PEM bundle from `sslrootcert`
+/// or `PGSSLROOTCERT` (such as a cluster's private `CloudNativePG` CA).
+fn tls(root_cert: Option<&std::path::Path>) -> Result<tokio_postgres_rustls::MakeRustlsConnect> {
 	let mut roots = rustls::RootCertStore::empty();
 	roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+	if let Some(path) = root_cert {
+		add_pem_roots(&mut roots, path)?;
+	}
 	let config = rustls::ClientConfig::builder_with_provider(Arc::new(
 		rustls::crypto::ring::default_provider(),
 	))
@@ -393,6 +504,45 @@ fn tls() -> Result<tokio_postgres_rustls::MakeRustlsConnect> {
 	.with_no_client_auth();
 
 	Ok(tokio_postgres_rustls::MakeRustlsConnect::new(config))
+}
+
+fn add_pem_roots(roots: &mut rustls::RootCertStore, path: &std::path::Path) -> Result<()> {
+	use rustls::pki_types::CertificateDer;
+	use rustls::pki_types::pem::PemObject as _;
+
+	let bytes = std::fs::read(path).map_err(|failure| {
+		DbError::connection(std::io::Error::new(
+			failure.kind(),
+			format!(
+				"couldn't read Postgres CA bundle `{}`: {failure}",
+				path.display()
+			),
+		))
+	})?;
+	let mut added = 0usize;
+	for item in CertificateDer::pem_slice_iter(&bytes) {
+		let cert = item.map_err(|failure| {
+			DbError::connection(std::io::Error::new(
+				std::io::ErrorKind::InvalidData,
+				format!(
+					"invalid PEM certificate in Postgres CA bundle `{}`: {failure}",
+					path.display()
+				),
+			))
+		})?;
+		roots.add(cert).map_err(DbError::connection)?;
+		added += 1;
+	}
+	if added == 0 {
+		return Err(DbError::connection(std::io::Error::new(
+			std::io::ErrorKind::InvalidData,
+			format!(
+				"Postgres CA bundle `{}` contained no PEM certificates",
+				path.display()
+			),
+		)));
+	}
+	Ok(())
 }
 
 /// A value bound to whatever type the prepared statement says its
@@ -658,6 +808,7 @@ mod expansion;
 struct MigrationSession {
 	client: Option<Object>,
 	ssl_disabled: bool,
+	root_cert: Option<std::path::PathBuf>,
 }
 
 impl MigrationSession {
@@ -684,6 +835,7 @@ impl Drop for MigrationSession {
 			let client = Object::take(client);
 			let token = client.cancel_token();
 			let ssl_disabled = self.ssl_disabled;
+			let root_cert = self.root_cert.take();
 			// Closing a socket alone does not interrupt a backend blocked on
 			// a lock. Cancel explicitly while this detached client cannot be
 			// reused, then close it even if cancellation fails or times out.
@@ -694,7 +846,7 @@ impl Drop for MigrationSession {
 				let _ = tokio::time::timeout(std::time::Duration::from_secs(5), async {
 					if ssl_disabled {
 						let _ = token.cancel_query(tokio_postgres::NoTls).await;
-					} else if let Ok(tls) = tls() {
+					} else if let Ok(tls) = tls(root_cert.as_deref()) {
 						let _ = token.cancel_query(tls).await;
 					}
 				})
@@ -707,10 +859,11 @@ impl Drop for MigrationSession {
 
 impl Pool {
 	async fn migration_session(&self) -> Result<MigrationSession> {
-		let config: tokio_postgres::Config = self.url.parse().map_err(DbError::connection)?;
+		let parsed = parse_url(&self.url)?;
 		Ok(MigrationSession {
 			client: Some(self.client().await?),
-			ssl_disabled: config.get_ssl_mode() == SslMode::Disable,
+			ssl_disabled: parsed.config.get_ssl_mode() == SslMode::Disable,
+			root_cert: parsed.root_cert,
 		})
 	}
 
@@ -995,10 +1148,10 @@ impl Listener {
 	/// Connects and listens, and returns once `LISTEN` has taken effect, so
 	/// that a subscriber made after it hears every change committed after it.
 	pub(crate) async fn start(url: &str, hub: std::sync::Weak<crate::live::Hub>) -> Result<Self> {
-		let config: tokio_postgres::Config = url.parse().map_err(DbError::connection)?;
+		let parsed = parse_url(url)?;
 		let (ready, listening) = tokio::sync::oneshot::channel();
 		let (stop, stopped) = tokio::sync::oneshot::channel();
-		tokio::spawn(listen(config, hub, ready, stopped));
+		tokio::spawn(listen(parsed, hub, ready, stopped));
 
 		match listening.await {
 			Ok(Ok(())) => Ok(Self { _stop: stop }),
@@ -1031,7 +1184,7 @@ enum Outcome {
 
 /// Listens until the hub is gone, reconnecting with a growing delay.
 async fn listen(
-	config: tokio_postgres::Config,
+	parsed: ParsedUrl,
 	hub: std::sync::Weak<crate::live::Hub>,
 	ready: tokio::sync::oneshot::Sender<Result<()>>,
 	mut stop: tokio::sync::oneshot::Receiver<()>,
@@ -1064,7 +1217,7 @@ async fn listen(
 			true
 		};
 
-		let error = match session(&config, &mut stop, &mut heard).await {
+		let error = match session(&parsed, &mut stop, &mut heard).await {
 			Outcome::Stopped => return,
 			Outcome::Failed(error) => error,
 		};
@@ -1101,22 +1254,22 @@ async fn listen(
 
 /// One listening connection, until it fails or `stop` fires.
 async fn session(
-	config: &tokio_postgres::Config,
+	parsed: &ParsedUrl,
 	stop: &mut tokio::sync::oneshot::Receiver<()>,
 	heard: &mut (dyn FnMut(Heard) -> bool + Send),
 ) -> Outcome {
-	if config.get_ssl_mode() == SslMode::Disable {
-		match config.connect(tokio_postgres::NoTls).await {
+	if parsed.config.get_ssl_mode() == SslMode::Disable {
+		match parsed.config.connect(tokio_postgres::NoTls).await {
 			Ok((client, connection)) => drive(client, connection, stop, heard).await,
 			Err(failure) => Outcome::Failed(error(failure)),
 		}
 	} else {
-		let tls = match tls() {
+		let tls = match tls(parsed.root_cert.as_deref()) {
 			Ok(tls) => tls,
 			Err(error) => return Outcome::Failed(error),
 		};
 
-		match config.connect(tls).await {
+		match parsed.config.connect(tls).await {
 			Ok((client, connection)) => drive(client, connection, stop, heard).await,
 			Err(failure) => Outcome::Failed(error(failure)),
 		}
@@ -1179,4 +1332,58 @@ where
 		Poll::Pending
 	})
 	.await
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn extract_sslrootcert_strips_only_sslrootcert_param() {
+		let (clean, cert) = extract_sslrootcert(
+			"postgres://user:pw@db.internal:5432/cloud?sslmode=require&sslrootcert=%2Fetc%2Fca.\
+			 crt&application_name=control",
+		);
+		assert_eq!(
+			clean,
+			"postgres://user:pw@db.internal:5432/cloud?sslmode=require&application_name=control"
+		);
+		assert_eq!(cert, Some(std::path::PathBuf::from("/etc/ca.crt")));
+
+		let (clean_only, cert_only) =
+			extract_sslrootcert("postgres://user@db:5432/app?sslrootcert=/var/run/ca.pem");
+		assert_eq!(clean_only, "postgres://user@db:5432/app");
+		assert_eq!(cert_only, Some(std::path::PathBuf::from("/var/run/ca.pem")));
+
+		let (unchanged, none) = extract_sslrootcert("postgres://user@db:5432/app?sslmode=require");
+		assert_eq!(unchanged, "postgres://user@db:5432/app?sslmode=require");
+		assert_eq!(none, None);
+	}
+
+	#[test]
+	fn tls_rejects_missing_or_empty_custom_ca_bundle() {
+		let missing = tls(Some(std::path::Path::new(
+			"/nonexistent/leptoskit-db-ca.pem",
+		)));
+		assert!(missing.is_err());
+
+		let dir = tempfile::tempdir().expect("tempdir");
+		let empty = dir.path().join("empty.pem");
+		std::fs::write(&empty, b"not a certificate\n").expect("write");
+		assert!(tls(Some(&empty)).is_err());
+	}
+
+	#[test]
+	fn parse_url_accepts_sslrootcert_query_param() {
+		let parsed = parse_url(
+			"postgres://app:secret@control-rw.leptoskit-cloud.svc:5432/app?sslmode=require&\
+			 sslrootcert=/etc/leptoskit/db-ca/ca.crt",
+		)
+		.expect("parse_url succeeds");
+		assert_eq!(parsed.config.get_ssl_mode(), SslMode::Require);
+		assert_eq!(
+			parsed.root_cert,
+			Some(std::path::PathBuf::from("/etc/leptoskit/db-ca/ca.crt"))
+		);
+	}
 }

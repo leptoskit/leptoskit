@@ -556,6 +556,7 @@ pub const OPERATIONS: &[(&str, Requirement)] = &[
 	("append_log", Requirement::Worker),
 	("finish", Requirement::Worker),
 	("report_status", Requirement::Worker),
+	("cluster_environments", Requirement::Worker),
 	("clusters", Requirement::Operator),
 	("register_cluster", Requirement::Operator),
 	("set_cluster_facts", Requirement::Operator),

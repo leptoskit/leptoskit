@@ -524,6 +524,76 @@ impl Db {
 			Pool::Sqlite(pool) => pool.script(sql.to_string()).await,
 		}
 	}
+
+	/// Attempts to acquire a non-blocking session-scoped advisory lock for
+	/// `key`.
+	///
+	/// On Postgres this opens a dedicated connection outside the pool and calls
+	/// `pg_try_advisory_lock($1)`; dropping the returned [`AdvisoryLock`]
+	/// closes that session and releases the lock immediately (including if the
+	/// process crashes). On SQLite, which is single-process, this always
+	/// succeeds.
+	#[cfg_attr(
+		not(feature = "postgres"),
+		allow(
+			clippy::unused_async,
+			reason = "only Postgres awaits a session connection"
+		)
+	)]
+	pub async fn try_advisory_lock(&self, key: i64) -> Result<Option<AdvisoryLock>> {
+		match &*self.pool {
+			#[cfg(feature = "postgres")]
+			Pool::Postgres(pool) => {
+				Ok(crate::postgres::try_advisory_lock(pool.url(), key)
+					.await?
+					.map(|client| {
+						AdvisoryLock {
+							inner: AdvisoryLockInner::Postgres(client),
+						}
+					}))
+			}
+			#[cfg(feature = "sqlite")]
+			Pool::Sqlite(_) => {
+				let _ = key;
+				Ok(Some(AdvisoryLock {
+					inner: AdvisoryLockInner::Sqlite,
+				}))
+			}
+		}
+	}
+}
+
+/// A held session-scoped advisory lock returned by [`Db::try_advisory_lock`].
+/// Dropping this value releases the lock.
+#[must_use = "dropping an AdvisoryLock releases the lock immediately"]
+pub struct AdvisoryLock {
+	inner: AdvisoryLockInner,
+}
+
+enum AdvisoryLockInner {
+	#[cfg(feature = "postgres")]
+	Postgres(tokio_postgres::Client),
+	#[cfg(feature = "sqlite")]
+	Sqlite,
+}
+
+impl std::fmt::Debug for AdvisoryLock {
+	fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		formatter.write_str("AdvisoryLock(..)")
+	}
+}
+
+impl AdvisoryLock {
+	/// Whether the underlying database session holding this lock has closed.
+	#[must_use]
+	pub fn is_closed(&self) -> bool {
+		match &self.inner {
+			#[cfg(feature = "postgres")]
+			AdvisoryLockInner::Postgres(client) => client.is_closed(),
+			#[cfg(feature = "sqlite")]
+			AdvisoryLockInner::Sqlite => false,
+		}
+	}
 }
 
 impl Pool {

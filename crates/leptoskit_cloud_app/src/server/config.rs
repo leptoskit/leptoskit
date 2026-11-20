@@ -107,6 +107,20 @@ pub const S3_ACCESS_KEY_ID: &str = "LEPTOSKIT_CLOUD_S3_ACCESS_KEY_ID";
 pub const S3_SECRET_ACCESS_KEY: &str = "LEPTOSKIT_CLOUD_S3_SECRET_ACCESS_KEY";
 /// `true` to address buckets as `endpoint/bucket`, as `MinIO` does.
 pub const S3_PATH_STYLE: &str = "LEPTOSKIT_CLOUD_S3_PATH_STYLE";
+/// `false` to disable `x-amz-checksum-sha256` / `x-amz-checksum-mode` headers
+/// for S3-compatible gateways that reject checksum headers. Defaults to `true`.
+pub const S3_CHECKSUM_HEADERS: &str = "LEPTOSKIT_CLOUD_S3_CHECKSUM_HEADERS";
+/// `false` on secondary control-plane replicas so only one replica runs the
+/// background sweeper loop. Defaults to `true`.
+pub const SWEEPER: &str = "LEPTOSKIT_CLOUD_SWEEPER";
+/// Optional email address to idempotently bootstrap as an operator during
+/// `migrate` or `serve` without requiring interactive email sign-in first.
+pub const BOOTSTRAP_OPERATOR_EMAIL: &str = "LEPTOSKIT_CLOUD_BOOTSTRAP_OPERATOR_EMAIL";
+/// Optional maximum bytes per database backup dump (defaults to 20 GiB).
+pub const BACKUP_CAP_BYTES: &str = "LEPTOSKIT_CLOUD_BACKUP_CAP_BYTES";
+/// Optional maximum unexpired runtime log bytes per organisation (defaults to
+/// 512 MiB).
+pub const RUNTIME_LOG_CAP_BYTES: &str = "LEPTOSKIT_CLOUD_RUNTIME_LOG_CAP_BYTES";
 /// In `--dev`, the directory the control plane keeps objects in and serves
 /// on loopback, instead of an S3 store.
 pub const STORAGE_DIR: &str = "LEPTOSKIT_CLOUD_STORAGE_DIR";
@@ -220,10 +234,30 @@ pub struct ServeConfig {
 	pub control: ControlConfig,
 	/// The console's client build: [`SITE`].
 	pub site: Option<std::path::PathBuf>,
+	/// Optional operator email to bootstrap on startup:
+	/// [`BOOTSTRAP_OPERATOR_EMAIL`].
+	pub bootstrap_operator_email: Option<String>,
 	/// Whether the origin is the bind address, which `--dev` uses when
 	/// [`ORIGIN`] isn't set: then a bind to port 0 is reached at the port it
 	/// gets.
 	origin_from_bind: bool,
+}
+
+/// Optional operator email read and validated from
+/// [`BOOTSTRAP_OPERATOR_EMAIL`].
+///
+/// # Errors
+///
+/// [`ConfigError::Invalid`] when set to a value that is not a valid email
+/// address.
+pub fn bootstrap_operator_email(vars: Vars<'_>) -> Result<Option<String>, ConfigError> {
+	let Some(raw) = read(vars, BOOTSTRAP_OPERATOR_EMAIL) else {
+		return Ok(None);
+	};
+	let normalized = raw.to_ascii_lowercase();
+	leptoskit_db::Email::parse(&normalized)
+		.map_err(|_| invalid(BOOTSTRAP_OPERATOR_EMAIL, "must be a valid email address"))?;
+	Ok(Some(normalized))
 }
 
 impl ServeConfig {
@@ -295,6 +329,8 @@ impl ServeConfig {
 		let catalogue = catalogue(vars)?;
 		let payments = payments(vars, dev)?;
 		let resolver = resolver(vars, dev)?;
+		let shipping = shipping_settings(vars)?;
+		let bootstrap_operator_email = bootstrap_operator_email(vars)?;
 		let (mailer, mailbox) = if dev {
 			let mailbox = Mailbox::new();
 			(SharedMailer::new(mailbox.clone()), Some(mailbox))
@@ -327,13 +363,52 @@ impl ServeConfig {
 				payments,
 				rate_limits: leptoskit_cloud::server::RateLimits::default(),
 				client_ip_header: client_ip_header(vars)?,
-				shipping: ShippingSettings::default(),
+				shipping,
 				dev: mailbox.map(|mailbox| DevMode { mailbox }),
 			},
 			site: read(vars, SITE).map(std::path::PathBuf::from),
+			bootstrap_operator_email,
 			origin_from_bind,
 		})
 	}
+}
+
+fn shipping_settings(vars: Vars<'_>) -> Result<ShippingSettings, ConfigError> {
+	let run_sweeper = match read(vars, SWEEPER).as_deref() {
+		None | Some("true") => true,
+		Some("false") => false,
+		Some(_) => return Err(invalid(SWEEPER, "must be `true` or `false`")),
+	};
+	let mut settings = ShippingSettings {
+		run_sweeper,
+		..ShippingSettings::default()
+	};
+	let max_bytes = i64::MAX as u64;
+	if let Some(raw) = read(vars, BACKUP_CAP_BYTES) {
+		settings.backup_cap = raw
+			.parse::<u64>()
+			.ok()
+			.filter(|&v| (1..=max_bytes).contains(&v))
+			.ok_or_else(|| {
+				invalid(
+					BACKUP_CAP_BYTES,
+					"must be a positive byte count within 63-bit range",
+				)
+			})?;
+	}
+	if let Some(raw) = read(vars, RUNTIME_LOG_CAP_BYTES) {
+		settings.organization_runtime_log_cap = raw
+			.parse::<u64>()
+			.ok()
+			.filter(|&v| (1..=max_bytes).contains(&v))
+			.ok_or_else(|| {
+				invalid(
+					RUNTIME_LOG_CAP_BYTES,
+					"must be a positive byte count within 63-bit range",
+				)
+			})?;
+	}
+	Ok(settings)
 }
 
 /// What reads a custom domain's challenge record: [`DNS_RESOLVER`], over
@@ -493,6 +568,11 @@ fn storage(vars: Vars<'_>, dev: bool) -> Result<StorageConfig, ConfigError> {
 		Some("true") => true,
 		Some(_) => return Err(invalid(S3_PATH_STYLE, "must be `true` or `false`")),
 	};
+	let checksum_headers = match read(vars, S3_CHECKSUM_HEADERS).as_deref() {
+		None | Some("true") => true,
+		Some("false") => false,
+		Some(_) => return Err(invalid(S3_CHECKSUM_HEADERS, "must be `true` or `false`")),
+	};
 
 	Ok(StorageConfig::S3(S3Config {
 		endpoint,
@@ -502,6 +582,7 @@ fn storage(vars: Vars<'_>, dev: bool) -> Result<StorageConfig, ConfigError> {
 		access_key_id: required(vars, S3_ACCESS_KEY_ID)?,
 		secret_access_key: SecretValue::new(required(vars, S3_SECRET_ACCESS_KEY)?),
 		path_style,
+		checksum_headers,
 	}))
 }
 
@@ -997,5 +1078,41 @@ mod tests {
 			panic!("an S3 store");
 		};
 		assert_eq!((s3.region.as_str(), s3.path_style), ("us-east-1", true));
+	}
+
+	#[tokio::test]
+	async fn validates_bootstrap_operator_email_and_byte_caps() {
+		let mut pairs = production();
+		pairs.push((BOOTSTRAP_OPERATOR_EMAIL, "not-an-email"));
+		let bad_email = error(&pairs, false);
+		assert!(
+			bad_email.starts_with(BOOTSTRAP_OPERATOR_EMAIL),
+			"{bad_email}"
+		);
+
+		let mut pairs = production();
+		pairs.push((BACKUP_CAP_BYTES, "9223372036854775808"));
+		let bad_backup = error(&pairs, false);
+		assert!(bad_backup.starts_with(BACKUP_CAP_BYTES), "{bad_backup}");
+
+		let mut pairs = production();
+		pairs.push((RUNTIME_LOG_CAP_BYTES, "0"));
+		let bad_log_cap = error(&pairs, false);
+		assert!(
+			bad_log_cap.starts_with(RUNTIME_LOG_CAP_BYTES),
+			"{bad_log_cap}"
+		);
+
+		let mut pairs = production();
+		pairs.push((BOOTSTRAP_OPERATOR_EMAIL, "OPS@Example.COM"));
+		pairs.push((BACKUP_CAP_BYTES, "1048576"));
+		pairs.push((RUNTIME_LOG_CAP_BYTES, "2097152"));
+		let ok = ServeConfig::from_vars(&vars(&pairs), false).expect("valid");
+		assert_eq!(
+			ok.bootstrap_operator_email.as_deref(),
+			Some("ops@example.com")
+		);
+		assert_eq!(ok.control.shipping.backup_cap, 1_048_576);
+		assert_eq!(ok.control.shipping.organization_runtime_log_cap, 2_097_152);
 	}
 }

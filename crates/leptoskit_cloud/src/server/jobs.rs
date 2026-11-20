@@ -717,19 +717,25 @@ async fn sweep_logs(services: &Services) -> rpc::Result<u32> {
 					return Ok(None);
 				};
 
-				// A build's chunk stops counting against its organisation's
-				// log cap as it goes.
-				if chunk.kind == LogKind::Build {
-					let organization = chunk.organization_id;
+				// A chunk stops counting against its organisation's log cap as
+				// it goes.
+				let organization = chunk.organization_id;
 
-					if let Some(mut usage) = LogUsage::query()
-						.filter(|usage| usage.organization_id.eq(organization))
-						.first(tx)
-						.await?
-					{
-						usage.bytes = (usage.bytes - chunk.bytes).max(0);
-						usage.save(tx).await?;
+				if let Some(mut usage) = LogUsage::query()
+					.filter(|usage| usage.organization_id.eq(organization))
+					.first(tx)
+					.await?
+				{
+					match chunk.kind {
+						LogKind::Build => {
+							usage.bytes = (usage.bytes - chunk.bytes).max(0);
+						}
+						LogKind::Runtime => {
+							let current = usage.runtime_bytes.unwrap_or(0);
+							usage.runtime_bytes = Some((current - chunk.bytes).max(0));
+						}
 					}
+					usage.save(tx).await?;
 				}
 
 				let key = chunk.object_key.clone();

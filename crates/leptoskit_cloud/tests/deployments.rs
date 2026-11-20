@@ -622,3 +622,412 @@ async fn payment_pages_are_handed_out_slowly() {
 async fn without_payment_nothing_is_sold() {
 	subscriptions::without_payment_nothing_is_sold(&support::app().await).await;
 }
+
+#[tokio::test]
+async fn plan_scale_limits_block_oversized_environments_and_deploys() {
+	let catalogue = leptoskit_cloud::server::catalogue_from_json(
+		r#"{
+			"currency": "usd",
+			"plans": [{
+				"id": "hobby",
+				"name": "Hobby",
+				"monthly": 0,
+				"limits": { "max_size": "xs", "max_replicas": 1, "require_sleep": true }
+			}],
+			"meters": {
+				"compute_seconds_xs": { "minor": 1, "per": 3600 },
+				"build_minutes_linux": { "minor": 10 }
+			}
+		}"#,
+	)
+	.expect("a catalogue");
+	let db = leptoskit_db::testing::sqlite_migrated(leptoskit_cloud::MIGRATIONS).await;
+	let app = support::app_with(db, |config| config.catalogue = Some(catalogue)).await;
+	let shop = Shop::open(&app).await;
+
+	// Oversized process rejected on update_environment.
+	app.call(
+		"update_environment",
+		json!({
+			"organization": shop.org,
+			"project": "notes",
+			"environment": "production",
+			"revision": 0,
+			"scale": {
+				"app": { "size": "xl", "min": 0, "max": 1, "sleep": "when-idle" },
+				"services": {}
+			}
+		}),
+		shop.as_ana(),
+	)
+	.await
+	.refused(403, "quota_exceeded");
+
+	// Always-on process rejected when plan requires sleep.
+	app.call(
+		"update_environment",
+		json!({
+			"organization": shop.org,
+			"project": "notes",
+			"environment": "production",
+			"revision": 0,
+			"scale": {
+				"app": { "size": "xs", "min": 1, "max": 1, "sleep": "never" },
+				"services": {}
+			}
+		}),
+		shop.as_ana(),
+	)
+	.await
+	.refused(403, "quota_exceeded");
+
+	// Multiple replicas rejected when max_replicas == 1.
+	app.call(
+		"update_environment",
+		json!({
+			"organization": shop.org,
+			"project": "notes",
+			"environment": "production",
+			"revision": 0,
+			"scale": {
+				"app": { "size": "xs", "min": 0, "max": 2, "sleep": "when-idle" },
+				"services": {}
+			}
+		}),
+		shop.as_ana(),
+	)
+	.await
+	.refused(403, "quota_exceeded");
+}
+
+#[tokio::test]
+async fn bootstrap_operator_is_idempotent_without_email_sign_in() {
+	let db = leptoskit_db::testing::sqlite_migrated(leptoskit_cloud::MIGRATIONS).await;
+	let first = leptoskit_cloud::server::bootstrap_operator(&db, "ops@example.com")
+		.await
+		.expect("bootstrap succeeds");
+	let second = leptoskit_cloud::server::bootstrap_operator(&db, "OPS@EXAMPLE.COM")
+		.await
+		.expect("second bootstrap is idempotent");
+	assert_eq!(first, second);
+	let list = leptoskit_cloud::server::operators(&db).await.unwrap();
+	assert_eq!(list, vec!["ops@example.com".to_owned()]);
+}
+
+#[tokio::test]
+async fn update_environment_scales_live_deployment_and_next_deploy_clears_scale_differs() {
+	let app = support::app().await;
+	let shop = Shop::open(&app).await;
+	let first = shop.ship("production", b"v1", &[]).await;
+	assert_eq!(first, 1);
+
+	// Read current revision before scaling.
+	let envs = app
+		.call(
+			"environments",
+			json!({ "organization": shop.org, "project": "notes" }),
+			shop.as_ana(),
+		)
+		.await
+		.expect(200)
+		.json();
+	let rev = envs[0]["revision"].as_i64().unwrap();
+
+	// Updating scale on a live environment queues an immediate cluster release
+	// job.
+	let updated = app
+		.call(
+			"update_environment",
+			json!({
+				"organization": shop.org,
+				"project": "notes",
+				"environment": "production",
+				"revision": rev,
+				"scale": {
+					"app": { "size": "s", "min": 1, "max": 1, "sleep": "never" },
+					"services": {}
+				}
+			}),
+			shop.as_ana(),
+		)
+		.await
+		.expect(200)
+		.json();
+	assert_eq!(updated["scale_differs"], true);
+
+	// The cluster worker can immediately claim and finish the scaling release
+	// job.
+	let claimed = shop
+		.cluster
+		.claim()
+		.await
+		.expect("immediate scaling release job");
+	assert_eq!(
+		claimed["input"]["kind"], "release",
+		"expected immediate release job: {claimed}"
+	);
+	let spec = &claimed["input"]["spec"];
+	assert_eq!(spec["processes"][0]["resources"]["memory_mib"], 256);
+	assert_eq!(spec["processes"][0]["scale"]["min"], 1);
+	assert_eq!(spec["processes"][0]["scale"]["max"], 1);
+	shop.cluster
+		.finish(&claimed, shipping::applied())
+		.await
+		.expect(200);
+
+	// A subsequent deploy consumes the override and clears scale_differs so
+	// future leptoskit.toml edits are not permanently locked out.
+	let _second = shop.ship("production", b"v2", &[]).await;
+	let envs_after = app
+		.call(
+			"environments",
+			json!({ "organization": shop.org, "project": "notes" }),
+			shop.as_ana(),
+		)
+		.await
+		.expect(200)
+		.json();
+	assert_eq!(envs_after[0]["scale_differs"], false);
+}
+
+#[tokio::test]
+async fn manage_only_token_saves_scale_without_triggering_live_cluster_rollout() {
+	let app = support::app().await;
+	let shop = Shop::open(&app).await;
+	shop.ship("production", b"v1", &[]).await;
+
+	let (manage_token, _) = app.token(shop.as_ana(), &shop.org, &["manage"], None).await;
+	let envs = app
+		.call(
+			"environments",
+			json!({ "organization": shop.org, "project": "notes" }),
+			shop.as_ana(),
+		)
+		.await
+		.expect(200)
+		.json();
+	let rev = envs[0]["revision"].as_i64().unwrap();
+
+	// Manage-only token updates the saved scale but does NOT queue a cluster
+	// release because it lacks Permission::Deploy.
+	let updated = app
+		.call(
+			"update_environment",
+			json!({
+				"organization": shop.org,
+				"project": "notes",
+				"environment": "production",
+				"revision": rev,
+				"scale": {
+					"app": { "size": "s", "min": 1, "max": 1, "sleep": "never" },
+					"services": {}
+				}
+			}),
+			support::As::Bearer(&manage_token),
+		)
+		.await
+		.expect(200)
+		.json();
+	assert_eq!(updated["scale_differs"], true);
+	assert!(
+		shop.cluster.claim().await.is_none(),
+		"manage-only token must not queue a live cluster rollout"
+	);
+}
+
+#[tokio::test]
+async fn cluster_environments_returns_placed_environments_for_rehydration() {
+	let app = support::app().await;
+	let shop = Shop::open(&app).await;
+	shop.ship("production", b"v1", &[]).await;
+
+	// Cluster worker sees placed environments for startup rehydration.
+	let listed = shop
+		.cluster
+		.call("cluster_environments", json!({}))
+		.await
+		.expect(200)
+		.json();
+	let items = listed.as_array().expect("array");
+	assert_eq!(items.len(), 1);
+	assert_eq!(items[0]["environment"]["organization"]["slug"], shop.org);
+	assert_eq!(items[0]["environment"]["project"]["slug"], "notes");
+	assert_eq!(items[0]["environment"]["environment"]["slug"], "production");
+
+	// Build worker is refused.
+	shop.build
+		.call("cluster_environments", json!({}))
+		.await
+		.refused(403, "cluster_worker_required");
+}
+
+#[tokio::test]
+async fn plans_expose_scale_limits_and_catalogue_rejects_zero_max_replicas() {
+	assert!(
+		leptoskit_cloud::server::catalogue_from_json(
+			r#"{
+				"currency": "usd",
+				"plans": [{
+					"id": "broken",
+					"name": "Broken",
+					"monthly": 0,
+					"limits": { "max_replicas": 0 }
+				}],
+				"meters": {}
+			}"#,
+		)
+		.is_err()
+	);
+
+	let catalogue = leptoskit_cloud::server::catalogue_from_json(
+		r#"{
+			"currency": "usd",
+			"plans": [{
+				"id": "hobby",
+				"name": "Hobby",
+				"monthly": 0,
+				"limits": { "max_size": "xs", "max_replicas": 1, "require_sleep": true }
+			}],
+			"meters": {}
+		}"#,
+	)
+	.expect("valid catalogue");
+	let db = leptoskit_db::testing::sqlite_migrated(leptoskit_cloud::MIGRATIONS).await;
+	let app = support::app_with(db, |config| config.catalogue = Some(catalogue)).await;
+	let ana = app.sign_in("ana@example.com").await;
+	let plans = app
+		.call("plans", json!({}), support::As::Session(&ana))
+		.await
+		.expect(200)
+		.json();
+	let limits = &plans["plans"][0]["limits"];
+	assert_eq!(limits["max_size"], "xs");
+	assert_eq!(limits["max_replicas"], 1);
+	assert_eq!(limits["require_sleep"], true);
+}
+
+#[tokio::test]
+async fn bootstrap_operator_rejects_invalid_and_disabled_accounts_and_handles_concurrency() {
+	let db = leptoskit_db::testing::sqlite_migrated(leptoskit_cloud::MIGRATIONS).await;
+	let invalid = leptoskit_cloud::server::bootstrap_operator(&db, "not-an-email").await;
+	assert!(matches!(
+		invalid,
+		Err(leptoskit_cloud::server::OperatorError::InvalidEmail(_))
+	));
+
+	// Concurrent bootstrap for the same email succeeds cleanly.
+	let (first, second) = tokio::join!(
+		leptoskit_cloud::server::bootstrap_operator(&db, "ops@example.com"),
+		leptoskit_cloud::server::bootstrap_operator(&db, "OPS@EXAMPLE.COM"),
+	);
+	let id1 = first.expect("first concurrent bootstrap");
+	let id2 = second.expect("second concurrent bootstrap");
+	assert_eq!(id1, id2);
+
+	// Disabled accounts cannot be bootstrapped into operators.
+	db.run_script("UPDATE \"auth_accounts\" SET \"disabled_at\" = '2026-01-01T00:00:00Z'")
+		.await
+		.expect("disable account");
+	let disabled = leptoskit_cloud::server::bootstrap_operator(&db, "ops@example.com").await;
+	assert!(matches!(
+		disabled,
+		Err(leptoskit_cloud::server::OperatorError::DisabledAccount(_))
+	));
+}
+
+#[tokio::test]
+async fn runtime_log_cap_tracks_usage_and_recovers_after_expiry_sweep() {
+	let db = leptoskit_db::testing::sqlite_migrated(leptoskit_cloud::MIGRATIONS).await;
+	let app = support::app_with(db, |config| {
+		// Fit only one small chunk (~95 bytes) before dropping overflow.
+		config.shipping.organization_runtime_log_cap = 140;
+		config.shipping.runtime_logs = Duration::from_millis(50);
+	})
+	.await;
+	let shop = Shop::open(&app).await;
+	shop.ship("production", b"v1", &[]).await;
+
+	let envs = app
+		.call(
+			"environments",
+			json!({ "organization": shop.org, "project": "notes" }),
+			shop.as_ana(),
+		)
+		.await
+		.expect(200)
+		.json();
+	let env_id = envs[0]["id"].as_str().unwrap();
+	let listed = shop
+		.cluster
+		.call("cluster_environments", json!({}))
+		.await
+		.expect(200)
+		.json();
+	let env_ref = &listed[0]["environment"];
+
+	// First status report stores its log chunk.
+	let first = shop
+		.cluster
+		.call(
+			"report_status",
+			json!({
+				"environment": env_id,
+				"observed": { "environment": env_ref, "processes": [] },
+				"logs": [{
+					"process": "app",
+					"pod": "app-0",
+					"at_millis": 1_700_000_000_000_i64,
+					"message": "hello first chunk"
+				}]
+			}),
+		)
+		.await
+		.expect(200)
+		.json();
+	assert_eq!(first["log_lines"], 1);
+
+	// Second report exceeds cap: status succeeds, log lines dropped.
+	let second = shop
+		.cluster
+		.call(
+			"report_status",
+			json!({
+				"environment": env_id,
+				"observed": { "environment": env_ref, "processes": [] },
+				"logs": [{
+					"process": "app",
+					"pod": "app-0",
+					"at_millis": 1_700_000_001_000_i64,
+					"message": "this second chunk exceeds the 220 byte cap"
+				}]
+			}),
+		)
+		.await
+		.expect(200)
+		.json();
+	assert_eq!(second["log_lines"], 0);
+
+	// After retention elapses and sweeper runs, runtime_bytes decrements and
+	// fresh log lines are accepted again.
+	tokio::time::sleep(Duration::from_millis(80)).await;
+	app.control.sweep().await.expect("sweep");
+	let third = shop
+		.cluster
+		.call(
+			"report_status",
+			json!({
+				"environment": env_id,
+				"observed": { "environment": env_ref, "processes": [] },
+				"logs": [{
+					"process": "app",
+					"pod": "app-0",
+					"at_millis": 1_700_000_002_000_i64,
+					"message": "accepted after sweep"
+				}]
+			}),
+		)
+		.await
+		.expect(200)
+		.json();
+	assert_eq!(third["log_lines"], 1);
+}

@@ -557,8 +557,15 @@ impl Fixture {
 		match operation {
 			"rpc.inbox" => json!({ "limit": 10 }),
 			"rpc.mark_read" | "rpc.job_status" | "rpc.cancel_job" => json!({ "id": nothing }),
-			"rpc.mark_all_read" | "whoami" | "organizations" | "claim" | "clusters" | "workers"
-			| "jobs" | "plans" => json!({}),
+			"rpc.mark_all_read"
+			| "whoami"
+			| "organizations"
+			| "claim"
+			| "clusters"
+			| "workers"
+			| "jobs"
+			| "plans"
+			| "cluster_environments" => json!({}),
 			"rpc.service_token" => json!({ "service": "billing" }),
 			"create_organization" => json!({ "slug": "new-team", "name": "New team" }),
 			"accept_invitation" => json!({ "token": "0".repeat(64) }),
@@ -938,7 +945,9 @@ async fn a_worker_runs_only_the_protocol() {
 			Requirement::Worker => {
 				match *operation {
 					"claim" => answer.status == 200,
-					"report_status" => answer.message().starts_with("cluster_worker_required"),
+					"report_status" | "cluster_environments" => {
+						answer.message().starts_with("cluster_worker_required")
+					}
 					_ => answer.message().starts_with("job_not_held"),
 				}
 			}
@@ -973,7 +982,7 @@ async fn a_cluster_worker_runs_only_the_protocol() {
 		let fine = match requirement {
 			Requirement::Worker => {
 				match *operation {
-					"claim" => answer.status == 200,
+					"claim" | "cluster_environments" => answer.status == 200,
 					"report_status" => {
 						answer.status == 404
 							&& answer.message().starts_with("environment_not_found")

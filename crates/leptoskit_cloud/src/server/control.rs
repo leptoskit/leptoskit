@@ -189,7 +189,7 @@ pub struct Control {
 	router: Router,
 	cli_client_id: String,
 	services: Services,
-	_sweeper: Arc<Sweeper>,
+	_sweeper: Arc<Option<Sweeper>>,
 }
 
 /// The sweeper's task, stopped when the last [`Control`] goes.
@@ -326,7 +326,11 @@ impl Control {
 		// session layer then carries.
 		let router = router.layer(auth.layer()).layer(idp.layer());
 
-		let sweeper = Sweeper(tokio::spawn(sweep_forever(services.clone())));
+		let sweeper = if services.shipping().settings.run_sweeper {
+			Some(Sweeper(tokio::spawn(sweep_forever(services.clone()))))
+		} else {
+			None
+		};
 
 		Ok(Self {
 			auth,
@@ -482,14 +486,39 @@ pub fn catalogue_from_json(text: &str) -> Result<Catalogue, ControlError> {
 		.map_err(|error| ControlError::Config(format!("isn't a price catalogue: {error}")))
 }
 
+/// Dedicated Postgres advisory lock ID (`"lkcloudS"`) ensuring only one
+/// control-plane replica sweeps at a time in HA multi-replica deployments.
+const SWEEPER_ADVISORY_LOCK: i64 = 0x6c6b_636c_6f75_6453;
+
 /// Runs the sweeper every [`ShippingSettings::sweep`]. A failed sweep is
-/// reported and tried again at the next.
+/// reported and tried again at the next. On Postgres, replicas coordinate via
+/// a session advisory lock so only the current leader sweeps while standbys
+/// take over automatically if the leader disconnects.
 async fn sweep_forever(services: Services) {
 	let mut interval = tokio::time::interval(services.shipping().settings.sweep);
 	interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+	let mut lock: Option<leptoskit_db::AdvisoryLock> = None;
 
 	loop {
 		interval.tick().await;
+
+		if lock
+			.as_ref()
+			.is_none_or(leptoskit_db::AdvisoryLock::is_closed)
+		{
+			match services.db().try_advisory_lock(SWEEPER_ADVISORY_LOCK).await {
+				Ok(Some(acquired)) => lock = Some(acquired),
+				Ok(None) => {
+					lock = None;
+					continue;
+				}
+				Err(error) => {
+					lock = None;
+					eprintln!("leptoskit-cloud: couldn't acquire sweeper lock: {error}");
+					continue;
+				}
+			}
+		}
 
 		if let Err(error) = jobs::sweep(&services).await {
 			eprintln!("leptoskit-cloud: the sweep failed: {error}");
