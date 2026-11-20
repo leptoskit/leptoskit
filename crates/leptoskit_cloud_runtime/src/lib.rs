@@ -43,6 +43,8 @@ pub use kubernetes::Object;
 #[cfg(feature = "kubernetes")]
 pub use kubernetes::SecretValues;
 #[cfg(feature = "kubernetes")]
+pub use kubernetes::TolerationSpec;
+#[cfg(feature = "kubernetes")]
 pub use kubernetes::manifests;
 pub use runtime::Applied;
 pub use runtime::LogLine;

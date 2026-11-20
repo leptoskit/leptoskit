@@ -108,8 +108,8 @@ fn cloud_node(
 pub(crate) fn initial_cloud_init(config: &PlatformConfig) -> String {
 	let nft = format!(
 		"table inet leptoskit {{ chain input {{ type filter hook input priority 0; policy drop; \
-		 ct state established,related accept; iifname lo accept; ip saddr {{ {} }} tcp dport 22 \
-		 accept; }} }}",
+		 ct state established,related accept; iifname lo accept; ip protocol icmp accept; ip6 \
+		 nexthdr icmpv6 accept; ip saddr {{ {} }} tcp dport 22 accept; }} }}",
 		config
 			.admin_cidrs
 			.iter()
@@ -133,6 +133,9 @@ pub(crate) fn rules(
 	if machine.node.role() == Role::Server {
 		rules.push(rule("tcp", "6443", &config.admin_cidrs));
 	}
+	let has_external_agents = peers
+		.iter()
+		.any(|peer| peer.node.role() == Role::Agent && !peer.node.cloud());
 	for peer in peers.iter().filter(|p| p.id != machine.id) {
 		rules.push(rule("udp", "51820", &[host_cidr(&peer.public)]));
 		if machine.node.role() == Role::Server {
@@ -142,6 +145,12 @@ pub(crate) fn rules(
 				&peer.public
 			};
 			rules.push(rule("tcp", "6443", &[host_cidr(address)]));
+			if peer.node.role() == Role::Server && has_external_agents && address != &peer.public {
+				// Servers advertise their public address when external agents
+				// exist, so server-to-server traffic to kubernetes.default.svc
+				// arrives from the peer's public IP as well.
+				rules.push(rule("tcp", "6443", &[host_cidr(&peer.public)]));
+			}
 			if peer.node.role() == Role::Agent
 				&& peer.node.cloud()
 				&& machine.node.cloud()
@@ -154,10 +163,24 @@ pub(crate) fn rules(
 					rules.push(rule("tcp", port, &[host_cidr(address)]));
 				}
 			}
+		} else if peer.node.role() == Role::Server {
+			// Allow metrics-server on control-plane servers to scrape kubelet
+			// metrics on agent nodes for CPU HPA.
+			let address = if machine.node.cloud() && peer.node.cloud() {
+				peer.private.as_ref().unwrap_or(&peer.public)
+			} else {
+				&peer.public
+			};
+			rules.push(rule("tcp", "10250", &[host_cidr(address)]));
 		}
 	}
 	if config.edge.mode == EdgeMode::Https && machine.node.pool() == Pool::Ingress {
 		rules.push(rule("tcp", "443", &config.edge.cloudflare_cidrs));
+		if config.edge.custom_domains == crate::config::CustomDomains::CertManager {
+			// Let's Encrypt HTTP-01 solvers validate customer domains over TCP
+			// 80 from non-Cloudflare IPs.
+			rules.push(rule("tcp", "80", &["0.0.0.0/0".into(), "::/0".into()]));
+		}
 	}
 	rules
 }
@@ -185,8 +208,13 @@ fn edge(
 	let domains = [control.to_owned(), format!("*.{}", config.apps_domain)];
 	let tunnel = config.edge.mode == EdgeMode::Tunnel;
 	let content = if tunnel {
+		// Forward unmatched hostnames to Traefik in both Cloudflare-for-SaaS
+		// and cert-manager modes so verified customer domains and ACME HTTP-01
+		// challenges reach tenant Ingress objects; Traefik returns 404 for
+		// unconfigured hosts.
+		let fallback = crate::addons::TUNNEL_ORIGIN;
 		doc["resource"]["cloudflare_zero_trust_tunnel_cloudflared"]["platform"] = json!({"account_id":config.edge.account_id,"name":config.name,"config_src":"cloudflare"});
-		doc["resource"]["cloudflare_zero_trust_tunnel_cloudflared_config"]["platform"] = json!({"account_id":config.edge.account_id,"tunnel_id":"${cloudflare_zero_trust_tunnel_cloudflared.platform.id}","config":{"ingress":[{"hostname":control,"service":"http://traefik.kube-system.svc.cluster.local:80"},{"hostname":domains[1],"service":"http://traefik.kube-system.svc.cluster.local:80"},{"service":"http_status:404"}]}});
+		doc["resource"]["cloudflare_zero_trust_tunnel_cloudflared_config"]["platform"] = json!({"account_id":config.edge.account_id,"tunnel_id":"${cloudflare_zero_trust_tunnel_cloudflared.platform.id}","config":{"ingress":[{"hostname":control,"service":crate::addons::TUNNEL_ORIGIN},{"hostname":domains[1],"service":crate::addons::TUNNEL_ORIGIN},{"service":fallback}]}});
 		doc["data"]["cloudflare_zero_trust_tunnel_cloudflared_token"]["platform"] = json!({"account_id":config.edge.account_id,"tunnel_id":"${cloudflare_zero_trust_tunnel_cloudflared.platform.id}"});
 		doc["output"]["tunnel_token"] = json!({"value":"${data.cloudflare_zero_trust_tunnel_cloudflared_token.platform.token}","sensitive":true});
 		"${cloudflare_zero_trust_tunnel_cloudflared.platform.id}.cfargotunnel.com".into()

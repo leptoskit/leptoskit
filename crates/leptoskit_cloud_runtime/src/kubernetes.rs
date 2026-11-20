@@ -15,6 +15,7 @@ use std::cmp::Reverse;
 use std::collections::BTreeMap;
 
 use k8s_openapi::ByteString;
+use k8s_openapi::api::admissionregistration::v1 as admission;
 use k8s_openapi::api::apps::v1 as apps;
 use k8s_openapi::api::autoscaling::v2 as autoscaling;
 use k8s_openapi::api::core::v1 as core;
@@ -24,6 +25,7 @@ use k8s_openapi::api::rbac::v1 as rbac;
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1 as meta;
 use k8s_openapi::apimachinery::pkg::util::intstr::IntOrString;
+use serde::Deserialize;
 use serde::Serialize;
 use sha2::Digest;
 use sha2::Sha256;
@@ -158,6 +160,124 @@ pub fn worker_rbac(
 	(permissions, binding)
 }
 
+/// Admission policy restricting the cluster worker's mutations to tenant
+/// namespaces named `lk-*`.
+/// Kubernetes RBAC cannot restrict a `ClusterRole` to namespaces created in the
+/// future. This `ValidatingAdmissionPolicy` + binding denies any create,
+/// update, or delete (including subresources) sent by
+/// `system:serviceaccount:<namespace>:<service_account>` outside
+/// `lk-<20 hex>` tenant namespaces, and guarantees that any created or updated
+/// tenant namespace preserves `pod-security.kubernetes.io/enforce=restricted`
+/// and `app.kubernetes.io/managed-by=leptoskit-cloud`.
+///
+/// # Panics
+///
+/// Panics if `namespace` or `service_account` is not a valid Kubernetes DNS
+/// label (`[a-z0-9-]`, 1..=63 chars), preventing malformed CEL interpolation.
+#[must_use]
+pub fn worker_admission_policy(
+	namespace: &str,
+	service_account: &str,
+) -> (
+	admission::ValidatingAdmissionPolicy,
+	admission::ValidatingAdmissionPolicyBinding,
+) {
+	assert!(
+		is_dns_label(namespace),
+		"worker_admission_policy namespace must be a valid DNS label: {namespace:?}"
+	);
+	assert!(
+		is_dns_label(service_account),
+		"worker_admission_policy service_account must be a valid DNS label: {service_account:?}"
+	);
+	let name = "leptoskit-cloud-worker-scope";
+	let subject = format!("system:serviceaccount:{namespace}:{service_account}");
+	let policy = admission::ValidatingAdmissionPolicy {
+		metadata: meta::ObjectMeta {
+			name: Some(name.to_owned()),
+			..Default::default()
+		},
+		spec: Some(admission::ValidatingAdmissionPolicySpec {
+			failure_policy: Some("Fail".to_owned()),
+			match_conditions: Some(vec![admission::MatchCondition {
+				name: "is-cloud-worker".to_owned(),
+				expression: format!("request.userInfo.username == '{subject}'"),
+			}]),
+			match_constraints: Some(admission::MatchResources {
+				resource_rules: Some(vec![admission::NamedRuleWithOperations {
+					api_groups: Some(vec!["*".to_owned()]),
+					api_versions: Some(vec!["*".to_owned()]),
+					operations: Some(vec![
+						"CREATE".to_owned(),
+						"UPDATE".to_owned(),
+						"DELETE".to_owned(),
+					]),
+					resources: Some(vec!["*/*".to_owned()]),
+					resource_names: None,
+					scope: Some("*".to_owned()),
+				}]),
+				..Default::default()
+			}),
+			validations: Some(vec![
+				admission::Validation {
+					expression: "(request.kind.group == '' && request.kind.kind == 'Namespace' && \
+					             request.name.matches('^lk-[0-9a-f]{20}$')) || (request.namespace \
+					             != '' && request.namespace.matches('^lk-[0-9a-f]{20}$'))"
+						.to_owned(),
+					message: Some(
+						"leptoskit-cloud-worker may only mutate lk-<20 hex> tenant namespaces"
+							.to_owned(),
+					),
+					..Default::default()
+				},
+				admission::Validation {
+					expression: "!(request.kind.group == '' && request.kind.kind == 'Namespace' \
+					             && request.operation != 'DELETE') || \
+					             (has(object.metadata.labels) && \
+					             'pod-security.kubernetes.io/enforce' in object.metadata.labels \
+					             && object.metadata.labels['pod-security.kubernetes.io/enforce'] \
+					             == 'restricted' && 'app.kubernetes.io/managed-by' in \
+					             object.metadata.labels && \
+					             object.metadata.labels['app.kubernetes.io/managed-by'] == \
+					             'leptoskit-cloud')"
+						.to_owned(),
+					message: Some(
+						"tenant namespaces must enforce restricted Pod Security and \
+						 app.kubernetes.io/managed-by=leptoskit-cloud"
+							.to_owned(),
+					),
+					..Default::default()
+				},
+			]),
+			..Default::default()
+		}),
+		status: None,
+	};
+	let binding = admission::ValidatingAdmissionPolicyBinding {
+		metadata: meta::ObjectMeta {
+			name: Some(name.to_owned()),
+			..Default::default()
+		},
+		spec: admission::ValidatingAdmissionPolicyBindingSpec {
+			policy_name: name.to_owned(),
+			validation_actions: vec!["Deny".to_owned()],
+			match_resources: None,
+			param_ref: None,
+		},
+	};
+	(policy, binding)
+}
+
+fn is_dns_label(name: &str) -> bool {
+	!name.is_empty()
+		&& name.len() <= 63
+		&& name
+			.bytes()
+			.all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+		&& !name.starts_with('-')
+		&& !name.ends_with('-')
+}
+
 /// How a process's replicas are owned, decided once and read by both the
 /// Deployment and the scaling stage.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -170,10 +290,28 @@ enum Scaling {
 	Fixed,
 }
 
+/// Default size limit in MiB for the read-only-root `/tmp` `emptyDir` volume.
+pub const DEFAULT_TMP_SIZE_LIMIT_MIB: u32 = 128;
+
+const fn default_tmp_size_limit_mib() -> u32 {
+	DEFAULT_TMP_SIZE_LIMIT_MIB
+}
+
+/// A Kubernetes pod toleration rendered onto tenant pods so they schedule onto
+/// dedicated tenant nodes rather than control-plane or platform nodes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TolerationSpec {
+	pub key: String,
+	pub operator: String,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub value: Option<String>,
+	pub effect: String,
+}
+
 /// What a cluster looks like to the manifest generator: which edge fronts
 /// it, what certificates it can hand out, and which add-ons are installed.
 /// Operator configuration, not customer data.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ClusterProfile {
 	/// The Ingress class the edge serves, such as `nginx`.
 	pub ingress_class: String,
@@ -186,6 +324,11 @@ pub struct ClusterProfile {
 	pub wildcard_tls_secret: Option<String>,
 	/// The cert-manager cluster issuer that issues per-host certificates.
 	pub cluster_issuer: Option<String>,
+	/// When true (for example, Cloudflare for `SaaS`), custom domains terminate
+	/// TLS at the edge and do not annotate Ingress objects with a cert-manager
+	/// cluster issuer.
+	#[serde(default)]
+	pub edge_terminated_custom_domains: bool,
 	/// The namespace the cluster's DNS resolves from.
 	pub dns_namespace: String,
 	/// The ranges internet egress may not reach: the cluster's pod and
@@ -196,10 +339,22 @@ pub struct ClusterProfile {
 	/// Whether KEDA's HTTP add-on is installed, which is what lets a
 	/// process sleep at `min = 0` and wake on the first request.
 	pub keda_http: Option<HttpAddon>,
+	/// Optional node selector applied to every tenant pod (for example,
+	/// `leptoskit.dev/pool = tenant`).
+	#[serde(default)]
+	pub tenant_node_selector: BTreeMap<String, String>,
+	/// Optional tolerations applied to every tenant pod so it schedules on
+	/// tainted tenant pools without landing on control-plane nodes.
+	#[serde(default)]
+	pub tenant_tolerations: Vec<TolerationSpec>,
+	/// Size limit in MiB for the `/tmp` `emptyDir` volume and basis for
+	/// container `ephemeral-storage` bounds.
+	#[serde(default = "default_tmp_size_limit_mib")]
+	pub tmp_size_limit_mib: u32,
 }
 
 /// Service endpoints installed by the pinned HTTP add-on chart.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HttpAddon {
 	pub namespace: String,
 	pub interceptor_service: String,
@@ -220,10 +375,14 @@ impl Default for ClusterProfile {
 			ingress_namespace: String::new(),
 			wildcard_tls_secret: None,
 			cluster_issuer: None,
+			edge_terminated_custom_domains: false,
 			dns_namespace: "kube-system".to_owned(),
 			blocked_egress_cidrs: Vec::new(),
 			image_pull_secret: None,
 			keda_http: None,
+			tenant_node_selector: BTreeMap::new(),
+			tenant_tolerations: Vec::new(),
+			tmp_size_limit_mib: DEFAULT_TMP_SIZE_LIMIT_MIB,
 		}
 	}
 }
@@ -239,7 +398,8 @@ impl ClusterProfile {
 			ingress_class: "traefik".to_owned(),
 			ingress_namespace: "kube-system".to_owned(),
 			wildcard_tls_secret: Some("apps-wildcard-tls".to_owned()),
-			cluster_issuer: Some("apps".to_owned()),
+			cluster_issuer: Some("apps-http01".to_owned()),
+			edge_terminated_custom_domains: false,
 			dns_namespace: "kube-system".to_owned(),
 			image_pull_secret: None,
 			blocked_egress_cidrs: [
@@ -269,32 +429,46 @@ impl ClusterProfile {
 					),
 				]),
 			}),
+			tenant_node_selector: BTreeMap::new(),
+			tenant_tolerations: Vec::new(),
+			tmp_size_limit_mib: DEFAULT_TMP_SIZE_LIMIT_MIB,
 		}
 	}
 
 	/// Refuse missing namespace names, invalid endpoints and malformed IPv4
-	/// egress ranges. # Errors
+	/// egress ranges.
+	///
+	/// # Errors
 	/// Returns `ManifestError::Profile` for an unusable cluster profile.
 	pub fn validate(&self) -> Result<(), ManifestError> {
-		let valid_name = |name: &str| {
-			!name.is_empty()
-				&& name.len() <= 63
-				&& name
-					.bytes()
-					.all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
-				&& !name.starts_with('-')
-				&& !name.ends_with('-')
-		};
 		if [
 			&self.ingress_class,
 			&self.ingress_namespace,
 			&self.dns_namespace,
 		]
 		.into_iter()
-		.any(|name| !valid_name(name))
+		.any(|name| !is_dns_label(name))
 		{
 			return Err(ManifestError::Profile(
 				"invalid ingress or DNS name".to_owned(),
+			));
+		}
+		for (field, value) in [
+			("image_pull_secret", self.image_pull_secret.as_deref()),
+			("wildcard_tls_secret", self.wildcard_tls_secret.as_deref()),
+			("cluster_issuer", self.cluster_issuer.as_deref()),
+		] {
+			if let Some(name) = value
+				&& !is_dns_label(name)
+			{
+				return Err(ManifestError::Profile(format!(
+					"invalid {field} name: must be a Kubernetes DNS label"
+				)));
+			}
+		}
+		if self.tmp_size_limit_mib == 0 {
+			return Err(ManifestError::Profile(
+				"tmp_size_limit_mib must be positive".to_owned(),
 			));
 		}
 		if let Some(addon) = &self.keda_http
@@ -304,7 +478,7 @@ impl ClusterProfile {
 				&addon.scaler_service,
 			]
 			.into_iter()
-			.any(|name| !valid_name(name))
+			.any(|name| !is_dns_label(name))
 				|| addon.interceptor_port == 0
 				|| addon.scaler_port == 0
 				|| addon.interceptor_labels.is_empty())
@@ -324,8 +498,103 @@ impl ClusterProfile {
 				));
 			}
 		}
+		for (key, value) in &self.tenant_node_selector {
+			if !is_label_key(key) || !is_label_value(value) {
+				return Err(ManifestError::Profile(
+					"invalid tenant_node_selector label key or value".to_owned(),
+				));
+			}
+		}
+		for toleration in &self.tenant_tolerations {
+			validate_toleration(toleration)?;
+		}
 		Ok(())
 	}
+}
+
+fn is_label_key(key: &str) -> bool {
+	if key.is_empty() || key.len() > 253 + 1 + 63 {
+		return false;
+	}
+	let name = match key.split_once('/') {
+		Some((prefix, name)) => {
+			if prefix.is_empty() || prefix.len() > 253 || !prefix.split('.').all(is_dns_label) {
+				return false;
+			}
+			name
+		}
+		None => key,
+	};
+	!name.is_empty()
+		&& name.len() <= 63
+		&& name
+			.bytes()
+			.all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
+		&& name
+			.bytes()
+			.next()
+			.is_some_and(|b| b.is_ascii_alphanumeric())
+		&& name
+			.bytes()
+			.last()
+			.is_some_and(|b| b.is_ascii_alphanumeric())
+}
+
+fn is_label_value(value: &str) -> bool {
+	value.len() <= 63
+		&& (value.is_empty()
+			|| (value
+				.bytes()
+				.all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
+				&& value
+					.bytes()
+					.next()
+					.is_some_and(|b| b.is_ascii_alphanumeric())
+				&& value
+					.bytes()
+					.last()
+					.is_some_and(|b| b.is_ascii_alphanumeric())))
+}
+
+fn validate_toleration(toleration: &TolerationSpec) -> Result<(), ManifestError> {
+	if !is_label_key(&toleration.key) {
+		return Err(ManifestError::Profile(
+			"invalid tenant_tolerations key".to_owned(),
+		));
+	}
+	match toleration.operator.as_str() {
+		"Equal" => {
+			if let Some(value) = &toleration.value
+				&& !is_label_value(value)
+			{
+				return Err(ManifestError::Profile(
+					"invalid tenant_tolerations value".to_owned(),
+				));
+			}
+		}
+		"Exists" => {
+			if toleration.value.is_some() {
+				return Err(ManifestError::Profile(
+					"tenant_tolerations with operator Exists must not set value".to_owned(),
+				));
+			}
+		}
+		_ => {
+			return Err(ManifestError::Profile(
+				"tenant_tolerations operator must be Equal or Exists".to_owned(),
+			));
+		}
+	}
+	if !matches!(
+		toleration.effect.as_str(),
+		"" | "NoSchedule" | "PreferNoSchedule" | "NoExecute"
+	) {
+		return Err(ManifestError::Profile(
+			"tenant_tolerations effect must be NoSchedule, PreferNoSchedule, NoExecute, or empty"
+				.to_owned(),
+		));
+	}
+	Ok(())
 }
 
 /// The values behind a release spec's `secret_env` keys.
@@ -642,7 +911,7 @@ pub fn manifests(
 	let labels = labels(spec);
 	let mut objects = Vec::new();
 	objects.push(namespace_object(&namespace, &labels));
-	objects.extend(quota_objects(spec, &namespace, &labels));
+	objects.extend(quota_objects(spec, cluster, &namespace, &labels));
 	objects.extend(network_policies(spec, cluster, &namespace, &labels));
 	objects.push(service_account_object(&namespace, &labels));
 	objects.extend(secret_objects(spec, secrets, &namespace, &labels)?);
@@ -791,10 +1060,13 @@ fn namespace_object(namespace: &str, labels: &BTreeMap<String, String>) -> Objec
 /// environment may take, and the most any one container may ask for.
 fn quota_objects(
 	spec: &ReleaseSpec,
+	cluster: &ClusterProfile,
 	namespace: &str,
 	labels: &BTreeMap<String, String>,
 ) -> Vec<Object> {
 	let quota = &spec.policy.quota;
+	let ephemeral_request_mib = 64_u32.min(cluster.tmp_size_limit_mib);
+	let ephemeral_limit_mib = cluster.tmp_size_limit_mib.saturating_mul(2);
 	let mut objects = vec![Object::ResourceQuota(core::ResourceQuota {
 		metadata: object_meta(Some(namespace), "quota", labels),
 		spec: Some(core::ResourceQuotaSpec {
@@ -803,6 +1075,14 @@ fn quota_objects(
 				("limits.cpu".to_owned(), cpu_millis(quota.cpu_millis)),
 				("requests.memory".to_owned(), memory_mib(quota.memory_mib)),
 				("limits.memory".to_owned(), memory_mib(quota.memory_mib)),
+				(
+					"requests.ephemeral-storage".to_owned(),
+					memory_mib(ephemeral_request_mib.saturating_mul(quota.pods)),
+				),
+				(
+					"limits.ephemeral-storage".to_owned(),
+					memory_mib(ephemeral_limit_mib.saturating_mul(quota.pods)),
+				),
 				("pods".to_owned(), quantity(quota.pods.to_string())),
 				(
 					"requests.storage".to_owned(),
@@ -822,6 +1102,10 @@ fn quota_objects(
 				max: Some(BTreeMap::from([
 					("cpu".to_owned(), cpu_millis(quota.cpu_millis)),
 					("memory".to_owned(), memory_mib(quota.memory_mib)),
+					(
+						"ephemeral-storage".to_owned(),
+						memory_mib(ephemeral_limit_mib),
+					),
 				])),
 				min: None,
 				default: None,
@@ -861,6 +1145,11 @@ fn network_policies(
 		),
 	];
 	policies.extend(ingress_policies(spec, cluster, namespace, labels));
+	if !cluster.edge_terminated_custom_domains
+		&& spec.routes.iter().any(|route| route.tls == Tls::Issued)
+	{
+		policies.push(acme_http01_solver_policy(cluster, namespace, labels));
+	}
 	policies.push(dns_policy(cluster, namespace, labels));
 	if spec.policy.egress == Egress::Internet {
 		policies.push(internet_policy(cluster, namespace, labels));
@@ -1018,6 +1307,36 @@ fn ingress_policy_for(
 				match_labels: Some(BTreeMap::from([(
 					NAME_LABEL.to_owned(),
 					process.name.clone(),
+				)])),
+				match_expressions: None,
+			}),
+			policy_types: Some(vec!["Ingress".to_owned()]),
+			ingress: Some(vec![from]),
+			egress: None,
+		}),
+	})
+}
+
+/// Allows Traefik (in `cluster.ingress_namespace`) to reach cert-manager's
+/// ephemeral HTTP-01 challenge solver pods (`port 8089`) inside a tenant
+/// namespace when custom domains use cert-manager rather than edge-terminated
+/// TLS.
+fn acme_http01_solver_policy(
+	cluster: &ClusterProfile,
+	namespace: &str,
+	labels: &BTreeMap<String, String>,
+) -> Object {
+	let from = networking::NetworkPolicyIngressRule {
+		ports: Some(vec![tcp_door(8089)]),
+		from: Some(vec![peer_from_namespace(&cluster.ingress_namespace)]),
+	};
+	Object::NetworkPolicy(networking::NetworkPolicy {
+		metadata: object_meta(Some(namespace), "allow-acme-http01-solver", labels),
+		spec: Some(networking::NetworkPolicySpec {
+			pod_selector: Some(meta::LabelSelector {
+				match_labels: Some(BTreeMap::from([(
+					"acme.cert-manager.io/http01-solver".to_owned(),
+					"true".to_owned(),
 				)])),
 				match_expressions: None,
 			}),
@@ -1241,8 +1560,23 @@ fn deployment_strategy(process: &Process) -> apps::DeploymentStrategy {
 }
 
 fn pod_spec(policy: &Policy, cluster: &ClusterProfile, process: &Process) -> core::PodSpec {
+	let tolerations = (!cluster.tenant_tolerations.is_empty()).then(|| {
+		cluster
+			.tenant_tolerations
+			.iter()
+			.map(|toleration| {
+				core::Toleration {
+					key: Some(toleration.key.clone()),
+					operator: Some(toleration.operator.clone()),
+					value: toleration.value.clone(),
+					effect: Some(toleration.effect.clone()),
+					toleration_seconds: None,
+				}
+			})
+			.collect()
+	});
 	core::PodSpec {
-		containers: vec![container(process)],
+		containers: vec![container(process, cluster)],
 		service_account_name: Some(SERVICE_ACCOUNT.to_owned()),
 		automount_service_account_token: Some(false),
 		runtime_class_name: policy.runtime_class.clone(),
@@ -1250,9 +1584,12 @@ fn pod_spec(policy: &Policy, cluster: &ClusterProfile, process: &Process) -> cor
 			.image_pull_secret
 			.as_ref()
 			.map(|name| vec![core::LocalObjectReference { name: name.clone() }]),
+		node_selector: (!cluster.tenant_node_selector.is_empty())
+			.then(|| cluster.tenant_node_selector.clone()),
+		tolerations,
 		security_context: Some(pod_security()),
 		termination_grace_period_seconds: Some(30),
-		volumes: Some(pod_volumes(process)),
+		volumes: Some(pod_volumes(process, cluster)),
 		..Default::default()
 	}
 }
@@ -1271,7 +1608,7 @@ fn pod_security() -> core::PodSecurityContext {
 	}
 }
 
-fn container(process: &Process) -> core::Container {
+fn container(process: &Process, cluster: &ClusterProfile) -> core::Container {
 	core::Container {
 		name: process.name.clone(),
 		image: Some(process.image.reference()),
@@ -1287,7 +1624,7 @@ fn container(process: &Process) -> core::Container {
 		env_from: container_env_from(process),
 		readiness_probe: Some(http_probe(&process.probes.ready, process.port, 5, 5)),
 		liveness_probe: Some(http_probe(&process.probes.live, process.port, 10, 10)),
-		resources: Some(container_resources(process)),
+		resources: Some(container_resources(process, cluster)),
 		security_context: Some(container_security()),
 		volume_mounts: Some(container_mounts(process)),
 		..Default::default()
@@ -1355,12 +1692,18 @@ fn container_env_from(process: &Process) -> Option<Vec<core::EnvFromSource>> {
 
 /// Memory's request equals its limit, so a burst never steals memory a
 /// neighbour counted on.
-fn container_resources(process: &Process) -> core::ResourceRequirements {
+fn container_resources(process: &Process, cluster: &ClusterProfile) -> core::ResourceRequirements {
+	let ephemeral_request_mib = 64_u32.min(cluster.tmp_size_limit_mib);
+	let ephemeral_limit_mib = cluster.tmp_size_limit_mib.saturating_mul(2);
 	core::ResourceRequirements {
 		limits: Some(BTreeMap::from([
 			(
 				"cpu".to_owned(),
 				cpu_millis(process.resources.cpu_limit_millis),
+			),
+			(
+				"ephemeral-storage".to_owned(),
+				memory_mib(ephemeral_limit_mib),
 			),
 			(
 				"memory".to_owned(),
@@ -1371,6 +1714,10 @@ fn container_resources(process: &Process) -> core::ResourceRequirements {
 			(
 				"cpu".to_owned(),
 				cpu_millis(process.resources.cpu_request_millis),
+			),
+			(
+				"ephemeral-storage".to_owned(),
+				memory_mib(ephemeral_request_mib),
 			),
 			(
 				"memory".to_owned(),
@@ -1402,14 +1749,14 @@ fn container_mounts(process: &Process) -> Vec<core::VolumeMount> {
 	mounts
 }
 
-fn pod_volumes(process: &Process) -> Vec<core::Volume> {
+fn pod_volumes(process: &Process, cluster: &ClusterProfile) -> Vec<core::Volume> {
 	let mut volumes = Vec::new();
 	if !mounts_tmp(process) {
 		volumes.push(core::Volume {
 			name: TMP_VOLUME.to_owned(),
 			empty_dir: Some(core::EmptyDirVolumeSource {
 				medium: None,
-				size_limit: None,
+				size_limit: Some(memory_mib(cluster.tmp_size_limit_mib)),
 			}),
 			..Default::default()
 		});
@@ -1784,6 +2131,20 @@ fn host_tls(
 			))
 		}
 		Tls::Issued => {
+			if cluster.edge_terminated_custom_domains {
+				let _secret = cluster.wildcard_tls_secret.as_ref().ok_or_else(|| {
+					ManifestError::NoWildcardSecret {
+						hostname: hostname.to_owned(),
+					}
+				})?;
+				return Ok((
+					Some(networking::IngressTLS {
+						hosts: Some(vec![hostname.to_owned()]),
+						secret_name: None,
+					}),
+					None,
+				));
+			}
 			let issuer = cluster.cluster_issuer.as_ref().ok_or_else(|| {
 				ManifestError::NoIssuer {
 					hostname: hostname.to_owned(),

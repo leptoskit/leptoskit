@@ -105,6 +105,7 @@ fn cluster() -> ClusterProfile {
 			"192.168.0.0/16".to_owned(),
 		],
 		image_pull_secret: None,
+		edge_terminated_custom_domains: false,
 		keda_http: Some(HttpAddon {
 			namespace: "keda".to_owned(),
 			interceptor_service: "keda-add-ons-http-interceptor-proxy".to_owned(),
@@ -122,6 +123,9 @@ fn cluster() -> ClusterProfile {
 				),
 			]),
 		}),
+		tenant_node_selector: BTreeMap::new(),
+		tenant_tolerations: Vec::new(),
+		tmp_size_limit_mib: leptoskit_cloud_runtime::kubernetes::DEFAULT_TMP_SIZE_LIMIT_MIB,
 	}
 }
 
@@ -819,6 +823,216 @@ fn platform_defaults_validate_and_use_the_controller_certificate() {
 	let mut invalid = profile;
 	invalid.keda_http.as_mut().unwrap().interceptor_port = 0;
 	assert!(invalid.validate().is_err());
+	let mut zero_tmp = ClusterProfile::platform_defaults();
+	zero_tmp.tmp_size_limit_mib = 0;
+	assert!(zero_tmp.validate().is_err());
+}
+
+#[test]
+fn edge_terminated_custom_domains_skip_cert_manager_issuer() {
+	let (mut spec, mut profile, secrets) = minimal_sleeping_app();
+	spec.routes[0].hostname = "shop.example.com".to_owned();
+	spec.routes[0].tls = Tls::Issued;
+	profile.cluster_issuer = None;
+	profile.edge_terminated_custom_domains = true;
+	let objects = build(&spec, &profile, &secrets);
+	let ingress = objects
+		.iter()
+		.find_map(|object| {
+			match object {
+				Object::Ingress(ingress) => Some(ingress),
+				_ => None,
+			}
+		})
+		.expect("ingress present");
+	assert!(ingress.metadata.annotations.is_none());
+	let tls = ingress.spec.as_ref().unwrap().tls.as_ref().unwrap();
+	assert_eq!(tls[0].secret_name, None);
+	assert_eq!(
+		tls[0].hosts.as_deref(),
+		Some(&["shop.example.com".to_owned()][..])
+	);
+}
+
+#[test]
+fn tenant_placement_tmp_limit_and_profile_json_round_trip() {
+	let (spec, mut profile, secrets) = minimal_sleeping_app();
+	profile
+		.tenant_node_selector
+		.insert("leptoskit.dev/pool".to_owned(), "tenant".to_owned());
+	profile
+		.tenant_tolerations
+		.push(leptoskit_cloud_runtime::TolerationSpec {
+			key: "leptoskit.dev/pool".to_owned(),
+			operator: "Equal".to_owned(),
+			value: Some("tenant".to_owned()),
+			effect: "PreferNoSchedule".to_owned(),
+		});
+	profile.tmp_size_limit_mib = 256;
+	let encoded = serde_json::to_string(&profile).expect("profile serializes");
+	let decoded: ClusterProfile = serde_json::from_str(&encoded).expect("profile deserializes");
+	assert_eq!(decoded, profile);
+
+	let objects = build(&spec, &decoded, &secrets);
+	let deployment = objects
+		.iter()
+		.find_map(|object| {
+			match object {
+				Object::Deployment(deployment) => Some(deployment),
+				_ => None,
+			}
+		})
+		.expect("deployment present");
+	let pod_spec = deployment
+		.spec
+		.as_ref()
+		.unwrap()
+		.template
+		.spec
+		.as_ref()
+		.unwrap();
+	assert_eq!(
+		pod_spec
+			.node_selector
+			.as_ref()
+			.unwrap()
+			.get("leptoskit.dev/pool")
+			.map(String::as_str),
+		Some("tenant")
+	);
+	assert_eq!(pod_spec.tolerations.as_ref().unwrap().len(), 1);
+	let tmp_vol = pod_spec
+		.volumes
+		.as_ref()
+		.unwrap()
+		.iter()
+		.find(|v| v.name == "tmp")
+		.unwrap();
+	assert_eq!(
+		tmp_vol
+			.empty_dir
+			.as_ref()
+			.unwrap()
+			.size_limit
+			.as_ref()
+			.unwrap()
+			.0,
+		"256Mi"
+	);
+	let (vap, binding) = leptoskit_cloud_runtime::kubernetes::worker_admission_policy(
+		"kube-system",
+		"leptoskit-cloud-worker",
+	);
+	assert_eq!(
+		vap.metadata.name.as_deref(),
+		Some("leptoskit-cloud-worker-scope")
+	);
+	assert_eq!(binding.spec.policy_name, "leptoskit-cloud-worker-scope");
+	let spec = vap.spec.expect("vap spec");
+	assert_eq!(spec.failure_policy.as_deref(), Some("Fail"));
+	let conditions = spec.match_conditions.expect("matchConditions");
+	assert_eq!(conditions.len(), 1);
+	assert!(
+		conditions[0]
+			.expression
+			.contains("system:serviceaccount:kube-system:leptoskit-cloud-worker")
+	);
+	let rules = spec
+		.match_constraints
+		.expect("matchConstraints")
+		.resource_rules
+		.expect("resourceRules");
+	assert_eq!(rules[0].resources.as_deref(), Some(&["*/*".to_owned()][..]));
+	let validations = spec.validations.expect("validations");
+	assert_eq!(validations.len(), 2);
+	assert!(validations[0].expression.contains("^lk-[0-9a-f]{20}$"));
+	assert!(
+		validations[1]
+			.expression
+			.contains("pod-security.kubernetes.io/enforce")
+			&& validations[1]
+				.expression
+				.contains("app.kubernetes.io/managed-by")
+	);
+}
+
+#[test]
+fn cert_manager_issued_route_emits_acme_http01_solver_policy() {
+	let (mut spec, mut profile, secrets) = minimal_sleeping_app();
+	profile.edge_terminated_custom_domains = false;
+	profile.cluster_issuer = Some("apps-http01".to_owned());
+	spec.routes.push(Route {
+		hostname: "shop.example.com".to_owned(),
+		path_prefix: "/".to_owned(),
+		process: "app".to_owned(),
+		tls: Tls::Issued,
+		strip_cookies: false,
+	});
+	let objects = build(&spec, &profile, &secrets);
+	let solver = objects
+		.iter()
+		.find_map(|object| {
+			match object {
+				Object::NetworkPolicy(policy)
+					if policy.metadata.name.as_deref() == Some("allow-acme-http01-solver") =>
+				{
+					Some(policy)
+				}
+				_ => None,
+			}
+		})
+		.expect("HTTP-01 solver policy emitted for cert-manager Issued routes");
+	let labels = solver
+		.spec
+		.as_ref()
+		.unwrap()
+		.pod_selector
+		.as_ref()
+		.unwrap()
+		.match_labels
+		.as_ref()
+		.unwrap();
+	assert_eq!(
+		labels
+			.get("acme.cert-manager.io/http01-solver")
+			.map(String::as_str),
+		Some("true")
+	);
+}
+
+#[test]
+fn cluster_profile_validation_rejects_invalid_tolerations_selectors_and_names() {
+	let mut bad_toleration = ClusterProfile::platform_defaults();
+	bad_toleration
+		.tenant_tolerations
+		.push(leptoskit_cloud_runtime::TolerationSpec {
+			key: "leptoskit.dev/pool".to_owned(),
+			operator: "Exists".to_owned(),
+			value: Some("tenant".to_owned()),
+			effect: "NoSchedule".to_owned(),
+		});
+	assert!(bad_toleration.validate().is_err());
+
+	let mut bad_operator = ClusterProfile::platform_defaults();
+	bad_operator
+		.tenant_tolerations
+		.push(leptoskit_cloud_runtime::TolerationSpec {
+			key: "leptoskit.dev/pool".to_owned(),
+			operator: "Bogus".to_owned(),
+			value: None,
+			effect: "NoSchedule".to_owned(),
+		});
+	assert!(bad_operator.validate().is_err());
+
+	let mut bad_selector = ClusterProfile::platform_defaults();
+	bad_selector
+		.tenant_node_selector
+		.insert("invalid key with spaces".to_owned(), "tenant".to_owned());
+	assert!(bad_selector.validate().is_err());
+
+	let mut bad_issuer = ClusterProfile::platform_defaults();
+	bad_issuer.cluster_issuer = Some("INVALID_ISSUER".to_owned());
+	assert!(bad_issuer.validate().is_err());
 }
 
 /// Where a `kubectl` is installed, the snapshots are real Kubernetes. Run

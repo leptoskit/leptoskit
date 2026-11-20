@@ -65,6 +65,19 @@ pub fn generate(
 	Ok(files)
 }
 
+/// Build nodes are always `NoSchedule`. When a dedicated platform pool exists,
+/// tenant nodes become `NoSchedule` so k3s system pods (`coredns`,
+/// `metrics-server`, `local-path-provisioner`, `helm-install-*`) stay on
+/// platform servers while tenant pods carry matching tenant tolerations.
+fn pool_taint_effect(cluster: &Cluster, pool: Pool) -> &'static str {
+	let has_dedicated_platform_pool = cluster.nodes.values().any(|n| n.pool() == Pool::Platform);
+	if pool == Pool::Build || (pool == Pool::Tenant && has_dedicated_platform_pool) {
+		"NoSchedule"
+	} else {
+		"PreferNoSchedule"
+	}
+}
+
 fn script(
 	config: &PlatformConfig,
 	cluster: &Cluster,
@@ -80,17 +93,12 @@ fn script(
 		Pool::Build => "build",
 		Pool::Ingress => "ingress",
 	};
-	let platform = match config.isolation.platform {
+	let effective_platform = machine.node.isolation_platform(config.isolation.platform);
+	let platform = match effective_platform {
 		GvisorPlatform::Systrap => "systrap",
 		GvisorPlatform::Kvm => "kvm",
 	};
-	// Soft pool taints let bundled DNS/local-path and Helm controllers schedule
-	// before add-ons supply explicit placements. Build nodes stay exclusive.
-	let effect = if machine.node.pool() == Pool::Build {
-		"NoSchedule"
-	} else {
-		"PreferNoSchedule"
-	};
+	let effect = pool_taint_effect(cluster, machine.node.pool());
 	let mut settings = json!({"node-name":machine.id,"node-ip":machine.private.as_ref().unwrap_or(&machine.public),"node-external-ip":machine.public,"token-file":"/etc/rancher/k3s/join-token","node-label":[format!("leptoskit.dev/pool={pool}")],"node-taint":[format!("leptoskit.dev/pool={pool}:{effect}")]});
 	let registration = cluster
 		.registration_address
@@ -98,16 +106,36 @@ fn script(
 		.unwrap_or(&first.public);
 	if server {
 		// The add-on slice owns pinned Traefik and ingress placement. Disable
-		// ServiceLB to avoid arbitrary host-port listeners; metrics-server
-		// would require opening peer kubelet ports and is unnecessary
-		// for KEDA.
-		settings["disable"] = json!(["traefik", "servicelb", "metrics-server"]);
+		// ServiceLB to avoid arbitrary host-port listeners. Keep bundled
+		// metrics-server enabled so CPU HPAs (`max > min`) have metrics.k8s.io.
+		settings["disable"] = json!(["traefik", "servicelb"]);
+		settings["secrets-encryption"] = json!(true);
 		settings["cluster-cidr"] = json!(cluster.pod_cidr);
 		settings["service-cidr"] = json!(cluster.service_cidr);
 		settings["flannel-backend"] = json!("wireguard-native");
 		settings["flannel-external-ip"] = json!(true);
-		settings["advertise-address"] = json!(machine.private.as_ref().unwrap_or(&machine.public));
-		settings["tls-san"] = json!([registration]);
+		// When existing agents outside the cloud private network join the
+		// cluster, advertise the public address so kubernetes.default.svc is
+		// routable from tenant and build nodes.
+		let has_external_agents = peers
+			.iter()
+			.any(|peer| peer.node.role() == Role::Agent && !peer.node.cloud());
+		let advertise = if has_external_agents {
+			&machine.public
+		} else {
+			machine.private.as_ref().unwrap_or(&machine.public)
+		};
+		settings["advertise-address"] = json!(advertise);
+		let mut sans = vec![registration.clone()];
+		if !sans.contains(&machine.public) {
+			sans.push(machine.public.clone());
+		}
+		if let Some(private) = &machine.private
+			&& !sans.contains(private)
+		{
+			sans.push(private.clone());
+		}
+		settings["tls-san"] = json!(sans);
 		if machine.id == first.id {
 			settings["cluster-init"] = json!(true);
 		}
@@ -170,10 +198,21 @@ WantedBy=multi-user.target
 	);
 	// k3s loads this operator-owned file into containerd on startup:
 	// https://docs.k3s.io/installation/private-registry. Never render auth.
-	script.push_str(
-		"test -s /etc/rancher/k3s/registries.yaml\nchmod 600 /etc/rancher/k3s/registries.yaml\n",
-	);
-	if config.isolation.platform == GvisorPlatform::Kvm {
+	match &config.registry {
+		crate::config::Registry::Zot { .. } => {
+			script.push_str(
+				"test -s /etc/rancher/k3s/registries.yaml\nchmod 600 \
+				 /etc/rancher/k3s/registries.yaml\n",
+			);
+		}
+		crate::config::Registry::External { .. } => {
+			script.push_str(
+				"if [ -s /etc/rancher/k3s/registries.yaml ]; then chmod 600 \
+				 /etc/rancher/k3s/registries.yaml; fi\n",
+			);
+		}
+	}
+	if effective_platform == GvisorPlatform::Kvm {
 		script.push_str("test -c /dev/kvm\n");
 	}
 	for (path, content) in [
@@ -213,10 +252,12 @@ fn firewall(
 	// Hetzner Cloud Firewalls do not filter private-network traffic, so host
 	// input policy supplements them. Forwarding belongs to k3s/kube-router;
 	// Flannel WireGuard and CNI input is already authenticated cluster traffic.
+	// ICMP/ICMPv6 stays open so Path MTU Discovery works across WireGuard.
 	let mut result = String::from(
 		"add table inet leptoskit\nflush table inet leptoskit\ntable inet leptoskit {\n chain \
 		 input {\n  type filter hook input priority 0; policy drop;\n  ct state \
-		 established,related accept\n  iifname lo accept\n  iifname { cni0, flannel-wg } accept\n",
+		 established,related accept\n  iifname lo accept\n  ip protocol icmp accept\n  ip6 \
+		 nexthdr icmpv6 accept\n  iifname { cni0, flannel-wg } accept\n",
 	);
 	for rule in crate::tofu::rules(config, machine, peers) {
 		let protocol = rule["protocol"]

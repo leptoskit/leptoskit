@@ -269,12 +269,137 @@ fn https_external_registry_and_environment_credentials() {
 	assert_eq!(values["deployment"]["kind"], "DaemonSet");
 	assert_eq!(values["ports"]["websecure"]["hostPort"], 443);
 	assert_eq!(values["nodeSelector"]["leptoskit.dev/pool"], "ingress");
+	// External registry skips creating the registry namespace and wires
+	// image_pull_secret.
+	assert!(
+		!docs
+			.iter()
+			.any(|d| d["kind"] == "Namespace" && d["metadata"]["name"] == "registry")
+	);
+	let cluster = config
+		.regions
+		.values()
+		.next()
+		.unwrap()
+		.clusters
+		.values()
+		.next()
+		.unwrap();
+	let profile = addons::runtime_profile(&config, cluster);
+	assert_eq!(
+		profile.image_pull_secret.as_deref(),
+		Some("pull-credentials")
+	);
+}
+
+#[test]
+fn cert_manager_http01_cold_s3_and_zot_ingress_opt_in() {
+	use leptoskit_cloud_platform::config::ColdObjectStorage;
+	use leptoskit_cloud_platform::config::CredentialRef;
+	use leptoskit_cloud_platform::config::CustomDomains;
+	use leptoskit_cloud_platform::config::Registry;
+
+	let mut config = PlatformConfig::parse(include_str!("../examples/launch.toml")).unwrap();
+	config.edge.custom_domains = CustomDomains::CertManager;
+	config.registry = Registry::Zot {
+		auth_secret: "registry-auth".into(),
+		expose_ingress: true,
+	};
+	config.object_storage.cold = Some(ColdObjectStorage {
+		endpoint: "https://s3.us-west-004.backblazeb2.com".into(),
+		region: "us-west-004".into(),
+		credentials: CredentialRef::KubernetesSecret {
+			name: "cold-backups".into(),
+			access_key: "B2_KEY_ID".into(),
+			secret_key: "B2_APP_KEY".into(),
+		},
+	});
+	let files = addons::generate(&config).unwrap();
+	let docs: Vec<Value> = files
+		.values()
+		.map(|s| serde_json::from_str(s).unwrap())
+		.collect();
+	assert!(
+		docs.iter()
+			.any(|d| d["kind"] == "ClusterIssuer" && d["metadata"]["name"] == "apps-http01")
+	);
+	assert!(
+		docs.iter()
+			.any(|d| d["kind"] == "Ingress" && d["metadata"]["name"] == "registry")
+	);
+	let cnpg = docs
+		.iter()
+		.find(|d| d["kind"] == "Cluster" && d["metadata"]["name"] == "shared")
+		.unwrap();
+	assert_eq!(
+		cnpg["spec"]["backup"]["barmanObjectStore"]["endpointURL"],
+		"https://s3.us-west-004.backblazeb2.com"
+	);
+	assert_eq!(
+		cnpg["spec"]["backup"]["barmanObjectStore"]["s3Credentials"]["accessKeyId"]["name"],
+		"cold-backups"
+	);
+	assert_eq!(cnpg["spec"]["env"][0]["value"], "us-west-004");
+	assert_eq!(cnpg["spec"]["enableSuperuserAccess"], true);
+	assert_eq!(
+		cnpg["spec"]["postgresql"]["parameters"]["max_connections"],
+		"300"
+	);
+	let pg_hba = cnpg["spec"]["postgresql"]["pg_hba"].as_array().unwrap();
+	assert!(
+		pg_hba
+			.iter()
+			.any(|rule| rule.as_str() == Some("hostnossl all all 0.0.0.0/0 reject"))
+	);
+
+	let cluster = config
+		.regions
+		.values()
+		.next()
+		.unwrap()
+		.clusters
+		.values()
+		.next()
+		.unwrap();
+	let profile = addons::runtime_profile(&config, cluster);
+	assert!(!profile.edge_terminated_custom_domains);
+	assert_eq!(profile.cluster_issuer.as_deref(), Some("apps-http01"));
+
+	let tofu = leptoskit_cloud_platform::tofu::generate(&config).unwrap();
+	assert!(
+		!tofu.values().any(|s| s.contains("http_status:404")),
+		"tunnel must forward custom domains and HTTP-01 challenges to Traefik"
+	);
 }
 
 #[test]
 fn growth() {
 	snapshot("addons_growth", include_str!("../examples/growth.toml"));
 	let config = PlatformConfig::parse(include_str!("../examples/growth.toml")).unwrap();
+	let cluster = config
+		.regions
+		.values()
+		.next()
+		.unwrap()
+		.clusters
+		.values()
+		.next()
+		.unwrap();
+	let profile = addons::runtime_profile(&config, cluster);
+	assert!(profile.edge_terminated_custom_domains);
+	assert_eq!(
+		profile.tenant_tolerations[0].effect, "NoSchedule",
+		"dedicated tenant pool uses NoSchedule so k3s system pods remain on platform servers"
+	);
+	assert_eq!(profile.cluster_issuer, None);
+	assert_eq!(
+		profile
+			.tenant_node_selector
+			.get("leptoskit.dev/pool")
+			.map(String::as_str),
+		Some("tenant")
+	);
+	assert_eq!(profile.tenant_tolerations.len(), 1);
 	for content in addons::generate(&config).unwrap().values() {
 		let doc: Value = serde_json::from_str(content).unwrap();
 		if let Some(values) = doc["spec"]["valuesContent"].as_str() {

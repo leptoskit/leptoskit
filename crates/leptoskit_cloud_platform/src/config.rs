@@ -154,6 +154,10 @@ pub enum Node {
 		count: u16,
 		/// Existing provider SSH key IDs.
 		ssh_key_ids: Vec<u64>,
+		/// Optional per-group gVisor platform override (defaults to
+		/// `isolation.platform`).
+		#[serde(default, skip_serializing_if = "Option::is_none")]
+		isolation_platform: Option<GvisorPlatform>,
 	},
 	/// Operator-owned Ubuntu 24.04 x86-64 host; never provisioned.
 	Existing {
@@ -165,6 +169,10 @@ pub enum Node {
 		public_address: std::net::Ipv4Addr,
 		/// Existing private IPv4 link; mandatory for multiple servers.
 		private_address: Option<std::net::Ipv4Addr>,
+		/// Optional per-group gVisor platform override (allows `kvm` on bare
+		/// metal while cloud VMs stay on `systrap`).
+		#[serde(default, skip_serializing_if = "Option::is_none")]
+		isolation_platform: Option<GvisorPlatform>,
 	},
 }
 
@@ -194,6 +202,18 @@ impl Node {
 	/// Whether `OpenTofu` owns this node.
 	pub fn cloud(&self) -> bool {
 		matches!(self, Self::HetznerCloud { .. })
+	}
+
+	/// Effective gVisor platform for this node group.
+	pub fn isolation_platform(&self, default: GvisorPlatform) -> GvisorPlatform {
+		match self {
+			Self::HetznerCloud {
+				isolation_platform, ..
+			}
+			| Self::Existing {
+				isolation_platform, ..
+			} => isolation_platform.unwrap_or(default),
+		}
 	}
 }
 
@@ -237,6 +257,10 @@ fn gvisor_sha512() -> String {
 	GVISOR_SHA512.into()
 }
 
+const fn default_max_connections() -> u32 {
+	300
+}
+
 /// `CloudNativePG` shared database inputs.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -251,6 +275,10 @@ pub struct Postgres {
 	pub wal_bucket: String,
 	/// WAL retention days.
 	pub retention_days: u16,
+	/// Shared Postgres `max_connections` (defaults to 300 so multiple tenant
+	/// roles with `CONNECTION LIMIT 20` do not exhaust Postgres' default 100).
+	#[serde(default = "default_max_connections")]
+	pub max_connections: u32,
 }
 
 /// A reference to credentials; secret material is never accepted.
@@ -275,6 +303,19 @@ pub enum CredentialRef {
 	},
 }
 
+/// Optional separate S3 endpoint for cold database WAL archives and base
+/// backups (for example, Backblaze B2 while hot buckets stay on Cloudflare R2).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ColdObjectStorage {
+	/// HTTPS S3 endpoint for backups and WAL archives.
+	pub endpoint: String,
+	/// S3 signing region for backups and WAL archives.
+	pub region: String,
+	/// Environment or Kubernetes secret reference for backups and WAL archives.
+	pub credentials: CredentialRef,
+}
+
 /// Existing buckets; generation creates no object-store credentials.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -297,6 +338,23 @@ pub struct ObjectStorage {
 	pub registry: String,
 	/// Environment or Kubernetes secret reference.
 	pub credentials: CredentialRef,
+	/// Optional separate cold storage target (endpoint, region, credentials)
+	/// for `backups` and Postgres WAL archives.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub cold: Option<ColdObjectStorage>,
+}
+
+impl ObjectStorage {
+	/// Endpoint, region, and credential reference used for database backups
+	/// and WAL archives (`cold` when configured, otherwise the primary store).
+	#[must_use]
+	pub fn backups_store(&self) -> (&str, &str, &CredentialRef) {
+		if let Some(cold) = &self.cold {
+			(&cold.endpoint, &cold.region, &cold.credentials)
+		} else {
+			(&self.endpoint, &self.region, &self.credentials)
+		}
+	}
 }
 
 /// Public origin strategy.
@@ -310,7 +368,7 @@ pub enum EdgeMode {
 }
 
 /// Certificate ownership for customer domains.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum CustomDomains {
 	/// Cloudflare for `SaaS`.
@@ -346,6 +404,11 @@ pub enum Registry {
 	Zot {
 		/// Existing authentication secret.
 		auth_secret: String,
+		/// Expose Zot externally at `registry.<apps_domain>` through Ingress.
+		/// Defaults to `false` so pulls/pushes use the cluster-local Service
+		/// and avoid Cloudflare's 100 MiB upload limit and hairpin loops.
+		#[serde(default)]
+		expose_ingress: bool,
 	},
 	/// Operator-managed registry.
 	External {
@@ -496,6 +559,13 @@ impl PlatformConfig {
 			require(slug(bucket), "object storage bucket names must be slugs")?;
 		}
 		validate_credentials(&self.object_storage.credentials)?;
+		if let Some(cold) = &self.object_storage.cold {
+			require(
+				https(&cold.endpoint),
+				"cold object storage requires an HTTPS origin",
+			)?;
+			validate_credentials(&cold.credentials)?;
+		}
 		require(slug(&self.name), "name must be a lowercase slug")?;
 		require(
 			https(&self.control_origin),
@@ -509,41 +579,19 @@ impl PlatformConfig {
 			!self.admin_cidrs.is_empty(),
 			"admin_cidrs must not be empty",
 		)?;
-		for value in self
-			.admin_cidrs
-			.iter()
-			.chain(&self.isolation.denied_egress_cidrs)
-			.chain(&self.edge.cloudflare_cidrs)
-		{
+		for value in self.admin_cidrs.iter().chain(&self.edge.cloudflare_cidrs) {
 			cidr(value)?;
 		}
-		require(
-			self.isolation.runtime_class == "gvisor",
-			"only the gvisor runtime class is supported",
-		)?;
-		require(
-			self.isolation.sha512.len() == 128
-				&& self.isolation.sha512.bytes().all(|b| b.is_ascii_hexdigit()),
-			"isolation.sha512 must be the official tarball SHA-512 (128 hex digits)",
-		)?;
-		let (date, point) =
-			self.isolation.release.split_once('.').ok_or_else(|| {
-				PlatformError::Invalid("gVisor release must be YYYYMMDD.N".into())
-			})?;
-		require(
-			date.len() == 8
-				&& date.bytes().all(|b| b.is_ascii_digit())
-				&& !point.is_empty()
-				&& point.bytes().all(|b| b.is_ascii_digit()),
-			"gVisor release must be YYYYMMDD.N",
-		)?;
+		self.validate_isolation()?;
 		require(
 			https(&self.object_storage.endpoint),
 			"object storage requires an HTTPS origin",
 		)?;
 		require(
-			self.postgres.instances > 0 && self.postgres.retention_days > 0,
-			"postgres instances and retention must be positive",
+			self.postgres.instances > 0
+				&& self.postgres.retention_days > 0
+				&& self.postgres.max_connections >= 100,
+			"postgres instances, retention, and max_connections (>= 100) must be positive",
 		)?;
 		require(
 			self.postgres.wal_bucket == self.object_storage.backups,
@@ -587,6 +635,37 @@ impl PlatformConfig {
 				cluster.validate(self.isolation.platform)?;
 			}
 		}
+		Ok(())
+	}
+
+	fn validate_isolation(&self) -> Result<(), PlatformError> {
+		for value in &self.isolation.denied_egress_cidrs {
+			let parsed = cidr(value)?;
+			require(
+				parsed.0.is_ipv4(),
+				"isolation.denied_egress_cidrs must be IPv4 CIDRs",
+			)?;
+		}
+		require(
+			self.isolation.runtime_class == "gvisor",
+			"only the gvisor runtime class is supported",
+		)?;
+		require(
+			self.isolation.sha512.len() == 128
+				&& self.isolation.sha512.bytes().all(|b| b.is_ascii_hexdigit()),
+			"isolation.sha512 must be the official tarball SHA-512 (128 hex digits)",
+		)?;
+		let (date, point) =
+			self.isolation.release.split_once('.').ok_or_else(|| {
+				PlatformError::Invalid("gVisor release must be YYYYMMDD.N".into())
+			})?;
+		require(
+			date.len() == 8
+				&& date.bytes().all(|b| b.is_ascii_digit())
+				&& !point.is_empty()
+				&& point.bytes().all(|b| b.is_ascii_digit()),
+			"gVisor release must be YYYYMMDD.N",
+		)?;
 		Ok(())
 	}
 }
@@ -679,7 +758,7 @@ impl Cluster {
 					..
 				} => {
 					require(
-						platform != GvisorPlatform::Kvm,
+						node.isolation_platform(platform) != GvisorPlatform::Kvm,
 						"gVisor kvm is allowed only on existing nodes: cloud VMs do not guarantee \
 						 nested virtualization",
 					)?;
