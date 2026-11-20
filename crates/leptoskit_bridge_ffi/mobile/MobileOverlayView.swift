@@ -60,6 +60,9 @@ final class MobileOverlayView: UIView, UIPopoverPresentationControllerDelegate {
     var onDismiss: (() -> Void)?
     /// The view joined or left a window, so an open overlay may now have somewhere to show.
     var onWindowChange: (() -> Void)?
+    /// Whether the app last asked for the overlay open, so a take-down UIKit had to put off knows
+    /// whether it still stands.
+    private var wantsOpen = false
     let controller = MobileOverlayController()
 
     init(_ presentation: Presentation) {
@@ -106,6 +109,7 @@ final class MobileOverlayView: UIView, UIPopoverPresentationControllerDelegate {
 
             return false
         }
+        wantsOpen = true
 
         switch presentation {
         case .sheet: return showSheet()
@@ -182,10 +186,28 @@ final class MobileOverlayView: UIView, UIPopoverPresentationControllerDelegate {
 
     /// Takes the overlay off screen without asking anyone, along with anything presented over it.
     func hide() {
+        wantsOpen = false
+
         guard !controller.isBeingDismissed else { return }
+        // UIKit ignores a dismissal while the presentation is still finishing, which can last until a
+        // later turn of the run loop even without animation. Take it down once that is done, unless
+        // the app opened it again meanwhile.
+        guard !controller.isBeingPresented else {
+            if let coordinator = controller.transitionCoordinator {
+                coordinator.animate(alongsideTransition: nil) { [weak self] _ in self?.hideIfClosed() }
+            } else {
+                DispatchQueue.main.async { [weak self] in self?.hideIfClosed() }
+            }
+
+            return
+        }
         // Asking the presenter, not the controller itself, takes this one down even when it has
         // presented something of its own.
         controller.presentingViewController?.dismiss(animated: UIView.areAnimationsEnabled)
+    }
+
+    private func hideIfClosed() {
+        if !wantsOpen { hide() }
     }
 
     /// Asks to close as Escape does. The overlay stays until the app closes it.
