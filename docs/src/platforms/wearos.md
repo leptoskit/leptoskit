@@ -10,37 +10,20 @@ On Wear OS, leptoskit does not pretend a phone activity is a watch. You describe
 
 ## What works and what doesn't
 
-| Works                                                                   | Doesn't work yet                                  |
-| ----------------------------------------------------------------------- | ------------------------------------------------- |
-| `WatchApp` / `WatchPage` / `WatchTile` / `WatchComplication` validation | Packaging an APK or App Bundle                    |
-| Recording presentations in `WearOsHost` for tests                       | Installing on an emulator or watch                |
-| Tailwind classes and `View` / `Text` / `Button` inside budgets          | Live tile timelines and complication updates      |
-| `leptoskit new --platform wearos` and `native prepare wearos`           | Code push, DevTools, and runtime plugins on watch |
-
-## Create a project
-
-```sh
-leptoskit new steps --platform wearos
-cd steps
-leptoskit native prepare wearos
-```
-
-The starter depends on `leptoskit_watch` and `leptoskit_wearos`. Guest-shaped content lives in `hosts/wearos/guest.rs`. Kotlin stubs live under `hosts/wearos/android/`.
-
-## Manifest requirements (when packaging lands)
-
-- `android.hardware.type.watch` uses-feature (required for Wear distribution).
-- A launcher activity (or tile-only distribution where Play allows it).
-- Tile service with `androidx.wear.tiles.action.BIND_TILE_PROVIDER`.
-- Complication data source intent filters matching the families you declare.
-- Play Console Wear OS form factors for store listing.
-
-Until packaging lands, keep these as notes next to the stubs; the prepare step does not write a Gradle project yet.
+| Works                                                                             | Doesn't work yet                            |
+| --------------------------------------------------------------------------------- | ------------------------------------------- |
+| `WatchApp` / `WearableApp` surfaces, budgets, and `WearOsHost` recording tests    | Play Store Wear track publishing automation |
+| Android Gradle APK packaging with `android.hardware.type.watch` manifest transform | Code push updates on Wear OS                |
+| Full Android runtime plugins (`wearable`, `health`, `watch-sync`, `ble`, `location`, `battery`, `thermal`, `background`) | Automated Wear OS emulator harness in CI |
+| Samsung Galaxy Watch (Wear OS / One UI Watch) + optional Samsung Health Sensor SDK hook | |
 
 ## Build
 
+With an app-owned `platforms/wearos` (or `platforms/android`) Gradle host and `[native.wearos]` configured:
+
 ```sh
+leptoskit native prepare wearos
 leptoskit native build wearos
 ```
 
-Stops with an experimental notice. Prefer unit tests against `WearOsHost` and `WatchApp::validate` while the host is a stub.
+The build transforms the merged `AndroidManifest.xml` to add `<uses-feature android:name="android.hardware.type.watch" android:required="true"/>`, `com.google.android.wearable.standalone`, and optional Tile and Complication service entries, then packages the Wear OS APK with Gradle. Install it on a watch over ADB (`adb -s <watch> install ...`).

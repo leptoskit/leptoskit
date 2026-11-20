@@ -45,6 +45,12 @@ pub enum WatchError {
 	#[error("{0}")]
 	Unavailable(String),
 	/// An unknown watch platform name.
-	#[error("unknown watch platform `{0}` (expected wearos or watchos)")]
+	#[error("unknown watch platform `{0}` (expected wearos, watchos, or harmonyos)")]
 	UnknownKind(String),
+	/// A sensor-first wearable app must subscribe to at least one stream.
+	#[error("a wearable app must declare at least one stream")]
+	NoStreams,
+	/// A balanced sampling policy interval must be positive.
+	#[error("wearable sampling interval must be greater than zero seconds")]
+	InvalidInterval,
 }

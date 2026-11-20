@@ -59,6 +59,20 @@ impl WatchViewport {
 		}
 	}
 
+	/// A representative Samsung Galaxy Watch (Wear OS / One UI Watch) round
+	/// face.
+	#[must_use]
+	pub const fn samsung_wear_medium() -> Self {
+		Self {
+			kind: WatchKind::WearOs,
+			shape: WatchShape::Round,
+			size_class: WatchSizeClass::Medium,
+			width_dp: 450.0,
+			height_dp: 450.0,
+			safe_inset_dp: 24.0,
+		}
+	}
+
 	/// A representative Apple Watch 45 mm face.
 	#[must_use]
 	pub const fn watch_os_medium() -> Self {
@@ -69,6 +83,19 @@ impl WatchViewport {
 			width_dp: 242.0,
 			height_dp: 297.0,
 			safe_inset_dp: 16.0,
+		}
+	}
+
+	/// A representative Huawei Watch (HarmonyOS Wearable) round 466×466 face.
+	#[must_use]
+	pub const fn harmony_os_round() -> Self {
+		Self {
+			kind: WatchKind::HarmonyOs,
+			shape: WatchShape::Round,
+			size_class: WatchSizeClass::Large,
+			width_dp: 466.0,
+			height_dp: 466.0,
+			safe_inset_dp: 22.0,
 		}
 	}
 

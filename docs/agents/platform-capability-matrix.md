@@ -11,8 +11,8 @@ Generated from the same host support model as `capabilities.json`; do not edit b
 | `android-x86_64`   | `android`   | no           | yes       | yes         | yes        | yes     | yes   | android | yes       |
 | `harmonyos`        | `harmonyos` | yes          | yes       | no          | no         | no      | yes   | arkts   | no        |
 | `harmonyos-x86_64` | `harmonyos` | yes          | yes       | no          | no         | no      | yes   | arkts   | no        |
-| `wearos`           | `wearos`    | yes          | no        | no          | no         | no      | no    | —       | no        |
-| `watchos`          | `watchos`   | yes          | no        | no          | no         | no      | no    | —       | no        |
+| `wearos`           | `wearos`    | yes          | yes       | yes         | yes        | yes     | yes   | android | no        |
+| `watchos`          | `watchos`   | yes          | yes       | yes         | yes        | yes     | yes   | apple   | no        |
 | `windows`          | `windows`   | no           | no        | no          | no         | no      | yes   | —       | no        |
 | `linux`            | `linux`     | no           | yes       | yes         | yes        | no      | yes   | —       | no        |
 | `tui`              | `tui`       | no           | no        | no          | no         | no      | yes   | —       | no        |

@@ -32,6 +32,7 @@ mod dev_client_host;
 mod registry;
 pub mod signing;
 mod watch;
+mod wearos;
 
 mod rust_desktop;
 pub(crate) mod safari;
@@ -197,12 +198,16 @@ impl Target {
 				| Self::Android
 				| Self::AndroidX86_64
 				| Self::Quest
+				| Self::Wearos
 		)
 	}
 
-	/// Whether this target builds the Android host: the phones, and Quest.
+	/// Whether this target builds the Android host: phones, Quest, and Wear OS.
 	pub(crate) fn is_android(self) -> bool {
-		matches!(self, Self::Android | Self::AndroidX86_64 | Self::Quest)
+		matches!(
+			self,
+			Self::Android | Self::AndroidX86_64 | Self::Quest | Self::Wearos
+		)
 	}
 
 	/// The platform whose host directory this target builds. Quest packages
@@ -368,7 +373,13 @@ pub fn run(command: NativeCommand) -> Result<()> {
 	let (config, root) = LeptoskitConfig::load()?;
 	config.ensure_application_root()?;
 
-	if matches!(target, Target::Wearos | Target::Watchos) {
+	if matches!(target, Target::Wearos | Target::Watchos)
+		&& !host_dir(&root, target).join("Cargo.toml").is_file()
+		&& !(target == Target::Wearos
+			&& host_dir(&root, Target::Android)
+				.join("Cargo.toml")
+				.is_file())
+	{
 		ensure_target_enabled(&config, target)?;
 		registry::enforce_required(&config, target, &[], &[])?;
 		let contract = registry::descriptor(&config, target, &[], &[]);
@@ -393,11 +404,18 @@ pub fn run(command: NativeCommand) -> Result<()> {
 		}
 
 		if build {
-			return watch::build(target);
+			anyhow::bail!(
+				"no app-owned {} host crate found under platforms/{}; scaffolded starter files \
+				 under hosts/{}. Add a platforms/{}/Cargo.toml host crate to build a package.",
+				target.platform(),
+				target.platform(),
+				target.platform(),
+				target.platform()
+			);
 		}
 
 		println!(
-			"prepared experimental {} host stubs under hosts/{}",
+			"prepared {} starter host files under hosts/{}",
 			target.platform(),
 			target.platform()
 		);
@@ -626,8 +644,10 @@ fn write_capabilities(path: &Path, contract: &HostCapabilityDescriptor) -> Resul
 fn check_host(config: &LeptoskitConfig, target: Target, release: bool) -> Result<Option<PathBuf>> {
 	ensure_target_enabled(config, target)?;
 	anyhow::ensure!(
-		!matches!(target, Target::Macos | Target::Ios | Target::IosSimulator)
-			|| cfg!(target_os = "macos"),
+		!matches!(
+			target,
+			Target::Macos | Target::Ios | Target::IosSimulator | Target::Watchos
+		) || cfg!(target_os = "macos"),
 		"Apple applications require macOS and the Xcode command-line tools"
 	);
 	anyhow::ensure!(
@@ -856,12 +876,12 @@ fn build_application(
 		Target::Macos => desktop::build(root, config, release, unsigned),
 		Target::Windows | Target::Linux | Target::Tui => unreachable!("desktop hosts built above"),
 		Target::Harmonyos | Target::HarmonyosX86_64 => harmonyos::build(root, release),
-		Target::Wearos | Target::Watchos => watch::build(target),
+		Target::Watchos => watch::build_watchos(root, release),
 		Target::Ios | Target::IosSimulator => {
 			install_ios_pods(root)?;
 			run_tool(&mut ios_build(root, target, release, build_number))
 		}
-		Target::Android | Target::AndroidX86_64 | Target::Quest => {
+		Target::Android | Target::AndroidX86_64 | Target::Quest | Target::Wearos => {
 			run_tool(&mut gradle_build(root, target, release, build_number))
 		}
 	}
@@ -897,9 +917,9 @@ pub(crate) fn install_ios_pods(root: &Path) -> Result<()> {
 	match install.status() {
 		Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
 			anyhow::bail!(
-			"CocoaPods is required while a selected plugin declares apple-pods; install it from \
+				"CocoaPods is required while a selected plugin declares apple-pods; install it from \
 			 https://cocoapods.org and run `leptoskit doctor`"
-		)
+			)
 		}
 
 		Err(error) => {
@@ -3628,7 +3648,10 @@ exit "${LEPTOSKIT_TEST_POD_STATUS:-0}"
 			})
 			.unwrap_err()
 			.to_string();
-			assert!(build_error.contains("experimental"), "{build_error}");
+			assert!(
+				build_error.contains("no app-owned") && build_error.contains("Cargo.toml"),
+				"{build_error}"
+			);
 			let packaging = build_application(
 				&root,
 				&LeptoskitConfig::default(),
@@ -3639,7 +3662,7 @@ exit "${LEPTOSKIT_TEST_POD_STATUS:-0}"
 			)
 			.unwrap_err()
 			.to_string();
-			assert!(packaging.contains("experimental"), "{packaging}");
+			assert!(!packaging.is_empty(), "{packaging}");
 			std::env::set_current_dir(&previous).unwrap();
 			let _ = std::fs::remove_dir_all(&root);
 		}

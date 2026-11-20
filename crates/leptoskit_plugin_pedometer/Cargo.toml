@@ -16,6 +16,7 @@ apple-module = "LeptosKitPedometer"
 apple-type = "PedometerPlugin"
 android-type = "dev.leptoskit.plugins.pedometer.PedometerPlugin"
 android-context = true
+harmonyos-type = "PedometerPlugin"
 
 [features]
 guest = ["leptoskit_bridge/guest", "leptoskit_sensor/guest"]

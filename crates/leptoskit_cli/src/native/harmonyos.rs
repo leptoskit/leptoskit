@@ -223,8 +223,10 @@ pub(super) fn generate(
 	registry: &Registry,
 	target: Target,
 ) -> Result<()> {
-	scaffold(root, config)?;
-	generate_plugins(&root.join("hosts/harmonyos"), registry)?;
+	let host = harmonyos_host_dir(root, target);
+	scaffold_into(&host, config)?;
+	apply_module_config(&host, config)?;
+	generate_plugins(&host, registry)?;
 	let abi = if matches!(target, Target::HarmonyosX86_64) {
 		"x86_64"
 	} else {
@@ -232,10 +234,7 @@ pub(super) fn generate(
 	};
 
 	let profile = HarmonyOs::entry_build_profile(abi);
-	project::write(
-		&root.join("hosts/harmonyos/entry/build-profile.json5"),
-		&profile,
-	)?;
+	project::write(&host.join("entry/build-profile.json5"), &profile)?;
 	// CMake bracket arguments preserve spaces, quotes, and Windows separators.
 	let cmake_path = |path: &Path| -> Result<String> {
 		let path = path.to_str().context("HarmonyOS path is not UTF-8")?;
@@ -257,9 +256,70 @@ pub(super) fn generate(
 	Ok(())
 }
 
+fn harmonyos_host_dir(root: &Path, target: Target) -> PathBuf {
+	let dir = super::host_dir(root, target);
+	if dir.join("Cargo.toml").is_file() {
+		dir
+	} else {
+		root.join("hosts").join(HarmonyOs::ID)
+	}
+}
+
+/// Applies `[native.harmonyos]` `device-types` (including `"wearable"` for
+/// Huawei Watch) and `permissions` into `entry/src/main/module.json5` when
+/// explicitly configured.
+fn apply_module_config(host: &Path, config: &LeptoskitConfig) -> Result<()> {
+	let hcfg = &config.native.harmonyos;
+	if *hcfg == leptoskit_config::HarmonyosConfig::default() {
+		return Ok(());
+	}
+	let path = host.join("entry/src/main/module.json5");
+	let raw = std::fs::read_to_string(&path)
+		.with_context(|| format!("read HarmonyOS module manifest {}", path.display()))?;
+	let mut doc: serde_json::Value = serde_json::from_str(&raw)
+		.with_context(|| format!("parse HarmonyOS module manifest {}", path.display()))?;
+	if let Some(module) = doc
+		.get_mut("module")
+		.and_then(serde_json::Value::as_object_mut)
+	{
+		if !hcfg.device_types.is_empty() {
+			let types: Vec<serde_json::Value> = hcfg
+				.device_types
+				.iter()
+				.map(|d| serde_json::Value::String(d.as_str().to_owned()))
+				.collect();
+			module.insert("deviceTypes".into(), serde_json::Value::Array(types));
+		}
+		if !hcfg.permissions.is_empty() {
+			let mut existing: Vec<serde_json::Value> = module
+				.get("requestPermissions")
+				.and_then(serde_json::Value::as_array)
+				.cloned()
+				.unwrap_or_default();
+			for perm in &hcfg.permissions {
+				let already = existing.iter().any(|entry| {
+					entry.get("name").and_then(serde_json::Value::as_str) == Some(perm.as_str())
+				});
+				if !already {
+					existing.push(serde_json::json!({ "name": perm }));
+				}
+			}
+			module.insert(
+				"requestPermissions".into(),
+				serde_json::Value::Array(existing),
+			);
+		}
+	}
+	project::write(&path, &serde_json::to_string_pretty(&doc)?)?;
+	Ok(())
+}
+
 /// The app shell is owned by the application, just like hosts/android.
 pub(super) fn scaffold(root: &Path, config: &LeptoskitConfig) -> Result<()> {
-	let host = root.join("hosts").join(HarmonyOs::ID);
+	scaffold_into(&root.join("hosts").join(HarmonyOs::ID), config)
+}
+
+fn scaffold_into(host: &Path, config: &LeptoskitConfig) -> Result<()> {
 	let package = if config.native.package_id.is_empty() {
 		leptoskit_config::default_package_id(&config.app.name)
 	} else {

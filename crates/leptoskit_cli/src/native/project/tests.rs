@@ -33,7 +33,7 @@ fn metadata_registry(root: &Path, metadata: &[serde_json::Value]) -> Registry {
 }
 
 #[test]
-fn watch_targets_refuse_phone_project_generation() {
+fn watch_targets_generate_watch_host_artifacts() {
 	let root = std::env::temp_dir().canonicalize().unwrap().join(format!(
 		"leptoskit-watch-project-generate-{}",
 		std::process::id()
@@ -42,15 +42,13 @@ fn watch_targets_refuse_phone_project_generation() {
 	let registry = metadata_registry(&root, &[]);
 	let config = leptoskit_config::LeptoskitConfig::default();
 
-	for target in [Target::Wearos, Target::Watchos] {
-		let error = generate(&root, &config, &registry, target, false)
-			.unwrap_err()
-			.to_string();
-		assert!(
-			error.contains("watch hosts are scaffolded"),
-			"{target:?}: {error}"
-		);
-	}
+	generate(&root, &config, &registry, Target::Watchos, false).unwrap();
+	assert!(root.join(".leptoskit/watchos/Info.plist").is_file());
+	assert!(root.join(".leptoskit/watchos/WatchHost.xcconfig").is_file());
+
+	// Wear OS routes through the Android host generator, so it requires the
+	// bridge's Android sources and an app-owned manifest.
+	assert!(generate(&root, &config, &registry, Target::Wearos, false).is_err());
 
 	std::fs::remove_dir_all(root).unwrap();
 }
@@ -566,9 +564,9 @@ fn host_registry(root: &Path) -> Registry {
 	fixture(&support.join("android/Helper.kt"), "// helper");
 	fixture(&support.join("Package.swift"), "// helper package");
 	fixture(
-			&root.join("hosts/android/app/src/main/AndroidManifest.xml"),
-			"<manifest xmlns:android=\"http://schemas.android.com/apk/res/android\"><application/></manifest>",
-		);
+		&root.join("hosts/android/app/src/main/AndroidManifest.xml"),
+		"<manifest xmlns:android=\"http://schemas.android.com/apk/res/android\"><application/></manifest>",
+	);
 	fixture(&root.join("hosts/ios/App.swift"), "// app");
 
 	Registry {

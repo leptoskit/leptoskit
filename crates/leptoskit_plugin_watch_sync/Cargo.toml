@@ -1,0 +1,30 @@
+[package]
+name = "leptoskit_plugin_watch_sync"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+homepage.workspace = true
+license.workspace = true
+readme = "readme.md"
+repository.workspace = true
+rust-version.workspace = true
+description = "Bidirectional phone and watch companion messaging and durable transfers over WatchConnectivity, Wear OS Data Layer, and Huawei Wear Engine."
+
+[package.metadata.leptoskit.runtime]
+name = "watch-sync"
+apple-module = "LeptosKitWatchSync"
+apple-type = "WatchSyncPlugin"
+android-type = "dev.leptoskit.plugins.watchsync.WatchSyncPlugin"
+android-context = true
+android-dependencies = ["com.google.android.gms:play-services-wearable:18.2.0"]
+harmonyos-type = "WatchSyncPlugin"
+harmonyos-context = true
+
+[features]
+guest = ["leptoskit_bridge/guest"]
+
+[dependencies]
+leptoskit_bridge = { workspace = true }
+
+[lints]
+workspace = true

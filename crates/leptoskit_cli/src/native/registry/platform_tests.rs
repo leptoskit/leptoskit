@@ -369,7 +369,10 @@ fn watch_targets_consult_platform_tables_without_native_hosts() {
 	.unwrap();
 	assert_eq!(
 		with_rust.plugins[0].implementation(Target::Wearos, HostCapabilities::of(Target::Wearos)),
-		Err(Missing::HostCannotRun(Capability::Sync))
+		Ok(Implementation::Rust(RustRegistration {
+			constructor: Constructor::Type("Shared"),
+			flavour: Flavour::Sync,
+		}))
 	);
 }
 

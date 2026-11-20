@@ -6952,6 +6952,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "leptoskit_plugin_ble"
+version = "0.3.0"
+dependencies = [
+ "leptoskit_bridge",
+]
+
+[[package]]
 name = "leptoskit_plugin_blob"
 version = "0.3.0"
 dependencies = [
@@ -7739,6 +7746,20 @@ dependencies = [
 
 [[package]]
 name = "leptoskit_plugin_video_thumbnails"
+version = "0.3.0"
+dependencies = [
+ "leptoskit_bridge",
+]
+
+[[package]]
+name = "leptoskit_plugin_watch_sync"
+version = "0.3.0"
+dependencies = [
+ "leptoskit_bridge",
+]
+
+[[package]]
+name = "leptoskit_plugin_wearable"
 version = "0.3.0"
 dependencies = [
  "leptoskit_bridge",

@@ -10,37 +10,20 @@ On watchOS, leptoskit models pages, Smart Stack glances, and complications as fi
 
 ## What works and what doesn't
 
-| Works                                                                     | Doesn't work yet                                  |
-| ------------------------------------------------------------------------- | ------------------------------------------------- |
-| `WatchApp` / `WatchPage` / `WatchGlance` / `WatchComplication` validation | Xcode project generation and `.app` packaging     |
-| Recording presentations in `WatchOsHost` for tests                        | Simulator or device install                       |
-| Tailwind classes and `View` / `Text` / `Button` inside budgets            | ClockKit / WidgetKit live timelines               |
-| `leptoskit new --platform watchos` and `native prepare watchos`           | Code push, DevTools, and runtime plugins on watch |
-
-## Create a project
-
-```sh
-leptoskit new steps --platform watchos
-cd steps
-leptoskit native prepare watchos
-```
-
-The starter depends on `leptoskit_watch` and `leptoskit_watchos`. Guest-shaped content lives in `hosts/watchos/guest.rs`. Swift stubs live under `hosts/watchos/swift/`.
-
-## Entitlements (when packaging lands)
-
-- Watch App target, optionally paired with an iOS companion (or watch-only where App Store rules allow).
-- Widget Extension for Smart Stack glances.
-- Complication push when you update complications from the network.
-- App Groups when the watch and phone share a store.
-- HealthKit or other capabilities only when a surface needs them.
-
-Until packaging lands, keep these as notes next to the stubs; the prepare step does not write an Xcode project yet.
+| Works                                                                      | Doesn't work yet                           |
+| -------------------------------------------------------------------------- | ------------------------------------------ |
+| `WatchApp` / `WearableApp` surfaces, budgets, and `WatchOsHost` tests      | Automated watchOS simulator harness in CI  |
+| `.leptoskit/watchos` plugin registrant, `Info.plist`, entitlements, and `WatchHost.xcconfig` | Code push updates on watchOS               |
+| Apple runtime plugins (`wearable`, `health`, `watch-sync`, `ble`, `location`, `battery`, `thermal`) | App Store Connect watchOS upload automation |
+| `leptoskit native build watchos` via `xcodebuild -sdk watchos` on macOS    | |
 
 ## Build
 
+On macOS with Xcode and an app-owned `platforms/watchos` host:
+
 ```sh
+leptoskit native prepare watchos
 leptoskit native build watchos
 ```
 
-Stops with an experimental notice. Prefer unit tests against `WatchOsHost` and `WatchApp::validate` while the host is a stub.
+`prepare` writes `.leptoskit/watchos/GeneratedPlugins.swift`, `Info.plist` (including `WKApplication`, `WKRunsIndependentlyOfCompanionApp`, and `WKBackgroundModes`), `WatchApp.entitlements`, and `WatchHost.xcconfig`, then `build` invokes `xcodebuild -sdk watchos`.

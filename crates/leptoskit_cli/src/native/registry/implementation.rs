@@ -284,8 +284,10 @@ impl HostCapabilities {
 		};
 
 		match target {
-			Target::Ios | Target::IosSimulator | Target::Macos => everything(NativeKind::Apple),
-			Target::Android | Target::AndroidX86_64 | Target::Quest => {
+			Target::Ios | Target::IosSimulator | Target::Macos | Target::Watchos => {
+				everything(NativeKind::Apple)
+			}
+			Target::Android | Target::AndroidX86_64 | Target::Quest | Target::Wearos => {
 				everything(NativeKind::Android)
 			}
 			// `bridge.cpp` enables the reserved timer and dispatches
@@ -322,18 +324,6 @@ impl HostCapabilities {
 					service: false,
 					native: None,
 					timer: true,
-				}
-			}
-			// The experimental watch hosts are stubs: they run no guest and
-			// therefore promise neither plugins nor a timer.
-			Target::Wearos | Target::Watchos => {
-				Self {
-					sync: false,
-					worker: false,
-					asynchronous: false,
-					service: false,
-					native: None,
-					timer: false,
 				}
 			}
 		}

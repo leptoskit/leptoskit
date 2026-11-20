@@ -56,6 +56,37 @@ impl WatchOsHost {
 	pub fn presentations(&self) -> &[WatchPresentation] {
 		self.inner.presentations()
 	}
+
+	/// Runtime capabilities available on watchOS hosts.
+	#[must_use]
+	pub const fn capabilities() -> WatchOsCapabilities {
+		WatchOsCapabilities {
+			healthkit_background_delivery: true,
+			healthkit_live_workout: true,
+			core_motion_batched_sensors: true,
+			watch_connectivity: true,
+			widgetkit_glances: true,
+			complications: true,
+		}
+	}
+}
+
+/// Device capabilities exposed by a watchOS host.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(clippy::struct_excessive_bools)]
+pub struct WatchOsCapabilities {
+	/// `HKObserverQuery` + `enableBackgroundDelivery`.
+	pub healthkit_background_delivery: bool,
+	/// `HKWorkoutSession` + `HKLiveWorkoutBuilder` continuous wrist streaming.
+	pub healthkit_live_workout: bool,
+	/// `CMPedometer` and `CMBatchedSensorManager`.
+	pub core_motion_batched_sensors: bool,
+	/// `WCSession` companion sync with paired iPhone.
+	pub watch_connectivity: bool,
+	/// `WidgetKit` Smart Stack glances.
+	pub widgetkit_glances: bool,
+	/// `WidgetKit` accessory complications.
+	pub complications: bool,
 }
 
 impl Default for WatchOsHost {
@@ -94,6 +125,9 @@ mod tests {
 	use leptoskit_watch::WatchApp;
 	use leptoskit_watch::WatchKind;
 	use leptoskit_watch::WatchPage;
+	use leptoskit_watch::WearableApp;
+	use leptoskit_watch::WearableStatus;
+	use leptoskit_watch::WearableStream;
 
 	use super::*;
 
@@ -103,6 +137,17 @@ mod tests {
 			WatchApp::new("demo", WatchKind::WatchOs).page(WatchPage::new("home", Text("Hi")));
 		let mut host = WatchOsHost::new();
 		host.present_app(&app).unwrap();
+		assert_ne!(host.presentations(), []);
+	}
+
+	#[test]
+	fn presents_a_wearable_status_app() {
+		let app = WearableApp::new("tracker", WatchKind::WatchOs)
+			.streams(&[WearableStream::HeartRate, WearableStream::Steps]);
+		let mut host = WatchOsHost::new();
+		host.present_wearable(&app, &WearableStatus::default())
+			.unwrap();
+		assert!(WatchOsHost::capabilities().healthkit_live_workout);
 		assert_ne!(host.presentations(), []);
 	}
 

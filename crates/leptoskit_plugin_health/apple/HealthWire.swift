@@ -17,10 +17,14 @@ public enum HealthWire {
     public static let oxygenSaturation = 6
     public static let respiratoryRate = 7
     public static let exercise = 8
+    public static let skinTemperature = 9
+    public static let activeCalories = 10
+    public static let distance = 11
+    public static let floorsClimbed = 12
 
     /// Every type HealthKit records, as a bit mask; RMSSD (bit 2) stays
     /// Health Connect only and SDNN (bit 3) HealthKit only.
-    public static let appleTypes: UInt32 = 0x1FB
+    public static let appleTypes: UInt32 = 0x1FFB
 
     /// Reply flag bits, in the order `types.rs` decodes them.
     public static let flagBackground: UInt32 = 1
@@ -160,6 +164,10 @@ public enum HealthValue: Equatable {
     case oxygenSaturation(percent: Double)
     case respiratoryRate(breathsPerMinute: Double)
     case exercise(activity: Int, platformCode: Int32, title: String?)
+    case skinTemperature(celsius: Double)
+    case activeCalories(kilocalories: Double)
+    case distance(meters: Double)
+    case floorsClimbed(floors: Double)
 
     var typeCode: Int {
         switch self {
@@ -171,6 +179,10 @@ public enum HealthValue: Equatable {
         case .oxygenSaturation: HealthWire.oxygenSaturation
         case .respiratoryRate: HealthWire.respiratoryRate
         case .exercise: HealthWire.exercise
+        case .skinTemperature: HealthWire.skinTemperature
+        case .activeCalories: HealthWire.activeCalories
+        case .distance: HealthWire.distance
+        case .floorsClimbed: HealthWire.floorsClimbed
         }
     }
 }
@@ -251,6 +263,14 @@ extension WireWriter {
             u32(UInt32(activity))
             u32(UInt32(bitPattern: platformCode))
             try optional(title)
+        case .skinTemperature(let celsius):
+            try f64(celsius)
+        case .activeCalories(let kilocalories):
+            try f64(kilocalories)
+        case .distance(let meters):
+            try f64(meters)
+        case .floorsClimbed(let floors):
+            try f64(floors)
         }
     }
 }
@@ -319,7 +339,8 @@ public struct ReadRequest: Equatable {
         try reader.finished()
         let supported = [
             HealthWire.heartRate, HealthWire.restingHeartRate, HealthWire.hrvSdnn, HealthWire.steps,
-            HealthWire.sleep, HealthWire.oxygenSaturation, HealthWire.respiratoryRate, HealthWire.exercise
+            HealthWire.sleep, HealthWire.oxygenSaturation, HealthWire.respiratoryRate, HealthWire.exercise,
+            HealthWire.skinTemperature, HealthWire.activeCalories, HealthWire.distance, HealthWire.floorsClimbed
         ]
         guard supported.contains(Int(type)), start < end,
             size >= 1 && size <= UInt32(ReadRequest.maxPageSize), token != ""
@@ -355,7 +376,7 @@ public struct TypesRequest: Equatable {
 
     /// The type codes the mask selects, in wire order.
     public var types: [Int] {
-        (0...8).filter { mask & (1 << UInt32($0)) != 0 }
+        (0...12).filter { mask & (1 << UInt32($0)) != 0 }
     }
 }
 
