@@ -100,7 +100,7 @@ pub struct TargetConfig {
 	pub unavailable: Option<String>,
 }
 
-/// Native startup behavior. Neither mode needs a URL or web server.
+/// Native startup behavior. None of these modes needs a URL or web server.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "kebab-case")]
@@ -108,8 +108,10 @@ pub enum NativeMode {
 	/// Open the main window at launch.
 	#[default]
 	Window,
-	/// Keep a macOS status item alive; create UI only when requested.
+	/// Keep a status item or tray icon alive; create UI only when requested.
 	MenuBar,
+	/// Run in the background without opening an initial window or Dock icon.
+	Background,
 }
 
 impl NativeMode {
@@ -330,12 +332,17 @@ impl LeptoskitConfig {
 			}
 			self.project_target(name, target)?.validate()?;
 		}
-		if self.native.mode == NativeMode::MenuBar
-			&& self.selected_target.is_some()
-			&& self.app.default_platform != Platform::Macos
-		{
+		if matches!(
+			self.native.mode,
+			NativeMode::MenuBar | NativeMode::Background
+		) && self.selected_target.is_some()
+			&& !matches!(
+				self.app.default_platform,
+				Platform::Macos | Platform::Windows | Platform::Linux
+			) {
 			return Err(invalid(
-				"native.mode = menu-bar currently supports macos only",
+				"native.mode = menu-bar or background requires a desktop target (macos, windows, \
+				 or linux)",
 			));
 		}
 		Ok(())

@@ -1339,6 +1339,10 @@ pub struct NativeConfig {
 	/// types (including Huawei Watch wearables) and permissions.
 	#[serde(skip_serializing_if = "HarmonyosConfig::is_default")]
 	pub harmonyos: HarmonyosConfig,
+	/// Desktop window defaults (always-on-top overlays, frameless/transparent
+	/// chrome, vibrancy/Mica backdrop, and close-to-tray behavior).
+	#[serde(skip_serializing_if = "DesktopWindowConfig::is_default")]
+	pub window: DesktopWindowConfig,
 	/// The initial viewport width for the headless layout pass.
 	pub viewport_width: f32,
 	/// The initial viewport height for the headless layout pass.
@@ -1374,9 +1378,96 @@ impl Default for NativeConfig {
 			wearos: WearosConfig::default(),
 			watchos: WatchosConfig::default(),
 			harmonyos: HarmonyosConfig::default(),
+			window: DesktopWindowConfig::default(),
 			viewport_width: 390.0,
 			viewport_height: 844.0,
 		}
+	}
+}
+
+/// Declarative desktop window chrome and overlay settings under
+/// `[native.window]`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields, default)]
+#[allow(clippy::struct_excessive_bools)]
+pub struct DesktopWindowConfig {
+	/// Optional window title override; defaults to `app.name`.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub title: Option<String>,
+	/// Initial logical window width.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub width: Option<f64>,
+	/// Initial logical window height.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub height: Option<f64>,
+	/// Minimum logical window width.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub min_width: Option<f64>,
+	/// Minimum logical window height.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub min_height: Option<f64>,
+	/// Keep the desktop window drawn above other apps (`HWND_TOPMOST` /
+	/// `NSFloatingWindowLevel`).
+	#[serde(skip_serializing_if = "std::ops::Not::not")]
+	pub always_on_top: bool,
+	/// Omit the native titlebar and window frame.
+	#[serde(skip_serializing_if = "std::ops::Not::not")]
+	pub frameless: bool,
+	/// Allow transparent backgrounds for floating overlays and HUDs.
+	#[serde(skip_serializing_if = "std::ops::Not::not")]
+	pub transparent: bool,
+	/// Pass pointer clicks through to applications underneath the window.
+	#[serde(skip_serializing_if = "std::ops::Not::not")]
+	pub click_through: bool,
+	/// Pin the window across every virtual desktop / macOS Space.
+	#[serde(skip_serializing_if = "std::ops::Not::not")]
+	pub visible_on_all_workspaces: bool,
+	/// Hide the window from the OS taskbar / window switcher.
+	#[serde(skip_serializing_if = "std::ops::Not::not")]
+	pub skip_taskbar: bool,
+	/// Keep the process running in the system tray / background when the window
+	/// closes instead of exiting.
+	#[serde(skip_serializing_if = "std::ops::Not::not")]
+	pub close_to_tray: bool,
+	/// Allow user window resizing (defaults to `true`).
+	#[serde(skip_serializing_if = "DesktopWindowConfig::is_default_resizable")]
+	pub resizable: bool,
+}
+
+impl Default for DesktopWindowConfig {
+	fn default() -> Self {
+		Self {
+			title: None,
+			width: None,
+			height: None,
+			min_width: None,
+			min_height: None,
+			always_on_top: false,
+			frameless: false,
+			transparent: false,
+			click_through: false,
+			visible_on_all_workspaces: false,
+			skip_taskbar: false,
+			close_to_tray: false,
+			resizable: true,
+		}
+	}
+}
+
+impl DesktopWindowConfig {
+	/// Whether every window option matches its default.
+	#[must_use]
+	pub fn is_default(&self) -> bool {
+		*self == Self::default()
+	}
+
+	#[allow(
+		clippy::trivially_copy_pass_by_ref,
+		reason = "serde skip_serializing_if passes the field by reference"
+	)]
+	fn is_default_resizable(resizable: &bool) -> bool {
+		*resizable
 	}
 }
 
