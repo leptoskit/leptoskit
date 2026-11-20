@@ -24,7 +24,11 @@ const WAITING: usize = 20_000;
 const CHUNK_BYTES: usize = 32 * 1024;
 
 /// How long lines are gathered before a chunk that isn't full is sent.
-const GATHER: Duration = Duration::from_millis(250);
+///
+/// Batches log writes to keep S3 PUT and control-plane database transaction
+/// overhead low; full chunks (`CHUNK_BYTES` or `MAX_LOG_LINES`) still flush
+/// immediately.
+const GATHER: Duration = Duration::from_secs(2);
 
 /// How many times one chunk is sent before the log is given up on.
 const TRIES: u32 = 6;
@@ -158,14 +162,19 @@ pub(crate) fn ship(
 			}
 
 			// Gather what else arrives soon, so a chatty build is a few
-			// chunks a second and not one call a line.
+			// chunks per second and not one call a line, while flushing
+			// immediately once a chunk reaches CHUNK_BYTES or MAX_LOG_LINES.
 			let gathered = tokio::time::sleep(GATHER);
 			tokio::pin!(gathered);
+			let mut waiting_bytes: usize = waiting.iter().map(String::len).sum();
 
-			while open && waiting.len() < MAX_LOG_LINES {
+			while open && waiting.len() < MAX_LOG_LINES && waiting_bytes < CHUNK_BYTES {
 				tokio::select! {
 					line = receiver.recv() => match line {
-						Some(line) => waiting.push_back(line),
+						Some(line) => {
+							waiting_bytes += line.len();
+							waiting.push_back(line);
+						}
 						None => open = false,
 					},
 					() = &mut gathered => break,

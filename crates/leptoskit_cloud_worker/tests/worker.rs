@@ -151,11 +151,9 @@ impl Bench {
 	/// without waiting and renewing its lease five times a second.
 	fn worker(&self, script: &str) -> Worker<CommandBuilder> {
 		let builder = CommandBuilder::new("/bin/sh", vec!["-c".to_owned(), script.to_owned()]);
-		let settings = Settings {
-			wait_seconds: 0,
-			workspace: self.workspace(),
-			renew_every: Some(Duration::from_millis(200)),
-		};
+		let mut settings = Settings::new(self.workspace());
+		settings.wait_seconds = 0;
+		settings.renew_every = Some(Duration::from_millis(200));
 		Worker::new(self.control(), self.state(), builder, settings).expect("a worker")
 	}
 

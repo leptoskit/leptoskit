@@ -370,6 +370,45 @@ impl Control {
 		)
 		.await
 	}
+
+	/// Reports what the cluster currently runs for `environment`, along with
+	/// recent runtime log lines. Feeds `environment_status`, `runtime_logs`,
+	/// and compute metering on the control plane.
+	///
+	/// # Errors
+	///
+	/// [`CallError`]; `environment_not_found` if the environment is no longer
+	/// placed on this cluster.
+	pub async fn report_status(
+		&self,
+		environment: Uuid,
+		observed: leptoskit_cloud_runtime::Observed,
+		logs: Vec<leptoskit_cloud_runtime::LogLine>,
+	) -> Result<workers::StatusReceived, CallError> {
+		self.call(
+			&workers::ReportStatus {
+				environment,
+				observed: workers::RuntimeValue(observed),
+				logs: logs.into_iter().map(workers::RuntimeValue).collect(),
+			},
+			Duration::ZERO,
+		)
+		.await
+	}
+
+	/// Lists every environment placed on this cluster worker's cluster so
+	/// periodic status reporting, runtime logs, and compute metering resume
+	/// immediately after a worker restart.
+	///
+	/// # Errors
+	///
+	/// [`CallError`]; `cluster_worker_required` for a build worker.
+	pub async fn cluster_environments(
+		&self,
+	) -> Result<Vec<workers::ClusterEnvironment>, CallError> {
+		self.call(&workers::ClusterEnvironments {}, Duration::ZERO)
+			.await
+	}
 }
 
 #[cfg(test)]
