@@ -33,35 +33,5 @@ leptoskit_rive = { workspace = true }
 objc2-app-kit = { workspace = true, features = ["std", "NSAccessibilityProtocols", "NSAccessibilityConstants", "NSScreen", "NSScroller", "NSTextContent", "NSTextField"] }
 objc2-foundation = { workspace = true, features = ["std", "NSGeometry"] }
 
-# AppKit only runs on the main thread, and the standard harness runs every
-# test on a thread of its own, so these tests bring their own harness.
-[[test]]
-name = "appkit"
-harness = false
-
-[[test]]
-name = "controls"
-harness = false
-
-[[test]]
-name = "accessibility"
-harness = false
-
-[[test]]
-name = "pressable"
-harness = false
-
-[[test]]
-name = "button_metrics"
-harness = false
-
-[[test]]
-name = "vector"
-harness = false
-
-[[test]]
-name = "overlays"
-harness = false
-
 [lints]
 workspace = true

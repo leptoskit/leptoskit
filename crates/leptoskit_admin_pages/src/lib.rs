@@ -37,7 +37,7 @@ pub(crate) fn spawn(task: impl Future<Output = ()> + 'static) {
 
 /// Points the rpc client at the admin's own endpoints and live connection,
 /// once: configuring it again would start a second connection.
-#[cfg(feature = "hydrate")]
+#[cfg(all(feature = "hydrate", target_arch = "wasm32"))]
 pub(crate) fn live_connection() {
 	static ONCE: std::sync::Once = std::sync::Once::new();
 
@@ -51,13 +51,14 @@ pub(crate) fn live_connection() {
 }
 
 /// Leaves this page for `address`, as a full page load. On the server there
-/// is no page to leave.
+/// is no page to leave. `hydrate` is also on for a host `--all-features`
+/// build, which has no window, so this is the Wasm build alone.
 pub(crate) fn go(address: &str) {
-	#[cfg(feature = "hydrate")]
+	#[cfg(all(feature = "hydrate", target_arch = "wasm32"))]
 	if let Some(window) = web_sys::window() {
 		let _ = window.location().assign(address);
 	}
-	#[cfg(not(feature = "hydrate"))]
+	#[cfg(not(all(feature = "hydrate", target_arch = "wasm32")))]
 	let _ = address;
 }
 

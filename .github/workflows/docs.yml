@@ -1,7 +1,7 @@
 name: docs
 
-# Builds the public website on every pull request that could change it, and
-# deploys it to GitHub Pages from main. The artifact is the real public-only
+# Builds the public website on main when the site sources change, and deploys
+# it to GitHub Pages. Pull requests do not build the site. The artifact is the real public-only
 # packager output: the landing page with its live Wasm example at the root,
 # the book from docs/src under /docs/ with the web builds of the examples it
 # plays under /docs/play/, and the schema aliases at their stable root paths
@@ -12,24 +12,6 @@ name: docs
 on:
   push:
     branches: [main]
-    paths:
-      - "docs/**"
-      - "crates/leptoskit_app/**"
-      - "crates/leptoskit_cli/**"
-      - "crates/leptoskit_docs/**"
-      - "crates/leptoskit_router/**"
-      - "examples/file_routes/**"
-      - "examples/gallery/**"
-      - "examples/observatory/**"
-      - "examples/postcard/**"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - "rust-toolchain.toml"
-      - ".github/actions/rust/**"
-      - ".github/actions/ubuntu-archive/**"
-      - ".github/workflows/docs.yml"
-
-  pull_request:
     paths:
       - "docs/**"
       - "crates/leptoskit_app/**"

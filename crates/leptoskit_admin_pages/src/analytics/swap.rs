@@ -14,11 +14,11 @@
 use std::collections::HashSet;
 
 use leptos::context::use_context;
-#[cfg(feature = "hydrate")]
+#[cfg(all(feature = "hydrate", target_arch = "wasm32"))]
 use leptos::prelude::Effect;
-#[cfg(feature = "hydrate")]
+#[cfg(all(feature = "hydrate", target_arch = "wasm32"))]
 use leptos::prelude::GetValue as _;
-#[cfg(feature = "hydrate")]
+#[cfg(all(feature = "hydrate", target_arch = "wasm32"))]
 use leptos::prelude::SetValue as _;
 use leptos::prelude::StoredValue;
 use leptos::prelude::WithValue as _;
@@ -59,8 +59,10 @@ impl Swap {
 			menu: RwSignal::new(None),
 		};
 
-		// Back and Forward bring back the page the address names.
-		#[cfg(feature = "hydrate")]
+		// Back and Forward bring back the page the address names. The
+		// listener and the reread effect call into the browser, and
+		// `hydrate` is also on for a host `--all-features` build.
+		#[cfg(all(feature = "hydrate", target_arch = "wasm32"))]
 		{
 			let handle = leptos::prelude::window_event_listener(leptos::ev::popstate, move |_| {
 				if let Some(href) =
@@ -79,7 +81,7 @@ impl Swap {
 	/// Reads the page again when the stream has newer events, at most every
 	/// ten seconds, unless the person is in the middle of something: an
 	/// open menu or row, the confirm sheet, or a field.
-	#[cfg(feature = "hydrate")]
+	#[cfg(all(feature = "hydrate", target_arch = "wasm32"))]
 	fn reread(self) {
 		const EVERY_MS: f64 = 10_000.0;
 
@@ -252,7 +254,7 @@ impl Swap {
 }
 
 /// Whether `page` reads itself again when newer events arrive.
-#[cfg(feature = "hydrate")]
+#[cfg(all(feature = "hydrate", target_arch = "wasm32"))]
 fn rereads(page: &Page) -> bool {
 	match page {
 		Page::Insight(_) | Page::Web(_) | Page::Dashboard(_) => true,

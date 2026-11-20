@@ -1475,22 +1475,24 @@ async fn the_oidc_flow_admits_ada_refuses_grace_and_leaks_nothing() -> Result<()
 		Some(&*format!("{}/sign-in", leptoskit_admin::BASE)),
 		"Grace is sent back to the admin's sign-in card"
 	);
-	// The analytics live API is a GET; the person-export API is a GET
-	// too. Both are `api_gate`d, and refuse her without an admin session.
-	let live = grace
+	// The dashboards list is a GET; the person-export API is a GET too.
+	// Both are `api_gate`d, and refuse her without an admin session. The
+	// old server-sent events route is gone: the stream is the admin's
+	// live connection.
+	let dashboards = grace
 		.get(
 			&instance.admin,
 			ADMIN_ORIGIN,
-			"/_leptoskit/admin/api/analytics/live",
+			"/_leptoskit/admin/api/analytics/dashboards",
 		)
 		.await;
 	assert!(
 		matches!(
-			live.status(),
+			dashboards.status(),
 			StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN
 		),
 		"the analytics API refuses Grace: {}",
-		live.status()
+		dashboards.status()
 	);
 	let export = grace
 		.get(

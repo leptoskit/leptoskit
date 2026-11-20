@@ -93,7 +93,7 @@ fn exec_with_descriptor(root: &Path, address: SocketAddr, inherited: Option<&Pat
 				.arg(env!("CARGO_BIN_EXE_demo_service"));
 			command
 		}
-		None => Command::new(env!("CARGO_BIN_EXE_demo_service")),
+		None => support::command_with_clean_fds(env!("CARGO_BIN_EXE_demo_service")),
 	};
 	command.envs(variables).stderr(Stdio::piped());
 	let mut child = command.spawn().expect("the child process spawns");

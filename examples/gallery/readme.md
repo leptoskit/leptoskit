@@ -55,6 +55,5 @@ leptoskit dev
 
 One conformance scenario runs on every host: each screen renders with that host's widgets, and pressing the counter's native button updates the shared state without replacing the control.
 
-- `cargo test -p gallery` runs it on the desktop's backend (`tests/desktop.rs` and `tests/cli.rs`). On Linux it needs a display, for example `dbus-run-session -- xvfb-run -a env GDK_BACKEND=x11 cargo test -p gallery`. The same command also lays every screen out headlessly at its own size and at phone size.
-- `test:browser` runs it in Chrome (`tests/web.rs`).
-- `verify_mobile` runs it on iOS and Android, as described above.
+- `cargo test -p gallery` lays every screen out headlessly, checks the shared host behavior, and checks the terminal and CLI output.
+- `verify_mobile` runs the screens on iOS and Android, as described above.

@@ -14,7 +14,7 @@ const SERVER_EDITOR: u32 = 57;
 
 #[test]
 fn the_hydration_fixture_is_what_the_server_renders() {
-	// The same screen as `hydration_screen` in `element.rs`.
+	// A labelled editor with a placeholder, the markup the fixture hydrates.
 	let html = without_devtools_attributes(
 		&render(
 			Element::view().child(

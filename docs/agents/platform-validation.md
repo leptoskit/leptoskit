@@ -2,26 +2,27 @@
 
 How the repository proves that each platform works: the runtime probe, the widget verifiers, the native fixtures, and what CI runs. None of this is needed to build an app with leptoskit, so it lives here rather than on the public site.
 
-## What CI runs per platform
+## What CI runs
 
-| Platform        | CI job                                                                                      | What it exercises                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| --------------- | ------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| macOS (AppKit)  | `desktop tests (macos-latest, …)` and the `applications (macos-latest, …)` legs in `ci.yml` | The macOS and macOS-CLI shards of `setup/scripts/test-shard.sh` on a real macOS runner: the `leptoskit_appkit` suite with offscreen PNG snapshots, the bridge renderers, the gallery and platform probe, the plugins with a macOS implementation, and the CLI's non-ignored tests including `doctor`'s macOS-only checks. Then generated macOS app builds, Commonplace, and the widget journey. Not part of the coverage gate.                 |
-| iOS (UIKit)     | `ios simulator e2e`, `ios applications e2e`, and `ios code push e2e`                        | Boots a simulator and runs the instrumented `native_probe` through `verify_simulator`, with coverage, plus the generated app's UI test and the code push journey.                                                                                                                                                                                                                                                                              |
-| Android         | `android build and widget tests`                                                            | An API 35 x86_64 emulator running `verify_device`, the widget suite, `verify_mobile` gallery screenshots, Gradle instrumented tests, and a launch of the R8-minified release build of the file-routes example, with coverage.                                                                                                                                                                                                                  |
-| Linux (GTK 4)   | The `coverage (…)` shards and `application coverage (…)` legs                               | The workspace suite, once, with the real GTK widget suite under Xvfb with the cairo renderer and AT-SPI.                                                                                                                                                                                                                                                                                                                                       |
-| Windows (Win32) | `desktop tests (windows-latest, …)` and the `applications (windows-latest, …)` legs         | The Windows and Windows-CLI shards: `leptoskit_windows --test widgets` against real Win32 windows, the gallery and platform probe, the plugins with a Windows implementation, the CLI's non-ignored tests including the keygen ACL tests (with the publish tests' OpenSSL key generation), and `leptoskit_app`'s broker stop path. Then a generated-app build, the file-routes example, and the widget journey. Not part of the coverage gate. |
-| HarmonyOS       | `harmonyos.yml`, separate from `ci.yml`                                                     | Deno render-model tests, host contracts, and the Wasm counter, then compiles the app and its instrumentation HAPs for both ABIs. Nothing runs on an emulator or device. See [HarmonyOS](harmonyos.md).                                                                                                                                                                                                                                         |
-| Terminal        | The `coverage (…)` shards and `application coverage (…)` legs                               | The `leptoskit_tui` suite headlessly (render snapshots, input routing, escape streaming), the gallery terminal conformance snapshots, and a generated terminal app build.                                                                                                                                                                                                                                                                      |
-| System plugins  | `native-ui.yml`                                                                             | Dialog and permission plugins on all five desktop and mobile platforms. It does not test the widget backends.                                                                                                                                                                                                                                                                                                                                  |
+Pull requests and pushes to `main` run one Linux workflow, `ci.yml`:
 
-The workspace suite runs once, on Linux. Windows and macOS run only the packages whose code or tests change with the OS, listed as the `windows`, `windows-cli`, `macos`, and `macos-cli` shards in [`setup/scripts/test-shard.sh`](../../setup/scripts/test-shard.sh): a package with a per-OS implementation belongs there, and everything else is tested on Linux alone. The CLI's tests change with the OS too — the codepush keygen ACL tests on Windows, `doctor`'s macOS-only checks, per-OS branches in `src/native` and `src/dev` — so each desktop OS runs its non-ignored tests in a `-cli` leg beside the platform shard, with the Windows leg also covering `leptoskit_app`'s broker test's Windows-only stop path. The CLI's test binaries are the largest in the workspace, which is why the legs are separate.
+| Job                             | What it does                                                                                                                                                                                                            |
+| ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `fmt`                           | `leptoskit-fmt --check` for Rust and `view!` markup.                                                                                                                                                                    |
+| `workflow lint`                 | Offline `zizmor` audit of `.github`.                                                                                                                                                                                    |
+| `clippy, build, and unit tests` | `cargo clippy --locked --all-features` for the workspace's default members (the crates), then `cargo test --lib` for `leptoskit_yoga`, `leptoskit_native`, and `leptoskit_config`, then the configuration schema check. |
 
-No job compiles and tests the whole workspace. The Linux suite runs as four shards in parallel, each building only its packages: `compile-errors` (the trybuild tests, the slowest single test), `database`, `cli`, and `workspace`, which takes every package the others don't name. Generated application builds run in their own legs, since each app keeps its own build target and compiles cold. Every Linux leg exports its own instrumented report, and the coverage gate requires all of them. Each job has a 40- to 75-minute budget, above a cold build; a job that needs more should be split rather than given a longer timeout.
+The toolchain is the channel in `rust-toolchain.toml`, installed with dtolnay/rust-toolchain. Jobs install their own system libraries and Cargo tools. They do not install Nix or enter `devenv shell`.
 
-The local pre-push gate includes the same grouped Wasm Clippy checks as CI, covering browser and guest feature combinations. Optional server dependencies, such as the file router's SSR integration, stay behind native target guards even when a browser build enables every feature.
+There is no macOS, Windows, iOS, or Android leg on a pull request. Release binaries still build on the operating system that artifact needs, in `publish.yml`, which is tag and dispatch only. Generated project and SDK acceptance run there too, before publication. Docs deploy from `main`. HarmonyOS, native UI, benchmarks, the hosted pilot, and the services deploy journeys are `workflow_dispatch` only.
 
-Linux jobs use Nix's C/C++ compilers and Rust host linker with the Nix libraries. `setup:ci` exports those compiler paths and the Wasm browser capabilities file to later steps, which run outside the devenv shell. Keeping only its `bin` directory on `PATH` loses these settings: a system linker can pair the runner's glibc with a newer Nix `libm`, and browser tests can fall back to the runner's Chrome instead of the pinned Chromium.
+Platform suites below stay available locally through `devenv shell`. They are not pull-request checks.
+
+The packages whose tests change with the operating system are still listed as the `windows`, `windows-cli`, `macos`, and `macos-cli` shards in [`setup/scripts/test-shard.sh`](../../setup/scripts/test-shard.sh). Run the shard for the OS you are on; CI does not.
+
+The local pre-push gate runs the grouped Wasm Clippy checks, covering browser and guest feature combinations. Optional server dependencies, such as the file router's SSR integration, stay behind native target guards even when a browser build enables every feature.
+
+Local Linux builds inside `devenv shell` use Nix's C/C++ compilers and Rust host linker with the Nix libraries. `setup:ci` exports those compiler paths and the Wasm browser capabilities file for steps that leave the shell. Keeping only its `bin` directory on `PATH` loses these settings: a system linker can pair the runner's glibc with a newer Nix `libm`, and browser tests can fall back to the machine's Chrome instead of the pinned Chromium. GitHub Actions does not use that shell; it links with the runner's own compilers.
 
 On macOS, `lint:all` and the pre-push gate run `lint:swift`, using the same strict configuration as the Apple bridge job.
 
@@ -35,17 +36,17 @@ Browser audio tests exercise the default context and explicit 44.1 kHz and 48 kH
 
 Linux coverage builds use `line-tables-only` debug information for the dev and test profiles, with incremental compilation disabled. This keeps source locations for diagnostics and LLVM coverage while reducing the disk footprint of instrumented binaries and nested fixture builds. Their cache keys include the debug profile so they cannot restore the previous full-debug artifacts.
 
-The Linux coverage shards that run tests install NATS at the version provided by devenv and sets `LEPTOSKIT_REQUIRE_NATS=1`. Relay and session-revocation tests must run against a real server; a missing binary fails the job instead of silently skipping them.
+Local coverage runs that execute the relay tests install NATS at the version provided by devenv and set `LEPTOSKIT_REQUIRE_NATS=1`. Relay and session-revocation tests must run against a real server; a missing binary fails the run instead of silently skipping them.
 
-The iOS matrix separates widget verification, generated application journeys, and code push. Each job boots its own simulator, and the coverage gate waits for all three jobs to succeed.
+Local iOS checks separate widget verification, generated application journeys, and code push. Each one boots its own simulator.
 
-The coverage gate merges only the Linux, browser, iOS, and Android reports; see [CONTRIBUTING.md](../../CONTRIBUTING.md#coverage).
+A local coverage gate merges the Linux, browser, iOS, and Android reports; see [CONTRIBUTING.md](../../CONTRIBUTING.md#coverage). GitHub Actions does not run it.
 
 Android Clippy checks use the NDK compiler through `setup/scripts/clippy.sh aarch64-linux-android`. The script keeps API 24 explicit in C/C++ and bindgen flags even when a compiler cache hides the NDK compiler's name. The pinned Clippy reports `missing_const_for_thread_local` on some initializers that already use `const`, through Android's fallback TLS expansion ([rust-clippy#13422](https://github.com/rust-lang/rust-clippy/issues/13422)). Each affected static has an Android-only `expect` for that lint, so a fixed compiler reports the expectation as unfulfilled and requires removing it. Keep the const initializer and all other warnings denied.
 
 ## Deployments with services
 
-`services-deploy.yml` runs what `leptoskit generate deploy` and `lk infra` write for an app with [services](services.md), for real. It runs on pull requests and pushes to `main` that touch the generators, the service runtime, `examples/analytics`, or `Cargo.lock`, and weekly for the images and tools it pulls.
+`services-deploy.yml` runs what `leptoskit generate deploy` and `lk infra` write for an app with [services](services.md), for real. Start it with `workflow_dispatch`. Pull requests do not.
 
 The project is a copy of this checkout with `examples/analytics` at its root and a `leptoskit.toml` of its own (`setup/scripts/services_deploy_fixture.sh`). It adds the echo service from `setup/services_echo`, which reports the `Cookie` it receives, sets a cookie of its own, writes to a volume, calls the app's `/readyz`, and answers any other path with a marker. The image is built with the generated `Dockerfile`, changed in one line: crates.io has no CLI with this checkout's changes, so the build stage copies in the CLI built from it.
 
@@ -137,7 +138,7 @@ dbus-run-session -- xvfb-run -a env GDK_BACKEND=x11 GSK_RENDERER=cairo \
 
 ## The portable widget journey
 
-The SDK's `widget_suite` example is the journey CI runs on every OS through `leptoskit test run`:
+The SDK's `widget_suite` example is the local widget journey. Pull requests do not run it:
 
 ```sh
 cargo build -p leptoskit_testing --example widget_suite
@@ -146,7 +147,7 @@ cargo build -p leptoskit_testing --example widget_suite --target aarch64-apple-i
 cargo build -p leptoskit_testing --example widget_suite --target aarch64-linux-android
 ```
 
-The AppKit suite (`crates/leptoskit_appkit/tests/appkit.rs`) must run on the main thread. It checks the actual `NSTextField` content after an interaction and renders a PNG; set `LEPTOSKIT_TEST_ARTIFACTS` to keep it.
+The AppKit, GTK, and Win32 widget integration suites are not in the tree. On a Mac, the platform probe and `widget_suite` are how you exercise AppKit.
 
 ## Native fixtures
 
@@ -188,15 +189,8 @@ They are interpreter and HTTP integration tests. They do not prove the AppKit, U
 
 ## Code push journey
 
-`cargo run -p leptoskit_cli --example mobile_codepush -- --platform ios|android --device <id> --sdk-path . --cli target/debug/leptoskit` runs the full journey against a booted simulator or emulator, and CI runs it on both platforms. It scaffolds an app, builds four signed guests from one source, and serves them from a local registry. Then it taps a counter that steps by one, downloads and activates a replacement that steps by ten, and relaunches offline. Then it activates a guest that traps on startup and checks that the working guest is still interactive, both straight away and after a relaunch. Finally it installs a second good update after that rollback, and checks that it survives an offline relaunch.
+`cargo run -p leptoskit_cli --example mobile_codepush -- --platform ios|android --device <id> --sdk-path . --cli target/debug/leptoskit` runs the full journey against a booted simulator or emulator. Pull requests do not. It scaffolds an app, builds four signed guests from one source, and serves them from a local registry. Then it taps a counter that steps by one, downloads and activates a replacement that steps by ten, and relaunches offline. Then it activates a guest that traps on startup and checks that the working guest is still interactive, both straight away and after a relaunch. Finally it installs a second good update after that rollback, and checks that it survives an offline relaunch.
 
 ## `leptoskit dev` reload
 
-`crates/leptoskit_cli/tests/dev_reload.rs` checks that `leptoskit dev` reloads a real app: it scaffolds a project against this checkout, runs `leptoskit dev --platform <platform>`, edits the home screen's heading, and waits until every app `dev` launched logs `leptoskit dev: reloaded`. The shells log that line only once the new guest's native views have rendered. On Android the test also reads each device's view hierarchy with `uiautomator dump` and requires the edited text on screen. The tests need the platform toolchain and a device, so they are ignored by default and CI does not run them yet:
-
-```sh
-cargo nextest run -p leptoskit_cli --test dev_reload --run-ignored ignored-only
-cargo nextest run -p leptoskit_cli --test dev_reload --run-ignored ignored-only -E 'test(android)'
-```
-
-iOS uses every booted iPhone simulator, and boots the newest one when none is booted. Android uses every device `adb devices` lists, phones and emulators alike, and boots the first emulator when none is attached. Each run keeps its project and the full `dev` log under `target/dev-reload/<platform>-<time>/`.
+The device reload integration test is not in the tree, and pull requests do not run a device. Check a reload locally with `leptoskit dev`: edit a screen and confirm the running app logs `leptoskit dev: reloaded` after the new guest's native views render.

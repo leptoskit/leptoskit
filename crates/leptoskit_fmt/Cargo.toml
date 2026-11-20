@@ -24,10 +24,6 @@ required-features = ["cli"]
 name = "cli"
 required-features = ["cli"]
 
-[[bench]]
-name = "format"
-harness = false
-
 [features]
 # The `leptoskit format` command line: its arguments, file walking, and
 # reporting.

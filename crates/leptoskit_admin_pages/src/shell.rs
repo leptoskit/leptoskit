@@ -980,7 +980,9 @@ pub(crate) fn preference(body: &str) {
 mod browser {
 	/// Whether the device prefers dark.
 	pub(super) fn prefers_dark() -> bool {
-		#[cfg(feature = "hydrate")]
+		// `hydrate` is also on for a host `--all-features` build, which has
+		// no window. These calls exist only in the browser build.
+		#[cfg(all(feature = "hydrate", target_arch = "wasm32"))]
 		{
 			web_sys::window()
 				.and_then(|window| {
@@ -991,13 +993,13 @@ mod browser {
 				})
 				.is_some_and(|list| list.matches())
 		}
-		#[cfg(not(feature = "hydrate"))]
+		#[cfg(not(all(feature = "hydrate", target_arch = "wasm32")))]
 		false
 	}
 
 	/// Sets a cookie on this page's site.
 	pub(super) fn set_cookie(cookie: &str) {
-		#[cfg(feature = "hydrate")]
+		#[cfg(all(feature = "hydrate", target_arch = "wasm32"))]
 		{
 			use wasm_bindgen::JsCast as _;
 
@@ -1008,14 +1010,14 @@ mod browser {
 				let _ = document.set_cookie(cookie);
 			}
 		}
-		#[cfg(not(feature = "hydrate"))]
+		#[cfg(not(all(feature = "hydrate", target_arch = "wasm32")))]
 		let _ = cookie;
 	}
 
 	/// Sends `body`, as JSON, to `path` on this site, and lets it go: a
 	/// preference that doesn't save is asked for again next time.
 	pub(super) fn post(path: &str, body: &str) {
-		#[cfg(feature = "hydrate")]
+		#[cfg(all(feature = "hydrate", target_arch = "wasm32"))]
 		{
 			let init = web_sys::RequestInit::new();
 			init.set_method("POST");
@@ -1033,7 +1035,7 @@ mod browser {
 				let _ = sent.await;
 			});
 		}
-		#[cfg(not(feature = "hydrate"))]
+		#[cfg(not(all(feature = "hydrate", target_arch = "wasm32")))]
 		let _ = (path, body);
 	}
 }

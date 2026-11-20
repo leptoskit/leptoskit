@@ -1,6 +1,7 @@
 //! The Infrastructure pages this crate builds: every project, and one
 //! operation followed live while it runs.
 
+#[cfg(all(feature = "hydrate", target_arch = "wasm32"))]
 use leptos::prelude::Effect;
 use leptoskit::prelude::*;
 use leptoskit::rpc::client::StreamHandle;
@@ -87,9 +88,6 @@ pub(crate) struct Follow {
 impl Follow {
 	/// Opens the operation's progress stream, in the browser.
 	pub(crate) fn open(id: &str) -> Self {
-		#[cfg(feature = "hydrate")]
-		crate::live_connection();
-
 		let id = id.to_owned();
 		let progress = leptoskit::rpc::use_stream({
 			let id = id.clone();
@@ -97,15 +95,25 @@ impl Follow {
 		});
 		let page = format!("{BASE}/infra/operations/{id}");
 
-		Effect::new(move |_| {
-			let done = progress
-				.items()
-				.with(|items| items.contains(&Progress::Done));
+		// Following the stream is the browser's. `Effect::new` calls
+		// `spawn_local`, which panics on the server runtime, and `hydrate`
+		// is also on for a host `--all-features` build.
+		#[cfg(all(feature = "hydrate", target_arch = "wasm32"))]
+		{
+			crate::live_connection();
 
-			if done {
-				crate::go(&page);
-			}
-		});
+			Effect::new(move |_| {
+				let done = progress
+					.items()
+					.with(|items| items.contains(&Progress::Done));
+
+				if done {
+					crate::go(&page);
+				}
+			});
+		}
+		#[cfg(not(all(feature = "hydrate", target_arch = "wasm32")))]
+		let _ = page;
 
 		Self { progress }
 	}

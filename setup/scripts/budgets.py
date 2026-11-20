@@ -2,10 +2,9 @@
 """Caps and boot, the blocking checks that fail on a count.
 
 Exact's six checks are build, test, lint, caps, boot, and workspace. This
-script runs caps and boot. They count, so a timer cannot flake them. build,
-test, lint, and workspace stay the CI jobs named below; this script only
-checks those jobs are still wired, because a workspace compile does not
-finish in Exact's 65 second gate.
+script runs caps and boot. They count, so a timer cannot flake them. build
+and workspace stay the local clippy script. test and lint stay the Linux CI
+job: cargo test, and cargo clippy with warnings denied.
 """
 
 from __future__ import annotations
@@ -119,8 +118,8 @@ def wired() -> list[str]:
     problems: list[str] = []
     ci = read(".github/workflows/ci.yml")
     clippy = read("setup/scripts/clippy.sh")
-    if "run: lint:all" not in ci:
-        problems.append("lint: CI no longer runs lint:all")
+    if 'build.warnings="deny"' not in ci or "cargo clippy" not in ci:
+        problems.append("lint: CI no longer denies warnings with clippy")
     if "cargo test" not in ci:
         problems.append("test: CI no longer runs cargo test")
     if "--workspace --all-features --all-targets" not in clippy:

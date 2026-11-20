@@ -12,11 +12,21 @@ export const LIVE_SUBPROTOCOL = "leptoskit.live.v1.json";
 export class LiveError extends Error {
 	/** The HTTP status the same failure would carry; `0` when the connection closed. */
 	readonly status: number;
+	/** The stable name of the reason, such as `rate_limited`, when the server refused the request and said why. */
+	readonly code: string | undefined;
+	/** How many seconds to wait before trying again, when the server said. */
+	readonly retryAfter: number | undefined;
 
-	constructor(status: number, message: string) {
+	constructor(
+		status: number,
+		message: string,
+		refusal: { code?: string; retryAfter?: number } = {},
+	) {
 		super(message);
 		this.name = "LiveError";
 		this.status = status;
+		this.code = refusal.code;
+		this.retryAfter = refusal.retryAfter;
 	}
 }
 
@@ -832,10 +842,21 @@ function applyRows(value: unknown, patch: Frame): unknown {
 }
 
 function wireError(err: unknown): LiveError {
-	const error = (err ?? {}) as { status?: unknown; message?: unknown };
+	const error = (err ?? {}) as {
+		status?: unknown;
+		message?: unknown;
+		code?: unknown;
+		retry_after?: unknown;
+	};
 	return new LiveError(
 		number(error.status, 500),
 		String(error.message ?? "the server failed"),
+		{
+			code: typeof error.code === "string" ? error.code : undefined,
+			retryAfter: typeof error.retry_after === "number"
+				? error.retry_after
+				: undefined,
+		},
 	);
 }
 

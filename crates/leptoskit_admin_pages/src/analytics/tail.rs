@@ -18,7 +18,7 @@ pub struct Tail {
 	pulse: RwSignal<Option<Pulse>>,
 	/// How many times the pulse came, changed or not: about once a second.
 	#[cfg_attr(
-		not(feature = "hydrate"),
+		not(all(feature = "hydrate", target_arch = "wasm32")),
 		expect(dead_code, reason = "only the browser re-reads a builder")
 	)]
 	beats: RwSignal<u64>,
@@ -45,7 +45,7 @@ impl Tail {
 		tail
 	}
 
-	#[cfg(feature = "hydrate")]
+	#[cfg(all(feature = "hydrate", target_arch = "wasm32"))]
 	fn follow(self, events: bool) {
 		use leptos::prelude::Effect;
 
@@ -82,7 +82,7 @@ impl Tail {
 		});
 	}
 
-	#[cfg(not(feature = "hydrate"))]
+	#[cfg(not(all(feature = "hydrate", target_arch = "wasm32")))]
 	fn follow(self, events: bool) {
 		let _ = (self, events);
 	}
@@ -97,7 +97,7 @@ impl Tail {
 	/// The pulse's newest event number, without tracking it.
 	#[must_use]
 	#[cfg_attr(
-		not(feature = "hydrate"),
+		not(all(feature = "hydrate", target_arch = "wasm32")),
 		expect(dead_code, reason = "only the browser re-reads a builder")
 	)]
 	pub(crate) fn latest_untracked(&self) -> Option<u64> {
@@ -109,7 +109,7 @@ impl Tail {
 	/// second while the stream flows.
 	#[must_use]
 	#[cfg_attr(
-		not(feature = "hydrate"),
+		not(all(feature = "hydrate", target_arch = "wasm32")),
 		expect(dead_code, reason = "only the browser re-reads a builder")
 	)]
 	pub(crate) fn beats(&self) -> u64 {
@@ -118,6 +118,10 @@ impl Tail {
 
 	/// The events that arrived since the last call, oldest first. An effect
 	/// that calls it runs again when more arrive.
+	#[cfg_attr(
+		not(all(feature = "hydrate", target_arch = "wasm32")),
+		expect(dead_code, reason = "only the browser takes events off the stream")
+	)]
 	pub(crate) fn take(&self) -> Vec<Arrival> {
 		let arrived = self.arrived.get();
 
