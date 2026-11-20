@@ -369,7 +369,7 @@ impl Workings {
 	}
 }
 
-#[cfg(feature = "hydrate")]
+#[cfg(all(feature = "hydrate", target_arch = "wasm32"))]
 fn copy(text: String, copied: RwSignal<Option<String>>, notice: Option<RwSignal<String>>) {
 	crate::spawn(async move {
 		if leptoskit_plugin_clipboard::web::write_text(&text)
@@ -397,7 +397,7 @@ fn copy(text: String, copied: RwSignal<Option<String>>, notice: Option<RwSignal<
 
 /// Off the browser there's no clipboard: the press only marks the text
 /// copied, which tests read.
-#[cfg(not(feature = "hydrate"))]
+#[cfg(not(all(feature = "hydrate", target_arch = "wasm32")))]
 fn copy(text: String, copied: RwSignal<Option<String>>, notice: Option<RwSignal<String>>) {
 	let _ = (notice, COPIED_FOR);
 	copied.set(Some(text));

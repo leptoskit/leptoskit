@@ -423,7 +423,7 @@ mod tests {
 			"1.0.1",
 		);
 
-		assert_eq!(tool.program, "npx");
+		assert_eq!(tool.program, if cfg!(windows) { "npx.cmd" } else { "npx" });
 		assert_eq!(
 			tool.args,
 			[

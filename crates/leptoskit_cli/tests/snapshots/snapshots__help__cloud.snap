@@ -7,21 +7,31 @@ Signs in and manages cloud accounts, projects, environments and tokens
 Usage: leptoskit cloud [OPTIONS] <COMMAND>
 
 Commands:
-  login    Signs in through your browser with a short code
-  logout   Revokes your login and removes the local credentials
-  whoami   Shows who is signed in and which organizations they can see
-  org      Manages organizations and membership
-  project  Manages projects and their production environment
-  env      Manages a project's environments
-  token    Manages scoped API tokens for CI
-  link     Links leptoskit.toml to an existing cloud project
-  help     Print this message or the help of the given subcommand(s)
+  login         Signs in through your browser with a short code
+  logout        Revokes your login and removes the local credentials
+  whoami        Shows who is signed in and which organizations they can see
+  org           Manages organizations and membership
+  project       Manages projects and their production environment
+  env           Manages a project's environments
+  var           Manages an environment's variables
+  secret        Manages an environment's secrets
+  domain        Manages an environment's custom domains
+  deployments   Lists an environment's deployments, newest first
+  rollback      Returns an environment to an earlier deployment that was live, reusing its image
+  db            Manages an environment's database and its backups
+  publish       Builds the project on a build worker and uploads it to stores, as `lk publish` does, with the environment's secrets as credentials
+  publications  Shows an environment's publishes and what they printed
+  usage         Shows what the organization used in a month, and its cost
+  token         Manages scoped API tokens for CI
+  link          Links leptoskit.toml to an existing cloud project
+  help          Print this message or the help of the given subcommand(s)
 
 Options:
-      --app-target <NAME>  Select a named target from the root leptoskit.toml
-      --url <URL>          Cloud origin; overrides `LEPTOSKIT_CLOUD_URL` and [cloud].url
-      --json               Prints the documented JSON result
-      --org <ORG>          Organization slug; defaults to [cloud].organization or your personal one
-      --project <PROJECT>  Project slug; defaults to [cloud].project
-  -h, --help               Print help
-  -V, --version            Print version
+      --app-target <NAME>          Select a named target from the root leptoskit.toml
+      --url <URL>                  Cloud origin; overrides `LEPTOSKIT_CLOUD_URL` and [cloud].url
+      --json                       Prints the documented JSON result
+      --org <ORG>                  Organization slug; defaults to [cloud].organization or your personal one
+      --project <PROJECT>          Project slug; defaults to [cloud].project
+  -e, --environment <ENVIRONMENT>  Environment name, for the commands about one; defaults to production
+  -h, --help                       Print help
+  -V, --version                    Print version

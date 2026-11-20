@@ -3967,7 +3967,8 @@ fn credentials(pairs: &[(&str, &str)]) -> super::Credentials {
 	let mut text = String::new();
 
 	for (name, value) in pairs {
-		let _ = writeln!(text, "{name} = \"{value}\"");
+		// A basic string, escaped: a Windows path holds backslashes.
+		let _ = writeln!(text, "{name} = {}", toml::Value::from(*value));
 	}
 
 	std::fs::write(directory.path().join("credentials.toml"), text).unwrap();
@@ -4176,7 +4177,10 @@ fn the_send_builds_once_and_submits_through_one_recorded_invocation() {
 	let seen = seen.seen.borrow();
 	assert_eq!(seen.len(), 2);
 	let submit = &seen[1];
-	assert_eq!(submit.program, "npx");
+	assert_eq!(
+		submit.program,
+		if cfg!(windows) { "npx.cmd" } else { "npx" }
+	);
 	let copied = root
 		.path()
 		.join(".leptoskit/publish/solana/app-release.apk");

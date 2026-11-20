@@ -337,6 +337,11 @@ pub fn disable_key(endpoint: uuid::Uuid) -> String {
 /// printable token means Android — and this module never second-guesses it.
 /// The token's shape was validated at the plugin boundary; its bytes are
 /// forwarded verbatim, never re-derived or stored.
+#[allow(
+	clippy::result_large_err,
+	reason = "an enrollment fails once per attempt and the caller keeps the error's enrollments; \
+	          boxing it buys nothing. `allow`, as 32-bit targets fall under the size limit"
+)]
 pub fn decide(
 	snapshot: &leptoskit_plugin_notifications::RemoteRegistration,
 ) -> Result<Option<PushCredential>, EnrollError> {
@@ -419,6 +424,11 @@ pub enum Retirement {
 ///
 /// [`EnrollError`] for each step's own failure. A silent OS is
 /// [`EnrollError::Unconfirmed`], never a stale token.
+#[allow(
+	clippy::result_large_err,
+	reason = "an enrollment fails once per attempt and the caller keeps the error's enrollments; \
+	          boxing it buys nothing. `allow`, as 32-bit targets fall under the size limit"
+)]
 #[cfg_attr(
 	not(target_arch = "wasm32"),
 	allow(clippy::unused_async, reason = "matches the wasm signature")
@@ -490,6 +500,11 @@ pub async fn enroll() -> Result<Enrollment, EnrollError> {
 /// retired or dropped), and [`EnrollError::RetireFailed`] /
 /// [`EnrollError::OwnershipUnknown`] leave any new enrollment live and the
 /// old handle still needing its revoke.
+#[allow(
+	clippy::result_large_err,
+	reason = "an enrollment fails once per attempt and the caller keeps the error's enrollments; \
+	          boxing it buys nothing. `allow`, as 32-bit targets fall under the size limit"
+)]
 #[cfg_attr(
 	not(target_arch = "wasm32"),
 	allow(clippy::unused_async, reason = "matches the wasm signature")

@@ -2393,6 +2393,10 @@ fn matches(element: &web_sys::Element, selector: &str) -> bool {
 }
 
 #[wasm_bindgen_test]
+#[expect(
+	clippy::cognitive_complexity,
+	reason = "one browser journey, step by step, reads best in one place"
+)]
 async fn a_modal_opens_in_the_top_layer_and_gives_focus_back() {
 	use leptoskit_native::components::Button;
 	use leptoskit_native::components::Modal;
@@ -2674,6 +2678,10 @@ async fn tab_wraps_inside_an_open_modal() {
 }
 
 #[wasm_bindgen_test]
+#[expect(
+	clippy::cognitive_complexity,
+	reason = "one browser journey, step by step, reads best in one place"
+)]
 async fn a_popover_opens_beside_its_anchor_and_asks_before_it_closes() {
 	use leptoskit_native::Placement;
 	use leptoskit_native::components::Button;
