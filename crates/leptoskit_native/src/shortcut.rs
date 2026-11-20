@@ -126,6 +126,7 @@ thread_local! {
 	/// The shortcuts in use, oldest first.
 	static SHORTCUTS: RefCell<Vec<(u64, Shortcut, Run)>> = const { RefCell::new(Vec::new()) };
 	/// The next registration's number.
+	#[cfg_attr(target_os = "android", expect(clippy::missing_const_for_thread_local, reason = "Android fallback TLS: rust-clippy#13422"))]
 	static NEXT: Cell<u64> = const { Cell::new(1) };
 }
 

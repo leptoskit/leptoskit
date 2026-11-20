@@ -65,6 +65,13 @@ fn overflowing_decoration_never_extends_the_activation_bounds() {
 }
 
 #[test]
+#[cfg_attr(
+	target_arch = "wasm32",
+	expect(
+		clippy::useless_vec,
+		reason = "on 64-bit hosts the elements would be an array over 16 KiB on the stack"
+	)
+)]
 fn decoration_rejects_nested_controls_handlers_and_scrolling_in_all_variants() {
 	let group = RadioGroup::new("choices").unwrap();
 

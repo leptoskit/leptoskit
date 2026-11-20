@@ -30,8 +30,6 @@ leptos = { workspace = true }
 leptoskit = { workspace = true, features = ["apm", "aria", "auth", "query", "rpc", "web"] }
 # The insights engine's types: a query, and what it answered.
 leptoskit_analytics = { workspace = true, features = ["insights"] }
-# Copy in a drawer.
-leptoskit_plugin_clipboard = { workspace = true, optional = true }
 schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
@@ -40,6 +38,11 @@ wasm-bindgen-futures = { workspace = true, optional = true }
 # The theme's cookie, the device's appearance, saving a preference, and a
 # full page load when a search result leads to another page.
 web-sys = { workspace = true, optional = true, features = ["Crypto", "Document", "Element", "Headers", "History", "HtmlDocument", "HtmlElement", "Location", "MediaQueryList", "Node", "Performance", "Request", "RequestCredentials", "RequestInit", "Response", "Window"] }
+
+# Copy in a drawer, through the browser's clipboard. It has no other
+# backend here, so the dependency is the browser's alone.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+leptoskit_plugin_clipboard = { workspace = true, optional = true }
 
 [features]
 default = []

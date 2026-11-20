@@ -63,15 +63,16 @@ pub fn use_clock(interval: Duration) -> Clock {
 		let started = leptoskit_query::now_ms();
 		let mut latest = Duration::ZERO;
 
-		while leptoskit_query::try_sleep(interval).await.is_ok() {
+		// Where the host has no timer, `sleep` never wakes, and the clock
+		// stays at zero.
+		loop {
+			leptoskit_query::sleep(interval).await;
 			// A wall clock can be set back. This one never goes back.
 			let now = Duration::from_millis(leptoskit_query::now_ms().saturating_sub(started));
 			latest = latest.max(now);
-
-			if elapsed.try_set(latest).is_some() {
-				// The signal is gone, and so is whoever was reading it.
-				return;
-			}
+			// The signal goes with its owner, whose cleanup aborts this loop
+			// too, so a set that finds it gone has nothing more to do.
+			let _ = elapsed.try_set(latest);
 		}
 	});
 	let ticking = async move {

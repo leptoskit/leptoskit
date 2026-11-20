@@ -1362,7 +1362,10 @@ mod tests {
 			["fetch"],
 			"an app without push declares nothing for it"
 		);
-		assert!(super::background_modes(&registry(Vec::new()), &config()).is_empty());
+		assert_eq!(
+			super::background_modes(&registry(Vec::new()), &config()),
+			Vec::<String>::new()
+		);
 	}
 
 	/// The generated app target's Swift compiles against the real modules:
