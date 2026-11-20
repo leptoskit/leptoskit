@@ -2031,6 +2031,13 @@
 						"type": "string"
 					}
 				},
+				"optional_permissions": {
+					"description": "Named permissions the extension requests at run time with\n`leptoskit::extension::permissions::request_permissions`.",
+					"type": "array",
+					"items": {
+						"type": "string"
+					}
+				},
 				"options": {
 					"description": "The extension's settings page.",
 					"anyOf": [
@@ -2099,9 +2106,23 @@
 						"$ref": "#/$defs/Browser"
 					}
 				},
+				"open_at_install": {
+					"description": "Whether Firefox opens the sidebar automatically on install\n(`sidebar_action.open_at_install`).",
+					"type": [
+						"boolean",
+						"null"
+					]
+				},
 				"route": {
 					"description": "The app route the page opens, such as `/clip`.",
 					"type": "string"
+				},
+				"title": {
+					"description": "Optional title for surfaces that display one in browser chrome (such as\nFirefox's `sidebar_action.default_title`).",
+					"type": [
+						"string",
+						"null"
+					]
 				}
 			},
 			"additionalProperties": false,

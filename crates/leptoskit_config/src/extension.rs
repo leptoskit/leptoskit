@@ -66,6 +66,10 @@ pub struct ExtensionConfig {
 	/// Extension permissions, added to those the app's plugins need.
 	#[serde(skip_serializing_if = "Vec::is_empty")]
 	pub permissions: Vec<String>,
+	/// Named permissions the extension requests at run time with
+	/// `leptoskit::extension::permissions::request_permissions`.
+	#[serde(skip_serializing_if = "Vec::is_empty")]
+	pub optional_permissions: Vec<String>,
 	/// Match patterns granted at install.
 	#[serde(skip_serializing_if = "Vec::is_empty")]
 	pub host_permissions: Vec<String>,
@@ -114,6 +118,7 @@ impl Default for ExtensionConfig {
 			browsers: vec![Browser::Chromium, Browser::Firefox],
 			server: None,
 			permissions: Vec::new(),
+			optional_permissions: Vec::new(),
 			host_permissions: Vec::new(),
 			optional_host_permissions: Vec::new(),
 			popup: None,
@@ -141,6 +146,14 @@ pub struct ExtensionPage {
 	/// omitted.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub browsers: Option<Vec<Browser>>,
+	/// Optional title for surfaces that display one in browser chrome (such as
+	/// Firefox's `sidebar_action.default_title`).
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub title: Option<String>,
+	/// Whether Firefox opens the sidebar automatically on install
+	/// (`sidebar_action.open_at_install`).
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub open_at_install: Option<bool>,
 }
 
 impl ExtensionPage {
@@ -1004,6 +1017,8 @@ id = "inspector@example.com"
 			popup: Some(ExtensionPage {
 				route: "/popup".into(),
 				browsers: None,
+				title: None,
+				open_at_install: None,
 			}),
 			..ExtensionConfig::default()
 		};

@@ -155,7 +155,7 @@ impl Port {
 	}
 
 	#[cfg(target_arch = "wasm32")]
-	fn from_js(name: String, port: wasm_bindgen::JsValue) -> Self {
+	pub(crate) fn from_js(name: String, port: wasm_bindgen::JsValue) -> Self {
 		Self::blank(name, PortKind::Js(port))
 	}
 
