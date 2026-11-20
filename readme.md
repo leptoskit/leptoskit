@@ -20,7 +20,15 @@
 
 ---
 
-Write shared LeptosKit components for web SSR and hydration, browser extensions, and native apps. Web and extensions render HTML and CSS; native apps render platform widgets without a web view.
+<!-- {=leptoskitOverview} -->
+
+leptoskit is a full-stack Rust toolkit for taking an app from a single codebase to every screen and to production:
+
+- **One UI, real native widgets:** describe screens once as a tree of components (`View`, `Text`, `Button`, `TextInput`, `ScrollView`, …) styled with built-in Tailwind. On the web it renders to the DOM with SSR, CSR, or islands; on macOS, iOS, Android, Linux, Windows, the terminal, and experimental HarmonyOS it renders native controls with no web view.
+- **Full-stack by default:** typed server functions (`leptoskit_rpc`), file-based routing, cached queries, SQLite or Postgres migrations, sign-in, background jobs, real-time updates, and sidecar services live beside the UI in one workspace configured by `leptoskit.toml`.
+- **Two clear ways to ship:** deploy straight from `leptoskit.toml` to **LeptosKit Cloud** (`lk cloud launch` / `lk deploy`), or self-host on your own Linux VMs with **OpenTofu + Kamal** (`lk infra`).
+
+<!-- {/leptoskitOverview} -->
 
 ## Examples
 
@@ -72,10 +80,11 @@ Generated macOS, iOS, and Android apps use the Swift or Kotlin renderers in `lep
 | [`leptoskit_use`](crates/leptoskit_use)                         | Cross-platform reactive hooks: state, derived values, watchers, timers, storage, and viewport breakpoints without a DOM or executor.                                                                           |
 | [`leptoskit_aria`](crates/leptoskit_aria)                       | Headless accessible components: disclosure, toggle buttons, tabs, labeled fields, and dialogs expressed in shared metadata, with platform-specific accessibility limits.                                       |
 | [`leptoskit_form`](crates/leptoskit_form)                       | Headless form state in the style of TanStack Form: typed fields, sync validation, touch and submit tracking, and inputs wired through the aria fields.                                                         |
-| [`leptoskit_config`](crates/leptoskit_config)                   | `leptoskit.toml`: app identity, platforms, servers, native targets, code push channels, and plugin declarations.                                                                                               |
+| [`leptoskit_config`](crates/leptoskit_config)                   | `leptoskit.toml`: app identity, platforms, servers, cloud environments and storage, native targets, code push channels, and plugin declarations.                                                               |
+| [`leptoskit_cloud`](crates/leptoskit_cloud)                     | Shared types, source archive, price estimator, and control plane for LeptosKit Cloud (paired with `leptoskit_cloud_runtime`, `leptoskit_cloud_worker`, `leptoskit_cloud_platform`, and `leptoskit_cloud_app`). |
 | [`leptoskit_plugin`](crates/leptoskit_plugin)                   | The plugin system: build hooks for leptoskit plugins, and leptos plugins forwarded as app cargo features.                                                                                                      |
 | [`leptoskit_docs`](crates/leptoskit_docs)                       | Markdown with leptos components, in the style of MDX, and the static site generator that builds these docs: navigation, search, highlighting, and checked links.                                               |
-| [`leptoskit_cli`](crates/leptoskit_cli)                         | The `leptoskit` binary: `new`, `dev`, `build`, `game`, `serve`, `lint`, `format`, `codepush`, `doctor`, `completions`.                                                                                         |
+| [`leptoskit_cli`](crates/leptoskit_cli)                         | The `leptoskit` (`lk`) binary: `new`, `dev`, `build`, `cloud`, `infra`, `deploy`, `mcp`, `game`, `serve`, `lint`, `format`, `codepush`, `doctor`, `completions`.                                               |
 | [`leptoskit_testing`](crates/leptoskit_testing)                 | Native widget tests with semantic finders, interactions, bounded pumping, and diagnostic trees.                                                                                                                |
 | [`leptoskit_lint`](crates/leptoskit_lint)                       | The project rules behind `leptoskit lint`: components carry `#[component]`, and trees are written the way `[lint] markup` says.                                                                                |
 | [`leptoskit_testing_library`](crates/leptoskit_testing_library) | Testing Library queries and widget-test actions (`tap`, `enter_text`, `toggle`) for leptoskit components in a real browser, sharing `leptoskit_testing`'s finders.                                             |
@@ -86,18 +95,32 @@ Generated macOS, iOS, and Android apps use the Swift or Kotlin renderers in `lep
 ```bash
 cargo install leptoskit_cli --locked
 
-leptoskit new my_app                     # one app, all six platforms enabled
-leptoskit dev                            # run every platform, rebuild on change
-leptoskit routes                         # write the typed Route enum from src/routes/
-leptoskit build --release --platform web # cached builds
-leptoskit serve                          # static files, SPA fallback, health check
-leptoskit codepush release               # pack dist/ into a versioned release
-leptoskit codepush publish               # upload releases to an S3-compatible bucket
-leptoskit codepush serve                 # or serve updates to devices yourself
-leptoskit doctor                         # check the toolchain
+lk new my_app                            # one app, all six platforms enabled (add --web-only --cloud --auth for web + cloud)
+lk dev                                   # run every platform, rebuild on change
+lk routes                                # write the typed Route enum from src/routes/
+lk build --release --platform web        # cached builds
+lk cloud login && lk cloud launch        # ship straight to LeptosKit Cloud from leptoskit.toml
+lk deploy                                # deploy to LeptosKit Cloud (or self-hosted OpenTofu/Kamal)
+lk codepush release                      # pack dist/ into a versioned over-the-air release
+lk doctor                                # check the toolchain
 ```
 
-The install includes `lk`, a shorter alias for the same CLI: `lk new my_app`, `lk dev`, `lk build`. Help and completions answer to whichever name you type.
+The install includes `lk`, a shorter alias for `leptoskit`. Help and completions answer to whichever name you type.
+
+## Shipping your app
+
+<!-- {=deploymentTracks} -->
+
+| Track                         | Best for                                                                               | Primary commands                                                                     | What it manages                                                                                                                                                       |
+| ----------------------------- | -------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **LeptosKit Cloud** (managed) | Shipping fast with zero infrastructure boilerplate, including from AI agents           | `lk cloud login`, `lk cloud launch`, `lk deploy`, `lk cloud status`, `lk cloud logs` | Source archiving, OCI builds, rolling releases, scale-to-zero, managed Postgres, secrets vault, custom domains, and usage metering from `[cloud]` in `leptoskit.toml` |
+| **Self-hosted** (`lk infra`)  | Running on your own Hetzner, DigitalOcean, or Linux servers with full provider control | `lk infra generate`, `lk infra plan`, `lk infra apply`, `lk deploy`                  | OpenTofu VMs/networks/Cloudflare tunnels, Kamal app + Postgres containers, and encrypted Restic backups (`infra.mode = "graph"` is experimental)                      |
+
+`lk console` is the legacy operator-enrolled deployment dashboard and agent API; new projects should pick either **LeptosKit Cloud** (`lk cloud`) or **Self-hosted** (`lk infra`).
+
+<!-- {/deploymentTracks} -->
+
+Read the [LeptosKit Cloud guide](docs/src/guide/41-leptoskit-cloud.md) or [Deploying a server](docs/src/guide/24-deploying.md) for step-by-step instructions.
 
 `leptoskit new amazing` creates `amazing_app`, `amazing_backend`, and `amazing_shared` crates, with the SSR server in root `src/main.rs`. The app owns routes, components, and state for every platform. Backend implementation stays server-only, and shared contracts live in the shared crate. App-owned `web/`, `ios/`, `android/`, `macos/`, `windows/`, and `linux/` folders contain platform integration. Generated state stays in ignored `.leptoskit/` directories.
 

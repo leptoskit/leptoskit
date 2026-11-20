@@ -1,5 +1,11 @@
 # Manage deployments through a hosted account
 
+<Callout kind="important" title="Legacy operator-enrolled console">
+
+This page documents `lk console`, the legacy operator-enrolled deployment dashboard for self-hosted `lk infra` installations. For new projects, choose either [LeptosKit Cloud](41-leptoskit-cloud.md) (`lk cloud launch` / `lk deploy`) or [Deploying a server](24-deploying.md) (`lk infra`).
+
+</Callout>
+
 Use a hosted LeptosKit account to keep deployment requests, application measurements and OpenTofu state in one place. The LeptosKit app uses the same screens on the web, iOS and Android. The website connects to its own server; native builds connect to the server configured when the app is built.
 
 This release supports operator-enrolled accounts. Your service operator supplies the URL and initial account key. It does not create an account on a public LeptosKit service automatically.

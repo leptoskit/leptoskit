@@ -1,6 +1,10 @@
 # leptoskit_cloud_runtime
 
-LeptosKit Cloud's runtime crate: the desired state of one environment as data, the boundary a place that runs environments sits behind, and the Kubernetes manifests for one release.
+<!-- {=cloudRuntimeSummary} -->
+
+Desired-state `ReleaseSpec`, `Runtime` adapter trait, deterministic Kubernetes manifest generator, and `kube` cluster adapter for `LeptosKit` Cloud environments: gVisor sandboxing, default-deny `NetworkPolicy`, KEDA HTTP scale-to-zero, CPU autoscaling, custom-domain TLS, bounded log reads, and environment status observation.
+
+<!-- {/cloudRuntimeSummary} -->
 
 A [`ReleaseSpec`](https://docs.rs/leptoskit_cloud_runtime/latest/leptoskit_cloud_runtime/spec/struct.ReleaseSpec.html) is the whole release the cloud applies: the app and its services, each with an exact image digest, port, health paths, environment variables, secret references, resources, scale, and volumes; the routes that reach them; and the policy they live under — a runtime class, egress rules, a quota, and a database's door. The spec is pure data with no plans or prices in it, and [`validate`](https://docs.rs/leptoskit_cloud_runtime/latest/leptoskit_cloud_runtime/spec/struct.ReleaseSpec.html#method.validate) refuses one no runtime could honor, one typed error per reason: two apps, a route to nowhere, a sleeper whose minimum is not zero, a process with volumes that scales past one replica, a quota the full scale would blow past, a tag where a digest belongs.
 

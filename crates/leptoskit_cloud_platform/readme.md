@@ -1,6 +1,12 @@
 # Cloud platform generator
 
-An unpublished, offline operator tool: one typed TOML declaration produces inspectable OpenTofu JSON, Kubernetes add-ons and address-resolved node bootstrap documents. Nothing has been provisioned with it. Follow the [operator runbook](../../docs/agents/cloud-platform.md) for installation order, required Secrets, placement, upgrades and acceptance checks.
+<!-- {=cloudPlatformSummary} -->
+
+Operator provisioning tool (`leptoskit-cloud-platform`) for `LeptosKit` Cloud clusters: generates inspectable `OpenTofu` JSON, two-phase hardened k3s + gVisor node bootstrap scripts, Kubernetes add-ons (CloudNativePG, KEDA, cert-manager, Traefik, Zot, cloudflared, control plane, and workers), and orchestrates end-to-end installs via `leptoskit-cloud-platform up`.
+
+<!-- {/cloudPlatformSummary} -->
+
+Follow the [operator runbook](../../docs/agents/cloud-platform.md) for installation order, required Secrets, placement, upgrades, and acceptance checks.
 
 Run commands through the repository shell:
 
@@ -9,9 +15,12 @@ CARGO_BUILD_JOBS=4 devenv shell -- cargo run -p leptoskit_cloud_platform -- chec
 CARGO_BUILD_JOBS=4 devenv shell -- cargo run -p leptoskit_cloud_platform -- plan-summary --config crates/leptoskit_cloud_platform/examples/growth.toml
 CARGO_BUILD_JOBS=4 devenv shell -- cargo run -p leptoskit_cloud_platform -- generate --config cloud-platform.toml --out generated
 CARGO_BUILD_JOBS=4 devenv shell -- cargo run -p leptoskit_cloud_platform -- bootstrap --config cloud-platform.toml --outputs tofu-output.json --out generated
+CARGO_BUILD_JOBS=4 devenv shell -- cargo run -p leptoskit_cloud_platform -- up --config cloud-platform.toml --out generated --dry-run
 ```
 
-Each generated `region/cluster` directory is an independent OpenTofu root. The operator runs `tofu init/plan/apply` separately and exports `tofu output -json` for bootstrap. Existing-only clusters omit `--outputs`; multiple clusters supply a JSON object keyed by `region/cluster`, with each value containing that cluster's outputs. No command executes OpenTofu, Kubernetes tools or SSH. Generated ownership journals refuse foreign or locally edited files; interrupted writes retain both old and intended contents. A stale `.platform.lock` or `*.platform-tmp` requires operator inspection before removal. Removed topology files are retained, never deleted automatically.
+`check`, `plan-summary`, `generate`, and `bootstrap` stay strictly offline. `up` orchestrates the end-to-end operator sequence (`generate` → `tofu init/plan/apply` → `bootstrap` → SSH node bootstrap → phased `kubectl apply` and readiness waits across `00`–`60`, including optional `[control_plane]` and `[workers]` manifests) and supports `--dry-run`, `--skip-tofu`, `--skip-bootstrap`, and `--skip-apply`. Once installed beside `lk` or on `PATH` (`cargo install --path crates/leptoskit_cloud_platform`), `lk cloud platform <command>` dispatches to this binary automatically.
+
+Each generated `region/cluster` directory is an independent OpenTofu root. Existing-only clusters omit `--outputs`; multiple clusters supply a JSON object keyed by `region/cluster`, with each value containing that cluster's outputs. Generated ownership journals refuse foreign or locally edited files; interrupted writes retain both old and intended contents. A stale `.platform.lock` or `*.platform-tmp` requires operator inspection before removal. Removed topology files are retained, never deleted automatically.
 
 Bootstrap targets Ubuntu 24.04 x86-64 with IPv4 pod/service networks. Copy the generated `.sh` document to its corresponding node, supply the shared join token in `/etc/rancher/k3s/join-token` with root-only permissions, then run the document as root. Start the first server before the remaining nodes. Cloud-init wrappers contain the same script for operators applying phase two through cloud-init; the original VM user-data only hardens the host. Tokens never enter generated files or arguments.
 

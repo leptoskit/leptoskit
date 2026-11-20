@@ -1,8 +1,12 @@
 # leptoskit_cloud_worker
 
-`leptoskit-cloud-worker` is LeptosKit Cloud's worker. It pairs with a control plane, asks it for jobs, runs one at a time under a lease, sends the job's log, and reports how it ended.
+<!-- {=cloudWorkerSummary} -->
 
-This crate holds the loop every role shares, the `build` role, with store publishing, and the `cluster` role. A cluster's worker doesn't take backups yet.
+`LeptosKit` Cloud execution worker (`leptoskit-cloud-worker`) supporting the `build` role (with the built-in `build-app` OCI builder and optional store publishing) and the `cluster` role (Kubernetes rollouts, shared Postgres provisioning, periodic status and runtime log reporting, and `--reconcile-on-start` recovery).
+
+<!-- {/cloudWorkerSummary} -->
+
+It pairs with a control plane, asks it for jobs, runs one at a time under a lease, batches job logs, and reports outcomes, environment status, and runtime logs back to the control plane. When `--build-command` is omitted, it defaults to its built-in `leptoskit-cloud-worker build-app` OCI builder (supporting persistent `--build-cache-dir` and optional `--build-sandbox` isolation wrappers). Once installed beside `lk` or on `PATH`, you can also run it via `lk cloud worker <command>`. A cluster's worker doesn't take backups yet.
 
 ## Pairing
 

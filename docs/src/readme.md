@@ -8,9 +8,17 @@ leptoskit is a Rust toolkit for building an app's interface once, with leptos co
 
 ## What leptoskit is for
 
-Most cross-platform toolkits make you pick: render to a web view everywhere, or write each platform twice. leptoskit takes a third path.
+Most cross-platform toolkits make you pick: render to a web view everywhere, or write each platform twice—and then stitch together separate backend, auth, database, and deployment tools on your own. leptoskit brings the whole app into one Rust workspace.
 
-You describe a screen once, in Rust, as a tree of components: `View`, `Text`, `Button`, `TextInput`, `ScrollView`, and the rest. On the web, the same tree renders through leptos to the DOM, with server rendering and hydration. On native platforms, leptoskit's own layout engine lays the tree out with flexbox and CSS grid, and a platform backend commits it as the platform's real controls: AppKit views on macOS, UIKit on iOS, Android views, GTK 4 on Linux, Win32 controls on Windows, and, experimentally, ArkUI on HarmonyOS. Wear OS and watchOS use a separate watch surface API (`leptoskit::watch`) rather than phone screens. In a terminal, the same tree draws as characters in the cell grid. Nothing runs in a web view.
+<!-- {=leptoskitOverview} -->
+
+leptoskit is a full-stack Rust toolkit for taking an app from a single codebase to every screen and to production:
+
+- **One UI, real native widgets:** describe screens once as a tree of components (`View`, `Text`, `Button`, `TextInput`, `ScrollView`, …) styled with built-in Tailwind. On the web it renders to the DOM with SSR, CSR, or islands; on macOS, iOS, Android, Linux, Windows, the terminal, and experimental HarmonyOS it renders native controls with no web view.
+- **Full-stack by default:** typed server functions (`leptoskit_rpc`), file-based routing, cached queries, SQLite or Postgres migrations, sign-in, background jobs, real-time updates, and sidecar services live beside the UI in one workspace configured by `leptoskit.toml`.
+- **Two clear ways to ship:** deploy straight from `leptoskit.toml` to **LeptosKit Cloud** (`lk cloud launch` / `lk deploy`), or self-host on your own Linux VMs with **OpenTofu + Kamal** (`lk infra`).
+
+<!-- {/leptoskitOverview} -->
 
 <Cards>
 	<Card title="Get started" href="guide/01-installation.md">
@@ -19,8 +27,8 @@ You describe a screen once, in Rust, as a tree of components: `View`, `Text`, `B
 	<Card title="Build a shared screen" href="guide/07-shared-components.md">
 		Write one screen with the built-in components and Tailwind, and render it on the web and natively.
 	</Card>
-	<Card title="Test what you ship" href="guide/08-testing.md">
-		Widget tests, device journeys, and the same finders on every platform.
+	<Card title="Ship to LeptosKit Cloud" href="guide/41-leptoskit-cloud.md">
+		Launch a full-stack Rust app with Postgres, secrets, domains, and logs straight from `leptoskit.toml`.
 	</Card>
 	<Card title="Pick your platforms" href="platforms/readme.md">
 		What each target runs, what works today, and how the host apps are put together.
@@ -78,7 +86,23 @@ The logo is the architecture. The ember boxes are layout: elements placed by the
 | [`leptoskit_query`](https://github.com/leptoskit/leptoskit/tree/main/crates/leptoskit_query)       | Cached, deduplicated, retrying async data in the style of TanStack Query.                                                                                                                                                                                                                                                                                                                                                                          |
 | [`leptoskit_l10n`](https://github.com/leptoskit/leptoskit/tree/main/crates/leptoskit_l10n)         | Typed translations in the style of Flutter's `gen_l10n`: ARB files become a `Messages` trait, with plurals for every language.                                                                                                                                                                                                                                                                                                                     |
 | [`leptoskit_testing`](https://github.com/leptoskit/leptoskit/tree/main/crates/leptoskit_testing)   | Widget tests with semantic finders, plus a driver that runs the same journeys against real native apps.                                                                                                                                                                                                                                                                                                                                            |
+| [`leptoskit_cloud`](https://github.com/leptoskit/leptoskit/tree/main/crates/leptoskit_cloud)       | The shared types, source archive, price estimator, and control plane behind [LeptosKit Cloud](guide/41-leptoskit-cloud.md), paired with the Kubernetes runtime, worker, and platform crates.                                                                                                                                                                                                                                                       |
 | [`leptoskit_docs`](https://github.com/leptoskit/leptoskit/tree/main/crates/leptoskit_docs)         | Markdown with leptos components, and the generator that builds this site. See [writing docs](guide/14-writing-docs.md).                                                                                                                                                                                                                                                                                                                            |
+
+## Shipping your app
+
+<!-- {=deploymentTracks} -->
+
+| Track                         | Best for                                                                               | Primary commands                                                                     | What it manages                                                                                                                                                       |
+| ----------------------------- | -------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **LeptosKit Cloud** (managed) | Shipping fast with zero infrastructure boilerplate, including from AI agents           | `lk cloud login`, `lk cloud launch`, `lk deploy`, `lk cloud status`, `lk cloud logs` | Source archiving, OCI builds, rolling releases, scale-to-zero, managed Postgres, secrets vault, custom domains, and usage metering from `[cloud]` in `leptoskit.toml` |
+| **Self-hosted** (`lk infra`)  | Running on your own Hetzner, DigitalOcean, or Linux servers with full provider control | `lk infra generate`, `lk infra plan`, `lk infra apply`, `lk deploy`                  | OpenTofu VMs/networks/Cloudflare tunnels, Kamal app + Postgres containers, and encrypted Restic backups (`infra.mode = "graph"` is experimental)                      |
+
+`lk console` is the legacy operator-enrolled deployment dashboard and agent API; new projects should pick either **LeptosKit Cloud** (`lk cloud`) or **Self-hosted** (`lk infra`).
+
+<!-- {/deploymentTracks} -->
+
+See [LeptosKit Cloud](guide/41-leptoskit-cloud.md) for managed hosting or [Deploying a server](guide/24-deploying.md) for self-hosted infrastructure.
 
 ## Over the air updates
 
@@ -137,6 +161,7 @@ The web pipeline: cached builds, `wasm-opt`, server rendering, islands, and Axum
 - **Toasts:** [Ding-inspired toast pills](guide/33-toasts.md) morph in place from ordinary `View` / `Text` / `Button` / `Vector` builders. Enter, morph, and stack springs match Ding's tunings where animations already run; elsewhere the resting phase still shows.
 - **Gestures:** [tap, long press, pan, pinch, rotation, and fling](guide/38-gestures.md) run in one arena on the Android widget backend and on Linux. A winning drag claims the pointer so a button does not also click. The web, iOS, macOS, Windows, the terminal, HarmonyOS, and the generated Swift and Kotlin renderers still deliver presses and clicks only.
 - **Styled text, key handlers, and controlled focus** work on the web and in the terminal. The native widget backends still draw a `Text`'s styled runs in its own single style, deliver no `on_key` presses, and do not move focus for `focused(true)`. To move focus once, a [`FocusRequest`](guide/15-accessibility.md#move-focus-once) works on every backend; it has been run on the web, in the terminal and on GTK, and is untested on macOS, iOS, Android and Windows. **Italic and per-edge borders** (`border-l-2`, `border-t`, …) paint on Linux (GTK), Android, and experimental HarmonyOS (ArkUI); AppKit, UIKit, and Win32 still draw italic upright and leave a per-edge border undrawn.
+- **LeptosKit Cloud:** `lk cloud launch`, `lk deploy`, `lk cloud status`, `lk cloud logs`, `lk cloud estimate`, secrets, domains, usage, and the `lk mcp` cloud tools are wired end to end against the control plane, workers, and platform generator; live cluster acceptance runs, dedicated database tiers (`s`/`m`/`l`), cluster-worker Postgres dump/restore, and automatic bucket provisioning for `[cloud.storage.buckets.<name>]` remain open. See [LeptosKit Cloud](guide/41-leptoskit-cloud.md).
 
 On every native platform, `Image` loads the pictures your app bundles with [`asset://`](guide/36-assets.md) and local files, not URLs. Code push updates reach the iOS and Android apps; the generated desktop apps don't check for them yet. CSS shadows, gradients, filters, and custom fonts aren't supported anywhere yet: the [CSS coverage reference](reference/css-coverage.md) lists what is. Color and length `var(--name)` utilities work on the web and, through `Theme`, on native — including one nested fallback, `/opacity` on color vars, and `[theme]` tokens in `leptoskit.toml`. Deeper nesting and Tailwind `@theme` / `tailwind.config` files still don't. Rive's internal vector paints and transforms are separate from those CSS properties. [Platforms](platforms/readme.md) has the full picture.
 

@@ -10,13 +10,22 @@ leptoskit dev
 
 `leptoskit dev` builds the app, starts a server at `http://127.0.0.1:3000`, and rebuilds when you save. Open that address and you get the starter: a home screen with an **Add one** button, a Kit tab of the shared controls, and a Platforms tab. The server renders the page as HTML first, and the browser then takes it over, so the button works. The same screens are what every native app shows: `dev` also opens them in the iOS Simulator, on an Android emulator, and as a desktop app, on every platform this machine can run, and updates them all when you save. It also prints a QR code. The LeptosKit app on a phone, in `examples/dev_client`, scans that code and runs the same guest. [Building and serving](04-building.md#leptoskit-dev) lists what runs where.
 
+For a **web-only** project ready to ship to [LeptosKit Cloud](41-leptoskit-cloud.md) with sign-in and Postgres (skipping the mobile and desktop host directories):
+
+```bash
+leptoskit new notes --web-only --cloud --auth
+```
+
+`--web-only` sets `app.platforms = ["web"]` and omits native runners so builds stay lean. `--cloud` writes a starter `[cloud]` table and defaults `--auth` without `--db` to Postgres instead of SQLite so your local database matches managed cloud Postgres.
+
 For a **marketing site**, **product app**, and **admin console** as separate deployments in one repository:
 
 ```bash
 leptoskit new shop --frontends
+leptoskit new shop --frontends landing,app --web-only --cloud --auth
 ```
 
-That writes `leptoskit.workspace.toml` and `apps/{landing,app,admin}/` (pass `landing,app,admin` explicitly to name a subset). See [Applications in one workspace](33-workspaces.md#multiple-frontends).
+That writes `leptoskit.workspace.toml` and `apps/{landing,app,admin}/` (pass `landing,app,admin` explicitly to name a subset). `--frontends` combines cleanly with `--db`, `--auth`, `--web-only`, and `--cloud` (wiring database and sign-in onto `apps/app`, or the first frontend when `app` is omitted). See [Applications in one workspace](33-workspaces.md#multiple-frontends).
 
 ## What's in the project
 
