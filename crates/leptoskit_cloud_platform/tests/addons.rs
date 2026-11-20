@@ -127,6 +127,7 @@ fn documents_and_secret_inventory_agree() {
 	for input in [
 		include_str!("../examples/launch.toml"),
 		include_str!("../examples/growth.toml"),
+		include_str!("../examples/full-stack.toml"),
 	] {
 		let config = PlatformConfig::parse(input).unwrap();
 		let files = addons::generate(&config).unwrap();
@@ -151,7 +152,7 @@ fn documents_and_secret_inventory_agree() {
 			if doc["metadata"].get("namespace").is_some() {
 				assert!(namespaces.contains(ns));
 			}
-			if doc["kind"] == "ConfigMap" {
+			if doc["kind"] == "ConfigMap" && doc["metadata"]["name"] == "required-secrets" {
 				let entries: Vec<Value> =
 					serde_json::from_str(doc["data"]["requirements.json"].as_str().unwrap())
 						.unwrap();
@@ -409,4 +410,86 @@ fn growth() {
 			}
 		}
 	}
+}
+
+#[test]
+fn full_stack_emits_control_plane_workers_and_ordered_up_plan() {
+	let config = PlatformConfig::parse(include_str!("../examples/full-stack.toml")).unwrap();
+	let files = addons::generate(&config).unwrap();
+	let docs: Vec<Value> = files
+		.values()
+		.map(|s| serde_json::from_str(s).unwrap())
+		.collect();
+
+	// 50-control-plane documents.
+	assert!(docs.iter().any(|d| {
+		d["kind"] == "Cluster"
+			&& d["metadata"]["name"] == "control"
+			&& d["metadata"]["namespace"] == "leptoskit-cloud-control"
+	}));
+	assert!(
+		docs.iter()
+			.any(|d| d["kind"] == "Job" && d["metadata"]["name"] == "control-migrate")
+	);
+	assert!(
+		docs.iter()
+			.any(|d| d["kind"] == "Deployment" && d["metadata"]["name"] == "control")
+	);
+	assert!(
+		docs.iter()
+			.any(|d| d["kind"] == "Ingress" && d["metadata"]["name"] == "control")
+	);
+
+	// 60-workers documents, including valid ClusterProfile ConfigMap JSON.
+	assert!(docs.iter().any(|d| {
+		d["kind"] == "ServiceAccount" && d["metadata"]["name"] == "leptoskit-cloud-worker"
+	}));
+	let profile_cm = docs
+		.iter()
+		.find(|d| d["kind"] == "ConfigMap" && d["metadata"]["name"] == "cluster-profile")
+		.expect("cluster-profile ConfigMap");
+	let parsed_profile: leptoskit_cloud_runtime::ClusterProfile =
+		serde_json::from_str(profile_cm["data"]["profile.json"].as_str().unwrap())
+			.expect("valid ClusterProfile JSON");
+	parsed_profile.validate().unwrap();
+	assert!(parsed_profile.edge_terminated_custom_domains);
+
+	assert!(
+		docs.iter()
+			.any(|d| d["kind"] == "Deployment" && d["metadata"]["name"] == "cluster-worker")
+	);
+	assert!(
+		docs.iter()
+			.any(|d| d["kind"] == "Deployment" && d["metadata"]["name"] == "build-worker")
+	);
+
+	// One-click `up` dry run orders 50-control-plane before 60-workers.
+	let dir = tempfile::tempdir().unwrap();
+	let mut runner = leptoskit_cloud_platform::up::DryRunRunner::default();
+	let options = leptoskit_cloud_platform::up::UpOptions {
+		out: dir.path().to_path_buf(),
+		dry_run: true,
+		skip_tofu: true,
+		skip_bootstrap: true,
+		skip_apply: false,
+		kubeconfig: None,
+		ssh_user: "root".into(),
+	};
+	leptoskit_cloud_platform::up::execute(&config, &options, &mut runner).unwrap();
+	let kubectl: Vec<String> = runner
+		.commands
+		.iter()
+		.filter(|(p, ..)| p == "kubectl")
+		.map(|(_, a, _)| a.join(" "))
+		.collect();
+	let pos = |needle: &str| {
+		kubectl
+			.iter()
+			.position(|line| line.contains(needle))
+			.unwrap()
+	};
+	assert!(pos("50-control-plane-") < pos("job/control-migrate"));
+	assert!(pos("job/control-migrate") < pos("deployment/control"));
+	assert!(pos("deployment/control") < pos("60-workers-"));
+	assert!(pos("60-workers-") < pos("deployment/cluster-worker"));
 }

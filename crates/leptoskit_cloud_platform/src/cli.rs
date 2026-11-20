@@ -61,6 +61,34 @@ pub enum Operation {
 		#[arg(long)]
 		config: PathBuf,
 	},
+	/// Provision infrastructure, bootstrap nodes, and apply Kubernetes add-ons
+	/// and platform workloads in strict phase order.
+	Up {
+		/// Operator TOML file.
+		#[arg(long)]
+		config: PathBuf,
+		/// Output directory for generated artifacts.
+		#[arg(long)]
+		out: PathBuf,
+		/// Print the planned commands without running external tools.
+		#[arg(long, default_value_t = false)]
+		dry_run: bool,
+		/// Skip `OpenTofu` init/apply (e.g. for existing bare-metal hosts).
+		#[arg(long, default_value_t = false)]
+		skip_tofu: bool,
+		/// Skip SSH node bootstrap.
+		#[arg(long, default_value_t = false)]
+		skip_bootstrap: bool,
+		/// Skip kubectl manifest apply & wait phases.
+		#[arg(long, default_value_t = false)]
+		skip_apply: bool,
+		/// Optional kubeconfig path passed to kubectl.
+		#[arg(long)]
+		kubeconfig: Option<PathBuf>,
+		/// SSH user for node bootstrap (default `root`).
+		#[arg(long, default_value = "root")]
+		ssh_user: String,
+	},
 }
 
 impl Cli {
@@ -69,7 +97,8 @@ impl Cli {
 		let (Operation::Generate { config, .. }
 		| Operation::Bootstrap { config, .. }
 		| Operation::Check { config }
-		| Operation::PlanSummary { config }) = &self.command;
+		| Operation::PlanSummary { config }
+		| Operation::Up { config, .. }) = &self.command;
 		let config = PlatformConfig::parse(&std::fs::read_to_string(config)?)?;
 		match &self.command {
 			Operation::Check { .. } => Ok("configuration valid\n".into()),
@@ -86,6 +115,49 @@ impl Cli {
 					"bootstrap",
 					&crate::bootstrap::generate(&config, outputs.as_deref())?,
 				)
+			}
+			Operation::Up {
+				out,
+				dry_run,
+				skip_tofu,
+				skip_bootstrap,
+				skip_apply,
+				kubeconfig,
+				ssh_user,
+				..
+			} => {
+				let options = crate::up::UpOptions {
+					out: out.clone(),
+					dry_run: *dry_run,
+					skip_tofu: *skip_tofu,
+					skip_bootstrap: *skip_bootstrap,
+					skip_apply: *skip_apply,
+					kubeconfig: kubeconfig.clone(),
+					ssh_user: ssh_user.clone(),
+				};
+				if *dry_run {
+					let mut runner = crate::up::DryRunRunner::default();
+					let mut transcript = crate::up::execute(&config, &options, &mut runner)?;
+					for (program, args, cwd) in runner.commands {
+						match cwd {
+							Some(dir) => {
+								writeln!(
+									transcript,
+									"[dry-run] (cd {}) {program} {}",
+									dir.display(),
+									args.join(" ")
+								)?;
+							}
+							None => {
+								writeln!(transcript, "[dry-run] {program} {}", args.join(" "))?;
+							}
+						}
+					}
+					Ok(transcript)
+				} else {
+					let mut runner = crate::up::SystemRunner;
+					crate::up::execute(&config, &options, &mut runner)
+				}
 			}
 		}
 	}
@@ -171,6 +243,14 @@ fn summary(config: &PlatformConfig) -> Result<String, PlatformError> {
 }
 
 type Ownership = BTreeMap<String, Vec<String>>;
+
+pub(crate) fn write_generated_files(
+	root: &Path,
+	phase: &str,
+	files: &Generated,
+) -> Result<String, PlatformError> {
+	write_files(root, phase, files)
+}
 
 fn write_files(root: &Path, phase: &str, files: &Generated) -> Result<String, PlatformError> {
 	std::fs::create_dir_all(root)?;

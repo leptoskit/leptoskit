@@ -6,6 +6,7 @@ pub mod cli;
 pub mod config;
 pub mod tofu;
 mod topology;
+pub mod up;
 
 /// Deterministic relative paths and UTF-8 file contents; the library performs
 /// no I/O.

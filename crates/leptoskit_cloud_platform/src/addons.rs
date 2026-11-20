@@ -15,6 +15,7 @@ use crate::config::Pool;
 use crate::config::Registry;
 
 mod registry;
+mod workloads;
 
 /// Origin shared with the `OpenTofu` tunnel configuration.
 pub const TUNNEL_ORIGIN: &str = "http://traefik.kube-system.svc.cluster.local:80";
@@ -236,6 +237,9 @@ fn platform_namespaces(config: &PlatformConfig, edge: bool) -> Vec<&'static str>
 	if edge && matches!(config.registry, Registry::Zot { .. }) {
 		namespaces.push("registry");
 	}
+	if edge && config.control_plane.is_some() {
+		namespaces.push(workloads::CONTROL_NAMESPACE);
+	}
 	namespaces
 }
 
@@ -330,6 +334,10 @@ fn server_host_cidrs(cluster: &Cluster) -> Vec<String> {
 
 /// Generate independent, ordered YAML documents per cluster without resolving
 /// secrets or contacting chart repositories.
+#[expect(
+	clippy::too_many_lines,
+	reason = "declarative phase-ordered cluster add-on manifest generation"
+)]
 pub fn generate(config: &PlatformConfig) -> Result<Generated, PlatformError> {
 	config.validate()?;
 	let mut files = Generated::new();
@@ -448,6 +456,19 @@ pub fn generate(config: &PlatformConfig) -> Result<Generated, PlatformError> {
 				if config.edge.mode == EdgeMode::Tunnel {
 					required.push(json!({"namespace":"kube-system","name":"cloudflare-tunnel","keys":["token"],"purpose":"Tunnel connector","source":"sensitive OpenTofu tunnel_token output","createdBy":"operator"}));
 				}
+				if let Some(cp) = &config.control_plane {
+					let (cp_docs, cp_secrets) = workloads::control_plane_documents(
+						config, cluster, &platform, cp, region, name,
+					)?;
+					documents.extend(cp_docs);
+					required.extend(cp_secrets);
+				}
+			}
+			if let Some(workers) = &config.workers {
+				let (worker_docs, worker_secrets) =
+					workloads::worker_documents(config, cluster, &platform, workers)?;
+				documents.extend(worker_docs);
+				required.extend(worker_secrets);
 			}
 			documents.push((
 				"01-secrets",
