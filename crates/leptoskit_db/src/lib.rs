@@ -147,6 +147,8 @@ pub use connection::PoolOptions;
 #[cfg(feature = "server")]
 pub use connection::Read;
 #[cfg(any(feature = "postgres", feature = "sqlite"))]
+pub use db::AdvisoryLock;
+#[cfg(any(feature = "postgres", feature = "sqlite"))]
 pub use db::Db;
 #[cfg(any(feature = "postgres", feature = "sqlite"))]
 pub use db::Tx;

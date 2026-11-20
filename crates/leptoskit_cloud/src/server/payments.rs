@@ -172,6 +172,21 @@ pub(crate) fn is_id(id: &str) -> bool {
 			.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
 }
 
+/// Sanitizes an error token (`type`, `code`, `request-id`) for operator logs:
+/// at most 64 ASCII alphanumeric, `_`, or `-` characters.
+fn sanitize_token(raw: &str) -> String {
+	let cleaned: String = raw
+		.chars()
+		.filter(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-'))
+		.take(64)
+		.collect();
+	if cleaned.is_empty() {
+		"unknown".to_owned()
+	} else {
+		cleaned
+	}
+}
+
 /// Stripe, over its HTTP API.
 #[derive(Clone)]
 pub struct Stripe {
@@ -236,6 +251,7 @@ impl Stripe {
 		}
 
 		if !(key.starts_with("rk_") || key.starts_with("sk_"))
+			|| key.len() < 10
 			|| !key.bytes().all(|byte| byte.is_ascii_graphic())
 		{
 			return Err(
@@ -275,12 +291,18 @@ impl Stripe {
 		let status = response.status();
 
 		if !status.is_success() {
+			let request_id = response
+				.headers()
+				.get("request-id")
+				.and_then(|value| value.to_str().ok())
+				.map_or_else(|| "none".to_owned(), sanitize_token);
 			let mut err_body = Vec::new();
+			const MAX_ERR_BODY: usize = 16 * 1024;
 
 			while let Some(chunk) = response.chunk().await.ok().flatten() {
-				let take = chunk.len().min(4096_usize.saturating_sub(err_body.len()));
+				let take = chunk.len().min(MAX_ERR_BODY.saturating_sub(err_body.len()));
 				err_body.extend_from_slice(&chunk[..take]);
-				if err_body.len() >= 4096 {
+				if err_body.len() >= MAX_ERR_BODY {
 					break;
 				}
 			}
@@ -289,13 +311,13 @@ impl Stripe {
 			let kind = parsed
 				.as_ref()
 				.and_then(|v| v.pointer("/error/type").and_then(Value::as_str))
-				.unwrap_or("unknown");
+				.map_or_else(|| "unknown".to_owned(), sanitize_token);
 			let code = parsed
 				.as_ref()
 				.and_then(|v| v.pointer("/error/code").and_then(Value::as_str))
-				.unwrap_or("none");
+				.map_or_else(|| "none".to_owned(), sanitize_token);
 			eprintln!(
-				"leptoskit-cloud: stripe answered {} ({kind}/{code})",
+				"leptoskit-cloud: stripe answered {} ({kind}/{code}, request-id={request_id})",
 				status.as_u16()
 			);
 			return Err(PaymentError::Unavailable);

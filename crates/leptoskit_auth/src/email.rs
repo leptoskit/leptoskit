@@ -449,16 +449,36 @@ pub async fn ensure_verified_email_account(
 	}
 	.insert(&tx)
 	.await?;
-	NewEmailAddress {
+	let inserted = NewEmailAddress {
 		account_id: account.id,
 		address: address.clone(),
 		verified_at: Some(leptoskit_db::now()),
 		is_primary: true,
 	}
 	.insert(&tx)
-	.await?;
-	tx.commit().await?;
-	Ok(account.id)
+	.await;
+	match inserted {
+		Ok(_) => {
+			tx.commit().await?;
+			Ok(account.id)
+		}
+		Err(leptoskit_db::DbError::Conflict { .. }) => {
+			let _ = tx.rollback().await;
+			let mut existing = EmailAddress::query()
+				.filter(|row| row.address.eq(address.clone()))
+				.one(db)
+				.await?;
+			if existing.verified_at.is_none() {
+				existing.verified_at = Some(leptoskit_db::now());
+				existing.save(db).await?;
+			}
+			Ok(existing.account_id)
+		}
+		Err(error) => {
+			let _ = tx.rollback().await;
+			Err(error)
+		}
+	}
 }
 
 #[cfg(test)]

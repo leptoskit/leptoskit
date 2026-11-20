@@ -46,6 +46,7 @@ use crate::tables::Worker;
 use crate::workers::Assignment;
 use crate::workers::BackupOutcome;
 use crate::workers::BuildOutcome;
+use crate::workers::ClusterEnvironment;
 use crate::workers::DestroyOutcome;
 use crate::workers::Finished;
 use crate::workers::JobKind;
@@ -292,11 +293,11 @@ impl rpc::Operation for ClaimJob {
 }
 
 /// The worker's row as it is now, or `Unauthorized` once it is revoked.
-async fn live_worker(tx: &Tx, caller: &WorkerCaller) -> rpc::Result<Worker> {
+async fn live_worker(db: &impl leptoskit_db::Read, caller: &WorkerCaller) -> rpc::Result<Worker> {
 	let id = caller.id;
 	Worker::query()
 		.filter(|worker| worker.id.eq(id) & worker.revoked_at.is_null())
-		.first(tx)
+		.first(db)
 		.await?
 		.ok_or_else(|| rpc::Error::unauthorized("worker_key_required: this worker was revoked"))
 }
@@ -740,6 +741,7 @@ async fn charge_log(
 			NewLogUsage {
 				organization_id: organization,
 				bytes,
+				runtime_bytes: None,
 			}
 			.insert(tx)
 			.await?;
@@ -1226,21 +1228,20 @@ async fn report(cx: &rpc::MutationCx, args: ReportStatus) -> rpc::Result<Reporte
 	.await?;
 	let runtime_cap = i64::try_from(services.shipping().settings.organization_runtime_log_cap)
 		.unwrap_or(i64::MAX);
-	let mut runtime_used: i64 = if args.chunks.is_empty() {
-		0
+	let org_id = project.organization_id;
+	let mut usage = if args.chunks.is_empty() {
+		None
 	} else {
-		let org_id = project.organization_id;
-		LogChunk::query()
-			.filter(|chunk| {
-				chunk.organization_id.eq(org_id)
-					& chunk.kind.eq(LogKind::Runtime)
-					& chunk.expires_at.gt(now)
-			})
-			.all(tx)
+		LogUsage::query()
+			.filter(|row| row.organization_id.eq(org_id))
+			.first(tx)
 			.await?
-			.into_iter()
-			.fold(0_i64, |acc, chunk| acc.saturating_add(chunk.bytes))
 	};
+	let mut runtime_used: i64 = usage
+		.as_ref()
+		.and_then(|row| row.runtime_bytes)
+		.unwrap_or(0);
+	let mut added_bytes: i64 = 0;
 	let mut lines = 0;
 
 	for reported in args.chunks {
@@ -1249,6 +1250,7 @@ async fn report(cx: &rpc::MutationCx, args: ReportStatus) -> rpc::Result<Reporte
 			break;
 		}
 		runtime_used = runtime_used.saturating_add(chunk_bytes);
+		added_bytes = added_bytes.saturating_add(chunk_bytes);
 		let key = log_key(
 			project.organization_id.uuid(),
 			args.environment,
@@ -1276,6 +1278,24 @@ async fn report(cx: &rpc::MutationCx, args: ReportStatus) -> rpc::Result<Reporte
 		chunks.push(key);
 	}
 
+	if added_bytes > 0 {
+		match usage.as_mut() {
+			Some(row) => {
+				row.runtime_bytes = Some(runtime_used);
+				row.save(tx).await?;
+			}
+			None => {
+				NewLogUsage {
+					organization_id: org_id,
+					bytes: 0,
+					runtime_bytes: Some(runtime_used),
+				}
+				.insert(tx)
+				.await?;
+			}
+		}
+	}
+
 	Ok(Reported {
 		status: StatusReceived {
 			environment: args.environment,
@@ -1284,6 +1304,66 @@ async fn report(cx: &rpc::MutationCx, args: ReportStatus) -> rpc::Result<Reporte
 		},
 		chunks,
 	})
+}
+
+pub(crate) async fn cluster_environments(
+	cx: &rpc::QueryCx,
+) -> rpc::Result<Vec<ClusterEnvironment>> {
+	let caller = worker(cx.context())?;
+
+	if caller.role != WorkerRole::Cluster {
+		return Err(rpc::Error::forbidden(
+			"cluster_worker_required: only a cluster's worker lists its placed environments",
+		));
+	}
+
+	let db = cx.db();
+	live_worker(db, caller).await?;
+	let Some(cluster_id) = caller.cluster else {
+		return Ok(Vec::new());
+	};
+
+	let placements = Placement::query()
+		.filter(|row| row.cluster_id.eq(cluster_id))
+		.all(db)
+		.await?;
+	let mut out = Vec::with_capacity(placements.len());
+
+	for placement in placements {
+		let env_id = placement.environment_id;
+		let Some(environment) = crate::tables::Environment::query()
+			.filter(|row| row.id.eq(env_id))
+			.first(db)
+			.await?
+		else {
+			continue;
+		};
+		let project_id = environment.project_id;
+		let Some(project) = crate::tables::Project::query()
+			.filter(|row| row.id.eq(project_id))
+			.first(db)
+			.await?
+		else {
+			continue;
+		};
+		let org_id = project.organization_id;
+		let Some(organization) = crate::tables::Organization::query()
+			.filter(|row| row.id.eq(org_id))
+			.first(db)
+			.await?
+		else {
+			continue;
+		};
+		out.push(ClusterEnvironment {
+			environment: RuntimeValue(super::deployments::environment_ref(
+				&organization,
+				&project,
+				&environment,
+			)),
+		});
+	}
+
+	Ok(out)
 }
 
 #[cfg(test)]

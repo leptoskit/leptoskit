@@ -101,6 +101,9 @@ fn plan_summary(plan: &Plan) -> PlanSummary {
 			organizations: plan.limits.organizations,
 			projects: plan.limits.projects,
 			custom_domains: plan.limits.custom_domains,
+			max_size: plan.limits.max_size,
+			max_replicas: plan.limits.max_replicas,
+			require_sleep: plan.limits.require_sleep,
 		},
 		spend_cap: effective_cap(plan, None).0,
 	}

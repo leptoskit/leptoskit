@@ -1142,6 +1142,26 @@ pub async fn report_status(
 	crate::server::workers::report_status(cx, environment, observed, logs).await
 }
 
+/// An environment placed on a cluster, returned to that cluster's worker on
+/// startup so status reporting, runtime logs, and compute metering resume
+/// immediately after a worker restart.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ClusterEnvironment {
+	/// The environment's organisation, project, and environment slugs and IDs.
+	pub environment: RuntimeValue<EnvironmentRef>,
+}
+
+/// Every environment currently placed on the calling cluster worker's cluster.
+///
+/// # Errors
+///
+/// `Forbidden` (`cluster_worker_required`) for a build worker.
+#[rpc::api(scope = crate::OAuthScope::Cloud, tag = "workers")]
+#[rpc::query]
+pub async fn cluster_environments(cx: &rpc::QueryCx) -> rpc::Result<Vec<ClusterEnvironment>> {
+	crate::server::workers::cluster_environments(cx).await
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;

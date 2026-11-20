@@ -243,10 +243,21 @@ pub struct ServeConfig {
 	origin_from_bind: bool,
 }
 
-/// Optional operator email read from [`BOOTSTRAP_OPERATOR_EMAIL`].
-#[must_use]
-pub fn bootstrap_operator_email(vars: Vars<'_>) -> Option<String> {
-	read(vars, BOOTSTRAP_OPERATOR_EMAIL)
+/// Optional operator email read and validated from
+/// [`BOOTSTRAP_OPERATOR_EMAIL`].
+///
+/// # Errors
+///
+/// [`ConfigError::Invalid`] when set to a value that is not a valid email
+/// address.
+pub fn bootstrap_operator_email(vars: Vars<'_>) -> Result<Option<String>, ConfigError> {
+	let Some(raw) = read(vars, BOOTSTRAP_OPERATOR_EMAIL) else {
+		return Ok(None);
+	};
+	let normalized = raw.to_ascii_lowercase();
+	leptoskit_db::Email::parse(&normalized)
+		.map_err(|_| invalid(BOOTSTRAP_OPERATOR_EMAIL, "must be a valid email address"))?;
+	Ok(Some(normalized))
 }
 
 impl ServeConfig {
@@ -319,6 +330,7 @@ impl ServeConfig {
 		let payments = payments(vars, dev)?;
 		let resolver = resolver(vars, dev)?;
 		let shipping = shipping_settings(vars)?;
+		let bootstrap_operator_email = bootstrap_operator_email(vars)?;
 		let (mailer, mailbox) = if dev {
 			let mailbox = Mailbox::new();
 			(SharedMailer::new(mailbox.clone()), Some(mailbox))
@@ -355,7 +367,7 @@ impl ServeConfig {
 				dev: mailbox.map(|mailbox| DevMode { mailbox }),
 			},
 			site: read(vars, SITE).map(std::path::PathBuf::from),
-			bootstrap_operator_email: bootstrap_operator_email(vars),
+			bootstrap_operator_email,
 			origin_from_bind,
 		})
 	}
@@ -371,19 +383,30 @@ fn shipping_settings(vars: Vars<'_>) -> Result<ShippingSettings, ConfigError> {
 		run_sweeper,
 		..ShippingSettings::default()
 	};
+	let max_bytes = i64::MAX as u64;
 	if let Some(raw) = read(vars, BACKUP_CAP_BYTES) {
 		settings.backup_cap = raw
 			.parse::<u64>()
 			.ok()
-			.filter(|&v| v > 0)
-			.ok_or_else(|| invalid(BACKUP_CAP_BYTES, "must be a positive byte count"))?;
+			.filter(|&v| (1..=max_bytes).contains(&v))
+			.ok_or_else(|| {
+				invalid(
+					BACKUP_CAP_BYTES,
+					"must be a positive byte count within 63-bit range",
+				)
+			})?;
 	}
 	if let Some(raw) = read(vars, RUNTIME_LOG_CAP_BYTES) {
 		settings.organization_runtime_log_cap = raw
 			.parse::<u64>()
 			.ok()
-			.filter(|&v| v > 0)
-			.ok_or_else(|| invalid(RUNTIME_LOG_CAP_BYTES, "must be a positive byte count"))?;
+			.filter(|&v| (1..=max_bytes).contains(&v))
+			.ok_or_else(|| {
+				invalid(
+					RUNTIME_LOG_CAP_BYTES,
+					"must be a positive byte count within 63-bit range",
+				)
+			})?;
 	}
 	Ok(settings)
 }
@@ -1055,5 +1078,41 @@ mod tests {
 			panic!("an S3 store");
 		};
 		assert_eq!((s3.region.as_str(), s3.path_style), ("us-east-1", true));
+	}
+
+	#[tokio::test]
+	async fn validates_bootstrap_operator_email_and_byte_caps() {
+		let mut pairs = production();
+		pairs.push((BOOTSTRAP_OPERATOR_EMAIL, "not-an-email"));
+		let bad_email = error(&pairs, false);
+		assert!(
+			bad_email.starts_with(BOOTSTRAP_OPERATOR_EMAIL),
+			"{bad_email}"
+		);
+
+		let mut pairs = production();
+		pairs.push((BACKUP_CAP_BYTES, "9223372036854775808"));
+		let bad_backup = error(&pairs, false);
+		assert!(bad_backup.starts_with(BACKUP_CAP_BYTES), "{bad_backup}");
+
+		let mut pairs = production();
+		pairs.push((RUNTIME_LOG_CAP_BYTES, "0"));
+		let bad_log_cap = error(&pairs, false);
+		assert!(
+			bad_log_cap.starts_with(RUNTIME_LOG_CAP_BYTES),
+			"{bad_log_cap}"
+		);
+
+		let mut pairs = production();
+		pairs.push((BOOTSTRAP_OPERATOR_EMAIL, "OPS@Example.COM"));
+		pairs.push((BACKUP_CAP_BYTES, "1048576"));
+		pairs.push((RUNTIME_LOG_CAP_BYTES, "2097152"));
+		let ok = ServeConfig::from_vars(&vars(&pairs), false).expect("valid");
+		assert_eq!(
+			ok.bootstrap_operator_email.as_deref(),
+			Some("ops@example.com")
+		);
+		assert_eq!(ok.control.shipping.backup_cap, 1_048_576);
+		assert_eq!(ok.control.shipping.organization_runtime_log_cap, 2_097_152);
 	}
 }

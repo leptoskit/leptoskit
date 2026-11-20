@@ -352,27 +352,46 @@ pub async fn grant_operator(db: &Db, email: &str) -> Result<Id<Account>, Operato
 ///
 /// # Errors
 ///
-/// [`OperatorError::UnknownEmail`] when `email` is not a valid email address,
+/// [`OperatorError::InvalidEmail`] when `email` is not a valid email address,
+/// [`OperatorError::DisabledAccount`] when the account for `email` is disabled,
 /// or [`OperatorError::Db`] when the database fails.
 pub async fn bootstrap_operator(db: &Db, email: &str) -> Result<Id<Account>, OperatorError> {
 	let db = db.system("cloud: bootstrap operator");
 	let normalized = email.trim().to_ascii_lowercase();
 	let address = leptoskit_db::Email::parse(&normalized)
-		.map_err(|_| OperatorError::UnknownEmail(normalized.clone()))?;
+		.map_err(|_| OperatorError::InvalidEmail(normalized.clone()))?;
 	let account = leptoskit_auth::ensure_verified_email_account(&db, &address).await?;
+	let account_row = Account::query()
+		.filter(|row| row.id.eq(account))
+		.one(&db)
+		.await?;
+	if account_row.disabled_at.is_some() {
+		return Err(OperatorError::DisabledAccount(normalized));
+	}
 	let existing = Operator::query()
 		.filter(|operator| operator.account_id.eq(account))
 		.first(&db)
 		.await?;
 	if existing.is_none() {
 		let tx = db.begin().await?;
-		NewOperator {
+		match (NewOperator {
 			account_id: account,
-		}
+		})
 		.insert(&tx)
-		.await?;
-		audit::record_system(&tx, "operator.bootstrap", Some(account.to_string())).await?;
-		tx.commit().await?;
+		.await
+		{
+			Ok(_) => {
+				audit::record_system(&tx, "operator.bootstrap", Some(account.to_string())).await?;
+				tx.commit().await?;
+			}
+			Err(leptoskit_db::DbError::Conflict { .. }) => {
+				let _ = tx.rollback().await;
+			}
+			Err(error) => {
+				let _ = tx.rollback().await;
+				return Err(error.into());
+			}
+		}
 	}
 	Ok(account)
 }
@@ -424,6 +443,12 @@ pub async fn operators(db: &Db) -> Result<Vec<String>, OperatorError> {
 /// Why an operator command failed.
 #[derive(Debug, thiserror::Error)]
 pub enum OperatorError {
+	/// The address is not a valid email address.
+	#[error("`{0}` is not a valid email address")]
+	InvalidEmail(String),
+	/// The account for the address is disabled.
+	#[error("the account for `{0}` is disabled")]
+	DisabledAccount(String),
 	/// No account has verified the address.
 	#[error("no account has verified `{0}`; sign in with it first")]
 	UnknownEmail(String),

@@ -420,10 +420,12 @@ pub(crate) async fn update_environment(
 				error.into()
 			}
 		})?;
-		Box::pin(super::deployments::apply_live_scale(
-			cx, &access, &project, &row,
-		))
-		.await?;
+		if access.require(Permission::Deploy).is_ok() {
+			Box::pin(super::deployments::apply_live_scale(
+				cx, &access, &project, &row,
+			))
+			.await?;
+		}
 		audit::record(
 			cx.tx(),
 			&Actor::from(&access.caller),

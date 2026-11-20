@@ -43,6 +43,15 @@ pub struct PlanLimits {
 	pub organizations: Option<u64>,
 	pub projects: Option<u64>,
 	pub custom_domains: Option<u64>,
+	/// Largest process size allowed on this plan.
+	#[serde(default)]
+	pub max_size: Option<crate::size::Size>,
+	/// Maximum replica count (`scale.max`) allowed per process on this plan.
+	#[serde(default)]
+	pub max_replicas: Option<u32>,
+	/// Whether processes on this plan must sleep when idle.
+	#[serde(default)]
+	pub require_sleep: bool,
 }
 
 /// A plan the cloud offers.

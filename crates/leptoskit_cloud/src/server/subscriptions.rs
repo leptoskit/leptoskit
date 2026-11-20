@@ -226,7 +226,7 @@ async fn start_checkout(cx: &rpc::MutationCx, args: StartCheckout) -> rpc::Resul
 		}
 		None => {
 			if made.is_some() {
-				NewBillingAccount {
+				match (NewBillingAccount {
 					organization_id,
 					spend_cap: None,
 					customer: made.clone(),
@@ -234,12 +234,26 @@ async fn start_checkout(cx: &rpc::MutationCx, args: StartCheckout) -> rpc::Resul
 					status: None,
 					period_end: None,
 					cancel_at_period_end: None,
-				}
+				})
 				.insert(cx.tx())
-				.await?;
+				.await
+				{
+					Ok(_) => made,
+					Err(leptoskit_db::DbError::Conflict { .. }) => {
+						let mut raced = account(cx.tx(), organization_id)
+							.await?
+							.ok_or_else(|| rpc::Error::conflict("billing account raced"))?;
+						if raced.customer.is_none() {
+							raced.customer.clone_from(&made);
+							raced.save(cx.tx()).await?;
+						}
+						raced.customer
+					}
+					Err(error) => return Err(error.into()),
+				}
+			} else {
+				made
 			}
-
-			made
 		}
 	};
 
@@ -664,9 +678,15 @@ pub(crate) async fn sweep(services: &Services) -> rpc::Result<u32> {
 		.await?;
 	let mut asked = 0;
 
-	for account in unheard {
-		if let Some(id) = &account.subscription {
-			follow(services, config, id, None).await;
+	for mut account in unheard {
+		if let Some(id) = account.subscription.clone() {
+			let wrote = follow(services, config, &id, None).await;
+			if !wrote {
+				// Move checked accounts to the back of the `updated_at ASC`
+				// queue so a permanently stalled subscription cannot starve
+				// newer overdue accounts past `ASK_BATCH`.
+				let _ = account.save(services.db()).await;
+			}
 			asked += 1;
 		}
 	}

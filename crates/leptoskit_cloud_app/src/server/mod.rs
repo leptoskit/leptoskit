@@ -125,7 +125,9 @@ pub async fn run(command: Command, vars: Vars<'_>) -> Result<(), Error> {
 				println!("applied {name}");
 			}
 
-			if let Some(email) = config::bootstrap_operator_email(vars) {
+			if let Some(email) = config::bootstrap_operator_email(vars)?
+				&& leptoskit_cloud::server::operators(&db).await?.is_empty()
+			{
 				leptoskit_cloud::server::bootstrap_operator(&db, &email).await?;
 				println!("bootstrapped operator {email}");
 			}
@@ -177,7 +179,9 @@ async fn serve(config: ServeConfig) -> Result<(), Error> {
 		ready(&db, &config.database).await?;
 	}
 
-	if let Some(email) = &config.bootstrap_operator_email {
+	if let Some(email) = &config.bootstrap_operator_email
+		&& leptoskit_cloud::server::operators(&db).await?.is_empty()
+	{
 		leptoskit_cloud::server::bootstrap_operator(&db, email).await?;
 	}
 

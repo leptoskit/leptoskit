@@ -386,6 +386,9 @@ pub enum CatalogueError {
 		/// The meter.
 		meter: Meter,
 	},
+	/// A plan with `max_replicas = 0`, which prevents deploying any process.
+	#[error("the plan `{0}` sets `max_replicas` to 0; set at least 1 or omit the limit")]
+	ZeroMaxReplicas(Slug),
 }
 
 impl Catalogue {
@@ -394,7 +397,8 @@ impl Catalogue {
 	/// # Errors
 	///
 	/// A [`CatalogueError`] when there is no plan, two plans share an ID, a
-	/// plan has no name, or a plan includes a meter that has no price.
+	/// plan has no name, a plan sets `max_replicas` to 0, or a plan includes a
+	/// meter that has no price.
 	pub fn new(
 		currency: Currency,
 		plans: Vec<Plan>,
@@ -413,6 +417,10 @@ impl Catalogue {
 
 			if plan.name.trim().is_empty() {
 				return Err(CatalogueError::UnnamedPlan(plan.id.clone()));
+			}
+
+			if plan.limits.max_replicas == Some(0) {
+				return Err(CatalogueError::ZeroMaxReplicas(plan.id.clone()));
 			}
 
 			if let Some(meter) = plan

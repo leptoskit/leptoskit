@@ -58,8 +58,12 @@ pub const MAX_SMALL_OBJECT: usize = 1024 * 1024;
 /// How long a request to the store may take.
 const REQUEST_TIMEOUT: Duration = Duration::from_mins(10);
 
-/// How long the store's own presigned requests live.
-const SELF_PRESIGN: Duration = Duration::from_mins(5);
+/// How long the store's own presigned requests live (longer than
+/// [`REQUEST_TIMEOUT`] so streaming verification never expires mid-transfer).
+const SELF_PRESIGN: Duration = Duration::from_mins(15);
+
+/// Maximum concurrent full-object streaming SHA-256 verifications.
+const MAX_CONCURRENT_STREAM_HASHES: usize = 4;
 
 type HmacSha256 = hmac::Hmac<sha2::Sha256>;
 
@@ -509,6 +513,7 @@ struct S3Store {
 	secret: String,
 	client: reqwest::Client,
 	checksum_headers: bool,
+	verify_permits: Arc<tokio::sync::Semaphore>,
 }
 
 impl S3Store {
@@ -529,6 +534,7 @@ impl S3Store {
 		};
 		let client = reqwest::Client::builder()
 			.timeout(REQUEST_TIMEOUT)
+			.redirect(reqwest::redirect::Policy::none())
 			.build()
 			.map_err(|_| StoreError::Config("can't make an HTTP client".to_owned()))?;
 
@@ -542,6 +548,7 @@ impl S3Store {
 			secret: config.secret_access_key.expose().to_owned(),
 			client,
 			checksum_headers: config.checksum_headers,
+			verify_permits: Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_STREAM_HASHES)),
 		})
 	}
 
@@ -611,9 +618,9 @@ impl S3Store {
 				.await
 				.map_err(|_| StoreError::Request(format!("HEAD {key} got no answer")))?;
 			// S3-compatible stores that don't support `x-amz-checksum-mode`
-			// may answer 400 or 501; fall back to a plain HEAD and streaming
-			// verification.
-			if matches!(resp.status().as_u16(), 400 | 501) {
+			// may answer 400, 403 (signature/header rejection), or 501; fall
+			// back to a plain HEAD and streaming verification.
+			if matches!(resp.status().as_u16(), 400 | 403 | 501) {
 				self.head_plain(bucket, key).await?
 			} else {
 				resp
@@ -675,6 +682,11 @@ impl S3Store {
 		size: u64,
 		digest: &Digest,
 	) -> Result<Verification, StoreError> {
+		let _permit = self
+			.verify_permits
+			.acquire()
+			.await
+			.map_err(|_| StoreError::Request("verification limiter closed".to_owned()))?;
 		let url = self
 			.bucket(bucket)
 			.get_object(Some(&self.credentials), key)
@@ -696,6 +708,14 @@ impl S3Store {
 				});
 			}
 			_ => {}
+		}
+
+		if let Some(length) = response.content_length()
+			&& length != size
+		{
+			return Ok(Verification::Mismatch(format!(
+				"it has {length} bytes, not the {size} promised"
+			)));
 		}
 
 		let mut hasher = sha2::Sha256::new();
