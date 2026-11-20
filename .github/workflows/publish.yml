@@ -171,6 +171,9 @@ jobs:
     needs: [validate, sdk-acceptance, project-acceptance]
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    env:
+      CC: gcc
+      CXX: g++
     permissions:
       # The archive is attached to the draft release, like the binaries.
       contents: write
@@ -182,10 +185,44 @@ jobs:
           ref: ${{ needs.validate.outputs.revision }}
           persist-credentials: false
 
-      - uses: ./.github/actions/devenv
+      - uses: ./.github/actions/rust
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          nix-cache: /tmp/nixcache
+          # Publication reads caches and never writes one a pull request could poison.
+          prefix-key: devtools-ui
+          lookup-only: true
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24.21.0"
+          package-manager-cache: false
+
+      - name: install native libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config libssl-dev cmake clang libclang-dev
+
+      - name: install binaryen and esbuild
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/binaryen.tar.gz"
+          curl --fail --silent --show-error --location --retry 3 \
+            https://github.com/WebAssembly/binaryen/releases/download/version_132/binaryen-version_132-x86_64-linux.tar.gz \
+            -o "$archive"
+          echo "195ddc94f9bc89f45abdabb0b9eea86023d727ba90eac8b35b80f2544fc30572  $archive" | sha256sum --check --strict
+          tar -xzf "$archive" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/binaryen-version_132/bin" >> "$GITHUB_PATH"
+          archive="$RUNNER_TEMP/esbuild.tgz"
+          curl --fail --silent --show-error --location --retry 3 \
+            https://registry.npmjs.org/@esbuild/linux-x64/-/linux-x64-0.27.2.tgz \
+            -o "$archive"
+          echo "4ac0a36a8573ef6b612263661e7c77343a38789485344e1875cf33a498292310  $archive" | sha256sum --check --strict
+          mkdir -p "$RUNNER_TEMP/esbuild"
+          tar -xzf "$archive" -C "$RUNNER_TEMP/esbuild"
+          echo "$RUNNER_TEMP/esbuild/package/bin" >> "$GITHUB_PATH"
 
       - name: build the interface and its archive
         id: build
@@ -194,8 +231,20 @@ jobs:
           VERSION: ${{ needs.validate.outputs.version }}
         run: |
           set -euo pipefail
-          devtools:build "$RUNNER_TEMP/devtools"
-          archive="$RUNNER_TEMP/devtools/leptoskit-devtools-$VERSION.tar.gz"
+          root="$GITHUB_WORKSPACE"
+          out="$RUNNER_TEMP/devtools"
+          metadata="$(cargo metadata --no-deps --format-version 1 --manifest-path "$root/Cargo.toml")"
+          version="$(jq -r '.packages[] | select(.name == "leptoskit_cli") | .version' <<<"$metadata")"
+          target="$(jq -r .target_directory <<<"$metadata")"
+          test "$version" = "$VERSION"
+          cargo build --locked --manifest-path "$root/Cargo.toml" --package leptoskit_cli --bin leptoskit
+          rm -rf "$root/devtools/dist" "$out/ui"
+          (cd "$root/devtools" && "$target/debug/leptoskit" build --platform web --release)
+          mkdir -p "$out"
+          cp -R "$root/devtools/dist" "$out/ui"
+          archive="$out/leptoskit-devtools-$VERSION.tar.gz"
+          tar --sort=name --owner=0 --group=0 --numeric-owner --mtime=@0 -C "$out/ui" -cf - . | gzip -n -9 >"$archive"
+          sha256sum "$archive" | cut -d' ' -f1 >"$archive.sha256"
           test -s "$archive"
           echo "sha256=$(cat "$archive.sha256")" >> "$GITHUB_OUTPUT"
 

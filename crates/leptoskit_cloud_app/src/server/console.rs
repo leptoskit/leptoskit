@@ -94,7 +94,34 @@ pub fn routes(site: Option<PathBuf>) -> Router {
 		);
 	}
 
-	router.with_state(options)
+	router
+		.layer(leptoskit::server::axum::middleware::map_response(
+			private_pages,
+		))
+		.with_state(options)
+}
+
+/// Marks every rendered page `private, no-store`: a page carries the signed-in
+/// person's data (their organisations, and on the billing page its usage and
+/// cap) in the query results it streams, so no shared cache may keep it.
+/// Fonts and the client build keep their own caching.
+async fn private_pages(
+	mut response: leptoskit::server::axum::response::Response,
+) -> leptoskit::server::axum::response::Response {
+	let html = response
+		.headers()
+		.get(header::CONTENT_TYPE)
+		.and_then(|value| value.to_str().ok())
+		.is_some_and(|value| value.starts_with("text/html"));
+
+	if html {
+		response.headers_mut().insert(
+			header::CACHE_CONTROL,
+			HeaderValue::from_static("private, no-store"),
+		);
+	}
+
+	response
 }
 
 /// `path` with each `:name` segment written `{name}`, as axum 0.8 captures

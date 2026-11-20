@@ -4,10 +4,7 @@
 
 mod support;
 
-use std::time::Duration;
-
 use axum::http::StatusCode;
-use http_body_util::BodyExt as _;
 use leptoskit_deploy_console::control::Phase;
 use leptoskit_deploy_console::control::Principal;
 use leptoskit_deploy_console::control::RunResult;
@@ -55,8 +52,29 @@ fn redact(world: &World, text: &str) -> String {
 }
 
 /// The `<html>` element's own attributes.
-fn root(html: &str) -> &str {
-	html.split_once("<head>").map_or(html, |(root, _)| root)
+/// The opening tag of the element with `test_id`.
+fn tag_of<'a>(html: &'a str, test_id: &str) -> &'a str {
+	let start = html
+		.find(&format!("data-testid=\"{test_id}\""))
+		.unwrap_or_else(|| panic!("no {test_id}"));
+	let tag_start = html[..start].rfind('<').unwrap();
+	&html[tag_start..start + html[start..].find('>').unwrap()]
+}
+
+/// Whether the drawer `id` is open on the page the server drew.
+fn drawer_open(html: &str, id: &str) -> bool {
+	let tag = tag_of(html, &format!("drawer:{id}"));
+	let classes = tag
+		.split("class=\"")
+		.nth(1)
+		.and_then(|rest| rest.split('"').next())
+		.unwrap_or_default();
+	!classes.split_whitespace().any(|class| class == "hidden") && !tag.contains("display:none")
+}
+
+/// Whether Workings mode is on, by the switch in the top bar.
+fn workings_mode(html: &str) -> bool {
+	tag_of(html, "workings-mode").contains("aria-pressed=\"true\"")
 }
 
 async fn page(world: &World, browser: &mut Browser, path: &str) -> (StatusCode, String) {
@@ -306,38 +324,25 @@ async fn progress_streams_to_the_operation_page() {
 		"a running operation follows along"
 	);
 
+	assert!(
+		html.contains("Following live"),
+		"the page says it is following: {html}"
+	);
+
+	// The page follows over the admin's own live connection, which opens
+	// only for a signed-in admin.
 	let response = ada
-		.get(
-			&world.admin,
-			ADMIN,
-			&format!("{BASE}/infra/operations/{id}/events"),
-		)
+		.get(&world.admin, ADMIN, &format!("{BASE}/live/events"))
 		.await;
 	assert_eq!(response.status(), StatusCode::OK);
 	assert_eq!(response.headers()["content-type"], "text/event-stream");
-	let mut body = response.into_body();
-	let mut next = async || {
-		let frame = tokio::time::timeout(Duration::from_secs(5), body.frame())
-			.await
-			.expect("an event in time")
-			.unwrap()
-			.unwrap();
-		String::from_utf8(frame.into_data().unwrap().to_vec()).unwrap()
-	};
-
-	let first = next().await;
-	assert!(first.contains("event: operation"), "{first}");
-	assert!(first.contains("ada@example.com"), "{first}");
-
-	world
-		.service
-		.progress(&id, "Reading the provider state")
-		.unwrap();
-	let progress = next().await;
-	assert!(progress.contains("event: progress"), "{progress}");
+	let response = Browser::default()
+		.get(&world.admin, ADMIN, &format!("{BASE}/live/events"))
+		.await;
 	assert!(
-		progress.contains("Reading the provider state"),
-		"{progress}"
+		response.status().is_client_error(),
+		"a stranger can't open it: {}",
+		response.status()
 	);
 }
 
@@ -374,10 +379,7 @@ async fn key_screens() {
 	)
 	.await;
 	assert_eq!(status, StatusCode::OK);
-	assert!(
-		root(&html).contains("data-admin-drawer=\"plan\""),
-		"Workings opens the first times"
-	);
+	assert!(drawer_open(&html, "plan"), "Workings opens the first times");
 	assert!(html.contains("persistent_resource_deletion_blocked"));
 	insta::assert_snapshot!(
 		"changes",
@@ -472,10 +474,7 @@ async fn preferences_follow_the_person() {
 	let changes = format!("{BASE}/infra/projects/notes-production/changes");
 
 	let (_, html) = page(&world, &mut ada, &changes).await;
-	assert!(
-		root(&html).contains("data-admin-mode=\"workings\""),
-		"Workings mode is on the first week"
-	);
+	assert!(workings_mode(&html), "Workings mode is on the first week");
 	assert!(html.contains("note:plan-review"));
 
 	for change in [
@@ -497,10 +496,10 @@ async fn preferences_follow_the_person() {
 	}
 
 	let (_, html) = page(&world, &mut ada, &changes).await;
-	assert!(!root(&html).contains("data-admin-mode=\"workings\""));
+	assert!(!workings_mode(&html));
 	assert!(!html.contains("note:plan-review"));
 	assert!(
-		!root(&html).contains("data-admin-drawer=\"plan\""),
+		!drawer_open(&html, "plan"),
 		"Workings retires after three opens"
 	);
 

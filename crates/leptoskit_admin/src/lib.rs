@@ -36,8 +36,8 @@ mod analytics;
 mod client;
 mod infra;
 mod learn;
+mod live;
 mod server;
-mod shell;
 mod signin;
 
 use std::path::PathBuf;
@@ -45,7 +45,6 @@ use std::sync::Arc;
 
 pub use leptoskit_admin_pages::BASE;
 pub use leptoskit_admin_pages::Environment;
-use leptoskit_admin_pages::charts;
 use leptoskit_admin_pages::components;
 pub use leptoskit_admin_pages::model::UnknownEnvironment;
 use leptoskit_admin_pages::style;

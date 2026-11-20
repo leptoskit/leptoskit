@@ -17,7 +17,7 @@ rules:
   # `cut` split of rustup's output, so it can never carry a newline into
   # the environment file, and nothing attacker-influenced reaches the write.
   # zizmor matches ignores by file name alone, so this covers every
-  # `action.yml`; the devenv action writes no environment file.
+  # `action.yml`. The rust action exports the toolchain name it just resolved.
   github-env:
     ignore:
       - action.yml
@@ -30,6 +30,7 @@ rules:
     ignore:
       - benchmarks.yml
       - ci.yml
+      - harmonyos.yml
       - docs.yml
       - hosted-pilot.yml
       - publish.yml

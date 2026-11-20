@@ -8,6 +8,7 @@
 
 use std::sync::Arc;
 
+use leptos::context::provide_context;
 use leptoskit::aria::Menu;
 use leptoskit::auth::ErrorResponse;
 use leptoskit::auth::client::sign_out_mutation;
@@ -27,11 +28,16 @@ use leptoskit::shortcut::Shortcut;
 use leptoskit::shortcut::use_shortcut;
 
 use crate::BASE;
+use crate::analytics::tail::Tail;
 use crate::components;
+use crate::confirm::Confirm;
 use crate::model::Model;
+use crate::model::Page;
 use crate::model::Section;
 use crate::model::Viewer;
 use crate::style;
+use crate::workings;
+use crate::workings::Workings;
 
 /// An icon, drawn as strokes in the current text colour.
 pub fn icon(path: &str) -> Element {
@@ -422,11 +428,18 @@ pub fn switcher(viewer: &Viewer, section: &Section) -> Option<Element> {
 /// the Live screen.
 #[must_use]
 pub fn pulse(viewer: &Viewer) -> Element {
+	pulse_of(viewer.pulse.as_ref())
+}
+
+/// The live events indicator for `pulse`, or that analytics isn't
+/// connected.
+#[must_use]
+pub fn pulse_of(pulse: Option<&crate::model::Pulse>) -> Element {
 	const CLASS: &str = "flex-row items-center gap-2 rounded-full border \
 	                     border-[var(--admin-line)] px-2.5 py-1 cursor-pointer \
 	                     hover:bg-[var(--admin-sunken)] max-sm:hidden";
 
-	let Some(pulse) = &viewer.pulse else {
+	let Some(pulse) = pulse else {
 		return Pressable("Live events: analytics isn't connected yet")
 			.href(format!("{BASE}/analytics/live"))
 			.class(CLASS)
@@ -534,10 +547,12 @@ pub fn matching(targets: &[Target], query: &str) -> Vec<Target> {
 /// What the chrome around every page changes, and the page it frames.
 #[derive(Clone)]
 pub struct Shell {
-	/// The page's model.
+	/// The page's model, as the server sent it.
 	pub model: Arc<Model>,
-	/// Whether mint tabs show their sources.
-	pub workings: RwSignal<bool>,
+	/// The page shown now: the model's, until a builder changes in place.
+	pub(crate) page: RwSignal<Page>,
+	/// Workings mode and the page's drawers.
+	pub workings: Workings,
 	/// `light` or `dark` once the person chose one.
 	appearance: RwSignal<Option<String>>,
 	/// Whether the account menu is open.
@@ -549,9 +564,13 @@ pub struct Shell {
 	/// Takes focus to the search field.
 	search: FocusRequest,
 	/// What the notice above the content says.
-	notice: RwSignal<String>,
+	pub(crate) notice: RwSignal<String>,
+	/// The confirm sheet a page's actions ask through.
+	pub(crate) confirm: Confirm,
 	/// Signing out at the main site.
 	sign_out: MutationHandle<(), (), ErrorResponse>,
+	/// The analytics stream: the pulse, and on Live, each event.
+	pub(crate) tail: Tail,
 }
 
 impl Shell {
@@ -559,16 +578,27 @@ impl Shell {
 	/// elsewhere) finds a screen and Shift+W turns Workings mode on or off.
 	#[must_use]
 	pub fn new(model: Model) -> Self {
+		let tail = Tail::open(
+			model.viewer.pulse.clone(),
+			matches!(model.page, Page::Live(_)),
+		);
 		let shell = Self {
-			workings: RwSignal::new(model.viewer.workings_mode),
+			workings: Workings::new(
+				model.viewer.workings_mode,
+				model.open.clone(),
+				model.page.drawers().first().map(|drawer| drawer.id.clone()),
+			),
 			appearance: RwSignal::new(model.viewer.appearance.clone()),
+			page: RwSignal::new(model.page.clone()),
 			model: Arc::new(model),
 			menu_open: RwSignal::new(false),
 			query: RwSignal::new(String::new()),
 			search_open: RwSignal::new(false),
 			search: FocusRequest::new(),
 			notice: RwSignal::new(String::new()),
+			confirm: Confirm::new(),
 			sign_out: use_mutation(sign_out_mutation()),
+			tail,
 		};
 
 		let find = shell.clone();
@@ -577,6 +607,18 @@ impl Shell {
 		use_shortcut(Shortcut::key("w").shift().unless_typing(), move || {
 			workings.toggle_workings();
 		});
+		let drawers = shell.workings;
+		let confirm = shell.confirm;
+		provide_context(drawers);
+		provide_context(confirm);
+		provide_context(tail);
+		provide_context(components::Notes::new());
+		// While the confirm sheet asks, no shortcut runs: its keys are its
+		// own.
+		use_shortcut(Shortcut::key("w").unless_typing(), move || {
+			drawers.toggle_first();
+		});
+		use_shortcut(Shortcut::key("Escape"), move || drawers.hide());
 
 		shell
 	}
@@ -589,8 +631,8 @@ impl Shell {
 
 	/// Turns Workings mode on or off, and remembers it for the person.
 	fn toggle_workings(&self) {
-		let on = !self.workings.get_untracked();
-		self.workings.set(on);
+		let on = !self.workings.mode.get_untracked();
+		self.workings.mode.set(on);
 		browser::post(
 			&format!("{BASE}/api/preferences"),
 			&format!(r#"{{"kind":"workings_mode","on":{on}}}"#),
@@ -632,7 +674,7 @@ impl Shell {
 	#[must_use]
 	pub fn frame(&self, content: Element) -> Element {
 		let viewer = &self.model.viewer;
-		let section = self.model.page.section();
+		let section = self.page.with(Page::section);
 		let main = View()
 			.class("min-w-0 flex-1 overflow-scroll")
 			.role(Role::Main)
@@ -660,18 +702,31 @@ impl Shell {
 				View()
 					.class("relative min-h-0 flex-1 flex-row overflow-hidden")
 					.child(rail(viewer, &section))
-					.child(main),
+					.child(main)
+					.children({
+						self.page.with(|page| {
+							let drawers = page.drawers();
+							(!drawers.is_empty()).then(|| workings::aside(drawers))
+						})
+					}),
 			)
 			.child(tab_bar(
 				&section,
 				viewer,
 				search_open().on_press(move || find.find()),
 			))
+			.children(
+				self.page
+					.with(|page| {
+						matches!(page, Page::Project(_) | Page::Person(_) | Page::Insight(_))
+					})
+					.then(|| self.confirm.view()),
+			)
 	}
 
 	fn top_bar(&self) -> Element {
 		let viewer = &self.model.viewer;
-		let section = self.model.page.section();
+		let section = self.page.with(Page::section);
 
 		View()
 			.class(
@@ -687,7 +742,7 @@ impl Shell {
 			.children(switcher(viewer, &section))
 			.child(self.search_field())
 			.child(View().class("flex-1"))
-			.child(pulse(viewer))
+			.child(pulse_of(self.tail.pulse().as_ref()))
 			.child(self.workings_switch())
 			.child(self.theme_button())
 			.child(self.account_menu())
@@ -781,7 +836,7 @@ impl Shell {
 	/// the words can go on a phone and the switch still reads "Show
 	/// workings" to a screen reader.
 	fn workings_switch(&self) -> Element {
-		let on = self.workings.get();
+		let on = self.workings.mode.get();
 		let shell = self.clone();
 
 		Pressable("Show workings")
@@ -917,10 +972,17 @@ pub fn stylesheet() -> String {
 }
 
 /// What only a browser can do. On the server, each is nothing.
+/// Remembers a preference for the signed-in admin, and lets it go.
+pub(crate) fn preference(body: &str) {
+	browser::post(&format!("{BASE}/api/preferences"), body);
+}
+
 mod browser {
 	/// Whether the device prefers dark.
 	pub(super) fn prefers_dark() -> bool {
-		#[cfg(feature = "hydrate")]
+		// `hydrate` is also on for a host `--all-features` build, which has
+		// no window. These calls exist only in the browser build.
+		#[cfg(all(feature = "hydrate", target_arch = "wasm32"))]
 		{
 			web_sys::window()
 				.and_then(|window| {
@@ -931,13 +993,13 @@ mod browser {
 				})
 				.is_some_and(|list| list.matches())
 		}
-		#[cfg(not(feature = "hydrate"))]
+		#[cfg(not(all(feature = "hydrate", target_arch = "wasm32")))]
 		false
 	}
 
 	/// Sets a cookie on this page's site.
 	pub(super) fn set_cookie(cookie: &str) {
-		#[cfg(feature = "hydrate")]
+		#[cfg(all(feature = "hydrate", target_arch = "wasm32"))]
 		{
 			use wasm_bindgen::JsCast as _;
 
@@ -948,14 +1010,14 @@ mod browser {
 				let _ = document.set_cookie(cookie);
 			}
 		}
-		#[cfg(not(feature = "hydrate"))]
+		#[cfg(not(all(feature = "hydrate", target_arch = "wasm32")))]
 		let _ = cookie;
 	}
 
 	/// Sends `body`, as JSON, to `path` on this site, and lets it go: a
 	/// preference that doesn't save is asked for again next time.
 	pub(super) fn post(path: &str, body: &str) {
-		#[cfg(feature = "hydrate")]
+		#[cfg(all(feature = "hydrate", target_arch = "wasm32"))]
 		{
 			let init = web_sys::RequestInit::new();
 			init.set_method("POST");
@@ -973,7 +1035,7 @@ mod browser {
 				let _ = sent.await;
 			});
 		}
-		#[cfg(not(feature = "hydrate"))]
+		#[cfg(not(all(feature = "hydrate", target_arch = "wasm32")))]
 		let _ = (path, body);
 	}
 }
@@ -1036,12 +1098,16 @@ mod tests {
 				viewer: Viewer {
 					pulse: Some(crate::model::Pulse {
 						per_second: 1.5,
+						per_minute: 3,
 						seconds: vec![0, 2, 1],
 						live: true,
+						reason: None,
+						latest: 7,
 					}),
 					..viewer(&["notes-production", "notes-staging"])
 				},
-				page: crate::model::Page::Glossary,
+				page: Page::Glossary,
+				open: None,
 			});
 			// Search with and without matches, and the account menu open.
 			for query in ["", "trend", "zebra"] {

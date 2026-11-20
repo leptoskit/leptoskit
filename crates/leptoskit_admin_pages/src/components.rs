@@ -6,13 +6,17 @@
 //! server renders the whole page and the script only adds behaviour.
 
 use leptoskit::native::Color;
+use leptoskit::native::FocusRequest;
+use leptoskit::native::ScrollAlign;
 use leptoskit::native::TextSpan;
 use leptoskit::prelude::*;
+use serde::Deserialize;
+use serde::Serialize;
 
 use crate::style;
 
 /// A state word's tone, always shown with an icon and a word.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub enum Tone {
 	/// ✓ Healthy, Succeeded, Create.
 	Good,
@@ -127,7 +131,13 @@ impl Card {
 				.child(mint_tab(drawer, source));
 		}
 
-		let mut card = View().class(style::CARD).child(header).children(self.body);
+		let open = self.workings.as_ref().is_some_and(|(drawer, _)| {
+			crate::workings::Workings::current().is_some_and(|workings| workings.is_open(drawer))
+		});
+		let mut card = View()
+			.class(if open { style::CARD_OPEN } else { style::CARD })
+			.child(header)
+			.children(self.body);
 
 		if let Some((drawer, _)) = self.workings {
 			card = card.test_id(format!("card:{drawer}"));
@@ -144,6 +154,44 @@ impl Card {
 /// The mint tab: the logo's mint piece and `Workings`, with the card's
 /// source beside it in Workings mode.
 pub fn mint_tab(drawer: &str, source: &str) -> Element {
+	if let Some(workings) = crate::workings::Workings::current() {
+		let open = workings.is_open(drawer);
+		let mode = workings.mode.get();
+		let here = FocusRequest::new();
+		workings.register_tab(drawer, here);
+		let id = drawer.to_owned();
+
+		return Pressable(format!("Show workings: {source}"))
+			.class(match (open, mode) {
+				(true, _) => style::MINT_TAB_OPEN,
+				(false, true) => style::MINT_TAB,
+				(false, false) => style::MINT_TAB_QUIET,
+			})
+			.aria_expanded(open)
+			.test_id(format!("workings-tab:{drawer}"))
+			.focus_on(here)
+			.on_press(move || workings.toggle(&id, Some(here)))
+			.child(
+				View()
+					.class(if open {
+						style::MINT_PIECE_OPEN
+					} else {
+						style::MINT_PIECE
+					})
+					.test_id("mint-piece"),
+			)
+			.child(Text("Workings"))
+			.children(mode.then(|| {
+				Text(source)
+					.class(if open {
+						style::MINT_SOURCE_OPEN
+					} else {
+						style::MINT_SOURCE
+					})
+					.test_id("mint-source")
+			}));
+	}
+
 	Pressable(format!("Show workings: {source}"))
 		.class(style::MINT_TAB)
 		.test_id(format!("workings-tab:{drawer}"))
@@ -157,7 +205,7 @@ pub fn mint_tab(drawer: &str, source: &str) -> Element {
 }
 
 /// What a button looks like.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Kind {
 	/// Ink fill on an ember-warm offset block.
 	Primary,
@@ -212,20 +260,64 @@ pub fn raised(control: Element) -> Element {
 		.child(control)
 }
 
+/// The margin notes dismissed on this page, on a page this crate runs.
+#[derive(Clone, Copy, Debug)]
+pub struct Notes(RwSignal<Vec<String>>);
+
+impl Notes {
+	#[must_use]
+	pub fn new() -> Self {
+		Self(RwSignal::new(Vec::new()))
+	}
+
+	fn current() -> Option<Self> {
+		leptos::context::use_context::<Self>()
+	}
+
+	fn dismissed(self, id: &str) -> bool {
+		self.0
+			.with(|dismissed| dismissed.iter().any(|known| known == id))
+	}
+
+	/// Hides note `id` and tells the admin not to show it again.
+	fn dismiss(self, id: &str) {
+		self.0.update(|dismissed| dismissed.push(id.to_owned()));
+		crate::shell::preference(
+			&serde_json::json!({ "kind": "dismiss_note", "note": id }).to_string(),
+		);
+	}
+}
+
+impl Default for Notes {
+	fn default() -> Self {
+		Self::new()
+	}
+}
+
 /// A margin note in the sketch face, with "Got it".
 pub fn margin_note(id: &str, text: impl Into<String>) -> Element {
+	let notes = Notes::current();
+	let mut dismiss = Button("Got it")
+		.class(
+			"text-xs font-semibold text-[var(--admin-mint-text)] cursor-pointer hover:opacity-70",
+		)
+		.test_id(format!("note-dismiss:{id}"));
+
+	if let Some(notes) = notes {
+		let note = id.to_owned();
+		dismiss = dismiss.on_press(move || notes.dismiss(&note));
+	}
+
 	View()
 		.class(style::NOTE)
+		.class(if notes.is_some_and(|notes| notes.dismissed(id)) {
+			"hidden"
+		} else {
+			""
+		})
 		.test_id(format!("note:{id}"))
 		.child(Text(text.into()).class(style::NOTE_TEXT))
-		.child(
-			Button("Got it")
-				.class(
-					"text-xs font-semibold text-[var(--admin-mint-text)] cursor-pointer \
-					 hover:opacity-70",
-				)
-				.test_id(format!("note-dismiss:{id}")),
-		)
+		.child(dismiss)
 }
 
 /// The environment pill: the one place ember fills outside data.
@@ -323,7 +415,7 @@ pub fn bar(fraction: f64, threshold: Option<f64>) -> Element {
 }
 
 /// One line of a code block.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Line {
 	/// The line's text, without a trailing newline.
 	pub text: String,
@@ -331,10 +423,14 @@ pub struct Line {
 	pub mark: Mark,
 	/// The configuration key this line declares, for linked highlighting.
 	pub key: Option<String>,
+	/// Whether the last builder change changed this line. Only the browser
+	/// marks it, comparing a page with the one it replaced.
+	#[serde(default, skip_serializing_if = "std::ops::Not::not")]
+	pub changed: bool,
 }
 
 /// How a code line stands out.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Mark {
 	/// An ordinary line.
 	Plain,
@@ -351,6 +447,7 @@ impl Line {
 			text: text.into(),
 			mark: Mark::Plain,
 			key: None,
+			changed: false,
 		}
 	}
 
@@ -360,6 +457,7 @@ impl Line {
 			text: text.into(),
 			mark,
 			key: None,
+			changed: false,
 		}
 	}
 
@@ -463,6 +561,7 @@ fn classify(word: &str) -> Color {
 /// per-line wash, and **Copy**. `copy_as` names what Copy gives, such as
 /// `TOML`.
 pub fn code_block(lines: &[Line], copy_as: &str) -> Element {
+	let text = crate::workings::text_of(lines);
 	// Copy sits in its own row above the code, so it never covers a line's
 	// end at any width; the stylesheet pins the row while the code scrolls
 	// sideways.
@@ -475,21 +574,28 @@ pub fn code_block(lines: &[Line], copy_as: &str) -> Element {
 				.class("font-[var(--admin-font-mono)] text-[11px] text-[#9d93a8]")
 				.aria_hidden(true),
 		)
-		.child(
-			Button("Copy")
+		.child(copy_button(
+			Button(copied_label(&text))
 				.aria_label(format!("Copy as {copy_as}"))
 				.class(
 					"rounded-md border border-[#4a3f58] bg-[#1d1726] px-2 py-0.5 text-[11px] \
 					 font-semibold text-[#c9c0d0] cursor-pointer hover:text-white",
 				)
 				.test_id("copy"),
-		);
+			text,
+		));
 	let mut block = View().class(style::CODE_BLOCK).test_id("code").child(head);
+	let workings = crate::workings::Workings::current();
+	// The first line a plan row linked scrolls into view, and so does the
+	// changed line the drawer names.
+	let mut revealed = false;
+	let mut revealed_change = false;
 
 	for (index, line) in lines.iter().enumerate() {
 		let wash = match line.mark {
 			Mark::Added => "bg-[#5fd08a]/15",
 			Mark::Removed => "bg-[#ff8a9e]/15",
+			Mark::Plain if line.changed => "bg-[#5ef2c2]/15",
 			Mark::Plain => "",
 		};
 		let mut row = View()
@@ -517,12 +623,34 @@ pub fn code_block(lines: &[Line], copy_as: &str) -> Element {
 					.test_id("code-text"),
 			);
 
+		if let Some(workings) = workings
+			&& let Some(key) = &line.key
+			&& workings.is_linked(key)
+		{
+			row = row.class(style::LINKED);
+
+			if !revealed {
+				revealed = true;
+				row = row.reveal_on(workings.reveal(), ScrollAlign::Center);
+			}
+		}
+
 		if line.mark != Mark::Plain {
 			row = row.aria_description(if line.mark == Mark::Added {
 				"added"
 			} else {
 				"removed"
 			});
+		} else if line.changed {
+			row = row.aria_description("changed");
+
+			if let Some(workings) = workings
+				&& !revealed_change
+				&& workings.is_change_target(&line.text)
+			{
+				revealed_change = true;
+				row = row.reveal_on(workings.change_reveal(), ScrollAlign::Nearest);
+			}
 		}
 
 		block = block.child(row);
@@ -548,8 +676,8 @@ pub fn paper_code(text: &str, copy_as: &str) -> Element {
 		);
 	}
 
-	block.child(
-		Button("Copy")
+	block.child(copy_button(
+		Button(copied_label(text))
 			.aria_label(format!("Copy as {copy_as}"))
 			.class(
 				"absolute right-1.5 top-1.5 rounded-md border border-[var(--admin-line-strong)] \
@@ -557,7 +685,25 @@ pub fn paper_code(text: &str, copy_as: &str) -> Element {
 				 text-[var(--admin-ink-2)] cursor-pointer hover:text-[var(--admin-ink)]",
 			)
 			.test_id("copy"),
-	)
+		text.to_owned(),
+	))
+}
+
+/// "Copied" for a moment after `text` was copied, otherwise "Copy".
+fn copied_label(text: &str) -> &'static str {
+	if crate::workings::Workings::current().is_some_and(|workings| workings.copied(text)) {
+		"Copied"
+	} else {
+		"Copy"
+	}
+}
+
+/// `button` copies `text` when pressed, on a page this crate runs.
+fn copy_button(button: Element, text: String) -> Element {
+	match crate::workings::Workings::current() {
+		Some(workings) => button.on_press(move || workings.copy(text.clone(), None)),
+		None => button,
+	}
 }
 
 /// A sentence whose `backticked` commands are set apart, the way the
@@ -658,6 +804,61 @@ pub fn empty_state(
 	}
 
 	body.child(Text(footnote.to_owned()).class(style::MUTED))
+}
+
+/// A page heading: the title, a line under it, and actions on the right.
+pub fn header(title: &str, subtitle: &str, actions: Vec<Element>) -> Element {
+	View()
+		.class("flex-row flex-wrap items-start justify-between gap-4")
+		.child(
+			// Views don't shrink unless told: a floor of 16rem lets the
+			// title wrap, and pushes the actions underneath on a phone.
+			View()
+				.class("min-w-[16rem] flex-1 flex-col gap-1")
+				.child(Heading(1, title.to_owned()).class(style::PAGE_TITLE))
+				.child(Text(subtitle.to_owned()).class(style::SECONDARY)),
+		)
+		.child(
+			View()
+				.class("flex-row flex-wrap items-center gap-2")
+				.children(actions),
+		)
+}
+
+/// The `struct` badge on an event a Rust type sends.
+pub fn struct_badge() -> Element {
+	Text("struct").class(
+		"rounded-full border border-[var(--admin-mint)] px-1.5 text-[11px] font-semibold \
+		 leading-4 text-[var(--admin-mint-text)]",
+	)
+}
+
+/// Two letters for an avatar: `AL` for `ada.lovelace@…`.
+#[must_use]
+pub fn initials(name: &str) -> String {
+	let name = name.split('@').next().unwrap_or(name);
+	let mut letters: String = name
+		.split(['.', '_', '-', ' '])
+		.filter_map(|part| part.chars().next().filter(char::is_ascii_alphabetic))
+		.take(2)
+		.collect();
+
+	if letters.is_empty() {
+		letters.push('?');
+	}
+
+	letters.to_uppercase()
+}
+
+/// A person's initials in a circle; `size` sets its box and type.
+pub fn avatar(name: &str, size: &str) -> Element {
+	Text(initials(name))
+		.class(
+			"shrink-0 rounded-full bg-[var(--admin-sunken)] text-center font-semibold \
+			 text-[var(--admin-ink)]",
+		)
+		.class(size)
+		.aria_hidden(true)
 }
 
 #[cfg(test)]

@@ -8,6 +8,7 @@ import android.content.pm.PackageManager
 import android.os.Build
 import androidx.test.platform.app.InstrumentationRegistry
 import dev.leptoskit.bridge.PluginException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
@@ -340,24 +341,28 @@ class NotificationsPluginTest {
                     NotificationsPlugin(
                         context,
                         null,
-                        {
-                            asks.incrementAndGet()
-                            RemoteRegistration.noteToken(token)
-                        },
+                        // Firebase answers through a later callback, never
+                        // inside the ask, so the fake only counts asks and
+                        // the test answers once both callers are waiting.
+                        { asks.incrementAndGet() },
                         5_000,
                     )
                 }
             try {
+                // Each caller runs on the main thread up to its wait before
+                // the next starts, so both are in flight together: the first
+                // asks, the second joins its wait.
                 val waiters =
-                    listOf(
-                        async(Dispatchers.Main) { snapshot(plugin.invoke(8, ByteBuffer.allocate(0))) },
-                        async(Dispatchers.Main) { snapshot(plugin.invoke(8, ByteBuffer.allocate(0))) },
-                    )
-                // The first caller asks and starts waiting; the broker's
-                // answer reaches both through the shared wait.
-                withTimeout(5000) {
-                    while (asks.get() == 0) delay(10)
-                }
+                    withContext(Dispatchers.Main) {
+                        List(2) {
+                            this@runBlocking.async(Dispatchers.Main, CoroutineStart.UNDISPATCHED) {
+                                snapshot(plugin.invoke(8, ByteBuffer.allocate(0)))
+                            }
+                        }
+                    }
+                assertEquals(1, asks.get())
+                // The broker's one answer reaches both through the shared
+                // wait.
                 RemoteRegistration.noteToken(token)
 
                 for (waiter in waiters) {

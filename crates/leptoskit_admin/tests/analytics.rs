@@ -179,6 +179,16 @@ async fn page(world: &World, browser: &mut Browser, path: &str) -> (StatusCode, 
 	(status, text(response).await)
 }
 
+/// The model of the page at `path`, as a builder asks for the next one.
+async fn page_model(world: &World, browser: &mut Browser, path: &str) -> (StatusCode, String) {
+	let request = axum::http::Request::get(path).header("x-admin-page", "json");
+	let response = browser
+		.send(&world.admin, ADMIN, request, axum::body::Body::empty())
+		.await;
+	let status = response.status();
+	(status, text(response).await)
+}
+
 /// The value of `attribute` on the element with `test_id`: the first such
 /// element, or the last when `last`.
 fn attribute_on(html: &str, test_id: &str, attribute: &str, last: bool) -> String {
@@ -215,12 +225,9 @@ fn live_badges(html: &str) -> Vec<(String, bool)> {
 				|| attribute_of(row, "how-toggle", "aria-label"),
 				|value| value[..value.find('"').unwrap()].to_owned(),
 			);
-			let badge = row
-				.find("data-testid=\"struct-badge\"")
-				.unwrap_or_else(|| panic!("a row without a badge: {row}"));
-			let tag =
-				&row[row[..badge].rfind('<').unwrap()..badge + row[badge..].find('>').unwrap()];
-			(name, !tag.contains("aria-hidden=\"true\""))
+			// The badge sits in the row's toggle, and only on a typed event.
+			let toggle = &row[..row.find("</button>").unwrap_or(row.len())];
+			(name, toggle.contains("data-testid=\"struct-badge\""))
 		})
 		.collect()
 }
@@ -497,6 +504,7 @@ async fn a_wrong_token_is_refused_and_the_page_says_so() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+#[expect(clippy::too_many_lines, reason = "every page, one after another")]
 async fn every_page_reads_the_service_as_the_app() {
 	let (world, analytics) = seeded().await;
 	let mut ada = world.ada().await;
@@ -529,6 +537,23 @@ async fn every_page_reads_the_service_as_the_app() {
 	.await;
 	assert!(html.contains("struct"), "note_created has a Rust type");
 	snapshot("analytics_trends", &html);
+
+	// A builder changing in place asks for the next page's model instead.
+	let (status, json) = page_model(
+		&world,
+		&mut ada,
+		&format!("{BASE}/analytics/trends?{RANGE}&interval=day"),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	let model: Value = serde_json::from_str(&json).unwrap();
+	let insight = &model["Insight"];
+	assert_eq!(insight["kind"], "trends");
+	assert_eq!(insight["path"], format!("{BASE}/analytics/trends"));
+	assert_eq!(insight["address"]["interval"], "day");
+	assert_eq!(insight["query"]["interval"], "day");
+	assert!(insight["answer"]["Ok"].is_object(), "{json}");
+	assert_eq!(insight["drawer"]["id"], "trends");
 
 	let (_, html) = page(
 		&world,
@@ -741,9 +766,12 @@ async fn export_and_delete_need_a_confirmation_and_the_role() {
 	let person = attribute_of(&html, "person-row", "href");
 	let id = person.rsplit('/').next().unwrap().to_owned();
 	let (_, html) = page(&world, &mut ada, &person).await;
-	let guard = attribute_of(&html, "person-delete", "aria-description");
-	let (_, confirmation) = guard.split_once('|').unwrap();
-	assert_eq!(confirmation, "member-03@notes.example");
+	// Deleting asks for their name as the page shows it.
+	let confirmation = "member-03@notes.example";
+	assert!(
+		html.contains(&format!("<title>{confirmation} · ")),
+		"the page is theirs"
+	);
 
 	// Export: everything stored about them, as a download.
 	let response = ada
@@ -828,9 +856,13 @@ async fn export_and_delete_need_a_confirmation_and_the_role() {
 
 /// Writes real pages, as the admin renders them, into the directory
 /// `LEPTOSKIT_ADMIN_PAGES` names, for `tests/script.mjs` to drive the
-/// admin's script against in a browser. It runs from there.
+/// admin's pages against in a browser. It runs from there.
 #[tokio::test]
 #[ignore = "tests/script.mjs runs it"]
+#[expect(
+	clippy::too_many_lines,
+	reason = "one world, every page written from it"
+)]
 async fn pages_for_the_script() {
 	let directory = std::path::PathBuf::from(
 		std::env::var_os("LEPTOSKIT_ADMIN_PAGES").expect("set LEPTOSKIT_ADMIN_PAGES"),
@@ -892,6 +924,91 @@ async fn pages_for_the_script() {
 		)
 		.unwrap();
 
+	// A person, for People and their page.
+	let (_, html) = page(
+		&world,
+		&mut ada,
+		&format!("{BASE}/analytics/people?search=member-01"),
+	)
+	.await;
+	let person = attribute_of(&html, "person-row", "href");
+
+	// A dashboard with one card, as a page and as its model.
+	let saved = ada
+		.post_json(
+			&world.admin,
+			ADMIN,
+			&format!("{BASE}/api/analytics/insights"),
+			json!({
+				"kind": "trends",
+				"name": "Notes, weekly",
+				"params": { "from": "2026-10-05", "to": "2026-11-02", "interval": "week" },
+			}),
+		)
+		.await;
+	assert_eq!(saved.status(), StatusCode::OK);
+	let saved = json_body(saved).await;
+	let added = ada
+		.post_json(
+			&world.admin,
+			ADMIN,
+			&format!("{BASE}/api/analytics/dashboards"),
+			json!({
+				"kind": "trends",
+				"insight": saved["insight"],
+				"name": "Notes, weekly",
+				"dashboard_name": "Product",
+			}),
+		)
+		.await;
+	assert_eq!(added.status(), StatusCode::OK);
+	let dashboard = json_body(added).await["href"].as_str().unwrap().to_owned();
+	let (status, json) = page_model(&world, &mut ada, &dashboard).await;
+	assert_eq!(status, StatusCode::OK, "{dashboard}");
+	std::fs::write(directory.join("dashboard.json"), json).unwrap();
+
+	// The web overview over the last week, for a chip that changes it in
+	// place.
+	let week = format!("{BASE}/analytics/overview?days=7");
+	let (status, json) = page_model(&world, &mut ada, &week).await;
+	assert_eq!(status, StatusCode::OK, "{week}");
+	std::fs::write(directory.join("web-week.json"), json).unwrap();
+
+	// What one instance reported, for Health's charts.
+	let fleet = leptoskit::apm::Analytics::new(
+		leptoskit::apm::Resource {
+			service: "notes-production".into(),
+			environment: "production".into(),
+			release: "v41".into(),
+			instance: "web-0".into(),
+		},
+		leptoskit::apm::Limits::default(),
+		|| {
+			std::time::SystemTime::now()
+				.duration_since(std::time::UNIX_EPOCH)
+				.unwrap()
+				.as_secs()
+		},
+	)
+	.unwrap();
+
+	for (operation, duration) in [("/notes/{id}", 12.0), ("/", 4.0)] {
+		fleet.record(
+			leptoskit::apm::SeriesKey {
+				source: leptoskit::apm::Source::Backend,
+				signal: leptoskit::apm::Signal::Http,
+				operation: operation.into(),
+				outcome: leptoskit::apm::Outcome::Ok,
+			},
+			duration,
+			None,
+		);
+	}
+
+	world
+		.store
+		.ingest("notes-production", &fleet.snapshot())
+		.unwrap();
 	let project = format!("{BASE}/infra/projects/notes-production");
 	for (file, path) in [
 		(
@@ -913,13 +1030,71 @@ async fn pages_for_the_script() {
 			),
 		),
 		("live.html", format!("{BASE}/analytics/live")),
+		("library.html", format!("{BASE}/analytics/library")),
+		("people.html", format!("{BASE}/analytics/people")),
+		("person.html", person),
+		("dashboard.html", dashboard),
+		("web.html", format!("{BASE}/analytics/overview")),
 		("glossary.html", format!("{BASE}/learn/glossary")),
 		("learn.html", format!("{BASE}/learn")),
 		("overview.html", format!("{project}/overview")),
+		(
+			"overview-release.html",
+			format!("{project}/overview?workings=release"),
+		),
+		("releases.html", format!("{project}/releases")),
+		("health.html", format!("{project}/health")),
 		("changes.html", format!("{project}/changes")),
+		("projects.html", format!("{BASE}/infra/projects")),
+		(
+			"operation.html",
+			format!("{BASE}/infra/operations/{}", claimed.id),
+		),
+		(
+			"operation-workings.html",
+			format!("{BASE}/infra/operations/{}?workings=operation", claimed.id),
+		),
 	] {
 		let (status, html) = page(&world, &mut ada, &path).await;
 		assert_eq!(status, StatusCode::OK, "{path}");
 		std::fs::write(directory.join(file), html).unwrap();
+	}
+
+	// Sign-in, to someone signed out, and the refusal the callback sends.
+	for (file, query, expected) in [
+		("sign-in.html", "", StatusCode::OK),
+		(
+			"refusal.html",
+			"?auth_error=not_allowed",
+			StatusCode::FORBIDDEN,
+		),
+	] {
+		let path = format!("{BASE}/sign-in{query}");
+		let (status, html) = page(&world, &mut Browser::default(), &path).await;
+		assert_eq!(status, expected, "{path}");
+		std::fs::write(directory.join(file), html).unwrap();
+	}
+
+	// The builders change in place: each page as a model, and two with
+	// their Workings open.
+	for (name, query) in [
+		("trends-day", "interval=day"),
+		("trends-week", "interval=week"),
+		("trends-pageviews", "s0=%24pageview&interval=day"),
+		(
+			"trends-channels",
+			"s0=%24pageview&interval=day&by=session:channel",
+		),
+	] {
+		let path = format!("{BASE}/analytics/trends?{RANGE}&{query}");
+		let (status, json) = page_model(&world, &mut ada, &path).await;
+		assert_eq!(status, StatusCode::OK, "{path}");
+		std::fs::write(directory.join(format!("{name}.json")), json).unwrap();
+
+		if matches!(name, "trends-day" | "trends-week") {
+			let (status, html) = page(&world, &mut ada, &format!("{path}&workings=trends")).await;
+			assert_eq!(status, StatusCode::OK, "{path}");
+			std::fs::write(directory.join(format!("{name}-workings.html")), html).unwrap();
+		}
 	}
 }

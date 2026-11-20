@@ -21,7 +21,7 @@ fn declare(state: &ProjectState, why: &str) -> Station {
 			"Declare",
 			"leptoskit.toml, changes not yet committed",
 			format!("{why} These lines changed since the last commit."),
-			Body::Code(state.changed.clone(), "TOML"),
+			Body::Code(state.changed.clone(), "TOML".to_owned()),
 		);
 	}
 
@@ -41,7 +41,7 @@ fn declare(state: &ProjectState, why: &str) -> Station {
 		"Declare",
 		"leptoskit.toml",
 		format!("{why} Nothing in [infra] changed since the last commit."),
-		Body::Code(state.declared.clone(), "TOML"),
+		Body::Code(state.declared.clone(), "TOML".to_owned()),
 	)
 }
 
@@ -105,7 +105,12 @@ fn generate(state: &ProjectState, changes: &[Change]) -> Station {
 		lines.push(Line::plain(format!("  … the rest is in {source}")));
 	}
 
-	Station::new("Generate", source, why, Body::Code(lines, "JSON"))
+	Station::new(
+		"Generate",
+		source,
+		why,
+		Body::Code(lines, "JSON".to_owned()),
+	)
 }
 
 /// Plan: the resource diff, as `OpenTofu` reports it.
@@ -144,7 +149,7 @@ fn plan(state: &ProjectState) -> Station {
 				"Plan",
 				format!("operation {}", short_id(&plan.operation.id)),
 				why,
-				Body::Code(lines, "text"),
+				Body::Code(lines, "text".to_owned()),
 			)
 		}
 		Some(plan) => {
@@ -214,7 +219,7 @@ fn apply(command: &str, last: Option<&Operation>) -> Station {
 		"the control service's worker",
 		"The control service runs one operation per project at a time, records every step, and \
 		 keeps going if you close this tab.",
-		Body::Code(lines, "shell"),
+		Body::Code(lines, "shell".to_owned()),
 	)
 }
 

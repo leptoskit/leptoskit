@@ -44,6 +44,7 @@ struct Page {
 	status: u16,
 	location: Option<String>,
 	content_type: Option<String>,
+	cache_control: Option<String>,
 	text: String,
 }
 
@@ -165,10 +166,12 @@ impl Console {
 		};
 		let location = header(reqwest::header::LOCATION);
 		let content_type = header(reqwest::header::CONTENT_TYPE);
+		let cache_control = header(reqwest::header::CACHE_CONTROL);
 		Page {
 			status: response.status().as_u16(),
 			location,
 			content_type,
+			cache_control,
 			text: response.text().await.expect("a body"),
 		}
 	}
@@ -413,10 +416,17 @@ async fn signed_in_pages_render_with_their_status() {
 		("/account", "Account"),
 		(&format!("/{personal}"), "Ship your first app"),
 		("/device", "Enter the code your terminal shows."),
+		(&format!("/{personal}/settings/billing"), "Billing"),
 	] {
 		let page = app.get(path, cookie).await;
 		page.expect(200).shows(heading);
 		only_the_framework_loader(path, &page.text);
+		// A page carries the person's own data: no shared cache keeps it.
+		assert_eq!(
+			page.cache_control.as_deref(),
+			Some("private, no-store"),
+			"{path}"
+		);
 	}
 
 	let missing = app.get("/someone-else", cookie).await;
@@ -440,6 +450,9 @@ const QUERIES_IN_ORDER: &[&str] = &[
 	"leptoskit_auth::client::identities",
 	"leptoskit_auth::client::passkeys",
 	"leptoskit_auth::client::devices",
+	"rpc:subscription",
+	"rpc:plans",
+	"rpc:usage",
 	"rpc:projects",
 ];
 

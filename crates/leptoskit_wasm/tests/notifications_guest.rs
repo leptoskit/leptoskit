@@ -1289,7 +1289,7 @@ fn a_host_that_predates_receiving_answers_unavailable() {
 	let run = run_receiving(&guest(), 12, Vec::new(), Vec::new(), None, Service::new());
 
 	assert_eq!(run.steps, vec!["received=err:unavailable".to_owned()]);
-	assert!(run.waits.is_empty());
+	assert_eq!(run.waits, Vec::<u32>::new());
 }
 
 #[test]

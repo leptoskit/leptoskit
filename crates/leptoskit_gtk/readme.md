@@ -72,8 +72,7 @@ Initialize GTK on the application thread, construct `GtkBackend`, and hand it to
 ## Use it
 
 ```sh
-GDK_BACKEND=x11 GSK_RENDERER=cairo dbus-run-session -- xvfb-run -a \
-  cargo test -p leptoskit_gtk --test widgets --test overlays
+cargo check -p leptoskit_gtk
 ```
 
 ## Learn more

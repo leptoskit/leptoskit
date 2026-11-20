@@ -4,7 +4,7 @@ This file is for people working on leptoskit itself. The [public docs](https://l
 
 ## Development environment
 
-[`devenv`](https://devenv.sh/) provides the whole development environment: the pinned Rust toolchain, the wasm tools, the browser drivers, and every lint the CI runs.
+[`devenv`](https://devenv.sh/) provides the local development environment: the pinned Rust toolchain, the wasm tools, the browser drivers, and the full local lint. GitHub Actions installs that same toolchain itself and does not enter a devenv shell.
 
 ```bash
 devenv shell install:all   # pinned tools and locked dependencies
@@ -13,7 +13,7 @@ devenv shell lint:all      # clippy on every target, monostyle, leptoskit lint, 
 devenv shell fix:all       # autofix everything fixable
 ```
 
-A Cursor cloud agent prepares the same shell with `.cursor/install.sh`: single-user Nix (flakes and `nix-command` on), devenv on `PATH` for login and non-login shells, and the public devenv and nix-community binary caches so the shell is substituted instead of built from source. The script is safe to run again. It then runs `devenv shell -- true` and `install:all`. macOS, iOS, Windows, Android emulators, and the HarmonyOS device SDK are not part of that Linux VM; those checks stay on their own runners.
+A Cursor cloud agent prepares the same shell with `.cursor/install.sh`: single-user Nix (flakes and `nix-command` on), devenv on `PATH` for login and non-login shells, and the public devenv and nix-community binary caches so the shell is substituted instead of built from source. The script is safe to run again. It then runs `devenv shell -- true` and `install:all`. macOS, iOS, Windows, Android emulators, and the HarmonyOS device SDK are not part of that Linux VM. Pull requests do not run those journeys either.
 
 | Script                 | What it does                                                                   |
 | ---------------------- | ------------------------------------------------------------------------------ |
@@ -43,7 +43,7 @@ Depend on a local checkout from a generated app with `--sdk-path`: `leptoskit ne
 
 `devenv shell test:sdk` runs TypeScript under Deno and Node, Python, Dart, Go, Rust, and the generated CLI against a real local live server. The clients exercise subscriptions, patches, read-your-writes, reconnect, mutation deduplication, and channels. The development environment supplies each language's toolchain; missing tools or an empty test selection fail. The tests run serially, and the generated Rust consumers use a separate cache configurable with `LEPTOSKIT_SDK_TARGET_DIR`.
 
-Every pull request and main push runs this command in CI. Publication runs it again on the validated release commit, before uploading artifacts or publishing crates. Every publication build checks out that same validated commit SHA. `test:all` includes it locally. These tests install generated packages and their dependencies, so they require registry access. They validate the SDK/server journey; native host transport, generated application, and provider recovery tests remain separate checks.
+Publication runs this command on the validated release commit, before uploading artifacts or publishing crates. Every publication build checks out that same validated commit SHA. Pull requests do not. `test:all` includes it locally. These tests install generated packages and their dependencies, so they require registry access. They validate the SDK/server journey; native host transport, generated application, and provider recovery tests remain separate checks.
 
 ## Generated application acceptance
 
@@ -53,11 +53,11 @@ The command requires Node 22 or newer, `cargo-nextest`, Binaryen, Python 3 with 
 
 The database journey finishes by removing its RPC schema-pack declaration. It checks that accidental removal and a wrong pack name leave migrations, schema and rows unchanged, then explicitly removes the pack and verifies that the app's notes survive. Its SQLite observer opens the existing database read-only and fails if it is missing.
 
-PRs, main, and publication use the same command. Publication checks out the validated release SHA and requires success before any artifact upload or crate publication, including validation during a dry run. `test:all` includes it locally. These are compiled application and headless host checks; they do not establish browser UI, device SDK, simulator, physical device, or provider deployment acceptance. The broader coverage jobs retain their instrumented journeys separately.
+Publication checks out the validated release SHA and requires success before any artifact upload or crate publication, including validation during a dry run. Pull requests do not run the journeys. `test:all` includes them locally. These are compiled application and headless host checks; they do not establish browser UI, device SDK, simulator, physical device, or provider deployment acceptance.
 
 ## Coverage
 
-Coverage is measured on four platforms with `-C instrument-coverage`:
+GitHub Actions does not collect coverage. Measure it locally with `devenv shell coverage:all` when you need the floor. The historical CI shape, kept here so the local gate is still understandable, measured four platforms with `-C instrument-coverage`:
 
 - the `coverage` CI matrix runs the Linux suite once across two jobs: `workspace` runs the unit and integration tests, the GTK widget suite under Xvfb, the doc tests, and the portable widget journey through `leptoskit test run`; `applications` runs the CLI's ignored wasm end-to-end tests, generated Linux and terminal app builds, opencode's browser and terminal builds, the islands release build, and the file-routes Linux build (the CLI those drive is instrumented; the wasm32 builds it starts are not);
 - the browser job runs the Chrome suites (`coverage:browser`: leptoskit_testing_library, the web adapter, and browser storage) with the pinned nightly that wasm-bindgen-test coverage needs;

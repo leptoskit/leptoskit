@@ -118,13 +118,6 @@ required-features = ["service"]
 name = "postgres"
 required-features = ["postgres"]
 
-# The browser tests run in Chrome through the wasm runner; they exercise
-# the receiver script and the enrollment entry points' browser-side
-# behavior.
-[[test]]
-name = "browser"
-required-features = ["browser"]
-
 [dependencies]
 # The client side: the operations' types, which the app compiles to call the
 # service, and the shared validation it runs before it calls. No server

@@ -322,7 +322,7 @@ impl Page {
 	}
 
 	/// Signs out, then runs `then`. A failed sign-out stays here and says so.
-	fn leave(&self, failed: &'static str, then: impl FnOnce(Self) + 'static) {
+	fn leave(&self, failed: &'static str, then: impl FnOnce(Self) + Send + 'static) {
 		let state = self.state;
 
 		if state.leaving.get_untracked() {
@@ -374,7 +374,9 @@ pub(crate) fn open(shell: &Shell, welcome: &Arc<Welcome>, state: &State) {
 		welcome: Arc::clone(welcome),
 		state: *state,
 	};
-	Effect::new(move |_| {
+	// `new_sync` runs on the multi-thread server runtime. `Effect::new`
+	// calls `spawn_local`, which panics there.
+	Effect::new_sync(move |_| {
 		let page = page.clone();
 		crate::spawn(async move {
 			page.load().await;
@@ -503,7 +505,7 @@ fn account_menu(page: &Page) -> Element {
 
 /// The element in `slot`, leaving an empty view there until it is put back.
 fn taken(slot: &mut Element) -> Element {
-	std::mem::replace(slot, View())
+	std::mem::replace(slot, view! { <View /> })
 }
 
 /// A link to the admin, which opens beside this page so both stay in view.

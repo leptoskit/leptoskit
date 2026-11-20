@@ -1315,12 +1315,6 @@ mod tests {
 		assert!(!root.join(".leptoskit/ios/Host.xcworkspace").exists());
 	}
 
-	// The generated app target's Swift compiles against the real modules:
-	// with the notifications plugin selected its package is built for the
-	// iOS simulator and `App.swift`'s conditional import resolves; without
-	// it the same file compiles with the plugin simply absent. Anything but
-	// macOS, or a machine without Xcode, skips: the generated project is
-	// still exercised textually by the snapshot tests everywhere else.
 	/// A push-enabled app declares the background mode a silent data
 	/// message needs to wake it, once, beside what its plugins declare; an
 	/// app that never opted into push declares nothing for it.
@@ -1368,11 +1362,22 @@ mod tests {
 			["fetch"],
 			"an app without push declares nothing for it"
 		);
-		assert!(super::background_modes(&registry(Vec::new()), &config()).is_empty());
+		assert_eq!(
+			super::background_modes(&registry(Vec::new()), &config()),
+			Vec::<String>::new()
+		);
 	}
 
+	/// The generated app target's Swift compiles against the real modules:
+	/// with the notifications or background plugin selected, its package is
+	/// built for the iOS simulator and `App.swift`'s conditional import and
+	/// call into it resolve; without either, the same file compiles with the
+	/// plugins simply absent. Each plugin is checked on its own build, so the
+	/// typecheck sees one copy of the bridge module. Anything but macOS, or a
+	/// machine without Xcode, skips: the generated project is still
+	/// exercised textually by the snapshot tests everywhere else.
 	#[test]
-	fn generated_app_swift_typechecks_with_and_without_the_notifications_module() {
+	fn generated_app_swift_typechecks_with_and_without_the_plugin_modules() {
 		let Some(sdk) = simulator_sdk() else {
 			eprintln!("skipped: no iOS simulator SDK on this machine");
 			return;
@@ -1385,75 +1390,87 @@ mod tests {
 			.unwrap();
 		let root = temporary.path();
 		write_host_files(root);
-
-		// The real notifications plugin, with its real package directory.
-		let mut plugin: super::super::super::registry::Plugin =
-			serde_json::from_value(serde_json::json!({
-				"name": "notifications",
-				"apple-module": "LeptosKitNotifications",
-				"apple-type": "NotificationsPlugin",
-			}))
-			.unwrap();
-		plugin.directory =
-			Path::new(env!("CARGO_MANIFEST_DIR")).join("../leptoskit_plugin_notifications");
-		plugin.package_name = "leptoskit_plugin_notifications".into();
-		let registry = Registry {
-			package: "app".into(),
-			plugins: vec![plugin],
-			support: Vec::new(),
-			bridge: Path::new(env!("CARGO_MANIFEST_DIR")).join("../leptoskit_bridge_ffi"),
-			target: root.join("target"),
-			host_features: Vec::new(),
-			devtools_feature: None,
-			missing: Vec::new(),
-			scene3d: false,
+		let bridge = Path::new(env!("CARGO_MANIFEST_DIR")).join("../leptoskit_bridge_ffi");
+		let registry = |plugins| {
+			Registry {
+				package: "app".into(),
+				plugins,
+				support: Vec::new(),
+				bridge: bridge.clone(),
+				target: root.join("target"),
+				host_features: Vec::new(),
+				devtools_feature: None,
+				missing: Vec::new(),
+				scene3d: false,
+			}
 		};
-
-		super::generate(root, &pods_config(), &registry).unwrap();
 		let packages = root.join(".leptoskit/ios/packages");
-		let bridge = registry.bridge.clone();
 		let app = root.join("hosts/ios/App.swift");
+		let registrant = root.join(".leptoskit/ios/GeneratedPlugins.swift");
 		let sources = app_sources(&bridge);
 
-		// Build the plugin package (and, through it, the bridge) for the
-		// simulator: the module the conditional import names. Its target, not
-		// its product: `--product` cannot name an automatic library, and
-		// SwiftPM then builds the package's default targets instead.
-		let plugin_build = root.join("plugin-build");
-		swift(&[
-			"build".into(),
-			package_flag(&packages.join("leptoskit_plugin_notifications")),
-			"--target=LeptosKitNotifications".into(),
-			triple(),
-			format!("--sdk={}", sdk.display()),
-			format!("--build-path={}", plugin_build.display()),
-		]);
-		let plugin_modules = modules(&plugin_build, "LeptosKitNotifications");
-		assert!(
-			plugin_modules
-				.join("LeptosKitNotifications.swiftmodule")
-				.exists(),
-			"the plugin module was built for the simulator"
-		);
+		// The real plugins the app delegate calls into, with their real
+		// package directories: runtime name, module, type, and crate.
+		for (name, module, kind, package) in [
+			(
+				"notifications",
+				"LeptosKitNotifications",
+				"NotificationsPlugin",
+				"leptoskit_plugin_notifications",
+			),
+			(
+				"background",
+				"LeptosKitBackground",
+				"BackgroundPlugin",
+				"leptoskit_plugin_background",
+			),
+		] {
+			let mut plugin: super::super::super::registry::Plugin =
+				serde_json::from_value(serde_json::json!({
+					"name": name,
+					"apple-module": module,
+					"apple-type": kind,
+				}))
+				.unwrap();
+			plugin.directory = Path::new(env!("CARGO_MANIFEST_DIR"))
+				.join("..")
+				.join(package);
+			plugin.package_name = package.into();
+			super::generate(root, &pods_config(), &registry(vec![plugin])).unwrap();
 
-		typecheck(
-			&sdk,
-			&plugin_modules,
-			&bridge,
-			&sources,
-			&[
-				app.clone(),
-				root.join(".leptoskit/ios/GeneratedPlugins.swift"),
-			],
-		);
+			// Build the plugin package (and, through it, the bridge) for the
+			// simulator: the module the conditional import names. Its target,
+			// not its product: `--product` cannot name an automatic library,
+			// and SwiftPM then builds the package's default targets instead.
+			let plugin_build = root.join(format!("{package}-build"));
+			swift(&[
+				"build".into(),
+				package_flag(&packages.join(package)),
+				format!("--target={module}"),
+				triple(),
+				format!("--sdk={}", sdk.display()),
+				format!("--build-path={}", plugin_build.display()),
+			]);
+			let plugin_modules = modules(&plugin_build, module);
+			assert!(
+				plugin_modules
+					.join(format!("{module}.swiftmodule"))
+					.exists(),
+				"the {module} module was built for the simulator"
+			);
 
-		// Without the plugin: the same `App.swift`, the module absent from
+			typecheck(
+				&sdk,
+				&plugin_modules,
+				&bridge,
+				&sources,
+				&[app.clone(), registrant.clone()],
+			);
+		}
+
+		// Without the plugins: the same `App.swift`, the modules absent from
 		// the search path, and a registrant that registers nothing.
-		let without_plugin = Registry {
-			plugins: Vec::new(),
-			..registry
-		};
-		super::generate(root, &pods_config(), &without_plugin).unwrap();
+		super::generate(root, &pods_config(), &registry(Vec::new())).unwrap();
 		let bridge_build = root.join("bridge-build");
 		swift(&[
 			"build".into(),
@@ -1469,18 +1486,14 @@ mod tests {
 			format!("--build-path={}", bridge_build.display()),
 		]);
 		let bridge_modules = modules(&bridge_build, "LeptosKitBridge");
-		assert!(
-			!bridge_modules
-				.join("LeptosKitNotifications.swiftmodule")
-				.exists()
-		);
-		typecheck(
-			&sdk,
-			&bridge_modules,
-			&bridge,
-			&sources,
-			&[app, root.join(".leptoskit/ios/GeneratedPlugins.swift")],
-		);
+		for module in ["LeptosKitNotifications", "LeptosKitBackground"] {
+			assert!(
+				!bridge_modules
+					.join(format!("{module}.swiftmodule"))
+					.exists()
+			);
+		}
+		typecheck(&sdk, &bridge_modules, &bridge, &sources, &[app, registrant]);
 	}
 
 	/// The iOS simulator SDK's path, when this machine has one.

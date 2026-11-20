@@ -1,0 +1,33 @@
+---
+source: crates/leptoskit_cli/src/cloud/tests.rs
+expression: help
+---
+Manages an environment's custom domains
+
+Usage: domain [OPTIONS] <COMMAND>
+
+Commands:
+  list    Lists the environment's domains and the DNS records each needs
+  add     Attaches a domain and shows the DNS records to publish
+  verify  Looks for the domain's challenge record and marks it verified
+  remove  Detaches a domain; requires the hostname again as confirmation
+  help    Print this message or the help of the given subcommand(s)
+
+Options:
+      --url <URL>
+          Cloud origin; overrides `LEPTOSKIT_CLOUD_URL` and [cloud].url
+
+      --json
+          Prints the documented JSON result
+
+      --org <ORG>
+          Organization slug; defaults to [cloud].organization or your personal one
+
+      --project <PROJECT>
+          Project slug; defaults to [cloud].project
+
+  -e, --environment <ENVIRONMENT>
+          Environment name, for the commands about one; defaults to production
+
+  -h, --help
+          Print help

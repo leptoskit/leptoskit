@@ -1948,9 +1948,12 @@ async fn a_key_is_remembered_until_its_send_is_gone(db: &Db) {
 	assert_eq!(count(db, rows).await, 0);
 
 	// Its jobs run, and the job table forgets them, as it does a day after
-	// they finish. Now the key is free: the same call is a new send, with
-	// one row.
+	// they finish. A job that finished this millisecond is not yet older
+	// than nothing — both clocks keep only milliseconds — so the forget
+	// waits one moment. Now the key is free: the same call is a new send,
+	// with one row.
 	jobs.run_jobs_until_idle().await;
+	tokio::time::sleep(std::time::Duration::from_millis(5)).await;
 	jobs.prune(std::time::Duration::ZERO).await;
 	assert_eq!(
 		send(address, "receipt-1", to).await,

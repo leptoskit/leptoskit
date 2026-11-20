@@ -12,9 +12,12 @@
 //! the old way, with the pieces this crate shares ([`style`],
 //! [`components`], [`workings`], [`charts`], and the rail).
 
+pub mod analytics;
 pub mod charts;
 pub mod components;
+pub mod confirm;
 pub mod model;
+pub mod ops;
 pub mod pages;
 pub mod shell;
 pub mod style;
@@ -32,15 +35,139 @@ pub(crate) fn spawn(task: impl Future<Output = ()> + 'static) {
 	leptos::task::spawn_local(task);
 }
 
+/// Points the rpc client at the admin's own endpoints and live connection,
+/// once: configuring it again would start a second connection.
+#[cfg(all(feature = "hydrate", target_arch = "wasm32"))]
+pub(crate) fn live_connection() {
+	static ONCE: std::sync::Once = std::sync::Once::new();
+
+	ONCE.call_once(|| {
+		leptoskit::rpc::client::configure(
+			leptoskit::rpc::client::ClientConfig::new()
+				.rpc_path(format!("{BASE}/rpc"))
+				.live_path(format!("{BASE}/live")),
+		);
+	});
+}
+
 /// Leaves this page for `address`, as a full page load. On the server there
-/// is no page to leave.
+/// is no page to leave. `hydrate` is also on for a host `--all-features`
+/// build, which has no window, so this is the Wasm build alone.
 pub(crate) fn go(address: &str) {
-	#[cfg(feature = "hydrate")]
+	#[cfg(all(feature = "hydrate", target_arch = "wasm32"))]
 	if let Some(window) = web_sys::window() {
 		let _ = window.location().assign(address);
 	}
-	#[cfg(not(feature = "hydrate"))]
+	#[cfg(not(all(feature = "hydrate", target_arch = "wasm32")))]
 	let _ = address;
+}
+
+/// A key that makes a retried action count once.
+pub(crate) fn idempotency_key() -> String {
+	#[cfg(feature = "hydrate")]
+	{
+		web_sys::window()
+			.and_then(|window| window.crypto().ok())
+			.map(|crypto| crypto.random_uuid())
+			.unwrap_or_default()
+	}
+	#[cfg(not(feature = "hydrate"))]
+	String::new()
+}
+
+/// Posts `body` as JSON to `path` on this site: whether the answer was a
+/// success, and its JSON. `None` when nothing came back.
+#[cfg_attr(
+	not(feature = "hydrate"),
+	expect(clippy::unused_async, reason = "only a browser sends anything")
+)]
+pub(crate) async fn post_json(path: &str, body: &str) -> Option<(bool, serde_json::Value)> {
+	#[cfg(feature = "hydrate")]
+	{
+		use wasm_bindgen::JsCast as _;
+		use wasm_bindgen_futures::JsFuture;
+
+		let init = web_sys::RequestInit::new();
+		init.set_method("POST");
+		init.set_credentials(web_sys::RequestCredentials::SameOrigin);
+		init.set_body(&wasm_bindgen::JsValue::from_str(body));
+		let request = web_sys::Request::new_with_str_and_init(path, &init).ok()?;
+		request
+			.headers()
+			.set("content-type", "application/json")
+			.ok()?;
+		let response: web_sys::Response =
+			JsFuture::from(web_sys::window()?.fetch_with_request(&request))
+				.await
+				.ok()?
+				.dyn_into()
+				.ok()?;
+		let text = JsFuture::from(response.text().ok()?).await.ok()?;
+		let data = text
+			.as_string()
+			.and_then(|text| serde_json::from_str(&text).ok())
+			.unwrap_or(serde_json::Value::Null);
+
+		Some((response.ok(), data))
+	}
+	#[cfg(not(feature = "hydrate"))]
+	{
+		let _ = (path, body);
+		None
+	}
+}
+
+/// The header that asks a page's address for its [`model::Page`] as JSON,
+/// so a builder can put the next page in place of this one.
+pub const PAGE_HEADER: &str = "x-admin-page";
+
+/// Gets `path` on this site as JSON: whether the answer was a success, and
+/// its JSON, or `Null` when it wasn't JSON. With `page`, asks a page's
+/// address for its model. `None` when nothing came back.
+#[cfg_attr(
+	not(feature = "hydrate"),
+	expect(clippy::unused_async, reason = "only a browser fetches anything")
+)]
+pub(crate) async fn get_json(path: &str, page: bool) -> Option<(bool, serde_json::Value)> {
+	#[cfg(feature = "hydrate")]
+	{
+		use wasm_bindgen::JsCast as _;
+		use wasm_bindgen_futures::JsFuture;
+
+		let init = web_sys::RequestInit::new();
+		init.set_method("GET");
+		init.set_credentials(web_sys::RequestCredentials::SameOrigin);
+		let request = web_sys::Request::new_with_str_and_init(path, &init).ok()?;
+		request.headers().set("accept", "application/json").ok()?;
+
+		if page {
+			request.headers().set(PAGE_HEADER, "json").ok()?;
+		}
+
+		let response: web_sys::Response =
+			JsFuture::from(web_sys::window()?.fetch_with_request(&request))
+				.await
+				.ok()?
+				.dyn_into()
+				.ok()?;
+		// A sign-in the session lost answers with a redirect to a page.
+		if response.redirected() {
+			return Some((false, serde_json::Value::Null));
+		}
+
+		let text = JsFuture::from(response.text().ok()?).await.ok()?;
+		let data = text
+			.as_string()
+			.and_then(|text| serde_json::from_str(&text).ok())
+			.unwrap_or(serde_json::Value::Null);
+
+		Some((response.ok(), data))
+	}
+	#[cfg(not(feature = "hydrate"))]
+	{
+		let _ = (path, page);
+		None
+	}
 }
 
 /// The HTML document a page renders into.

@@ -33,20 +33,20 @@ Do not reopen these. If one turns out to be unworkable, stop and ask.
 
 One pull request per item. Every backend is kept in step, with AppKit as the reference. The gap numbers refer to [js-to-wasm-audit.md](js-to-wasm-audit.md), which has the proposed API and the per-backend table for each.
 
-| #  | Change                                                      | Gap      | State      |
-| -- | ----------------------------------------------------------- | -------- | ---------- |
-| 1  | Text input hints                                            | G9       | #852, open |
-| 2  | `TextArea`                                                  | G12      | #877, open |
-| 3  | Labels that focus their fields                              | G13      | #879, open |
-| 4  | One-shot focus requests                                     | G2       | #887, open |
-| 5  | Arrow-key navigation for tabs, radio groups and menus       | G5       | #892, open |
-| 6  | `Modal` and `Popover`                                       | G1       | #896, open |
-| 7  | Scroll into view                                            | G4       | #913, open |
-| 8  | A clock hook                                                | G6       | #914, open |
-| 9  | Typed refusals in the rpc client (status, code, retry time) | G8       | #918, open |
-| 10 | Streams without a database                                  | G3       | #923, open |
-| 11 | The ⌘ key on the web                                        | G7a      | #924, open |
-| 12 | New-tab and download links                                  | G14, G15 | #925, open |
+| #  | Change                                                      | Gap      | State        |
+| -- | ----------------------------------------------------------- | -------- | ------------ |
+| 1  | Text input hints                                            | G9       | #852, merged |
+| 2  | `TextArea`                                                  | G12      | #877, merged |
+| 3  | Labels that focus their fields                              | G13      | #879, merged |
+| 4  | One-shot focus requests                                     | G2       | #887, merged |
+| 5  | Arrow-key navigation for tabs, radio groups and menus       | G5       | #892, merged |
+| 6  | `Modal` and `Popover`                                       | G1       | #896, merged |
+| 7  | Scroll into view                                            | G4       | #913, merged |
+| 8  | A clock hook                                                | G6       | #914, merged |
+| 9  | Typed refusals in the rpc client (status, code, retry time) | G8       | #918, merged |
+| 10 | Streams without a database                                  | G3       | #923, merged |
+| 11 | The ⌘ key on the web                                        | G7a      | #924, merged |
+| 12 | New-tab and download links                                  | G14, G15 | #925, merged |
 
 After those: convert the demo (3–4 pull requests), then app shortcuts with native key delivery (G7b), `prompt=login` on provider sign-in (G16) and document titles (G10), then convert the admin page by page (5–7 pull requests).
 
@@ -285,12 +285,117 @@ The admin's pages move to `crates/leptoskit_admin_pages`, one crate built twice 
 - **Tests:** `script.mjs` builds the client with `leptoskit build --platform web` unless `LEPTOSKIT_ADMIN_CLIENT` names one, serves `glossary.html` from `pages_for_the_script`, and checks the theme, Shift+W, Ctrl+K and search, and signing out.
 - **Next:** see part 2.
 
-### `feat/admin-learn-pages`: admin conversion, part 2
+### `feat/admin-learn-pages`: admin conversion, part 2 (merged, #949)
 
 Learn's hub and lessons moved. The lessons and their checks stay in `leptoskit_admin/src/learn.rs`, because the checks read server-side state (projects, operations, analytics facts, preferences); it now builds `model::Learn` and `model::Lesson` values (rows with their evidence, the lesson up next, each lesson's target). `leptoskit_admin_pages/src/pages/learn.rs` draws them, with the same test ids. `server::hydrated_screen` takes a closure over the `Proof` so a page can be built from it, and answers 404 when it returns `None` (an unknown lesson).
 
 - **Tests:** the `learn` and `analytics_learn` snapshots didn't change, so the server's markup is the same as before. `script.mjs` serves `learn.html` and checks that it hydrates without `admin.mjs`, that the theme flips, and that a lesson row opens its lesson.
-- **Next:** infrastructure with its drawers and actions, the analytics builder, Live, People and the dialogs, and last delete `admin.mjs` and the attribute rules in `shell_css`.
+- **Next:** see part 3.
+
+### `feat/admin-infra-pages`: admin conversion, part 3 (merged, #951)
+
+Workings drawers, Projects and the Operation page moved.
+
+- **Drawers:** `workings::Workings` is the drawers' state (Workings mode, the open drawer, the Ask tab, the open stations on a phone, the "Copied" notice), provided as context by `shell::Shell`. The builders (`mint_tab`, `Card::build`, `code_block`, `paper_code`, `panel`, `station_view`, `ask_tabs`, `aside`) read it with `Workings::current()`; without one, on a page the server still draws, they render the old markup that `admin.mjs` drives. Opening a drawer focuses its Close button through a `FocusRequest`, closing it returns focus to the tab that opened it, `W` toggles the page's first drawer, Escape closes it, and Copy uses `leptoskit_plugin_clipboard`. `Drawer` and its parts are serde now, so a page's model carries them.
+- **Deep links:** a moved page takes `?workings=<id>` instead of `#workings=<id>`: the server sets `Model.open`, only to a drawer the page has. Opening a drawer doesn't rewrite the URL.
+- **Live progress:** the Operation page follows a running operation with the G3 rpc stream `ops::operation_progress`, served by `leptoskit_admin/src/live.rs` on `rpc::server::LiveStreams` nested under the admin's base path (`{BASE}/live`, `{BASE}/live/events`, `{BASE}/live/frames`), so a host site's own `/live` keeps working. The stream's `Identify` lets only a signed-in admin in. It sends the steps so far, each new one, then `Done`, and the page then loads itself again to show how it ended. The old `/infra/operations/{id}/events` SSE endpoint is gone.
+- **Tests:** `live::tests` follows an operation through the stream in Rust; `tests/admin.rs` checks that the page says it's following live, that `{BASE}/live/events` answers an admin and refuses a stranger. `script.mjs` serves `projects.html`, `operation.html` and `operation-workings.html` and checks the drawer: open, focus, Escape, focus return, `W`, and `?workings=`.
+- **Not tested:** the live stream end to end in a browser (the script's pages are static). The layout rules for an open drawer at extra-large widths (collapsed rail labels, one-column grid) are not reproduced yet.
+- **Next:** see part 4.
+
+### `feat/admin-project-tabs`: admin conversion, part 4 (merged, #952)
+
+A project's Overview, Changes, Releases, Operations, Backups and Config tabs moved. `leptoskit_admin/src/infra/pages.rs` builds `model::project::Project` (each tab's data, its actions as `Action { kind, label, request, explain }`, its drawers), and `leptoskit_admin_pages/src/pages/project.rs` draws it. Health stays server-drawn with `admin.mjs` until its fleet charts move with the analytics pages.
+
+- **The confirm sheet** is `confirm::Confirm`, provided by the shell: an `aria::Dialog` as a `Modal`, test ids `confirm-sheet`, `confirm-yes`, `confirm-no`. The browser keeps focus inside it and makes the page inert; Escape and the backdrop cancel; focus goes back to the button that asked, one frame after the dialog closes (focus can't land while the page is inert). No app shortcut runs while it is open: `leptoskit_native`'s web shortcut listener now skips keys while any `dialog:modal` is open, because before it ran the app's Escape and prevented the key's default, so Escape couldn't close the modal (`shortcuts_wait_while_a_modal_is_open` in `tests/web_browser.rs`). It has no text field or choices yet: the analytics dialogs add them.
+- **Actions** POST to `{BASE}/api/projects/{id}/actions` as before, with an idempotency key from `crypto.randomUUID()`, and open the operation they start. Deploy without a version says so in the notice and focuses the field.
+- **Plan rows** open the plan's drawer, mark the `[infra]` lines that cause the row (`Workings::link`, `style::LINKED`) and scroll to the first with a `Reveal`.
+- **W** opens the drawer of the card that holds focus and gives focus back to what had it; this reads `document.activeElement` through `web-sys` (`workings::browser`), because leptoskit has no way to ask what has focus. Margin notes' Got it hides the note and saves the dismissal.
+- **Tests:** `script.mjs` serves `overview.html`, `overview-release.html` (`?workings=release`), `changes.html` and `releases.html`. The confirm test now checks `:modal` instead of `inert` on the root, and a new test types a version, confirms Deploy and checks the request. `tests/admin.rs` reads an open drawer and Workings mode from the drawer's class and the switch's `aria-pressed`, not root attributes.
+- **Next:** Health with the analytics builder, Live, People and the dialogs, and last delete `admin.mjs` and the attribute rules in `shell_css`.
+
+### `feat/admin-analytics-pages`: admin conversion, part 5a (merged, #954)
+
+The analytics Library, People and a person's page moved. `leptoskit_admin/src/analytics/{library,people}.rs` build `model::library::Library`, `model::people::People` and `model::people::Person`; `leptoskit_admin_pages/src/pages/{library,people}.rs` draw them. An analytics route's body now returns `analytics::Shown`, a server `Screen` or a pages-crate `Page`, so the not-connected and unreachable states stay server-drawn while a page with data hydrates; `server::render_page` renders a `Page` after the gate.
+
+- **The confirm sheet** takes `Ask::new(title, explanation)` with `.typed(label, expected)` (a field, test id `confirm-input`, that takes focus; the button stays disabled and Enter does nothing until the text matches), `.danger()` (a filled bad button) and `.download(href, file_name)` (the button is a `Pressable().href().download()` link: the browser downloads the server's attachment, and the sheet closes a frame later). `yes` gets what was typed. Choices (the add-to-dashboard radios) come with the builder.
+- **People:** the fields are signals; Filter or Enter in a field leaves for the list's address built from them. **Person:** Export and Delete use the sheet; Delete POSTs `{confirm}` and follows the answer's `href`, or puts its message in the notice. Their `aria-description`s now describe the buttons instead of carrying the id and name for the script.
+- **Shared:** `components::header`, `struct_badge`, `initials` and `avatar` moved to the pages crate, and the server's analytics helpers call them. `post_json` and `idempotency_key` moved to the crate root.
+- **Tests:** `script.mjs` serves `library.html`, `people.html` and `person.html`, fakes the export and delete endpoints, and checks search by Enter, the export download link and fetch, focus return, and the typed-name delete. `analytics_person` was re-reviewed.
+- **Next:** dashboards and the builders (trends, funnels, retention, saved insights) with save and add-to-dashboard, then Live, Health, the sign-in page, and last delete `admin.mjs` and the attribute rules in `shell_css`.
+
+### `feat/admin-analytics-builder`: admin conversion, part 5b (merged, #955; a move, no new behaviour)
+
+The analytics drawing moved from `leptoskit_admin/src/analytics/` to `leptoskit_admin_pages/src/analytics/`, so the builders can hydrate next: `format` (all but `person_name`, which reads a service type and stays in the server's `format`, re-exporting the rest), `params`, `draw`, `insights` (the `Kind`, the charts `trend_view`/`funnel_view`/`retention_view`, the builders' controls, `suggested_name`, `actions`), and the widgets `chip`, `segmented`, `menu`, `menu_item`, `stat`, `Drawn` and `table`. The pages crate now depends on `leptoskit_analytics` with `insights` (the query and result types, Wasm-safe) and `chrono`.
+
+- `analytics::Definition` is the builders' view of an event definition (`EventDefinitionView` is a `service` type); the server converts with `analytics::definitions(facts)`.
+- The builders take `insights::Builder { definitions, notes }`, where `notes` are the margin notes that still show (`analytics::notes(preferences)` on the server).
+- The server keeps what runs queries: `insights::{sample, page, actors}`, `stations` (the drawers), `web`, `library`, `people`, and re-exports the moved items, so the pages still render server-side with `admin.mjs` and the snapshots don't change.
+- **Next:** hydrate the builders: an insight model (query, answer, definitions, drawer), builder links that fetch the next model and swap it in place (the audit's AD-24: router plus a query keyed on the address), the drawer's changed-line wash, menus as `Popover`s, and Save and Add to dashboard through the confirm sheet (a name field; dashboard choices).
+
+### `feat/admin-analytics-hydrate`: admin conversion, part 5c
+
+The builders (Trends, Funnels, Retention, a saved insight) are `Page::Insight`, a `model::insight::Insight` the server builds (`analytics::insights::page`: the query, what the service answered, the definitions, the notes that show, the source label and the drawer) and `pages/insight.rs` draws. The server still draws the chart once, with `insights::answered`, because the drawer's Draw station needs its `Drawn`.
+
+- **In place:** `analytics::swap::Swap`, provided by the builder's screen, owns the shell's new `page: RwSignal<Page>`. `swap::link(element, href)` gives a link to the same path a press that fetches `href` with `x-admin-page: json`; `routes::finish` answers that header with the `Page` as JSON (any other answer, or a server-drawn `Screen`, makes the client load the address normally). The client marks the new drawer's lines that the old block didn't have (`components::Line::changed`, never serialised when false), sets the page, pushes the address (keeping the hash) and the title, and when the person made the change with that drawer open, opens the changed station on a phone and has `Workings` say `Ask changed: …` and reveal the first changed line in the Ask tab showing (`Workings::announce_change`, `change_reveal`). A `popstate` listener does the same without pushing. `chip`, `segmented` and the × remove links go through `swap::link`.
+- **Not the router, yet:** the audit's AD-24 names the router and an rpc query keyed on the address. A builder's address is free-form (`?s0=…&by=…`), and `leptoskit_router::Href` has no public constructor, so `Routable` can't describe it; the page endpoint plus `history.pushState` through `web_sys` does the same job in the pages crate. If the router grows a free-form route, this is the place to use it.
+- **Menus:** `analytics::menu(label, id, Vec<MenuItem>)` is a `leptoskit::aria::Menu` whose open state is the swap's (one at a time); each item keeps its `href` and the `menu-item` test id, and choosing one swaps.
+- **Save and Add to dashboard:** `pages::insight::Actions` asks through the confirm sheet. `Ask::named(label, value)` is a field that starts with a value and can't be empty; `Ask::choices(Vec<(value, label)>)` is a radio group (`leptoskit::aria::RadioGroup`), and the field is only enabled for the choice whose value is empty. `yes` now gets an `Answer { text, choice }`. Both post the address's own params (`Insight::address`) so an unchanged saved insight isn't re-saved, then follow the answer's `href`.
+- **Ask tabs** on a page this crate runs are a `leptoskit::aria::Tabs` set (arrow keys, Home, End); the script did that before.
+- **Timers and owners:** leptos's `set_timeout` and `request_animation_frame` cancel when the reactive owner that set them goes, and a press handler's owner is the build that the press's own state change replaces. The confirm sheet's focus return never ran because of that (the browser's dialog focus restore hid it whenever the opener had focus); `confirm::after_close` now uses `window.setTimeout` with `Closure::once_into_js`. `workings::copy`'s reset timer may have the same problem.
+- **Workings by link:** analytics pages open the drawer `?workings=<id>` names; `#workings=` was the script's.
+- **Gap (deliberate):** the builders don't re-read as events arrive (the script did, every ten seconds at most, unless a menu, the sheet, or a field was open). It comes back with Live's stream in 5d, which the shell's pulse also needs.
+- **Tests:** `pages_for_the_script` writes each trends variant's model as JSON and two `-workings.html` pages; `script.mjs` serves the JSON for the header, fakes the dashboards and insights endpoints, and checks the in-place change (marks, status, reveal, focus, Back), the breakdown colours, Save and Add to dashboard, and the phone stations. The trends, funnel and retention snapshots only gained the menus' roles and the station toggles' ▾.
+- **Next (5d):** dashboards (their cards and live refresh), Live with a G3 stream, the web overview and the actors page, Health's fleet charts, the sign-in page; then delete `admin.mjs` and the attribute rules in `shell_css`.
+
+### `feat/admin-delete-script`: admin conversion, part 6 (the script goes)
+
+- **Deleted:** `crates/leptoskit_admin/assets/admin.mjs` and its route; the SSE `{BASE}/api/analytics/live` route (`live_events`); the server's own shell (`src/shell.rs`: `Screen`, `frame`, `shell_css` with its attribute rules, `document`, `page`); `server::render` and `server::html`. `analytics::Shown` is now a plain wrapper around a `Page`.
+- **Tests:** `script.mjs` no longer serves the script or fakes the SSE stream; every page test still asserts that no `admin.mjs` script is in the page. `tests/script.mjs` passes as before.
+- **Next:** the analytics design brief as an installable module, then stop for ifi.
+
+### `feat/admin-signin`: admin conversion, part 5h (sign-in and refusal, merged, #964)
+
+- **Model:** `model::signin::{SignIn, Outcome}` and `Page::SignIn`: the main site's host, the button's name, the roles, and whether the page signs in, refuses, or says a sign-in didn't finish. The admin's `signin::render` builds it with a viewer that is only the admin's own (nobody is signed in) and answers 403 for a refusal.
+- **No shell:** `screen_of` draws `pages/signin.rs` without `Shell::frame`. How admins are chosen is a disclosure with its own state; the panel is only in the page while open.
+- **Starting sign-in:** Continue and Switch account use `leptoskit::auth::client::sign_in_with_provider` with `provider: "main"` and `redirect_to: {BASE}/sign-in`; Switch account adds `Prompt::Login` instead of editing the provider's URL as the script did. A refusal from `/auth/oauth/start` shows its message in a `Status` on the card.
+- **Tests:** `pages_for_the_script` writes `sign-in.html` and `refusal.html`; `script.mjs` fakes `/auth/oauth/start` and a main site, and checks hydration, the disclosure, the problem message, Continue's request, and Switch account's `prompt`.
+- **Next:** delete the script (part 6, above).
+
+### `feat/admin-health-signin`: admin conversion, part 5g (Health, merged, #962)
+
+- **Model:** `model::project::Body::Health(Health)`: the health word, the last check, the Run health check action, and the fleet's last hour as `Fleet` (hosts, per-release series, limitations), a mirror of the control service's `Fleet` built in `infra/pages.rs` `health_tab`. `leptoskit_apm`'s `Window`, `HostSample` and `ExportHealth` now derive `PartialEq`, and the pages crate turns on leptoskit's `apm` feature.
+- **Drawing:** `infra/health.rs` moved to the pages crate as `pages/health.rs`, unchanged but for `short`; `pages/project.rs` draws the check card above it.
+- **Route:** the project route reads the fleet inside `hydrated_screen` only for Health; the server's own `health` handler and `health_screen` are gone. Nothing builds a server `Screen` now: `shell::Screen`, `server::render` and `Shown::Screen` go with `admin.mjs`.
+- **Tests:** `pages_for_the_script` records one instance's measurements and writes `health.html`; `script.mjs` checks it hydrates without the script, draws the routes and hosts, and Run health check asks, then sends `status`.
+- **Next:** the sign-in and refusal pages (5h, above).
+
+### `feat/admin-web-overview`: admin conversion, part 5f (web overview)
+
+- **Model:** `model::analytics::Web`: the address, the `WebOverview` query and its result, the daily visitors' trend and what it answered, the pageviews and sessions series for the sparklines, whether the channels note shows, and the two drawers. The server (`analytics/web.rs`) runs the queries and still draws the visitors chart once for its drawer's `Drawn`; `pages/web.rs` draws the page.
+- **In place:** `Swap::path` knows the overview's address, so its chips and its table rows (`draw::bar_list` rows now go through `swap::link`) fetch the next model and swap it in, pushing the address. `Swap::go` takes a `Page::Web` whether chosen or a re-read; only a builder's change marks code lines.
+- **Add to dashboard:** `insight::Actions::add_web(button, params)` sends `kind: "web"` with the page's params, as the script did.
+- **Tests:** `pages_for_the_script` writes `web.html` and the last week's model; `script.mjs` checks the page hydrates without the script and a chip changes it in place.
+- **Next:** Health's fleet charts, the sign-in and refusal pages; then delete `admin.mjs`, the SSE route and the attribute rules in `shell_css`.
+
+### `feat/admin-analytics-rest`: admin conversion, part 5e (dashboards, actors, notices)
+
+- **Models:** `model::analytics::{Dashboard, Card, Actors, Actor, Notice, Why}`. The server runs each card's saved insight (`library::dashboard`) and each actors query (`insights::actors`); `analytics::{not_configured, unreachable, listening}` now return `Page::Notice`. `pages/analytics.rs` draws all three, with the connect and first-event code that used to live in the server's `analytics/mod.rs`.
+- **Re-reading:** `screen_of` sends `Insight`, `Dashboard` and `Notice` through the same arm, which makes a `Swap` and draws whatever page `shell.page` holds. `Swap::reread` only acts on a page that `rereads` (a builder, a dashboard, a `Why::Listening` notice), and `Swap::go` puts a re-read `Dashboard` or `Notice` in place (or the builder a listening page turns into) instead of loading the address.
+- **Tests:** `pages_for_the_script` saves an insight onto a dashboard and writes `dashboard.html` and `dashboard.json`; `script.mjs` serves any `/analytics/dashboards/…` from them and checks the dashboard hydrates without the script and re-reads in place. The actors snapshot only gained the station toggles' ▾.
+- **Next:** the web overview (`web::page` still returns a `Screen`), Health's fleet charts, the sign-in and refusal pages; then delete `admin.mjs`, the SSE route and the attribute rules in `shell_css`.
+
+### `feat/admin-analytics-live`: admin conversion, part 5d (Live)
+
+Live is `Page::Live` (`model::live::Live`: the latest events as `Arrival`s, the drawer, whether the Pause note shows), which the server's `analytics/tail.rs` builds from an Events query and `pages/live.rs` draws.
+
+- **The stream:** `ops::analytics_live { events }` is a G3 `#[rpc::stream]` yielding `ops::Live::{Pulse, Event}`. The server's `Streams` (in `leptoskit_admin/src/live.rs`) answers it with `analytics::live::follow`, which sends the hub's pulse every second and, with `events`, each tail item as an `Arrival` (`typed` from the facts' definitions with fields). It refuses with `not_found` when analytics isn't connected.
+- **One connection:** `crate::live_connection()` configures the rpc client once (a second `configure` would start a fresh client); the Operation page's `Follow` and the shell's tail both call it.
+- **The tail:** `analytics::tail::Tail` is opened by `Shell::new` when the viewer has a pulse, and provided as context. It holds the pulse (set only when it changes, because any read rebuilds the screen), a `beats` count that ticks with every pulse, and the events no page took yet (`take()`). Only Live asks for events.
+- **Live's list:** `pages::live::Watch` keeps the rows with a key each (newest first, at most 200), what waits while paused (`Resume (n)`), the filter, and which rows are open. A row's `struct` badge is only drawn on a typed event, and its properties panel only when open. Pause posts the `live-pause` use_note.
+- **Builders re-read:** `Swap::reread` (hydrate only) watches `beats`; when the pulse's `latest` passes the one it saw, ten seconds have passed, and no menu, open row, confirm sheet or focused field is in the way, it swaps the page for its own address without marking changes. The sheet counts through `Confirm::asking_untracked`, not the DOM: the sheet's `<dialog>` is always in the page.
+- **Tests:** `script.mjs` fakes the live WebSocket at `{BASE}/live` (`leptoskit.live.v1.json`: a welcome, then `item` frames for every `analytics_live` stream) and checks the badge, opening a row, the rate card and top-bar pulse, a pulse-only stream on another page, Pause with `Resume (n)`, the filter, and a builder's re-read (none too soon, one after ten seconds, none when nothing is newer). The SSE `/api/analytics/live` route and its fake stay until `admin.mjs` goes. `tests/classes.rs` now reads the pages crate's sources too.
+- **Next (5d):** dashboards (their cards and live refresh), the web overview and actors, Health's fleet charts, the sign-in page; then delete `admin.mjs`, the SSE route and the attribute rules in `shell_css`.
 
 ### `feat/public-demo`: pull request #856 (merged)
 

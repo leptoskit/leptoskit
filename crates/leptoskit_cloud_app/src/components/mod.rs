@@ -26,6 +26,7 @@ use leptoskit::native::Live;
 use leptoskit::prelude::*;
 pub use mark::ICON_ACCOUNT;
 pub use mark::ICON_APPS;
+pub use mark::ICON_BILLING;
 pub use mark::ICON_INBOX;
 pub use mark::ICON_PLUS;
 pub use mark::ICON_RELEASES;

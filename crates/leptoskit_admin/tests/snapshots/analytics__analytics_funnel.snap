@@ -44,26 +44,26 @@ main [main]
             "×"
         button [menu-toggle]
           "+ Add step"
-        div [menu-panel]
-          a [menu-item] label="$pageview" href=/_leptoskit/admin/analytics/funnels?from=2026-10-05&amp;order=ordered&amp;s0=checkout_started&amp;s1=payment_submitted&amp;s2=checkout_completed&amp;s3=%24pageview&amp;to=2026-11-02&amp;window=14
+        div [menu-panel] role=menu
+          a [menu-item] role=menuitem label="$pageview" href=/_leptoskit/admin/analytics/funnels?from=2026-10-05&amp;order=ordered&amp;s0=checkout_started&amp;s1=payment_submitted&amp;s2=checkout_completed&amp;s3=%24pageview&amp;to=2026-11-02&amp;window=14
             "$pageview"
             "20"
-          a [menu-item] label="note_created" href=/_leptoskit/admin/analytics/funnels?from=2026-10-05&amp;order=ordered&amp;s0=checkout_started&amp;s1=payment_submitted&amp;s2=checkout_completed&amp;s3=note_created&amp;to=2026-11-02&amp;window=14
+          a [menu-item] role=menuitem label="note_created" href=/_leptoskit/admin/analytics/funnels?from=2026-10-05&amp;order=ordered&amp;s0=checkout_started&amp;s1=payment_submitted&amp;s2=checkout_completed&amp;s3=note_created&amp;to=2026-11-02&amp;window=14
             "note_created"
             "struct · 11"
-          a [menu-item] label="signed_up" href=/_leptoskit/admin/analytics/funnels?from=2026-10-05&amp;order=ordered&amp;s0=checkout_started&amp;s1=payment_submitted&amp;s2=checkout_completed&amp;s3=signed_up&amp;to=2026-11-02&amp;window=14
+          a [menu-item] role=menuitem label="signed_up" href=/_leptoskit/admin/analytics/funnels?from=2026-10-05&amp;order=ordered&amp;s0=checkout_started&amp;s1=payment_submitted&amp;s2=checkout_completed&amp;s3=signed_up&amp;to=2026-11-02&amp;window=14
             "signed_up"
             "struct · 6"
-          a [menu-item] label="$identify" href=/_leptoskit/admin/analytics/funnels?from=2026-10-05&amp;order=ordered&amp;s0=checkout_started&amp;s1=payment_submitted&amp;s2=checkout_completed&amp;s3=%24identify&amp;to=2026-11-02&amp;window=14
+          a [menu-item] role=menuitem label="$identify" href=/_leptoskit/admin/analytics/funnels?from=2026-10-05&amp;order=ordered&amp;s0=checkout_started&amp;s1=payment_submitted&amp;s2=checkout_completed&amp;s3=%24identify&amp;to=2026-11-02&amp;window=14
             "$identify"
             "6"
-          a [menu-item] label="checkout_started" href=/_leptoskit/admin/analytics/funnels?from=2026-10-05&amp;order=ordered&amp;s0=checkout_started&amp;s1=payment_submitted&amp;s2=checkout_completed&amp;s3=checkout_started&amp;to=2026-11-02&amp;window=14
+          a [menu-item] role=menuitem label="checkout_started" href=/_leptoskit/admin/analytics/funnels?from=2026-10-05&amp;order=ordered&amp;s0=checkout_started&amp;s1=payment_submitted&amp;s2=checkout_completed&amp;s3=checkout_started&amp;to=2026-11-02&amp;window=14
             "checkout_started"
             "struct · 4"
-          a [menu-item] label="payment_submitted" href=/_leptoskit/admin/analytics/funnels?from=2026-10-05&amp;order=ordered&amp;s0=checkout_started&amp;s1=payment_submitted&amp;s2=checkout_completed&amp;s3=payment_submitted&amp;to=2026-11-02&amp;window=14
+          a [menu-item] role=menuitem label="payment_submitted" href=/_leptoskit/admin/analytics/funnels?from=2026-10-05&amp;order=ordered&amp;s0=checkout_started&amp;s1=payment_submitted&amp;s2=checkout_completed&amp;s3=payment_submitted&amp;to=2026-11-02&amp;window=14
             "payment_submitted"
             "struct · 3"
-          a [menu-item] label="checkout_completed" href=/_leptoskit/admin/analytics/funnels?from=2026-10-05&amp;order=ordered&amp;s0=checkout_started&amp;s1=payment_submitted&amp;s2=checkout_completed&amp;s3=checkout_completed&amp;to=2026-11-02&amp;window=14
+          a [menu-item] role=menuitem label="checkout_completed" href=/_leptoskit/admin/analytics/funnels?from=2026-10-05&amp;order=ordered&amp;s0=checkout_started&amp;s1=payment_submitted&amp;s2=checkout_completed&amp;s3=checkout_completed&amp;to=2026-11-02&amp;window=14
             "checkout_completed"
             "struct · 2"
       "Converted within"
@@ -87,26 +87,26 @@ main [main]
       "Breakdown"
       button [menu-toggle]
         "None ▾"
-      div [menu-panel]
-        a [menu-item] label="None" href=/_leptoskit/admin/analytics/funnels?from=2026-10-05&amp;order=ordered&amp;s0=checkout_started&amp;s1=payment_submitted&amp;s2=checkout_completed&amp;to=2026-11-02&amp;window=14
+      div [menu-panel] role=menu
+        a [menu-item] role=menuitem label="None" href=/_leptoskit/admin/analytics/funnels?from=2026-10-05&amp;order=ordered&amp;s0=checkout_started&amp;s1=payment_submitted&amp;s2=checkout_completed&amp;to=2026-11-02&amp;window=14
           "None"
-        a [menu-item] label="plan (from checkout_started)" href=/_leptoskit/admin/analytics/funnels?by=plan&amp;from=2026-10-05&amp;order=ordered&amp;s0=checkout_started&amp;s1=payment_submitted&amp;s2=checkout_completed&amp;to=2026-11-02&amp;window=14
+        a [menu-item] role=menuitem label="plan (from checkout_started)" href=/_leptoskit/admin/analytics/funnels?by=plan&amp;from=2026-10-05&amp;order=ordered&amp;s0=checkout_started&amp;s1=payment_submitted&amp;s2=checkout_completed&amp;to=2026-11-02&amp;window=14
           "plan (from checkout_started)"
-        a [menu-item] label="seats (from checkout_started)" href=/_leptoskit/admin/analytics/funnels?by=seats&amp;from=2026-10-05&amp;order=ordered&amp;s0=checkout_started&amp;s1=payment_submitted&amp;s2=checkout_completed&amp;to=2026-11-02&amp;window=14
+        a [menu-item] role=menuitem label="seats (from checkout_started)" href=/_leptoskit/admin/analytics/funnels?by=seats&amp;from=2026-10-05&amp;order=ordered&amp;s0=checkout_started&amp;s1=payment_submitted&amp;s2=checkout_completed&amp;to=2026-11-02&amp;window=14
           "seats (from checkout_started)"
-        a [menu-item] label="Channel (session)" href=/_leptoskit/admin/analytics/funnels?by=session%3Achannel&amp;from=2026-10-05&amp;order=ordered&amp;s0=checkout_started&amp;s1=payment_submitted&amp;s2=checkout_completed&amp;to=2026-11-02&amp;window=14
+        a [menu-item] role=menuitem label="Channel (session)" href=/_leptoskit/admin/analytics/funnels?by=session%3Achannel&amp;from=2026-10-05&amp;order=ordered&amp;s0=checkout_started&amp;s1=payment_submitted&amp;s2=checkout_completed&amp;to=2026-11-02&amp;window=14
           "Channel (session)"
-        a [menu-item] label="Browser (session)" href=/_leptoskit/admin/analytics/funnels?by=session%3Abrowser&amp;from=2026-10-05&amp;order=ordered&amp;s0=checkout_started&amp;s1=payment_submitted&amp;s2=checkout_completed&amp;to=2026-11-02&amp;window=14
+        a [menu-item] role=menuitem label="Browser (session)" href=/_leptoskit/admin/analytics/funnels?by=session%3Abrowser&amp;from=2026-10-05&amp;order=ordered&amp;s0=checkout_started&amp;s1=payment_submitted&amp;s2=checkout_completed&amp;to=2026-11-02&amp;window=14
           "Browser (session)"
-        a [menu-item] label="Operating system (session)" href=/_leptoskit/admin/analytics/funnels?by=session%3Aos&amp;from=2026-10-05&amp;order=ordered&amp;s0=checkout_started&amp;s1=payment_submitted&amp;s2=checkout_completed&amp;to=2026-11-02&amp;window=14
+        a [menu-item] role=menuitem label="Operating system (session)" href=/_leptoskit/admin/analytics/funnels?by=session%3Aos&amp;from=2026-10-05&amp;order=ordered&amp;s0=checkout_started&amp;s1=payment_submitted&amp;s2=checkout_completed&amp;to=2026-11-02&amp;window=14
           "Operating system (session)"
-        a [menu-item] label="Device (session)" href=/_leptoskit/admin/analytics/funnels?by=session%3Adevice_type&amp;from=2026-10-05&amp;order=ordered&amp;s0=checkout_started&amp;s1=payment_submitted&amp;s2=checkout_completed&amp;to=2026-11-02&amp;window=14
+        a [menu-item] role=menuitem label="Device (session)" href=/_leptoskit/admin/analytics/funnels?by=session%3Adevice_type&amp;from=2026-10-05&amp;order=ordered&amp;s0=checkout_started&amp;s1=payment_submitted&amp;s2=checkout_completed&amp;to=2026-11-02&amp;window=14
           "Device (session)"
-        a [menu-item] label="Referrer (session)" href=/_leptoskit/admin/analytics/funnels?by=session%3Areferrer_domain&amp;from=2026-10-05&amp;order=ordered&amp;s0=checkout_started&amp;s1=payment_submitted&amp;s2=checkout_completed&amp;to=2026-11-02&amp;window=14
+        a [menu-item] role=menuitem label="Referrer (session)" href=/_leptoskit/admin/analytics/funnels?by=session%3Areferrer_domain&amp;from=2026-10-05&amp;order=ordered&amp;s0=checkout_started&amp;s1=payment_submitted&amp;s2=checkout_completed&amp;to=2026-11-02&amp;window=14
           "Referrer (session)"
-        a [menu-item] label="UTM source (session)" href=/_leptoskit/admin/analytics/funnels?by=session%3Autm_source&amp;from=2026-10-05&amp;order=ordered&amp;s0=checkout_started&amp;s1=payment_submitted&amp;s2=checkout_completed&amp;to=2026-11-02&amp;window=14
+        a [menu-item] role=menuitem label="UTM source (session)" href=/_leptoskit/admin/analytics/funnels?by=session%3Autm_source&amp;from=2026-10-05&amp;order=ordered&amp;s0=checkout_started&amp;s1=payment_submitted&amp;s2=checkout_completed&amp;to=2026-11-02&amp;window=14
           "UTM source (session)"
-        a [menu-item] label="Entry page (session)" href=/_leptoskit/admin/analytics/funnels?by=session%3Aentry_pathname&amp;from=2026-10-05&amp;order=ordered&amp;s0=checkout_started&amp;s1=payment_submitted&amp;s2=checkout_completed&amp;to=2026-11-02&amp;window=14
+        a [menu-item] role=menuitem label="Entry page (session)" href=/_leptoskit/admin/analytics/funnels?by=session%3Aentry_pathname&amp;from=2026-10-05&amp;order=ordered&amp;s0=checkout_started&amp;s1=payment_submitted&amp;s2=checkout_completed&amp;to=2026-11-02&amp;window=14
           "Entry page (session)"
       div [note:funnel-drop-off]
         "Press the hatched part of a column to see exactly who stopped there."
@@ -154,6 +154,7 @@ aside [drawer-aside] label="Workings"
           "Emit"
           "the event catalogue"
         button [station-toggle] label="Emit station"
+          "▾"
         div [station-body]
           "checkout_started"
           "is a Rust type in your app, so its properties are its fields and a misspelled one fails when it compiles. This is the shape the app last registered; the service doesn't record where in your code it's sent from."
@@ -196,6 +197,7 @@ aside [drawer-aside] label="Workings"
           "Send"
           "the latest checkout_started, re-encoded here"
         button [station-toggle] label="Send station"
+          "▾"
         div [station-body]
           "Typed events send no property names, so this one is 92 bytes instead of 209: 56.0% smaller. Measured as one event alone in a batch; a real batch shares its context and session between events, so it shrinks further."
           div [code]
@@ -239,6 +241,7 @@ aside [drawer-aside] label="Workings"
           "Store"
           "events, person_distinct_ids, person_overrides on sqlite"
         button [station-toggle] label="Store station"
+          "▾"
         div [station-body]
           "Events land in"
           "events"
@@ -351,6 +354,7 @@ aside [drawer-aside] label="Workings"
           "Ask"
           "the query"
         button [station-toggle] label="Ask station"
+          "▾"
         div [station-body]
           "Every insight is one value of the typed"
           "Query"
@@ -803,6 +807,7 @@ aside [drawer-aside] label="Workings"
           "Draw"
           "rows → chart"
         button [station-toggle] label="Draw station"
+          "▾"
         div [station-body]
           "One row per step: how many people reached it within the window. Each column's height is that count; the hatched part is who reached the step before and stopped. Overall, 50.0% converted, taking 8m 00s at the median."
           div [code]

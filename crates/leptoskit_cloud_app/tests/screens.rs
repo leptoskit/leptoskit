@@ -157,6 +157,12 @@ struct World {
 	identities: Option<Vec<IdentityInfo>>,
 	passkeys: Option<Vec<PasskeyInfo>>,
 	devices: Option<Vec<leptoskit::auth::Device>>,
+	billing: Option<(
+		String,
+		serde_json::Value,
+		serde_json::Value,
+		serde_json::Value,
+	)>,
 }
 
 impl World {
@@ -232,6 +238,32 @@ impl World {
 
 		if let Some(devices) = &self.devices {
 			client.set_query_data(&client::devices(), (), devices.clone());
+		}
+
+		if let Some((organization, subscription, plans, usage)) = &self.billing {
+			use leptoskit_cloud::billing;
+
+			client.set_query_data(
+				&query_scope::<billing::Subscription>(),
+				Args::new(billing::Subscription {
+					organization: organization.clone(),
+				}),
+				serde_json::from_value::<billing::SubscriptionSummary>(subscription.clone())
+					.expect("a subscription"),
+			);
+			client.set_query_data(
+				&query_scope::<billing::Plans>(),
+				Args::new(billing::Plans {}),
+				serde_json::from_value::<billing::PlanList>(plans.clone()).expect("plans"),
+			);
+			client.set_query_data(
+				&query_scope::<billing::Usage>(),
+				Args::new(billing::Usage {
+					organization: organization.clone(),
+					period: None,
+				}),
+				serde_json::from_value::<billing::UsageReport>(usage.clone()).expect("usage"),
+			);
 		}
 	}
 }
@@ -943,4 +975,132 @@ fn w_turns_the_focused_card_shift_w_turns_them_all_and_escape_turns_them_back() 
 		assert!(!turned.is_turned("project-blog"));
 		assert!(!turned.turn_back_all(), "nothing left to turn back");
 	});
+}
+
+fn acme_on_pro(role: &str, usage: serde_json::Value) -> World {
+	let mut acme = organization("acme", "Acme", false, role);
+	"pro".clone_into(&mut acme.plan);
+	World {
+		signed_in: true,
+		providers: providers(),
+		me: Some(me(&[organization("ana", "ana", true, "owner"), acme])),
+		projects: Some(("acme".to_owned(), vec![project("notes", "notes")])),
+		billing: Some((
+			"acme".to_owned(),
+			json!({
+				"plan": "pro",
+				"payments": true,
+				"sold": ["pro", "scale"],
+				"status": "active",
+				"period_end": "2026-12-01T00:00:00Z",
+				"cancel_at_period_end": false,
+			}),
+			json!({
+				"currency": "usd",
+				"plans": [
+					{"id": "hobby", "name": "Hobby", "monthly": 0, "included_usage": 0, "allowances": [], "limits": {"organizations": 1, "projects": 3, "custom_domains": 0}, "spend_cap": 0},
+					{"id": "pro", "name": "Pro", "monthly": 2000, "included_usage": 2000, "allowances": [], "limits": {"organizations": null, "projects": null, "custom_domains": 10}, "spend_cap": 5000},
+				],
+				"prices": [],
+			}),
+			usage,
+		)),
+		..World::default()
+	}
+}
+
+fn billing_route() -> leptoskit_cloud_app::routes::OrgBilling {
+	leptoskit_cloud_app::routes::OrgBilling {
+		org: "acme".to_owned(),
+	}
+}
+
+#[test]
+fn billing_shows_the_plan_the_cap_and_this_months_receipt() {
+	let world = acme_on_pro(
+		"owner",
+		json!({
+			"period": "2026-11",
+			"plan": "pro",
+			"quantities": [],
+			"cost": {"kind": "bill", "currency": "usd", "plan_price": 2000, "lines": [
+				{"meter": "build_minutes_linux", "quantity": 240, "allowance": 0, "billable": 240, "amount": 120},
+				{"meter": "egress_gb", "quantity": 12, "allowance": 100, "billable": 0, "amount": 0},
+			], "usage": 120, "included": 120, "total": 2000, "over": 0, "spend_cap": 5000, "own_spend_cap": false, "cap_reached": false, "unpriced": []},
+			"projects": [],
+		}),
+	);
+	snapshot_screen("billing", |width| {
+		Screen::open(billing_route(), &world, width)
+	});
+	let screen = Screen::open(billing_route(), &world, DESKTOP);
+	screen
+		.tester
+		.get_by_text("Pro · $20.00 a month")
+		.expect("the plan and its price");
+	screen
+		.tester
+		.get_by_text("$20.00 of usage included")
+		.expect("what it includes");
+	screen
+		.tester
+		.get_by_text("$50.00 of usage a month beyond the plan, the plan's cap.")
+		.expect("the cap");
+	screen
+		.tester
+		.get_by_text("November 2026 so far")
+		.expect("the receipt's month");
+	screen
+		.tester
+		.get_by_text("Payment and invoices")
+		.expect("the portal");
+}
+
+#[test]
+fn billing_without_prices_says_usage_is_not_priced() {
+	let world = acme_on_pro(
+		"billing",
+		json!({
+			"period": "2026-11",
+			"plan": "pro",
+			"quantities": [{"meter": "build_minutes_linux", "quantity": 1140}],
+			"cost": {"kind": "unpriced", "reason": "this cloud has no price catalogue."},
+			"projects": [],
+		}),
+	);
+	let screen = Screen::open(billing_route(), &world, DESKTOP);
+	screen
+		.tester
+		.get_by_text("Usage isn't priced here: this cloud has no price catalogue.")
+		.expect("why nothing is priced");
+	screen
+		.tester
+		.get_by_text("1,140")
+		.expect("the quantity still shows");
+	screen
+		.tester
+		.get_by_text("This cloud has no prices for the plan, so a cap would limit nothing.")
+		.expect("no cap without prices");
+}
+
+#[test]
+fn billing_is_for_owners_and_billing_members() {
+	let world = acme_on_pro("developer", json!({}));
+	let world = World {
+		billing: None,
+		..world
+	};
+	let screen = Screen::open(billing_route(), &world, DESKTOP);
+	screen
+		.tester
+		.get_by_text("Billing is for owners and billing members.")
+		.expect("a developer sees why there is nothing more");
+	screen
+		.tester
+		.get_by_text("Payment and invoices")
+		.expect_err("and nothing that changes billing");
+	screen
+		.tester
+		.get_by_text("Spend cap")
+		.expect_err("or reads it");
 }

@@ -87,7 +87,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 	// its result. Once `[auth] origin` names the site, the socket refuses
 	// pages from anywhere else; native apps, which send no `Origin`, sign in
 	// with a token.
-	let rpc = leptoskit::LeptoskitConfig::from_toml(
+	let rpc = leptoskit::config::LeptoskitConfig::from_toml(
 		include_str!("../leptoskit.toml"),
 		std::path::Path::new(env!("CARGO_MANIFEST_DIR")),
 	)?

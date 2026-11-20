@@ -1,6 +1,5 @@
 ---
 source: crates/leptoskit_admin/tests/admin.rs
-assertion_line: 349
 expression: "redact(&world, &regions(&outline(&html), &[\"main\", \"drawer-aside\"]))"
 ---
 main [main]
@@ -122,6 +121,7 @@ aside [drawer-aside] label="Workings"
           "Declare"
           "leptoskit.toml"
         button [station-toggle] label="Declare station"
+          "▾"
         div [station-body]
           "The hosts it probes are the ones [infra] declares. Nothing in [infra] changed since the last commit."
           div [code]
@@ -265,6 +265,7 @@ aside [drawer-aside] label="Workings"
           "Generate"
           "nothing"
         button [station-toggle] label="Generate station"
+          "▾"
         div [station-body]
           "A health check reads; it generates nothing."
       div [station:plan]
@@ -273,6 +274,7 @@ aside [drawer-aside] label="Workings"
           "Plan"
           "nothing"
         button [station-toggle] label="Plan station"
+          "▾"
         div [station-body]
           "A health check changes nothing, so there's no plan."
       div [station:apply]
@@ -281,6 +283,7 @@ aside [drawer-aside] label="Workings"
           "Apply"
           "the control service's worker"
         button [station-toggle] label="Apply station"
+          "▾"
         div [station-body]
           "The control service runs one operation per project at a time, records every step, and keeps going if you close this tab."
           div [code]
@@ -304,6 +307,7 @@ aside [drawer-aside] label="Workings"
           "Check"
           "health checks and backups"
         button [station-toggle] label="Check station"
+          "▾"
         div [station-body]
           "Done means the fleet answers its health checks, not that a command exited."
           "•"

@@ -1,6 +1,5 @@
 ---
 source: crates/leptoskit_admin/tests/admin.rs
-assertion_line: 301
 expression: "redact(&world, &regions(&outline(&html), &[\"main\", \"drawer-aside\"]))"
 ---
 main [main]
@@ -74,6 +73,7 @@ aside [drawer-aside] label="Workings"
           "Declare"
           "leptoskit.toml"
         button [station-toggle] label="Declare station"
+          "▾"
         div [station-body]
           "[infra] says what should exist. Nothing in [infra] changed since the last commit."
           div [code]
@@ -217,6 +217,7 @@ aside [drawer-aside] label="Workings"
           "Generate"
           "infra/notes-production/main.tf.json"
         button [station-toggle] label="Generate station"
+          "▾"
         div [station-body]
           "lk infra generate"
           "turns [infra] into OpenTofu's own JSON, which you can read and review like any other file."
@@ -227,6 +228,7 @@ aside [drawer-aside] label="Workings"
           "Plan"
           "operation <op 0>"
         button [station-toggle] label="Plan station"
+          "▾"
         div [station-body]
           "A plan compares what's declared with what exists and lists the difference. It changes nothing."
           div [code]
@@ -261,6 +263,7 @@ aside [drawer-aside] label="Workings"
           "Apply"
           "the control service's worker"
         button [station-toggle] label="Apply station"
+          "▾"
         div [station-body]
           "The control service runs one operation per project at a time, records every step, and keeps going if you close this tab."
           div [code]
@@ -284,6 +287,7 @@ aside [drawer-aside] label="Workings"
           "Check"
           "health checks and backups"
         button [station-toggle] label="Check station"
+          "▾"
         div [station-body]
           "Done means the fleet answers its health checks, not that a command exited."
           "•"

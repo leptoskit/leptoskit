@@ -9,6 +9,17 @@
 use serde::Deserialize;
 use serde::Serialize;
 
+use crate::components::Tone;
+use crate::workings::Drawer;
+
+pub mod analytics;
+pub mod insight;
+pub mod library;
+pub mod live;
+pub mod people;
+pub mod project;
+pub mod signin;
+
 /// Which environment the admin acts on, shown as the pill in the top bar.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -52,14 +63,24 @@ impl std::str::FromStr for Environment {
 }
 
 /// How fast analytics events arrive.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Pulse {
 	/// Events a second, over the last ten seconds.
 	pub per_second: f64,
+	/// Events in the last minute.
+	#[serde(default)]
+	pub per_minute: u64,
 	/// Events in each of the last sixty seconds, oldest first.
 	pub seconds: Vec<u64>,
 	/// Whether the admin is hearing the stream now.
 	pub live: bool,
+	/// Why it isn't, once it has lost the stream; nothing while it connects.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub reason: Option<String>,
+	/// The newest event's number: a page that read its data before a larger
+	/// one has something new to show.
+	#[serde(default)]
+	pub latest: u64,
 }
 
 /// Who is looking, and how they like the admin.
@@ -120,6 +141,63 @@ pub enum Section {
 	ProjectOperations(String),
 	Learn,
 	Glossary,
+}
+
+/// A project on the Projects page.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectCard {
+	pub id: String,
+	pub environment: String,
+	/// `Serving v42 · 3 hours ago`, or that nothing is.
+	pub serving: String,
+	/// Its last health check, in a word.
+	pub health: (Tone, String),
+	/// Its newest operation and how it went.
+	pub last: String,
+}
+
+/// One step of an operation's timeline.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Step {
+	/// Steps count from 1, in the order they happened.
+	pub sequence: u64,
+	pub message: String,
+	pub tone: Tone,
+	/// The phase in a word: `Running`.
+	pub word: String,
+	/// `5 minutes ago`.
+	pub when: String,
+}
+
+/// One resource a plan changes.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChangeRow {
+	/// `+ create`.
+	pub label: String,
+	pub tone: Tone,
+	pub address: String,
+}
+
+/// One operation: what it is doing or did, step by step.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Operation {
+	pub id: String,
+	pub project: String,
+	/// What it does: `Deploy v42`.
+	pub title: String,
+	/// Its phase, in a word.
+	pub phase: (Tone, String),
+	/// `Started by ada · 5 minutes ago · took 2 minutes`.
+	pub started: String,
+	/// Whether it is still queued or running, so the page follows it.
+	pub running: bool,
+	pub steps: Vec<Step>,
+	/// How it ended, once it has.
+	pub result: String,
+	/// What its plan found, when it made one.
+	pub changes: Vec<ChangeRow>,
+	/// Its Workings.
+	pub drawer: Drawer,
 }
 
 /// A lesson as a row in its track on the Learn hub.
@@ -185,7 +263,7 @@ pub struct Lesson {
 
 /// The pages this crate builds. Every other page is still rendered by
 /// `leptoskit_admin` alone.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Page {
 	/// The glossary of words the admin uses.
 	Glossary,
@@ -193,6 +271,32 @@ pub enum Page {
 	Learn(Learn),
 	/// One lesson.
 	Lesson(Lesson),
+	/// Every registered project.
+	Projects(Vec<ProjectCard>),
+	/// One operation, followed live while it runs.
+	Operation(Box<Operation>),
+	/// One tab of one project.
+	Project(Box<project::Project>),
+	/// Saved insights and dashboards.
+	Library(library::Library),
+	/// Everyone the events came from.
+	People(people::People),
+	/// One person.
+	Person(Box<people::Person>),
+	/// A builder: trends, funnels or retention, new or saved.
+	Insight(Box<insight::Insight>),
+	/// Events as they arrive.
+	Live(Box<live::Live>),
+	/// The web overview.
+	Web(Box<analytics::Web>),
+	/// A dashboard's cards.
+	Dashboard(Box<analytics::Dashboard>),
+	/// The people behind one point of a chart.
+	Actors(Box<analytics::Actors>),
+	/// What an analytics page says when it has nothing to read.
+	Notice(Box<analytics::Notice>),
+	/// Signing in, or being refused: the one page without the shell.
+	SignIn(Box<signin::SignIn>),
 }
 
 impl Page {
@@ -203,15 +307,73 @@ impl Page {
 			Self::Glossary => "Glossary",
 			Self::Learn(_) => "Your progress",
 			Self::Lesson(lesson) => &lesson.title,
+			Self::Projects(_) => "Projects",
+			Self::Operation(operation) => &operation.title,
+			Self::Project(project) => &project.title,
+			Self::Library(_) => "Library",
+			Self::People(_) => "People",
+			Self::Person(person) => &person.name,
+			Self::Insight(insight) => &insight.name,
+			Self::Live(_) => "Live",
+			Self::Web(_) => "Web analytics",
+			Self::Dashboard(dashboard) => &dashboard.name,
+			Self::Actors(actors) => &actors.title,
+			Self::Notice(notice) => &notice.title,
+			Self::SignIn(sign_in) => {
+				match sign_in.outcome {
+					signin::Outcome::Refused(_) => "Not an admin",
+					_ => "Sign in",
+				}
+			}
+		}
+	}
+
+	/// The page's Workings drawers, in the order its cards show them.
+	#[must_use]
+	pub fn drawers(&self) -> &[Drawer] {
+		match self {
+			Self::Glossary
+			| Self::Learn(_)
+			| Self::Lesson(_)
+			| Self::Projects(_)
+			| Self::Library(_)
+			| Self::People(_)
+			| Self::Dashboard(_)
+			| Self::Notice(_)
+			| Self::SignIn(_) => &[],
+			Self::Actors(actors) => std::slice::from_ref(&actors.drawer),
+			Self::Web(web) => &web.drawers,
+			Self::Person(person) => std::slice::from_ref(&person.drawer),
+			Self::Insight(insight) => std::slice::from_ref(&insight.drawer),
+			Self::Live(live) => std::slice::from_ref(&live.drawer),
+			Self::Operation(operation) => std::slice::from_ref(&operation.drawer),
+			Self::Project(project) => &project.drawers,
 		}
 	}
 
 	/// Where the page sits in the rail.
 	#[must_use]
-	pub const fn section(&self) -> Section {
+	pub fn section(&self) -> Section {
 		match self {
 			Self::Glossary => Section::Glossary,
 			Self::Learn(_) | Self::Lesson(_) => Section::Learn,
+			// Sign-in has no rail; Projects is where signing in leads.
+			Self::Projects(_) | Self::SignIn(_) => Section::Projects,
+			Self::Library(_) | Self::Dashboard(_) => Section::Library,
+			Self::People(_) | Self::Person(_) => Section::People,
+			Self::Insight(insight) => insight.kind.section(),
+			Self::Live(_) => Section::Live,
+			Self::Actors(actors) => actors.section.clone(),
+			Self::Web(_) => Section::Overview,
+			Self::Notice(notice) => notice.section.clone(),
+			Self::Operation(operation) => Section::ProjectOperations(operation.project.clone()),
+			Self::Project(project) => {
+				match project.tab {
+					project::Tab::Health => Section::ProjectHealth(project.id.clone()),
+					project::Tab::Operations => Section::ProjectOperations(project.id.clone()),
+					_ => Section::Project(project.id.clone()),
+				}
+			}
 		}
 	}
 }
@@ -223,6 +385,8 @@ pub struct Model {
 	pub viewer: Viewer,
 	/// Which page, with its data.
 	pub page: Page,
+	/// The drawer open when the page loads: `?workings=plan`.
+	pub open: Option<String>,
 }
 
 impl Model {

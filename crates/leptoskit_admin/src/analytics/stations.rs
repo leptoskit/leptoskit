@@ -11,6 +11,8 @@
 
 use std::sync::OnceLock;
 
+pub(crate) use leptoskit_admin_pages::analytics::Drawn;
+pub(crate) use leptoskit_admin_pages::analytics::table;
 use leptoskit_analytics::query::Answer;
 use leptoskit_analytics::query::EventRow;
 use leptoskit_analytics::query::Query;
@@ -35,14 +37,6 @@ pub(crate) fn focus_event(query: &Query) -> Option<String> {
 		Query::Events(events) => events.event.clone(),
 		Query::Actors(actors) => focus_event(&actors.query),
 	}
-}
-
-/// How a card's rows became its chart.
-pub(crate) struct Drawn {
-	/// One or two sentences: how many rows, what the chart does with them.
-	pub sentence: String,
-	/// The rows as a small table, header first.
-	pub rows: Vec<String>,
 }
 
 /// What a drawer is built from.
@@ -122,7 +116,7 @@ fn emit(event: &str, definition: Option<&EventDefinitionView>) -> Station {
 				 misspelled one fails when it compiles. This is the shape the app last \
 				 registered; the service doesn't record where in your code it's sent from."
 			),
-			Body::Code(lines(code), "Rust"),
+			Body::Code(lines(code), "Rust".to_owned()),
 		);
 	}
 
@@ -144,7 +138,7 @@ fn emit(event: &str, definition: Option<&EventDefinitionView>) -> Station {
 			if properties.is_empty() {
 				Body::Missing("None have arrived yet, so there are no properties to show.".into())
 			} else {
-				Body::Code(lines(properties), "text")
+				Body::Code(lines(properties), "text".to_owned())
 			},
 		);
 	}
@@ -171,7 +165,7 @@ fn emit(event: &str, definition: Option<&EventDefinitionView>) -> Station {
 			 name becomes a new property instead of an error. Declaring it as a struct fixes \
 			 that, and makes each one smaller to send."
 		),
-		Body::Code(lines(code), "Rust"),
+		Body::Code(lines(code), "Rust".to_owned()),
 	)
 }
 
@@ -309,7 +303,7 @@ fn send(
 				 format, {json} as JSON. Measured as one event alone in a batch."
 			)
 		},
-		Body::Code(lines(code), "text"),
+		Body::Code(lines(code), "text".to_owned()),
 	)
 }
 
@@ -410,7 +404,7 @@ fn store(answer: Option<&Answer>) -> Station {
 		"Events land in `events` as they arrive; sessions and persons are kept up to date beside \
 		 them as each batch is stored, so a query reads tables, never a queue. These are the ones \
 		 this query read.",
-		Body::Code(lines(code), "text"),
+		Body::Code(lines(code), "text".to_owned()),
 	)
 }
 
@@ -441,19 +435,19 @@ fn ask(query: &Query, answer: Option<&Answer>, url: &str) -> Station {
 		),
 		Body::Tabs(vec![
 			Tab {
-				name: "Rust",
+				name: "Rust".to_owned(),
 				lines: lines(code::rust(query)),
-				copy_as: "Rust",
+				copy_as: "Rust".to_owned(),
 			},
 			Tab {
-				name: "SQL",
+				name: "SQL".to_owned(),
 				lines: lines(sql),
-				copy_as: "SQL",
+				copy_as: "SQL".to_owned(),
 			},
 			Tab {
-				name: "HTTP",
+				name: "HTTP".to_owned(),
 				lines: lines(code::http(query, url)),
-				copy_as: "shell",
+				copy_as: "shell".to_owned(),
 			},
 		]),
 	)
@@ -467,7 +461,7 @@ fn draw(drawn: Drawn) -> Station {
 		if drawn.rows.is_empty() {
 			Body::Missing("No rows came back.".into())
 		} else {
-			Body::Code(lines(drawn.rows), "text")
+			Body::Code(lines(drawn.rows), "text".to_owned())
 		},
 	)
 }
@@ -493,37 +487,6 @@ pub(crate) fn drawer(source: Source<'_>) -> Drawer {
 			draw(source.drawn),
 		],
 	}
-}
-
-/// Pads a table's cells into columns.
-pub(crate) fn table(rows: &[Vec<String>]) -> Vec<String> {
-	let columns = rows.iter().map(Vec::len).max().unwrap_or(0);
-	let widths: Vec<usize> = (0..columns)
-		.map(|column| {
-			rows.iter()
-				.filter_map(|row| row.get(column))
-				.map(|cell| cell.chars().count())
-				.max()
-				.unwrap_or(0)
-		})
-		.collect();
-	rows.iter()
-		.map(|row| {
-			row.iter()
-				.enumerate()
-				.map(|(column, cell)| {
-					if column == 0 {
-						format!("{cell:<width$}", width = widths[column])
-					} else {
-						format!("{cell:>width$}", width = widths[column])
-					}
-				})
-				.collect::<Vec<_>>()
-				.join("  ")
-				.trim_end()
-				.to_owned()
-		})
-		.collect()
 }
 
 #[cfg(test)]

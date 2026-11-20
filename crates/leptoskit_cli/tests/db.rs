@@ -436,7 +436,8 @@ fn have(program: &str) -> bool {
 /// with the server's environment broken: no sign-in keys, and a database
 /// URL that can't connect. Both still succeed, because the server writes
 /// the spec before it reads either, and nothing touches the database. The
-/// spec lists `operations`, each at `POST /rpc/<name>`, and the backend's
+/// spec lists `operations`, each at `POST /rpc/<name>` (`[rpc] path`'s
+/// default; the JSON routes are also kept on `/api`), and the backend's
 /// `GET /api/health`; the client is written to `client`.
 fn exports_without_the_environment(root: &Path, operations: &[&str], client: &Path) -> String {
 	let target = std::env::var_os("LEPTOSKIT_E2E_TARGET_DIR")

@@ -26,7 +26,7 @@ leptoskit_config = { workspace = true }
 leptoskit_db = { workspace = true, features = ["sqlite"] }
 leptoskit_db_schema = { workspace = true }
 leptoskit_deploy_console = { workspace = true, features = ["server"] }
-leptoskit_rpc = { workspace = true, features = ["services"] }
+leptoskit_rpc = { workspace = true, features = ["axum", "live-streams", "services"] }
 reqwest = { workspace = true, features = ["rustls-tls"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }

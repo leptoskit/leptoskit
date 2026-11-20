@@ -15,6 +15,7 @@ expression: "readable(desktop.palette(Appearance::Dark))"
 "B"                                          #c9c0d0 on #251e30  9.13
 "Blog"                                       #c9c0d0 on #1d1726  9.92
 "New project"                                #c9c0d0 on #1d1726  9.92
+"Billing"                                    #c9c0d0 on #1d1726  9.92
 "Projects"                                   #f4efe8 on #16111f 16.19
 "New project"                                #16111f on #f4efe8 16.19
 "notes"                                      #f4efe8 on #1d1726 15.26

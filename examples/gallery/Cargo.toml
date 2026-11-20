@@ -59,12 +59,6 @@ web = ["dep:base64", "dep:leptos", "leptoskit/web"]
 # Mount the gallery when the browser loads the wasm client.
 csr = ["web", "dep:wasm-bindgen", "dep:web-sys"]
 
-# AppKit and GTK only run on the thread that started them, so the desktop
-# conformance test brings its own harness and runs on the main thread.
-[[test]]
-name = "desktop"
-harness = false
-
 [lints]
 workspace = true
 

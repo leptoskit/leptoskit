@@ -602,6 +602,7 @@ impl SignIn {
 			StartProvider {
 				provider: provider.to_owned(),
 				redirect_to: None,
+				prompt: None,
 			},
 			MutateCallbacks::new().on_success(move |_| show_outcome(this.outcome, this.second)),
 		);

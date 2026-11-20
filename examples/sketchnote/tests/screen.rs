@@ -29,8 +29,18 @@ fn now<T>(future: impl Future<Output = T>) -> T {
 	}
 }
 
-fn mount(notebook: Notebook) -> WidgetTester {
+/// An arena for signals. Workspace `--all-features` turns on
+/// `sandboxed-arenas`, and a notebook opened with no arena active panics.
+fn arena() -> Owner {
 	let owner = Owner::new();
+	owner.set();
+	owner
+}
+
+fn mount(notebook: Notebook) -> WidgetTester {
+	// The notebook was opened in the arena `arena()` set. A second owner
+	// would hide that arena, and the screen could not read the page.
+	let owner = Owner::current().expect("the test set an arena");
 	let state = owner.with(ScreenState::new);
 	owner.with(|| state.provide());
 	WidgetTester::new(
@@ -43,6 +53,7 @@ fn mount(notebook: Notebook) -> WidgetTester {
 
 #[test]
 fn the_page_it_ships_is_a_document_with_one_sketch() {
+	let _arena = arena();
 	let saved = Summary::of(PAGE);
 
 	assert_eq!(saved.sketches, 1);
@@ -60,6 +71,7 @@ fn the_page_it_ships_is_a_document_with_one_sketch() {
 
 #[test]
 fn the_screen_names_everything_a_person_can_press() {
+	let _arena = arena();
 	let notebook = Notebook::open();
 	let tester = mount(notebook);
 
@@ -92,6 +104,7 @@ fn the_screen_names_everything_a_person_can_press() {
 
 #[test]
 fn the_buttons_change_the_document_through_the_handle() {
+	let _arena = arena();
 	let notebook = Notebook::open();
 	let mut tester = mount(notebook);
 	let sketches = || {

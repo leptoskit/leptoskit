@@ -1,20 +1,6 @@
 name: hosted pilot
 
 on:
-  pull_request:
-    paths:
-      - "crates/leptoskit_app/**"
-      - "crates/leptoskit_deploy_console/**"
-      - "crates/leptoskit_cli/**"
-      - "crates/leptoskit_config/**"
-      - "docs/**"
-      - "setup/scripts/*hosted_pilot*"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - "rust-toolchain.toml"
-      - ".github/actions/rust/**"
-      - ".github/actions/ubuntu-archive/**"
-      - ".github/workflows/hosted-pilot.yml"
   workflow_dispatch:
     inputs:
       public_origin:

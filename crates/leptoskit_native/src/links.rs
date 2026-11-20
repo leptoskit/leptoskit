@@ -6,6 +6,20 @@
 //! `leptoskit_plugin_linking`, which opens it in the person's browser, mail
 //! or phone app.
 
+// With `links` on where nothing below opens a link (Android, iOS, the web
+// without the guest), the dependency is still named by the feature and goes
+// unused; this keeps cargo's unused-dependency lint quiet there.
+#[cfg(all(
+	feature = "links",
+	not(any(
+		target_os = "macos",
+		target_os = "windows",
+		all(target_os = "linux", not(target_env = "ohos")),
+		all(feature = "guest", target_arch = "wasm32")
+	))
+))]
+use leptoskit_plugin_linking as _;
+
 /// Opens `href` outside the app, and says whether it was a link this
 /// platform can open.
 ///

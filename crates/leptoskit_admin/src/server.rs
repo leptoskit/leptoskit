@@ -3,7 +3,6 @@
 //! to the control service under their name.
 
 use std::collections::HashMap;
-use std::convert::Infallible;
 
 use axum::Extension;
 use axum::Json;
@@ -13,27 +12,20 @@ use axum::extract::Query;
 use axum::http::HeaderMap;
 use axum::http::StatusCode;
 use axum::http::header;
-use axum::response::Html;
 use axum::response::IntoResponse;
 use axum::response::Redirect;
 use axum::response::Response;
-use axum::response::sse::Event as SseEvent;
-use axum::response::sse::KeepAlive;
-use axum::response::sse::Sse;
 use axum::routing::get;
 use axum::routing::post;
-use futures::StreamExt as _;
 use leptoskit_admin_pages::model::Page;
+use leptoskit_admin_pages::model::Viewer;
 use leptoskit_auth::SignedIn;
 use leptoskit_deploy_console::control::Action;
 use leptoskit_deploy_console::control::EnqueueError;
-use leptoskit_deploy_console::control::FacadeError;
 use leptoskit_deploy_console::control::Intent;
-use leptoskit_deploy_console::control::Phase;
 use leptoskit_deploy_console::control::Principal;
 use leptoskit_deploy_console::control::Rejection;
 use leptoskit_deploy_console::control::Service;
-use leptoskit_deploy_console::control::Update;
 use serde::Deserialize;
 use serde_json::json;
 
@@ -44,12 +36,8 @@ use crate::analytics;
 use crate::infra;
 use crate::infra::ProjectState;
 use crate::learn;
-use crate::shell;
-use crate::shell::Screen;
-use crate::shell::Viewer;
 use crate::signin;
 
-const SCRIPT: &str = include_str!("../assets/admin.mjs");
 const SKETCH: &[u8] = include_bytes!("../assets/fonts/SkribbleNotoSketch-Latin.woff2");
 const MONO: &[u8] = include_bytes!("../assets/fonts/SkribbleMonoPlayful-Latin.woff2");
 
@@ -66,17 +54,16 @@ pub(crate) fn router(admin: Admin) -> Router {
 		.route(&at("/infra/projects/{id}"), get(project_home))
 		.route(&at("/infra/projects/{id}/{tab}"), get(project))
 		.route(&at("/infra/operations/{id}"), get(operation))
-		.route(&at("/infra/operations/{id}/events"), get(operation_events))
 		.route(&at("/api/projects/{id}/actions"), post(action))
 		.route(&at("/api/preferences"), post(preferences))
 		.route(&at("/learn"), get(learn_hub))
 		.route(&at("/learn/glossary"), get(glossary))
 		.route(&at("/learn/{track}/{lesson}"), get(lesson))
-		.route(&at("/assets/admin.mjs"), get(script))
 		.route(&at("/pkg/{file}"), get(client_file))
 		.route(&at("/assets/sketch.woff2"), get(|| async { font(SKETCH) }))
 		.route(&at("/assets/mono.woff2"), get(|| async { font(MONO) }))
 		.merge(analytics::routes::router())
+		.merge(crate::live::router(&admin))
 		.merge(auth.router())
 		.layer(Extension(admin))
 		.layer(auth.layer())
@@ -109,10 +96,6 @@ pub(crate) fn no_store(mut response: Response) -> Response {
 	response
 }
 
-pub(crate) fn html(body: String) -> Response {
-	no_store(Html(body).into_response())
-}
-
 /// A signed-in admin, or the response that turns everyone else away.
 pub(crate) struct Gate {
 	pub who: String,
@@ -142,12 +125,7 @@ pub(crate) async fn gate(
 		.map_err(|error| failure(&error.to_string()))?;
 
 	if !roles.iter().any(|role| inner.roles.contains(role)) {
-		let page = signin::page(
-			inner,
-			&signin::Outcome::Refused(Some(who)),
-			appearance(headers).as_deref(),
-		);
-		return Err((StatusCode::FORBIDDEN, html(page)).into_response());
+		return Err(signin::render(admin, signin::Outcome::Refused(Some(who)), headers).await);
 	}
 
 	access::welcome(&inner.db, me.account)
@@ -243,17 +221,6 @@ pub(crate) async fn analytics_facts(admin: &Admin) -> Option<analytics::Facts> {
 	connection.facts().await.ok()
 }
 
-/// Renders a signed-in screen.
-pub(crate) fn render(
-	admin: &Admin,
-	gate: &Gate,
-	headers: &HeaderMap,
-	proof: &learn::Proof<'_>,
-	screen: Screen,
-) -> Response {
-	html(shell::page(&viewer(admin, gate, headers, proof), screen))
-}
-
 /// Who is looking at a signed-in screen, and how they like the admin.
 fn viewer(admin: &Admin, gate: &Gate, headers: &HeaderMap, proof: &learn::Proof<'_>) -> Viewer {
 	let inner = admin.inner();
@@ -270,14 +237,10 @@ fn viewer(admin: &Admin, gate: &Gate, headers: &HeaderMap, proof: &learn::Proof<
 			.map(|state| state.project.id.clone())
 			.collect(),
 		progress: learn::progress(proof),
-		pulse: inner.analytics.as_ref().map(|connection| {
-			let pulse = connection.live().pulse();
-			leptoskit_admin_pages::model::Pulse {
-				live: pulse.status == analytics::live::Status::Live,
-				per_second: pulse.per_second,
-				seconds: pulse.seconds,
-			}
-		}),
+		pulse: inner
+			.analytics
+			.as_ref()
+			.map(|connection| connection.live().pulse().shown()),
 	}
 }
 
@@ -311,7 +274,6 @@ async fn sign_in(
 	Query(query): Query<SignInQuery>,
 ) -> Response {
 	let inner = admin.inner();
-	let appearance = appearance(&headers);
 
 	if let Some(me) = me {
 		let roles = inner.auth.roles(me.account).await.unwrap_or_default();
@@ -321,8 +283,7 @@ async fn sign_in(
 		}
 
 		let who = access::display_name(&inner.db, me.account).await.ok();
-		let page = signin::page(inner, &signin::Outcome::Refused(who), appearance.as_deref());
-		return (StatusCode::FORBIDDEN, html(page)).into_response();
+		return signin::render(&admin, signin::Outcome::Refused(who), &headers).await;
 	}
 
 	let outcome = match query.auth_error.as_deref() {
@@ -337,26 +298,17 @@ async fn sign_in(
 		}
 		None => signin::Outcome::Ready,
 	};
-	let status = if matches!(outcome, signin::Outcome::Refused(_)) {
-		StatusCode::FORBIDDEN
-	} else {
-		StatusCode::OK
-	};
-
-	(
-		status,
-		html(signin::page(inner, &outcome, appearance.as_deref())),
-	)
-		.into_response()
+	signin::render(&admin, outcome, &headers).await
 }
 
-/// Gates, loads the projects, and renders what `screen` makes of them.
-/// A signed-in page `leptoskit_admin_pages` builds, which the browser picks
-/// up where the server left it.
+/// Gates, loads the projects, and renders the page `page` makes of them:
+/// a signed-in page `leptoskit_admin_pages` builds, which the browser picks
+/// up where the server left it. `open` names the drawer open on arrival.
 async fn hydrated_screen(
 	admin: &Admin,
 	me: Option<SignedIn>,
 	headers: &HeaderMap,
+	open: Option<String>,
 	page: impl FnOnce(&learn::Proof<'_>) -> Option<Page>,
 ) -> Response {
 	let gate = match gate(admin, me, headers).await {
@@ -378,41 +330,44 @@ async fn hydrated_screen(
 	let Some(page) = page(&proof) else {
 		return not_found();
 	};
+
+	render_page(admin, &gate, headers, &proof, page, open).await
+}
+
+/// Renders `page` from the pages crate, with the drawer `open` names open
+/// when the page has it.
+pub(crate) async fn render_page(
+	admin: &Admin,
+	gate: &Gate,
+	headers: &HeaderMap,
+	proof: &learn::Proof<'_>,
+	page: Page,
+	open: Option<String>,
+) -> Response {
+	// Only a drawer the page has opens: the id goes back into the page.
+	let open = open
+		.or_else(|| opens_by_default(&page))
+		.filter(|open| page.drawers().iter().any(|drawer| drawer.id == *open));
 	let model = leptoskit_admin_pages::Model {
-		viewer: viewer(admin, &gate, headers, &proof),
+		viewer: viewer(admin, gate, headers, proof),
 		page,
+		open,
 	};
 
 	admin.inner().client.render(model).await
 }
 
-async fn signed_in_screen(
-	admin: &Admin,
-	me: Option<SignedIn>,
-	headers: &HeaderMap,
-	screen: impl FnOnce(&learn::Proof<'_>) -> Option<Screen>,
-) -> Response {
-	let gate = match gate(admin, me, headers).await {
-		Ok(gate) => gate,
-		Err(response) => return response,
+/// The drawer a page opens when no link names one: the plan's, the first
+/// three times.
+fn opens_by_default(page: &Page) -> Option<String> {
+	let Page::Project(project) = page else {
+		return None;
 	};
-	let states = match states(admin).await {
-		Ok(states) => states,
-		Err(error) => return failure(&format!("the control service didn't answer: {error}")),
-	};
-	let facts = analytics_facts(admin).await;
-	let proof = learn::Proof {
-		states: &states,
-		now: now(),
-		facts: facts.as_ref(),
-		preferences: &gate.preferences,
-		simulated: admin.inner().simulated_infrastructure,
+	let leptoskit_admin_pages::model::project::Body::Changes(changes) = &project.body else {
+		return None;
 	};
 
-	match screen(&proof) {
-		Some(screen) => render(admin, &gate, headers, &proof, screen),
-		None => not_found(),
-	}
+	changes.workings_by_default.then(|| "plan".to_owned())
 }
 
 async fn projects(
@@ -420,8 +375,8 @@ async fn projects(
 	me: Option<SignedIn>,
 	headers: HeaderMap,
 ) -> Response {
-	signed_in_screen(&admin, me, &headers, |proof| {
-		Some(infra::projects(proof.states, proof.now))
+	hydrated_screen(&admin, me, &headers, None, |proof| {
+		Some(Page::Projects(infra::projects(proof.states, proof.now)))
 	})
 	.await
 }
@@ -435,46 +390,42 @@ async fn project(
 	me: Option<SignedIn>,
 	headers: HeaderMap,
 	Path((id, tab)): Path<(String, String)>,
+	Query(query): Query<WorkingsQuery>,
 ) -> Response {
 	let Some(tab) = infra::Tab::parse(&tab) else {
 		return not_found();
 	};
-	let gate = match gate(&admin, me, &headers).await {
-		Ok(gate) => gate,
-		Err(response) => return response,
-	};
-	let states = match states(&admin).await {
-		Ok(states) => states,
-		Err(error) => return failure(&format!("the control service didn't answer: {error}")),
-	};
-	let Some(state) = states.iter().find(|state| state.project.id == id) else {
-		return not_found();
-	};
-	let now = now();
-	let fleet = (tab == infra::Tab::Health)
-		.then(|| admin.inner().control.as_ref())
-		.flatten()
-		.map(|service| {
-			service
-				.fleet(&Principal::owner(), &id, now.saturating_sub(3600), now)
-				.map_err(|error| error.to_string())
-		});
-	let context = infra::Context {
-		now,
-		preferences: &gate.preferences,
-		fleet,
-		simulated: admin.inner().simulated_infrastructure,
-	};
-	let screen = infra::project(state, tab, &context);
-	let facts = analytics_facts(&admin).await;
-	let proof = learn::Proof {
-		states: &states,
-		now,
-		facts: facts.as_ref(),
-		preferences: &gate.preferences,
-		simulated: admin.inner().simulated_infrastructure,
-	};
-	render(&admin, &gate, &headers, &proof, screen)
+
+	let linked = query.workings.is_some();
+
+	hydrated_screen(&admin, me, &headers, query.workings, |proof| {
+		let state = proof.states.iter().find(|state| state.project.id == id)?;
+		// Only Health draws the fleet's last hour of measurements.
+		let fleet = (tab == infra::Tab::Health)
+			.then(|| admin.inner().control.as_ref())
+			.flatten()
+			.map(|service| {
+				service
+					.fleet(
+						&Principal::owner(),
+						&id,
+						proof.now.saturating_sub(3600),
+						proof.now,
+					)
+					.map_err(|error| error.to_string())
+			});
+		let context = infra::Context {
+			now: proof.now,
+			preferences: proof.preferences,
+			fleet,
+			simulated: proof.simulated,
+			linked,
+		};
+		Some(Page::Project(Box::new(infra::project(
+			state, tab, &context,
+		))))
+	})
+	.await
 }
 
 async fn operation(
@@ -482,90 +433,28 @@ async fn operation(
 	me: Option<SignedIn>,
 	headers: HeaderMap,
 	Path(id): Path<String>,
+	Query(query): Query<WorkingsQuery>,
 ) -> Response {
 	let Some(service) = admin.inner().control.clone() else {
 		return not_found();
 	};
-	signed_in_screen(&admin, me, &headers, |proof| {
+	hydrated_screen(&admin, me, &headers, query.workings, |proof| {
 		let operation = service.operation(&Principal::owner(), &id).ok()?;
 		let state = proof
 			.states
 			.iter()
 			.find(|state| state.project.id == operation.project)?;
-		Some(infra::operation(state, &operation, now()))
+		Some(Page::Operation(Box::new(infra::operation(
+			state, &operation, proof.now,
+		))))
 	})
 	.await
 }
 
-/// Server-sent events for one operation: its state now, each progress
-/// event as it happens, then `done` with the finished operation.
-async fn operation_events(
-	Extension(admin): Extension<Admin>,
-	me: Option<SignedIn>,
-	Path(id): Path<String>,
-) -> Response {
-	if let Err(response) = api_gate(&admin, me).await {
-		return response;
-	}
-
-	let Some(service) = admin.inner().control.clone() else {
-		return problem(
-			StatusCode::NOT_FOUND,
-			"not_found",
-			"There's no control service.",
-		);
-	};
-	// Subscribe before reading, so nothing that happens in between is lost.
-	let subscription = service.subscribe(&id);
-	let snapshot = match service.operation(&Principal::owner(), &id) {
-		Ok(operation) => operation,
-		Err(FacadeError::NotFound | FacadeError::Forbidden) => {
-			return problem(
-				StatusCode::NOT_FOUND,
-				"not_found",
-				"There's no such operation.",
-			);
-		}
-		Err(error) => {
-			return problem(
-				StatusCode::SERVICE_UNAVAILABLE,
-				"storage",
-				&error.to_string(),
-			);
-		}
-	};
-	let finished = !matches!(snapshot.phase, Phase::Queued | Phase::Running);
-	let first = SseEvent::default()
-		.event(if finished { "done" } else { "operation" })
-		.json_data(&snapshot)
-		.unwrap_or_default();
-	let updates = subscription
-		.take_while(move |_| std::future::ready(!finished))
-		.map(|update| {
-			match update {
-				Update::Progress { event, .. } => {
-					SseEvent::default()
-						.event("progress")
-						.json_data(&event)
-						.unwrap_or_default()
-				}
-				Update::Finished { operation } => {
-					SseEvent::default()
-						.event("done")
-						.json_data(&operation)
-						.unwrap_or_default()
-				}
-			}
-		});
-	let stream = futures::stream::once(std::future::ready(first))
-		.chain(updates)
-		.map(Ok::<_, Infallible>);
-
-	no_store(
-		Sse::new(stream)
-			.keep_alive(KeepAlive::default())
-			.into_response(),
-	)
+/// `?workings=plan`: a link that opens a card with its workings showing.
+#[derive(Deserialize)]
+struct WorkingsQuery {
+	workings: Option<String>,
 }
 
 /// What the page asks the control service to do.
@@ -802,7 +691,7 @@ async fn learn_hub(
 	me: Option<SignedIn>,
 	headers: HeaderMap,
 ) -> Response {
-	hydrated_screen(&admin, me, &headers, |proof| {
+	hydrated_screen(&admin, me, &headers, None, |proof| {
 		Some(Page::Learn(learn::hub(proof)))
 	})
 	.await
@@ -813,7 +702,7 @@ async fn glossary(
 	me: Option<SignedIn>,
 	headers: HeaderMap,
 ) -> Response {
-	hydrated_screen(&admin, me, &headers, |_| Some(Page::Glossary)).await
+	hydrated_screen(&admin, me, &headers, None, |_| Some(Page::Glossary)).await
 }
 
 async fn lesson(
@@ -822,7 +711,7 @@ async fn lesson(
 	headers: HeaderMap,
 	Path((track, lesson)): Path<(String, String)>,
 ) -> Response {
-	hydrated_screen(&admin, me, &headers, |proof| {
+	hydrated_screen(&admin, me, &headers, None, |proof| {
 		learn::lesson(&track, &lesson, proof).map(Page::Lesson)
 	})
 	.await
@@ -835,17 +724,6 @@ async fn client_file(
 	headers: HeaderMap,
 ) -> Response {
 	admin.inner().client.serve(&file, &headers)
-}
-
-async fn script() -> Response {
-	(
-		[
-			(header::CONTENT_TYPE, "text/javascript; charset=utf-8"),
-			(header::CACHE_CONTROL, "no-cache"),
-		],
-		SCRIPT,
-	)
-		.into_response()
 }
 
 fn font(bytes: &'static [u8]) -> Response {

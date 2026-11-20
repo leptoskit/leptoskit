@@ -24,7 +24,7 @@ header [top-bar]
   div [avatar-menu] role=menu
     "Signed in as"
     "ada@example.com"
-    button [sign-out] role=menuitem
+    button [sign-out] role=menuitem label="Sign out"
       "Sign out"
 nav [rail] label="Admin"
   span [rail-label]

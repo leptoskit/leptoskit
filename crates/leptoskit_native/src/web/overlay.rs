@@ -28,6 +28,7 @@ use crate::Overlay;
 
 thread_local! {
 	/// Whether a render since the last sync held a modal or popover.
+	#[cfg_attr(target_os = "android", expect(clippy::missing_const_for_thread_local, reason = "Android fallback TLS: rust-clippy#13422"))]
 	static RENDERED: Cell<bool> = const { Cell::new(false) };
 }
 

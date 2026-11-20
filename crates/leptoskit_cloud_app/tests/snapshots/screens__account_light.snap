@@ -10,6 +10,7 @@ expression: "readable(desktop.palette(Appearance::Light))"
 "/"                                          #6e6578 on #fffdf8  5.44
 "Projects"                                   #4d4558 on #fffdf8  8.95
 "New project"                                #4d4558 on #fffdf8  8.95
+"Billing"                                    #4d4558 on #fffdf8  8.95
 "Account"                                    #16111f on #faf6f0 17.20
 "You"                                        #16111f on #fffdf8 18.22
 "ana@example.com"                            #16111f on #fffdf8 18.22

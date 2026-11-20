@@ -1,9 +1,22 @@
 //! The pages this crate builds, each framed by the [`Shell`].
 
+mod analytics;
 mod glossary;
+mod health;
+mod infra;
+mod insight;
 mod learn;
+mod library;
+mod live;
+mod people;
+mod project;
+mod signin;
+mod web;
 
+use leptos::prelude::Get as _;
 use leptoskit::prelude::Element;
+pub use signin::host;
+pub(crate) use web::path as web_path;
 
 use crate::model::Page;
 use crate::shell::Shell;
@@ -13,7 +26,92 @@ use crate::shell::Shell;
 pub(crate) fn screen_of(shell: &Shell) -> Box<dyn Fn() -> Element + Send + Sync> {
 	let shell = shell.clone();
 
-	Box::new(move || shell.frame(content(&shell.model.page)))
+	match &shell.model.page {
+		Page::Operation(operation) if operation.running => {
+			let follow = infra::Follow::open(&operation.id);
+			Box::new(move || {
+				let Page::Operation(operation) = &shell.model.page else {
+					return shell.frame(content(&shell.model.page));
+				};
+				shell.frame(infra::operation(operation, Some(follow)))
+			})
+		}
+		Page::Project(project) => {
+			let actions = project::Actions::new(&project.id, shell.confirm, shell.notice);
+
+			if let crate::model::project::Body::Changes(changes) = &project.body
+				&& changes.workings_by_default
+			{
+				// The plan's Workings open by default the first three times.
+				crate::shell::preference(r#"{"kind":"use_note","note":"plan-workings"}"#);
+			}
+
+			Box::new(move || {
+				let Page::Project(project) = &shell.model.page else {
+					return shell.frame(content(&shell.model.page));
+				};
+				shell.frame(project::page(project, Some(actions)))
+			})
+		}
+		Page::People(people) => {
+			let search = people::Search::new(people);
+			Box::new(move || {
+				let Page::People(people) = &shell.model.page else {
+					return shell.frame(content(&shell.model.page));
+				};
+				shell.frame(people::list(people, Some(search)))
+			})
+		}
+		Page::Person(person) => {
+			let actions = people::Actions::new(person, shell.confirm, shell.notice);
+			Box::new(move || {
+				let Page::Person(person) = &shell.model.page else {
+					return shell.frame(content(&shell.model.page));
+				};
+				shell.frame(people::person(person, Some(actions)))
+			})
+		}
+		Page::Live(live) => {
+			let watch = live::Watch::new(live);
+			Box::new(move || {
+				let Page::Live(live) = &shell.model.page else {
+					return shell.frame(content(&shell.model.page));
+				};
+				shell.frame(live::page(live, Some(watch)))
+			})
+		}
+		// The pages that read themselves again as events arrive; the
+		// builders and the web overview also change in place.
+		Page::Insight(_) | Page::Web(_) | Page::Dashboard(_) | Page::Notice(_) => {
+			let swap = crate::analytics::swap::Swap::new(
+				shell.page,
+				shell.workings,
+				&shell.model.viewer.app_name,
+			);
+			leptos::context::provide_context(swap);
+			let actions = insight::Actions::new(shell.confirm, shell.notice);
+			Box::new(move || {
+				// The page a swap put in place, or the server's.
+				let page = shell.page.get();
+				shell.frame(match &page {
+					Page::Insight(insight) => insight::page(insight, Some(actions)),
+					Page::Web(web) => web::page(web, Some(actions)),
+					page => content(page),
+				})
+			})
+		}
+		// Nobody is signed in to see the shell, so sign-in has none.
+		Page::SignIn(_) => {
+			let start = signin::Start::new();
+			Box::new(move || {
+				let Page::SignIn(sign_in) = &shell.model.page else {
+					return content(&shell.model.page);
+				};
+				signin::page(&shell.model.viewer, sign_in, Some(start))
+			})
+		}
+		_ => Box::new(move || shell.frame(content(&shell.model.page))),
+	}
 }
 
 /// The content of `page`, without the frame, for a page that has no state
@@ -25,5 +123,21 @@ pub fn content(page: &Page) -> Element {
 		Page::Glossary => glossary::content(),
 		Page::Learn(learn) => learn::hub(learn),
 		Page::Lesson(lesson) => learn::lesson(lesson),
+		Page::Projects(cards) => infra::projects(cards),
+		Page::Operation(operation) => infra::operation(operation, None),
+		Page::Project(project) => project::page(project, None),
+		Page::Library(library) => library::page(library),
+		Page::People(people) => people::list(people, None),
+		Page::Person(person) => people::person(person, None),
+		Page::Insight(insight) => insight::page(insight, None),
+		Page::Live(live) => live::page(live, None),
+		Page::Web(web) => web::page(web, None),
+		Page::Dashboard(dashboard) => analytics::dashboard(dashboard),
+		Page::Actors(actors) => analytics::actors(actors),
+		Page::Notice(notice) => analytics::notice(notice),
+		// Drawn by `screen_of`, which knows the viewer.
+		Page::SignIn(_) => {
+			leptoskit::prelude::Text("Sign in to see this page.").class(crate::style::MUTED)
+		}
 	}
 }

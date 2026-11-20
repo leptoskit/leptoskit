@@ -436,7 +436,9 @@ fn generated_application_shares_behavior_and_selects_platform_overrides() {
 
 	assert!(
 		!conflicting.status.success(),
-		"ambiguous device features must fail"
+		"ambiguous device features must fail\nstdout:\n{}\nstderr:\n{}",
+		String::from_utf8_lossy(&conflicting.stdout),
+		String::from_utf8_lossy(&conflicting.stderr),
 	);
 	assert!(
 		String::from_utf8_lossy(&conflicting.stderr)

@@ -446,7 +446,8 @@ fn import_specifiers(source: &str) -> Vec<String> {
 	imports
 }
 
-/// The commands for the four checks CI already runs, plus caps and boot.
+/// The six Exact checks. caps and boot run in this crate. build and workspace
+/// are the local clippy script. test and lint are the Linux CI job.
 #[must_use]
 pub fn commands() -> &'static [(&'static str, &'static str)] {
 	&[
@@ -457,9 +458,13 @@ pub fn commands() -> &'static [(&'static str, &'static str)] {
 		),
 		(
 			"test",
-			"cargo test --locked --workspace --all-features --no-fail-fast",
+			"cargo test --locked --lib --package leptoskit_yoga --package leptoskit_native \
+			 --package leptoskit_config",
 		),
-		("lint", "devenv shell lint:all"),
+		(
+			"lint",
+			"cargo clippy --locked --all-features --keep-going --config 'build.warnings=\"deny\"'",
+		),
 		("caps", "python3 setup/scripts/budgets.py"),
 		("boot", "python3 setup/scripts/budgets.py"),
 		(

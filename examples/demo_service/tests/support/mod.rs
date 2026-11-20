@@ -359,13 +359,67 @@ pub fn spawn_env(root: &Path, port: u16, overrides: &[(&str, String)]) -> Server
 	spawn_with_variables(variables)
 }
 
+/// Close the descriptor numbers named after the binary, then replace the
+/// shell with that binary. The numbers are decimal. The shell's stderr
+/// pipe is created afterwards, so it is not closed.
+const CLOSE_LEAKED_FDS: &str =
+	r#"bin=$1; shift; for n in "$@"; do eval "exec ${n}>&-"; done; exec "$bin""#;
+
+/// Descriptors above the standard streams that are still open. The
+/// directory handle used to list them is closed before the result is
+/// returned, so it is not included.
+#[cfg(target_os = "linux")]
+fn leaked_fds() -> Vec<i32> {
+	let numbers: Vec<i32> = std::fs::read_dir("/proc/self/fd")
+		.expect("the test can list its descriptors")
+		.filter_map(|entry| {
+			entry
+				.ok()?
+				.file_name()
+				.to_string_lossy()
+				.parse::<i32>()
+				.ok()
+		})
+		.filter(|fd| *fd > 2)
+		.collect();
+	numbers
+		.into_iter()
+		.filter(|fd| std::fs::read_link(format!("/proc/self/fd/{fd}")).is_ok())
+		.collect()
+}
+
+/// A command that execs `binary` without the pipes this test inherited.
+///
+/// nextest, xvfb, and dbus leave pipes that are not close-on-exec. The
+/// service refuses to start while any of those would survive `exec`, so
+/// the proofs would be about the runner rather than the binary.
+pub fn command_with_clean_fds(binary: &str) -> Command {
+	#[cfg(target_os = "linux")]
+	{
+		let mut command = Command::new("sh");
+		command
+			.arg("-c")
+			.arg(CLOSE_LEAKED_FDS)
+			.arg("demo-close-fds")
+			.arg(binary);
+		for fd in leaked_fds() {
+			command.arg(fd.to_string());
+		}
+		command
+	}
+	#[cfg(not(target_os = "linux"))]
+	{
+		Command::new(binary)
+	}
+}
+
 fn spawn_with_variables(variables: Vec<(String, String)>) -> Server {
 	let bind: SocketAddr = variables
 		.iter()
 		.find(|(name, _)| name == "DEMO_BIND")
 		.and_then(|(_, value)| value.parse().ok())
 		.expect("the bind parses");
-	let mut child = Command::new(env!("CARGO_BIN_EXE_demo_service"))
+	let mut child = command_with_clean_fds(env!("CARGO_BIN_EXE_demo_service"))
 		.envs(variables)
 		.stdout(Stdio::null())
 		.stderr(Stdio::piped())

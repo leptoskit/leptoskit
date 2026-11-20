@@ -408,7 +408,9 @@ fn a_push_enabled_mac_app_is_never_ad_hoc_signed_with_its_entitlement() {
 	// Push with an identity: that identity, the entitlements, the profile.
 	let signing = local_signing(&root, &config, &identity, false).unwrap();
 	assert_eq!(
-		arguments(&signing).replace(&root.display().to_string(), "<root>"),
+		arguments(&signing)
+			.replace(&root.display().to_string(), "<root>")
+			.replace('\\', "/"),
 		"--force --sign Apple Development: Example (ABCDE12345) --timestamp=none --entitlements \
 		 <root>/.leptoskit/macos/App.entitlements"
 	);
