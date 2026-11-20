@@ -90,6 +90,42 @@ Pair with `leptoskit_plugin_wearable` (direct wrist sensors), `leptoskit_plugin_
 
 Watch surfaces reject phone-oriented widgets such as `ScrollView`, `TextInput`, `PasswordInput`, `TextArea`, `CanvistEditor`, `Checkbox`, `Radio`, `Slider`, `Rive`, and `Scene3d`. Deep or wordy trees fail validation against the surface budget. That is intentional: a complication is not a settings screen.
 
+## Watch hardware, Always-On Display, workouts, and companion sync
+
+Beyond UI surfaces, `leptoskit::watch` models the hardware and OS lifecycles shared across watchOS and Wear OS:
+
+| Feature | API | watchOS / Wear OS mapping |
+| --- | --- | --- |
+| Digital Crown & rotary bezel | `CrownConfig`, `CrownEvent`, `RotaryState` | `digitalCrownRotation` / Wear rotary scroll with detent haptics |
+| Always-On Display (AOD) | `AmbientModeState`, `AmbientPolicy` | `isLuminanceReduced` / `AmbientLifecycleObserver` burn-in protection |
+| Smart Stack & Tile relevance | `RelevanceHint` | watchOS Smart Stack relevance windows & Wear tile hints |
+| Live workout sessions | `WorkoutSession`, `WorkoutActivity`, `WorkoutMetrics` | `HKWorkoutSession` / Health Services `ExerciseClient` |
+| Phone-watch companion sync | `CompanionLink`, `CompanionMessage`, `CompanionDeliveryMode`, `MemoryCompanionLink` | `WatchConnectivity` (`WCSession`) / Wear Data Layer |
+| Haptics & wrist gestures | `WatchHaptic`, `WatchGesture`, `WatchCapabilities` | `WKHapticType`, Double Tap, Wrist Flick, Action Button |
+
+```rust
+use leptoskit::watch::CrownConfig;
+use leptoskit::watch::CrownEvent;
+use leptoskit::watch::RotaryState;
+use leptoskit::watch::WorkoutActivity;
+use leptoskit::watch::WorkoutLocation;
+use leptoskit::watch::WorkoutSession;
+
+let mut dial = RotaryState::new(CrownConfig::new(0.0, 60.0, 5.0).unwrap(), 15.0);
+let detents = dial.apply(CrownEvent {
+	delta: 10.0,
+	velocity: 2.0,
+	idle: false,
+});
+assert_eq!(detents, 2);
+
+let mut run = WorkoutSession::prepare(WorkoutActivity::Running, WorkoutLocation::Outdoor);
+run.start().unwrap();
+run.pause().unwrap();
+run.resume().unwrap();
+run.end().unwrap();
+```
+
 ## Permissions and entitlements
 
 Documented beside each platform page:
