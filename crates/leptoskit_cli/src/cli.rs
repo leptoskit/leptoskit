@@ -154,12 +154,20 @@ pub enum DevtoolsCommand {
 pub enum Command {
 	/// Validate and list the destinations in this application's configuration.
 	Targets,
-	/// Hosts or connects to the deployment dashboard and durable agent API.
+	/// Legacy operator-enrolled deployment dashboard and agent API.
+	#[command(
+		about = "Legacy operator-enrolled deployment dashboard and agent API. For new projects, \
+		         prefer `lk cloud` (LeptosKit Cloud) or `lk infra` (self-hosted)"
+	)]
 	Console {
 		#[command(subcommand)]
 		command: crate::console::ConsoleCommand,
 	},
-	/// Signs in and manages cloud accounts, projects, environments and tokens.
+	/// Primary managed hosting track.
+	#[command(
+		about = "Primary managed hosting track (LeptosKit Cloud): login, launch, deploy, status, \
+		         logs, secrets, domains, databases, and usage"
+	)]
 	Cloud(crate::cloud::CloudArgs),
 	/// Runs the admin: analytics, infrastructure and lessons, signed in
 	/// through the main site.
@@ -167,15 +175,22 @@ pub enum Command {
 		#[command(subcommand)]
 		command: crate::admin::AdminCommand,
 	},
-	/// Generates and manages the app's `OpenTofu` infrastructure.
-	#[command(alias = "tofu")]
+	/// Primary self-hosted track.
+	#[command(
+		alias = "tofu",
+		about = "Primary self-hosted track: generates and manages OpenTofu + Kamal infrastructure \
+		         on your own servers (infra.mode = \"graph\" is experimental)"
+	)]
 	Infra {
 		#[command(subcommand)]
 		command: crate::infra::InfraCommand,
 	},
-	/// Deploys a Git commit through its service, releases a prebuilt image, or
-	/// rolls back.
-	#[command(disable_version_flag = true)]
+	/// Deploys the application.
+	#[command(
+		disable_version_flag = true,
+		about = "Deploys the app: ships to LeptosKit Cloud when [cloud].project is set, or \
+		         releases through self-hosted OpenTofu/Kamal ([infra])"
+	)]
 	Deploy(crate::infra::ReleaseArgs),
 	/// Builds and reproduces backends from public commits and checks signed
 	/// deployment policies; does not show what a live server runs.
@@ -286,11 +301,21 @@ pub enum Command {
 		auth: bool,
 		/// Scaffold several frontend apps in one workspace. Pass values
 		/// (`landing`, `app`, `admin`) or the flag alone for all three.
-		/// Creates `leptoskit.workspace.toml` and `apps/<name>/`. Incompatible
-		/// with `--db`, `--auth`, `--extension`, and standalone HarmonyOS /
-		/// watch starters.
+		/// Creates `leptoskit.workspace.toml` and `apps/<name>/`. Combines
+		/// cleanly with `--db`, `--auth`, `--web-only`, and `--cloud`.
 		#[arg(long, value_delimiter = ',', num_args = 0..)]
 		frontends: Option<Vec<String>>,
+		/// Scaffold a web-only project (`app.platforms = ["web"]`, skipping
+		/// native mobile/desktop host directories).
+		#[arg(long)]
+		web_only: bool,
+		/// Add a starter `[cloud]` table and default `--auth` to Postgres.
+		#[arg(
+			long,
+			help = "Add a starter [cloud] table for LeptosKit Cloud and default --auth without \
+			        --db to Postgres instead of SQLite"
+		)]
+		cloud: bool,
 	},
 	/// Runs every platform you have set up, and rebuilds them on change.
 	///
@@ -515,6 +540,16 @@ pub enum GenerateCommand {
 		/// (`landing`, `app`, `admin`) or the flag alone for all three.
 		#[arg(long, value_delimiter = ',', num_args = 0..)]
 		frontends: Option<Vec<String>>,
+		/// Scaffold a web-only project (`app.platforms = ["web"]`).
+		#[arg(long)]
+		web_only: bool,
+		/// Add a starter `[cloud]` table and default `--auth` to Postgres.
+		#[arg(
+			long,
+			help = "Add a starter [cloud] table for LeptosKit Cloud and default --auth without \
+			        --db to Postgres instead of SQLite"
+		)]
+		cloud: bool,
 	},
 	/// Generates an independently publishable runtime plugin with an echo
 	/// method.
@@ -886,6 +921,8 @@ pub fn run(cli: Cli) -> anyhow::Result<()> {
 			extension,
 			auth,
 			frontends,
+			web_only,
+			cloud,
 		} => {
 			run(Cli {
 				app_target: None,
@@ -900,6 +937,8 @@ pub fn run(cli: Cli) -> anyhow::Result<()> {
 						extension,
 						auth,
 						frontends,
+						web_only,
+						cloud,
 					},
 				},
 			})
@@ -978,21 +1017,27 @@ fn generate_command(kind: GenerateCommand) -> anyhow::Result<()> {
 			extension,
 			auth,
 			frontends,
+			web_only,
+			cloud,
 		} => {
 			if let Some(frontends) = frontends {
 				anyhow::ensure!(
-					native_target.is_none() && db.is_none() && !auth && !extension,
-					"--frontends cannot combine with --native-target, --db, --auth, or --extension"
+					native_target.is_none() && !extension,
+					"--frontends cannot combine with --native-target or --extension"
 				);
 				anyhow::ensure!(
 					platform == leptoskit_config::Platform::Web,
 					"--frontends scaffolds web frontends; leave --platform at its web default"
 				);
-				return new_project::run_frontends(
+				return new_project::run_frontends_with_options(
 					&path,
 					&frontends,
 					name.as_deref(),
 					sdk_path.as_deref(),
+					db,
+					auth,
+					web_only,
+					cloud,
 				);
 			}
 
@@ -1017,15 +1062,19 @@ fn generate_command(kind: GenerateCommand) -> anyhow::Result<()> {
 				);
 			}
 
-			new_project::run_with_options(
-				&path,
+			new_project::run_configured(new_project::NewAppOptions {
+				path: &path,
 				platform,
-				name.as_deref(),
-				sdk_path.as_deref(),
-				db,
+				name: name.as_deref(),
+				sdk: sdk_path.as_deref(),
+				database: db,
 				extension,
 				auth,
-			)
+				cloud,
+				platforms: web_only.then(|| vec![leptoskit_config::Platform::Web]),
+				serve_port: None,
+				quiet: false,
+			})
 		}
 		GenerateCommand::Auth { idp, force } => crate::auth_pages::run(idp, force),
 		GenerateCommand::Plugin {

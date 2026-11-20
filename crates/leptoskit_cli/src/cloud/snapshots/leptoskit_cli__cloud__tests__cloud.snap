@@ -2,11 +2,17 @@
 source: crates/leptoskit_cli/src/cloud/tests.rs
 expression: help
 ---
-Signs in and manages cloud accounts, projects, environments and tokens
+Primary managed hosting track (LeptosKit Cloud): login, launch, deploy, status, logs, secrets, domains, databases, and usage
 
 Usage: cloud [OPTIONS] <COMMAND>
 
 Commands:
+  launch        Creates & links a cloud project if needed, previews cost, and ships the first deployment
+  deploy        Packs, uploads, and deploys the current project to LeptosKit Cloud
+  status        Shows the observed status, hostname, and process readiness of an environment
+  logs          Reads recent runtime logs for an environment (pass `--follow` to stream)
+  estimate      Previews the resolved release plan and estimated monthly cost without deploying
+  open          Opens the environment's live HTTPS URL in your browser
   login         Signs in through your browser with a short code
   logout        Revokes your login and removes the local credentials
   whoami        Shows who is signed in and which organizations they can see
@@ -44,3 +50,6 @@ Options:
 
   -h, --help
           Print help
+
+External subcommands:
+  Any `leptoskit-cloud-<name>` executable beside `lk` or on PATH (such as `platform`, `worker`, or `control`) can be invoked as `lk cloud <name> [ARGS]...`.

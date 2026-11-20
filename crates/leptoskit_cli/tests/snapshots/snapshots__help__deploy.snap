@@ -2,7 +2,7 @@
 source: crates/leptoskit_cli/tests/snapshots.rs
 expression: "normalize(&stdout(&output), &scratch.path)"
 ---
-Deploys a Git commit through its service, releases a prebuilt image, or rolls back
+Deploys the app: ships to LeptosKit Cloud when [cloud].project is set, or releases through self-hosted OpenTofu/Kamal ([infra])
 
 Usage: leptoskit deploy [OPTIONS]
 

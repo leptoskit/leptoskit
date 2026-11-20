@@ -101,11 +101,44 @@ pub struct CloudConfig {
 	/// The database every environment gets when the app has `[db]`.
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub database: Option<CloudDatabase>,
+	/// Application-level S3-compatible object storage buckets provisioned per
+	/// environment (`[cloud.storage.buckets.<name>]`).
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub storage: Option<CloudStorage>,
 	/// Each environment's size, scale, and domains, by name, such as
 	/// `[cloud.environments.production]`. Production exists even when it
 	/// isn't listed.
 	#[serde(skip_serializing_if = "BTreeMap::is_empty")]
 	pub environments: BTreeMap<String, CloudEnvironment>,
+}
+
+/// `[cloud.storage]`: application-level S3-compatible object storage buckets
+/// provisioned per environment.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields, default)]
+pub struct CloudStorage {
+	/// Named buckets provisioned for the app (e.g.
+	/// `[cloud.storage.buckets.uploads]`). Each bucket injects
+	/// `LEPTOSKIT_BUCKET_<NAME>_ENDPOINT`, `LEPTOSKIT_BUCKET_<NAME>_NAME`, and
+	/// credentials into the environment.
+	#[serde(skip_serializing_if = "BTreeMap::is_empty")]
+	pub buckets: BTreeMap<String, CloudBucket>,
+}
+
+/// `[cloud.storage.buckets.<name>]`: one application object storage bucket.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields, default)]
+pub struct CloudBucket {
+	/// Whether objects in this bucket may be read publicly over HTTPS without
+	/// presigned URLs (defaults to `false`, private).
+	#[serde(skip_serializing_if = "std::ops::Not::not")]
+	pub public: bool,
+	/// Optional soft size cap in gigabytes (must be >= 1 when set).
+	#[cfg_attr(feature = "schema", schemars(range(min = 1)))]
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub max_size_gb: Option<u32>,
 }
 
 /// `[cloud.database]`: the database each environment gets.
@@ -189,8 +222,21 @@ pub struct ResolvedCloud {
 	pub region: Option<Region>,
 	/// The cloud's address: `[cloud] url`, or [`DEFAULT_CLOUD_URL`].
 	pub url: String,
+	/// Application-level object storage buckets declared under
+	/// `[cloud.storage]`.
+	#[serde(skip_serializing_if = "BTreeMap::is_empty")]
+	pub storage: BTreeMap<Slug, ResolvedBucket>,
 	/// Every environment, production included.
 	pub environments: BTreeMap<Slug, ResolvedEnvironment>,
+}
+
+/// One resolved application object storage bucket.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct ResolvedBucket {
+	/// Whether reads are public over HTTPS without presigned URLs.
+	pub public: bool,
+	/// Optional soft size cap in gigabytes.
+	pub max_size_gb: Option<u32>,
 }
 
 /// One environment, resolved.
@@ -414,6 +460,20 @@ pub enum CloudError {
 		r#"cloud.database.backups = "continuous" archives Postgres's write-ahead log, but [db] dialect = "sqlite"; use backups = "daily", or switch to Postgres"#
 	)]
 	SqliteContinuousBackups,
+	/// A bucket's name isn't a slug.
+	#[error("cloud.storage.buckets.{name}: a bucket name is a slug, and {reason}")]
+	BucketName {
+		/// The bucket name as written.
+		name: String,
+		/// The rule it breaks.
+		reason: SlugError,
+	},
+	/// A bucket's `max_size_gb` is zero.
+	#[error("cloud.storage.buckets.{name}.max_size_gb must be at least 1")]
+	BucketSize {
+		/// The bucket name as written.
+		name: String,
+	},
 }
 
 impl CloudConfig {
@@ -435,6 +495,28 @@ impl CloudConfig {
 
 		if let Some(url) = &self.url {
 			check_url(url)?;
+		}
+
+		let mut storage = BTreeMap::new();
+		if let Some(table) = &self.storage {
+			for (name, bucket) in &table.buckets {
+				let slug = Slug::parse(name).map_err(|reason| {
+					CloudError::BucketName {
+						name: name.clone(),
+						reason,
+					}
+				})?;
+				if bucket.max_size_gb == Some(0) {
+					return Err(CloudError::BucketSize { name: name.clone() });
+				}
+				storage.insert(
+					slug,
+					ResolvedBucket {
+						public: bucket.public,
+						max_size_gb: bucket.max_size_gb,
+					},
+				);
+			}
 		}
 
 		let database = self.resolved_database(app)?;
@@ -487,6 +569,7 @@ impl CloudConfig {
 				.url
 				.clone()
 				.unwrap_or_else(|| DEFAULT_CLOUD_URL.to_owned()),
+			storage,
 			environments,
 		})
 	}

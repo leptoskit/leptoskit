@@ -1,9 +1,8 @@
 ---
 source: crates/leptoskit_cli/tests/snapshots.rs
-assertion_line: 236
 expression: "normalize(&stdout(&output), &scratch.path)"
 ---
-Generates and manages the app's `OpenTofu` infrastructure
+Primary self-hosted track: generates and manages OpenTofu + Kamal infrastructure on your own servers (infra.mode = "graph" is experimental)
 
 Usage: leptoskit infra [OPTIONS] <COMMAND>
 

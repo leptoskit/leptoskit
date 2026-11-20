@@ -795,6 +795,7 @@ fn cost(
 		organization: None,
 		region: None,
 		url: String::new(),
+		storage: BTreeMap::new(),
 		environments: BTreeMap::from([(slug, resolved)]),
 	};
 	PreviewCost::Estimate(estimate(catalogue, plan, &cloud))

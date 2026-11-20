@@ -1,0 +1,41 @@
+---
+source: crates/leptoskit_cli/src/cloud/tests.rs
+expression: help
+---
+Reads recent runtime logs for an environment (pass `--follow` to stream)
+
+Usage: logs [OPTIONS]
+
+Options:
+  -f, --follow
+          Continuously poll for new runtime log lines
+
+      --url <URL>
+          Cloud origin; overrides `LEPTOSKIT_CLOUD_URL` and [cloud].url
+
+      --json
+          Prints the documented JSON result
+
+      --process <PROCESS>
+          Filter to a single process (e.g. `app` or a service name)
+
+      --org <ORG>
+          Organization slug; defaults to [cloud].organization or your personal one
+
+      --since-minutes <SINCE_MINUTES>
+          Only include lines from the last N minutes
+
+      --contains <CONTAINS>
+          Only include lines containing this substring
+
+      --project <PROJECT>
+          Project slug; defaults to [cloud].project
+
+  -e, --environment <ENVIRONMENT>
+          Environment name, for the commands about one; defaults to production
+
+      --limit <LIMIT>
+          Maximum lines per page
+
+  -h, --help
+          Print help

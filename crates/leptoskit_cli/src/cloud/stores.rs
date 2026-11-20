@@ -133,7 +133,7 @@ pub(super) fn publish(
 /// filesystem's root, the home directory, or one holding SSH keys or this
 /// CLI's own sign-in. A stray `leptoskit.toml` above the project would
 /// otherwise send all of it to the cloud.
-fn refuse_root(root: &Path) -> Result<()> {
+pub(super) fn refuse_root(root: &Path) -> Result<()> {
 	let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
 	let canonical = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
 	let is_home = home
@@ -147,14 +147,14 @@ fn refuse_root(root: &Path) -> Result<()> {
 	{
 		bail!(
 			"{} holds leptoskit.toml, but it looks like a home or system directory, not a \
-			 project. Run `lk cloud publish` in the project's own directory.",
+			 project. Run `lk cloud` inside the project's own directory.",
 			printable(&root.display().to_string())
 		);
 	}
 	Ok(())
 }
 
-fn upload(
+pub(super) fn upload(
 	context: &Context,
 	organization: &str,
 	project: &str,
