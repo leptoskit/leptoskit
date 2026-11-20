@@ -436,7 +436,7 @@ fn have(program: &str) -> bool {
 /// with the server's environment broken: no sign-in keys, and a database
 /// URL that can't connect. Both still succeed, because the server writes
 /// the spec before it reads either, and nothing touches the database. The
-/// spec lists `operations`, each at `POST /api/<name>`, and the backend's
+/// spec lists `operations`, each at `POST /rpc/<name>`, and the backend's
 /// `GET /api/health`; the client is written to `client`.
 fn exports_without_the_environment(root: &Path, operations: &[&str], client: &Path) -> String {
 	let target = std::env::var_os("LEPTOSKIT_E2E_TARGET_DIR")
@@ -479,7 +479,7 @@ fn exports_without_the_environment(root: &Path, operations: &[&str], client: &Pa
 	for name in operations {
 		assert_eq!(
 			route(name),
-			Some(format!("POST /api/{name}")),
+			Some(format!("POST /rpc/{name}")),
 			"{name} isn't published: {spec}"
 		);
 	}
@@ -1779,7 +1779,7 @@ fn native_database_journey(wasm: &Path, address: &str, origins: &[String]) {
 
 	// The first load fails, and the manual Refresh recovers to the empty list.
 	app.settle_with(|request| {
-		if request.method == HttpMethod::Post && url_path(&request.url) == "/api/notes" {
+		if request.method == HttpMethod::Post && url_path(&request.url) == "/rpc/notes" {
 			Fate::Fail(BridgeError::Native)
 		} else {
 			Fate::Run
@@ -1812,7 +1812,7 @@ fn native_database_journey(wasm: &Path, address: &str, origins: &[String]) {
 	app.type_into("Write a note", "first note");
 	app.press("Add note");
 	app.settle_with(|request| {
-		if request.method == HttpMethod::Post && url_path(&request.url) == "/api/add_note" {
+		if request.method == HttpMethod::Post && url_path(&request.url) == "/rpc/add_note" {
 			Fate::Hold
 		} else {
 			Fate::Run
@@ -1849,7 +1849,7 @@ fn native_database_journey(wasm: &Path, address: &str, origins: &[String]) {
 	app.type_into("Write a note", "will fail");
 	app.press("Add note");
 	app.settle_with(|request| {
-		if request.method == HttpMethod::Post && url_path(&request.url) == "/api/add_note" {
+		if request.method == HttpMethod::Post && url_path(&request.url) == "/rpc/add_note" {
 			Fate::Fail(BridgeError::Native)
 		} else {
 			Fate::Run
@@ -1857,7 +1857,7 @@ fn native_database_journey(wasm: &Path, address: &str, origins: &[String]) {
 	});
 	app.assert_text("The note couldn't be saved");
 	assert_eq!(app.value("Write a note").as_deref(), Some("will fail"));
-	assert!(app.saw(HttpMethod::Post, "/api/add_note"));
+	assert!(app.saw(HttpMethod::Post, "/rpc/add_note"));
 }
 
 /// The auth scaffold's actual journey: session resolution, an emailed code
@@ -1903,7 +1903,7 @@ fn native_auth_journey(wasm: &Path, address: &str, origins: &[String]) {
 	// neither trap nor bring Bob's rows back on the sign-in screen.
 	app.press("Refresh");
 	app.settle_with(|request| {
-		if request.method == HttpMethod::Post && url_path(&request.url) == "/api/notes" {
+		if request.method == HttpMethod::Post && url_path(&request.url) == "/rpc/notes" {
 			Fate::Hold
 		} else {
 			Fate::Run
@@ -1932,7 +1932,7 @@ fn native_auth_journey(wasm: &Path, address: &str, origins: &[String]) {
 	app.type_into("Write a note", "late ada note");
 	app.press("Add note");
 	app.settle_with(|request| {
-		if request.method == HttpMethod::Post && url_path(&request.url) == "/api/add_note" {
+		if request.method == HttpMethod::Post && url_path(&request.url) == "/rpc/add_note" {
 			Fate::Hold
 		} else {
 			Fate::Run
