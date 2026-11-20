@@ -228,3 +228,24 @@ The `background` plugin keeps an app's process alive on Android with a foregroun
 - **No fixed cadence is promised.** The foreground service wakes the app on the configured interval while it is allowed to run; the WorkManager fallback runs at most every 15 minutes and only when the system permits it. The system can still kill a service it judges abusive.
 
 On iOS, the same plugin registers `BGTaskScheduler` app-refresh and processing tasks. iOS gives no guarantee of continuous execution: the system schedules those tasks at its own discretion, so an app cannot promise a fixed wake interval there.
+
+iOS only accepts those tasks while the app is still launching, and ends an app that registers one later. The generated app delegate registers them for you in `application(_:willFinishLaunchingWithOptions:)`, and `start` then only schedules the next wake. `hosts/ios/App.swift` is written once, when the host is first generated, and is yours from then on, so an app generated before this needs the call added by hand:
+
+```swift
+#if canImport(LeptosKitBackground)
+import LeptosKitBackground
+#endif
+
+func application(
+    _ application: UIApplication,
+    willFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
+) -> Bool {
+    #if canImport(LeptosKitBackground)
+    BackgroundPlugin.registerLaunchHandlers()
+    #endif
+
+    return true
+}
+```
+
+Without it the app still launches, and `start` answers `Unavailable` on iOS instead of scheduling anything. The task identifiers and background modes come from the plugin and are merged into the generated `Info.plist` on every build.

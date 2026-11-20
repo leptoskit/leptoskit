@@ -71,6 +71,23 @@ func startIsUnavailableOnMacOSAndRejectsMalformedMessages() async throws {
 
 @Test
 @MainActor
+func launchRegistrationIsRepeatableAndLeavesStartUnavailableOnMacOS() async throws {
+    // The app delegate may call this more than once; only the first call
+    // registers on iOS, and off iOS it does nothing.
+    BackgroundPlugin.registerLaunchHandlers()
+    BackgroundPlugin.registerLaunchHandlers()
+
+    let plugin = BackgroundPlugin()
+    defer { plugin.close() }
+    let valid = try payload(startBytes(title: "Running", text: "", types: 0, interval: 60))
+
+    await #expect(throws: PluginError.unavailable) {
+        try await plugin.invoke(method: 0, payload: valid)
+    }
+}
+
+@Test
+@MainActor
 func statusAndBatteryReplyHaveExactWireSizes() async throws {
     let plugin = BackgroundPlugin()
     defer { plugin.close() }

@@ -3,6 +3,9 @@ import LeptosKitBridge
 #if canImport(LeptosKitAppShortcuts)
 import LeptosKitAppShortcuts
 #endif
+#if canImport(LeptosKitBackground)
+import LeptosKitBackground
+#endif
 #if canImport(LeptosKitNotifications)
 import LeptosKitNotifications
 #endif
@@ -18,6 +21,11 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
         // launch ends, and only to a delegate that is already installed. The
         // delegate also lets a notification show while the app is open.
         NotificationsPlugin.installDelegate()
+        #endif
+        #if canImport(LeptosKitBackground)
+        // iOS ends an app that registers a background task's handler after
+        // launch finishes, so the handlers go in now; `start` schedules later.
+        BackgroundPlugin.registerLaunchHandlers()
         #endif
 
         return true

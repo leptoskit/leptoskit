@@ -32,7 +32,7 @@ Background execution for a LeptosKit app. On Android it runs a foreground `Servi
 | Windows / Linux | Unavailable                               | Desktop apps already run                                                             |
 | Browser         | Unavailable                               | The page's lifetime is its background lifetime                                       |
 
-iOS gives no guarantee of continuous execution: the system schedules background tasks at its own discretion, so an iOS app cannot promise a fixed wake interval. Android 14 (API 34) restricts which foreground service types may start from the background, and the system may still kill a service it judges abusive.
+iOS gives no guarantee of continuous execution: the system schedules background tasks at its own discretion, so an iOS app cannot promise a fixed wake interval. iOS also accepts the task handlers only while the app is launching: the generated app delegate calls `BackgroundPlugin.registerLaunchHandlers()` from `application(_:willFinishLaunchingWithOptions:)`, and `start` only schedules. An app whose `App.swift` predates that call keeps launching, and its `start` answers `Unavailable` on iOS until the call is added. Android 14 (API 34) restricts which foreground service types may start from the background, and the system may still kill a service it judges abusive.
 
 ## Native registration and use
 
