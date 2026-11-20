@@ -3276,6 +3276,7 @@ dependencies = [
  "leptoskit_animation",
  "leptoskit_devtools_protocol",
  "leptoskit_log",
+ "leptoskit_plugin_linking",
  "leptoskit_rive",
  "leptoskit_yoga",
  "reactive_graph",
@@ -3341,6 +3342,18 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "url",
+]
+
+[[package]]
+name = "leptoskit_plugin_linking"
+version = "0.3.0"
+dependencies = [
+ "leptoskit_bridge",
+ "objc2-app-kit",
+ "objc2-foundation",
+ "open",
+ "url",
+ "web-sys",
 ]
 
 [[package]]
@@ -3959,6 +3972,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d49e936b501e5c5bf01fda3a9452ff86dc3ea98ad5f283e1455153142d97518c"
 dependencies = [
  "bitflags 2.13.2",
+ "block2",
  "objc2",
  "objc2-core-foundation",
  "objc2-core-graphics",
@@ -4063,6 +4077,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d87d638e33c06f577498cbcc50491496a3ed4246998a7fbba7ccb98b1e7eab22"
 dependencies = [
  "bitflags 2.13.2",
+ "block2",
  "objc2",
  "objc2-core-foundation",
  "objc2-core-graphics",
