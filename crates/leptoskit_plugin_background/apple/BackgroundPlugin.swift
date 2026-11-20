@@ -5,11 +5,37 @@ import BackgroundTasks
 
 private let refreshIdentifier = "dev.leptoskit.background.refresh"
 private let processingIdentifier = "dev.leptoskit.background.processing"
+/// How long a woken task stays open. An app refresh gets about 30 seconds.
+private let wakeGrace: TimeInterval = 20
+
+/// Completes a background task once, from whichever of the grace timer and
+/// iOS's expiration handler comes first.
+private final class TaskFinish: @unchecked Sendable {
+    private let lock = NSLock()
+    private var task: BGTask?
+
+    init(_ task: BGTask) {
+        self.task = task
+    }
+
+    func complete(success: Bool) {
+        lock.lock()
+        let task = self.task
+        self.task = nil
+        lock.unlock()
+        task?.setTaskCompleted(success: success)
+    }
+}
 #endif
 
 /// BGTaskScheduler background tasks that wake the app's `AppService`. iOS gives
 /// no guarantee of continuous execution: the system schedules the tasks at its
 /// own discretion, so an iOS app cannot promise a fixed wake interval.
+///
+/// iOS accepts task handlers only while the app is launching, so the app
+/// delegate registers them with ``registerLaunchHandlers()`` before launch
+/// finishes; `start` only schedules. Without that call `start` answers
+/// `Unavailable` instead of crashing the app.
 @MainActor
 public final class BackgroundPlugin: NativePlugin {
     public let name = "background"
@@ -19,6 +45,51 @@ public final class BackgroundPlugin: NativePlugin {
     private var closed = false
 
     public init() {}
+
+    /// Registers the app-refresh and processing task handlers. Call it from
+    /// `application(_:willFinishLaunchingWithOptions:)` (or
+    /// `didFinishLaunchingWithOptions`): iOS raises an exception, ending the
+    /// app, when a handler is registered after launch finishes, and again when
+    /// one is registered twice. Calling this more than once is safe; only the
+    /// first call registers. An identifier missing from the app's
+    /// `BGTaskSchedulerPermittedIdentifiers`, or a task whose background mode is
+    /// missing from `UIBackgroundModes`, is skipped rather than registered.
+    /// Does nothing off iOS.
+    public nonisolated static func registerLaunchHandlers() {
+        #if os(iOS)
+        guard state.beginRegistration() else { return }
+        let info = Bundle.main.infoDictionary ?? [:]
+        let permitted = info["BGTaskSchedulerPermittedIdentifiers"] as? [String] ?? []
+        let modes = info["UIBackgroundModes"] as? [String] ?? []
+        var refresh = false
+
+        if permitted.contains(refreshIdentifier), modes.contains("fetch") {
+            refresh = BGTaskScheduler.shared.register(
+                forTaskWithIdentifier: refreshIdentifier, using: nil
+            ) { task in
+                wake(task)
+                scheduleRefresh()
+            }
+        }
+
+        if permitted.contains(processingIdentifier), modes.contains("processing") {
+            _ = BGTaskScheduler.shared.register(
+                forTaskWithIdentifier: processingIdentifier, using: nil
+            ) { task in
+                wake(task)
+            }
+        }
+
+        state.setRegistered(refresh)
+
+        if !refresh {
+            NativeLog.warn(
+                NativeLog.bridge,
+                "background: \(refreshIdentifier) is not registered; check the app's Info.plist"
+            )
+        }
+        #endif
+    }
 
     public func invoke(method: UInt32, payload: NativeBuffer) async throws -> Data {
         guard !closed else { throw PluginError.cancelled }
@@ -53,7 +124,10 @@ public final class BackgroundPlugin: NativePlugin {
 
     private func start(_ options: Options) throws {
         #if os(iOS)
-        Self.registerTasks()
+        // Registering here, after launch, is what iOS refuses with an
+        // exception; the app delegate has already done it, or nothing will.
+        guard Self.state.isRegistered() else { throw PluginError.unavailable }
+        Self.scheduleRefresh()
         Self.state.setScheduled(true)
         #else
         throw PluginError.unavailable
@@ -79,25 +153,18 @@ public final class BackgroundPlugin: NativePlugin {
     }
 
     #if os(iOS)
-    private nonisolated static func registerTasks() {
-        BGTaskScheduler.shared.register(
-            forTaskWithIdentifier: refreshIdentifier, using: nil
-        ) { task in
-            NativeServiceWakeBroker.wakeBackground()
-            state.recordWake()
-            scheduleRefresh()
-            task.setTaskCompleted(success: true)
+    /// Wakes the running app's `AppService`, if a scene is running one, and
+    /// keeps the task open for ``wakeGrace`` so the service's work, such as
+    /// an upload, can run before iOS suspends the app again. iOS's expiration
+    /// handler ends the task sooner when it must.
+    private nonisolated static func wake(_ task: BGTask) {
+        let finish = TaskFinish(task)
+        task.expirationHandler = { finish.complete(success: false) }
+        NativeServiceWakeBroker.wakeBackground()
+        state.recordWake()
+        DispatchQueue.global().asyncAfter(deadline: .now() + wakeGrace) {
+            finish.complete(success: true)
         }
-
-        BGTaskScheduler.shared.register(
-            forTaskWithIdentifier: processingIdentifier, using: nil
-        ) { task in
-            NativeServiceWakeBroker.wakeBackground()
-            state.recordWake()
-            task.setTaskCompleted(success: true)
-        }
-
-        scheduleRefresh()
     }
 
     private nonisolated static func scheduleRefresh() {
@@ -123,7 +190,31 @@ public final class BackgroundPlugin: NativePlugin {
 private final class BackgroundState: @unchecked Sendable {
     private let lock = NSLock()
     private var scheduled = false
+    private var registrationStarted = false
+    private var registered = false
     private var lastWakeSecs: UInt32 = 0
+
+    /// True for the first caller only: iOS ends the app when a task
+    /// identifier is registered twice.
+    func beginRegistration() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !registrationStarted else { return false }
+        registrationStarted = true
+        return true
+    }
+
+    func setRegistered(_ value: Bool) {
+        lock.lock()
+        registered = value
+        lock.unlock()
+    }
+
+    func isRegistered() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return registered
+    }
 
     func setScheduled(_ value: Bool) {
         lock.lock()
