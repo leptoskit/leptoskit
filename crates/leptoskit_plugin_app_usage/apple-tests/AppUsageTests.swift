@@ -23,7 +23,8 @@ func eventBatchesFrameCountKindAndAbsentPackage() {
         #expect(UInt32(littleEndian: bytes.loadUnaligned(as: UInt32.self)) == 2)
         #expect(UInt32(littleEndian: bytes.loadUnaligned(fromByteOffset: 4, as: UInt32.self)) == locked)
         #expect(Int64(littleEndian: bytes.loadUnaligned(fromByteOffset: 8, as: Int64.self)) == 1)
-        #expect(UInt32(littleEndian: bytes.loadUnaligned(fromByteOffset: 12, as: UInt32.self)) == .max)
+        // The timestamp takes bytes 8 to 15, so the package length follows at 16.
+        #expect(UInt32(littleEndian: bytes.loadUnaligned(fromByteOffset: 16, as: UInt32.self)) == .max)
         #expect(
             UInt32(littleEndian: bytes.loadUnaligned(fromByteOffset: 20, as: UInt32.self)) == unlocked
         )
