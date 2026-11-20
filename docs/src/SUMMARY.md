@@ -113,6 +113,7 @@
 
 - [Overview](platforms/readme.md)
   - [Code reuse](platforms/code-reuse.md)
+  - [Platform-specific features](platforms/platform-specific.md)
   - [Web](platforms/web.md)
   - [iOS](platforms/ios.md)
   - [Android](platforms/android.md)

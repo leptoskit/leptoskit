@@ -56,6 +56,7 @@ pub mod shortcut;
 pub mod store;
 pub mod surface;
 pub mod tailwind;
+pub mod target;
 pub mod vector;
 
 pub mod view;
