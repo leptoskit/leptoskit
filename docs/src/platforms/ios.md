@@ -98,3 +98,43 @@ A `focused(true)` request takes effect when the property changes. After the user
 ## Home-screen widgets
 
 The [`home-widgets`](plugin-inventory.md) plugin publishes a bounded text snapshot and asks WidgetKit to reload timelines. Your app still owns the Widget extension target and its SwiftUI views. Share an App Group between the host and the extension so the extension can read the snapshot the plugin wrote; without that group, capability reports that the shared store is not ready. WidgetKit cannot say whether a kind is pinned, so `installed` always answers `Unknown`.
+
+## Menu bar and hardware keyboard commands
+
+On iPadOS (and iOS with a hardware keyboard or Mac Catalyst), UIKit exposes a system menu bar (`UIMenuBuilder`) and the Cmd-hold keyboard shortcut HUD (`UIKeyCommand`). Describe menu sections and shortcuts with `leptoskit_plugin_menu::ios`:
+
+```rust
+use leptoskit_plugin_menu::Command;
+use leptoskit_plugin_menu::ios::IosMenuBar;
+use leptoskit_plugin_menu::ios::IosMenuPlacement;
+use leptoskit_plugin_menu::ios::IosMenuSection;
+use leptoskit_plugin_menu::ios::KeyCommand;
+use leptoskit_plugin_menu::ios::KeyModifier;
+
+let file_section = IosMenuSection::new(
+	"file.notes",
+	"Notes",
+	IosMenuPlacement::File,
+	vec![
+		Command("new_note")
+			.label("New Note")
+			.accelerator("Cmd+N")
+			.into(),
+	],
+)
+.unwrap();
+
+let quick_open = KeyCommand::new("quick_open", "Quick Open", "k", [KeyModifier::Command])
+	.unwrap()
+	.discoverability_title("Jump to any note")
+	.unwrap();
+
+let menu_bar = IosMenuBar::new()
+	.section(file_section)
+	.unwrap()
+	.key_command(quick_open)
+	.unwrap();
+assert_eq!(menu_bar.sections().len(), 1);
+```
+
+Placements map directly to UIKit's standard `UIMenu.Identifier` slots (`Application`, `File`, `Edit`, `Format`, `View`, `Window`, `Help`, or `Custom`). Duplicate shortcut chords are rejected before native installation.

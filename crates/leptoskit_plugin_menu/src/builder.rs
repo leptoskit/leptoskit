@@ -26,6 +26,7 @@
 use crate::Definition;
 use crate::Error;
 use crate::Item;
+use crate::MenuRole;
 
 /// Starts a free-form menu tree (tray menus, flat popovers, tests).
 #[must_use]
@@ -68,6 +69,27 @@ pub fn Check(id: impl Into<String>) -> CheckBuilder {
 	}
 }
 
+/// A mutually-exclusive radio row belonging to `group`.
+#[must_use]
+#[allow(non_snake_case)]
+pub fn Radio(id: impl Into<String>, group: impl Into<String>) -> RadioBuilder {
+	RadioBuilder {
+		id: id.into(),
+		group: group.into(),
+		label: None,
+		enabled: true,
+		selected: false,
+		accelerator: None,
+	}
+}
+
+/// A standard OS menu role (`Copy`, `Paste`, `About`, `Quit`, …).
+#[must_use]
+#[allow(non_snake_case)]
+pub fn Role(role: MenuRole) -> RoleBuilder {
+	RoleBuilder { role, label: None }
+}
+
 /// A labeled submenu. Nest further items with [`SubmenuBuilder::item`].
 #[must_use]
 #[allow(non_snake_case)]
@@ -85,6 +107,86 @@ pub fn Submenu(id: impl Into<String>) -> SubmenuBuilder {
 #[allow(non_snake_case)]
 pub fn Separator() -> Item {
 	Item::Separator
+}
+
+/// Builder for [`Item::Radio`].
+#[derive(Debug, Clone)]
+pub struct RadioBuilder {
+	id: String,
+	group: String,
+	label: Option<String>,
+	enabled: bool,
+	selected: bool,
+	accelerator: Option<String>,
+}
+
+impl RadioBuilder {
+	/// Visible label. Defaults to the id when omitted.
+	#[must_use]
+	pub fn label(mut self, label: impl Into<String>) -> Self {
+		self.label = Some(label.into());
+		self
+	}
+
+	/// Whether users may activate this option. Defaults to `true`.
+	#[must_use]
+	pub fn enabled(mut self, enabled: bool) -> Self {
+		self.enabled = enabled;
+		self
+	}
+
+	/// Initial selected state. Defaults to `false`.
+	#[must_use]
+	pub fn selected(mut self, selected: bool) -> Self {
+		self.selected = selected;
+		self
+	}
+
+	/// Native accelerator in muda syntax.
+	#[must_use]
+	pub fn accelerator(mut self, accelerator: impl Into<String>) -> Self {
+		self.accelerator = Some(accelerator.into());
+		self
+	}
+}
+
+impl From<RadioBuilder> for Item {
+	fn from(builder: RadioBuilder) -> Self {
+		let label = builder.label.unwrap_or_else(|| builder.id.clone());
+		Self::Radio {
+			id: builder.id,
+			group: builder.group,
+			label,
+			enabled: builder.enabled,
+			selected: builder.selected,
+			accelerator: builder.accelerator,
+		}
+	}
+}
+
+/// Builder for [`Item::Predefined`].
+#[derive(Debug, Clone)]
+pub struct RoleBuilder {
+	role: MenuRole,
+	label: Option<String>,
+}
+
+impl RoleBuilder {
+	/// Optional custom label override for the OS role.
+	#[must_use]
+	pub fn label(mut self, label: impl Into<String>) -> Self {
+		self.label = Some(label.into());
+		self
+	}
+}
+
+impl From<RoleBuilder> for Item {
+	fn from(builder: RoleBuilder) -> Self {
+		Self::Predefined {
+			role: builder.role,
+			label: builder.label,
+		}
+	}
 }
 
 /// Accumulates root menu items before validation.

@@ -18,12 +18,24 @@ use std::collections::HashSet;
 
 /// Chained constructors (`Menu`, `MenuBar`, `Command`, …) for menu trees.
 pub mod builder;
+/// Context menus (right-click / secondary-click menus).
+pub mod context;
+/// iOS and iPadOS menu bar (`UIMenuBuilder`) and hardware `UIKeyCommand` API.
+pub mod ios;
+
 pub use builder::Check;
 pub use builder::Command;
 pub use builder::Menu;
 pub use builder::MenuBar;
+pub use builder::Radio;
+pub use builder::Role;
 pub use builder::Separator;
 pub use builder::Submenu;
+pub use context::ContextMenu;
+pub use context::ContextMenuAnchor;
+pub use context::ContextMenuHost;
+pub use context::ContextMenuRequest;
+pub use context::MemoryContextMenuHost;
 
 #[cfg(any(
 	target_os = "macos",
@@ -77,6 +89,45 @@ pub enum Error {
 	Native,
 }
 
+/// Standard OS menu roles (Electron/AppKit/Win32/UIKit predefined items).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum MenuRole {
+	/// Standard "About <App>" item.
+	About,
+	/// macOS Services submenu.
+	Services,
+	/// Hide current application.
+	Hide,
+	/// Hide other applications.
+	HideOthers,
+	/// Show all hidden applications.
+	ShowAll,
+	/// Quit application.
+	Quit,
+	/// Undo last edit.
+	Undo,
+	/// Redo last edit.
+	Redo,
+	/// Cut selection.
+	Cut,
+	/// Copy selection.
+	Copy,
+	/// Paste clipboard.
+	Paste,
+	/// Select all.
+	SelectAll,
+	/// Minimize active window.
+	Minimize,
+	/// Maximize / zoom active window.
+	Maximize,
+	/// Toggle fullscreen mode.
+	Fullscreen,
+	/// Close active window.
+	CloseWindow,
+	/// Bring all application windows to front.
+	BringAllToFront,
+}
+
 /// A bounded, host-defined menu tree. Validate with [`Definition::new`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Item {
@@ -106,6 +157,28 @@ pub enum Item {
 		/// Optional native keyboard accelerator.
 		accelerator: Option<String>,
 	},
+	/// One mutually-exclusive radio option belonging to `group`.
+	Radio {
+		/// Unique local identifier.
+		id: String,
+		/// Radio group name; only one item in a group is selected at once.
+		group: String,
+		/// Visible label.
+		label: String,
+		/// Whether users may activate this item.
+		enabled: bool,
+		/// Initial selected state.
+		selected: bool,
+		/// Optional native keyboard accelerator.
+		accelerator: Option<String>,
+	},
+	/// A standard OS menu role (`Copy`, `Paste`, `About`, `Quit`, …).
+	Predefined {
+		/// Standard role.
+		role: MenuRole,
+		/// Optional custom label override.
+		label: Option<String>,
+	},
 	/// A labeled group containing at least one child.
 	Submenu {
 		/// Unique local identifier.
@@ -114,7 +187,8 @@ pub enum Item {
 		label: String,
 		/// Whether users may open this submenu.
 		enabled: bool,
-		/// Child commands, toggles, separators, or submenus.
+		/// Child commands, toggles, radios, predefined roles, separators, or
+		/// submenus.
 		items: Vec<Self>,
 	},
 	/// A native visual separator.
@@ -175,6 +249,31 @@ fn validate<'a>(
 				accelerator,
 				..
 			} => (id, label, accelerator.as_deref()),
+			Item::Radio {
+				id,
+				group,
+				label,
+				accelerator,
+				..
+			} => {
+				if group.is_empty()
+					|| group.len() > 64
+					|| !group
+						.bytes()
+						.all(|byte| byte.is_ascii_alphanumeric() || b"_.-".contains(&byte))
+				{
+					return Err(Error::InvalidDefinition);
+				}
+				(id, label, accelerator.as_deref())
+			}
+			Item::Predefined { label, .. } => {
+				if let Some(text) = label
+					&& !valid_label(text)
+				{
+					return Err(Error::InvalidDefinition);
+				}
+				continue;
+			}
 			Item::Submenu {
 				id, label, items, ..
 			} => {
