@@ -98,26 +98,26 @@ pub(super) fn missing_command_hint(name: &str) -> String {
 	match name {
 		"platform" => {
 			format!(
-				"`{bin}` was not found beside `lk` or on PATH.\nInstall the operator platform CLI \
-				 from a leptoskit checkout:\n  cargo install --path \
-				 crates/leptoskit_cloud_platform\nOr run it directly with:\n  cargo run -p \
-				 leptoskit_cloud_platform -- <command>"
+				"`{bin}` was not found beside `lk` or on PATH.\nInstall the operator platform \
+				 CLI:\n  cargo binstall leptoskit_cloud_platform\n  cargo install \
+				 leptoskit_cloud_platform --locked\nOr run from a leptoskit checkout:\n  cargo \
+				 run -p leptoskit_cloud_platform -- <command>"
 			)
 		}
 		"worker" => {
 			format!(
-				"`{bin}` was not found beside `lk` or on PATH.\nInstall the cloud worker binary \
-				 from a leptoskit checkout:\n  cargo install --path \
-				 crates/leptoskit_cloud_worker\nOr run it directly with:\n  cargo run -p \
-				 leptoskit_cloud_worker -- <command>"
+				"`{bin}` was not found beside `lk` or on PATH.\nInstall the cloud worker \
+				 binary:\n  cargo binstall leptoskit_cloud_worker\n  cargo install \
+				 leptoskit_cloud_worker --locked\nOr run from a leptoskit checkout:\n  cargo run \
+				 -p leptoskit_cloud_worker -- <command>"
 			)
 		}
 		"control" => {
 			format!(
 				"`{bin}` was not found beside `lk` or on PATH.\nInstall the cloud control-plane \
-				 binary from a leptoskit checkout:\n  cargo install --path \
-				 crates/leptoskit_cloud_app --features production\nOr run it directly with:\n  \
-				 cargo run -p leptoskit_cloud_app --features server -- <command>"
+				 binary:\n  cargo binstall leptoskit_cloud_app\n  cargo install \
+				 leptoskit_cloud_app --features production --locked\nOr run from a leptoskit \
+				 checkout:\n  cargo run -p leptoskit_cloud_app --features server -- <command>"
 			)
 		}
 		_ => {

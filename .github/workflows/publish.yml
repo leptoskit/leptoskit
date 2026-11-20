@@ -113,23 +113,27 @@ jobs:
 
       - name: verify the release ships every CLI binary
         # The upload job names the binaries it archives by hand, and `cargo binstall` resolves
-        # every `[[bin]]` the CLI crate declares from that one archive. A binary added to the crate
-        # but not to that list, or dropped from it, would make `cargo binstall leptoskit_cli` fail
-        # against a release that looks complete, so the crate's own target list is checked against
-        # the upload step here, before anything is built.
+        # every `[[bin]]` each published CLI crate declares from its release archive. A binary
+        # added to any of these crates without a matching upload step would make `cargo binstall`
+        # fail against a release that looks complete, so every declared binary target across the
+        # four CLI crates is checked against the `bin:` inputs in this workflow before building.
         run: |
           set -euo pipefail
 
           declared=$(cargo metadata --no-deps --format-version 1 \
-            | jq -r '.packages[] | select(.name == "leptoskit_cli") | .targets[] | select(.kind | index("bin")) | .name' \
+            | jq -r '.packages[]
+              | select(.name == "leptoskit_cli"
+                or .name == "leptoskit_cloud_platform"
+                or .name == "leptoskit_cloud_worker"
+                or .name == "leptoskit_cloud_app")
+              | .targets[] | select(.kind | index("bin")) | .name' \
             | sort)
-          # The upload step's `bin:` input is the only `bin:` key in this file.
           shipped=$(grep -E '^[[:space:]]*bin:' .github/workflows/publish.yml \
             | sed -E 's/^[[:space:]]*bin:[[:space:]]*//' \
             | tr ', ' '[\n*]' | sed '/^$/d' | sort)
 
           if [ "$declared" != "$shipped" ]; then
-            echo "::error file=.github/workflows/publish.yml::the CLI declares binaries [$(tr '\n' ' ' <<< "$declared")] but the upload step ships [$(tr '\n' ' ' <<< "$shipped")]"
+            echo "::error file=.github/workflows/publish.yml::the CLI crates declare binaries [$(tr '\n' ' ' <<< "$declared")] but the upload steps ship [$(tr '\n' ' ' <<< "$shipped")]"
             exit 1
           fi
           echo "The release ships every CLI binary: $(tr '\n' ' ' <<< "$declared")"
@@ -417,6 +421,55 @@ jobs:
           zip: windows
           # A dry run builds and archives every target without touching the draft release, so the
           # exact release tree is validated.
+          dry-run: ${{ inputs.dry_run == true }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          checksum: sha256,sha512
+
+      - name: upload leptoskit-cloud-platform binary
+        uses: taiki-e/upload-rust-binary-action@f0d45ae91ee7b8ee928de7a9d04d893a08bcbec6 # v1.30.2
+        with:
+          bin: leptoskit-cloud-platform
+          manifest-path: crates/leptoskit_cloud_platform/Cargo.toml
+          profile: dist
+          locked: true
+          ref: ${{ format('refs/tags/{0}', env.RELEASE_TAG) }}
+          archive: leptoskit-cloud-platform-$target-${{ env.RELEASE_TAG }}
+          target: ${{ matrix.target }}
+          tar: all
+          zip: windows
+          dry-run: ${{ inputs.dry_run == true }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          checksum: sha256,sha512
+
+      - name: upload leptoskit-cloud-worker binary
+        uses: taiki-e/upload-rust-binary-action@f0d45ae91ee7b8ee928de7a9d04d893a08bcbec6 # v1.30.2
+        with:
+          bin: leptoskit-cloud-worker
+          manifest-path: crates/leptoskit_cloud_worker/Cargo.toml
+          profile: dist
+          locked: true
+          ref: ${{ format('refs/tags/{0}', env.RELEASE_TAG) }}
+          archive: leptoskit-cloud-worker-$target-${{ env.RELEASE_TAG }}
+          target: ${{ matrix.target }}
+          tar: all
+          zip: windows
+          dry-run: ${{ inputs.dry_run == true }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          checksum: sha256,sha512
+
+      - name: upload leptoskit-cloud-control binary
+        uses: taiki-e/upload-rust-binary-action@f0d45ae91ee7b8ee928de7a9d04d893a08bcbec6 # v1.30.2
+        with:
+          bin: leptoskit-cloud-control
+          manifest-path: crates/leptoskit_cloud_app/Cargo.toml
+          features: production
+          profile: dist
+          locked: true
+          ref: ${{ format('refs/tags/{0}', env.RELEASE_TAG) }}
+          archive: leptoskit-cloud-control-$target-${{ env.RELEASE_TAG }}
+          target: ${{ matrix.target }}
+          tar: all
+          zip: windows
           dry-run: ${{ inputs.dry_run == true }}
           token: ${{ secrets.GITHUB_TOKEN }}
           checksum: sha256,sha512

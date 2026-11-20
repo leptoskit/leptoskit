@@ -1,14 +1,26 @@
 [package]
 name = "leptoskit_cloud_platform"
-version.workspace = true
+version = "0.3.0"
+authors.workspace = true
+categories = ["command-line-utilities", "development-tools"]
 edition.workspace = true
+homepage.workspace = true
+keywords = ["leptoskit", "cloud", "kubernetes", "opentofu"]
 license.workspace = true
-publish = false
-description = "Offline generation of LeptosKit Cloud platform infrastructure"
+readme = "readme.md"
+repository.workspace = true
+rust-version.workspace = true
+description = "LeptosKit Cloud platform operator CLI: OpenTofu, k3s bootstrap, Kubernetes add-ons, and one-click cluster bring-up."
 
 [[bin]]
 name = "leptoskit-cloud-platform"
+doc = false
 path = "src/main.rs"
+
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/leptoskit-cloud-platform-{ target }-v{ version }{ archive-suffix }"
+pkg-fmt = "tgz"
+bin-dir = "{ bin }{ binary-ext }"
 
 [dependencies]
 clap = { workspace = true, features = ["derive"] }

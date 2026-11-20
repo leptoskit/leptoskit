@@ -6145,7 +6145,7 @@ dependencies = [
 
 [[package]]
 name = "leptoskit_cloud_app"
-version = "0.0.0"
+version = "0.3.0"
 dependencies = [
  "any_spawner",
  "clap",
@@ -6211,7 +6211,7 @@ dependencies = [
 
 [[package]]
 name = "leptoskit_cloud_worker"
-version = "0.0.0"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "clap",

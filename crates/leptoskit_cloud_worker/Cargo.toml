@@ -1,10 +1,12 @@
 [package]
 name = "leptoskit_cloud_worker"
-version = "0.0.0"
+version = "0.3.0"
 authors.workspace = true
+categories = ["command-line-utilities", "development-tools"]
 edition.workspace = true
+homepage.workspace = true
+keywords = ["leptoskit", "cloud", "worker", "deploy"]
 license.workspace = true
-publish = false
 readme = "readme.md"
 repository.workspace = true
 rust-version.workspace = true
@@ -12,7 +14,13 @@ description = "LeptosKit Cloud's worker: `leptoskit-cloud-worker` pairs with a c
 
 [[bin]]
 name = "leptoskit-cloud-worker"
+doc = false
 path = "src/main.rs"
+
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/leptoskit-cloud-worker-{ target }-v{ version }{ archive-suffix }"
+pkg-fmt = "tgz"
+bin-dir = "{ bin }{ binary-ext }"
 
 # The worker runs on Linux and macOS: it locks its state directory with
 # `flock` and ends a build by its process group. Elsewhere the program only

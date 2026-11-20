@@ -1,10 +1,12 @@
 [package]
 name = "leptoskit_cloud_app"
-version = "0.0.0"
+version = "0.3.0"
 authors.workspace = true
+categories = ["command-line-utilities", "web-programming"]
 edition.workspace = true
+homepage.workspace = true
+keywords = ["leptoskit", "cloud", "control-plane", "server"]
 license.workspace = true
-publish = false
 readme = "readme.md"
 repository.workspace = true
 rust-version.workspace = true
@@ -18,8 +20,14 @@ crate-type = ["cdylib", "rlib"]
 
 [[bin]]
 name = "leptoskit-cloud-control"
+doc = false
 path = "src/main.rs"
 required-features = ["server"]
+
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/leptoskit-cloud-control-{ target }-v{ version }{ archive-suffix }"
+pkg-fmt = "tgz"
+bin-dir = "{ bin }{ binary-ext }"
 
 [dependencies]
 clap = { workspace = true, optional = true, features = ["derive", "env"] }
