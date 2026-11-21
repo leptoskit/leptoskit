@@ -52,11 +52,15 @@ export class WearablePlugin implements NativePlugin {
 				this.stopAll();
 				return new ArrayBuffer(0);
 			case 5: {
-				if (call.payload.byteLength !== 12) throw new PluginError(INVALID_ARGUMENT);
+				if (call.payload.byteLength !== 12) {
+					throw new PluginError(INVALID_ARGUMENT);
+				}
 				const view = new DataView(call.payload);
 				const mask = view.getUint32(0, true);
 				const intervalMs = view.getUint32(4, true);
-				if (mask === 0 || intervalMs < 200) throw new PluginError(INVALID_ARGUMENT);
+				if (mask === 0 || intervalMs < 200) {
+					throw new PluginError(INVALID_ARGUMENT);
+				}
 				this.startSensors(mask, intervalMs);
 				return new ArrayBuffer(0);
 			}
@@ -106,8 +110,13 @@ export class WearablePlugin implements NativePlugin {
 			const pedCb = (data: sensor.PedometerResponse): void => {
 				const now = Date.now();
 				const total = Math.max(0, Math.round(data.steps));
-				if (this.lastSteps !== undefined && this.lastStepsTime !== undefined && total > this.lastSteps) {
-					this.enqueue(encodeSteps(this.lastStepsTime, now, total - this.lastSteps));
+				if (
+					this.lastSteps !== undefined && this.lastStepsTime !== undefined &&
+					total > this.lastSteps
+				) {
+					this.enqueue(
+						encodeSteps(this.lastStepsTime, now, total - this.lastSteps),
+					);
 				}
 				this.lastSteps = total;
 				this.lastStepsTime = now;
@@ -124,8 +133,12 @@ export class WearablePlugin implements NativePlugin {
 				this.enqueue(encodeWearState(Date.now(), data.value === 1));
 			};
 			try {
-				sensor.on(sensor.SensorId.WEAR_DETECTION, wearCb, { interval: intervalNs });
-				this.stops.push(() => sensor.off(sensor.SensorId.WEAR_DETECTION, wearCb));
+				sensor.on(sensor.SensorId.WEAR_DETECTION, wearCb, {
+					interval: intervalNs,
+				});
+				this.stops.push(() =>
+					sensor.off(sensor.SensorId.WEAR_DETECTION, wearCb)
+				);
 			} catch {
 				// Wear detection not present.
 			}
@@ -201,7 +214,11 @@ function encodeU32(value: number): ArrayBuffer {
 	return buf;
 }
 
-function encodeHeartRate(timeMs: number, bpm: number, accuracy: number): Uint8Array {
+function encodeHeartRate(
+	timeMs: number,
+	bpm: number,
+	accuracy: number,
+): Uint8Array {
 	const buf = new ArrayBuffer(24);
 	const view = new DataView(buf);
 	view.setUint32(0, KIND_HR, true);
@@ -211,7 +228,11 @@ function encodeHeartRate(timeMs: number, bpm: number, accuracy: number): Uint8Ar
 	return new Uint8Array(buf);
 }
 
-function encodeSteps(startMs: number, endMs: number, count: number): Uint8Array {
+function encodeSteps(
+	startMs: number,
+	endMs: number,
+	count: number,
+): Uint8Array {
 	const buf = new ArrayBuffer(28);
 	const view = new DataView(buf);
 	view.setUint32(0, KIND_STEPS, true);

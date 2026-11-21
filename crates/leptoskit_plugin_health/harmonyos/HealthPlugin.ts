@@ -221,7 +221,12 @@ export class HealthPlugin implements NativePlugin {
 			| ((req: Record<string, unknown>) => Promise<HealthStoreSample[]>)
 			| undefined;
 		const rows: HealthStoreSample[] = reader
-			? await reader({ dataType, startTime: startMs, endTime: endMs, limit: pageSize })
+			? await reader({
+				dataType,
+				startTime: startMs,
+				endTime: endMs,
+				limit: pageSize,
+			})
 			: [];
 
 		const writer = new WireWriter();

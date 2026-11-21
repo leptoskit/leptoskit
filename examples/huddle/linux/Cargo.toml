@@ -16,14 +16,14 @@ name = "leptoskit_app"
 crate-type = ["staticlib"]
 
 [target.'cfg(target_os = "linux")'.dependencies]
-leptoskit_bridge_ffi = { version = "=0.3.0", default-features = false, path = "../../../crates/leptoskit_bridge_ffi", features = ["app"] }
-leptoskit_plugin_crypto = { version = "=0.3.0", path = "../../../crates/leptoskit_plugin_crypto" }
-leptoskit_plugin_http = { version = "=0.3.0", default-features = false, path = "../../../crates/leptoskit_plugin_http" }
-leptoskit_plugin_passkeys = { version = "=0.3.0", default-features = false, path = "../../../crates/leptoskit_plugin_passkeys" }
-leptoskit_plugin_secure_store = { version = "=0.3.0", default-features = false, path = "../../../crates/leptoskit_plugin_secure_store" }
-leptoskit_plugin_web_auth = { version = "=0.3.0", default-features = false, path = "../../../crates/leptoskit_plugin_web_auth" }
-leptoskit_plugin_websocket = { version = "=0.3.0", default-features = false, path = "../../../crates/leptoskit_plugin_websocket" }
-leptoskit = { version = "=0.3.0", default-features = false, path = "../../../crates/leptoskit", features = ["wasm", "rive", "gtk", "codepush-http"] }
+leptoskit_bridge_ffi = { version = "=0.3.1", default-features = false, path = "../../../crates/leptoskit_bridge_ffi", features = ["app"] }
+leptoskit_plugin_crypto = { version = "=0.3.1", path = "../../../crates/leptoskit_plugin_crypto" }
+leptoskit_plugin_http = { version = "=0.3.1", default-features = false, path = "../../../crates/leptoskit_plugin_http" }
+leptoskit_plugin_passkeys = { version = "=0.3.1", default-features = false, path = "../../../crates/leptoskit_plugin_passkeys" }
+leptoskit_plugin_secure_store = { version = "=0.3.1", default-features = false, path = "../../../crates/leptoskit_plugin_secure_store" }
+leptoskit_plugin_web_auth = { version = "=0.3.1", default-features = false, path = "../../../crates/leptoskit_plugin_web_auth" }
+leptoskit_plugin_websocket = { version = "=0.3.1", default-features = false, path = "../../../crates/leptoskit_plugin_websocket" }
+leptoskit = { version = "=0.3.1", default-features = false, path = "../../../crates/leptoskit", features = ["wasm", "rive", "gtk", "codepush-http"] }
 
 [[bin]]
 name = "huddle-linux"

@@ -22,7 +22,9 @@ export class BatteryPlugin implements NativePlugin {
 			throw new PluginError(CANCELLED);
 		}
 		if (call.method === 0) {
-			if (call.payload.byteLength !== 0) throw new PluginError(INVALID_ARGUMENT);
+			if (call.payload.byteLength !== 0) {
+				throw new PluginError(INVALID_ARGUMENT);
+			}
 			return this.snapshot();
 		}
 		throw new PluginError(UNAVAILABLE);

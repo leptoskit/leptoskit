@@ -1,5 +1,0 @@
----
-"leptoskit_cli": minor
----
-
-Opt-in FCM for generated Android apps. `[native.android] push = true` writes the Firebase messaging dependency into `.leptoskit/android/plugin-dependencies.txt`, writes `.leptoskit/android/gradle-plugins.txt` (the Google services plugin id, applied by the app's Gradle script), generates `LeptosKitMessagingService.kt` — whose `onNewToken` lands FCM registration-token refreshes in the notifications plugin's broker — and declares that service in the manifest. With push off, none of it is written and stale copies are removed, so existing apps generate byte-for-byte as before. Generation with push on stops before any write when the `notifications` plugin is not selected, when the app author's `google-services.json` is missing, or when the app's `build.gradle.kts` doesn't read the generated plugins file, naming the file and the lines to add. New scaffolds apply the generated plugins list and put the Google services plugin on the classpath, and the Android snapshots cover the whole opt-in and opt-out.

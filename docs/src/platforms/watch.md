@@ -78,10 +78,10 @@ let tracker = WearableApp::new("quant-watch", WatchKind::WearOs)
 
 ## Platforms
 
-| Platform                                    | Feature     | Host crate / extension         | Status                                       |
-| ------------------------------------------- | ----------- | ------------------------------ | -------------------------------------------- |
-| Android Wear OS (Pixel Watch, Galaxy Watch) | `wearos`    | `leptoskit_wearos` + Android   | Experimental Gradle APK + runtime plugins    |
-| Apple watchOS                               | `watchos`   | `leptoskit_watchos` + Apple    | Experimental Xcode build + runtime plugins   |
+| Platform                                    | Feature     | Host crate / extension         | Status                                           |
+| ------------------------------------------- | ----------- | ------------------------------ | ------------------------------------------------ |
+| Android Wear OS (Pixel Watch, Galaxy Watch) | `wearos`    | `leptoskit_wearos` + Android   | Experimental Gradle APK + runtime plugins        |
+| Apple watchOS                               | `watchos`   | `leptoskit_watchos` + Apple    | Experimental Xcode build + runtime plugins       |
 | Huawei Watch (HarmonyOS Wearable)           | `harmonyos` | `leptoskit_platform_harmonyos` | Experimental HAP (`device-types = ["wearable"]`) |
 
 Pair with `leptoskit_plugin_wearable` (direct wrist sensors), `leptoskit_plugin_health` (`HealthKit`, Health Connect, HarmonyOS Health), `leptoskit_plugin_watch_sync` (phone ↔ watch link), and `leptoskit_plugin_ble` (BLE GATT heart-rate straps and rings).
@@ -94,14 +94,14 @@ Watch surfaces reject phone-oriented widgets such as `ScrollView`, `TextInput`, 
 
 Beyond UI surfaces, `leptoskit::watch` models the hardware and OS lifecycles shared across watchOS and Wear OS:
 
-| Feature | API | watchOS / Wear OS mapping |
-| --- | --- | --- |
-| Digital Crown & rotary bezel | `CrownConfig`, `CrownEvent`, `RotaryState` | `digitalCrownRotation` / Wear rotary scroll with detent haptics |
-| Always-On Display (AOD) | `AmbientModeState`, `AmbientPolicy` | `isLuminanceReduced` / `AmbientLifecycleObserver` burn-in protection |
-| Smart Stack & Tile relevance | `RelevanceHint` | watchOS Smart Stack relevance windows & Wear tile hints |
-| Live workout sessions | `WorkoutSession`, `WorkoutActivity`, `WorkoutMetrics` | `HKWorkoutSession` / Health Services `ExerciseClient` |
-| Phone-watch companion sync | `CompanionLink`, `CompanionMessage`, `CompanionDeliveryMode`, `MemoryCompanionLink` | `WatchConnectivity` (`WCSession`) / Wear Data Layer |
-| Haptics & wrist gestures | `WatchHaptic`, `WatchGesture`, `WatchCapabilities` | `WKHapticType`, Double Tap, Wrist Flick, Action Button |
+| Feature                      | API                                                                                 | watchOS / Wear OS mapping                                            |
+| ---------------------------- | ----------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| Digital Crown & rotary bezel | `CrownConfig`, `CrownEvent`, `RotaryState`                                          | `digitalCrownRotation` / Wear rotary scroll with detent haptics      |
+| Always-On Display (AOD)      | `AmbientModeState`, `AmbientPolicy`                                                 | `isLuminanceReduced` / `AmbientLifecycleObserver` burn-in protection |
+| Smart Stack & Tile relevance | `RelevanceHint`                                                                     | watchOS Smart Stack relevance windows & Wear tile hints              |
+| Live workout sessions        | `WorkoutSession`, `WorkoutActivity`, `WorkoutMetrics`                               | `HKWorkoutSession` / Health Services `ExerciseClient`                |
+| Phone-watch companion sync   | `CompanionLink`, `CompanionMessage`, `CompanionDeliveryMode`, `MemoryCompanionLink` | `WatchConnectivity` (`WCSession`) / Wear Data Layer                  |
+| Haptics & wrist gestures     | `WatchHaptic`, `WatchGesture`, `WatchCapabilities`                                  | `WKHapticType`, Double Tap, Wrist Flick, Action Button               |
 
 ```rust
 use leptoskit::watch::CrownConfig;
