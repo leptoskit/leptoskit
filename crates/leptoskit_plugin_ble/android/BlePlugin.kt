@@ -18,10 +18,13 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.os.ParcelUuid
 import androidx.core.content.ContextCompat
+import dev.leptoskit.bridge.NativePermissionHost
 import dev.leptoskit.bridge.NativePlugin
 import dev.leptoskit.bridge.PluginException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.io.ByteArrayOutputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -39,8 +42,12 @@ class BlePlugin(
     override val name = "ble"
     override val methods = intArrayOf(0, 1, 2, 3, 4, 5, 6, 7)
 
+    private val permissionHost = context as? NativePermissionHost
     private val manager = context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
     private val connections = ConcurrentHashMap<String, BluetoothGatt>()
+    private val pendingConnects = ConcurrentHashMap<String, CompletableDeferred<Unit>>()
+    private val descriptorLocks = ConcurrentHashMap<String, Mutex>()
+    private val descriptorWaiters = ConcurrentHashMap<String, CompletableDeferred<Int>>()
     private val lock = Any()
     private val notifications = ArrayDeque<ByteArray>()
     private var dropped = 0
@@ -50,7 +57,8 @@ class BlePlugin(
     override suspend fun invoke(method: Int, payload: ByteBuffer): ByteArray {
         if (closed) throw PluginException(PluginException.CANCELLED)
         return when (method) {
-            0, 1 -> encodeU32(availabilityCode())
+            0 -> encodeU32(availabilityCode())
+            1 -> requestPermission()
             2 -> scan(payload)
             3 -> connect(readSingleString(payload))
             4 -> disconnect(readSingleString(payload))
@@ -63,12 +71,21 @@ class BlePlugin(
 
     override fun close() {
         closed = true
+        for (pending in pendingConnects.values) {
+            pending.completeExceptionally(PluginException(PluginException.CANCELLED))
+        }
+        pendingConnects.clear()
+        for (pending in descriptorWaiters.values) {
+            pending.completeExceptionally(PluginException(PluginException.CANCELLED))
+        }
+        descriptorWaiters.clear()
         for (gatt in connections.values) {
             runCatching { gatt.close() }
         }
         connections.clear()
+        descriptorLocks.clear()
         synchronized(lock) {
-            waiter?.cancel()
+            waiter?.completeExceptionally(PluginException(PluginException.CANCELLED))
             waiter = null
         }
     }
@@ -79,13 +96,26 @@ class BlePlugin(
         return if (adapter.isEnabled) 0 else 1
     }
 
-    private fun hasPermissions(): Boolean {
-        if (Build.VERSION.SDK_INT < 31) return true
-        val scanOk = ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_SCAN) ==
-            PackageManager.PERMISSION_GRANTED
-        val connOk = ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) ==
-            PackageManager.PERMISSION_GRANTED
-        return scanOk && connOk
+    private fun requiredPermissions(): Array<String> =
+        if (Build.VERSION.SDK_INT >= 31) {
+            arrayOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT)
+        } else {
+            arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
+        }
+
+    private fun hasPermissions(): Boolean =
+        requiredPermissions().all { perm ->
+            ContextCompat.checkSelfPermission(context, perm) == PackageManager.PERMISSION_GRANTED
+        }
+
+    private suspend fun requestPermission(): ByteArray {
+        if (manager?.adapter == null) return encodeU32(3)
+        if (!hasPermissions()) {
+            val host = permissionHost ?: return encodeU32(availabilityCode())
+            host.requestNativePermissions(requiredPermissions())
+            if (closed) throw PluginException(PluginException.CANCELLED)
+        }
+        return encodeU32(availabilityCode())
     }
 
     private suspend fun scan(payload: ByteBuffer): ByteArray {
@@ -93,7 +123,7 @@ class BlePlugin(
         val reader = WireReader(payload)
         val timeoutMs = reader.u32().coerceIn(500, 30_000)
         val filterCount = reader.u32()
-        val uuids = List(filterCount) { reader.string() }
+        val uuids = List(filterCount) { parseBleUuid(reader.string()) }
         reader.finished()
 
         val scanner = manager?.adapter?.bluetoothLeScanner ?: throw PluginException(PluginException.UNAVAILABLE)
@@ -105,10 +135,8 @@ class BlePlugin(
                 }
             }
         val filters =
-            uuids.mapNotNull {
-                runCatching {
-                    ScanFilter.Builder().setServiceUuid(ParcelUuid(UUID.fromString(it))).build()
-                }.getOrNull()
+            uuids.map { uuid ->
+                ScanFilter.Builder().setServiceUuid(ParcelUuid(uuid)).build()
             }
         val settings = ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY).build()
         scanner.startScan(filters, settings, callback)
@@ -117,34 +145,56 @@ class BlePlugin(
         } finally {
             runCatching { scanner.stopScan(callback) }
         }
-        return encodeDevices(found.values.toList())
+        return encodeDevices(found.values.take(MAX_SCAN_DEVICES))
     }
 
     private suspend fun connect(deviceId: String): ByteArray {
         if (availabilityCode() != 0) throw PluginException(PluginException.UNAVAILABLE)
         val adapter = manager?.adapter ?: throw PluginException(PluginException.UNAVAILABLE)
-        val device = adapter.getRemoteDevice(deviceId)
+        val device =
+            runCatching { adapter.getRemoteDevice(deviceId) }
+                .getOrElse { throw PluginException(PluginException.INVALID_ARGUMENT) }
         val ready = CompletableDeferred<Unit>()
+        pendingConnects.put(deviceId, ready)?.completeExceptionally(PluginException(PluginException.CANCELLED))
         val gatt =
             device.connectGatt(
                 context,
                 false,
                 object : BluetoothGattCallback() {
                     override fun onConnectionStateChange(g: BluetoothGatt, status: Int, newState: Int) {
-                        if (newState == BluetoothProfile.STATE_CONNECTED) {
+                        if (newState == BluetoothProfile.STATE_CONNECTED && status == BluetoothGatt.GATT_SUCCESS) {
                             g.discoverServices()
-                        } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
+                        } else if (
+                            newState == BluetoothProfile.STATE_DISCONNECTED ||
+                            status != BluetoothGatt.GATT_SUCCESS
+                        ) {
                             connections.remove(deviceId)
+                            descriptorLocks.remove(deviceId)
+                            descriptorWaiters.remove(deviceId)
+                                ?.completeExceptionally(PluginException(PluginException.NATIVE))
+                            runCatching { g.close() }
+                            pendingConnects.remove(deviceId, ready)
                             if (!ready.isCompleted) ready.completeExceptionally(PluginException(PluginException.NATIVE))
                         }
                     }
 
                     override fun onServicesDiscovered(g: BluetoothGatt, status: Int) {
+                        pendingConnects.remove(deviceId, ready)
                         if (status == BluetoothGatt.GATT_SUCCESS) {
                             ready.complete(Unit)
                         } else if (!ready.isCompleted) {
+                            connections.remove(deviceId)
+                            runCatching { g.close() }
                             ready.completeExceptionally(PluginException(PluginException.NATIVE))
                         }
+                    }
+
+                    override fun onDescriptorWrite(
+                        g: BluetoothGatt,
+                        descriptor: BluetoothGattDescriptor,
+                        status: Int,
+                    ) {
+                        descriptorWaiters.remove(deviceId)?.complete(status)
                     }
 
                     override fun onCharacteristicChanged(
@@ -176,43 +226,68 @@ class BlePlugin(
                     }
                 },
             )
-        connections[deviceId] = gatt
-        ready.await()
+        connections.put(deviceId, gatt)?.let { previous -> runCatching { previous.close() } }
+        descriptorLocks.putIfAbsent(deviceId, Mutex())
+        try {
+            ready.await()
+        } catch (error: Throwable) {
+            pendingConnects.remove(deviceId, ready)
+            throw error
+        }
         return ByteArray(0)
     }
 
     private fun disconnect(deviceId: String): ByteArray {
-        connections.remove(deviceId)?.close()
+        pendingConnects.remove(deviceId)?.completeExceptionally(PluginException(PluginException.CANCELLED))
+        descriptorWaiters.remove(deviceId)?.completeExceptionally(PluginException(PluginException.CANCELLED))
+        descriptorLocks.remove(deviceId)
+        connections.remove(deviceId)?.let { gatt -> runCatching { gatt.close() } }
         return ByteArray(0)
     }
 
-    private fun setNotify(payload: ByteBuffer, enable: Boolean): ByteArray {
+    private suspend fun setNotify(payload: ByteBuffer, enable: Boolean): ByteArray {
         val reader = WireReader(payload)
         val deviceId = reader.string()
-        val serviceUuid = UUID.fromString(reader.string())
-        val charUuid = UUID.fromString(reader.string())
+        val serviceUuid = parseBleUuid(reader.string())
+        val charUuid = parseBleUuid(reader.string())
         reader.finished()
 
         val gatt = connections[deviceId] ?: throw PluginException(PluginException.UNAVAILABLE)
         val characteristic =
             gatt.getService(serviceUuid)?.getCharacteristic(charUuid)
                 ?: throw PluginException(PluginException.UNAVAILABLE)
-        gatt.setCharacteristicNotification(characteristic, enable)
-        val cccd = characteristic.getDescriptor(CCCD_UUID)
-        if (cccd != null) {
+        val writeLock = descriptorLocks.computeIfAbsent(deviceId) { Mutex() }
+        writeLock.withLock {
+            gatt.setCharacteristicNotification(characteristic, enable)
+            val cccd = characteristic.getDescriptor(CCCD_UUID) ?: return@withLock
+            val props = characteristic.properties
             val value =
-                if (enable) {
-                    BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
-                } else {
-                    BluetoothGattDescriptor.DISABLE_NOTIFICATION_VALUE
+                when {
+                    !enable -> BluetoothGattDescriptor.DISABLE_NOTIFICATION_VALUE
+                    (props and BluetoothGattCharacteristic.PROPERTY_NOTIFY) != 0 ->
+                        BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+                    (props and BluetoothGattCharacteristic.PROPERTY_INDICATE) != 0 ->
+                        BluetoothGattDescriptor.ENABLE_INDICATION_VALUE
+                    else -> BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
                 }
-            if (Build.VERSION.SDK_INT >= 33) {
-                gatt.writeDescriptor(cccd, value)
-            } else {
-                @Suppress("DEPRECATION")
-                cccd.value = value
-                @Suppress("DEPRECATION")
-                gatt.writeDescriptor(cccd)
+            val written = CompletableDeferred<Int>()
+            descriptorWaiters[deviceId] = written
+            val started =
+                if (Build.VERSION.SDK_INT >= 33) {
+                    gatt.writeDescriptor(cccd, value) == BluetoothGatt.GATT_SUCCESS
+                } else {
+                    @Suppress("DEPRECATION")
+                    cccd.value = value
+                    @Suppress("DEPRECATION")
+                    gatt.writeDescriptor(cccd)
+                }
+            if (!started) {
+                descriptorWaiters.remove(deviceId, written)
+                throw PluginException(PluginException.NATIVE)
+            }
+            val status = written.await()
+            if (status != BluetoothGatt.GATT_SUCCESS) {
+                throw PluginException(PluginException.NATIVE)
             }
         }
         return ByteArray(0)
@@ -272,8 +347,21 @@ class BlePlugin(
     }
 
     private companion object {
+        const val MAX_SCAN_DEVICES = 256
         val CCCD_UUID: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
     }
+}
+
+private fun parseBleUuid(raw: String): UUID {
+    val trimmed = raw.trim()
+    val expanded =
+        when (trimmed.length) {
+            4 -> "0000$trimmed-0000-1000-8000-00805f9b34fb"
+            8 -> "$trimmed-0000-1000-8000-00805f9b34fb"
+            else -> trimmed
+        }
+    return runCatching { UUID.fromString(expanded) }
+        .getOrElse { throw PluginException(PluginException.INVALID_ARGUMENT) }
 }
 
 private class WireReader(payload: ByteBuffer) {

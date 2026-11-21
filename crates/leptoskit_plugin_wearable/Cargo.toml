@@ -14,11 +14,18 @@ description = "Direct on-watch live and passive biometric sensors for Wear OS (i
 name = "wearable"
 apple-module = "LeptosKitWearable"
 apple-type = "WearablePlugin"
-apple-usage-descriptions = ["NSHealthShareUsageDescription", "NSMotionUsageDescription"]
+apple-usage-descriptions = [
+	"NSHealthShareUsageDescription",
+	"NSHealthUpdateUsageDescription",
+	"NSMotionUsageDescription",
+]
 apple-entitlements = ["com.apple.developer.healthkit"]
 android-type = "dev.leptoskit.plugins.wearable.WearablePlugin"
 android-context = true
-android-dependencies = ["androidx.health:health-services-client:1.1.0-alpha05"]
+android-dependencies = [
+	"androidx.core:core:1.16.0",
+	"androidx.health:health-services-client:1.1.0-alpha05",
+]
 android-permissions = [
 	"android.permission.ACTIVITY_RECOGNITION",
 	"android.permission.BODY_SENSORS",

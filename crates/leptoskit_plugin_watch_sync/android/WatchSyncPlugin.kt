@@ -1,7 +1,9 @@
 package dev.leptoskit.plugins.watchsync
 
 import android.content.Context
+import android.net.Uri
 import com.google.android.gms.tasks.Task
+import com.google.android.gms.wearable.Asset
 import com.google.android.gms.wearable.DataClient
 import com.google.android.gms.wearable.DataEvent
 import com.google.android.gms.wearable.DataEventBuffer
@@ -13,11 +15,14 @@ import com.google.android.gms.wearable.Wearable
 import dev.leptoskit.bridge.NativePlugin
 import dev.leptoskit.bridge.PluginException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.suspendCancellableCoroutine
 import java.io.ByteArrayOutputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.ArrayDeque
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.Executors
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
@@ -33,7 +38,11 @@ class WatchSyncPlugin(
 
     private val lock = Any()
     private val incoming = ArrayDeque<ByteArray>()
+    private val pendingUris = ConcurrentHashMap<String, Uri>()
+    private val assetExecutor = Executors.newSingleThreadExecutor()
     private var incomingWaiter: CompletableDeferred<ByteArray>? = null
+    @Volatile
+    private var localNodeId: String? = null
     private var closed = false
 
     private val messageListener =
@@ -45,17 +54,31 @@ class WatchSyncPlugin(
         DataClient.OnDataChangedListener { buffer: DataEventBuffer ->
             for (event in buffer) {
                 if (event.type == DataEvent.TYPE_CHANGED) {
+                    val uri = event.dataItem.uri
+                    val selfId = localNodeId
+                    if (selfId != null && uri.host == selfId) continue
                     val map = DataMapItem.fromDataItem(event.dataItem).dataMap
                     val id = map.getString("id") ?: ""
-                    val topic = map.getString("topic") ?: event.dataItem.uri.path ?: "/transfer"
-                    val payload = map.getByteArray("payload") ?: ByteArray(0)
-                    enqueue(encodeEnvelope(id, topic, System.currentTimeMillis(), payload))
+                    val topic = map.getString("topic") ?: uri.path ?: "/transfer"
+                    val inline = map.getByteArray("payload")
+                    val asset = if (inline == null) map.getAsset("payload_asset") else null
+                    if (id.isNotEmpty()) pendingUris[id] = uri
+                    if (inline != null) {
+                        enqueue(encodeEnvelope(id, topic, System.currentTimeMillis(), inline))
+                    } else if (asset != null) {
+                        enqueueAsset(id, topic, asset)
+                    } else {
+                        enqueue(encodeEnvelope(id, topic, System.currentTimeMillis(), ByteArray(0)))
+                    }
                 }
             }
         }
 
     init {
         runCatching {
+            Wearable.getNodeClient(context).localNode.addOnSuccessListener { node ->
+                localNodeId = node.id
+            }
             Wearable.getMessageClient(context).addListener(messageListener)
             Wearable.getDataClient(context).addListener(dataListener)
         }
@@ -68,8 +91,8 @@ class WatchSyncPlugin(
             1 -> sendMessage(payload)
             2 -> queueTransfer(payload)
             3 -> nextIncoming()
-            4 -> ByteArray(0)
-            5 -> status()
+            4 -> ackTransfer(payload)
+            5 -> watchStatus(payload)
             else -> throw PluginException(PluginException.UNAVAILABLE)
         }
     }
@@ -80,16 +103,40 @@ class WatchSyncPlugin(
             Wearable.getMessageClient(context).removeListener(messageListener)
             Wearable.getDataClient(context).removeListener(dataListener)
         }
+        assetExecutor.shutdownNow()
         synchronized(lock) {
-            incomingWaiter?.cancel()
+            incomingWaiter?.completeExceptionally(PluginException(PluginException.CANCELLED))
             incomingWaiter = null
         }
+    }
+
+    private suspend fun ensureLocalNodeId(): String? {
+        localNodeId?.let { return it }
+        return runCatching { Wearable.getNodeClient(context).localNode.awaitResult().id }
+            .getOrNull()
+            ?.also { localNodeId = it }
+    }
+
+    private fun enqueueAsset(id: String, topic: String, asset: Asset) {
+        Wearable
+            .getDataClient(context)
+            .getFdForAsset(asset)
+            .addOnSuccessListener(assetExecutor) { result ->
+                if (closed) return@addOnSuccessListener
+                val bytes =
+                    runCatching { result.inputStream.use { stream -> stream.readBytes() } }
+                        .getOrNull()
+                        ?: return@addOnSuccessListener
+                enqueue(encodeEnvelope(id, topic, System.currentTimeMillis(), bytes))
+            }
     }
 
     private suspend fun status(): ByteArray {
         val nodes =
             runCatching { Wearable.getNodeClient(context).connectedNodes.awaitResult() }
-                .getOrElse { emptyList() }
+                .getOrElse {
+                    return encodeStatus(0, 0, null)
+                }
         val peer = nodes.firstOrNull()
         var flags = 1 // supported
         if (peer != null) {
@@ -97,6 +144,17 @@ class WatchSyncPlugin(
             if (peer.isNearby) flags = flags or 4 // reachable
         }
         return encodeStatus(2, flags, peer?.displayName)
+    }
+
+    private suspend fun watchStatus(payload: ByteBuffer): ByteArray {
+        val last = ByteArray(payload.remaining())
+        payload.duplicate().get(last)
+        while (!closed) {
+            val current = status()
+            if (!current.contentEquals(last)) return current
+            delay(1_500L)
+        }
+        throw PluginException(PluginException.CANCELLED)
     }
 
     private suspend fun sendMessage(payload: ByteBuffer): ByteArray {
@@ -114,22 +172,39 @@ class WatchSyncPlugin(
     }
 
     private suspend fun queueTransfer(payload: ByteBuffer): ByteArray {
+        ensureLocalNodeId()
         val reader = WireReader(payload)
         val id = reader.string()
         val topic = reader.string()
         val data = reader.bytes()
         reader.finished()
+        val safeId = Uri.encode(id)
         val request =
-            PutDataMapRequest.create("/leptoskit/transfer/$id").apply {
+            PutDataMapRequest.create("/leptoskit/transfer/$safeId").apply {
                 dataMap.putString("id", id)
                 dataMap.putString("topic", topic)
-                dataMap.putByteArray("payload", data)
+                if (data.size > INLINE_DATA_LIMIT) {
+                    dataMap.putAsset("payload_asset", Asset.createFromBytes(data))
+                } else {
+                    dataMap.putByteArray("payload", data)
+                }
                 dataMap.putLong("ts", System.currentTimeMillis())
             }
         Wearable
             .getDataClient(context)
             .putDataItem(request.asPutDataRequest().setUrgent())
             .awaitResult()
+        return ByteArray(0)
+    }
+
+    private suspend fun ackTransfer(payload: ByteBuffer): ByteArray {
+        val reader = WireReader(payload)
+        val id = reader.string()
+        reader.finished()
+        val uri = pendingUris.remove(id)
+        if (uri != null) {
+            runCatching { Wearable.getDataClient(context).deleteDataItems(uri).awaitResult() }
+        }
         return ByteArray(0)
     }
 
@@ -154,6 +229,10 @@ class WatchSyncPlugin(
                 incoming.addLast(envelope)
             }
         }
+    }
+
+    private companion object {
+        const val INLINE_DATA_LIMIT = 64 * 1024
     }
 }
 

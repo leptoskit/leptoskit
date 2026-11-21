@@ -143,7 +143,7 @@ pub(crate) fn resolve(
 	}
 
 	match target {
-		Target::Android | Target::AndroidX86_64 | Target::Quest => {
+		Target::Android | Target::AndroidX86_64 | Target::Quest | Target::Wearos => {
 			AndroidSigning::resolve(root, env, &PLAY_KEYSTORE)
 				.map(|signing| Some(Signing::Android(signing)))
 		}

@@ -130,6 +130,12 @@ class HealthWireTest {
 
         assertEquals(ACTIVITY_SWIMMING, activityCode(ExerciseSessionRecord.EXERCISE_TYPE_SWIMMING_POOL))
         assertEquals(ACTIVITY_CYCLING, activityCode(ExerciseSessionRecord.EXERCISE_TYPE_BIKING_STATIONARY))
+        assertEquals(
+            ACTIVITY_HIGH_INTENSITY_INTERVAL_TRAINING,
+            activityCode(ExerciseSessionRecord.EXERCISE_TYPE_HIGH_INTENSITY_INTERVAL_TRAINING),
+        )
+        assertEquals(8, ACTIVITY_HIGH_INTENSITY_INTERVAL_TRAINING)
+        assertEquals(9, activityCode(ExerciseSessionRecord.EXERCISE_TYPE_ROWING))
         assertEquals(ACTIVITY_OTHER, activityCode(ExerciseSessionRecord.EXERCISE_TYPE_FENCING))
         assertEquals(STAGE_UNKNOWN, stageCode(SleepSessionRecord.STAGE_TYPE_UNKNOWN))
     }
@@ -234,8 +240,11 @@ class HealthWireTest {
         val last = encodePage(emptyList(), null)
         val trailing = ByteBuffer.wrap(last).order(ByteOrder.LITTLE_ENDIAN)
         assertEquals(0, trailing.int)
-        assertEquals(ABSENT_LENGTH, trailing.int)
+        assertEquals(-1, trailing.int)
 
+        assertEquals(0x1FF7, ANDROID_TYPES)
+        assertEquals(1, (ANDROID_TYPES ushr TYPE_HRV_RMSSD) and 1)
+        assertEquals(0, (ANDROID_TYPES ushr 3) and 1)
         val mask = ByteBuffer.wrap(encodeMask(ANDROID_TYPES, 5)).order(ByteOrder.LITTLE_ENDIAN)
         assertEquals(ANDROID_TYPES, mask.int)
         assertEquals(5, mask.int)

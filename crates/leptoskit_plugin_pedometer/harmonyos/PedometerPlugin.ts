@@ -1,6 +1,7 @@
 import { sensor } from "@kit.SensorServiceKit";
 import {
 	CANCELLED,
+	INVALID_ARGUMENT,
 	NativeCall,
 	NativePlugin,
 	PluginError,
@@ -36,33 +37,51 @@ export class PedometerPlugin implements NativePlugin {
 	}
 
 	private nextReading(call: NativeCall): Promise<ArrayBuffer> {
+		if (call.payload.byteLength !== 4) {
+			return Promise.reject(new PluginError(INVALID_ARGUMENT));
+		}
+		const timeoutMs = new DataView(call.payload).getUint32(0, true);
 		return new Promise<ArrayBuffer>((resolve, reject) => {
 			let settled = false;
-			const cb = (data: sensor.PedometerResponse): void => {
-				if (settled) return;
-				settled = true;
+			let timer: ReturnType<typeof setTimeout> | undefined = undefined;
+			const cleanup = (cb: (data: sensor.PedometerResponse) => void): void => {
+				if (timer !== undefined) {
+					clearTimeout(timer);
+					timer = undefined;
+				}
 				try {
 					sensor.off(sensor.SensorId.PEDOMETER, cb);
 				} catch {
 					// Ignore cleanup errors.
 				}
-				const buf = new ArrayBuffer(32);
+			};
+			const cb = (data: sensor.PedometerResponse): void => {
+				if (settled) return;
+				settled = true;
+				cleanup(cb);
+				// bounded_reply framing: 4-byte status (0 = reading) + 32-byte Reading.
+				const buf = new ArrayBuffer(36);
 				const view = new DataView(buf);
-				view.setUint32(0, 1, true); // BootCounter scope
-				view.setUint32(4, 0, true);
-				view.setBigUint64(8, BigInt(Math.max(0, Math.round(data.steps))), true);
-				view.setFloat64(16, Date.now() / 1000.0, true);
-				view.setFloat64(24, 0.0, true);
+				view.setUint32(0, 0, true); // bounded_reply: Present
+				view.setUint32(4, 1, true); // BootCounter scope
+				view.setUint32(8, 0, true); // reserved
+				view.setBigUint64(12, BigInt(Math.max(0, Math.round(data.steps))), true);
+				view.setFloat64(20, data.timestamp > 0 ? data.timestamp / 1e9 : Date.now() / 1000.0, true);
+				view.setFloat64(28, 0.0, true);
 				resolve(buf);
 			};
+			if (timeoutMs > 0) {
+				timer = setTimeout(() => {
+					if (settled) return;
+					settled = true;
+					cleanup(cb);
+					resolve(encodeU32(1)); // bounded_reply: TimedOut
+				}, timeoutMs);
+			}
 			call.onCancel(() => {
 				if (!settled) {
 					settled = true;
-					try {
-						sensor.off(sensor.SensorId.PEDOMETER, cb);
-					} catch {
-						// Ignore cleanup errors.
-					}
+					cleanup(cb);
 					reject(new PluginError(CANCELLED));
 				}
 			});
@@ -70,6 +89,7 @@ export class PedometerPlugin implements NativePlugin {
 				sensor.on(sensor.SensorId.PEDOMETER, cb);
 			} catch {
 				settled = true;
+				cleanup(cb);
 				reject(new PluginError(UNAVAILABLE));
 			}
 		});

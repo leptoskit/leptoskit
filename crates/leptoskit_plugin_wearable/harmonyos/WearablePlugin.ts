@@ -25,8 +25,11 @@ export class WearablePlugin implements NativePlugin {
 	private context: common.Context;
 	private buffer: Uint8Array[] = [];
 	private dropped = 0;
-	private waiter: ((data: ArrayBuffer) => void) | undefined = undefined;
-	private stops: (() => void)[] = [];
+	private waiter:
+		| { resolve: (data: ArrayBuffer) => void; reject: (err: PluginError) => void }
+		| undefined = undefined;
+	private passiveStops: (() => void)[] = [];
+	private liveStops: (() => void)[] = [];
 	private lastSteps: number | undefined = undefined;
 	private lastStepsTime: number | undefined = undefined;
 	private closed = false;
@@ -46,10 +49,11 @@ export class WearablePlugin implements NativePlugin {
 			case 2:
 				return encodeU32(2);
 			case 3:
-				this.startSensors(readMask(call.payload), 5_000);
+				this.stopGroup(this.passiveStops);
+				this.startSensors(readMask(call.payload), 5_000, this.passiveStops);
 				return new ArrayBuffer(0);
 			case 4:
-				this.stopAll();
+				this.stopGroup(this.passiveStops);
 				return new ArrayBuffer(0);
 			case 5: {
 				if (call.payload.byteLength !== 12) throw new PluginError(INVALID_ARGUMENT);
@@ -57,11 +61,12 @@ export class WearablePlugin implements NativePlugin {
 				const mask = view.getUint32(0, true);
 				const intervalMs = view.getUint32(4, true);
 				if (mask === 0 || intervalMs < 200) throw new PluginError(INVALID_ARGUMENT);
-				this.startSensors(mask, intervalMs);
+				this.stopGroup(this.liveStops);
+				this.startSensors(mask, intervalMs, this.liveStops);
 				return new ArrayBuffer(0);
 			}
 			case 6:
-				this.stopAll();
+				this.stopGroup(this.liveStops);
 				return new ArrayBuffer(0);
 			case 7:
 				return this.nextBatch(call);
@@ -72,8 +77,13 @@ export class WearablePlugin implements NativePlugin {
 
 	close(): void {
 		this.closed = true;
-		this.stopAll();
-		this.waiter = undefined;
+		this.stopGroup(this.passiveStops);
+		this.stopGroup(this.liveStops);
+		if (this.waiter !== undefined) {
+			const pending = this.waiter;
+			this.waiter = undefined;
+			pending.reject(new PluginError(CANCELLED));
+		}
 	}
 
 	private capabilities(): ArrayBuffer {
@@ -86,8 +96,7 @@ export class WearablePlugin implements NativePlugin {
 		return buf;
 	}
 
-	private startSensors(mask: number, intervalMs: number): void {
-		this.stopAll();
+	private startSensors(mask: number, intervalMs: number, group: (() => void)[]): void {
 		const intervalNs = intervalMs * 1_000_000;
 		if ((mask & (1 << 0)) !== 0) {
 			const hrCb = (data: sensor.HeartRateResponse): void => {
@@ -97,7 +106,7 @@ export class WearablePlugin implements NativePlugin {
 			};
 			try {
 				sensor.on(sensor.SensorId.HEART_RATE, hrCb, { interval: intervalNs });
-				this.stops.push(() => sensor.off(sensor.SensorId.HEART_RATE, hrCb));
+				group.push(() => sensor.off(sensor.SensorId.HEART_RATE, hrCb));
 			} catch {
 				// Sensor not present on non-wearable HarmonyOS device.
 			}
@@ -114,7 +123,7 @@ export class WearablePlugin implements NativePlugin {
 			};
 			try {
 				sensor.on(sensor.SensorId.PEDOMETER, pedCb, { interval: intervalNs });
-				this.stops.push(() => sensor.off(sensor.SensorId.PEDOMETER, pedCb));
+				group.push(() => sensor.off(sensor.SensorId.PEDOMETER, pedCb));
 			} catch {
 				// Pedometer not present.
 			}
@@ -125,16 +134,15 @@ export class WearablePlugin implements NativePlugin {
 			};
 			try {
 				sensor.on(sensor.SensorId.WEAR_DETECTION, wearCb, { interval: intervalNs });
-				this.stops.push(() => sensor.off(sensor.SensorId.WEAR_DETECTION, wearCb));
+				group.push(() => sensor.off(sensor.SensorId.WEAR_DETECTION, wearCb));
 			} catch {
 				// Wear detection not present.
 			}
 		}
 	}
 
-	private stopAll(): void {
-		const stops = this.stops;
-		this.stops = [];
+	private stopGroup(group: (() => void)[]): void {
+		const stops = group.splice(0, group.length);
 		for (const stop of stops) {
 			try {
 				stop();
@@ -151,9 +159,9 @@ export class WearablePlugin implements NativePlugin {
 		}
 		this.buffer.push(reading);
 		if (this.waiter !== undefined) {
-			const resolve = this.waiter;
+			const pending = this.waiter;
 			this.waiter = undefined;
-			resolve(this.drain());
+			pending.resolve(this.drain());
 		}
 	}
 
@@ -166,7 +174,7 @@ export class WearablePlugin implements NativePlugin {
 				this.waiter = undefined;
 				reject(new PluginError(CANCELLED));
 			});
-			this.waiter = resolve;
+			this.waiter = { resolve, reject };
 		});
 	}
 

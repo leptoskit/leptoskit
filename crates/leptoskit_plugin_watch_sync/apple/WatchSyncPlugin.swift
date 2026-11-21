@@ -13,8 +13,9 @@ public final class WatchSyncPlugin: NSObject, NativePlugin {
 
     #if canImport(WatchConnectivity) && (os(iOS) || os(watchOS))
     private var incoming: [Data] = []
-    private var incomingWaiter: CheckedContinuation<Data, Error>?
-    private var statusWaiter: CheckedContinuation<Data, Error>?
+    private var unackedIds: Set<String> = []
+    private var incomingWaiters: [CheckedContinuation<Data, Error>] = []
+    private var statusWaiters: [CheckedContinuation<Data, Error>] = []
     private var closed = false
 
     public override init() {
@@ -40,6 +41,7 @@ public final class WatchSyncPlugin: NSObject, NativePlugin {
         case 3:
             return try await nextIncoming()
         case 4:
+            try ackTransfer(data)
             return Data()
         case 5:
             return try await watchStatus(last: data)
@@ -50,10 +52,10 @@ public final class WatchSyncPlugin: NSObject, NativePlugin {
 
     public func close() {
         closed = true
-        incomingWaiter?.resume(throwing: PluginError.cancelled)
-        incomingWaiter = nil
-        statusWaiter?.resume(throwing: PluginError.cancelled)
-        statusWaiter = nil
+        for waiter in incomingWaiters { waiter.resume(throwing: PluginError.cancelled) }
+        incomingWaiters.removeAll()
+        for waiter in statusWaiters { waiter.resume(throwing: PluginError.cancelled) }
+        statusWaiters.removeAll()
     }
 
     private func encodeCurrentStatus() -> Data {
@@ -65,7 +67,8 @@ public final class WatchSyncPlugin: NSObject, NativePlugin {
             if session.isPaired { flags |= 2 }
             if session.isWatchAppInstalled { flags |= 8 }
             #else
-            flags |= 2 | 8
+            flags |= 2
+            if session.isCompanionAppInstalled { flags |= 8 }
             #endif
             if session.isReachable { flags |= 4 }
         }
@@ -73,7 +76,10 @@ public final class WatchSyncPlugin: NSObject, NativePlugin {
     }
 
     private func sendMessage(_ data: Data) async throws {
-        guard WCSession.isSupported(), WCSession.default.isReachable else {
+        guard WCSession.isSupported(),
+              WCSession.default.activationState == .activated,
+              WCSession.default.isReachable
+        else {
             throw PluginError.unavailable
         }
         var reader = WireReader(data)
@@ -91,7 +97,9 @@ public final class WatchSyncPlugin: NSObject, NativePlugin {
     }
 
     private func queueTransfer(_ data: Data) throws {
-        guard WCSession.isSupported() else { throw PluginError.unavailable }
+        guard WCSession.isSupported(), WCSession.default.activationState == .activated else {
+            throw PluginError.unavailable
+        }
         var reader = WireReader(data)
         let id = try reader.string()
         let topic = try reader.string()
@@ -104,12 +112,19 @@ public final class WatchSyncPlugin: NSObject, NativePlugin {
         ])
     }
 
+    private func ackTransfer(_ data: Data) throws {
+        var reader = WireReader(data)
+        let id = try reader.string()
+        try reader.finished()
+        unackedIds.remove(id)
+    }
+
     private func nextIncoming() async throws -> Data {
         if !incoming.isEmpty {
             return incoming.removeFirst()
         }
         return try await withCheckedThrowingContinuation { continuation in
-            incomingWaiter = continuation
+            incomingWaiters.append(continuation)
         }
     }
 
@@ -117,15 +132,16 @@ public final class WatchSyncPlugin: NSObject, NativePlugin {
         let now = encodeCurrentStatus()
         if now != last { return now }
         return try await withCheckedThrowingContinuation { continuation in
-            statusWaiter = continuation
+            statusWaiters.append(continuation)
         }
     }
 
     private func deliver(id: String, topic: String, payload: Data) {
         let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
         let encoded = encodeEnvelope(id: id, topic: topic, receivedMs: nowMs, payload: payload)
-        if let waiter = incomingWaiter {
-            incomingWaiter = nil
+        if !id.isEmpty { unackedIds.insert(id) }
+        if !incomingWaiters.isEmpty {
+            let waiter = incomingWaiters.removeFirst()
             waiter.resume(returning: encoded)
         } else {
             if incoming.count >= 64 { incoming.removeFirst() }
@@ -134,9 +150,12 @@ public final class WatchSyncPlugin: NSObject, NativePlugin {
     }
 
     private func notifyStatus() {
-        if let waiter = statusWaiter {
-            statusWaiter = nil
-            waiter.resume(returning: encodeCurrentStatus())
+        guard !statusWaiters.isEmpty else { return }
+        let current = encodeCurrentStatus()
+        let waiters = statusWaiters
+        statusWaiters.removeAll()
+        for waiter in waiters {
+            waiter.resume(returning: current)
         }
     }
     #else
@@ -167,6 +186,13 @@ extension WatchSyncPlugin: WCSessionDelegate {
     public nonisolated func sessionDidDeactivate(_ session: WCSession) {
         session.activate()
     }
+    public nonisolated func sessionWatchStateDidChange(_ session: WCSession) {
+        Task { @MainActor in self.notifyStatus() }
+    }
+    #else
+    public nonisolated func sessionCompanionAppInstalledDidChange(_ session: WCSession) {
+        Task { @MainActor in self.notifyStatus() }
+    }
     #endif
 
     public nonisolated func sessionReachabilityDidChange(_ session: WCSession) {
@@ -177,6 +203,17 @@ extension WatchSyncPlugin: WCSessionDelegate {
         let topic = (message["topic"] as? String) ?? "/message"
         let payload = (message["payload"] as? Data) ?? Data()
         Task { @MainActor in self.deliver(id: "", topic: topic, payload: payload) }
+    }
+
+    public nonisolated func session(
+        _ session: WCSession,
+        didReceiveMessage message: [String: Any],
+        replyHandler: @escaping ([String: Any]) -> Void
+    ) {
+        let topic = (message["topic"] as? String) ?? "/message"
+        let payload = (message["payload"] as? Data) ?? Data()
+        Task { @MainActor in self.deliver(id: "", topic: topic, payload: payload) }
+        replyHandler([:])
     }
 
     public nonisolated func session(_ session: WCSession, didReceiveUserInfo userInfo: [String: Any]) {

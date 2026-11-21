@@ -26,7 +26,7 @@ public final class WearablePlugin: NSObject, NativePlugin {
     private var observerQueries: [HKObserverQuery] = []
     private var buffer: [Data] = []
     private var dropped: UInt32 = 0
-    private var waiter: CheckedContinuation<Data, Error>?
+    private var waiters: [CheckedContinuation<Data, Error>] = []
     private var closed = false
 
     public override init() {
@@ -65,12 +65,12 @@ public final class WearablePlugin: NSObject, NativePlugin {
         closed = true
         stopPassive()
         stopLive()
-        waiter?.resume(throwing: PluginError.cancelled)
-        waiter = nil
+        for waiter in waiters { waiter.resume(throwing: PluginError.cancelled) }
+        waiters.removeAll()
     }
 
     private func encodeCapabilities() -> Data {
-        let mask: UInt32 = (1 << 0) | (1 << 1) | (1 << 2) | (1 << 3) | (1 << 4) | (1 << 5) | (1 << 6) | (1 << 7)
+        let mask: UInt32 = (1 << 0) | (1 << 2) | (1 << 3) | (1 << 4) | (1 << 5) | (1 << 6) | (1 << 7)
         let flags: UInt32 = 1 | 2 // passive + live workout sessions
         var out = Data()
         appendU32(&out, 2) // PlatformKind::WatchOs
@@ -85,13 +85,13 @@ public final class WearablePlugin: NSObject, NativePlugin {
            let heartRate = HKObjectType.quantityType(forIdentifier: .heartRate) {
             readTypes.insert(heartRate)
         }
-        if mask & (1 << 1) != 0,
-           let hrv = HKObjectType.quantityType(forIdentifier: .heartRateVariabilitySDNN) {
-            readTypes.insert(hrv)
-        }
         if mask & (1 << 2) != 0,
            let spo2 = HKObjectType.quantityType(forIdentifier: .oxygenSaturation) {
             readTypes.insert(spo2)
+        }
+        if mask & (1 << 3) != 0,
+           let skinTemp = HKObjectType.quantityType(forIdentifier: .appleSleepingWristTemperature) {
+            readTypes.insert(skinTemp)
         }
         if mask & (1 << 4) != 0,
            let steps = HKObjectType.quantityType(forIdentifier: .stepCount) {
@@ -118,16 +118,19 @@ public final class WearablePlugin: NSObject, NativePlugin {
         let ids: [(UInt32, HKQuantityTypeIdentifier)] = [
             (1 << 0, .heartRate),
             (1 << 2, .oxygenSaturation),
+            (1 << 3, .appleSleepingWristTemperature),
             (1 << 4, .stepCount),
-            (1 << 6, .activeEnergyBurned)
+            (1 << 5, .flightsClimbed),
+            (1 << 6, .activeEnergyBurned),
+            (1 << 7, .distanceWalkingRunning)
         ]
         for (bit, identifier) in ids where mask & bit != 0 {
             guard let sampleType = HKObjectType.quantityType(forIdentifier: identifier) else { continue }
             try await healthStore.enableBackgroundDelivery(for: sampleType, frequency: .immediate)
             let query = HKObserverQuery(sampleType: sampleType, predicate: nil) { [weak self] _, completion, _ in
+                completion()
                 Task { @MainActor in
                     await self?.fetchLatest(identifier: identifier)
-                    completion()
                 }
             }
             observerQueries.append(query)
@@ -150,11 +153,14 @@ public final class WearablePlugin: NSObject, NativePlugin {
         let intervalMs = data.withUnsafeBytes {
             UInt32(littleEndian: $0.loadUnaligned(fromByteOffset: 4, as: UInt32.self))
         }
+        let activityCode = data.withUnsafeBytes {
+            UInt32(littleEndian: $0.loadUnaligned(fromByteOffset: 8, as: UInt32.self))
+        }
         guard mask != 0, intervalMs >= 200 else { throw PluginError.invalidArgument }
 
         stopLive()
         let config = HKWorkoutConfiguration()
-        config.activityType = .other
+        config.activityType = Self.mapWorkoutActivity(activityCode)
         config.locationType = .unknown
         let session = try HKWorkoutSession(healthStore: healthStore, configuration: config)
         let builder = session.associatedWorkoutBuilder()
@@ -166,14 +172,20 @@ public final class WearablePlugin: NSObject, NativePlugin {
         session.startActivity(with: now)
         try await builder.beginCollection(at: now)
 
-        if mask & (1 << 4) != 0, CMPedometer.isStepCountingAvailable() {
+        if (mask & ((1 << 4) | (1 << 5))) != 0, CMPedometer.isStepCountingAvailable() {
             pedometer.startUpdates(from: now) { [weak self] data, _ in
                 guard let data else { return }
                 let startMs = Int64(data.startDate.timeIntervalSince1970 * 1000)
                 let endMs = Int64(data.endDate.timeIntervalSince1970 * 1000)
                 let steps = data.numberOfSteps.int64Value
+                let floors = data.floorsAscended?.doubleValue
                 Task { @MainActor in
-                    self?.enqueue(Self.encodeSteps(startMs: startMs, endMs: endMs, count: steps))
+                    if mask & (1 << 4) != 0 {
+                        self?.enqueue(Self.encodeSteps(startMs: startMs, endMs: endMs, count: steps))
+                    }
+                    if mask & (1 << 5) != 0, let floors, floors > 0 {
+                        self?.enqueue(Self.encodeIntervalDouble(kind: 5, startMs: startMs, endMs: endMs, value: floors))
+                    }
                 }
             }
         }
@@ -181,53 +193,85 @@ public final class WearablePlugin: NSObject, NativePlugin {
 
     private func stopLive() {
         pedometer.stopUpdates()
-        workoutSession?.end()
+        let activeSession = workoutSession
+        let activeBuilder = workoutBuilder
         workoutSession = nil
         workoutBuilder = nil
+        activeSession?.end()
+        if let activeBuilder {
+            activeBuilder.endCollection(withEnd: Date()) { _, _ in
+                activeBuilder.discardWorkout()
+            }
+        }
     }
 
     private func fetchLatest(identifier: HKQuantityTypeIdentifier) async {
         guard let sampleType = HKObjectType.quantityType(forIdentifier: identifier) else { return }
         let sort = [NSSortDescriptor(key: HKSampleSortIdentifierEndDate, ascending: false)]
-        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+        let encoded: Data? = await withCheckedContinuation { continuation in
             let query = HKSampleQuery(
                 sampleType: sampleType,
                 predicate: nil,
                 limit: 1,
                 sortDescriptors: sort
-            ) { [weak self] _, samples, _ in
-                if let sample = samples?.first as? HKQuantitySample {
-                    Task { @MainActor in
-                        self?.enqueueQuantity(sample)
-                    }
-                }
-                continuation.resume()
+            ) { _, samples, _ in
+                let payload = (samples?.first as? HKQuantitySample).flatMap(Self.encodeQuantitySample)
+                continuation.resume(returning: payload)
             }
             healthStore.execute(query)
         }
+        if let encoded {
+            enqueue(encoded)
+        }
     }
 
-    private func enqueueQuantity(_ sample: HKQuantitySample) {
+    private static func encodeQuantitySample(_ sample: HKQuantitySample) -> Data? {
         let startMs = Int64(sample.startDate.timeIntervalSince1970 * 1000)
         let endMs = Int64(sample.endDate.timeIntervalSince1970 * 1000)
         switch sample.quantityType.identifier {
         case HKQuantityTypeIdentifier.heartRate.rawValue:
             let bpm = sample.quantity.doubleValue(for: HKUnit.count().unitDivided(by: .minute()))
-            enqueue(Self.encodeHeartRate(timeMs: endMs, bpm: bpm, accuracy: 4))
+            return encodeHeartRate(timeMs: endMs, bpm: bpm, accuracy: 4)
         case HKQuantityTypeIdentifier.oxygenSaturation.rawValue:
             let pct = sample.quantity.doubleValue(for: .percent()) * 100.0
-            enqueue(Self.encodeInstantDouble(kind: 2, timeMs: endMs, value: pct))
+            return encodeInstantDouble(kind: 2, timeMs: endMs, value: pct)
+        case HKQuantityTypeIdentifier.appleSleepingWristTemperature.rawValue:
+            let celsius = sample.quantity.doubleValue(for: .degreeCelsius())
+            return encodeInstantDouble(kind: 3, timeMs: endMs, value: celsius)
         case HKQuantityTypeIdentifier.stepCount.rawValue:
             let steps = Int64(sample.quantity.doubleValue(for: .count()))
-            enqueue(Self.encodeSteps(startMs: startMs, endMs: endMs, count: steps))
+            return encodeSteps(startMs: startMs, endMs: endMs, count: steps)
+        case HKQuantityTypeIdentifier.flightsClimbed.rawValue:
+            let floors = sample.quantity.doubleValue(for: .count())
+            return encodeIntervalDouble(kind: 5, startMs: startMs, endMs: endMs, value: floors)
         case HKQuantityTypeIdentifier.activeEnergyBurned.rawValue:
             let kcal = sample.quantity.doubleValue(for: .kilocalorie())
-            enqueue(Self.encodeIntervalDouble(kind: 6, startMs: startMs, endMs: endMs, value: kcal))
+            return encodeIntervalDouble(kind: 6, startMs: startMs, endMs: endMs, value: kcal)
         case HKQuantityTypeIdentifier.distanceWalkingRunning.rawValue:
             let meters = sample.quantity.doubleValue(for: .meter())
-            enqueue(Self.encodeIntervalDouble(kind: 7, startMs: startMs, endMs: endMs, value: meters))
+            return encodeIntervalDouble(kind: 7, startMs: startMs, endMs: endMs, value: meters)
         default:
-            break
+            return nil
+        }
+    }
+
+    private static func mapWorkoutActivity(_ code: UInt32) -> HKWorkoutActivityType {
+        switch code {
+        case 1: .walking
+        case 2: .running
+        case 3: .cycling
+        case 4: .swimming
+        case 5: .hiking
+        case 6: .traditionalStrengthTraining
+        case 7: .yoga
+        case 8: .highIntensityIntervalTraining
+        case 9: .rowing
+        case 10: .elliptical
+        case 11: .stairClimbing
+        case 12: .cardioDance
+        case 13: .pilates
+        case 14: .martialArts
+        default: .other
         }
     }
 
@@ -237,8 +281,8 @@ public final class WearablePlugin: NSObject, NativePlugin {
             dropped &+= 1
         }
         buffer.append(reading)
-        if let pending = waiter {
-            waiter = nil
+        if !waiters.isEmpty {
+            let pending = waiters.removeFirst()
             pending.resume(returning: drainBatch())
         }
     }
@@ -248,7 +292,7 @@ public final class WearablePlugin: NSObject, NativePlugin {
             return drainBatch()
         }
         return try await withCheckedThrowingContinuation { continuation in
-            waiter = continuation
+            waiters.append(continuation)
         }
     }
 
@@ -328,8 +372,8 @@ public final class WearablePlugin: NSObject, NativePlugin {
 }
 
 #if os(watchOS)
-extension WearablePlugin: HKLiveWorkoutBuilderDelegate {
-    public nonisolated func workoutBuilder(
+extension WearablePlugin: @preconcurrency HKLiveWorkoutBuilderDelegate {
+    public func workoutBuilder(
         _ workoutBuilder: HKLiveWorkoutBuilder,
         didCollectDataOf collectedTypes: Set<HKSampleType>
     ) {
@@ -339,19 +383,18 @@ extension WearablePlugin: HKLiveWorkoutBuilderDelegate {
                   let stats = workoutBuilder.statistics(for: quantityType) else { continue }
             if quantityType.identifier == HKQuantityTypeIdentifier.heartRate.rawValue,
                let bpm = stats.mostRecentQuantity()?.doubleValue(for: HKUnit.count().unitDivided(by: .minute())) {
-                Task { @MainActor in
-                    self.enqueue(Self.encodeHeartRate(timeMs: nowMs, bpm: bpm, accuracy: 4))
-                }
+                enqueue(Self.encodeHeartRate(timeMs: nowMs, bpm: bpm, accuracy: 4))
             } else if quantityType.identifier == HKQuantityTypeIdentifier.activeEnergyBurned.rawValue,
                       let kcal = stats.sumQuantity()?.doubleValue(for: .kilocalorie()) {
-                Task { @MainActor in
-                    self.enqueue(Self.encodeIntervalDouble(kind: 6, startMs: nowMs - 1000, endMs: nowMs, value: kcal))
-                }
+                enqueue(Self.encodeIntervalDouble(kind: 6, startMs: nowMs - 1000, endMs: nowMs, value: kcal))
+            } else if quantityType.identifier == HKQuantityTypeIdentifier.distanceWalkingRunning.rawValue,
+                      let meters = stats.sumQuantity()?.doubleValue(for: .meter()) {
+                enqueue(Self.encodeIntervalDouble(kind: 7, startMs: nowMs - 1000, endMs: nowMs, value: meters))
             }
         }
     }
 
-    public nonisolated func workoutBuilderDidCollectEvent(_ workoutBuilder: HKLiveWorkoutBuilder) {}
+    public func workoutBuilderDidCollectEvent(_ workoutBuilder: HKLiveWorkoutBuilder) {}
 }
 #endif
 

@@ -97,10 +97,15 @@ pub struct RotaryState {
 }
 
 impl RotaryState {
-	/// Starts rotary tracking at `initial` (clamped into `[min, max]`).
+	/// Starts rotary tracking at `initial` (clamped into `[min, max]`,
+	/// falling back to `min` when `initial` is non-finite).
 	#[must_use]
 	pub const fn new(config: CrownConfig, initial: f64) -> Self {
-		let clamped = initial.clamp(config.min, config.max);
+		let clamped = if initial.is_finite() {
+			initial.clamp(config.min, config.max)
+		} else {
+			config.min
+		};
 		Self {
 			config,
 			value: clamped,
@@ -133,13 +138,18 @@ impl RotaryState {
 		};
 		let span = self.config.max - self.config.min;
 		let next = self.value + (event.delta * scale);
+		let unwrapped_target = if self.config.wrap {
+			next
+		} else {
+			next.clamp(self.config.min, self.config.max)
+		};
+		let next_bucket = ((unwrapped_target - self.config.min) / self.config.step).floor();
 		self.value = if self.config.wrap {
 			let offset = (next - self.config.min).rem_euclid(span);
 			self.config.min + offset
 		} else {
-			next.clamp(self.config.min, self.config.max)
+			unwrapped_target
 		};
-		let next_bucket = ((self.value - self.config.min) / self.config.step).floor();
 		#[allow(
 			clippy::cast_possible_truncation,
 			clippy::cast_sign_loss,
@@ -176,11 +186,15 @@ mod tests {
 
 		let wrap_cfg = CrownConfig::new(0.0, 360.0, 30.0).unwrap().wrap(true);
 		let mut dial = RotaryState::new(wrap_cfg, 350.0);
-		let _ = dial.apply(CrownEvent {
+		let wrapped_detents = dial.apply(CrownEvent {
 			delta: 20.0,
 			velocity: 1.0,
 			idle: false,
 		});
 		assert!((dial.value() - 10.0).abs() < 1e-9);
+		assert_eq!(wrapped_detents, 1);
+
+		let nan_state = RotaryState::new(config, f64::NAN);
+		assert!((nan_state.value() - 0.0).abs() < f64::EPSILON);
 	}
 }

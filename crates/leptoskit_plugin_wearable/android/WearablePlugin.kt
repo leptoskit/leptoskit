@@ -8,6 +8,7 @@ import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.os.Build
+import android.os.SystemClock
 import androidx.core.content.ContextCompat
 import androidx.health.services.client.HealthServices
 import androidx.health.services.client.MeasureCallback
@@ -16,9 +17,11 @@ import androidx.health.services.client.data.Availability
 import androidx.health.services.client.data.DataPointContainer
 import androidx.health.services.client.data.DataType
 import androidx.health.services.client.data.DeltaDataType
+import androidx.health.services.client.data.IntervalDataPoint
 import androidx.health.services.client.data.PassiveListenerConfig
 import androidx.health.services.client.data.SampleDataPoint
 import com.google.common.util.concurrent.ListenableFuture
+import dev.leptoskit.bridge.NativePermissionHost
 import dev.leptoskit.bridge.NativePlugin
 import dev.leptoskit.bridge.PluginException
 import kotlinx.coroutines.CompletableDeferred
@@ -36,8 +39,7 @@ import kotlin.coroutines.resumeWithException
  *
  * Uses Android Wear Health Services (`PassiveMonitoringClient`, `MeasureClient`)
  * plus Android `SensorManager` (`TYPE_HEART_RATE`, `TYPE_STEP_COUNTER`,
- * `TYPE_LOW_LATENCY_OFFBODY_DETECT`), and detects the optional Samsung Health
- * Sensor SDK at runtime when installed on Samsung Galaxy Watch hardware.
+ * `TYPE_LOW_LATENCY_OFFBODY_DETECT`).
  */
 class WearablePlugin(
     private val context: Context,
@@ -45,14 +47,17 @@ class WearablePlugin(
     override val name = "wearable"
     override val methods = intArrayOf(0, 1, 2, 3, 4, 5, 6, 7)
 
+    private val permissionHost = context as? NativePermissionHost
     private val sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as? SensorManager
     private val lock = Any()
     private val buffer = ArrayDeque<ByteArray>()
     private var dropped = 0
     private var waiter: CompletableDeferred<ByteArray>? = null
     private var closed = false
+    private var requestedOnce = false
     private var passiveRunning = false
     private var liveRunning = false
+    private var measureRegistered = false
     private var lastStepCounter: Long? = null
     private var lastStepTimeMs: Long? = null
 
@@ -106,6 +111,7 @@ class WearablePlugin(
         object : PassiveListenerCallback {
             override fun onNewDataPointsReceived(dataPoints: DataPointContainer) {
                 val now = System.currentTimeMillis()
+                val bootEpochMs = now - SystemClock.elapsedRealtime()
                 for (point in dataPoints.getData(DataType.HEART_RATE_BPM)) {
                     val bpm = (point as? SampleDataPoint<Double>)?.value ?: continue
                     if (bpm > 0.0) enqueue(encodeHeartRate(now, bpm, ACCURACY_HIGH))
@@ -113,22 +119,26 @@ class WearablePlugin(
                 for (point in dataPoints.getData(DataType.STEPS)) {
                     val count = point.value
                     if (count > 0L) {
-                        enqueue(encodeSteps(now - 60_000L, now, count))
+                        val (startMs, endMs) = intervalMillis(point, bootEpochMs, now)
+                        enqueue(encodeSteps(startMs, endMs, count))
                     }
                 }
                 for (point in dataPoints.getData(DataType.CALORIES)) {
                     if (point.value > 0.0) {
-                        enqueue(encodeIntervalDouble(KIND_CALORIES, now - 60_000L, now, point.value))
+                        val (startMs, endMs) = intervalMillis(point, bootEpochMs, now)
+                        enqueue(encodeIntervalDouble(KIND_CALORIES, startMs, endMs, point.value))
                     }
                 }
                 for (point in dataPoints.getData(DataType.DISTANCE)) {
                     if (point.value > 0.0) {
-                        enqueue(encodeIntervalDouble(KIND_DISTANCE, now - 60_000L, now, point.value))
+                        val (startMs, endMs) = intervalMillis(point, bootEpochMs, now)
+                        enqueue(encodeIntervalDouble(KIND_DISTANCE, startMs, endMs, point.value))
                     }
                 }
                 for (point in dataPoints.getData(DataType.FLOORS)) {
                     if (point.value > 0.0) {
-                        enqueue(encodeIntervalDouble(KIND_FLOORS, now - 60_000L, now, point.value))
+                        val (startMs, endMs) = intervalMillis(point, bootEpochMs, now)
+                        enqueue(encodeIntervalDouble(KIND_FLOORS, startMs, endMs, point.value))
                     }
                 }
             }
@@ -139,7 +149,7 @@ class WearablePlugin(
         return when (method) {
             0 -> capabilities()
             1 -> encodeU32(permissionState())
-            2 -> encodeU32(permissionState())
+            2 -> requestPermissions(readMask(payload))
             3 -> startPassive(readMask(payload))
             4 -> stopPassive()
             5 -> startLive(payload)
@@ -152,8 +162,22 @@ class WearablePlugin(
     override fun close() {
         closed = true
         stopSensorsLocked()
+        if (passiveRunning && isWatch()) {
+            passiveRunning = false
+            runCatching {
+                HealthServices.getClient(context).passiveMonitoringClient.clearPassiveListenerCallbackAsync()
+            }
+        }
+        if (measureRegistered && isWatch()) {
+            measureRegistered = false
+            runCatching {
+                HealthServices.getClient(context).measureClient
+                    .unregisterMeasureCallbackAsync(DataType.HEART_RATE_BPM, measureCallback)
+            }
+        }
+        liveRunning = false
         synchronized(lock) {
-            waiter?.cancel()
+            waiter?.completeExceptionally(PluginException(PluginException.CANCELLED))
             waiter = null
         }
     }
@@ -161,17 +185,8 @@ class WearablePlugin(
     private fun isWatch(): Boolean =
         context.packageManager.hasSystemFeature(PackageManager.FEATURE_WATCH)
 
-    private fun hasSamsungHealthSensorSdk(): Boolean =
-        try {
-            Class.forName("com.samsung.android.service.health.tracking.HealthTrackingService")
-            true
-        } catch (_: ClassNotFoundException) {
-            false
-        }
-
     private fun capabilities(): ByteArray {
         val watch = isWatch()
-        val samsung = hasSamsungHealthSensorSdk()
         var mask = 0
         if (sensorManager?.getDefaultSensor(Sensor.TYPE_HEART_RATE) != null || watch) {
             mask = mask or (1 shl 0)
@@ -184,13 +199,8 @@ class WearablePlugin(
         }
         val offBody = sensorManager?.getDefaultSensor(Sensor.TYPE_LOW_LATENCY_OFFBODY_DETECT) != null
         if (offBody) mask = mask or (1 shl 8)
-        if (samsung) {
-            // Samsung Galaxy Watch Health Sensor SDK adds IBI/HRV, SpO2, skin temp, BIA.
-            mask = mask or (1 shl 1) or (1 shl 2) or (1 shl 3) or (1 shl 10)
-        }
         var flags = 0
         if (watch) flags = flags or 1 or 2
-        if (samsung) flags = flags or 4
         if (offBody) flags = flags or 16
         return ByteBuffer
             .allocate(12)
@@ -201,21 +211,47 @@ class WearablePlugin(
             .array()
     }
 
+    private fun granted(permission: String): Boolean =
+        ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
+
     private fun permissionState(): Int {
         if (!isWatch()) return 4
-        val body = ContextCompat.checkSelfPermission(context, Manifest.permission.BODY_SENSORS) ==
-            PackageManager.PERMISSION_GRANTED
-        if (!body) return 3
+        val body = granted(Manifest.permission.BODY_SENSORS)
+        if (!body) return if (requestedOnce) 3 else 0
         val background =
             if (Build.VERSION.SDK_INT >= 33) {
-                ContextCompat.checkSelfPermission(
-                    context,
-                    "android.permission.BODY_SENSORS_BACKGROUND",
-                ) == PackageManager.PERMISSION_GRANTED
+                granted("android.permission.BODY_SENSORS_BACKGROUND")
             } else {
                 true
             }
         return if (background) 2 else 1
+    }
+
+    private suspend fun requestPermissions(mask: Int): ByteArray {
+        if (!isWatch()) return encodeU32(4)
+        val host = permissionHost ?: return encodeU32(permissionState())
+        val needed = mutableListOf<String>()
+        if (!granted(Manifest.permission.BODY_SENSORS)) {
+            needed += Manifest.permission.BODY_SENSORS
+        }
+        val wantsActivity = (mask and ((1 shl 4) or (1 shl 5) or (1 shl 6) or (1 shl 7))) != 0
+        if (wantsActivity && Build.VERSION.SDK_INT >= 29 && !granted(Manifest.permission.ACTIVITY_RECOGNITION)) {
+            needed += Manifest.permission.ACTIVITY_RECOGNITION
+        }
+        if (needed.isNotEmpty()) {
+            requestedOnce = true
+            host.requestNativePermissions(needed.toTypedArray())
+            if (closed) throw PluginException(PluginException.CANCELLED)
+        }
+        // Android 13+ requires BODY_SENSORS_BACKGROUND to be requested in a separate step after BODY_SENSORS.
+        if (Build.VERSION.SDK_INT >= 33 &&
+            granted(Manifest.permission.BODY_SENSORS) &&
+            !granted("android.permission.BODY_SENSORS_BACKGROUND")
+        ) {
+            host.requestNativePermissions(arrayOf("android.permission.BODY_SENSORS_BACKGROUND"))
+            if (closed) throw PluginException(PluginException.CANCELLED)
+        }
+        return encodeU32(permissionState())
     }
 
     private suspend fun startPassive(mask: Int): ByteArray {
@@ -257,15 +293,21 @@ class WearablePlugin(
         buf.int // activity hint
         if (mask == 0 || intervalMs < 200) throw PluginException(PluginException.INVALID_ARGUMENT)
 
-        val delayUs = intervalMs * 1000
+        val delayUs = (intervalMs.toLong() * 1000L).coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
         if (mask and (1 shl 0) != 0) {
-            sensorManager?.getDefaultSensor(Sensor.TYPE_HEART_RATE)?.let {
-                sensorManager.registerListener(sensorListener, it, delayUs)
-            }
+            var registeredMeasure = false
             if (isWatch()) {
-                runCatching {
-                    HealthServices.getClient(context).measureClient
-                        .registerMeasureCallback(DataType.HEART_RATE_BPM, measureCallback)
+                registeredMeasure =
+                    runCatching {
+                        HealthServices.getClient(context).measureClient
+                            .registerMeasureCallback(DataType.HEART_RATE_BPM, measureCallback)
+                        true
+                    }.getOrDefault(false)
+                measureRegistered = registeredMeasure
+            }
+            if (!registeredMeasure) {
+                sensorManager?.getDefaultSensor(Sensor.TYPE_HEART_RATE)?.let {
+                    sensorManager.registerListener(sensorListener, it, delayUs)
                 }
             }
         }
@@ -285,12 +327,13 @@ class WearablePlugin(
 
     private suspend fun stopLive(): ByteArray {
         stopSensorsLocked()
-        if (liveRunning && isWatch()) {
+        if (measureRegistered && isWatch()) {
             runCatching {
                 HealthServices.getClient(context).measureClient
                     .unregisterMeasureCallbackAsync(DataType.HEART_RATE_BPM, measureCallback)
                     .awaitResult()
             }
+            measureRegistered = false
         }
         liveRunning = false
         return ByteArray(0)
@@ -298,6 +341,20 @@ class WearablePlugin(
 
     private fun stopSensorsLocked() {
         sensorManager?.unregisterListener(sensorListener)
+    }
+
+    private fun intervalMillis(
+        point: IntervalDataPoint<*>,
+        bootEpochMs: Long,
+        fallbackNowMs: Long,
+    ): Pair<Long, Long> {
+        val startMs = bootEpochMs + point.startDurationFromBoot.toMillis()
+        val endMs = bootEpochMs + point.endDurationFromBoot.toMillis()
+        return if (startMs > 0L && endMs >= startMs) {
+            Pair(startMs, endMs)
+        } else {
+            Pair(fallbackNowMs - 60_000L, fallbackNowMs)
+        }
     }
 
     private suspend fun nextBatch(): ByteArray {

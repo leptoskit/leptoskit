@@ -491,13 +491,13 @@ impl Plugin {
 
 	fn native_implementation(&self, target: Target) -> Option<Implementation<'_>> {
 		match target {
-			Target::Ios | Target::IosSimulator | Target::Macos => {
+			Target::Ios | Target::IosSimulator | Target::Macos | Target::Watchos => {
 				Some(Implementation::Apple {
 					module: self.apple_module.as_deref()?,
 					ty: self.apple_type.as_deref()?,
 				})
 			}
-			Target::Android | Target::AndroidX86_64 | Target::Quest => {
+			Target::Android | Target::AndroidX86_64 | Target::Quest | Target::Wearos => {
 				Some(Implementation::Android {
 					ty: self.android_type.as_deref()?,
 				})
@@ -507,9 +507,7 @@ impl Plugin {
 					ty: self.harmonyos_type.as_deref()?,
 				})
 			}
-			Target::Windows | Target::Linux | Target::Tui | Target::Wearos | Target::Watchos => {
-				None
-			}
+			Target::Windows | Target::Linux | Target::Tui => None,
 		}
 	}
 }

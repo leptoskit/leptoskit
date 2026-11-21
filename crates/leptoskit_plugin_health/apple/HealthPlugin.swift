@@ -291,7 +291,6 @@ public final class HealthPlugin: NativePlugin {
 }
 
 #if os(iOS) || os(watchOS)
-#if os(iOS) || os(watchOS)
 private extension HealthPlugin {
     /// Serialises an anchor so the token the guest stores is plain text.
     static func encode(_ anchor: HKQueryAnchor) throws -> String {
@@ -327,7 +326,6 @@ private extension HealthPlugin {
         return parts.isEmpty ? nil : "1;" + parts.joined(separator: ";")
     }
 }
-#endif
 
 /// What one anchored query observed: upserts, deletions and where to continue.
 struct AnchoredResult {

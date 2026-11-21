@@ -29,26 +29,34 @@ export class WatchSyncPlugin implements NativePlugin {
 		const wearEngine = this.loadWearEngine();
 		switch (call.method) {
 			case 0:
-			case 5: {
-				const buf = new ArrayBuffer(12);
-				const view = new DataView(buf);
-				view.setUint32(0, wearEngine ? 3 : 0, true); // HuaweiWearEngine or None
-				view.setUint32(4, wearEngine ? 1 : 0, true);
-				view.setUint32(8, 0xffffffff, true);
-				return buf;
-			}
+				return this.encodeCurrentStatus(wearEngine);
 			case 4:
 				return new ArrayBuffer(0);
-			default:
-				if (!wearEngine) {
-					throw new PluginError(UNAVAILABLE);
+			case 5: {
+				const current = this.encodeCurrentStatus(wearEngine);
+				if (!buffersEqual(current, call.payload)) {
+					return current;
 				}
-				return new ArrayBuffer(0);
+				return new Promise<ArrayBuffer>((_resolve, reject) => {
+					call.onCancel(() => reject(new PluginError(CANCELLED)));
+				});
+			}
+			default:
+				throw new PluginError(UNAVAILABLE);
 		}
 	}
 
 	close(): void {
 		this.closed = true;
+	}
+
+	private encodeCurrentStatus(wearEngine: Record<string, unknown> | undefined): ArrayBuffer {
+		const buf = new ArrayBuffer(12);
+		const view = new DataView(buf);
+		view.setUint32(0, wearEngine ? 3 : 0, true); // HuaweiWearEngine or None
+		view.setUint32(4, wearEngine ? 1 : 0, true);
+		view.setUint32(8, 0xffffffff, true);
+		return buf;
 	}
 
 	private loadWearEngine(): Record<string, unknown> | undefined {
@@ -61,4 +69,14 @@ export class WatchSyncPlugin implements NativePlugin {
 			return undefined;
 		}
 	}
+}
+
+function buffersEqual(a: ArrayBuffer, b: ArrayBuffer): boolean {
+	if (a.byteLength !== b.byteLength) return false;
+	const ua = new Uint8Array(a);
+	const ub = new Uint8Array(b);
+	for (let i = 0; i < ua.byteLength; i++) {
+		if (ua[i] !== ub[i]) return false;
+	}
+	return true;
 }

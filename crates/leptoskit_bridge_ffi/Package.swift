@@ -58,7 +58,7 @@ let controllerTargets: [Target] = []
 
 let package = Package(
     name: "LeptosKitBridge",
-    platforms: [.macOS(.v14), .iOS(.v17)],
+    platforms: [.macOS(.v14), .iOS(.v17), .watchOS(.v10)],
     products: [.library(name: "LeptosKitBridge", targets: ["LeptosKitBridge"])],
     targets: [
         .systemLibrary(name: "CLeptosKitBridge", path: "include"),
@@ -68,7 +68,7 @@ let package = Package(
             path: "apple",
             linkerSettings: [
                 .linkedLibrary("leptoskit_bridge_ffi"),
-                .linkedLibrary("c++", .when(platforms: [.macOS, .iOS]))
+                .linkedLibrary("c++", .when(platforms: [.macOS, .iOS, .watchOS]))
             ]
         ),
         .testTarget(

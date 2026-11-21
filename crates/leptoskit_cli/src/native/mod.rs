@@ -262,14 +262,32 @@ pub(crate) fn host_dir(root: &Path, target: Target) -> PathBuf {
 		return directory;
 	}
 
+	if target == Target::Wearos {
+		let android_owned = root.join("platforms/android");
+		if android_owned.join("Cargo.toml").is_file() {
+			return android_owned;
+		}
+		let android_dir = root.join("android");
+		if android_dir.join("Cargo.toml").is_file() {
+			return android_dir;
+		}
+		if !root.join("hosts/wearos/Cargo.toml").is_file() {
+			return root.join("hosts/android");
+		}
+	}
+
 	root.join("hosts").join(platform)
 }
 
 /// Platform-local generated state prevents one destination replacing another.
 pub(crate) fn generated_dir(root: &Path, target: Target) -> PathBuf {
 	let generated = root.join(".leptoskit");
+	let host = host_dir(root, target);
 
-	if host_dir(root, target).join("Cargo.toml").is_file() {
+	if host.join("Cargo.toml").is_file() {
+		if let Some(name) = host.file_name() {
+			return generated.join(name);
+		}
 		return generated.join(target.host_platform().to_string());
 	}
 
@@ -492,7 +510,7 @@ pub fn run(command: NativeCommand) -> Result<()> {
 		// directives, so the libraries rustc reports for it are written into
 		// the host's CMake project before Gradle links the JNI library.
 		let native_libraries = run_host_library(&mut host)?;
-		project::write_android_cmake(&root, &registry, &native_libraries)?;
+		project::write_android_cmake(&root, target, &registry, &native_libraries)?;
 	} else {
 		run_tool(&mut host)?;
 	}
@@ -744,7 +762,10 @@ fn host_library_command(
 		}
 
 		host.args(["--", "--print", "native-static-libs"]);
-	} else if matches!(target, Target::Ios | Target::IosSimulator | Target::Macos) {
+	} else if matches!(
+		target,
+		Target::Ios | Target::IosSimulator | Target::Macos | Target::Watchos
+	) {
 		for (key, value) in apple_cc_environment(target) {
 			host.env(key, value);
 		}
@@ -804,9 +825,14 @@ fn configure_android_toolchain(
 	} else {
 		"aarch64"
 	};
+	let api_level = if matches!(target, Target::Wearos) {
+		30
+	} else {
+		26
+	};
 
 	let tools = ndk.join(format!("toolchains/llvm/prebuilt/{NDK_HOST}/bin"));
-	let clang_target = format!("{architecture}-linux-android26");
+	let clang_target = format!("{architecture}-linux-android{api_level}");
 	let compiler = tools.join(format!("{clang_target}-clang{NDK_LAUNCHER_SUFFIX}"));
 	anyhow::ensure!(
 		compiler.is_file(),
@@ -814,7 +840,7 @@ fn configure_android_toolchain(
 		compiler.display()
 	);
 	project::write(
-		&root.join(".leptoskit/android/ndk-path.txt"),
+		&project::android_output_dir(root, target).join("ndk-path.txt"),
 		&gradle_ndk_path(ndk)?,
 	)?;
 	// C dependencies of the host (ring, through the code push transport's
@@ -875,7 +901,7 @@ fn build_application(
 	match target {
 		Target::Macos => desktop::build(root, config, release, unsigned),
 		Target::Windows | Target::Linux | Target::Tui => unreachable!("desktop hosts built above"),
-		Target::Harmonyos | Target::HarmonyosX86_64 => harmonyos::build(root, release),
+		Target::Harmonyos | Target::HarmonyosX86_64 => harmonyos::build(root, target, release),
 		Target::Watchos => watch::build_watchos(root, release),
 		Target::Ios | Target::IosSimulator => {
 			install_ios_pods(root)?;
@@ -1120,6 +1146,7 @@ fn apple_cc_environment(target: Target) -> Vec<(String, String)> {
 	let sdk = match target {
 		Target::Ios => "iphoneos",
 		Target::IosSimulator => "iphonesimulator",
+		Target::Watchos => "watchos",
 		_ => "macosx",
 	};
 
@@ -1237,7 +1264,8 @@ fn assets_destination(root: &Path, target: Target) -> PathBuf {
 	match target {
 		Target::Linux | Target::Windows => generated_dir(root, target).join("app").join(ASSETS),
 		Target::Harmonyos | Target::HarmonyosX86_64 => {
-			root.join("hosts/harmonyos/entry/src/main/resources/rawfile")
+			harmonyos::harmonyos_host_dir(root, target)
+				.join("entry/src/main/resources/rawfile")
 				.join(ASSETS)
 		}
 		_ => generated_dir(root, target).join("mobile").join(ASSETS),
@@ -1270,7 +1298,8 @@ fn write_assets(
 	if matches!(target, Target::Harmonyos | Target::HarmonyosX86_64) {
 		return project::copy(
 			&bundle_dir.join("app.wasm"),
-			&root.join("hosts/harmonyos/entry/src/main/resources/rawfile/app.wasm"),
+			&harmonyos::harmonyos_host_dir(root, target)
+				.join("entry/src/main/resources/rawfile/app.wasm"),
 		);
 	}
 

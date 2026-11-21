@@ -1,6 +1,6 @@
 import CLeptosKitBridge
 import Foundation
-#if canImport(UIKit)
+#if canImport(UIKit) && !os(watchOS)
     import UIKit
     public typealias NativePresentationOwner = UIViewController
 #elseif canImport(AppKit)
@@ -8,14 +8,14 @@ import Foundation
     public typealias NativePresentationOwner = NSViewController
 #endif
 
-#if canImport(UIKit) || canImport(AppKit)
+#if (canImport(UIKit) && !os(watchOS)) || canImport(AppKit)
     /// The owning app's presentation context. It never discovers global windows
     /// and does not extend the controller's lifetime. Plugins may retain context.
     @MainActor
     public final class NativePluginContext {
         private weak var owner: NativePresentationOwner?
 
-        #if canImport(UIKit)
+        #if canImport(UIKit) && !os(watchOS)
             /// An optional orientation restriction observed by the owning controller.
             /// The plugin requests scene geometry and orientation updates explicitly.
             public var orientationMask: UIInterfaceOrientationMask?
@@ -32,7 +32,7 @@ import Foundation
                 throw PluginError.unavailable
             }
 
-            #if canImport(UIKit)
+            #if canImport(UIKit) && !os(watchOS)
 
                 guard window.windowScene?.activationState == .foregroundActive else {
                     throw PluginError.unavailable

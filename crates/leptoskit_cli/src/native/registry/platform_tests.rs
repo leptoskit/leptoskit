@@ -341,7 +341,7 @@ fn experimental_only_rust_plugin_reports_missing_flag_when_not_opted_in() {
 }
 
 #[test]
-fn watch_targets_consult_platform_tables_without_native_hosts() {
+fn watch_targets_bind_native_and_rust_implementations() {
 	let with_android = resolve_metadata(
 		runtime_metadata(&json!({
 			"name": "echo", "android-type": "dev.example.EchoPlugin"
@@ -349,8 +349,7 @@ fn watch_targets_consult_platform_tables_without_native_hosts() {
 		&echo_config(),
 	)
 	.unwrap();
-	// Wear OS reads the Android table but has no native host kind yet, so the
-	// Android type does not bind; watchOS has no table at all.
+	// Without a native host kind, Android-only plugins do not bind.
 	assert_eq!(
 		with_android.plugins[0].implementation(Target::Wearos, RUNS_RUST),
 		Err(Missing::NoImplementation)
@@ -358,6 +357,30 @@ fn watch_targets_consult_platform_tables_without_native_hosts() {
 	assert_eq!(
 		with_android.plugins[0].implementation(Target::Watchos, RUNS_RUST),
 		Err(Missing::NoImplementation)
+	);
+	// With real watch host capabilities, Wear OS binds Android plugins.
+	assert_eq!(
+		with_android.plugins[0]
+			.implementation(Target::Wearos, HostCapabilities::of(Target::Wearos)),
+		Ok(Implementation::Android {
+			ty: "dev.example.EchoPlugin",
+		})
+	);
+
+	let with_apple = resolve_metadata(
+		runtime_metadata(&json!({
+			"name": "echo", "apple-module": "LeptosKitEcho", "apple-type": "EchoPlugin"
+		})),
+		&echo_config(),
+	)
+	.unwrap();
+	assert_eq!(
+		with_apple.plugins[0]
+			.implementation(Target::Watchos, HostCapabilities::of(Target::Watchos)),
+		Ok(Implementation::Apple {
+			module: "LeptosKitEcho",
+			ty: "EchoPlugin",
+		})
 	);
 
 	let with_rust = resolve_metadata(
