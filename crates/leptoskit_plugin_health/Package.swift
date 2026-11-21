@@ -3,7 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "LeptosKitHealth",
-    platforms: [.macOS(.v14), .iOS(.v17)],
+    platforms: [.macOS(.v14), .iOS(.v17), .watchOS(.v10)],
     products: [.library(name: "LeptosKitHealth", targets: ["LeptosKitHealth"])],
     dependencies: [.package(path: "../leptoskit_bridge_ffi")],
     targets: [

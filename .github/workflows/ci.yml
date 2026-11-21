@@ -127,7 +127,15 @@ jobs:
           cargo test --locked --lib \
             --package leptoskit_yoga \
             --package leptoskit_native \
-            --package leptoskit_config
+            --package leptoskit_config \
+            --package leptoskit_watch \
+            --package leptoskit_watchos \
+            --package leptoskit_wearos \
+            --package leptoskit_platform_harmonyos \
+            --package leptoskit_plugin_wearable \
+            --package leptoskit_plugin_watch_sync \
+            --package leptoskit_plugin_ble \
+            --package leptoskit_plugin_health
 
       - name: check generated configuration schemas
         shell: bash

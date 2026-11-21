@@ -216,7 +216,7 @@ fn android_cmake_links_the_libraries_rustc_reports_without_repeats() {
 
 	// Generation alone names the archive and the NDK's own libraries; the host
 	// build then adds the ones rustc reports for the archive.
-	write_android_cmake(&root, &registry, &[]).unwrap();
+	write_android_cmake(&root, Target::Android, &registry, &[]).unwrap();
 	let cmake = std::fs::read_to_string(&path).unwrap();
 	assert!(
 		cmake.contains(
@@ -227,6 +227,7 @@ fn android_cmake_links_the_libraries_rustc_reports_without_repeats() {
 
 	write_android_cmake(
 		&root,
+		Target::Android,
 		&registry,
 		&[
 			"dl".to_owned(),

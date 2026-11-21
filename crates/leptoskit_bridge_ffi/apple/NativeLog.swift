@@ -1,7 +1,9 @@
 import CLeptosKitBridge
 import Foundation
-#if canImport(UIKit)
+#if canImport(UIKit) && !os(watchOS)
 import UIKit
+#elseif os(watchOS)
+import WatchKit
 #elseif canImport(AppKit)
 import AppKit
 #endif
@@ -57,9 +59,13 @@ public enum NativeLog {
 
     @MainActor
     private static let lifecycle: [NSObjectProtocol] = {
-        #if canImport(UIKit)
+        #if canImport(UIKit) && !os(watchOS)
         let (paused, resumed) = (
             UIApplication.willResignActiveNotification, UIApplication.didBecomeActiveNotification
+        )
+        #elseif os(watchOS)
+        let (paused, resumed) = (
+            WKApplication.willResignActiveNotification, WKApplication.didBecomeActiveNotification
         )
         #elseif canImport(AppKit)
         let (paused, resumed) = (

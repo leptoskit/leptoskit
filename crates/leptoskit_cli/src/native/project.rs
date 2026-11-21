@@ -391,11 +391,7 @@ fn android_host_for(
 	wearos: Option<&leptoskit_config::WearosConfig>,
 ) -> Result<()> {
 	let push = config.native.android.push;
-	let dir = if target == Target::Wearos && root.join("platforms/wearos/Cargo.toml").is_file() {
-		root.join(".leptoskit/wearos")
-	} else {
-		root.join(".leptoskit/android")
-	};
+	let dir = android_output_dir(root, target);
 	write(&dir.join("version.properties"), &android_version(config))?;
 	write(
 		&dir.join("plugin-dependencies.txt"),
@@ -413,7 +409,7 @@ fn android_host_for(
 		 Long,\n        dispatcher: NativeDispatcher,\n    ) {\n",
 	);
 
-	android_registrant(registry, &sources, &mut kotlin)?;
+	android_registrant(registry, target, &sources, &mut kotlin)?;
 	if push {
 		write(
 			&sources.join(MESSAGING_SERVICE_FILE),
@@ -558,7 +554,16 @@ fn android_host_for(
 	}
 
 	write(&dir.join("AndroidManifest.xml"), &manifest)?;
-	write_android_cmake(root, registry, &[])
+	write_android_cmake(root, target, registry, &[])
+}
+
+/// Generated directory for an Android or Wear OS host build.
+pub(super) fn android_output_dir(root: &Path, target: Target) -> std::path::PathBuf {
+	if target == Target::Wearos && root.join("platforms/wearos/Cargo.toml").is_file() {
+		root.join(".leptoskit/wearos")
+	} else {
+		root.join(".leptoskit/android")
+	}
 }
 
 /// Writes the `CMake` project that builds the host's JNI library around the
@@ -568,9 +573,11 @@ fn android_host_for(
 /// named again here.
 pub(super) fn write_android_cmake(
 	root: &Path,
+	target: Target,
 	registry: &Registry,
 	native: &[String],
 ) -> Result<()> {
+	let output_dir = android_output_dir(root, target);
 	let cmake = format!(
 		"cmake_minimum_required(VERSION 3.22)\nproject(leptoskit_app LANGUAGES \
 		 CXX)\nadd_library(runtime STATIC IMPORTED)\nset_target_properties(runtime PROPERTIES \
@@ -580,12 +587,12 @@ pub(super) fn write_android_cmake(
 		 -Werror)\ntarget_compile_options(leptoskit_bridge_jni PRIVATE -ffunction-sections \
 		 -fdata-sections)\ntarget_link_options(leptoskit_bridge_jni PRIVATE \
 		 -Wl,--gc-sections)\ntarget_link_libraries(leptoskit_bridge_jni PRIVATE {})\n",
-		quote(&super::generated_dir(root, Target::Android).join("lib/libleptoskit_bridge_ffi.a"))?,
+		quote(&super::generated_dir(root, target).join("lib/libleptoskit_bridge_ffi.a"))?,
 		quote(&registry.bridge.join("android/bridge.cpp"))?,
 		quote(&registry.bridge.join("mobile/app.cpp"))?,
 		android_link_libraries(native)
 	);
-	write(&root.join(".leptoskit/android/CMakeLists.txt"), &cmake)
+	write(&output_dir.join("CMakeLists.txt"), &cmake)
 }
 
 /// The C++ runtime, which the host project owns: `CMake` compiles the JNI
@@ -1092,8 +1099,13 @@ pub(super) fn register_rust_plugin(
 }
 
 /// Native handlers retain order independently of Rust service installation.
-fn android_registrant(registry: &Registry, sources: &Path, kotlin: &mut String) -> Result<()> {
-	for (index, plugin, implementation) in registry.implementations(Target::Android)? {
+fn android_registrant(
+	registry: &Registry,
+	target: Target,
+	sources: &Path,
+	kotlin: &mut String,
+) -> Result<()> {
+	for (index, plugin, implementation) in registry.implementations(target)? {
 		let Some(Implementation::Android { ty }) = implementation.native() else {
 			continue;
 		};

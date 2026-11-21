@@ -13,8 +13,8 @@ final class HealthTests: XCTestCase {
 
     func testAvailabilityAndMaskRepliesMatchTheRustFraming() {
         XCTAssertEqual(encodeAvailability(3), Data([3, 0, 0, 0]))
-        XCTAssertEqual(encodeMask(HealthWire.appleTypes, flags: HealthWire.flagExact), reply(0x1FB, 4))
-        XCTAssertEqual(HealthWire.appleTypes, 0x1FB)
+        XCTAssertEqual(encodeMask(HealthWire.appleTypes, flags: HealthWire.flagExact), reply(0x1FFB, 4))
+        XCTAssertEqual(HealthWire.appleTypes, 0x1FFB)
         XCTAssertEqual((HealthWire.appleTypes >> 2) & 1, 0, "RMSSD stays Health Connect only")
     }
 
@@ -112,7 +112,7 @@ final class HealthTests: XCTestCase {
 
     func testTypesRequestsCarryMasksAndFlags() throws {
         let request = try TypesRequest(try types(HealthWire.appleTypes, 0))
-        XCTAssertEqual(request.types.count, 8)
+        XCTAssertEqual(request.types.count, 12)
         XCTAssertFalse(request.types.contains(2))
         XCTAssertThrowsError(try TypesRequest(try types(0, 0)))
         XCTAssertThrowsError(try TypesRequest(try types(1 << 2, 0)))

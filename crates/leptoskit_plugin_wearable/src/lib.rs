@@ -297,6 +297,38 @@ impl Accuracy {
 	}
 }
 
+/// Single-lead watch ECG rhythm classification.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(u32)]
+pub enum EcgClassification {
+	/// Classification not reported or not set.
+	Unknown = 0,
+	/// Normal sinus rhythm.
+	SinusRhythm = 1,
+	/// Signs of atrial fibrillation.
+	AtrialFibrillation = 2,
+	/// Low or high heart rate outside the algorithm's classification range.
+	LowOrHighHeartRate = 3,
+	/// Inconclusive recording.
+	Inconclusive = 4,
+	/// Poor signal / motion artefact.
+	PoorRecording = 5,
+}
+
+impl EcgClassification {
+	const fn from_code(code: u32) -> Result<Self, Error> {
+		match code {
+			0 => Ok(Self::Unknown),
+			1 => Ok(Self::SinusRhythm),
+			2 => Ok(Self::AtrialFibrillation),
+			3 => Ok(Self::LowOrHighHeartRate),
+			4 => Ok(Self::Inconclusive),
+			5 => Ok(Self::PoorRecording),
+			_ => Err(Error::InvalidArgument),
+		}
+	}
+}
+
 /// One typed biometric or wear-state reading delivered from a watch.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Reading {
@@ -393,6 +425,15 @@ pub enum Reading {
 		/// Body water percentage when measured.
 		water_percent: Option<f64>,
 	},
+	/// Single-lead electrocardiogram summary.
+	Ecg {
+		/// Unix milliseconds.
+		time_ms: i64,
+		/// Rhythm classification reported by the watch.
+		classification: EcgClassification,
+		/// Average heart rate during the recording, when reported.
+		average_bpm: Option<f64>,
+	},
 }
 
 const KIND_HR: u32 = 0;
@@ -406,6 +447,7 @@ const KIND_DISTANCE: u32 = 7;
 const KIND_WEAR: u32 = 8;
 const KIND_STRESS: u32 = 9;
 const KIND_BIA: u32 = 10;
+const KIND_ECG: u32 = 11;
 
 /// One bounded batch of wrist readings drained from the native ring buffer.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -552,6 +594,16 @@ fn encode_reading(w: &mut Writer, reading: &Reading) -> Result<(), Error> {
 				.opt_f64(*skeletal_muscle_kg)?
 				.opt_f64(*water_percent)?;
 		}
+		Reading::Ecg {
+			time_ms,
+			classification,
+			average_bpm,
+		} => {
+			w.u32(KIND_ECG)
+				.i64(*time_ms)
+				.u32(*classification as u32)
+				.opt_f64(*average_bpm)?;
+		}
 	}
 	Ok(())
 }
@@ -668,6 +720,13 @@ fn decode_reading(r: &mut Reader<'_>) -> Result<Reading, Error> {
 				body_fat_percent: r.opt_f64()?,
 				skeletal_muscle_kg: r.opt_f64()?,
 				water_percent: r.opt_f64()?,
+			})
+		}
+		KIND_ECG => {
+			Ok(Reading::Ecg {
+				time_ms: r.i64()?,
+				classification: EcgClassification::from_code(r.u32()?)?,
+				average_bpm: r.opt_f64()?,
 			})
 		}
 		_ => Err(Error::InvalidArgument),
@@ -952,6 +1011,11 @@ mod tests {
 					body_fat_percent: Some(18.5),
 					skeletal_muscle_kg: Some(34.2),
 					water_percent: Some(59.0),
+				},
+				Reading::Ecg {
+					time_ms: 1_700_000_007_000,
+					classification: EcgClassification::SinusRhythm,
+					average_bpm: Some(68.0),
 				},
 			],
 		};

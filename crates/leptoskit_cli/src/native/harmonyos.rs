@@ -250,13 +250,13 @@ pub(super) fn generate(
 		&format!(
 			"set(LEPTOSKIT_BRIDGE {})\nset(LEPTOSKIT_LIBRARY {})\n",
 			cmake_path(&registry.bridge)?,
-			cmake_path(&root.join(".leptoskit/lib/libleptoskit_bridge_ffi.a"))?
+			cmake_path(&super::generated_dir(root, target).join("lib/libleptoskit_bridge_ffi.a"))?
 		),
 	)?;
 	Ok(())
 }
 
-fn harmonyos_host_dir(root: &Path, target: Target) -> PathBuf {
+pub(super) fn harmonyos_host_dir(root: &Path, target: Target) -> PathBuf {
 	let dir = super::host_dir(root, target);
 	if dir.join("Cargo.toml").is_file() {
 		dir
@@ -269,6 +269,13 @@ fn harmonyos_host_dir(root: &Path, target: Target) -> PathBuf {
 /// Huawei Watch) and `permissions` into `entry/src/main/module.json5` when
 /// explicitly configured.
 fn apply_module_config(host: &Path, config: &LeptoskitConfig) -> Result<()> {
+	const USER_GRANT_PERMISSIONS: &[&str] = &[
+		"ohos.permission.READ_HEALTH_DATA",
+		"ohos.permission.ACTIVITY_MOTION",
+		"ohos.permission.ACCESS_BLUETOOTH",
+		"ohos.permission.LOCATION",
+		"ohos.permission.APPROXIMATELY_LOCATION",
+	];
 	let hcfg = &config.native.harmonyos;
 	if *hcfg == leptoskit_config::HarmonyosConfig::default() {
 		return Ok(());
@@ -301,7 +308,19 @@ fn apply_module_config(host: &Path, config: &LeptoskitConfig) -> Result<()> {
 					entry.get("name").and_then(serde_json::Value::as_str) == Some(perm.as_str())
 				});
 				if !already {
-					existing.push(serde_json::json!({ "name": perm }));
+					let entry = if USER_GRANT_PERMISSIONS.contains(&perm.as_str()) {
+						serde_json::json!({
+							"name": perm,
+							"reason": "$string:app_name",
+							"usedScene": {
+								"abilities": ["EntryAbility"],
+								"when": "inuse",
+							}
+						})
+					} else {
+						serde_json::json!({ "name": perm })
+					};
+					existing.push(entry);
 				}
 			}
 			module.insert(
@@ -347,35 +366,32 @@ fn scaffold_into(host: &Path, config: &LeptoskitConfig) -> Result<()> {
 
 /// Package with the SDK-installed Hvigor command, without downloading a
 /// wrapper.
-pub(super) fn build(root: &Path, release: bool) -> Result<()> {
+pub(super) fn build(root: &Path, target: Target, release: bool) -> Result<()> {
+	let host = harmonyos_host_dir(root, target);
 	let executable = std::env::var_os("HVIGORW").unwrap_or_else(|| "hvigorw".into());
-	super::run_tool(
-		Command::new(executable)
-			.current_dir(root.join("hosts/harmonyos"))
-			.args([
-				"--mode",
-				"module",
-				"-p",
-				"product=default",
-				"-p",
-				"module=entry@default",
-				"-p",
-				if release {
-					"buildMode=release"
-				} else {
-					"buildMode=debug"
-				},
-				"assembleHap",
-				"--no-daemon",
-			]),
-	)
+	super::run_tool(Command::new(executable).current_dir(&host).args([
+		"--mode",
+		"module",
+		"-p",
+		"product=default",
+		"-p",
+		"module=entry@default",
+		"-p",
+		if release {
+			"buildMode=release"
+		} else {
+			"buildMode=debug"
+		},
+		"assembleHap",
+		"--no-daemon",
+	]))
 	.context(
 		"HarmonyOS HAP packaging requires DevEco's hvigorw on PATH (or set HVIGORW); sync the \
 		 project with ohpm install first",
 	)?;
 	println!(
-		"built HAP in {}/hosts/harmonyos/entry/build/default/outputs/default",
-		root.display()
+		"built HAP in {}/entry/build/default/outputs/default",
+		host.display()
 	);
 	Ok(())
 }

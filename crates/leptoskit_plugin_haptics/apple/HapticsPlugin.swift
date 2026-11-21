@@ -2,6 +2,8 @@ import Foundation
 import LeptosKitBridge
 #if os(iOS)
 import UIKit
+#elseif os(watchOS)
+import WatchKit
 #elseif os(macOS)
 import AppKit
 #endif
@@ -38,6 +40,8 @@ public final class HapticsPlugin: NativePlugin {
 
         #if os(iOS)
         perform(method, value)
+        #elseif os(watchOS)
+        performWatch(method, value)
         #elseif os(macOS)
         let pattern: NSHapticFeedbackManager.FeedbackPattern = switch method {
         case 0: .alignment
@@ -63,6 +67,25 @@ public final class HapticsPlugin: NativePlugin {
             let kinds: [UINotificationFeedbackGenerator.FeedbackType] = [.success, .warning, .error]
             notification.notificationOccurred(kinds[Int(value)])
         }
+    }
+    #elseif os(watchOS)
+    private func performWatch(_ method: UInt32, _ value: UInt32) {
+        let haptic: WKHapticType = switch method {
+        case 0: .click
+        case 1:
+            switch value {
+            case 0, 4: .directionUp
+            case 2, 3: .stop
+            default: .click
+            }
+        default:
+            switch value {
+            case 0: .success
+            case 1: .retry
+            default: .failure
+            }
+        }
+        WKInterfaceDevice.current().play(haptic)
     }
     #endif
 }

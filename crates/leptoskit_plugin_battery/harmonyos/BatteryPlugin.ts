@@ -37,10 +37,9 @@ export class BatteryPlugin implements NativePlugin {
 		const charge = soc >= 0 && soc <= 100 ? Math.round(soc * 10) : 0xffffffff;
 		const status = batteryInfo.chargingStatus;
 		let state = 0; // Unknown
-		if (status === batteryInfo.BatteryChargeState.NONE) state = 1; // Discharging
+		if (status === batteryInfo.BatteryChargeState.DISABLE) state = 1; // Discharging
 		else if (status === batteryInfo.BatteryChargeState.ENABLE) state = 2; // Charging
 		else if (status === batteryInfo.BatteryChargeState.FULL) state = 3; // Full
-		else if (status === batteryInfo.BatteryChargeState.DISABLE) state = 4; // NotCharging
 
 		const out = new ArrayBuffer(16);
 		const view = new DataView(out);

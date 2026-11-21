@@ -90,6 +90,7 @@ private enum Activity {
     case hiking
     case strengthTraining
     case yoga
+    case highIntensityIntervalTraining
     case rowing
     case elliptical
     case stairClimbing
@@ -106,6 +107,7 @@ private enum Activity {
         .hiking: .hiking,
         .traditionalStrengthTraining: .strengthTraining,
         .yoga: .yoga,
+        .highIntensityIntervalTraining: .highIntensityIntervalTraining,
         .rowing: .rowing,
         .elliptical: .elliptical,
         .stairClimbing: .stairClimbing,
@@ -125,6 +127,7 @@ private enum Activity {
         case .hiking: HealthActivity.hiking
         case .strengthTraining: HealthActivity.strengthTraining
         case .yoga: HealthActivity.yoga
+        case .highIntensityIntervalTraining: HealthActivity.highIntensityIntervalTraining
         case .rowing: HealthActivity.rowing
         case .elliptical: HealthActivity.elliptical
         case .stairClimbing: HealthActivity.stairClimbing
@@ -149,12 +152,13 @@ private enum HealthActivity {
     static let hiking = 5
     static let strengthTraining = 6
     static let yoga = 7
-    static let rowing = 8
-    static let elliptical = 9
-    static let stairClimbing = 10
-    static let dancing = 11
-    static let pilates = 12
-    static let martialArts = 13
+    static let highIntensityIntervalTraining = 8
+    static let rowing = 9
+    static let elliptical = 10
+    static let stairClimbing = 11
+    static let dancing = 12
+    static let pilates = 13
+    static let martialArts = 14
 }
 
 extension SleepStage.Stage {

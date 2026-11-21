@@ -109,13 +109,25 @@ fn watch_services(
 	prefix: &str,
 	wearos: &WearosConfig,
 ) -> Result<String> {
-	let has_service = |name: &str| {
+	let has_service_or_action = |name: &str, action: &str| {
 		application.children().any(|node| {
-			node.has_tag_name("service") && node.attribute((ANDROID, "name")) == Some(name)
+			if !node.has_tag_name("service") {
+				return false;
+			}
+			if node.attribute((ANDROID, "name")) == Some(name) {
+				return true;
+			}
+			node.descendants().any(|child| {
+				child.has_tag_name("action") && child.attribute((ANDROID, "name")) == Some(action)
+			})
 		})
 	};
 	let mut out = String::new();
-	if wearos.tile && !has_service("dev.leptoskit.wearos.LeptosKitTileService") {
+	if wearos.tile
+		&& !has_service_or_action(
+			"dev.leptoskit.wearos.LeptosKitTileService",
+			"androidx.wear.tiles.action.BIND_TILE_PROVIDER",
+		) {
 		writeln!(
 			out,
 			"<service {prefix}:name=\"dev.leptoskit.wearos.LeptosKitTileService\" \
@@ -126,7 +138,11 @@ fn watch_services(
 			 service>"
 		)?;
 	}
-	if wearos.complication && !has_service("dev.leptoskit.wearos.LeptosKitComplicationDataSource") {
+	if wearos.complication
+		&& !has_service_or_action(
+			"dev.leptoskit.wearos.LeptosKitComplicationDataSource",
+			"android.support.wearable.complications.ACTION_COMPLICATION_UPDATE_REQUEST",
+		) {
 		writeln!(
 			out,
 			"<service {prefix}:name=\"dev.leptoskit.wearos.LeptosKitComplicationDataSource\" \

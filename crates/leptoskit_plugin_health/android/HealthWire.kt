@@ -23,7 +23,7 @@ import java.nio.ByteOrder
  * layout. Little-endian throughout, and an optional string is either a u32
  * byte length and its bytes, or the length [ABSENT_LENGTH].
  */
-internal const val ABSENT_LENGTH: Int = Int.MIN_VALUE
+internal const val ABSENT_LENGTH: Int = -1
 
 /** Data type codes, in wire order; SDNN (3) is HealthKit only. */
 internal const val TYPE_HEART_RATE = 0
@@ -39,8 +39,8 @@ internal const val TYPE_ACTIVE_CALORIES = 10
 internal const val TYPE_DISTANCE = 11
 internal const val TYPE_FLOORS_CLIMBED = 12
 
-/** Every type Health Connect records, as a bit mask. */
-internal const val ANDROID_TYPES = 0x1FF3
+/** Every type Health Connect records, as a bit mask (bits 0..12 except bit 3 SDNN). */
+internal const val ANDROID_TYPES = 0x1FF7
 
 /** Sleep stage codes, in wire order. */
 internal const val STAGE_UNKNOWN = 0
@@ -60,12 +60,13 @@ internal const val ACTIVITY_SWIMMING = 4
 internal const val ACTIVITY_HIKING = 5
 internal const val ACTIVITY_STRENGTH = 6
 internal const val ACTIVITY_YOGA = 7
-internal const val ACTIVITY_ROWING = 8
-internal const val ACTIVITY_ELLIPTICAL = 9
-internal const val ACTIVITY_STAIR_CLIMBING = 10
-internal const val ACTIVITY_DANCING = 11
-internal const val ACTIVITY_PILATES = 12
-internal const val ACTIVITY_MARTIAL_ARTS = 13
+internal const val ACTIVITY_HIGH_INTENSITY_INTERVAL_TRAINING = 8
+internal const val ACTIVITY_ROWING = 9
+internal const val ACTIVITY_ELLIPTICAL = 10
+internal const val ACTIVITY_STAIR_CLIMBING = 11
+internal const val ACTIVITY_DANCING = 12
+internal const val ACTIVITY_PILATES = 13
+internal const val ACTIVITY_MARTIAL_ARTS = 14
 
 /** The most samples one read may ask for. */
 internal const val MAX_PAGE_SIZE = 1000
@@ -428,6 +429,9 @@ internal fun activityCode(type: Int): Int =
         -> ACTIVITY_STRENGTH
 
         ExerciseSessionRecord.EXERCISE_TYPE_YOGA -> ACTIVITY_YOGA
+
+        ExerciseSessionRecord.EXERCISE_TYPE_HIGH_INTENSITY_INTERVAL_TRAINING ->
+            ACTIVITY_HIGH_INTENSITY_INTERVAL_TRAINING
 
         ExerciseSessionRecord.EXERCISE_TYPE_ROWING,
         ExerciseSessionRecord.EXERCISE_TYPE_ROWING_MACHINE,

@@ -3,7 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "LeptosKitWatchSync",
-    platforms: [.macOS(.v14), .iOS(.v17)],
+    platforms: [.macOS(.v14), .iOS(.v17), .watchOS(.v10)],
     products: [.library(name: "LeptosKitWatchSync", targets: ["LeptosKitWatchSync"])],
     dependencies: [.package(path: "../leptoskit_bridge_ffi")],
     targets: [
