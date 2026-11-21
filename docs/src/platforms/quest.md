@@ -80,15 +80,37 @@ async fn enter_the_hunt(scene: u32) -> Result<leptoskit_xr::Session, leptoskit_x
 
 The headset leaves the panel for an immersive view of the scene, with the room showing through where the scene draws nothing. Your code keeps running and receives the session's frames, controllers, and hands as usual. When you `stop` the session, or the player leaves it, the immersive view closes and the panel comes back in Home. The scene needs `leptoskit`'s `3d` feature; `leptoskit build --platform quest` draws it.
 
+## Publish to the Meta Horizon Store
+
+Configure `[publish.quest]` in `leptoskit.toml` with your App ID from the Meta Horizon Developer Dashboard:
+
+```toml
+[publish.quest]
+app_id = "5159709737372459"
+channel = "alpha" # alpha, beta, rc, store (Production), or alpha:quest3only
+age_group = "teens_and_adults" # teens_and_adults, mixed_ages, or children
+```
+
+Then run:
+
+```sh
+leptoskit publish quest --dry-run # check everything without building or uploading
+leptoskit publish quest           # build, sign, and upload as a draft via ovr-platform-util
+leptoskit publish quest --submit  # upload to the channel (without --draft)
+```
+
+See [Publishing to the stores](../guide/24-publishing.md#the-meta-horizon-store) for credentials, optional OBB/assets flags, and the Developer Dashboard steps left after upload.
+
 ## What works and what doesn't
 
 | Works                                                                   | Doesn't work yet                                                                                               |
 | ----------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
 | Building an APK with the Quest manifest                                 | Running it on a headset hasn't been verified                                                                   |
 | Installing onto a connected headset with `leptoskit dev`                | Drawing the app's 2D interface inside an immersive session: immersive mode shows only what the app draws in 3D |
-| Every runtime plugin the Android build has                              | Publishing to the Horizon Store with `leptoskit publish`                                                       |
-| A release APK signed with your upload key                               |                                                                                                                |
-| The `xr` plugin's headset sessions, controllers, hands, and passthrough | Uploading the signed APK to the Horizon Store: use Meta's own tools                                            |
-| Drawing a 3D scene into the headset, from a panel app too               | Running the immersive switch and the return to the panel on a headset hasn't been verified                     |
+| Every runtime plugin the Android build has                              | Submitting for Meta Horizon Store review from the CLI (Meta has no review-submission API; submit in Dashboard) |
+| A release APK signed with your upload key                               | Running the immersive switch and the return to the panel on a headset hasn't been verified                     |
+| Uploading the signed APK to Horizon Store channels with `leptoskit publish quest` |                                                                                                                |
+| The `xr` plugin's headset sessions, controllers, hands, and passthrough |                                                                                                                |
+| Drawing a 3D scene into the headset, from a panel app too               |                                                                                                                |
 
 In immersive mode the headset shows only what the app draws through OpenXR, so a Quest game draws its world, and its menus, with the 3D renderer. Set `immersive = false` for an app whose interface is its ordinary screens: it runs in a window in the player's space.

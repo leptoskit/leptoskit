@@ -4,7 +4,7 @@ Use [Monosecret](secrets.md) to manage the server and deployment credentials in 
 
 Getting an app into a store is where a release usually loses a day. Every store has its own upload API, its own version rules, its own review form, and pages that can only be filled in by hand. `leptoskit publish` does the uploading, and finishes by telling you exactly what is left in each store's dashboard, with the text to paste.
 
-Today it publishes [browser extensions](../platforms/extension.md) to the Chrome Web Store, Microsoft Edge Add-ons, and addons.mozilla.org, [iOS apps](../platforms/ios.md) to TestFlight and the App Store, [Android apps](../platforms/android.md) to Google Play and the [Solana dApp Store](#the-solana-dapp-store), and [macOS apps](../platforms/macos.md) as notarized downloads.
+Today it publishes [browser extensions](../platforms/extension.md) to the Chrome Web Store, Microsoft Edge Add-ons, and addons.mozilla.org, [iOS apps](../platforms/ios.md) to TestFlight and the App Store, [Android apps](../platforms/android.md) to Google Play and the [Solana dApp Store](#the-solana-dapp-store), [Meta Quest apps](../platforms/quest.md) to the [Meta Horizon Store](#the-meta-horizon-store), and [macOS apps](../platforms/macos.md) as notarized downloads.
 
 ## An example
 
@@ -43,6 +43,7 @@ Every store has two steps:
   - in Google Play, a draft release on the track you name;
   - for macOS, a notarized `.dmg` and `.zip` in `.leptoskit/publish/macos/`.
   - the Solana dApp Store has no draft: without `--submit`, the signed APK is built, checked, and kept in `.leptoskit/publish/solana/`, and nothing is sent.
+  - in the Meta Horizon Store, a draft Quest APK upload on the configured channel (`--draft`), so nothing reaches testers or Production users.
 
   Nobody else sees it yet.
 - **Submit.** `--submit` sends it for review, and then to users. In a terminal, it asks once more first; `--yes` skips the question for scripts, and CI never asks. `--staged` keeps an approved Chrome Web Store version until you publish it by hand.
@@ -60,6 +61,7 @@ Each run builds what it uploads in release mode, so a stale build is never uploa
 | Developer ID (macOS)   | `LEPTOSKIT_PUBLISH_MACOS_IDENTITY`: the certificate's name, plus the three App Store Connect variables, which notarize the app                                                                                                                                                                                                                                                                     | A **Developer ID Application** certificate, made in Xcode under **Settings**, **Accounts**, **Manage Certificates**; `security find-identity -v -p codesigning` shows its name                                            |
 | Google Play            | `LEPTOSKIT_PUBLISH_PLAY_SERVICE_ACCOUNT`: the JSON key, or its path; and the upload key: `LEPTOSKIT_ANDROID_KEYSTORE` (its absolute path), `LEPTOSKIT_ANDROID_KEYSTORE_PASSWORD`, `LEPTOSKIT_ANDROID_KEY_ALIAS`, `LEPTOSKIT_ANDROID_KEY_PASSWORD`                                                                                                                                                  | A Google Cloud service account with the Google Play Android Developer API turned on, invited in Play Console under **Users and permissions**; the upload key from `keytool -genkeypair`                                   |
 | Solana dApp Store      | `LEPTOSKIT_PUBLISH_SOLANA_API_KEY`: a Publisher Portal API key; `LEPTOSKIT_PUBLISH_SOLANA_KEYPAIR`: the publisher wallet's keypair file, or its JSON; and the signing keystore: `LEPTOSKIT_SOLANA_KEYSTORE` (its absolute path, or the keystore itself in `LEPTOSKIT_SOLANA_KEYSTORE_BASE64`), `LEPTOSKIT_SOLANA_KEYSTORE_PASSWORD`, `LEPTOSKIT_SOLANA_KEY_ALIAS`, `LEPTOSKIT_SOLANA_KEY_PASSWORD` | The Publisher Portal's **Settings**, **API keys** (`publish.solanamobile.com`); a new wallet from `solana-keygen new`, dedicated to publishing; a keystore from `keytool -genkeypair` that is **not** the Google Play one |
+| Meta Horizon Store     | `LEPTOSKIT_PUBLISH_QUEST_APP_SECRET` (or `LEPTOSKIT_PUBLISH_QUEST_TOKEN`), plus the Android upload key (`LEPTOSKIT_ANDROID_KEYSTORE` or `LEPTOSKIT_ANDROID_KEYSTORE_BASE64`, `LEPTOSKIT_ANDROID_KEYSTORE_PASSWORD`, `LEPTOSKIT_ANDROID_KEY_ALIAS`, `LEPTOSKIT_ANDROID_KEY_PASSWORD`)                                                                                                             | The Meta Horizon Developer Dashboard under **Development**, **API** (App Secret) or an Oculus platform utility user token; the Android upload key from `keytool -genkeypair`                                              |
 
 Set them in the environment, or put them in a TOML file outside the project and pass `--credentials <file>`. A file inside the project is refused unless git ignores it. Values are never printed, in output or in errors. (Xcode prints its own command line, which shows the App Store key's ID and issuer ID, but never the key.)
 
@@ -156,6 +158,36 @@ An upload:
 
 The store takes an APK (not an App Bundle) of at most 2 GB that supports `arm64-v8a`, signed with a key that must differ from your Google Play upload key — an APK signed with the Play key is rejected. Each update needs a changed `versionName` (`app.version`) and a `versionCode` one higher than the store's, which the portal checks: pass `--build-number <n>` to set it. After `--submit`, updates are reviewed in 1 to 2 business days (a new app takes 3 to 4), and the result arrives by email. If a review is rejected, the email names the cause — most often a publisher site that doesn't load or Terms of Use and privacy policy addresses that aren't public — and fixing it is a step the run prints.
 
+## The Meta Horizon Store
+
+Quest apps upload to a Meta Horizon Store release channel (`alpha`, `beta`, `rc`, `store`, or a subchannel like `alpha:quest3only`) through Meta's `ovr-platform-util` command. Add a `[publish.quest]` table with your Meta Horizon App ID:
+
+```toml
+[publish.quest]
+app_id = "1234567890123456"
+# Optional:
+# channel = "alpha"              # alpha, beta, rc, store (Production), or a subchannel
+# age_group = "teens_and_adults" # teens_and_adults, mixed_ages, or children
+# draft = false                  # set true to always pass --draft even with --submit
+# obb = "dist/main.obb"
+# assets_dir = "assets/dlc"
+# debug_symbols_dir = "target/quest-symbols"
+```
+
+```bash
+leptoskit publish quest --dry-run # check everything without building or uploading
+leptoskit publish quest           # build the signed Quest APK and upload as a draft
+leptoskit publish quest --submit  # upload to the configured channel without --draft
+```
+
+An upload:
+
+1. checks that `platforms` includes `quest`, that `app_id` is set, that any optional `obb`, `assets_dir`, and `debug_symbols_dir` paths exist, that the Android Gradle script accepts `leptoskit.versionCode` and signs release builds for `arm64-v8a` without `x86` or `x86_64`, and that either `LEPTOSKIT_PUBLISH_QUEST_APP_SECRET` (preferred) or `LEPTOSKIT_PUBLISH_QUEST_TOKEN` is set alongside the upload keystore variables;
+2. prepares the Quest host and builds the release APK with Gradle (`assembleRelease`), passing the keystore values only to that Gradle invocation, and copies the APK to `.leptoskit/publish/quest/app-release.apk`;
+3. invokes `ovr-platform-util upload-quest-build` (or the executable set in `LEPTOSKIT_OVR_PLATFORM_UTIL`) with `-a`, `-s` / `-t`, `--apk`, `-c`, `--age-group` (mapped to `TEENS_AND_ADULTS`, `MIXED_AGES`, or `CHILDREN`), `-n` (from `store/en-US/release_notes.md`), and `--draft` unless `--submit` is passed with `age_group` set and `draft = false`. Secret values are redacted from error output if the command fails.
+
+`ovr-platform-util` uploads the binary and release notes only. Store listing copy, cover art, Data Use Checkup, age ratings, and submitting a build for Meta Horizon Store / VRC review stay in the [Meta Horizon Developer Dashboard](https://developers.meta.com/horizon/manage/); every run prints the remaining steps for your app. See [Meta Quest](../platforms/quest.md) for headset builds.
+
 ## A notarized macOS download
 
 A Mac opens an app downloaded from the web only if it is signed with a Developer ID and notarized by Apple. `leptoskit publish macos` does both, for download from your own site or a GitHub release:
@@ -231,6 +263,7 @@ What goes up with each upload:
 | Google Play            | name, summary (as the short description), description, release notes, icon, feature graphic, screenshots                      | nothing in the listing                                       |
 | addons.mozilla.org     | name, summary, description, screenshots                                                                                       | privacy policy                                               |
 | Solana dApp Store      | What's New, as the tool's text                                                                                                | the whole listing: the portal's form and its images          |
+| Meta Horizon Store     | release notes, via `ovr-platform-util -n`                                                                                     | store listing, cover art, Data Use Checkup, age rating, review submission |
 | Chrome Web Store, Edge | release notes, on Edge                                                                                                        | the whole listing, screenshots too: their APIs don't edit it |
 
 Text a store would refuse as too long fails before anything is built: Google Play takes an 80-character summary and a 30-character name, the App Store 100 bytes of keywords and a 170-character summary, addons.mozilla.org a 250-character summary, and the Solana dApp Store a 25-character name and a 50-character short description.

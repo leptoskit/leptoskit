@@ -4380,5 +4380,225 @@ fn the_cloud_carries_every_credential_a_store_needs() {
 		super::alternative(crate::native::signing::ANDROID_KEYSTORE),
 		Some(crate::native::signing::ANDROID_KEYSTORE_BASE64)
 	);
+	assert_eq!(
+		super::alternative(super::quest::APP_SECRET),
+		Some(super::quest::TOKEN)
+	);
 	assert_eq!(super::alternative(super::chrome::CREDENTIAL), None);
+}
+
+fn quest_project(table: &str) -> (tempfile::TempDir, leptoskit_config::LeptoskitConfig) {
+	let root = tempfile::tempdir().unwrap();
+	let android = crate::native::host_dir(root.path(), crate::native::Target::Quest);
+	std::fs::create_dir_all(android.join("app")).unwrap();
+	std::fs::create_dir_all(root.path().join("store/en-US")).unwrap();
+	std::fs::write(root.path().join("icon.svg"), "<svg/>").unwrap();
+	std::fs::write(
+		root.path().join("store/listing.toml"),
+		"privacy_policy = \"https://arena.example/privacy\"\nhomepage = \"https://arena.example\"\n",
+	)
+	.unwrap();
+	std::fs::write(
+		root.path().join("store/en-US/description.md"),
+		"Spatial arena built in Rust.",
+	)
+	.unwrap();
+	std::fs::write(
+		root.path().join("store/en-US/release_notes.md"),
+		"Initial Quest release.",
+	)
+	.unwrap();
+	std::fs::write(
+		android.join("app/build.gradle.kts"),
+		"android {\n    defaultConfig {\n        targetSdk = 35\n        versionCode = \
+		 providers.gradleProperty(\"leptoskit.versionCode\").orNull?.toInt() ?: 1\n    }\n    \
+		 signingConfigs {\n        val keystore = \
+		 providers.environmentVariable(\"LEPTOSKIT_ANDROID_KEYSTORE\").orNull\n    }\n}\n",
+	)
+	.unwrap();
+
+	let config = leptoskit_config::LeptoskitConfig::from_toml(
+		&format!(
+			"[app]\nname = \"Arena\"\nversion = \"1.2.0\"\nplatforms = [\"web\", \"quest\"]\nicon \
+			 = \"icon.svg\"\n\n[native]\npackage_id = \
+			 \"com.example.arena\"\n\n[publish.quest]\napp_id = \"5159709737372459\"\n{table}"
+		),
+		root.path(),
+	)
+	.unwrap();
+	(root, config)
+}
+
+fn quest_args(dry_run: bool, submit: bool, build: super::BuildNumber) -> super::PublishArgs {
+	super::PublishArgs {
+		stores: vec!["quest".to_owned()],
+		dry_run,
+		submit,
+		staged: false,
+		yes: true,
+		json: false,
+		credentials: None,
+		build_number: build,
+	}
+}
+
+#[test]
+fn a_quest_dry_run_checks_everything_and_sends_nothing() {
+	let (root, config) = quest_project("channel = \"alpha\"\nage_group = \"teens_and_adults\"\n");
+	let store = super::listing::Store::load(root.path()).unwrap();
+	let args = quest_args(true, false, super::BuildNumber::Number(7));
+	let session = super::Session {
+		args: &args,
+		root: root.path(),
+		config: &config,
+		credentials: &super::Credentials::default(),
+		store: &store,
+		http: &Http::default(),
+		runner: &super::tools::Recorder::default(),
+		extension: None,
+		name: super::display_name(&config),
+		version: super::apple_version(&config),
+		submit: false,
+	};
+	let (summary, steps) = session.publish("quest").unwrap();
+	assert!(summary.contains("versionCode 7"), "{summary}");
+	assert!(summary.contains("as a draft on `alpha`"), "{summary}");
+	assert!(
+		summary.contains("Nothing was built or uploaded"),
+		"{summary}"
+	);
+	assert!(steps.iter().all(|step| step.store == "quest"));
+	assert!(
+		steps
+			.iter()
+			.any(|step| step.what.contains("Data Use Checkup"))
+	);
+	assert!(
+		steps
+			.iter()
+			.any(|step| step.what.contains("Technical (VRC) and Content review"))
+	);
+}
+
+#[test]
+fn quest_send_builds_signed_apk_and_invokes_ovr_platform_util() {
+	let (root, _config) = quest_project("channel = \"beta\"\nage_group = \"teens_and_adults\"\n");
+	let android = crate::native::host_dir(root.path(), crate::native::Target::Quest);
+
+	for (draft, expect_draft_flag) in [(true, true), (false, false)] {
+		let recorder = BuildingRecorder {
+			inner: super::tools::Recorder::default(),
+			android: android.clone(),
+		};
+		let auth = super::quest::Auth::AppSecret(Secret::new("quest-secret".into()));
+		let send = super::QuestSend {
+			root: root.path(),
+			runner: &recorder,
+			tool: "ovr-platform-util",
+			app_id: "5159709737372459",
+			channel: "beta",
+			draft,
+			age_group: Some(leptoskit_config::publish::QuestAgeGroup::TeensAndAdults),
+			build_number: Some(42),
+			signing: super::quest::Signing {
+				keystore: Secret::new("/keys/upload.jks".into()),
+				keystore_password: Secret::new("store-pass".into()),
+				key_alias: Secret::new("upload".into()),
+				key_password: Secret::new("key-pass".into()),
+			},
+			auth: &auth,
+			notes: Some("Initial Quest release."),
+			obb: None,
+			assets_dir: None,
+			debug_symbols_dir: None,
+			name: "Arena",
+			version: "1.2.0",
+		};
+		let (summary, apk) = super::quest_send(&send, || Ok(())).unwrap();
+		assert_eq!(apk, ".leptoskit/publish/quest/app-release.apk");
+		assert!(root.path().join(&apk).is_file());
+		if expect_draft_flag {
+			assert!(summary.contains("as a draft"), "{summary}");
+		} else {
+			assert!(!summary.contains("as a draft"), "{summary}");
+		}
+
+		let seen = recorder.inner.seen.borrow();
+		assert_eq!(seen.len(), 2);
+		assert!(seen[0].args.iter().any(|arg| arg == "assembleRelease"));
+		assert!(
+			seen[0]
+				.args
+				.iter()
+				.any(|arg| arg == "-Pleptoskit.versionCode=42")
+		);
+		assert_eq!(seen[1].program, "ovr-platform-util");
+		assert_eq!(seen[1].args[0], "upload-quest-build");
+		assert_eq!(
+			seen[1].args.iter().any(|arg| arg == "--draft"),
+			expect_draft_flag
+		);
+		assert!(
+			seen[1]
+				.args
+				.windows(2)
+				.any(|pair| pair == ["--age-group", "TEENS_AND_ADULTS"])
+		);
+	}
+}
+
+#[test]
+fn quest_checks_reject_x86_abi_and_missing_optional_paths() {
+	let (root, config) = quest_project("obb = \"assets/missing.obb\"\n");
+	let store = super::listing::Store::load(root.path()).unwrap();
+	let args = quest_args(true, false, super::BuildNumber::Auto);
+	let session = super::Session {
+		args: &args,
+		root: root.path(),
+		config: &config,
+		credentials: &super::Credentials::default(),
+		store: &store,
+		http: &Http::default(),
+		runner: &super::tools::Recorder::default(),
+		extension: None,
+		name: super::display_name(&config),
+		version: super::apple_version(&config),
+		submit: false,
+	};
+	let error = session.publish("quest").unwrap_err().to_string();
+	assert!(error.contains("publish.quest.obb"), "{error}");
+
+	let (root, config) = quest_project("");
+	std::fs::create_dir_all(root.path().join(".leptoskit/android")).unwrap();
+	std::fs::write(root.path().join(".leptoskit/android/abi.txt"), "x86_64\n").unwrap();
+	let store = super::listing::Store::load(root.path()).unwrap();
+	let session = super::Session {
+		args: &args,
+		root: root.path(),
+		config: &config,
+		credentials: &super::Credentials::default(),
+		store: &store,
+		http: &Http::default(),
+		runner: &super::tools::Recorder::default(),
+		extension: None,
+		name: super::display_name(&config),
+		version: super::apple_version(&config),
+		submit: false,
+	};
+	let error = session.publish("quest").unwrap_err().to_string();
+	assert!(error.contains("arm64-v8a"), "{error}");
+}
+
+#[test]
+fn quest_credentials_accept_token_as_alternative_to_app_secret() {
+	let with_token = credentials(&[(super::quest::TOKEN, "OC|1|tok")]);
+	let listed = super::list_credentials(&["quest"], &with_token);
+	assert!(
+		listed.contains("LEPTOSKIT_PUBLISH_QUEST_APP_SECRET         set"),
+		"{listed}"
+	);
+	assert!(matches!(
+		super::quest::Auth::resolve(&with_token).unwrap(),
+		super::quest::Auth::UserToken(_)
+	));
 }

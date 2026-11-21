@@ -3933,6 +3933,17 @@
 						}
 					]
 				},
+				"quest": {
+					"description": "The Meta Horizon Store, for the release-signed Meta Quest APK.",
+					"anyOf": [
+						{
+							"$ref": "#/$defs/QuestStore"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
 				"solana": {
 					"description": "The Solana dApp Store, for the release-signed Android APK.",
 					"anyOf": [
@@ -3946,6 +3957,26 @@
 				}
 			},
 			"additionalProperties": false
+		},
+		"QuestAgeGroup": {
+			"description": "Intended age group for a Meta Horizon Store build (`--age-group`).\n\nLeaving this unset tells `ovr-platform-util` to upload the build in draft\nstatus until an age group is chosen in the Developer Dashboard.",
+			"oneOf": [
+				{
+					"description": "Teens and adults (`TEENS_AND_ADULTS`).",
+					"type": "string",
+					"const": "teens_and_adults"
+				},
+				{
+					"description": "Mixed ages (`MIXED_AGES`).",
+					"type": "string",
+					"const": "mixed_ages"
+				},
+				{
+					"description": "Children (`CHILDREN`).",
+					"type": "string",
+					"const": "children"
+				}
+			]
 		},
 		"QuestConfig": {
 			"description": "How the Meta Quest build (`--platform quest`) packages the Android app\nfor Horizon OS.",
@@ -4005,6 +4036,62 @@
 					"type": "string",
 					"const": "quest3s"
 				}
+			]
+		},
+		"QuestStore": {
+			"description": "An app in the Meta Horizon Developer Dashboard, uploaded through\n`ovr-platform-util upload-quest-build`.",
+			"type": "object",
+			"properties": {
+				"age_group": {
+					"description": "Intended age group passed to `--age-group`. Omitting it uploads as a\ndraft on the Developer Dashboard.",
+					"anyOf": [
+						{
+							"$ref": "#/$defs/QuestAgeGroup"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"app_id": {
+					"description": "The Meta Horizon App ID from the Developer Dashboard's API tab.",
+					"type": "string",
+					"pattern": "^[0-9]+$"
+				},
+				"assets_dir": {
+					"description": "Optional project-relative directory of extra asset files\n(`--assets-dir`).",
+					"type": [
+						"string",
+						"null"
+					]
+				},
+				"channel": {
+					"description": "The release channel: `alpha`, `beta`, `rc`, `store` (Production), or a\ncustom channel with optional device targeting such as\n`alpha:quest3only`. Defaults to `alpha`.",
+					"type": "string",
+					"default": "alpha"
+				},
+				"debug_symbols_dir": {
+					"description": "Optional project-relative directory of native debug symbols\n(`--debug-symbols-dir`).",
+					"type": [
+						"string",
+						"null"
+					]
+				},
+				"draft": {
+					"description": "Always pass `--draft` even when `--submit` is given.",
+					"type": "boolean"
+				},
+				"obb": {
+					"description": "Optional project-relative path to an `.obb` expansion file.",
+					"type": [
+						"string",
+						"null"
+					]
+				}
+			},
+			"additionalProperties": false,
+			"required": [
+				"app_id"
 			]
 		},
 		"Region": {

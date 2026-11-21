@@ -125,6 +125,12 @@ When you have computer use (screenshots, clicks, and typing) or a browser automa
   - a debug or unsigned APK, or one signed with the Google Play key (the command checks this);
   - a `versionCode` that isn't exactly one above the store's (pass `--build-number <n>`).
 
+**Meta Horizon Store (Quest)**
+
+- Developer Dashboard: <https://developers.meta.com/horizon/manage/>. Organization creation, app creation, store listing art, Data Use Checkup, content/age rating, VRC compliance, and final review submission are dashboard steps (`ovr-platform-util` has no submit-for-review command).
+- Auth uses `LEPTOSKIT_PUBLISH_QUEST_APP_SECRET` (from **Development -> API**) or `LEPTOSKIT_PUBLISH_QUEST_TOKEN` (an Oculus platform utility user token), plus the Android upload keystore (`LEPTOSKIT_ANDROID_*`). Set `LEPTOSKIT_OVR_PLATFORM_UTIL` if `ovr-platform-util` is not on `PATH`.
+- Without `--submit` (or without `age_group` in `[publish.quest]`), `leptoskit publish quest` uploads with `--draft` so nothing reaches testers or Production users. `--submit` uploads live to `channel` (`alpha`, `beta`, `rc`, or `store`).
+
 **macOS downloads (Developer ID)**
 
 - No dashboard: `leptoskit publish macos` signs, notarizes, and staples, and writes `.leptoskit/publish/macos/<Name>.dmg` and `.zip`.
