@@ -10,6 +10,23 @@ use leptoskit_bridge::codec::Encoder;
 const MAX_SLOT_TEXT: usize = 128;
 const MAX_SEGMENTS: usize = 8;
 
+/// Reserved `ContentState` key for Dynamic Island compact leading text.
+pub const KEY_COMPACT_LEADING: &str = "_lk_di_cl";
+/// Reserved `ContentState` key for Dynamic Island compact trailing text.
+pub const KEY_COMPACT_TRAILING: &str = "_lk_di_ct";
+/// Reserved `ContentState` key for Dynamic Island minimal circular text.
+pub const KEY_MINIMAL: &str = "_lk_di_min";
+/// Reserved `ContentState` key for Dynamic Island expanded leading text.
+pub const KEY_EXPANDED_LEADING: &str = "_lk_di_el";
+/// Reserved `ContentState` key for Dynamic Island expanded trailing text.
+pub const KEY_EXPANDED_TRAILING: &str = "_lk_di_et";
+/// Reserved `ContentState` key for Dynamic Island expanded center headline.
+pub const KEY_EXPANDED_CENTER: &str = "_lk_di_ec";
+/// Reserved `ContentState` key for Dynamic Island expanded bottom text.
+pub const KEY_EXPANDED_BOTTOM: &str = "_lk_di_eb";
+/// Reserved `ContentState` key for Dynamic Island `#RRGGBB` keyline tint.
+pub const KEY_KEYLINE_TINT: &str = "_lk_di_tint";
+
 /// Dynamic Island presentation slots rendered by an iOS Widget Extension.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DynamicIslandLayout {
@@ -143,6 +160,56 @@ impl ActivitySchedule {
 		}
 		Ok(self)
 	}
+
+	/// Appends this schedule into a binary bridge encoder (version 1).
+	pub(crate) fn encode_into(self, out: &mut Encoder) -> Result<(), Error> {
+		let schedule = self.validate()?;
+		out.u32(1);
+		match schedule.stale_after_seconds {
+			None => {
+				out.u32(0);
+				out.u32(0);
+			}
+			Some(seconds) => {
+				out.u32(1);
+				out.u32(seconds);
+			}
+		}
+		out.u32(schedule.relevance_score.to_bits());
+		out.u32(u32::from(schedule.allow_push_to_start));
+		Ok(())
+	}
+
+	/// Reads a version-1 schedule from a binary bridge decoder.
+	pub(crate) fn decode_from(input: &mut Decoder<'_>) -> Result<Self, Error> {
+		if input.u32()? != 1 {
+			return Err(Error::InvalidArgument);
+		}
+		let has_stale = input.u32()?;
+		let stale_seconds = input.u32()?;
+		let stale_after_seconds = match has_stale {
+			0 => {
+				if stale_seconds != 0 {
+					return Err(Error::InvalidArgument);
+				}
+				None
+			}
+			1 => Some(stale_seconds),
+			_ => return Err(Error::InvalidArgument),
+		};
+		let relevance_score = f32::from_bits(input.u32()?);
+		let allow_push_to_start = match input.u32()? {
+			0 => false,
+			1 => true,
+			_ => return Err(Error::InvalidArgument),
+		};
+		Self {
+			stale_after_seconds,
+			relevance_score,
+			allow_push_to_start,
+		}
+		.validate()
+	}
 }
 
 /// One colored segment in an Android 16+ Live Update progress bar
@@ -250,6 +317,12 @@ impl AndroidLiveUpdate {
 	/// Encodes this Android Live Update into bridge bytes.
 	pub fn encode(&self) -> Result<Bytes, Error> {
 		let mut out = Encoder::with_capacity(128);
+		self.encode_into(&mut out)?;
+		Ok(out.finish())
+	}
+
+	/// Appends this Android Live Update into an existing encoder.
+	pub(crate) fn encode_into(&self, out: &mut Encoder) -> Result<(), Error> {
 		out.u32(1);
 		out.bytes(self.title.as_bytes())?;
 		out.bytes(self.body.as_bytes())?;
@@ -266,12 +339,19 @@ impl AndroidLiveUpdate {
 				}
 			}
 		}
-		Ok(out.finish())
+		Ok(())
 	}
 
 	/// Decodes an Android Live Update from bridge bytes.
 	pub fn decode(bytes: &[u8]) -> Result<Self, Error> {
 		let mut input = Decoder::new(bytes);
+		let update = Self::decode_from(&mut input)?;
+		input.finish()?;
+		Ok(update)
+	}
+
+	/// Reads an Android Live Update from an in-progress decoder.
+	pub(crate) fn decode_from(input: &mut Decoder<'_>) -> Result<Self, Error> {
 		if input.u32()? != 1 {
 			return Err(Error::InvalidArgument);
 		}
@@ -293,7 +373,6 @@ impl AndroidLiveUpdate {
 			};
 			segments.push(ProgressSegment { length, color_hex });
 		}
-		input.finish()?;
 		Self::new(title, body, short_critical_text, progress, segments)
 	}
 }

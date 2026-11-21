@@ -7,8 +7,20 @@ import Testing
 @MainActor
 private final class PublisherSpy: ShortcutPublisher {
     var items: [[AppShortcutItem]] = []
+    var indexed: [SpotlightItemPayload] = []
+    var deletedSpotlightIds: [String] = []
+    var activeActivity: UserActivityPayload?
+    var endedActivityCount = 0
+
     func set(_ items: [AppShortcutItem]) throws { self.items.append(items) }
     func clear() throws { items.append([]) }
+    func indexSpotlight(_ item: SpotlightItemPayload) async throws { indexed.append(item) }
+    func deleteSpotlight(id: String) async throws { deletedSpotlightIds.append(id) }
+    func startUserActivity(_ activity: UserActivityPayload) throws { activeActivity = activity }
+    func endUserActivity() {
+        activeActivity = nil
+        endedActivityCount += 1
+    }
 }
 
 private func payload(_ bytes: [UInt8] = []) throws -> NativeBuffer {
@@ -31,23 +43,25 @@ private func payload(_ bytes: [UInt8] = []) throws -> NativeBuffer {
     return NativeBuffer(taking: request.payload)
 }
 
+private func appendU32(_ value: UInt32, to bytes: inout [UInt8]) {
+    var little = value.littleEndian
+    withUnsafeBytes(of: &little) { bytes.append(contentsOf: $0) }
+}
+
+private func appendString(_ value: String, to bytes: inout [UInt8]) {
+    let utf8 = Array(value.utf8)
+    appendU32(UInt32(utf8.count), to: &bytes)
+    bytes.append(contentsOf: utf8)
+}
+
 private func encodeList(_ items: [(String, String, String)]) -> [UInt8] {
     var bytes: [UInt8] = []
-    func appendU32(_ value: UInt32) {
-        var little = value.littleEndian
-        withUnsafeBytes(of: &little) { bytes.append(contentsOf: $0) }
-    }
-    func appendString(_ value: String) {
-        let utf8 = Array(value.utf8)
-        appendU32(UInt32(utf8.count))
-        bytes.append(contentsOf: utf8)
-    }
-    appendU32(UInt32(items.count))
+    appendU32(UInt32(items.count), to: &bytes)
 
     for item in items {
-        appendString(item.0)
-        appendString(item.1)
-        appendString(item.2)
+        appendString(item.0, to: &bytes)
+        appendString(item.1, to: &bytes)
+        appendString(item.2, to: &bytes)
     }
 
     return bytes
@@ -77,6 +91,53 @@ func setClearAndConsumeLaunchUsePublisherWithoutSystemUI() async throws {
     await #expect(throws: PluginError.cancelled) {
         try await plugin.invoke(method: 0, payload: payload(encoded))
     }
+}
+
+@Test
+@MainActor
+func spotlightHandoffAndIncomingShareRoundTrip() async throws {
+    let publisher = PublisherSpy()
+    let plugin = AppShortcutsPlugin(publisher: publisher)
+
+    var spotlight: [UInt8] = []
+    appendU32(1, to: &spotlight)
+    appendString("note_1", to: &spotlight)
+    appendString("notes", to: &spotlight)
+    appendString("Roadmap", to: &spotlight)
+    appendString("Q4 plans", to: &spotlight)
+    appendString("myapp://notes/1", to: &spotlight)
+    appendU32(1, to: &spotlight)
+    appendString("plans", to: &spotlight)
+    appendU32(0, to: &spotlight)
+    appendU32(0, to: &spotlight)
+    appendU32(0, to: &spotlight)
+
+    #expect(try await plugin.invoke(method: 3, payload: payload(spotlight)) == Data())
+    #expect(publisher.indexed.first?.id == "note_1")
+
+    var deleteId: [UInt8] = []
+    appendString("note_1", to: &deleteId)
+    #expect(try await plugin.invoke(method: 4, payload: payload(deleteId)) == Data())
+    #expect(publisher.deletedSpotlightIds == ["note_1"])
+
+    var activity: [UInt8] = []
+    appendU32(1, to: &activity)
+    appendString("com.example.notes.view", to: &activity)
+    appendString("Roadmap", to: &activity)
+    appendU32(1, to: &activity)
+    appendString("https://example.com/notes/1", to: &activity)
+    appendU32(0b111, to: &activity)
+
+    #expect(try await plugin.invoke(method: 5, payload: payload(activity)) == Data())
+    #expect(publisher.activeActivity?.activityType == "com.example.notes.view")
+    #expect(try await plugin.invoke(method: 6, payload: payload()) == Data())
+    #expect(publisher.activeActivity == nil)
+
+    try plugin.noteIncomingShare(text: "Hello", url: "https://leptoskit.dev", subject: "Docs")
+    let received = try await plugin.invoke(method: 7, payload: payload())
+    #expect(received.prefix(4) == Data([1, 0, 0, 0]))
+    let cleared = try await plugin.invoke(method: 7, payload: payload())
+    #expect(cleared == Data([0, 0, 0, 0]))
 }
 
 @Test

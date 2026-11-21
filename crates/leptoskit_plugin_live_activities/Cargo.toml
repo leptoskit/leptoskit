@@ -8,13 +8,14 @@ license.workspace = true
 readme = "readme.md"
 repository.workspace = true
 rust-version.workspace = true
-description = "iOS Live Activities and Dynamic Island updates for LeptosKit."
+description = "iOS Live Activities, Dynamic Island, and Android Live Updates for LeptosKit."
 
 [package.metadata.leptoskit.runtime]
 name = "live-activities"
 apple-module = "LeptosKitLiveActivities"
 apple-type = "LiveActivitiesPlugin"
 android-type = "dev.leptoskit.plugins.liveactivities.LiveActivitiesPlugin"
+android-context = true
 
 [features]
 guest = ["leptoskit_bridge/guest"]

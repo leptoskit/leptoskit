@@ -17,10 +17,57 @@ protocol LiveActivityService: AnyObject {
         fields: [String: String],
         pushUpdates: Bool
     ) async throws
+    func startScheduled(
+        id: String,
+        kind: String,
+        title: String,
+        fields: [String: String],
+        pushUpdates: Bool,
+        staleAfterSeconds: UInt32?,
+        relevanceScore: Double
+    ) async throws
     func update(id: String, fields: [String: String]) async throws
+    func updateScheduled(
+        id: String,
+        fields: [String: String],
+        staleAfterSeconds: UInt32?,
+        relevanceScore: Double
+    ) async throws
     func end(id: String, fields: [String: String]?, dismissal: DismissalKind, afterSeconds: UInt32) async throws
     func waitPushToken(id: String) async throws -> Data
+    func waitPushToStartToken() async throws -> Data
     func list() -> [String]
+}
+
+extension LiveActivityService {
+    func startScheduled(
+        id: String,
+        kind: String,
+        title: String,
+        fields: [String: String],
+        pushUpdates: Bool,
+        staleAfterSeconds: UInt32?,
+        relevanceScore: Double
+    ) async throws {
+        _ = staleAfterSeconds
+        _ = relevanceScore
+        try await start(id: id, kind: kind, title: title, fields: fields, pushUpdates: pushUpdates)
+    }
+
+    func updateScheduled(
+        id: String,
+        fields: [String: String],
+        staleAfterSeconds: UInt32?,
+        relevanceScore: Double
+    ) async throws {
+        _ = staleAfterSeconds
+        _ = relevanceScore
+        try await update(id: id, fields: fields)
+    }
+
+    func waitPushToStartToken() async throws -> Data {
+        throw PluginError.unavailable
+    }
 }
 
 enum DismissalKind: UInt32 {
@@ -47,6 +94,26 @@ private final class SystemLiveActivityService: LiveActivityService {
         fields: [String: String],
         pushUpdates: Bool
     ) async throws {
+        try await startScheduled(
+            id: id,
+            kind: kind,
+            title: title,
+            fields: fields,
+            pushUpdates: pushUpdates,
+            staleAfterSeconds: nil,
+            relevanceScore: 0.0
+        )
+    }
+
+    func startScheduled(
+        id: String,
+        kind: String,
+        title: String,
+        fields: [String: String],
+        pushUpdates: Bool,
+        staleAfterSeconds: UInt32?,
+        relevanceScore: Double
+    ) async throws {
         // Replace any prior ActivityKit activity with this app id so update/end
         // stay unambiguous and we never orphan a previous request.
         if let existing = activity(id: id) {
@@ -56,7 +123,12 @@ private final class SystemLiveActivityService: LiveActivityService {
 
         let attributes = LeptosKitLiveActivityAttributes(id: id, kind: kind, title: title)
         let state = LeptosKitLiveActivityAttributes.ContentState(fields: fields)
-        let content = ActivityContent(state: state, staleDate: nil)
+        let staleDate = staleAfterSeconds.map { Date().addingTimeInterval(TimeInterval($0)) }
+        let content = ActivityContent(
+            state: state,
+            staleDate: staleDate,
+            relevanceScore: relevanceScore
+        )
         let activity: Activity<LeptosKitLiveActivityAttributes>
 
         if pushUpdates {
@@ -70,9 +142,26 @@ private final class SystemLiveActivityService: LiveActivityService {
     }
 
     func update(id: String, fields: [String: String]) async throws {
+        try await updateScheduled(
+            id: id,
+            fields: fields,
+            staleAfterSeconds: nil,
+            relevanceScore: 0.0
+        )
+    }
+
+    func updateScheduled(
+        id: String,
+        fields: [String: String],
+        staleAfterSeconds: UInt32?,
+        relevanceScore: Double
+    ) async throws {
         guard let activity = activity(id: id) else { throw PluginError.unavailable }
         let state = LeptosKitLiveActivityAttributes.ContentState(fields: fields)
-        await activity.update(ActivityContent(state: state, staleDate: nil))
+        let staleDate = staleAfterSeconds.map { Date().addingTimeInterval(TimeInterval($0)) }
+        await activity.update(
+            ActivityContent(state: state, staleDate: staleDate, relevanceScore: relevanceScore)
+        )
     }
 
     func end(
@@ -128,6 +217,15 @@ private final class SystemLiveActivityService: LiveActivityService {
         }
     }
 
+    func waitPushToStartToken() async throws -> Data {
+        guard #available(iOS 17.2, *) else { throw PluginError.unavailable }
+        for await token in Activity<LeptosKitLiveActivityAttributes>.pushToStartTokenUpdates {
+            try Task.checkCancellation()
+            return Data(token)
+        }
+        throw PluginError.unavailable
+    }
+
     func list() -> [String] {
         Activity<LeptosKitLiveActivityAttributes>.activities.map(\.attributes.id)
     }
@@ -166,7 +264,7 @@ private final class SystemLiveActivityService: LiveActivityService {
 @MainActor
 public final class LiveActivitiesPlugin: NativePlugin {
     public let name = "live-activities"
-    public let methods: [UInt32] = [0, 1, 2, 3, 4, 5, 6]
+    public let methods: [UInt32] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
     private let service: (any LiveActivityService)?
     private var closed = false
     private var busy = Set<String>()
@@ -193,6 +291,20 @@ public final class LiveActivitiesPlugin: NativePlugin {
         try Task.checkCancellation()
 
         guard methods.contains(method) else { throw PluginError.unavailable }
+
+        if method == 10 {
+            _ = try payload.withUnsafeBytes { try AndroidLiveUpdateMessage($0) }
+            throw PluginError.unavailable
+        }
+        if method == 11 {
+            _ = try payload.withUnsafeBytes { bytes -> String in
+                var reader = try Reader(bytes, maximum: 68)
+                let id = try reader.identifier()
+                try reader.finish()
+                return id
+            }
+            throw PluginError.unavailable
+        }
 
         guard let service else { throw PluginError.unavailable }
 
@@ -260,6 +372,49 @@ public final class LiveActivitiesPlugin: NativePlugin {
         case 6:
             guard payload.count == 0 else { throw PluginError.invalidArgument }
             return try encodeList(service.list())
+        case 7:
+            guard payload.count == 0 else { throw PluginError.invalidArgument }
+            guard !closed else { throw PluginError.cancelled }
+            try Task.checkCancellation()
+            let token: Data
+
+            do {
+                token = try await service.waitPushToStartToken()
+            } catch is CancellationError {
+                throw PluginError.cancelled
+            } catch let error as PluginError {
+                throw error
+            } catch {
+                throw PluginError.native
+            }
+
+            guard !token.isEmpty, token.count <= 512 else { throw PluginError.invalidArgument }
+            return encodeBytes(token)
+        case 8:
+            let request = try payload.withUnsafeBytes { try ScheduledStartMessage($0) }
+            try await gated(request.start.id) {
+                try await service.startScheduled(
+                    id: request.start.id,
+                    kind: request.start.kind,
+                    title: request.start.title,
+                    fields: request.start.fields,
+                    pushUpdates: request.start.pushUpdates,
+                    staleAfterSeconds: request.schedule.staleAfterSeconds,
+                    relevanceScore: request.schedule.relevanceScore
+                )
+            }
+            return try encodeIdentifier(request.start.id)
+        case 9:
+            let request = try payload.withUnsafeBytes { try ScheduledUpdateMessage($0) }
+            try await gated(request.update.id) {
+                try await service.updateScheduled(
+                    id: request.update.id,
+                    fields: request.update.fields,
+                    staleAfterSeconds: request.schedule.staleAfterSeconds,
+                    relevanceScore: request.schedule.relevanceScore
+                )
+            }
+            return Data()
         default:
             throw PluginError.unavailable
         }
@@ -335,6 +490,11 @@ private struct StartMessage {
 
     init(_ bytes: UnsafeRawBufferPointer) throws {
         var reader = try Reader(bytes, maximum: 4096)
+        try self.init(from: &reader)
+        try reader.finish()
+    }
+
+    init(from reader: inout Reader) throws {
         id = try reader.identifier()
         kind = try reader.identifier()
         title = try reader.text(maximum: 128, required: true)
@@ -344,7 +504,6 @@ private struct StartMessage {
         default: throw PluginError.invalidArgument
         }
         fields = try reader.fields()
-        try reader.finish()
     }
 }
 
@@ -354,9 +513,107 @@ private struct UpdateMessage {
 
     init(_ bytes: UnsafeRawBufferPointer) throws {
         var reader = try Reader(bytes, maximum: 4096)
+        try self.init(from: &reader)
+        try reader.finish()
+    }
+
+    init(from reader: inout Reader) throws {
         id = try reader.identifier()
         fields = try reader.fields()
+    }
+}
+
+private struct ScheduleMessage {
+    let staleAfterSeconds: UInt32?
+    let relevanceScore: Double
+    let allowPushToStart: Bool
+
+    init(from reader: inout Reader) throws {
+        guard try reader.u32() == 1 else { throw PluginError.invalidArgument }
+        let hasStale = try reader.u32()
+        let seconds = try reader.u32()
+        switch hasStale {
+        case 0:
+            guard seconds == 0 else { throw PluginError.invalidArgument }
+            staleAfterSeconds = nil
+        case 1:
+            guard (1...86_400).contains(seconds) else { throw PluginError.invalidArgument }
+            staleAfterSeconds = seconds
+        default:
+            throw PluginError.invalidArgument
+        }
+        let score = Float(bitPattern: try reader.u32())
+        guard score.isFinite, score >= 0.0, score <= 1.0 else {
+            throw PluginError.invalidArgument
+        }
+        relevanceScore = Double(score)
+        switch try reader.u32() {
+        case 0: allowPushToStart = false
+        case 1: allowPushToStart = true
+        default: throw PluginError.invalidArgument
+        }
+    }
+}
+
+private struct ScheduledStartMessage {
+    let start: StartMessage
+    let schedule: ScheduleMessage
+
+    init(_ bytes: UnsafeRawBufferPointer) throws {
+        var reader = try Reader(bytes, maximum: 4200)
+        start = try StartMessage(from: &reader)
+        schedule = try ScheduleMessage(from: &reader)
         try reader.finish()
+    }
+}
+
+private struct ScheduledUpdateMessage {
+    let update: UpdateMessage
+    let schedule: ScheduleMessage
+
+    init(_ bytes: UnsafeRawBufferPointer) throws {
+        var reader = try Reader(bytes, maximum: 4200)
+        update = try UpdateMessage(from: &reader)
+        schedule = try ScheduleMessage(from: &reader)
+        try reader.finish()
+    }
+}
+
+private struct AndroidLiveUpdateMessage {
+    init(_ bytes: UnsafeRawBufferPointer) throws {
+        var reader = try Reader(bytes, maximum: 4096)
+        _ = try reader.identifier()
+        guard try reader.u32() == 1 else { throw PluginError.invalidArgument }
+        _ = try reader.text(maximum: 128, required: true)
+        _ = try reader.text(maximum: 256, required: false)
+        _ = try reader.text(maximum: 32, required: false)
+        let progress = Float(bitPattern: try reader.u32())
+        guard progress.isFinite, progress >= 0.0, progress <= 1.0 else {
+            throw PluginError.invalidArgument
+        }
+        let segmentCount = Int(try reader.u32())
+        guard segmentCount <= 8 else { throw PluginError.tooLarge }
+        for _ in 0..<segmentCount {
+            let length = try reader.u32()
+            guard (1...10_000).contains(length) else { throw PluginError.invalidArgument }
+            switch try reader.u32() {
+            case 0: break
+            case 1:
+                let hex = try reader.text(maximum: 7, required: true)
+                guard isValidHexColor(hex) else { throw PluginError.invalidArgument }
+            default:
+                throw PluginError.invalidArgument
+            }
+        }
+        try reader.finish()
+    }
+}
+
+private func isValidHexColor(_ value: String) -> Bool {
+    let utf8 = Array(value.utf8)
+    guard utf8.count == 7, utf8[0] == 35 else { return false }
+    return utf8[1...].allSatisfy {
+        (48...57).contains($0) || (65...70).contains($0) || (97...102).contains($0)
     }
 }
 

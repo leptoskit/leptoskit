@@ -9,21 +9,33 @@ import android.os.Build
 import android.os.Looper
 import dev.leptoskit.bridge.NativePlugin
 import dev.leptoskit.bridge.PluginException
+import java.io.ByteArrayOutputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.charset.CharacterCodingException
 import java.nio.charset.CodingErrorAction
 import java.nio.charset.StandardCharsets
 
-/** Publishes dynamic launcher shortcuts through ShortcutManager. */
+/** Publishes dynamic launcher shortcuts through ShortcutManager and captures incoming ACTION_SEND shares. */
 class AppShortcutsPlugin(
     private val context: Context,
 ) : NativePlugin {
     override val name = "app-shortcuts"
-    override val methods = intArrayOf(SET, CLEAR, CONSUME_LAUNCH)
+    override val methods =
+        intArrayOf(
+            SET,
+            CLEAR,
+            CONSUME_LAUNCH,
+            INDEX_SPOTLIGHT,
+            DELETE_SPOTLIGHT,
+            START_USER_ACTIVITY,
+            END_USER_ACTIVITY,
+            CONSUME_INCOMING_SHARE,
+        )
 
     private var closed = false
     private var launchId: String? = null
+    private var pendingShare: IncomingShareData? = null
 
     init {
         shared = this
@@ -33,6 +45,22 @@ class AppShortcutsPlugin(
     fun noteLaunch(id: String) {
         validateId(id)
         launchId = id
+    }
+
+    /** Records an incoming `ACTION_SEND` share intent for `consume_incoming_share`. */
+    fun noteIncomingShare(intent: Intent?) {
+        if (intent == null || intent.action != Intent.ACTION_SEND) return
+        val rawText = intent.getStringExtra(Intent.EXTRA_TEXT)?.take(4096)
+        val rawSubject = intent.getStringExtra(Intent.EXTRA_SUBJECT)?.take(256)
+        val trimmed = rawText?.trim()
+        val url =
+            if (trimmed != null && (trimmed.startsWith("https://") || trimmed.startsWith("http://"))) {
+                trimmed.take(2048)
+            } else {
+                null
+            }
+        if (rawText == null && rawSubject == null && url == null) return
+        pendingShare = IncomingShareData(text = rawText, url = url, subject = rawSubject)
     }
 
     override suspend fun invoke(
@@ -57,9 +85,38 @@ class AppShortcutsPlugin(
                 byteArrayOf()
             }
 
-            else -> {
+            CONSUME_LAUNCH -> {
                 if (payload.hasRemaining()) throw PluginException(PluginException.INVALID_ARGUMENT)
                 encodeLaunch(launchId.also { launchId = null })
+            }
+
+            INDEX_SPOTLIGHT -> {
+                validateSpotlight(payload)
+                throw PluginException(PluginException.UNAVAILABLE)
+            }
+
+            DELETE_SPOTLIGHT -> {
+                validateSingleId(payload)
+                throw PluginException(PluginException.UNAVAILABLE)
+            }
+
+            START_USER_ACTIVITY -> {
+                validateUserActivity(payload)
+                throw PluginException(PluginException.UNAVAILABLE)
+            }
+
+            END_USER_ACTIVITY -> {
+                if (payload.hasRemaining()) throw PluginException(PluginException.INVALID_ARGUMENT)
+                throw PluginException(PluginException.UNAVAILABLE)
+            }
+
+            CONSUME_INCOMING_SHARE -> {
+                if (payload.hasRemaining()) throw PluginException(PluginException.INVALID_ARGUMENT)
+                encodeOptionalShare(pendingShare.also { pendingShare = null })
+            }
+
+            else -> {
+                throw PluginException(PluginException.UNAVAILABLE)
             }
         }
     }
@@ -116,6 +173,12 @@ class AppShortcutsPlugin(
         val subtitle: String,
     )
 
+    private data class IncomingShareData(
+        val text: String?,
+        val url: String?,
+        val subject: String?,
+    )
+
     private fun decodeList(payload: ByteBuffer): List<Shortcut> {
         val buffer = payload.order(ByteOrder.LITTLE_ENDIAN)
 
@@ -130,8 +193,8 @@ class AppShortcutsPlugin(
             val title = readString(buffer, 128)
             val subtitle = readString(buffer, 128)
             validateId(id)
-            validateText(title, allowEmpty = false)
-            validateText(subtitle, allowEmpty = true)
+            validateText(title, max = 128, allowEmpty = false)
+            validateText(subtitle, max = 128, allowEmpty = true)
 
             if (!seen.add(id)) throw PluginException(PluginException.INVALID_ARGUMENT)
             items.add(Shortcut(id, title, subtitle))
@@ -140,6 +203,61 @@ class AppShortcutsPlugin(
         if (buffer.hasRemaining()) throw PluginException(PluginException.INVALID_ARGUMENT)
 
         return items
+    }
+
+    private fun validateSingleId(payload: ByteBuffer) {
+        val buffer = payload.order(ByteOrder.LITTLE_ENDIAN)
+        val id = readString(buffer, 64)
+        validateId(id)
+        if (buffer.hasRemaining()) throw PluginException(PluginException.INVALID_ARGUMENT)
+    }
+
+    private fun validateSpotlight(payload: ByteBuffer) {
+        val buffer = payload.order(ByteOrder.LITTLE_ENDIAN)
+        if (buffer.remaining() < 4 || buffer.int != 1) throw PluginException(PluginException.INVALID_ARGUMENT)
+        validateId(readString(buffer, 64))
+        validateId(readString(buffer, 64))
+        validateText(readString(buffer, 128), max = 128, allowEmpty = false)
+        validateText(readString(buffer, 1024), max = 1024, allowEmpty = true)
+        validateSafeUrl(readString(buffer, 2048))
+        if (buffer.remaining() < 4) throw PluginException(PluginException.INVALID_ARGUMENT)
+        val keywords = buffer.int
+        if (keywords !in 0..16) throw PluginException(PluginException.TOO_LARGE)
+        repeat(keywords) {
+            validateText(readString(buffer, 64), max = 64, allowEmpty = false)
+        }
+        if (buffer.remaining() < 12) throw PluginException(PluginException.INVALID_ARGUMENT)
+        val hasExp = buffer.int
+        val lo = buffer.int
+        val hi = buffer.int
+        when (hasExp) {
+            0 -> if (lo != 0 || hi != 0) throw PluginException(PluginException.INVALID_ARGUMENT)
+            1 -> Unit
+            else -> throw PluginException(PluginException.INVALID_ARGUMENT)
+        }
+        if (buffer.hasRemaining()) throw PluginException(PluginException.INVALID_ARGUMENT)
+    }
+
+    private fun validateUserActivity(payload: ByteBuffer) {
+        val buffer = payload.order(ByteOrder.LITTLE_ENDIAN)
+        if (buffer.remaining() < 4 || buffer.int != 1) throw PluginException(PluginException.INVALID_ARGUMENT)
+        validateId(readString(buffer, 64))
+        validateText(readString(buffer, 128), max = 128, allowEmpty = false)
+        if (buffer.remaining() < 4) throw PluginException(PluginException.INVALID_ARGUMENT)
+        when (buffer.int) {
+            0 -> Unit
+            1 -> {
+                val url = readString(buffer, 2048)
+                if (!url.startsWith("https://") || url.any { Character.isISOControl(it) }) {
+                    throw PluginException(PluginException.INVALID_ARGUMENT)
+                }
+            }
+            else -> throw PluginException(PluginException.INVALID_ARGUMENT)
+        }
+        if (buffer.remaining() < 4) throw PluginException(PluginException.INVALID_ARGUMENT)
+        val flags = buffer.int
+        if ((flags and 0b111.inv()) != 0) throw PluginException(PluginException.INVALID_ARGUMENT)
+        if (buffer.hasRemaining()) throw PluginException(PluginException.INVALID_ARGUMENT)
     }
 
     private fun encodeLaunch(id: String?): ByteArray {
@@ -151,6 +269,34 @@ class AppShortcutsPlugin(
         out.put(bytes)
 
         return out.array()
+    }
+
+    private fun encodeOptionalShare(share: IncomingShareData?): ByteArray {
+        val out = ByteArrayOutputStream()
+        fun writeU32(value: Int) {
+            out.write(ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(value).array())
+        }
+        fun writeOptString(value: String?) {
+            if (value == null) {
+                writeU32(0)
+            } else {
+                val bytes = value.toByteArray(StandardCharsets.UTF_8)
+                writeU32(1)
+                writeU32(bytes.size)
+                out.write(bytes)
+            }
+        }
+        if (share == null) {
+            writeU32(0)
+            return out.toByteArray()
+        }
+        writeU32(1) // Some
+        writeU32(1) // version
+        writeOptString(share.text)
+        writeOptString(share.url)
+        writeOptString(share.subject)
+        writeU32(0) // attachments
+        return out.toByteArray()
     }
 
     private fun readString(
@@ -189,14 +335,25 @@ class AppShortcutsPlugin(
 
     private fun validateText(
         value: String,
+        max: Int,
         allowEmpty: Boolean,
     ) {
-        if ((!allowEmpty && value.isEmpty()) || value.length > 128) {
+        if ((!allowEmpty && value.trim().isEmpty()) || value.length > max) {
             throw PluginException(PluginException.INVALID_ARGUMENT)
         }
 
         if (value.any { Character.isISOControl(it) }) {
             throw PluginException(PluginException.INVALID_ARGUMENT)
+        }
+    }
+
+    private fun validateSafeUrl(url: String) {
+        if (url.isEmpty() || url.length > 2048 || url.any { Character.isISOControl(it) } || !url.contains("://")) {
+            throw PluginException(PluginException.INVALID_ARGUMENT)
+        }
+        val lower = url.lowercase()
+        for (blocked in listOf("javascript:", "data:", "file:", "blob:", "vbscript:")) {
+            if (lower.startsWith(blocked)) throw PluginException(PluginException.INVALID_ARGUMENT)
         }
     }
 
@@ -211,17 +368,32 @@ class AppShortcutsPlugin(
         private const val SET = 0
         private const val CLEAR = 1
         private const val CONSUME_LAUNCH = 2
+        private const val INDEX_SPOTLIGHT = 3
+        private const val DELETE_SPOTLIGHT = 4
+        private const val START_USER_ACTIVITY = 5
+        private const val END_USER_ACTIVITY = 6
+        private const val CONSUME_INCOMING_SHARE = 7
 
         @Volatile
         var shared: AppShortcutsPlugin? = null
             private set
 
-        /** Notes a launcher shortcut when a plugin instance is registered. */
+        /** Notes a launcher shortcut or incoming `ACTION_SEND` share when a plugin instance is registered. */
         @JvmStatic
         fun noteLaunchIfPresent(intent: Intent?) {
+            noteIncomingShareIfPresent(intent)
             val id = intent?.getStringExtra(EXTRA_ID) ?: return
             try {
                 shared?.noteLaunch(id)
+            } catch (_: PluginException) {
+            }
+        }
+
+        /** Notes an incoming `ACTION_SEND` share when a plugin instance is registered. */
+        @JvmStatic
+        fun noteIncomingShareIfPresent(intent: Intent?) {
+            try {
+                shared?.noteIncomingShare(intent)
             } catch (_: PluginException) {
             }
         }

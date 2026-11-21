@@ -42,6 +42,20 @@ pub const END: MethodId = MethodId(4);
 pub const WAIT_PUSH_TOKEN: MethodId = MethodId(5);
 /// Empty payload; identifiers of activities this plugin currently tracks.
 pub const LIST: MethodId = MethodId(6);
+/// Empty payload; waits for the app-wide `ActivityKit` push-to-start token
+/// (iOS 17.2+).
+pub const WAIT_PUSH_TO_START_TOKEN: MethodId = MethodId(7);
+/// Scheduled start request (`StartRequest` + `ActivitySchedule`); echoes the
+/// activity identifier on success.
+pub const START_SCHEDULED: MethodId = MethodId(8);
+/// Scheduled update request (`UpdateRequest` + `ActivitySchedule`); empty
+/// reply.
+pub const UPDATE_SCHEDULED: MethodId = MethodId(9);
+/// Android Live Update request (`Identifier` + `AndroidLiveUpdate`); echoes
+/// the update identifier on success.
+pub const POST_ANDROID_LIVE_UPDATE: MethodId = MethodId(10);
+/// Activity id; dismisses an active Android Live Update notification.
+pub const END_ANDROID_LIVE_UPDATE: MethodId = MethodId(11);
 /// Independently grantable operations.
 pub const METHODS: &[MethodId] = &[
 	ARE_ENABLED,
@@ -51,6 +65,11 @@ pub const METHODS: &[MethodId] = &[
 	END,
 	WAIT_PUSH_TOKEN,
 	LIST,
+	WAIT_PUSH_TO_START_TOKEN,
+	START_SCHEDULED,
+	UPDATE_SCHEDULED,
+	POST_ANDROID_LIVE_UPDATE,
+	END_ANDROID_LIVE_UPDATE,
 ];
 
 const MAX_ID_LEN: usize = 64;
@@ -63,6 +82,8 @@ const MAX_START_BYTES: usize = 4096;
 const MAX_UPDATE_BYTES: usize = 4096;
 
 const MAX_END_BYTES: usize = 4096;
+const MAX_SCHEDULED_BYTES: usize = 4200;
+const MAX_ANDROID_LIVE_UPDATE_BYTES: usize = 4096;
 const MAX_AFTER_SECONDS: u32 = 86_400;
 
 /// Application-chosen activity identifier.
@@ -154,6 +175,106 @@ impl ContentState {
 	#[must_use]
 	pub fn fields(&self) -> &[(String, String)] {
 		&self.fields
+	}
+
+	/// Merges validated [`DynamicIslandLayout`] slots into reserved `_lk_di_*`
+	/// fields so an iOS Widget Extension can read them from
+	/// `LeptosKitLiveActivityAttributes.ContentState`.
+	pub fn with_dynamic_island(mut self, layout: &DynamicIslandLayout) -> Result<Self, Error> {
+		layout.validate()?;
+		let entries = [
+			(island::KEY_COMPACT_LEADING, layout.compact_leading.as_str()),
+			(
+				island::KEY_COMPACT_TRAILING,
+				layout.compact_trailing.as_str(),
+			),
+			(island::KEY_MINIMAL, layout.minimal.as_str()),
+			(
+				island::KEY_EXPANDED_LEADING,
+				layout.expanded_leading.as_str(),
+			),
+			(
+				island::KEY_EXPANDED_TRAILING,
+				layout.expanded_trailing.as_str(),
+			),
+			(island::KEY_EXPANDED_CENTER, layout.expanded_center.as_str()),
+			(island::KEY_EXPANDED_BOTTOM, layout.expanded_bottom.as_str()),
+		];
+
+		for (key, value) in entries {
+			if value.is_empty() {
+				continue;
+			}
+			self.upsert_field(key, value)?;
+		}
+		if let Some(hex) = layout.keyline_tint_hex.as_deref() {
+			self.upsert_field(island::KEY_KEYLINE_TINT, hex)?;
+		}
+		Ok(self)
+	}
+
+	/// Extracts any [`DynamicIslandLayout`] slots previously stored in
+	/// reserved `_lk_di_*` fields.
+	#[must_use]
+	pub fn dynamic_island(&self) -> Option<DynamicIslandLayout> {
+		let mut layout = DynamicIslandLayout::new();
+		let mut found = false;
+
+		for (key, value) in &self.fields {
+			match key.as_str() {
+				island::KEY_COMPACT_LEADING => {
+					layout.compact_leading.clone_from(value);
+					found = true;
+				}
+				island::KEY_COMPACT_TRAILING => {
+					layout.compact_trailing.clone_from(value);
+					found = true;
+				}
+				island::KEY_MINIMAL => {
+					layout.minimal.clone_from(value);
+					found = true;
+				}
+				island::KEY_EXPANDED_LEADING => {
+					layout.expanded_leading.clone_from(value);
+					found = true;
+				}
+				island::KEY_EXPANDED_TRAILING => {
+					layout.expanded_trailing.clone_from(value);
+					found = true;
+				}
+				island::KEY_EXPANDED_CENTER => {
+					layout.expanded_center.clone_from(value);
+					found = true;
+				}
+				island::KEY_EXPANDED_BOTTOM => {
+					layout.expanded_bottom.clone_from(value);
+					found = true;
+				}
+				island::KEY_KEYLINE_TINT => {
+					layout.keyline_tint_hex = Some(value.clone());
+					found = true;
+				}
+				_ => {}
+			}
+		}
+
+		found.then_some(layout)
+	}
+
+	fn upsert_field(&mut self, key: &str, value: &str) -> Result<(), Error> {
+		validate_id_len(key, MAX_FIELD_KEY_LEN)?;
+		validate_text(value, MAX_FIELD_VALUE_LEN, false)?;
+
+		if let Some((_, existing)) = self.fields.iter_mut().find(|(k, _)| k == key) {
+			value.clone_into(existing);
+			return Ok(());
+		}
+
+		if self.fields.len() >= MAX_FIELDS {
+			return Err(Error::InvalidArgument);
+		}
+		self.fields.push((key.to_owned(), value.to_owned()));
+		Ok(())
 	}
 
 	fn encode_into(&self, output: &mut Encoder) -> Result<(), Error> {
@@ -299,6 +420,13 @@ impl StartRequest {
 		})
 	}
 
+	/// Attaches validated [`DynamicIslandLayout`] slots to this request's
+	/// [`ContentState`].
+	pub fn with_dynamic_island(mut self, layout: &DynamicIslandLayout) -> Result<Self, Error> {
+		self.content = self.content.with_dynamic_island(layout)?;
+		Ok(self)
+	}
+
 	/// Application-chosen replacement identifier.
 	#[must_use]
 	pub fn id(&self) -> &Identifier {
@@ -332,12 +460,16 @@ impl StartRequest {
 	/// Encodes the start control message.
 	pub fn encode(&self) -> Result<Bytes, Error> {
 		let mut output = Encoder::with_capacity(64);
-		self.id.encode_into(&mut output)?;
-		self.kind.encode_into(&mut output)?;
+		self.encode_into(&mut output)?;
+		Ok(output.finish())
+	}
+
+	fn encode_into(&self, output: &mut Encoder) -> Result<(), Error> {
+		self.id.encode_into(output)?;
+		self.kind.encode_into(output)?;
 		output.bytes(self.title.as_bytes())?;
 		output.u32(u32::from(self.push_updates));
-		self.content.encode_into(&mut output)?;
-		Ok(output.finish())
+		self.content.encode_into(output)
 	}
 
 	/// Validates a complete start message.
@@ -347,8 +479,14 @@ impl StartRequest {
 		}
 
 		let mut input = Decoder::new(payload);
-		let id = Identifier::decode(&mut input)?;
-		let kind = Identifier::decode(&mut input)?;
+		let request = Self::decode_from(&mut input)?;
+		input.finish()?;
+		Ok(request)
+	}
+
+	fn decode_from(input: &mut Decoder<'_>) -> Result<Self, Error> {
+		let id = Identifier::decode(input)?;
+		let kind = Identifier::decode(input)?;
 		let title = input.string()?;
 
 		let push_updates = match input.u32()? {
@@ -357,9 +495,7 @@ impl StartRequest {
 			_ => return Err(Error::InvalidArgument),
 		};
 
-		let content = ContentState::decode(&mut input)?;
-
-		input.finish()?;
+		let content = ContentState::decode(input)?;
 		Self::new(id, kind, title, content, push_updates)
 	}
 }
@@ -377,6 +513,13 @@ impl UpdateRequest {
 		Self { id, content }
 	}
 
+	/// Attaches validated [`DynamicIslandLayout`] slots to this update's
+	/// [`ContentState`].
+	pub fn with_dynamic_island(mut self, layout: &DynamicIslandLayout) -> Result<Self, Error> {
+		self.content = self.content.with_dynamic_island(layout)?;
+		Ok(self)
+	}
+
 	/// Target activity.
 	#[must_use]
 	pub fn id(&self) -> &Identifier {
@@ -392,9 +535,13 @@ impl UpdateRequest {
 	/// Encodes the update control message.
 	pub fn encode(&self) -> Result<Bytes, Error> {
 		let mut output = Encoder::with_capacity(32);
-		self.id.encode_into(&mut output)?;
-		self.content.encode_into(&mut output)?;
+		self.encode_into(&mut output)?;
 		Ok(output.finish())
+	}
+
+	fn encode_into(&self, output: &mut Encoder) -> Result<(), Error> {
+		self.id.encode_into(output)?;
+		self.content.encode_into(output)
 	}
 
 	/// Validates a complete update message.
@@ -404,10 +551,162 @@ impl UpdateRequest {
 		}
 
 		let mut input = Decoder::new(payload);
-		let id = Identifier::decode(&mut input)?;
-		let content = ContentState::decode(&mut input)?;
+		let request = Self::decode_from(&mut input)?;
 		input.finish()?;
+		Ok(request)
+	}
+
+	fn decode_from(input: &mut Decoder<'_>) -> Result<Self, Error> {
+		let id = Identifier::decode(input)?;
+		let content = ContentState::decode(input)?;
 		Ok(Self::new(id, content))
+	}
+}
+
+/// Start request paired with [`ActivitySchedule`] freshness and ranking hints
+/// (`staleDate` and `relevanceScore` in `ActivityKit`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ScheduledStartRequest {
+	start: StartRequest,
+	schedule: ActivitySchedule,
+}
+
+impl ScheduledStartRequest {
+	/// Validates `schedule` and pairs it with `start`.
+	pub fn new(start: StartRequest, schedule: ActivitySchedule) -> Result<Self, Error> {
+		Ok(Self {
+			start,
+			schedule: schedule.validate()?,
+		})
+	}
+
+	/// Underlying start request.
+	#[must_use]
+	pub fn start(&self) -> &StartRequest {
+		&self.start
+	}
+
+	/// Schedule hints.
+	#[must_use]
+	pub const fn schedule(&self) -> ActivitySchedule {
+		self.schedule
+	}
+
+	/// Encodes the scheduled start message.
+	pub fn encode(&self) -> Result<Bytes, Error> {
+		let mut output = Encoder::with_capacity(96);
+		self.start.encode_into(&mut output)?;
+		self.schedule.encode_into(&mut output)?;
+		Ok(output.finish())
+	}
+
+	/// Validates a complete scheduled start message.
+	pub fn decode(payload: &[u8]) -> Result<Self, Error> {
+		if payload.len() > MAX_SCHEDULED_BYTES {
+			return Err(Error::InvalidArgument);
+		}
+		let mut input = Decoder::new(payload);
+		let start = StartRequest::decode_from(&mut input)?;
+		let schedule = ActivitySchedule::decode_from(&mut input)?;
+		input.finish()?;
+		Self::new(start, schedule)
+	}
+}
+
+/// Content update paired with [`ActivitySchedule`] freshness and ranking hints.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ScheduledUpdateRequest {
+	update: UpdateRequest,
+	schedule: ActivitySchedule,
+}
+
+impl ScheduledUpdateRequest {
+	/// Validates `schedule` and pairs it with `update`.
+	pub fn new(update: UpdateRequest, schedule: ActivitySchedule) -> Result<Self, Error> {
+		Ok(Self {
+			update,
+			schedule: schedule.validate()?,
+		})
+	}
+
+	/// Underlying update request.
+	#[must_use]
+	pub fn update(&self) -> &UpdateRequest {
+		&self.update
+	}
+
+	/// Schedule hints.
+	#[must_use]
+	pub const fn schedule(&self) -> ActivitySchedule {
+		self.schedule
+	}
+
+	/// Encodes the scheduled update message.
+	pub fn encode(&self) -> Result<Bytes, Error> {
+		let mut output = Encoder::with_capacity(64);
+		self.update.encode_into(&mut output)?;
+		self.schedule.encode_into(&mut output)?;
+		Ok(output.finish())
+	}
+
+	/// Validates a complete scheduled update message.
+	pub fn decode(payload: &[u8]) -> Result<Self, Error> {
+		if payload.len() > MAX_SCHEDULED_BYTES {
+			return Err(Error::InvalidArgument);
+		}
+		let mut input = Decoder::new(payload);
+		let update = UpdateRequest::decode_from(&mut input)?;
+		let schedule = ActivitySchedule::decode_from(&mut input)?;
+		input.finish()?;
+		Self::new(update, schedule)
+	}
+}
+
+/// Validated Android Live Update request pairing a replacement identifier with
+/// an [`AndroidLiveUpdate`] payload.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AndroidLiveUpdateRequest {
+	id: Identifier,
+	update: AndroidLiveUpdate,
+}
+
+impl AndroidLiveUpdateRequest {
+	/// Builds a validated Android Live Update request.
+	#[must_use]
+	pub fn new(id: Identifier, update: AndroidLiveUpdate) -> Self {
+		Self { id, update }
+	}
+
+	/// Replacement identifier used to update or dismiss the notification.
+	#[must_use]
+	pub fn id(&self) -> &Identifier {
+		&self.id
+	}
+
+	/// Progress notification payload.
+	#[must_use]
+	pub fn update(&self) -> &AndroidLiveUpdate {
+		&self.update
+	}
+
+	/// Encodes the Android Live Update request.
+	pub fn encode(&self) -> Result<Bytes, Error> {
+		let mut output = Encoder::with_capacity(160);
+		self.id.encode_into(&mut output)?;
+		self.update.encode_into(&mut output)?;
+		Ok(output.finish())
+	}
+
+	/// Validates a complete Android Live Update request.
+	pub fn decode(payload: &[u8]) -> Result<Self, Error> {
+		if payload.len() > MAX_ANDROID_LIVE_UPDATE_BYTES {
+			return Err(Error::InvalidArgument);
+		}
+		let mut input = Decoder::new(payload);
+		let id = Identifier::decode(&mut input)?;
+		let update = AndroidLiveUpdate::decode_from(&mut input)?;
+		input.finish()?;
+		Ok(Self::new(id, update))
 	}
 }
 
@@ -593,7 +892,10 @@ pub fn encode_list(ids: &[Identifier]) -> Result<Bytes, Error> {
 
 /// Validates empty-payload methods before a platform call.
 pub fn validate_empty(method: MethodId, payload: &[u8]) -> Result<(), Error> {
-	if !matches!(method, ARE_ENABLED | FREQUENT_UPDATES_ENABLED | LIST) {
+	if !matches!(
+		method,
+		ARE_ENABLED | FREQUENT_UPDATES_ENABLED | LIST | WAIT_PUSH_TO_START_TOKEN
+	) {
 		return Err(Error::Unavailable);
 	}
 
@@ -637,9 +939,28 @@ pub mod guest {
 			Ok(id)
 		}
 
+		/// Starts a Live Activity with [`ActivitySchedule`] freshness and
+		/// ranking hints (`staleDate` and `relevanceScore` in `ActivityKit`).
+		pub async fn start_scheduled(
+			self,
+			request: &ScheduledStartRequest,
+		) -> Result<Identifier, Error> {
+			let bytes = self.0.call(START_SCHEDULED, &request.encode()?)?.await?;
+			let mut input = Decoder::new(&bytes);
+			let id = Identifier::decode(&mut input)?;
+			input.finish()?;
+			Ok(id)
+		}
+
 		/// Replaces the content state of a running activity.
 		pub async fn update(self, request: &UpdateRequest) -> Result<(), Error> {
 			self.empty(UPDATE, &request.encode()?).await
+		}
+
+		/// Replaces the content state of a running activity with
+		/// [`ActivitySchedule`] freshness and ranking hints.
+		pub async fn update_scheduled(self, request: &ScheduledUpdateRequest) -> Result<(), Error> {
+			self.empty(UPDATE_SCHEDULED, &request.encode()?).await
 		}
 
 		/// Ends a running activity with an optional final state.
@@ -654,9 +975,39 @@ pub mod guest {
 			PushToken::decode(&self.0.call(WAIT_PUSH_TOKEN, &output.finish())?.await?)
 		}
 
+		/// Waits for the app-wide `ActivityKit` push-to-start token
+		/// (iOS 17.2+).
+		pub async fn wait_push_to_start_token(self) -> Result<PushToken, Error> {
+			PushToken::decode(&self.0.call(WAIT_PUSH_TO_START_TOKEN, &[])?.await?)
+		}
+
 		/// Identifiers this plugin currently tracks.
 		pub async fn list(self) -> Result<Vec<Identifier>, Error> {
 			decode_list(&self.0.call(LIST, &[])?.await?)
+		}
+
+		/// Posts or updates an Android ongoing Live Update progress
+		/// notification (`Notification.ProgressStyle` on Android 16+,
+		/// standard ongoing progress notification on earlier Android).
+		pub async fn post_android_live_update(
+			self,
+			request: &AndroidLiveUpdateRequest,
+		) -> Result<Identifier, Error> {
+			let bytes = self
+				.0
+				.call(POST_ANDROID_LIVE_UPDATE, &request.encode()?)?
+				.await?;
+			let mut input = Decoder::new(&bytes);
+			let id = Identifier::decode(&mut input)?;
+			input.finish()?;
+			Ok(id)
+		}
+
+		/// Dismisses an active Android Live Update notification.
+		pub async fn end_android_live_update(self, id: &Identifier) -> Result<(), Error> {
+			let mut output = Encoder::with_capacity(4 + id.as_str().len());
+			id.encode_into(&mut output)?;
+			self.empty(END_ANDROID_LIVE_UPDATE, &output.finish()).await
 		}
 
 		async fn empty(self, method: MethodId, payload: &[u8]) -> Result<(), Error> {
@@ -669,7 +1020,8 @@ pub mod guest {
 	}
 }
 
-/// Browsers have no `ActivityKit`. Every operation is unavailable.
+/// Browsers have no `ActivityKit` or Android Live Updates. Every operation is
+/// unavailable.
 #[cfg(all(target_arch = "wasm32", target_os = "unknown", not(feature = "guest")))]
 pub mod web {
 	use std::future::Ready;
@@ -693,7 +1045,17 @@ pub mod web {
 	}
 
 	/// Always unavailable outside iOS `ActivityKit`.
+	pub fn start_scheduled(_request: &ScheduledStartRequest) -> Ready<Result<Identifier, Error>> {
+		ready(Err(Error::Unavailable))
+	}
+
+	/// Always unavailable outside iOS `ActivityKit`.
 	pub fn update(_request: &UpdateRequest) -> Ready<Result<(), Error>> {
+		ready(Err(Error::Unavailable))
+	}
+
+	/// Always unavailable outside iOS `ActivityKit`.
+	pub fn update_scheduled(_request: &ScheduledUpdateRequest) -> Ready<Result<(), Error>> {
 		ready(Err(Error::Unavailable))
 	}
 
@@ -708,12 +1070,30 @@ pub mod web {
 	}
 
 	/// Always unavailable outside iOS `ActivityKit`.
+	pub fn wait_push_to_start_token() -> Ready<Result<PushToken, Error>> {
+		ready(Err(Error::Unavailable))
+	}
+
+	/// Always unavailable outside iOS `ActivityKit`.
 	pub fn list() -> Ready<Result<Vec<Identifier>, Error>> {
+		ready(Err(Error::Unavailable))
+	}
+
+	/// Always unavailable outside Android.
+	pub fn post_android_live_update(
+		_request: &AndroidLiveUpdateRequest,
+	) -> Ready<Result<Identifier, Error>> {
+		ready(Err(Error::Unavailable))
+	}
+
+	/// Always unavailable outside Android.
+	pub fn end_android_live_update(_id: &Identifier) -> Ready<Result<(), Error>> {
 		ready(Err(Error::Unavailable))
 	}
 }
 
-/// Explicit unavailable handler for hosts without an iOS `ActivityKit` adapter.
+/// Explicit unavailable handler for hosts without an iOS `ActivityKit` or
+/// Android Live Updates adapter.
 #[derive(Debug, Default)]
 pub struct Unsupported;
 
@@ -728,20 +1108,31 @@ impl leptoskit_bridge::Plugin for Unsupported {
 
 	fn invoke(&mut self, method: MethodId, payload: Bytes) -> Result<Bytes, Error> {
 		match method {
-			ARE_ENABLED | FREQUENT_UPDATES_ENABLED | LIST => validate_empty(method, &payload)?,
+			ARE_ENABLED | FREQUENT_UPDATES_ENABLED | LIST | WAIT_PUSH_TO_START_TOKEN => {
+				validate_empty(method, &payload)?;
+			}
 			START => {
 				StartRequest::decode(&payload)?;
+			}
+			START_SCHEDULED => {
+				ScheduledStartRequest::decode(&payload)?;
 			}
 			UPDATE => {
 				UpdateRequest::decode(&payload)?;
 			}
+			UPDATE_SCHEDULED => {
+				ScheduledUpdateRequest::decode(&payload)?;
+			}
 			END => {
 				EndRequest::decode(&payload)?;
 			}
-			WAIT_PUSH_TOKEN => {
+			WAIT_PUSH_TOKEN | END_ANDROID_LIVE_UPDATE => {
 				let mut input = Decoder::new(&payload);
 				Identifier::decode(&mut input)?;
 				input.finish()?;
+			}
+			POST_ANDROID_LIVE_UPDATE => {
+				AndroidLiveUpdateRequest::decode(&payload)?;
 			}
 			_ => return Err(Error::Unavailable),
 		}
@@ -1025,5 +1416,123 @@ mod tests {
 		assert!(encode_list(&many).is_err());
 
 		assert_eq!(validate_empty(START, &[]), Err(Error::Unavailable));
+	}
+
+	#[test]
+	fn dynamic_island_maps_through_content_state_and_requests() {
+		let island = DynamicIslandLayout::new()
+			.compact("Courier", "4m")
+			.minimal("4m")
+			.expanded("Order #42", "4m", "Arriving soon", "Main St & 3rd")
+			.keyline_tint("#4F46E5");
+
+		let start = StartRequest::new(
+			Identifier::new("order-42").unwrap(),
+			Identifier::new("delivery").unwrap(),
+			"Order #42",
+			ContentState::new([("status", "on_the_way")]).unwrap(),
+			true,
+		)
+		.unwrap()
+		.with_dynamic_island(&island)
+		.unwrap();
+
+		let decoded = StartRequest::decode(&start.encode().unwrap()).unwrap();
+		assert_eq!(decoded.content().dynamic_island(), Some(island.clone()));
+
+		let update = UpdateRequest::new(start.id().clone(), ContentState::default())
+			.with_dynamic_island(&island)
+			.unwrap();
+		let decoded_update = UpdateRequest::decode(&update.encode().unwrap()).unwrap();
+		assert_eq!(decoded_update.content().dynamic_island(), Some(island));
+	}
+
+	#[test]
+	fn scheduled_and_android_live_update_requests_round_trip() {
+		let id = Identifier::new("order-99").unwrap();
+		let start = StartRequest::new(
+			id.clone(),
+			Identifier::new("delivery").unwrap(),
+			"Order #99",
+			ContentState::new([("eta", "5m")]).unwrap(),
+			true,
+		)
+		.unwrap();
+		let schedule = ActivitySchedule {
+			stale_after_seconds: Some(300),
+			relevance_score: 0.85,
+			allow_push_to_start: true,
+		};
+
+		let scheduled_start = ScheduledStartRequest::new(start, schedule).unwrap();
+		let encoded_start = scheduled_start.encode().unwrap();
+		assert_eq!(
+			ScheduledStartRequest::decode(&encoded_start).unwrap(),
+			scheduled_start
+		);
+		assert!(ScheduledStartRequest::decode(&encoded_start[..encoded_start.len() - 1]).is_err());
+
+		let scheduled_update = ScheduledUpdateRequest::new(
+			UpdateRequest::new(id.clone(), ContentState::new([("eta", "2m")]).unwrap()),
+			ActivitySchedule {
+				stale_after_seconds: None,
+				relevance_score: 1.0,
+				allow_push_to_start: false,
+			},
+		)
+		.unwrap();
+		let encoded_update = scheduled_update.encode().unwrap();
+		assert_eq!(
+			ScheduledUpdateRequest::decode(&encoded_update).unwrap(),
+			scheduled_update
+		);
+
+		let android = AndroidLiveUpdateRequest::new(
+			id.clone(),
+			AndroidLiveUpdate::new(
+				"Order #99",
+				"Courier is 2 minutes away",
+				"2m",
+				0.8,
+				vec![ProgressSegment {
+					length: 100,
+					color_hex: Some("#22C55E".into()),
+				}],
+			)
+			.unwrap(),
+		);
+		let encoded_android = android.encode().unwrap();
+		assert_eq!(
+			AndroidLiveUpdateRequest::decode(&encoded_android).unwrap(),
+			android
+		);
+
+		let mut unsupported = Unsupported;
+		assert_eq!(
+			unsupported.invoke(WAIT_PUSH_TO_START_TOKEN, Bytes::new()),
+			Err(Error::Unavailable)
+		);
+		assert_eq!(
+			unsupported.invoke(WAIT_PUSH_TO_START_TOKEN, Bytes::from(vec![1])),
+			Err(Error::InvalidArgument)
+		);
+		assert_eq!(
+			unsupported.invoke(START_SCHEDULED, encoded_start),
+			Err(Error::Unavailable)
+		);
+		assert_eq!(
+			unsupported.invoke(UPDATE_SCHEDULED, encoded_update),
+			Err(Error::Unavailable)
+		);
+		assert_eq!(
+			unsupported.invoke(POST_ANDROID_LIVE_UPDATE, encoded_android),
+			Err(Error::Unavailable)
+		);
+		let mut end_android = Encoder::with_capacity(16);
+		id.encode_into(&mut end_android).unwrap();
+		assert_eq!(
+			unsupported.invoke(END_ANDROID_LIVE_UPDATE, end_android.finish()),
+			Err(Error::Unavailable)
+		);
 	}
 }

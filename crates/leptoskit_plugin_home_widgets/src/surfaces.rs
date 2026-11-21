@@ -38,6 +38,21 @@ pub enum SurfaceKind {
 	AndroidGlance = 6,
 }
 
+impl SurfaceKind {
+	fn from_u32(value: u32) -> Result<Self, Error> {
+		match value {
+			0 => Ok(Self::HomeScreen),
+			1 => Ok(Self::LockScreenCircular),
+			2 => Ok(Self::LockScreenRectangular),
+			3 => Ok(Self::LockScreenInline),
+			4 => Ok(Self::ControlCenter),
+			5 => Ok(Self::QuickSettingsTile),
+			6 => Ok(Self::AndroidGlance),
+			_ => Err(Error::InvalidArgument),
+		}
+	}
+}
+
 /// When the OS should request the next widget timeline refresh.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ReloadPolicy {
@@ -72,8 +87,9 @@ impl TimelineSchedule {
 	///
 	/// # Errors
 	///
-	/// Returns [`Error::InvalidArgument`] if empty or out of order, or
-	/// [`Error::TooLarge`] if more than [`MAX_TIMELINE_ENTRIES`] are provided.
+	/// Returns [`Error::InvalidArgument`] if empty, out of order, or mixed
+	/// kinds, or [`Error::TooLarge`] if more than [`MAX_TIMELINE_ENTRIES`] are
+	/// provided.
 	pub fn new(
 		surface: SurfaceKind,
 		entries: Vec<TimelineEntry>,
@@ -84,6 +100,12 @@ impl TimelineSchedule {
 		}
 		if entries.len() > MAX_TIMELINE_ENTRIES {
 			return Err(Error::TooLarge);
+		}
+		let expected_kind = entries[0].snapshot.kind();
+		for entry in &entries[1..] {
+			if entry.snapshot.kind() != expected_kind {
+				return Err(Error::InvalidArgument);
+			}
 		}
 		for pair in entries.windows(2) {
 			if pair[1].deliver_at_epoch_secs < pair[0].deliver_at_epoch_secs {
@@ -108,6 +130,12 @@ impl TimelineSchedule {
 		&self.entries
 	}
 
+	/// Widget kind shared by every entry in this schedule.
+	#[must_use]
+	pub fn kind(&self) -> &crate::Kind {
+		self.entries[0].snapshot.kind()
+	}
+
 	/// Reload policy.
 	#[must_use]
 	pub const fn policy(&self) -> ReloadPolicy {
@@ -118,6 +146,82 @@ impl TimelineSchedule {
 	#[must_use]
 	pub const fn surface(&self) -> SurfaceKind {
 		self.surface
+	}
+
+	/// Encodes this timeline schedule into bridge bytes (version 1).
+	pub fn encode(&self) -> Result<Bytes, Error> {
+		let mut out = Encoder::with_capacity(64 + self.entries.len() * 64);
+		out.u32(1);
+		out.u32(self.surface as u32);
+		match self.policy {
+			ReloadPolicy::AtEnd => {
+				out.u32(0);
+				out.u32(0);
+			}
+			ReloadPolicy::AfterSeconds(seconds) => {
+				out.u32(1);
+				out.u32(seconds);
+			}
+			ReloadPolicy::Never => {
+				out.u32(2);
+				out.u32(0);
+			}
+		}
+		out.u32(u32::try_from(self.entries.len()).map_err(|_| Error::TooLarge)?);
+		for entry in &self.entries {
+			out.u32((entry.deliver_at_epoch_secs & 0xFFFF_FFFF) as u32);
+			out.u32((entry.deliver_at_epoch_secs >> 32) as u32);
+			let snapshot = entry.snapshot.encode()?;
+			out.bytes(&snapshot)?;
+		}
+		Ok(out.finish())
+	}
+
+	/// Decodes a timeline schedule from bridge bytes.
+	pub fn decode(bytes: &[u8]) -> Result<Self, Error> {
+		let mut input = Decoder::new(bytes);
+		if input.u32()? != 1 {
+			return Err(Error::InvalidArgument);
+		}
+		let surface = SurfaceKind::from_u32(input.u32()?)?;
+		let policy_tag = input.u32()?;
+		let policy_seconds = input.u32()?;
+		let policy = match policy_tag {
+			0 => {
+				if policy_seconds != 0 {
+					return Err(Error::InvalidArgument);
+				}
+				ReloadPolicy::AtEnd
+			}
+			1 => ReloadPolicy::AfterSeconds(policy_seconds),
+			2 => {
+				if policy_seconds != 0 {
+					return Err(Error::InvalidArgument);
+				}
+				ReloadPolicy::Never
+			}
+			_ => return Err(Error::InvalidArgument),
+		};
+		let count = input.u32()? as usize;
+		if count == 0 {
+			return Err(Error::InvalidArgument);
+		}
+		if count > MAX_TIMELINE_ENTRIES {
+			return Err(Error::TooLarge);
+		}
+		let mut entries = Vec::with_capacity(count);
+		for _ in 0..count {
+			let lo = u64::from(input.u32()?);
+			let hi = u64::from(input.u32()?);
+			let deliver_at_epoch_secs = lo | (hi << 32);
+			let snapshot = Snapshot::decode(input.bytes()?)?;
+			entries.push(TimelineEntry {
+				deliver_at_epoch_secs,
+				snapshot,
+			});
+		}
+		input.finish()?;
+		Self::new(surface, entries, policy)
 	}
 }
 
@@ -551,6 +655,31 @@ mod tests {
 		)
 		.unwrap();
 		assert_eq!(schedule.entries().len(), 2);
+		assert_eq!(schedule.kind().as_str(), "steps");
+		let wire = schedule.encode().unwrap();
+		assert_eq!(TimelineSchedule::decode(&wire).unwrap(), schedule);
+		assert!(TimelineSchedule::decode(&wire[..wire.len() - 1]).is_err());
+
+		// Mixed kinds in one timeline fail validation.
+		let other =
+			Snapshot::new(Kind::new("other").unwrap(), Family::Small, "Other", "", "").unwrap();
+		assert_eq!(
+			TimelineSchedule::new(
+				SurfaceKind::HomeScreen,
+				vec![
+					TimelineEntry {
+						deliver_at_epoch_secs: 100,
+						snapshot: snap_a.clone(),
+					},
+					TimelineEntry {
+						deliver_at_epoch_secs: 200,
+						snapshot: other,
+					},
+				],
+				ReloadPolicy::AtEnd,
+			),
+			Err(Error::InvalidArgument)
+		);
 
 		// Out-of-order entries fail validation.
 		assert_eq!(
