@@ -21,6 +21,18 @@ use leptoskit_bridge::Plugin;
 use leptoskit_bridge::codec::Decoder;
 use leptoskit_bridge::codec::Encoder;
 
+pub mod feed;
+pub use feed::FeedBackend;
+pub use feed::FeedTransport;
+pub use feed::IntegrityVerifier;
+pub use feed::PlatformArtifact;
+pub use feed::ReleaseManifest;
+pub use feed::SemVer;
+pub use feed::Sha256OnlyVerifier;
+pub use feed::TargetPlatformId;
+pub use feed::UpdateChannel;
+pub use feed::UpdatePolicy;
+
 /// Empty request -> current installed version UTF-8.
 pub const CURRENT_VERSION: MethodId = MethodId(0);
 /// Empty request -> versioned [`Status`] after a check.

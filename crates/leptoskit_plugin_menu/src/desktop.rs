@@ -301,6 +301,28 @@ impl DesktopMenu {
 					)),
 				)
 			}
+			Item::Radio {
+				id,
+				label,
+				enabled,
+				selected,
+				accelerator,
+				..
+			} => {
+				(
+					id,
+					Box::new(muda::CheckMenuItem::with_id(
+						format!("leptoskit.menu.{serial}.{id}"),
+						label,
+						*enabled,
+						*selected,
+						parse(accelerator.as_deref())?,
+					)),
+				)
+			}
+			Item::Predefined { role, label } => {
+				return Ok(Box::new(predefined_item(*role, label.as_deref())));
+			}
 			Item::Submenu {
 				id,
 				label,
@@ -340,6 +362,29 @@ impl DesktopMenu {
 	}
 }
 
+fn predefined_item(role: crate::MenuRole, label: Option<&str>) -> muda::PredefinedMenuItem {
+	use crate::MenuRole as R;
+	match role {
+		R::About => muda::PredefinedMenuItem::about(label, None),
+		R::Services => muda::PredefinedMenuItem::services(label),
+		R::Hide => muda::PredefinedMenuItem::hide(label),
+		R::HideOthers => muda::PredefinedMenuItem::hide_others(label),
+		R::ShowAll => muda::PredefinedMenuItem::show_all(label),
+		R::Quit => muda::PredefinedMenuItem::quit(label),
+		R::Undo => muda::PredefinedMenuItem::undo(label),
+		R::Redo => muda::PredefinedMenuItem::redo(label),
+		R::Cut => muda::PredefinedMenuItem::cut(label),
+		R::Copy => muda::PredefinedMenuItem::copy(label),
+		R::Paste => muda::PredefinedMenuItem::paste(label),
+		R::SelectAll => muda::PredefinedMenuItem::select_all(label),
+		R::Minimize => muda::PredefinedMenuItem::minimize(label),
+		R::Maximize => muda::PredefinedMenuItem::maximize(label),
+		R::Fullscreen => muda::PredefinedMenuItem::fullscreen(label),
+		R::CloseWindow => muda::PredefinedMenuItem::close_window(label),
+		R::BringAllToFront => muda::PredefinedMenuItem::bring_all_to_front(label),
+	}
+}
+
 fn parse(accelerator: Option<&str>) -> Result<Option<Accelerator>, Error> {
 	accelerator
 		.map(str::parse)
@@ -355,7 +400,9 @@ fn validate_accelerators(items: &[Item]) -> Result<(), Error> {
 fn validate_accelerators_rec(items: &[Item], seen: &mut HashSet<Accelerator>) -> Result<(), Error> {
 	for item in items {
 		match item {
-			Item::Command { accelerator, .. } | Item::Check { accelerator, .. } => {
+			Item::Command { accelerator, .. }
+			| Item::Check { accelerator, .. }
+			| Item::Radio { accelerator, .. } => {
 				if let Some(accelerator) = parse(accelerator.as_deref())? {
 					// Same chord on two rows is ambiguous on every desktop
 					// backend (Windows accelerator tables keep both cmds;
@@ -368,7 +415,7 @@ fn validate_accelerators_rec(items: &[Item], seen: &mut HashSet<Accelerator>) ->
 				}
 			}
 			Item::Submenu { items, .. } => validate_accelerators_rec(items, seen)?,
-			Item::Separator => {}
+			Item::Predefined { .. } | Item::Separator => {}
 		}
 	}
 
