@@ -189,26 +189,26 @@ extension WatchSyncPlugin: WCSessionDelegate {
 #endif
 
 private struct WireReader {
-    private let bytes: [UInt8]
+    private let buffer: [UInt8]
     private var pos = 0
 
-    init(_ data: Data) { self.bytes = [UInt8](data) }
+    init(_ data: Data) { self.buffer = [UInt8](data) }
 
     mutating func u32() throws -> UInt32 {
-        guard bytes.count - pos >= 4 else { throw PluginError.invalidArgument }
+        guard buffer.count - pos >= 4 else { throw PluginError.invalidArgument }
         let offset = pos
         pos += 4
-        return bytes.withUnsafeBytes {
+        return buffer.withUnsafeBytes {
             UInt32(littleEndian: $0.loadUnaligned(fromByteOffset: offset, as: UInt32.self))
         }
     }
 
     mutating func bytes() throws -> Data {
         let len = Int(try u32())
-        guard len >= 0, bytes.count - pos >= len else { throw PluginError.invalidArgument }
+        guard len >= 0, buffer.count - pos >= len else { throw PluginError.invalidArgument }
         let start = pos
         pos += len
-        return Data(bytes[start..<(start + len)])
+        return Data(buffer[start..<(start + len)])
     }
 
     mutating func string() throws -> String {
@@ -218,7 +218,7 @@ private struct WireReader {
     }
 
     func finished() throws {
-        guard pos == bytes.count else { throw PluginError.invalidArgument }
+        guard pos == buffer.count else { throw PluginError.invalidArgument }
     }
 }
 
