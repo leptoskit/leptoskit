@@ -87,6 +87,7 @@ packages = [
 	"leptoskit_config",
 	"leptoskit_platform",
 	"leptoskit_platform_harmonyos",
+	"leptoskit_platform_horizon",
 	"leptoskit_platform_oculus",
 	"leptoskit_plugin",
 	"leptoskit_bridge",
@@ -390,6 +391,10 @@ type = "cargo"
 
 [package.leptoskit_platform_harmonyos]
 path = "crates/leptoskit_platform_harmonyos"
+type = "cargo"
+
+[package.leptoskit_platform_horizon]
+path = "crates/leptoskit_platform_horizon"
 type = "cargo"
 
 [package.leptoskit_platform_oculus]

@@ -99,7 +99,7 @@ leptoskit publish quest           # build, sign, and upload as a draft via ovr-p
 leptoskit publish quest --submit  # upload to the channel (without --draft)
 ```
 
-See [Publishing to the stores](../guide/24-publishing.md#the-meta-horizon-store) for credentials, optional OBB/assets flags, and the Developer Dashboard steps left after upload.
+See [Publishing to the stores](../guide/24-publishing.md#the-meta-horizon-store) for credentials, optional OBB/assets flags, and the Developer Dashboard steps left after upload. For Meta Horizon Worlds TypeScript Custom UI scripts and MHCP offline `.zip` bundles, see [Meta Horizon extension](horizon.md).
 
 ## What works and what doesn't
 
