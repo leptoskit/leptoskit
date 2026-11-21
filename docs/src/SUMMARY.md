@@ -122,6 +122,7 @@
   - [Wear OS](platforms/wearos.md)
   - [watchOS](platforms/watchos.md)
   - [Meta Quest](platforms/quest.md)
+  - [Meta Horizon extension](platforms/horizon.md)
   - [Meta Quest / Oculus extension](platforms/oculus.md)
   - [macOS](platforms/macos.md)
   - [Windows and Linux](platforms/windows-linux.md)

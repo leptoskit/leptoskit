@@ -1,0 +1,26 @@
+[package]
+name = "leptoskit_platform_horizon"
+version = "0.3.0"
+authors.workspace = true
+categories = ["gui", "game-development", "rendering"]
+edition.workspace = true
+homepage.workspace = true
+keywords = ["horizon", "meta", "mhcp", "vr", "leptoskit"]
+license.workspace = true
+readme = "readme.md"
+repository.workspace = true
+rust-version.workspace = true
+description = "Experimental Meta Horizon platform extension for leptoskit: Horizon Worlds TypeScript Custom UI host templates, capability manifest, and MHCP offline bundle packaging."
+
+[package.metadata.leptoskit.native-support]
+horizon = true
+
+[dependencies]
+leptoskit_platform = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

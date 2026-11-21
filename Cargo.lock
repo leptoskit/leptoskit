@@ -6056,6 +6056,7 @@ dependencies = [
  "leptoskit_native",
  "leptoskit_platform",
  "leptoskit_platform_harmonyos",
+ "leptoskit_platform_horizon",
  "leptoskit_platform_oculus",
  "leptoskit_plugin",
  "leptoskit_plugin_dev_client",
@@ -6752,6 +6753,15 @@ name = "leptoskit_platform_harmonyos"
 version = "0.3.0"
 dependencies = [
  "leptoskit_platform",
+ "serde_json",
+]
+
+[[package]]
+name = "leptoskit_platform_horizon"
+version = "0.3.0"
+dependencies = [
+ "leptoskit_platform",
+ "serde",
  "serde_json",
 ]
 
