@@ -212,6 +212,7 @@ fn store_name(store: &str) -> &'static str {
 		"play" => "Google Play",
 		"firefox" => "addons.mozilla.org",
 		"solana" => "the Solana dApp Store",
+		"quest" => "the Meta Horizon Store",
 		_ => "the store",
 	}
 }

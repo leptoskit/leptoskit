@@ -18,6 +18,7 @@ pub mod listing;
 
 pub mod macos;
 pub mod play;
+pub mod quest;
 pub mod screenshots;
 pub mod secrets;
 pub mod solana;
@@ -46,7 +47,7 @@ use self::steps::Who;
 #[allow(clippy::struct_excessive_bools, reason = "each is a command-line flag")]
 pub struct PublishArgs {
 	/// The stores: `chrome`, `edge`, `firefox`, `app_store`, `macos`,
-	/// `play`, and `solana`; every store `[publish]` configures when
+	/// `play`, `solana`, and `quest`; every store `[publish]` configures when
 	/// omitted.
 	/// `credentials` lists the credentials each configured store needs,
 	/// `screenshots` captures the stores' screenshots, and `workflow` writes
@@ -115,7 +116,7 @@ struct Needed {
 	how: &'static str,
 }
 
-const NEEDED: [Needed; 23] = [
+const NEEDED: [Needed; 28] = [
 	Needed {
 		store: "chrome",
 		name: chrome::CREDENTIAL,
@@ -231,16 +232,42 @@ const NEEDED: [Needed; 23] = [
 		name: solana::KEY_PASSWORD,
 		how: solana::KEYSTORE_HOW,
 	},
+	Needed {
+		store: "quest",
+		name: quest::APP_SECRET,
+		how: quest::AUTH_HOW,
+	},
+	Needed {
+		store: "quest",
+		name: quest::KEYSTORE,
+		how: quest::KEYSTORE_HOW,
+	},
+	Needed {
+		store: "quest",
+		name: quest::KEYSTORE_PASSWORD,
+		how: quest::KEYSTORE_HOW,
+	},
+	Needed {
+		store: "quest",
+		name: quest::KEY_ALIAS,
+		how: quest::KEYSTORE_HOW,
+	},
+	Needed {
+		store: "quest",
+		name: quest::KEY_PASSWORD,
+		how: quest::KEYSTORE_HOW,
+	},
 ];
 
 /// The credential that stands in for `name`: a keystore's bytes, base64
-/// encoded, for its file's path.
+/// encoded, for its file's path, or a Meta user token for the App Secret.
 fn alternative(name: &str) -> Option<&'static str> {
 	match name {
 		crate::native::signing::ANDROID_KEYSTORE => {
 			Some(crate::native::signing::ANDROID_KEYSTORE_BASE64)
 		}
 		solana::KEYSTORE => Some(solana::KEYSTORE_BASE64),
+		quest::APP_SECRET => Some(quest::TOKEN),
 		_ => None,
 	}
 }
@@ -1622,6 +1649,300 @@ fn solana_steps(run: &SolanaRun<'_>) -> Vec<Step> {
 }
 
 impl Session<'_> {
+	/// The Meta Horizon Store: checks, the release-signed Quest APK, and
+	/// `ovr-platform-util upload-quest-build`. Without `--submit`, the upload
+	/// goes up with `--draft` so nothing reaches testers or Production users.
+	fn quest(&self) -> Result<(String, Vec<Step>)> {
+		let settings = self.config.publish.quest.as_ref().expect("configured");
+		self.fits("quest")?;
+		quest::check_abis(self.root)?;
+		quest::check_optional_paths(self.root, settings)?;
+
+		let android = crate::native::host_dir(self.root, crate::native::Target::Quest);
+		let script = android.join("app/build.gradle.kts");
+		let text = std::fs::read_to_string(&script)
+			.with_context(|| format!("could not read {}", script.display()))?;
+		let problems = quest::gradle_problems(&text, &script);
+		anyhow::ensure!(
+			problems.is_empty(),
+			"the Meta Horizon Store can't take this Quest APK yet:\n- {}",
+			problems.join("\n- ")
+		);
+
+		let draft = !self.submit || settings.draft || settings.age_group.is_none();
+		let notes = self.store.release_notes.as_deref();
+
+		if self.args.dry_run {
+			let code = match self.args.build_number {
+				BuildNumber::Auto => "the one the APK carries".to_owned(),
+				BuildNumber::Number(number) => number.to_string(),
+			};
+			let mode = if draft {
+				"as a draft"
+			} else {
+				"to the channel"
+			};
+			return Ok((
+				format!(
+					"{} {} is checked; an upload builds the signed Quest APK (versionCode {code}) \
+					 and uploads it {mode} on `{}` via ovr-platform-util. Nothing was built or \
+					 uploaded.",
+					self.name, self.version, settings.channel
+				),
+				quest_steps(&QuestRun {
+					app_id: &settings.app_id,
+					channel: &settings.channel,
+					apk: ".leptoskit/publish/quest/app-release.apk",
+					draft,
+					submitted: false,
+					store: self.store,
+				}),
+			));
+		}
+
+		let auth = quest::Auth::resolve(self.credentials)?;
+		let keystore = crate::native::signing::AndroidSigning::resolve(
+			self.root,
+			&|name| {
+				self.credentials
+					.get(name)
+					.map(|secret| secret.expose().to_owned())
+			},
+			&crate::native::signing::PLAY_KEYSTORE,
+		)?;
+		let signing = quest::Signing {
+			keystore: Secret::new(keystore.path().display().to_string()),
+			keystore_password: self
+				.credentials
+				.require(quest::KEYSTORE_PASSWORD, quest::KEYSTORE_HOW)?,
+			key_alias: self
+				.credentials
+				.require(quest::KEY_ALIAS, quest::KEYSTORE_HOW)?,
+			key_password: self
+				.credentials
+				.require(quest::KEY_PASSWORD, quest::KEYSTORE_HOW)?,
+		};
+
+		let tool = quest::tool_program(std::env::var(quest::TOOL_ENV).ok());
+		let obb = settings.obb.as_deref().map(|path| self.root.join(path));
+		let assets_dir = settings
+			.assets_dir
+			.as_deref()
+			.map(|path| self.root.join(path));
+		let debug_symbols_dir = settings
+			.debug_symbols_dir
+			.as_deref()
+			.map(|path| self.root.join(path));
+
+		let send = QuestSend {
+			root: self.root,
+			runner: self.runner,
+			tool: &tool,
+			app_id: &settings.app_id,
+			channel: &settings.channel,
+			draft,
+			age_group: settings.age_group,
+			build_number: match self.args.build_number {
+				BuildNumber::Auto => None,
+				BuildNumber::Number(number) => Some(number),
+			},
+			signing,
+			auth: &auth,
+			notes,
+			obb: obb.as_deref(),
+			assets_dir: assets_dir.as_deref(),
+			debug_symbols_dir: debug_symbols_dir.as_deref(),
+			name: &self.name,
+			version: &self.version,
+		};
+		let (summary, apk) = quest_send(&send, || {
+			crate::native::run(crate::native::NativeCommand::Prepare {
+				target: crate::native::Target::Quest,
+				release: true,
+			})
+		})?;
+
+		Ok((
+			summary,
+			quest_steps(&QuestRun {
+				app_id: &settings.app_id,
+				channel: &settings.channel,
+				apk: &apk,
+				draft,
+				submitted: self.submit,
+				store: self.store,
+			}),
+		))
+	}
+}
+
+/// What one Meta Horizon Store upload sends.
+struct QuestSend<'a> {
+	root: &'a Path,
+	runner: &'a dyn tools::Runner,
+	tool: &'a str,
+	app_id: &'a str,
+	channel: &'a str,
+	draft: bool,
+	age_group: Option<leptoskit_config::publish::QuestAgeGroup>,
+	build_number: Option<u64>,
+	signing: quest::Signing,
+	auth: &'a quest::Auth,
+	notes: Option<&'a str>,
+	obb: Option<&'a Path>,
+	assets_dir: Option<&'a Path>,
+	debug_symbols_dir: Option<&'a Path>,
+	name: &'a str,
+	version: &'a str,
+}
+
+/// Builds the signed Quest APK and uploads it with `ovr-platform-util`.
+/// `prepare` stands in for `native prepare quest --release`, which tests
+/// replace with a no-op so no guest is compiled.
+fn quest_send(
+	run: &QuestSend<'_>,
+	prepare: impl FnOnce() -> Result<()>,
+) -> Result<(String, String)> {
+	let android = crate::native::host_dir(run.root, crate::native::Target::Quest);
+	let out = run.root.join(OUTPUT).join("quest");
+	std::fs::create_dir_all(&out)?;
+	prepare()?;
+	quest::check_abis(run.root)?;
+	crate::native::signing::clear_android_outputs(&android)?;
+	run.runner
+		.run(&quest::apk(&android, &run.signing, run.build_number))?;
+	let built = crate::native::signing::signed_apk(&android)?;
+	let copied = out.join("app-release.apk");
+	std::fs::copy(&built, &copied)
+		.with_context(|| format!("could not copy {} to {}", built.display(), copied.display()))?;
+
+	let tool = quest::upload(&quest::Upload {
+		tool: run.tool,
+		app_id: run.app_id,
+		auth: run.auth,
+		apk: &copied,
+		channel: run.channel,
+		draft: run.draft,
+		age_group: run.age_group,
+		notes: run.notes,
+		obb: run.obb,
+		assets_dir: run.assets_dir,
+		debug_symbols_dir: run.debug_symbols_dir,
+	});
+	run.runner
+		.output(&tool)
+		.map_err(|error| quest::redact_error(error, run.auth))?;
+
+	let summary = if run.draft {
+		format!(
+			"{} {} is uploaded to the Meta Horizon Store `{}` channel as a draft ({}).",
+			run.name,
+			run.version,
+			run.channel,
+			copied.strip_prefix(run.root).unwrap_or(&copied).display()
+		)
+	} else {
+		format!(
+			"{} {} is uploaded to the Meta Horizon Store `{}` channel ({}).",
+			run.name,
+			run.version,
+			run.channel,
+			copied.strip_prefix(run.root).unwrap_or(&copied).display()
+		)
+	};
+
+	Ok((
+		summary,
+		".leptoskit/publish/quest/app-release.apk".to_owned(),
+	))
+}
+
+/// What one Meta Horizon Store run did, for its steps.
+struct QuestRun<'a> {
+	app_id: &'a str,
+	channel: &'a str,
+	apk: &'a str,
+	draft: bool,
+	submitted: bool,
+	store: &'a Store,
+}
+
+/// What `ovr-platform-util` can't do: organization/app creation, store listing,
+/// Data Use Checkup, age rating, VRC compliance, and final review submission.
+fn quest_steps(run: &QuestRun<'_>) -> Vec<Step> {
+	let dashboard = format!(
+		"https://developers.meta.com/horizon/manage/organizations/applications/{}/",
+		run.app_id
+	);
+	let mut steps = vec![
+		step(
+			"quest",
+			Who::Agent,
+			"Fill in the Meta Horizon Store listing, art assets, and release notes in the \
+			 Developer Dashboard.",
+			Some(dashboard.clone()),
+			vec![
+				field("App ID", run.app_id),
+				field("Channel", run.channel),
+				field("APK", run.apk),
+				field(
+					"Description",
+					run.store
+						.description
+						.clone()
+						.unwrap_or_else(|| "(write it in store/en-US/description.md)".to_owned()),
+				),
+				field("Privacy policy", privacy_policy(run.store)),
+				field("Website", homepage(run.store)),
+			],
+			"ovr-platform-util uploads binaries to release channels but does not edit store \
+			 listings or art assets",
+			"the Developer Dashboard shows the store listing as complete",
+		),
+		step(
+			"quest",
+			Who::Person,
+			"Complete the Data Use Checkup, content/age rating, and VRC compliance declarations \
+			 in the Developer Dashboard.",
+			Some(dashboard.clone()),
+			Vec::new(),
+			"they are legal and policy declarations for the organization's account holder",
+			"Data Use Checkup and content rating show as approved",
+		),
+	];
+
+	if run.draft && !run.submitted {
+		steps.push(step(
+			"quest",
+			Who::Person,
+			&format!(
+				"Inspect the draft build on `{}`, then run `leptoskit publish quest --submit` (or \
+				 publish the draft in the Developer Dashboard) when ready.",
+				run.channel
+			),
+			Some(dashboard.clone()),
+			Vec::new(),
+			"without --submit (or age_group), builds stay in draft so nothing reaches testers or \
+			 Production users",
+			"the build is active on the target release channel",
+		));
+	}
+
+	steps.push(step(
+		"quest",
+		Who::Person,
+		"Submit the Production (`store`) channel build for Meta Horizon Store Technical (VRC) and \
+		 Content review in the Developer Dashboard.",
+		Some(dashboard),
+		Vec::new(),
+		"Meta has no CLI or API endpoint to submit a Quest build for store review",
+		"the Developer Dashboard shows the submission in review",
+	));
+
+	steps
+}
+
+impl Session<'_> {
 	/// Sets the `en-US` listing inside `edit`: its text, images, and icon.
 	fn play_listing(
 		&self,
@@ -2078,6 +2399,7 @@ impl Session<'_> {
 			"macos" => self.macos()?,
 			"play" => self.play()?,
 			"solana" => self.solana()?,
+			"quest" => self.quest()?,
 			other => anyhow::bail!("`{other}` isn't a store leptoskit publish publishes to"),
 		};
 

@@ -34,6 +34,9 @@ pub struct PublishConfig {
 	/// The Solana dApp Store, for the release-signed Android APK.
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub solana: Option<SolanaStore>,
+	/// The Meta Horizon Store, for the release-signed Meta Quest APK.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub quest: Option<QuestStore>,
 }
 
 /// An app in Google Play Console, created once there. Its package name is
@@ -225,8 +228,140 @@ pub struct FirefoxStore {
 	pub channel: FirefoxChannel,
 }
 
+/// Default Meta Horizon Store release channel for `[publish.quest]`.
+pub const DEFAULT_QUEST_CHANNEL: &str = "alpha";
+
+fn default_quest_channel() -> String {
+	DEFAULT_QUEST_CHANNEL.to_owned()
+}
+
+/// Intended age group for a Meta Horizon Store build (`--age-group`).
+///
+/// Leaving this unset tells `ovr-platform-util` to upload the build in draft
+/// status until an age group is chosen in the Developer Dashboard.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum QuestAgeGroup {
+	/// Teens and adults (`TEENS_AND_ADULTS`).
+	TeensAndAdults,
+	/// Mixed ages (`MIXED_AGES`).
+	MixedAges,
+	/// Children (`CHILDREN`).
+	Children,
+}
+
+impl QuestAgeGroup {
+	/// The value `ovr-platform-util upload-quest-build --age-group` takes.
+	#[must_use]
+	pub const fn as_cli_value(self) -> &'static str {
+		match self {
+			Self::TeensAndAdults => "TEENS_AND_ADULTS",
+			Self::MixedAges => "MIXED_AGES",
+			Self::Children => "CHILDREN",
+		}
+	}
+}
+
+/// An app in the Meta Horizon Developer Dashboard, uploaded through
+/// `ovr-platform-util upload-quest-build`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct QuestStore {
+	/// The Meta Horizon App ID from the Developer Dashboard's API tab.
+	#[cfg_attr(feature = "schema", schemars(regex(pattern = r"^[0-9]+$")))]
+	pub app_id: String,
+	/// The release channel: `alpha`, `beta`, `rc`, `store` (Production), or a
+	/// custom channel with optional device targeting such as
+	/// `alpha:quest3only`. Defaults to `alpha`.
+	#[serde(default = "default_quest_channel")]
+	pub channel: String,
+	/// Intended age group passed to `--age-group`. Omitting it uploads as a
+	/// draft on the Developer Dashboard.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub age_group: Option<QuestAgeGroup>,
+	/// Always pass `--draft` even when `--submit` is given.
+	#[serde(default, skip_serializing_if = "std::ops::Not::not")]
+	pub draft: bool,
+	/// Optional project-relative path to an `.obb` expansion file.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub obb: Option<String>,
+	/// Optional project-relative directory of extra asset files
+	/// (`--assets-dir`).
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub assets_dir: Option<String>,
+	/// Optional project-relative directory of native debug symbols
+	/// (`--debug-symbols-dir`).
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub debug_symbols_dir: Option<String>,
+}
+
+impl QuestStore {
+	fn problem(&self, app: &Facts) -> Option<String> {
+		if !app.platforms.contains(&crate::Platform::Quest) {
+			return Some(
+				"publish.quest needs `quest` in app.platforms: the Meta Horizon Store takes the \
+				 release-signed Quest APK"
+					.into(),
+			);
+		}
+
+		if self.app_id.is_empty() || !self.app_id.bytes().all(|byte| byte.is_ascii_digit()) {
+			return Some(format!(
+				"publish.quest.app_id `{}` must be the numeric App ID from the Meta Horizon \
+				 Developer Dashboard's API tab",
+				self.app_id
+			));
+		}
+
+		if self.channel.is_empty()
+			|| self
+				.channel
+				.chars()
+				.any(|ch| ch.is_whitespace() || ch.is_control())
+		{
+			return Some(format!(
+				"publish.quest.channel `{}` must be a non-empty channel name without whitespace \
+				 (such as `alpha`, `beta`, `rc`, or `store`)",
+				self.channel
+			));
+		}
+
+		for (field, value) in [
+			("obb", self.obb.as_deref()),
+			("assets_dir", self.assets_dir.as_deref()),
+			("debug_symbols_dir", self.debug_symbols_dir.as_deref()),
+		] {
+			if let Some(path) = value
+				&& !is_clean_relative_path(path)
+			{
+				return Some(format!(
+					"publish.quest.{field} `{path}` must be a relative path inside the project"
+				));
+			}
+		}
+
+		None
+	}
+}
+
+fn is_clean_relative_path(path: &str) -> bool {
+	if path.trim().is_empty() || path.starts_with('/') || path.starts_with('\\') {
+		return false;
+	}
+	std::path::Path::new(path).components().all(|component| {
+		!matches!(
+			component,
+			std::path::Component::ParentDir
+				| std::path::Component::RootDir
+				| std::path::Component::Prefix(_)
+		)
+	})
+}
+
 /// The stores `leptoskit publish` knows, as the command line names them.
-pub const STORES: [&str; 7] = [
+pub const STORES: [&str; 8] = [
 	"chrome",
 	"edge",
 	"firefox",
@@ -234,6 +369,7 @@ pub const STORES: [&str; 7] = [
 	"macos",
 	"play",
 	"solana",
+	"quest",
 ];
 
 impl PublishConfig {
@@ -274,6 +410,10 @@ impl PublishConfig {
 
 		if self.solana.is_some() {
 			stores.push("solana");
+		}
+
+		if self.quest.is_some() {
+			stores.push("quest");
 		}
 
 		stores
@@ -339,6 +479,10 @@ impl PublishConfig {
 			if let Some(problem) = solana.problem() {
 				return Some(problem);
 			}
+		}
+
+		if let Some(problem) = self.quest.as_ref().and_then(|store| store.problem(app)) {
+			return Some(problem);
 		}
 
 		None
@@ -679,5 +823,59 @@ panel = "/devtools/panel"
 		.unwrap_err()
 		.to_string();
 		assert!(error.contains("`ios` in app.platforms"), "{error}");
+	}
+
+	#[test]
+	fn the_quest_store_needs_quest_and_checks_app_id_and_paths() {
+		let toml = |platforms: &str, table: &str| {
+			LeptoskitConfig::from_toml(
+				&format!("[app]\nplatforms = {platforms}\n[publish.quest]\n{table}"),
+				Path::new("arena"),
+			)
+			.map_err(|error| error.to_string())
+		};
+
+		let config = toml("[\"web\", \"quest\"]", "app_id = \"5159709737372459\"\n").unwrap();
+		assert_eq!(config.publish.stores(), ["quest"]);
+		let store = config.publish.quest.unwrap();
+		assert_eq!(store.app_id, "5159709737372459");
+		assert_eq!(store.channel, super::DEFAULT_QUEST_CHANNEL);
+		assert_eq!(store.age_group, None);
+		assert!(!store.draft);
+
+		let config = toml(
+			"[\"web\", \"quest\"]",
+			"app_id = \"123456\"\nchannel = \"beta:quest3only\"\nage_group = \
+			 \"teens_and_adults\"\ndraft = true\nobb = \"assets/main.obb\"\nassets_dir = \
+			 \"assets/dlc\"\ndebug_symbols_dir = \"symbols\"\n",
+		)
+		.unwrap();
+		let store = config.publish.quest.unwrap();
+		assert_eq!(store.channel, "beta:quest3only");
+		assert_eq!(
+			store.age_group.map(super::QuestAgeGroup::as_cli_value),
+			Some("TEENS_AND_ADULTS")
+		);
+		assert!(store.draft);
+
+		let error = toml("[\"web\", \"android\"]", "app_id = \"123456\"\n").unwrap_err();
+		assert!(error.contains("`quest` in app.platforms"), "{error}");
+
+		let error = toml("[\"web\", \"quest\"]", "app_id = \"not-a-number\"\n").unwrap_err();
+		assert!(error.contains("numeric App ID"), "{error}");
+
+		let error = toml(
+			"[\"web\", \"quest\"]",
+			"app_id = \"123456\"\nchannel = \"alpha beta\"\n",
+		)
+		.unwrap_err();
+		assert!(error.contains("without whitespace"), "{error}");
+
+		let error = toml(
+			"[\"web\", \"quest\"]",
+			"app_id = \"123456\"\nobb = \"../outside.obb\"\n",
+		)
+		.unwrap_err();
+		assert!(error.contains("relative path"), "{error}");
 	}
 }
