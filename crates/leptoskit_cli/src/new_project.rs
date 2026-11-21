@@ -757,6 +757,8 @@ fn extension_config(name: &str) -> leptoskit_config::ExtensionConfig {
 		popup: Some(ExtensionPage {
 			route: "/".to_owned(),
 			browsers: None,
+			title: None,
+			open_at_install: None,
 		}),
 		background: Some(ExtensionBackground {
 			events: vec!["runtime.message".to_owned()],

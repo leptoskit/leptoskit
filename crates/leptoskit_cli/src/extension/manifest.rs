@@ -158,10 +158,15 @@ fn insert_surfaces(manifest: &mut Map<String, Value>, input: &ManifestInput<'_>,
 				);
 			}
 			Browser::Firefox => {
-				manifest.insert(
-					"sidebar_action".into(),
-					json!({ "default_panel": "side_panel.html", "default_title": name }),
-				);
+				let panel = extension.side_panel.as_ref();
+				let title = panel.and_then(|page| page.title.as_deref()).unwrap_or(name);
+				let mut sidebar = Map::new();
+				sidebar.insert("default_panel".into(), json!("side_panel.html"));
+				sidebar.insert("default_title".into(), json!(title));
+				if let Some(open_at_install) = panel.and_then(|page| page.open_at_install) {
+					sidebar.insert("open_at_install".into(), json!(open_at_install));
+				}
+				manifest.insert("sidebar_action".into(), Value::Object(sidebar));
 			}
 			Browser::Safari => {}
 		}
@@ -248,6 +253,11 @@ fn insert_access(
 
 	if !permissions.is_empty() {
 		manifest.insert("permissions".into(), json!(permissions));
+	}
+
+	if !extension.optional_permissions.is_empty() {
+		let optional: BTreeSet<&String> = extension.optional_permissions.iter().collect();
+		manifest.insert("optional_permissions".into(), json!(optional));
 	}
 
 	let mut hosts: BTreeSet<String> = extension.host_permissions.iter().cloned().collect();

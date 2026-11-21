@@ -119,7 +119,57 @@ worker.on_connect(|port, sender| {
 });
 ```
 
-`storage` has `get` / `set` / `remove`, plus `clear`, `keys`, and `get_bytes_in_use`, with `on_changed` across every surface. `permissions` can `request` host patterns, `get_all`, and listen with `on_added` / `on_removed`. `leptoskit::extension` also has `tabs`, `action` (the toolbar button's badge), `scripting`, `alarms`, `context_menus`, `commands`, `notifications`, `side_panel`, and `devtools`. Each works the same in every browser, returns `Error::Unavailable` where a browser lacks it, and stops listening when its handle is dropped.
+`storage` has `get` / `set` / `remove`, plus `clear`, `keys`, and `get_bytes_in_use`, with `on_changed` across every surface. `permissions` can `request` host patterns, `request_permissions` for named `optional_permissions` declared in `[extension]`, `get_all`, and listen with `on_added` / `on_removed`. `leptoskit::extension` also has `browser`, `tabs`, `windows`, `action` (the toolbar button's badge), `scripting`, `alarms`, `context_menus`, `commands`, `notifications`, `side_panel`, `offscreen`, `omnibox`, `native_messaging`, and `devtools`. Each works the same in every browser, returns `Error::Unavailable` where a browser lacks it, and stops listening when its handle is dropped.
+
+## Distinguishing Chrome, Firefox, Safari, Edge, and other browsers
+
+One build compiles one Wasm client and packages it for Chromium browsers, Firefox, and Safari. Use `leptoskit::extension::browser` when a screen or worker wants to adapt to the browser hosting it:
+
+```rust,ignore
+use leptoskit::extension::browser::{self, BrowserSwitch, ExtensionBrowser};
+
+let host = browser::current(); // Chrome, Edge, Brave, Opera, Arc, Vivaldi, Firefox, Safari, …
+let info = browser::info().await; // includes Firefox runtime.getBrowserInfo() version/vendor
+
+let label = BrowserSwitch::new()
+	.chrome("Open Chrome side panel")
+	.edge("Open Edge sidebar")
+	.firefox("Toggle Firefox sidebar")
+	.safari("Open Safari popup")
+	.chromium("Open browser side panel")
+	.default("Open panel")
+	.resolve();
+```
+
+Use `browser::with_browser(ExtensionBrowser::Firefox, || …)` in unit tests to exercise every browser branch on any host.
+
+## Side panel and Firefox sidebar
+
+Configure `[extension.side_panel]` once in `leptoskit.toml`:
+
+```toml
+[extension.side_panel]
+route = "/panel"
+title = "Notebook"
+open_at_install = false
+```
+
+The build emits `side_panel` plus the `sidePanel` permission for Chromium browsers (Chrome, Edge, Brave, Opera, Arc, Vivaldi), `sidebar_action` for Firefox (including `default_title` and `open_at_install`), and omits the surface for Safari.
+
+At run time, `leptoskit::extension::side_panel` exposes the full sidebar API across Chromium and Firefox:
+
+- `side_panel::available()` and `side_panel::capabilities()` report what the active browser supports.
+- `side_panel::open(window_id)`, `side_panel::open_for_tab(tab_id)`, `side_panel::open_target(SidePanelTarget::...)`, and `side_panel::close(...)` control visibility after a user gesture.
+- `side_panel::set_options(&SidePanelOptions::new().tab_id(tab_id).path("side_panel.html#/notes").enabled(true))` and `side_panel::get_options(Some(tab_id))` configure per-tab panels on Chromium and Firefox.
+- `side_panel::set_behavior(PanelBehavior { open_panel_on_action_click: true })` and `side_panel::get_layout()` expose Chromium's toolbar-click opening and left/right dock side.
+- `side_panel::toggle()`, `side_panel::is_open(None)`, `side_panel::set_title(...)`, and `side_panel::get_title(...)` expose Firefox's `sidebarAction` controls.
+
+## Windows, offscreen documents, omnibox, and native messaging
+
+- `windows`: query (`current`, `last_focused`, `all`, `get`), `create(&CreateWindow::new().url(...).size(420, 640))`, `focus`, and `close`.
+- `offscreen` (Chromium only, requires `"offscreen"` permission): `create(&CreateOffscreen::new(...))`, `has_document`, and `close` for hidden DOM/audio/clipboard work that Manifest V3 service workers cannot perform directly. Returns `Error::Unavailable` on Firefox and Safari.
+- `omnibox`: `set_default_suggestion` for address-bar keyword extensions.
+- `native_messaging` (requires `"nativeMessaging"` permission): `send` and `connect` to communicate with native desktop messaging hosts or Safari's containing macOS/iOS app.
 
 ## Content scripts
 

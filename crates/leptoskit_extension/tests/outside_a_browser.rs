@@ -16,10 +16,14 @@ use leptoskit_extension::Surface;
 use leptoskit_extension::action;
 use leptoskit_extension::alarms;
 use leptoskit_extension::background;
+use leptoskit_extension::browser;
 use leptoskit_extension::commands;
 use leptoskit_extension::context_menus;
 use leptoskit_extension::devtools;
+use leptoskit_extension::native_messaging;
 use leptoskit_extension::notifications;
+use leptoskit_extension::offscreen;
+use leptoskit_extension::omnibox;
 use leptoskit_extension::page;
 use leptoskit_extension::permissions;
 use leptoskit_extension::runtime;
@@ -27,6 +31,7 @@ use leptoskit_extension::scripting;
 use leptoskit_extension::side_panel;
 use leptoskit_extension::storage;
 use leptoskit_extension::tabs;
+use leptoskit_extension::windows;
 use serde_json::Value;
 use serde_json::json;
 
@@ -457,4 +462,132 @@ fn the_worker_answers_each_browser_event() {
 		block_on(background::simulate("tabs.removed", json!({}))),
 		Err("nothing handles `tabs.removed`".to_owned())
 	);
+}
+
+#[test]
+fn browser_and_side_panel_name_their_apis() {
+	assert_eq!(browser::current(), browser::ExtensionBrowser::Unknown);
+	assert_eq!(browser::family(), browser::BrowserFamily::Unknown);
+
+	let info = block_on(browser::info());
+	assert_eq!(info.browser, browser::ExtensionBrowser::Unknown);
+
+	assert_eq!(
+		block_on(side_panel::open_for_tab(5)),
+		Err(unavailable("sidePanel"))
+	);
+	assert_eq!(
+		block_on(side_panel::close(side_panel::SidePanelTarget::ActiveWindow)),
+		Err(unavailable("sidePanel.close"))
+	);
+	assert_eq!(
+		block_on(side_panel::toggle()),
+		Err(unavailable("sidebarAction.toggle"))
+	);
+	assert_eq!(
+		block_on(side_panel::is_open(None)),
+		Err(unavailable("sidebarAction.isOpen"))
+	);
+	assert_eq!(
+		block_on(side_panel::set_options(
+			&side_panel::SidePanelOptions::new().enabled(true),
+		)),
+		Err(unavailable("sidePanel.setOptions"))
+	);
+	assert_eq!(
+		block_on(side_panel::get_options(None)),
+		Err(unavailable("sidePanel.getOptions"))
+	);
+	assert_eq!(
+		block_on(side_panel::set_behavior(side_panel::PanelBehavior {
+			open_panel_on_action_click: true,
+		})),
+		Err(unavailable("sidePanel.setPanelBehavior"))
+	);
+	assert_eq!(
+		block_on(side_panel::get_behavior()),
+		Err(unavailable("sidePanel.getPanelBehavior"))
+	);
+	assert_eq!(
+		block_on(side_panel::get_layout()),
+		Err(unavailable("sidePanel.getLayout"))
+	);
+	assert_eq!(
+		block_on(side_panel::set_title(
+			"Notes",
+			side_panel::SidePanelTarget::ActiveWindow,
+		)),
+		Err(unavailable("sidebarAction.setTitle"))
+	);
+	assert_eq!(
+		block_on(side_panel::get_title(
+			side_panel::SidePanelTarget::ActiveWindow,
+		)),
+		Err(unavailable("sidebarAction.getTitle"))
+	);
+}
+
+#[test]
+fn windows_offscreen_omnibox_and_native_messaging_name_their_apis() {
+	assert_eq!(
+		block_on(windows::current()),
+		Err(unavailable("windows.getCurrent"))
+	);
+	assert_eq!(
+		block_on(windows::last_focused()),
+		Err(unavailable("windows.getLastFocused"))
+	);
+	assert_eq!(block_on(windows::all()), Err(unavailable("windows.getAll")));
+	assert_eq!(block_on(windows::get(1)), Err(unavailable("windows.get")));
+	assert_eq!(
+		block_on(windows::create(
+			&windows::CreateWindow::new().size(400, 600)
+		)),
+		Err(unavailable("windows.create"))
+	);
+	assert_eq!(
+		block_on(windows::focus(1)),
+		Err(unavailable("windows.update"))
+	);
+	assert_eq!(
+		block_on(windows::close(1)),
+		Err(unavailable("windows.remove"))
+	);
+
+	assert!(!offscreen::available());
+	assert_eq!(
+		block_on(offscreen::create(&offscreen::CreateOffscreen::new(
+			"offscreen.html",
+			[offscreen::Reason::Clipboard],
+			"Write clipped quotes",
+		))),
+		Err(unavailable("offscreen.createDocument"))
+	);
+	assert_eq!(
+		block_on(offscreen::close()),
+		Err(unavailable("offscreen.closeDocument"))
+	);
+	assert_eq!(
+		block_on(offscreen::has_document()),
+		Err(unavailable("offscreen.hasDocument"))
+	);
+
+	assert!(!omnibox::available());
+	assert_eq!(
+		block_on(omnibox::set_default_suggestion("Search clips")),
+		Err(unavailable("omnibox.setDefaultSuggestion"))
+	);
+
+	assert!(!native_messaging::available());
+	assert_eq!(
+		block_on(native_messaging::send::<_, Value>(
+			"dev.example.host",
+			&json!({ "ping": true }),
+		)),
+		Err(unavailable("runtime.sendNativeMessage"))
+	);
+	assert!(matches!(
+		native_messaging::connect("dev.example.host"),
+		Err(error) if error == unavailable("runtime.connectNative")
+	));
 }
