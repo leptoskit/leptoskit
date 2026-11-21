@@ -265,6 +265,8 @@ fn the_timer_contract_follows_the_generated_host_that_enables_it() {
 		Target::AndroidX86_64,
 		Target::Harmonyos,
 		Target::HarmonyosX86_64,
+		Target::Wearos,
+		Target::Watchos,
 		Target::Windows,
 		Target::Linux,
 		Target::Tui,
@@ -272,17 +274,6 @@ fn the_timer_contract_follows_the_generated_host_that_enables_it() {
 		assert!(
 			enforce_required(&config, target, &[], &[]).is_ok(),
 			"{target:?} enables the reserved timer"
-		);
-	}
-
-	for target in [Target::Wearos, Target::Watchos] {
-		let error =
-			enforce_required(&config, target, &[], &[]).expect_err("the watch stubs run no guest");
-		assert!(error.to_string().contains(CAP_HOST_TIMER), "{error}");
-		let descriptor = descriptor(&config, target, &[], &[]);
-		assert_eq!(
-			descriptor.state_of(CAP_HOST_TIMER).map(|(state, _)| *state),
-			Some(CapabilityState::Unsupported)
 		);
 	}
 }

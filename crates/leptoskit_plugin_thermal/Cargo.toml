@@ -16,6 +16,7 @@ apple-module = "LeptosKitThermal"
 apple-type = "ThermalPlugin"
 android-type = "dev.leptoskit.plugins.thermal.ThermalPlugin"
 android-context = true
+harmonyos-type = "ThermalPlugin"
 
 [features]
 guest = ["leptoskit_bridge/guest"]

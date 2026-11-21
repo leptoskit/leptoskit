@@ -129,6 +129,9 @@ packages = [
 	"leptoskit_plugin_light_sensor",
 	"leptoskit_plugin_pedometer",
 	"leptoskit_plugin_health",
+	"leptoskit_plugin_wearable",
+	"leptoskit_plugin_watch_sync",
+	"leptoskit_plugin_ble",
 	"leptoskit_plugin_accelerometer",
 	"leptoskit_plugin_device_motion",
 	"leptoskit_plugin_age_range",
@@ -501,6 +504,15 @@ path = "crates/leptoskit_plugin_pedometer"
 
 [package.leptoskit_plugin_health]
 path = "crates/leptoskit_plugin_health"
+
+[package.leptoskit_plugin_wearable]
+path = "crates/leptoskit_plugin_wearable"
+
+[package.leptoskit_plugin_watch_sync]
+path = "crates/leptoskit_plugin_watch_sync"
+
+[package.leptoskit_plugin_ble]
+path = "crates/leptoskit_plugin_ble"
 
 [package.leptoskit_plugin_accelerometer]
 path = "crates/leptoskit_plugin_accelerometer"

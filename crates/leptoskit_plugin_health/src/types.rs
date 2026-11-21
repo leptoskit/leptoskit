@@ -27,11 +27,20 @@ pub enum DataType {
 	RespiratoryRate = 7,
 	/// An exercise session: its activity and when it started and ended.
 	Exercise = 8,
+	/// Wrist or skin temperature in degrees Celsius (or sleeping delta on
+	/// watchOS).
+	SkinTemperature = 9,
+	/// Active energy burned in kilocalories.
+	ActiveCalories = 10,
+	/// Distance travelled in meters.
+	Distance = 11,
+	/// Floors or flights climbed.
+	FloorsClimbed = 12,
 }
 
 impl DataType {
 	/// Every data type, in wire order.
-	pub const ALL: [Self; 9] = [
+	pub const ALL: [Self; 13] = [
 		Self::HeartRate,
 		Self::RestingHeartRate,
 		Self::HeartRateVariabilityRmssd,
@@ -41,6 +50,10 @@ impl DataType {
 		Self::OxygenSaturation,
 		Self::RespiratoryRate,
 		Self::Exercise,
+		Self::SkinTemperature,
+		Self::ActiveCalories,
+		Self::Distance,
+		Self::FloorsClimbed,
 	];
 
 	/// The wire code.
@@ -248,15 +261,15 @@ mod tests {
 			assert_eq!(data_type.code(), code as u32);
 		}
 
-		assert_eq!(DataType::from_code(9), Err(Error::InvalidArgument));
+		assert_eq!(DataType::from_code(13), Err(Error::InvalidArgument));
 		let set = DataTypes::of(&[DataType::Sleep, DataType::HeartRate, DataType::Sleep]);
 		assert_eq!(set.bits(), 0b10_0001);
 		assert_eq!(
 			set.iter().collect::<Vec<_>>(),
 			[DataType::HeartRate, DataType::Sleep]
 		);
-		assert_eq!(DataTypes::from_bits(0x1FF), Ok(DataTypes::ALL));
-		assert_eq!(DataTypes::from_bits(0x200), Err(Error::InvalidArgument));
+		assert_eq!(DataTypes::from_bits(0x1FFF), Ok(DataTypes::ALL));
+		assert_eq!(DataTypes::from_bits(0x2000), Err(Error::InvalidArgument));
 		assert!(DataTypes::EMPTY.is_empty());
 	}
 
@@ -293,7 +306,7 @@ mod tests {
 			Err(Error::InvalidArgument)
 		);
 		assert_eq!(
-			Grants::decode(&[0, 4, 0, 0, 0, 0, 0, 0]),
+			Grants::decode(&[0, 0x20, 0, 0, 0, 0, 0, 0]),
 			Err(Error::InvalidArgument)
 		);
 		assert_eq!(

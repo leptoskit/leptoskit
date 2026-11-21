@@ -20,15 +20,21 @@ android-type = "dev.leptoskit.plugins.health.HealthPlugin"
 android-context = true
 android-dependencies = ["androidx.health.connect:connect-client:1.1.0"]
 android-permissions = [
+	"android.permission.health.READ_ACTIVE_CALORIES_BURNED",
+	"android.permission.health.READ_DISTANCE",
 	"android.permission.health.READ_EXERCISE",
+	"android.permission.health.READ_FLOORS_CLIMBED",
 	"android.permission.health.READ_HEART_RATE",
 	"android.permission.health.READ_HEART_RATE_VARIABILITY",
 	"android.permission.health.READ_OXYGEN_SATURATION",
 	"android.permission.health.READ_RESPIRATORY_RATE",
 	"android.permission.health.READ_RESTING_HEART_RATE",
+	"android.permission.health.READ_SKIN_TEMPERATURE",
 	"android.permission.health.READ_SLEEP",
 	"android.permission.health.READ_STEPS",
 ]
+harmonyos-type = "HealthPlugin"
+harmonyos-context = true
 # Android 11 to 13 install Health Connect as an app, which the client
 # library can only find when the package is visible.
 android-query-packages = ["com.google.android.apps.healthdata"]

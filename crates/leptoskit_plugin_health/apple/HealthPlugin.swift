@@ -1,17 +1,18 @@
 import Foundation
 import LeptosKitBridge
-#if canImport(HealthKit) && os(iOS)
+#if canImport(HealthKit) && (os(iOS) || os(watchOS))
 import HealthKit
 #endif
 
-/// Reads HealthKit samples. Authorization is HealthKit's own sheet; denied
-/// reads are indistinguishable from never asked, so grants are not exact.
+/// Reads HealthKit samples on iOS and watchOS. Authorization is HealthKit's own
+/// sheet; denied reads are indistinguishable from never asked, so grants are
+/// not exact.
 @MainActor
 public final class HealthPlugin: NativePlugin {
     public let name = "health"
     public let methods: [UInt32] = [0, 1, 2, 3, 4, 5, 6]
 
-    #if os(iOS)
+    #if os(iOS) || os(watchOS)
     private let store = HKHealthStore()
     private var closed = false
     private var queries: [ObjectIdentifier: HKQuery] = [:]
@@ -124,7 +125,8 @@ public final class HealthPlugin: NativePlugin {
     /// The type codes the plugin reads.
     private static let supportedCodes = [
         HealthWire.heartRate, HealthWire.restingHeartRate, HealthWire.hrvSdnn, HealthWire.steps,
-        HealthWire.sleep, HealthWire.oxygenSaturation, HealthWire.respiratoryRate, HealthWire.exercise
+        HealthWire.sleep, HealthWire.oxygenSaturation, HealthWire.respiratoryRate, HealthWire.exercise,
+        HealthWire.skinTemperature, HealthWire.activeCalories, HealthWire.distance, HealthWire.floorsClimbed
     ]
 
     private static let available = 0
@@ -267,6 +269,15 @@ public final class HealthPlugin: NativePlugin {
         case HealthWire.steps: .stepCount
         case HealthWire.oxygenSaturation: .oxygenSaturation
         case HealthWire.respiratoryRate: .respiratoryRate
+        case HealthWire.skinTemperature:
+            if #available(iOS 16.0, watchOS 9.0, *) {
+                .appleSleepingWristTemperature
+            } else {
+                .bodyTemperature
+            }
+        case HealthWire.activeCalories: .activeEnergyBurned
+        case HealthWire.distance: .distanceWalkingRunning
+        case HealthWire.floorsClimbed: .flightsClimbed
         default: preconditionFailure("unsupported health type code \(code)")
         }
     }
@@ -284,8 +295,8 @@ public final class HealthPlugin: NativePlugin {
     #endif
 }
 
-#if os(iOS)
-#if os(iOS)
+#if os(iOS) || os(watchOS)
+#if os(iOS) || os(watchOS)
 private extension HealthPlugin {
     /// Serialises an anchor so the token the guest stores is plain text.
     static func encode(_ anchor: HKQueryAnchor) throws -> String {

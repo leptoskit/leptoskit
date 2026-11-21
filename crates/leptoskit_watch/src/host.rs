@@ -68,6 +68,20 @@ pub trait WatchHost {
 
 		Ok(())
 	}
+
+	/// Renders and presents a sensor-first [`crate::WearableApp`] for `status`.
+	///
+	/// # Errors
+	///
+	/// Returns the first validation or presentation error.
+	fn present_wearable(
+		&mut self,
+		app: &crate::WearableApp,
+		status: &crate::WearableStatus,
+	) -> Result<(), WatchError> {
+		let rendered = app.render_status_app(status)?;
+		self.present_app(&rendered)
+	}
 }
 
 /// In-memory host used by stubs and unit tests.

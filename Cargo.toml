@@ -313,6 +313,7 @@ leptoskit_plugin_background_task = { path = "crates/leptoskit_plugin_background_
 leptoskit_plugin_badge = { path = "crates/leptoskit_plugin_badge", version = "0.3.0" }
 leptoskit_plugin_barometer = { path = "crates/leptoskit_plugin_barometer", version = "0.3.0" }
 leptoskit_plugin_battery = { path = "crates/leptoskit_plugin_battery", version = "0.3.0" }
+leptoskit_plugin_ble = { path = "crates/leptoskit_plugin_ble", version = "0.3.0" }
 leptoskit_plugin_blob = { path = "crates/leptoskit_plugin_blob", version = "0.3.0" }
 leptoskit_plugin_brightness = { path = "crates/leptoskit_plugin_brightness", version = "0.3.0" }
 leptoskit_plugin_calendar = { path = "crates/leptoskit_plugin_calendar", version = "0.3.0" }
@@ -386,6 +387,8 @@ leptoskit_plugin_tray = { path = "crates/leptoskit_plugin_tray", version = "0.3.
 leptoskit_plugin_updater = { path = "crates/leptoskit_plugin_updater", version = "0.3.0" }
 leptoskit_plugin_video = { path = "crates/leptoskit_plugin_video", version = "0.3.0" }
 leptoskit_plugin_video_thumbnails = { path = "crates/leptoskit_plugin_video_thumbnails", version = "0.3.0" }
+leptoskit_plugin_watch_sync = { path = "crates/leptoskit_plugin_watch_sync", version = "0.3.0" }
+leptoskit_plugin_wearable = { path = "crates/leptoskit_plugin_wearable", version = "0.3.0" }
 leptoskit_plugin_web_auth = { path = "crates/leptoskit_plugin_web_auth", version = "0.3.0" }
 leptoskit_plugin_web_browser = { path = "crates/leptoskit_plugin_web_browser", version = "0.3.0" }
 leptoskit_plugin_websocket = { path = "crates/leptoskit_plugin_websocket", version = "0.3.0", default-features = false }

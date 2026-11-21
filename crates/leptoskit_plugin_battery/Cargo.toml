@@ -16,6 +16,7 @@ apple-module = "LeptosKitBattery"
 apple-type = "BatteryPlugin"
 android-type = "dev.leptoskit.plugins.battery.BatteryPlugin"
 android-context = true
+harmonyos-type = "BatteryPlugin"
 
 # The generated Linux app answers snapshots on a worker; waiting for a change is
 # unavailable there.

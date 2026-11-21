@@ -2360,6 +2360,51 @@
 				"ssr"
 			]
 		},
+		"HarmonyDeviceType": {
+			"description": "HarmonyOS `module.json5` device type entry.",
+			"oneOf": [
+				{
+					"description": "HarmonyOS phone.",
+					"type": "string",
+					"const": "phone"
+				},
+				{
+					"description": "HarmonyOS tablet.",
+					"type": "string",
+					"const": "tablet"
+				},
+				{
+					"description": "Huawei Watch / HarmonyOS wearable.",
+					"type": "string",
+					"const": "wearable"
+				}
+			]
+		},
+		"HarmonyosConfig": {
+			"description": "How the HarmonyOS build (`--platform harmonyos`) configures `module.json5`\ndevice types (including Huawei Watch wearables) and permissions.",
+			"type": "object",
+			"properties": {
+				"device-types": {
+					"description": "`deviceTypes` written into `entry/src/main/module.json5`. Include\n`\"wearable\"` to target Huawei Watch devices.",
+					"type": "array",
+					"default": [
+						"phone",
+						"tablet"
+					],
+					"items": {
+						"$ref": "#/$defs/HarmonyDeviceType"
+					}
+				},
+				"permissions": {
+					"description": "Extra `ohos.permission.*` names declared in `requestPermissions`.",
+					"type": "array",
+					"items": {
+						"type": "string"
+					}
+				}
+			},
+			"additionalProperties": false
+		},
 		"Host": {
 			"description": "A named host class. Several units can share it unless exclusive.",
 			"type": "object",
@@ -3454,6 +3499,10 @@
 					"description": "Enables experimental pure-Rust native plugin backends (`objc2` on\niOS/macOS and `jni` on Android) for plugins that declare an\nexperimental Rust implementation. Off by default.",
 					"type": "boolean"
 				},
+				"harmonyos": {
+					"description": "How the HarmonyOS build (`--platform harmonyos`) configures device\ntypes (including Huawei Watch wearables) and permissions.",
+					"$ref": "#/$defs/HarmonyosConfig"
+				},
 				"ios": {
 					"description": "How a release iOS build is signed and exported.",
 					"$ref": "#/$defs/IosConfig"
@@ -3556,6 +3605,14 @@
 					"type": "number",
 					"format": "float",
 					"default": 390.0
+				},
+				"watchos": {
+					"description": "How the watchOS build (`--platform watchos`) packages the Apple Watch\nhost.",
+					"$ref": "#/$defs/WatchosConfig"
+				},
+				"wearos": {
+					"description": "How the Wear OS build (`--platform wearos`) packages the Android app\nfor Wear OS watches (Pixel Watch, Samsung Galaxy Watch, etc.).",
+					"$ref": "#/$defs/WearosConfig"
 				}
 			},
 			"additionalProperties": false
@@ -4832,6 +4889,67 @@
 					"additionalProperties": {
 						"type": "string"
 					}
+				}
+			},
+			"additionalProperties": false
+		},
+		"WatchosConfig": {
+			"description": "How the watchOS build (`--platform watchos`) packages the Apple Watch host.",
+			"type": "object",
+			"properties": {
+				"companion-bundle-id": {
+					"description": "Optional paired iOS companion bundle identifier\n(`WKCompanionAppBundleIdentifier`).",
+					"type": [
+						"string",
+						"null"
+					]
+				},
+				"complications": {
+					"description": "Enables `WidgetKit` watch-face complications and Smart Stack glances.",
+					"type": "boolean",
+					"default": true
+				},
+				"deployment-target": {
+					"description": "Minimum watchOS deployment target (e.g. `\"10.0\"`).",
+					"type": "string",
+					"default": "10.0"
+				},
+				"standalone": {
+					"description": "Whether the watchOS app runs independently of an iPhone companion app\n(`WKRunsIndependentlyOfCompanionApp`).",
+					"type": "boolean",
+					"default": true
+				},
+				"workout-background": {
+					"description": "Enables `workout-processing` in `WKBackgroundModes` for live wrist\nbiometric sessions.",
+					"type": "boolean",
+					"default": true
+				}
+			},
+			"additionalProperties": false
+		},
+		"WearosConfig": {
+			"description": "How the Wear OS build (`--platform wearos`) packages an Android host for\nWear OS smartwatches (Pixel Watch, Samsung Galaxy Watch, etc.).",
+			"type": "object",
+			"properties": {
+				"complication": {
+					"description": "Declares a watch-face complication data source service in the manifest.",
+					"type": "boolean",
+					"default": true
+				},
+				"samsung-health-sensor": {
+					"description": "Enables the optional Samsung Health Sensor SDK runtime hook on Galaxy\nWatch devices.",
+					"type": "boolean",
+					"default": true
+				},
+				"standalone": {
+					"description": "Whether the Wear OS app can run independently without a paired phone app\n(`com.google.android.wearable.standalone`).",
+					"type": "boolean",
+					"default": true
+				},
+				"tile": {
+					"description": "Declares a Wear OS Tile service in the transformed manifest.",
+					"type": "boolean",
+					"default": true
 				}
 			},
 			"additionalProperties": false

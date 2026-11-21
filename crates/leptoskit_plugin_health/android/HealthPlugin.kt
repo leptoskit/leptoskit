@@ -9,13 +9,17 @@ import androidx.health.connect.client.PermissionController
 import androidx.health.connect.client.changes.DeletionChange
 import androidx.health.connect.client.changes.UpsertionChange
 import androidx.health.connect.client.permission.HealthPermission
+import androidx.health.connect.client.records.ActiveCaloriesBurnedRecord
+import androidx.health.connect.client.records.DistanceRecord
 import androidx.health.connect.client.records.ExerciseSessionRecord
+import androidx.health.connect.client.records.FloorsClimbedRecord
 import androidx.health.connect.client.records.HeartRateRecord
 import androidx.health.connect.client.records.HeartRateVariabilityRmssdRecord
 import androidx.health.connect.client.records.OxygenSaturationRecord
 import androidx.health.connect.client.records.Record
 import androidx.health.connect.client.records.RespiratoryRateRecord
 import androidx.health.connect.client.records.RestingHeartRateRecord
+import androidx.health.connect.client.records.SkinTemperatureRecord
 import androidx.health.connect.client.records.SleepSessionRecord
 import androidx.health.connect.client.records.StepsRecord
 import androidx.health.connect.client.request.ChangesTokenRequest
@@ -235,6 +239,10 @@ internal val RECORD_TYPES: Map<Int, KClass<out Record>> =
         TYPE_OXYGEN_SATURATION to OxygenSaturationRecord::class,
         TYPE_RESPIRATORY_RATE to RespiratoryRateRecord::class,
         TYPE_EXERCISE to ExerciseSessionRecord::class,
+        TYPE_SKIN_TEMPERATURE to SkinTemperatureRecord::class,
+        TYPE_ACTIVE_CALORIES to ActiveCaloriesBurnedRecord::class,
+        TYPE_DISTANCE to DistanceRecord::class,
+        TYPE_FLOORS_CLIMBED to FloorsClimbedRecord::class,
     )
 
 /** The read permission one wire type asks for, from the record it reads. */
@@ -255,4 +263,5 @@ private fun readRequest(
         request.token,
     )
 
-private fun recordClassOf(type: Int): KClass<out Record> = RECORD_TYPES[type] ?: throw PluginException(PluginException.INVALID_ARGUMENT)
+private fun recordClassOf(type: Int): KClass<out Record> =
+    RECORD_TYPES[type] ?: throw PluginException(PluginException.INVALID_ARGUMENT)

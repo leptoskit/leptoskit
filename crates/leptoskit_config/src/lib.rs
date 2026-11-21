@@ -1327,6 +1327,18 @@ pub struct NativeConfig {
 	/// What opts the Android app into push, such as FCM enrollment.
 	#[serde(skip_serializing_if = "AndroidConfig::is_default")]
 	pub android: AndroidConfig,
+	/// How the Wear OS build (`--platform wearos`) packages the Android app
+	/// for Wear OS watches (Pixel Watch, Samsung Galaxy Watch, etc.).
+	#[serde(skip_serializing_if = "WearosConfig::is_default")]
+	pub wearos: WearosConfig,
+	/// How the watchOS build (`--platform watchos`) packages the Apple Watch
+	/// host.
+	#[serde(skip_serializing_if = "WatchosConfig::is_default")]
+	pub watchos: WatchosConfig,
+	/// How the HarmonyOS build (`--platform harmonyos`) configures device
+	/// types (including Huawei Watch wearables) and permissions.
+	#[serde(skip_serializing_if = "HarmonyosConfig::is_default")]
+	pub harmonyos: HarmonyosConfig,
 	/// The initial viewport width for the headless layout pass.
 	pub viewport_width: f32,
 	/// The initial viewport height for the headless layout pass.
@@ -1359,6 +1371,9 @@ impl Default for NativeConfig {
 			ios: IosConfig::default(),
 			macos: MacosConfig::default(),
 			android: AndroidConfig::default(),
+			wearos: WearosConfig::default(),
+			watchos: WatchosConfig::default(),
+			harmonyos: HarmonyosConfig::default(),
 			viewport_width: 390.0,
 			viewport_height: 844.0,
 		}
@@ -1617,6 +1632,135 @@ impl Default for QuestConfig {
 }
 
 impl QuestConfig {
+	fn is_default(&self) -> bool {
+		*self == Self::default()
+	}
+}
+
+/// How the Wear OS build (`--platform wearos`) packages an Android host for
+/// Wear OS smartwatches (Pixel Watch, Samsung Galaxy Watch, etc.).
+#[allow(clippy::struct_excessive_bools)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields, default, rename_all = "kebab-case")]
+pub struct WearosConfig {
+	/// Whether the Wear OS app can run independently without a paired phone app
+	/// (`com.google.android.wearable.standalone`).
+	pub standalone: bool,
+	/// Declares a Wear OS Tile service in the transformed manifest.
+	pub tile: bool,
+	/// Declares a watch-face complication data source service in the manifest.
+	pub complication: bool,
+	/// Enables the optional Samsung Health Sensor SDK runtime hook on Galaxy
+	/// Watch devices.
+	pub samsung_health_sensor: bool,
+}
+
+impl Default for WearosConfig {
+	fn default() -> Self {
+		Self {
+			standalone: true,
+			tile: true,
+			complication: true,
+			samsung_health_sensor: true,
+		}
+	}
+}
+
+impl WearosConfig {
+	fn is_default(&self) -> bool {
+		*self == Self::default()
+	}
+}
+
+/// How the watchOS build (`--platform watchos`) packages the Apple Watch host.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields, default, rename_all = "kebab-case")]
+pub struct WatchosConfig {
+	/// Whether the watchOS app runs independently of an iPhone companion app
+	/// (`WKRunsIndependentlyOfCompanionApp`).
+	pub standalone: bool,
+	/// Optional paired iOS companion bundle identifier
+	/// (`WKCompanionAppBundleIdentifier`).
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub companion_bundle_id: Option<String>,
+	/// Minimum watchOS deployment target (e.g. `"10.0"`).
+	pub deployment_target: String,
+	/// Enables `workout-processing` in `WKBackgroundModes` for live wrist
+	/// biometric sessions.
+	pub workout_background: bool,
+	/// Enables `WidgetKit` watch-face complications and Smart Stack glances.
+	pub complications: bool,
+}
+
+impl Default for WatchosConfig {
+	fn default() -> Self {
+		Self {
+			standalone: true,
+			companion_bundle_id: None,
+			deployment_target: "10.0".into(),
+			workout_background: true,
+			complications: true,
+		}
+	}
+}
+
+impl WatchosConfig {
+	fn is_default(&self) -> bool {
+		*self == Self::default()
+	}
+}
+
+/// HarmonyOS `module.json5` device type entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "lowercase")]
+pub enum HarmonyDeviceType {
+	/// HarmonyOS phone.
+	Phone,
+	/// HarmonyOS tablet.
+	Tablet,
+	/// Huawei Watch / HarmonyOS wearable.
+	Wearable,
+}
+
+impl HarmonyDeviceType {
+	/// The string written to `module.json5`'s `deviceTypes` array.
+	#[must_use]
+	pub const fn as_str(self) -> &'static str {
+		match self {
+			Self::Phone => "phone",
+			Self::Tablet => "tablet",
+			Self::Wearable => "wearable",
+		}
+	}
+}
+
+/// How the HarmonyOS build (`--platform harmonyos`) configures `module.json5`
+/// device types (including Huawei Watch wearables) and permissions.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields, default, rename_all = "kebab-case")]
+pub struct HarmonyosConfig {
+	/// `deviceTypes` written into `entry/src/main/module.json5`. Include
+	/// `"wearable"` to target Huawei Watch devices.
+	pub device_types: Vec<HarmonyDeviceType>,
+	/// Extra `ohos.permission.*` names declared in `requestPermissions`.
+	#[serde(skip_serializing_if = "Vec::is_empty")]
+	pub permissions: Vec<String>,
+}
+
+impl Default for HarmonyosConfig {
+	fn default() -> Self {
+		Self {
+			device_types: vec![HarmonyDeviceType::Phone, HarmonyDeviceType::Tablet],
+			permissions: Vec::new(),
+		}
+	}
+}
+
+impl HarmonyosConfig {
 	fn is_default(&self) -> bool {
 		*self == Self::default()
 	}

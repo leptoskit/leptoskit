@@ -191,6 +191,27 @@ pub enum Value {
 		/// The session's title, when the recording app gave one.
 		title: Option<String>,
 	},
+	/// Skin or wrist temperature in degrees Celsius (or sleeping delta on
+	/// watchOS).
+	SkinTemperature {
+		/// Degrees Celsius.
+		celsius: f64,
+	},
+	/// Active energy burned over the sample's interval.
+	ActiveCalories {
+		/// Kilocalories.
+		kilocalories: f64,
+	},
+	/// Distance covered over the sample's interval.
+	Distance {
+		/// Meters.
+		meters: f64,
+	},
+	/// Floors or flights climbed over the sample's interval.
+	FloorsClimbed {
+		/// Number of floors.
+		floors: f64,
+	},
 }
 
 impl Value {
@@ -206,6 +227,10 @@ impl Value {
 			Self::OxygenSaturation { .. } => DataType::OxygenSaturation,
 			Self::RespiratoryRate { .. } => DataType::RespiratoryRate,
 			Self::Exercise { .. } => DataType::Exercise,
+			Self::SkinTemperature { .. } => DataType::SkinTemperature,
+			Self::ActiveCalories { .. } => DataType::ActiveCalories,
+			Self::Distance { .. } => DataType::Distance,
+			Self::FloorsClimbed { .. } => DataType::FloorsClimbed,
 		}
 	}
 
@@ -248,6 +273,26 @@ impl Value {
 					activity: Activity::decode(reader.u32()?)?,
 					platform_code: reader.u32()?.cast_signed(),
 					title: reader.optional()?.map(str::to_owned),
+				}
+			}
+			DataType::SkinTemperature => {
+				Self::SkinTemperature {
+					celsius: reader.f64()?,
+				}
+			}
+			DataType::ActiveCalories => {
+				Self::ActiveCalories {
+					kilocalories: reader.f64()?,
+				}
+			}
+			DataType::Distance => {
+				Self::Distance {
+					meters: reader.f64()?,
+				}
+			}
+			DataType::FloorsClimbed => {
+				Self::FloorsClimbed {
+					floors: reader.f64()?,
 				}
 			}
 		})

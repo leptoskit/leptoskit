@@ -1,12 +1,16 @@
 package dev.leptoskit.plugins.health
 
+import androidx.health.connect.client.records.ActiveCaloriesBurnedRecord
+import androidx.health.connect.client.records.DistanceRecord
 import androidx.health.connect.client.records.ExerciseSessionRecord
+import androidx.health.connect.client.records.FloorsClimbedRecord
 import androidx.health.connect.client.records.HeartRateRecord
 import androidx.health.connect.client.records.HeartRateVariabilityRmssdRecord
 import androidx.health.connect.client.records.OxygenSaturationRecord
 import androidx.health.connect.client.records.Record
 import androidx.health.connect.client.records.RespiratoryRateRecord
 import androidx.health.connect.client.records.RestingHeartRateRecord
+import androidx.health.connect.client.records.SkinTemperatureRecord
 import androidx.health.connect.client.records.SleepSessionRecord
 import androidx.health.connect.client.records.StepsRecord
 import dev.leptoskit.bridge.PluginException
@@ -30,9 +34,13 @@ internal const val TYPE_SLEEP = 5
 internal const val TYPE_OXYGEN_SATURATION = 6
 internal const val TYPE_RESPIRATORY_RATE = 7
 internal const val TYPE_EXERCISE = 8
+internal const val TYPE_SKIN_TEMPERATURE = 9
+internal const val TYPE_ACTIVE_CALORIES = 10
+internal const val TYPE_DISTANCE = 11
+internal const val TYPE_FLOORS_CLIMBED = 12
 
 /** Every type Health Connect records, as a bit mask. */
-internal const val ANDROID_TYPES = 0x1F3
+internal const val ANDROID_TYPES = 0x1FF3
 
 /** Sleep stage codes, in wire order. */
 internal const val STAGE_UNKNOWN = 0
@@ -202,6 +210,10 @@ internal class ReadRequest(
                 TYPE_OXYGEN_SATURATION,
                 TYPE_RESPIRATORY_RATE,
                 TYPE_EXERCISE,
+                TYPE_SKIN_TEMPERATURE,
+                TYPE_ACTIVE_CALORIES,
+                TYPE_DISTANCE,
+                TYPE_FLOORS_CLIMBED,
             )
     }
 }
@@ -286,6 +298,24 @@ internal fun encodeRecord(record: Record): ByteArray {
             writer.optional(record.title)
         }
 
+        is SkinTemperatureRecord -> {
+            val baseline = record.baseline?.inCelsius ?: 0.0
+            val delta = record.deltas.lastOrNull()?.delta?.inCelsius ?: 0.0
+            writer.f64(baseline + delta)
+        }
+
+        is ActiveCaloriesBurnedRecord -> {
+            writer.f64(record.energy.inKilocalories)
+        }
+
+        is DistanceRecord -> {
+            writer.f64(record.distance.inMeters)
+        }
+
+        is FloorsClimbedRecord -> {
+            writer.f64(record.floors)
+        }
+
         else -> {
             throw PluginException(PluginException.NATIVE)
         }
@@ -324,6 +354,10 @@ private fun typeCodeOf(record: Record): Int =
         is OxygenSaturationRecord -> TYPE_OXYGEN_SATURATION
         is RespiratoryRateRecord -> TYPE_RESPIRATORY_RATE
         is ExerciseSessionRecord -> TYPE_EXERCISE
+        is SkinTemperatureRecord -> TYPE_SKIN_TEMPERATURE
+        is ActiveCaloriesBurnedRecord -> TYPE_ACTIVE_CALORIES
+        is DistanceRecord -> TYPE_DISTANCE
+        is FloorsClimbedRecord -> TYPE_FLOORS_CLIMBED
         else -> throw PluginException(PluginException.NATIVE)
     }
 
@@ -334,6 +368,10 @@ private fun intervalOf(record: Record): Pair<Long, Long> =
         is StepsRecord -> Pair(record.startTime.toEpochMilli(), record.endTime.toEpochMilli())
         is SleepSessionRecord -> Pair(record.startTime.toEpochMilli(), record.endTime.toEpochMilli())
         is ExerciseSessionRecord -> Pair(record.startTime.toEpochMilli(), record.endTime.toEpochMilli())
+        is SkinTemperatureRecord -> Pair(record.startTime.toEpochMilli(), record.endTime.toEpochMilli())
+        is ActiveCaloriesBurnedRecord -> Pair(record.startTime.toEpochMilli(), record.endTime.toEpochMilli())
+        is DistanceRecord -> Pair(record.startTime.toEpochMilli(), record.endTime.toEpochMilli())
+        is FloorsClimbedRecord -> Pair(record.startTime.toEpochMilli(), record.endTime.toEpochMilli())
         is RestingHeartRateRecord -> instantOf(record.time)
         is HeartRateVariabilityRmssdRecord -> instantOf(record.time)
         is OxygenSaturationRecord -> instantOf(record.time)

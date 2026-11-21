@@ -68,12 +68,21 @@ pub fn generate(
 				Some(&config.native.quest),
 			)
 		}
+		Target::Wearos => {
+			android_host_for(
+				root,
+				config,
+				registry,
+				Target::Wearos,
+				"arm64-v8a",
+				None,
+				Some(&config.native.wearos),
+			)
+		}
 		Target::Harmonyos | Target::HarmonyosX86_64 => {
 			super::harmonyos::generate(root, config, registry, target)
 		}
-		Target::Wearos | Target::Watchos => {
-			anyhow::bail!("watch hosts are scaffolded before project::generate")
-		}
+		Target::Watchos => super::watch::generate_watchos(root, config, registry),
 	}
 }
 
@@ -352,16 +361,9 @@ fn android(
 	registry: &Registry,
 	abi: &str,
 ) -> Result<()> {
-	android_host(root, config, registry, abi, None)
+	android_host_for(root, config, registry, Target::Android, abi, None, None)
 }
 
-/// The generated half of the Android host, for a phone or, with `quest`, for
-/// a Meta Quest headset. `[native.android] push` adds the Firebase pieces:
-/// the messaging dependency, the Google services plugin's data file, the
-/// messaging service source, its manifest declaration with Firebase's
-/// intent filter, the default channel and icon entries, and the keep rules
-/// for the names the plugin reaches by reflection. With push off, none of
-/// it is written and stale copies of all of it are removed.
 fn android_host(
 	root: &Path,
 	config: &leptoskit_config::LeptoskitConfig,
@@ -369,8 +371,31 @@ fn android_host(
 	abi: &str,
 	quest: Option<&leptoskit_config::QuestConfig>,
 ) -> Result<()> {
+	let target = if quest.is_some() {
+		Target::Quest
+	} else {
+		Target::Android
+	};
+	android_host_for(root, config, registry, target, abi, quest, None)
+}
+
+/// The generated half of the Android host, for a phone, a Meta Quest headset
+/// (`quest`), or a Wear OS smartwatch (`wearos`).
+fn android_host_for(
+	root: &Path,
+	config: &leptoskit_config::LeptoskitConfig,
+	registry: &Registry,
+	target: Target,
+	abi: &str,
+	quest: Option<&leptoskit_config::QuestConfig>,
+	wearos: Option<&leptoskit_config::WearosConfig>,
+) -> Result<()> {
 	let push = config.native.android.push;
-	let dir = root.join(".leptoskit/android");
+	let dir = if target == Target::Wearos && root.join("platforms/wearos/Cargo.toml").is_file() {
+		root.join(".leptoskit/wearos")
+	} else {
+		root.join(".leptoskit/android")
+	};
 	write(&dir.join("version.properties"), &android_version(config))?;
 	write(
 		&dir.join("plugin-dependencies.txt"),
@@ -397,9 +422,15 @@ fn android_host(
 	} else {
 		let _ = std::fs::remove_file(sources.join(MESSAGING_SERVICE_FILE));
 	}
-	let manifest = std::fs::read_to_string(
-		super::host_dir(root, Target::Android).join("app/src/main/AndroidManifest.xml"),
-	)?;
+	let host = {
+		let candidate = super::host_dir(root, target);
+		if candidate.join("app/src/main/AndroidManifest.xml").is_file() {
+			candidate
+		} else {
+			super::host_dir(root, Target::Android)
+		}
+	};
+	let manifest = std::fs::read_to_string(host.join("app/src/main/AndroidManifest.xml"))?;
 	let mut permissions = std::collections::BTreeSet::new();
 	let mut query_actions = std::collections::BTreeSet::new();
 	let mut query_intents = std::collections::BTreeSet::new();
@@ -518,6 +549,12 @@ fn android_host(
 	// Quest packages the same host for the headset: its manifest says so.
 	if let Some(quest) = quest {
 		manifest = super::quest::manifest(&manifest, quest)?;
+	}
+
+	// Wear OS packages the host for smartwatches (Pixel Watch, Galaxy Watch,
+	// etc.).
+	if let Some(wearos) = wearos {
+		manifest = super::wearos::manifest(&manifest, wearos)?;
 	}
 
 	write(&dir.join("AndroidManifest.xml"), &manifest)?;

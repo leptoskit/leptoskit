@@ -55,6 +55,41 @@ impl WearOsHost {
 	pub fn presentations(&self) -> &[WatchPresentation] {
 		self.inner.presentations()
 	}
+
+	/// Runtime capabilities available on Wear OS hosts (including Samsung
+	/// Galaxy Watch / One UI Watch).
+	#[must_use]
+	pub const fn capabilities() -> WearOsCapabilities {
+		WearOsCapabilities {
+			health_services_passive: true,
+			health_services_measure: true,
+			health_services_exercise: true,
+			samsung_health_sensor_sdk: true,
+			wearable_data_layer: true,
+			tiles: true,
+			complications: true,
+		}
+	}
+}
+
+/// Device capabilities exposed by a Wear OS host.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(clippy::struct_excessive_bools)]
+pub struct WearOsCapabilities {
+	/// Wear Health Services `PassiveMonitoringClient`.
+	pub health_services_passive: bool,
+	/// Wear Health Services `MeasureClient`.
+	pub health_services_measure: bool,
+	/// Wear Health Services `ExerciseClient`.
+	pub health_services_exercise: bool,
+	/// Optional Samsung Health Sensor SDK hook on Galaxy Watch devices.
+	pub samsung_health_sensor_sdk: bool,
+	/// Companion phone transport (`MessageClient` / `DataClient`).
+	pub wearable_data_layer: bool,
+	/// Wear OS Tiles (`TileService`).
+	pub tiles: bool,
+	/// Watch face complications (`ComplicationDataSourceService`).
+	pub complications: bool,
 }
 
 impl Default for WearOsHost {
@@ -93,6 +128,9 @@ mod tests {
 	use leptoskit_watch::WatchApp;
 	use leptoskit_watch::WatchKind;
 	use leptoskit_watch::WatchPage;
+	use leptoskit_watch::WearableApp;
+	use leptoskit_watch::WearableStatus;
+	use leptoskit_watch::WearableStream;
 
 	use super::*;
 
@@ -101,6 +139,17 @@ mod tests {
 		let app = WatchApp::new("demo", WatchKind::WearOs).page(WatchPage::new("home", Text("Hi")));
 		let mut host = WearOsHost::new();
 		host.present_app(&app).unwrap();
+		assert_ne!(host.presentations(), []);
+	}
+
+	#[test]
+	fn presents_a_wearable_status_app() {
+		let app = WearableApp::new("tracker", WatchKind::WearOs)
+			.streams(&[WearableStream::HeartRate, WearableStream::Steps]);
+		let mut host = WearOsHost::with_viewport(WatchViewport::samsung_wear_medium()).unwrap();
+		host.present_wearable(&app, &WearableStatus::default())
+			.unwrap();
+		assert!(WearOsHost::capabilities().samsung_health_sensor_sdk);
 		assert_ne!(host.presentations(), []);
 	}
 

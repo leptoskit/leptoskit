@@ -57,30 +57,34 @@ fn steps_wear() -> WatchApp {
 
 The same vocabulary works for watchOS with `WatchKind::WatchOs` and `WatchGlance` instead of (or beside) tiles. Content still uses leptoskit elements and classes; the container enforces the budget before a host presents it.
 
+## Sensor-first wearables (`WearableApp`)
+
+Trackers and biometric collectors spend most of their time with the screen off. `WearableApp` lets you declare the wrist streams, sampling policy (`Passive`, `Balanced`, `Continuous`, `Workout`), and delivery mode (`Direct`, `Companion`, or `DirectWithCompanionFallback`) first, and either render an automatic budget-checked status page, tile/glance, and complication from `WearableStatus` or pass a custom `WatchApp`:
+
+```rust
+use leptoskit::watch::*;
+
+let tracker = WearableApp::new("quant-watch", WatchKind::WearOs)
+	.streams(&[
+		WearableStream::HeartRate,
+		WearableStream::Steps,
+		WearableStream::OxygenSaturation,
+		WearableStream::WearState,
+	])
+	.policy(SamplingPolicy::Passive)
+	.delivery(DeliveryMode::DirectWithCompanionFallback)
+	.auto_status_surface();
+```
+
 ## Platforms
 
-| Platform        | Feature   | Host crate          | Status             |
-| --------------- | --------- | ------------------- | ------------------ |
-| Android Wear OS | `wearos`  | `leptoskit_wearos`  | Experimental stubs |
-| Apple watchOS   | `watchos` | `leptoskit_watchos` | Experimental stubs |
+| Platform                                    | Feature     | Host crate / extension         | Status                                       |
+| ------------------------------------------- | ----------- | ------------------------------ | -------------------------------------------- |
+| Android Wear OS (Pixel Watch, Galaxy Watch) | `wearos`    | `leptoskit_wearos` + Android   | Experimental Gradle APK + runtime plugins    |
+| Apple watchOS                               | `watchos`   | `leptoskit_watchos` + Apple    | Experimental Xcode build + runtime plugins   |
+| Huawei Watch (HarmonyOS Wearable)           | `harmonyos` | `leptoskit_platform_harmonyos` | Experimental HAP (`device-types = ["wearable"]`) |
 
-Enable the shared API with the `watch` feature, or a platform feature that pulls it in:
-
-```toml
-leptoskit = { version = "0.3", features = ["wearos"] }
-# or
-leptoskit = { version = "0.3", features = ["watchos"] }
-```
-
-Create a starter:
-
-```sh
-leptoskit new steps --platform wearos
-# or
-leptoskit new steps --platform watchos
-```
-
-`leptoskit native prepare wearos` (or `watchos`) writes the host stubs. `leptoskit native build` for either platform stops with an experimental notice until packaging lands.
+Pair with `leptoskit_plugin_wearable` (direct wrist sensors), `leptoskit_plugin_health` (`HealthKit`, Health Connect, HarmonyOS Health), `leptoskit_plugin_watch_sync` (phone ↔ watch link), and `leptoskit_plugin_ble` (BLE GATT heart-rate straps and rings).
 
 ## What is refused on purpose
 
@@ -90,5 +94,6 @@ Watch surfaces reject phone-oriented widgets such as `ScrollView`, `TextInput`, 
 
 Documented beside each platform page:
 
-- [Wear OS](wearos.md): watch feature flag, tile service, complication data source.
-- [watchOS](watchos.md): Watch App target, WidgetKit, complication push, App Groups.
+- [Wear OS](wearos.md): watch feature flag, standalone metadata, tile service, complication data source, Wear Health Services & Samsung Health Sensor SDK.
+- [watchOS](watchos.md): Watch App target, `HKWorkoutSession`, `WidgetKit` glances, complications, `WatchConnectivity`.
+- [HarmonyOS](harmonyos.md): `device-types = ["wearable"]`, `@kit.SensorServiceKit`, `@kit.HealthServiceKit`.

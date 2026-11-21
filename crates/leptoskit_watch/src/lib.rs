@@ -31,6 +31,7 @@ mod navigation;
 mod page;
 
 mod viewport;
+mod wearable;
 
 pub use ambient::ComplicationFamily;
 pub use ambient::RefreshPolicy;
@@ -51,3 +52,10 @@ pub use page::WatchPage;
 pub use viewport::WatchShape;
 pub use viewport::WatchSizeClass;
 pub use viewport::WatchViewport;
+pub use wearable::DeliveryMode;
+pub use wearable::SamplingPolicy;
+pub use wearable::WearableApp;
+pub use wearable::WearableStatus;
+pub use wearable::WearableStream;
+pub use wearable::WearableStreams;
+pub use wearable::WearableSurfaceMode;
