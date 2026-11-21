@@ -1794,6 +1794,84 @@
 				}
 			]
 		},
+		"DesktopWindowConfig": {
+			"description": "Declarative desktop window chrome and overlay settings under\n`[native.window]`.",
+			"type": "object",
+			"properties": {
+				"always_on_top": {
+					"description": "Keep the desktop window drawn above other apps (`HWND_TOPMOST` /\n`NSFloatingWindowLevel`).",
+					"type": "boolean"
+				},
+				"click_through": {
+					"description": "Pass pointer clicks through to applications underneath the window.",
+					"type": "boolean"
+				},
+				"close_to_tray": {
+					"description": "Keep the process running in the system tray / background when the window\ncloses instead of exiting.",
+					"type": "boolean"
+				},
+				"frameless": {
+					"description": "Omit the native titlebar and window frame.",
+					"type": "boolean"
+				},
+				"height": {
+					"description": "Initial logical window height.",
+					"type": [
+						"number",
+						"null"
+					],
+					"format": "double"
+				},
+				"min_height": {
+					"description": "Minimum logical window height.",
+					"type": [
+						"number",
+						"null"
+					],
+					"format": "double"
+				},
+				"min_width": {
+					"description": "Minimum logical window width.",
+					"type": [
+						"number",
+						"null"
+					],
+					"format": "double"
+				},
+				"resizable": {
+					"description": "Allow user window resizing (defaults to `true`).",
+					"type": "boolean"
+				},
+				"skip_taskbar": {
+					"description": "Hide the window from the OS taskbar / window switcher.",
+					"type": "boolean"
+				},
+				"title": {
+					"description": "Optional window title override; defaults to `app.name`.",
+					"type": [
+						"string",
+						"null"
+					]
+				},
+				"transparent": {
+					"description": "Allow transparent backgrounds for floating overlays and HUDs.",
+					"type": "boolean"
+				},
+				"visible_on_all_workspaces": {
+					"description": "Pin the window across every virtual desktop / macOS Space.",
+					"type": "boolean"
+				},
+				"width": {
+					"description": "Initial logical window width.",
+					"type": [
+						"number",
+						"null"
+					],
+					"format": "double"
+				}
+			},
+			"additionalProperties": false
+		},
 		"DevtoolsPage": {
 			"description": "A panel in the browser's developer tools. The developer tools open\n`route` out of sight each time they open for a tab, and that page adds the\npanel, which shows `panel`.",
 			"type": "object",
@@ -3634,12 +3712,16 @@
 				"wearos": {
 					"description": "How the Wear OS build (`--platform wearos`) packages the Android app\nfor Wear OS watches (Pixel Watch, Samsung Galaxy Watch, etc.).",
 					"$ref": "#/$defs/WearosConfig"
+				},
+				"window": {
+					"description": "Desktop window defaults (always-on-top overlays, frameless/transparent\nchrome, vibrancy/Mica backdrop, and close-to-tray behavior).",
+					"$ref": "#/$defs/DesktopWindowConfig"
 				}
 			},
 			"additionalProperties": false
 		},
 		"NativeMode": {
-			"description": "Native startup behavior. Neither mode needs a URL or web server.",
+			"description": "Native startup behavior. None of these modes needs a URL or web server.",
 			"oneOf": [
 				{
 					"description": "Open the main window at launch.",
@@ -3647,9 +3729,14 @@
 					"const": "window"
 				},
 				{
-					"description": "Keep a macOS status item alive; create UI only when requested.",
+					"description": "Keep a status item or tray icon alive; create UI only when requested.",
 					"type": "string",
 					"const": "menu-bar"
+				},
+				{
+					"description": "Run in the background without opening an initial window or Dock icon.",
+					"type": "string",
+					"const": "background"
 				}
 			]
 		},

@@ -17,8 +17,20 @@
 use serde::Deserialize;
 use serde::Serialize;
 
+pub mod desktop;
 #[cfg(target_os = "macos")]
 pub mod macos;
+
+pub use desktop::ActivationPolicy;
+pub use desktop::CloseBehavior;
+pub use desktop::DockAttention;
+pub use desktop::MemoryWindowController;
+pub use desktop::TaskbarProgress;
+pub use desktop::VibrancyMaterial;
+pub use desktop::WindowChrome;
+pub use desktop::WindowController;
+pub use desktop::WindowLevel;
+pub use desktop::WindowOptions;
 
 /// Invalid or unavailable window state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
