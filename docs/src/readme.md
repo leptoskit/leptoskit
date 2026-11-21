@@ -169,4 +169,6 @@ On every native platform, `Image` loads the pictures your app bundles with [`ass
 
 Axum is the one supported server.
 
+For coding agents and LLMs, every page in this book is also published as plain Markdown via [llms.txt](llms.txt) and the single-file [llms-full.txt](llms-full.txt). Install the built-in agent skill with `lk skill install`.
+
 To work on leptoskit itself, start with [CONTRIBUTING.md](https://github.com/leptoskit/leptoskit/blob/main/CONTRIBUTING.md).

@@ -417,6 +417,7 @@ fn content_type(file: &Path) -> &'static str {
 		Some("ico") => "image/x-icon",
 		Some("woff2") => "font/woff2",
 		Some("txt") => "text/plain; charset=utf-8",
+		Some("md") => "text/markdown; charset=utf-8",
 		_ => "application/octet-stream",
 	}
 }

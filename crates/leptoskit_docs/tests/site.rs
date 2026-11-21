@@ -611,3 +611,61 @@ fn defaults_to_the_title_text_without_a_logo() {
 	);
 	assert!(!home.contains("lk-pager"), "no pager for a single page");
 }
+
+#[test]
+fn writes_llms_txt_and_plain_markdown_chapters() {
+	let out = tempfile::tempdir().unwrap();
+	site(fixture()).build(out.path()).unwrap();
+
+	let index = read(out.path().join("llms.txt"));
+	assert!(index.starts_with("# Example\n"), "{index}");
+	assert!(index.contains("> An example book."), "{index}");
+	assert!(
+		index.contains("[Full documentation](https://example.github.io/project/llms-full.txt)"),
+		"{index}"
+	);
+	assert!(
+		index.contains("[Install](https://example.github.io/project/guide/install.md)"),
+		"{index}"
+	);
+	assert!(
+		index.contains("[Reference](https://example.github.io/project/reference.md)"),
+		"{index}"
+	);
+
+	let full = read(out.path().join("llms-full.txt"));
+	assert!(
+		full.contains("Source: https://example.github.io/project/guide/install.md"),
+		"{full}"
+	);
+	assert!(full.contains("You need Rust."), "{full}");
+
+	let install_md = read(out.path().join("guide/install.md"));
+	assert!(install_md.contains("You need Rust."), "{install_md}");
+
+	// MDT directive comments are stripped from companion Markdown and
+	// `llms-full.txt`, and chapters may link to `llms.txt` / `llms-full.txt`.
+	let root = book(&[
+		("SUMMARY.md", "[Home](readme.md)\n- [Guide](guide/a.md)\n"),
+		(
+			"readme.md",
+			"# Home\n\n<!-- {=snippet} -->\n\nShared prose.\n\n<!-- {/snippet} -->\n\nSee \
+			 [llms.txt](llms.txt) and [llms-full.txt](llms-full.txt).\n",
+		),
+		("guide/a.md", "# Guide\n\nBack to [index](../llms.txt).\n"),
+	]);
+	let custom_out = tempfile::tempdir().unwrap();
+	Site::new(root.path())
+		.title("Custom")
+		.build(custom_out.path())
+		.unwrap();
+
+	let cleaned = read(custom_out.path().join("readme.md"));
+	assert!(cleaned.contains("Shared prose."), "{cleaned}");
+	assert!(!cleaned.contains("<!-- {="), "{cleaned}");
+	assert!(!cleaned.contains("<!-- {/"), "{cleaned}");
+
+	let full_custom = read(custom_out.path().join("llms-full.txt"));
+	assert!(!full_custom.contains("<!-- {="), "{full_custom}");
+	assert!(full_custom.contains("Source: guide/a.md"), "{full_custom}");
+}
