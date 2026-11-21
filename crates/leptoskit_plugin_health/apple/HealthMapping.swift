@@ -65,7 +65,8 @@ private func value(ofQuantity sample: HKQuantitySample) -> HealthValue {
         .oxygenSaturation(percent: sample.quantity.doubleValue(for: HKUnit.percent()) * 100.0)
     case HKQuantityTypeIdentifier.respiratoryRate.rawValue:
         .respiratoryRate(breathsPerMinute: sample.quantity.doubleValue(for: beatsPerMinute))
-    case HKQuantityTypeIdentifier.bodyTemperature.rawValue:
+    case HKQuantityTypeIdentifier.bodyTemperature.rawValue,
+         HKQuantityTypeIdentifier.appleSleepingWristTemperature.rawValue:
         .skinTemperature(celsius: sample.quantity.doubleValue(for: HKUnit.degreeCelsius()))
     case HKQuantityTypeIdentifier.activeEnergyBurned.rawValue:
         .activeCalories(kilocalories: sample.quantity.doubleValue(for: HKUnit.kilocalorie()))
@@ -74,12 +75,7 @@ private func value(ofQuantity sample: HKQuantitySample) -> HealthValue {
     case HKQuantityTypeIdentifier.flightsClimbed.rawValue:
         .floorsClimbed(floors: sample.quantity.doubleValue(for: HKUnit.count()))
     default:
-        if #available(iOS 16.0, watchOS 9.0, *),
-           sample.quantityType.identifier == HKQuantityTypeIdentifier.appleSleepingWristTemperature.rawValue {
-            .skinTemperature(celsius: sample.quantity.doubleValue(for: HKUnit.degreeCelsius()))
-        } else {
-            .sleep(stages: [])
-        }
+        .sleep(stages: [])
     }
 }
 

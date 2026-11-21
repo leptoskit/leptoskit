@@ -1,6 +1,7 @@
 package dev.leptoskit.plugins.watchsync
 
 import android.content.Context
+import com.google.android.gms.tasks.Task
 import com.google.android.gms.wearable.DataClient
 import com.google.android.gms.wearable.DataEvent
 import com.google.android.gms.wearable.DataEventBuffer
@@ -12,11 +13,13 @@ import com.google.android.gms.wearable.Wearable
 import dev.leptoskit.bridge.NativePlugin
 import dev.leptoskit.bridge.PluginException
 import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.tasks.await
+import kotlinx.coroutines.suspendCancellableCoroutine
 import java.io.ByteArrayOutputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.ArrayDeque
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 
 /**
  * Bidirectional phone <-> Wear OS (including Samsung Galaxy Watch) companion
@@ -85,7 +88,7 @@ class WatchSyncPlugin(
 
     private suspend fun status(): ByteArray {
         val nodes =
-            runCatching { Wearable.getNodeClient(context).connectedNodes.await() }
+            runCatching { Wearable.getNodeClient(context).connectedNodes.awaitResult() }
                 .getOrElse { emptyList() }
         val peer = nodes.firstOrNull()
         var flags = 1 // supported
@@ -101,11 +104,11 @@ class WatchSyncPlugin(
         val topic = reader.string()
         val data = reader.bytes()
         reader.finished()
-        val nodes = Wearable.getNodeClient(context).connectedNodes.await()
+        val nodes = Wearable.getNodeClient(context).connectedNodes.awaitResult()
         if (nodes.isEmpty()) throw PluginException(PluginException.UNAVAILABLE)
         val client = Wearable.getMessageClient(context)
         for (node in nodes) {
-            client.sendMessage(node.id, topic, data).await()
+            client.sendMessage(node.id, topic, data).awaitResult()
         }
         return ByteArray(0)
     }
@@ -123,18 +126,21 @@ class WatchSyncPlugin(
                 dataMap.putByteArray("payload", data)
                 dataMap.putLong("ts", System.currentTimeMillis())
             }
-        Wearable.getDataClient(context).putDataItem(request.asPutDataRequest().setUrgent()).await()
+        Wearable
+            .getDataClient(context)
+            .putDataItem(request.asPutDataRequest().setUrgent())
+            .awaitResult()
         return ByteArray(0)
     }
 
     private suspend fun nextIncoming(): ByteArray {
-        synchronized(lock) {
-            val existing = incoming.pollFirst()
-            if (existing != null) return existing
-            val deferred = CompletableDeferred<ByteArray>()
-            incomingWaiter = deferred
-            return deferred.await()
-        }
+        val deferred =
+            synchronized(lock) {
+                val existing = incoming.pollFirst()
+                if (existing != null) return existing
+                CompletableDeferred<ByteArray>().also { incomingWaiter = it }
+            }
+        return deferred.await()
     }
 
     private fun enqueue(envelope: ByteArray) {
@@ -150,6 +156,19 @@ class WatchSyncPlugin(
         }
     }
 }
+
+private suspend fun <T> Task<T>.awaitResult(): T =
+    suspendCancellableCoroutine { cont ->
+        addOnSuccessListener { result ->
+            if (cont.isActive) cont.resume(result)
+        }
+        addOnFailureListener { error ->
+            if (cont.isActive) cont.resumeWithException(error)
+        }
+        addOnCanceledListener {
+            if (cont.isActive) cont.cancel()
+        }
+    }
 
 private const val ABSENT = -1
 
