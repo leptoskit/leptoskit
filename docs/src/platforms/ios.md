@@ -72,15 +72,90 @@ xcodebuild -project .leptoskit/ios/Host.xcodeproj -scheme App \
 
 ## Live Activities and the Dynamic Island
 
-To show a short-lived status on the Lock Screen or in the Dynamic Island while the user is outside the app, add the [`live-activities`](plugins.md) plugin. From Rust, start, update, and end an activity, and optionally wait for the ActivityKit push token your server needs for remote updates.
+To show a short-lived status on the Lock Screen or in the Dynamic Island while the user is outside the app, enable `leptoskit`'s `live-activities` (or `mobile-surfaces`) feature in your app crate, add `leptoskit_plugin_live_activities` to your iOS host package, and list `"live-activities"` under `native.plugins` in `leptoskit.toml`.
 
-The plugin talks to ActivityKit only. Your app still has to:
+From Rust (`leptoskit::platform::live_activities`), your guest can:
+
+- start, update, and end ActivityKit Live Activities (`start`, `update`, `end`, `list`);
+- attach a Dynamic Island layout (`DynamicIslandLayout`: compact leading/trailing, minimal badge, expanded leading/trailing/center/bottom, and `#RRGGBB` keyline tint) with `ContentState::with_dynamic_island`;
+- schedule stale dates and relevance scores with `ActivitySchedule`, `start_scheduled`, and `update_scheduled`;
+- wait for a per-activity APNs update token (`wait_push_token`) or an iOS 17.2+ push-to-start token (`wait_push_to_start_token`).
+
+```rust
+use leptoskit::platform::live_activities::ContentState;
+use leptoskit::platform::live_activities::Identifier;
+use leptoskit::platform::live_activities::ScheduledStartRequest;
+use leptoskit::platform::live_activities::StartRequest;
+use leptoskit::platform::live_activities::guest::LiveActivities;
+use leptoskit::platform::live_activities::island::ActivitySchedule;
+use leptoskit::platform::live_activities::island::DynamicIslandLayout;
+
+let island = DynamicIslandLayout::new()
+	.compact("ETA", "4m")
+	.minimal("4m")
+	.expanded("Delivery", "4 min", "Driver nearby", "123 Market St");
+
+let state = ContentState::new([("status", "Driver nearby")])?
+	.with_dynamic_island(&island)?;
+
+let request = StartRequest::new(
+	Identifier::new("order-42")?,
+	Identifier::new("delivery")?,
+	"Order #42",
+	state,
+	true,
+)?;
+let schedule = ActivitySchedule {
+	stale_after_seconds: Some(900),
+	relevance_score: 0.9,
+	allow_push_to_start: true,
+};
+let activities = LiveActivities::new()?;
+activities
+	.start_scheduled(&ScheduledStartRequest::new(request, schedule)?)
+	.await?;
+```
+
+The plugin drives ActivityKit; your iOS app still owns the Widget Extension UI and entitlements:
 
 - set `NSSupportsLiveActivities` to `true` in `ios/Info.plist` (and `NSSupportsLiveActivitiesFrequentUpdates` if you need frequent pushes);
-- include a Widget Extension that imports `LeptosKitLiveActivities` and draws `LeptosKitLiveActivityAttributes`;
-- enable Push Notifications when you ask for push updates.
+- enable **Push Notifications** when requesting `wait_push_token` or `wait_push_to_start_token`;
+- add a Widget Extension target in Xcode that imports `LeptosKitLiveActivities` and renders `LeptosKitLiveActivityAttributes`:
 
-Other platforms, and an iOS build without ActivityKit wiring, return `Unavailable`. A successful start means ActivityKit accepted the request, not that chrome appeared: Focus modes and a missing Widget Extension can still hide it. See the [plugin inventory](plugin-inventory.md) for the exact operations.
+```swift
+import ActivityKit
+import LeptosKitLiveActivities
+import SwiftUI
+import WidgetKit
+
+@available(iOS 16.1, *)
+struct DeliveryLiveActivityWidget: Widget {
+    var body: some WidgetConfiguration {
+        ActivityConfiguration(for: LeptosKitLiveActivityAttributes.self) { context in
+            VStack(alignment: .leading) {
+                Text(context.attributes.title).font(.headline)
+                Text(context.state.fields["status"] ?? "")
+            }
+            .padding()
+        } dynamicIsland: { context in
+            DynamicIsland {
+                DynamicIslandExpandedRegion(.leading) { Text(context.state.expandedLeading ?? "") }
+                DynamicIslandExpandedRegion(.trailing) { Text(context.state.expandedTrailing ?? "") }
+                DynamicIslandExpandedRegion(.center) { Text(context.state.expandedCenter ?? context.attributes.title) }
+                DynamicIslandExpandedRegion(.bottom) { Text(context.state.expandedBottom ?? "") }
+            } compactLeading: {
+                Text(context.state.compactLeading ?? "")
+            } compactTrailing: {
+                Text(context.state.compactTrailing ?? "")
+            } minimal: {
+                Text(context.state.minimal ?? "")
+            }
+        }
+    }
+}
+```
+
+A successful start means ActivityKit accepted the request, not that chrome appeared: Focus modes and a missing Widget Extension can still hide it. On Android, the same plugin wires Android 16+ Live Updates via `post_android_live_update`; macOS, Windows, Linux, and browsers return `Unavailable`. See the [plugin inventory](plugin-inventory.md) for the exact operations.
 
 ## Ship an update without the App Store
 
@@ -95,38 +170,53 @@ The app downloads the release when the user asks for an update, tries it, and ke
 
 A `focused(true)` request takes effect when the property changes. After the user dismisses the keyboard, unrelated renders do not focus the field again. Set focus to false and then true to request focus again. A [`FocusRequest`](../guide/15-accessibility.md#move-focus-once) says the same thing directly: each `request()` raises the keyboard on its text field once, and on any other widget it moves the VoiceOver cursor there.
 
-## Home-screen, Lock Screen, and Control Center widgets
+## Home-screen, Lock Screen, StandBy, and Control Center widgets
 
-The [`home-widgets`](plugin-inventory.md) plugin publishes bounded snapshots and asks WidgetKit to reload timelines. Use `leptoskit_plugin_home_widgets::surfaces` for:
+Enable `leptoskit`'s `home-widgets` (or `mobile-surfaces`) feature, add `leptoskit_plugin_home_widgets` to your iOS host package, and list `"home-widgets"` in `native.plugins`.
 
-- **Lock Screen accessory widgets**: `SurfaceKind::LockScreenCircular`, `LockScreenRectangular`, and `LockScreenInline` with multi-entry `TimelineSchedule`s and `ReloadPolicy`.
-- **iOS 18+ Control Center controls**: `ControlCenterControl` (`ControlKind::Toggle` and `ControlKind::Button`) with SF Symbol names and interactive `WidgetAction` deep links.
+The [`home-widgets`](plugin-inventory.md) plugin stores bounded widget payloads in an App Group `UserDefaults` suite and triggers WidgetKit reloads:
 
-Your app still owns the Widget Extension target and its SwiftUI views. Share an App Group between the host and the extension so the extension can read the snapshot the plugin wrote; without that group, capability reports that the shared store is not ready. WidgetKit cannot say whether a kind is pinned, so `installed` always answers `Unknown`.
+- **Home, Lock Screen, and StandBy widgets:** `set` / `get` / `clear` single snapshots, `set_timeline` / `get_timeline` for multi-entry `TimelineSchedule`s (`SurfaceKind::HomeSmall` through `HomeExtraLarge`, `LockScreenCircular`, `LockScreenRectangular`, `LockScreenInline`, and `StandBy`), and `reload` (`WidgetCenter.shared.reloadTimelines` / `reloadAllTimelines`).
+- **iOS 18+ Control Center controls:** `set_control` / `get_control` (`ControlCenterControl` with `ControlKind::Toggle` or `ControlKind::Button`, SF Symbol names, and `WidgetAction` deep links) and `reload_controls` (`ControlCenter.shared.reloadControls` / `reloadAllControls`).
 
-For Dynamic Island layouts, `leptoskit_plugin_live_activities::island` models `DynamicIslandLayout` (compact leading/trailing, minimal, expanded regions, and `#RRGGBB` keyline tint) and `ActivitySchedule` (stale dates, relevance score, and push-to-start flag).
+Share an App Group between your app and Widget Extension and add its identifier under the `LeptosKitAppGroup` key in both targets' `Info.plist` files; `HomeWidgetsPlugin` reads `LeptosKitAppGroup` automatically so the extension and app read the same suite. In your SwiftUI Widget Extension or ControlWidget target, decode the published data with `LeptosKitWidgetStore`:
 
-## App Intents, Spotlight, Handoff, and iPadOS chrome
+```swift
+import LeptosKitHomeWidgets
+import WidgetKit
 
-`leptoskit_plugin_app_shortcuts::integrations` models Apple-native system integrations alongside launcher quick actions:
+// Inside your TimelineProvider:
+let snapshot = LeptosKitWidgetStore.readSnapshot(kind: "summary")
 
-- **App Intents & Siri Shortcuts**: `AppIntentDefinition` (title, short title, up to 8 voice phrases, SF Symbol, and deep link).
-- **CoreSpotlight search indexing**: `SpotlightItem` (domain, keywords, deep link, expiration).
-- **Handoff / Continuity**: `UserActivity` (`NSUserActivity` type, HTTPS webpage fallback, Handoff/Spotlight/Siri prediction flags).
-- **Incoming Share Extensions**: `IncomingShare` and `SharedAttachment` (bounded to 32 attachments).
-- **iOS & iPadOS chrome**: `StatusBarConfig`, `SheetDetent` (`Medium`, `Large`, `Fraction`), and `MultiSceneConfig` with `PencilPreference`.
+// Inside an iOS 18+ ControlValueProvider:
+let control = LeptosKitWidgetStore.readControl(id: "focus-mode")
+```
+
+Your app still owns the Widget Extension target and its SwiftUI views. Without an App Group, `capability` reports that the shared store is not ready and snapshots stay in standard defaults. WidgetKit cannot say whether a kind is pinned, so `installed` always answers `Unknown`.
+
+## Quick Actions, CoreSpotlight, Handoff, Share Extensions, and iPadOS chrome
+
+Enable `leptoskit`'s `app-shortcuts` (or `mobile-surfaces`) feature, add `leptoskit_plugin_app_shortcuts` to your iOS host package, and list `"app-shortcuts"` in `native.plugins`.
+
+The [`app-shortcuts`](plugin-inventory.md) plugin wires:
+
+- **Home-screen Quick Actions:** `set`, `clear`, and `consume_launch` for up to eight `UIApplicationShortcutItem` items.
+- **CoreSpotlight search indexing:** `index_spotlight` and `delete_spotlight` (`SpotlightItem` with domain, keywords, deep link, and expiration) backed by `CSSearchableIndex.default()`.
+- **Handoff and Continuity:** `start_user_activity` and `end_user_activity` (`UserActivity` with activity type, HTTPS webpage fallback, Handoff/Spotlight/Siri eligibility) backed by `NSUserActivity`.
+- **Incoming Share Extensions:** `consume_incoming_share` returns the next `IncomingShare` recorded by your Share Extension or app delegate through `AppShortcutsPlugin.shared?.noteIncomingShare(text:url:subject:)`.
+- **Typed Apple descriptors:** `AppIntentDefinition` (Siri / Shortcuts voice phrases), `StatusBarConfig`, `SheetDetent` (`Medium`, `Large`, `Fraction`), `MultiSceneConfig`, and `PencilPreference` live in `leptoskit::platform::app_shortcuts::integrations`.
 
 ## Menu bar and hardware keyboard commands
 
-On iPadOS (and iOS with a hardware keyboard or Mac Catalyst), UIKit exposes a system menu bar (`UIMenuBuilder`) and the Cmd-hold keyboard shortcut HUD (`UIKeyCommand`). Describe menu sections and shortcuts with `leptoskit_plugin_menu::ios`:
+On iPadOS (and iOS with a hardware keyboard or Mac Catalyst), UIKit exposes a system menu bar (`UIMenuBuilder`) and the Cmd-hold keyboard shortcut HUD (`UIKeyCommand`). Enable `leptoskit`'s `menu` (or `mobile-surfaces`) feature and describe menu sections and shortcuts with `leptoskit::platform::menu::ios`:
 
 ```rust
-use leptoskit_plugin_menu::Command;
-use leptoskit_plugin_menu::ios::IosMenuBar;
-use leptoskit_plugin_menu::ios::IosMenuPlacement;
-use leptoskit_plugin_menu::ios::IosMenuSection;
-use leptoskit_plugin_menu::ios::KeyCommand;
-use leptoskit_plugin_menu::ios::KeyModifier;
+use leptoskit::platform::menu::Command;
+use leptoskit::platform::menu::ios::IosMenuBar;
+use leptoskit::platform::menu::ios::IosMenuPlacement;
+use leptoskit::platform::menu::ios::IosMenuSection;
+use leptoskit::platform::menu::ios::KeyCommand;
+use leptoskit::platform::menu::ios::KeyModifier;
 
 let file_section = IosMenuSection::new(
 	"file.notes",
@@ -155,3 +245,46 @@ assert_eq!(menu_bar.sections().len(), 1);
 ```
 
 Placements map directly to UIKit's standard `UIMenu.Identifier` slots (`Application`, `File`, `Edit`, `Format`, `View`, `Window`, `Help`, or `Custom`). Duplicate shortcut chords are rejected before native installation.
+
+## Complete iOS and iPadOS capability map
+
+Query any capability at runtime with `leptoskit::target::Capability` and `PlatformCapabilities::for_platform(TargetPlatform::Ios)`, or inspect `Capability::ALL` (each item reports `has_builtin_plugin()`, `plugin_crate()`, `runtime_plugin_name()`, and `cargo_feature()`).
+
+### Built into leptoskit today
+
+| iOS / iPadOS feature                                    | Crate / `native.plugins` name                                                                 | What works today                                                                                                               |
+| ------------------------------------------------------- | --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| Live Activities, Dynamic Island & Push-to-Start         | `leptoskit_plugin_live_activities` (`live-activities`, feature `live-activities`)             | ActivityKit start/update/end, Dynamic Island slots, stale dates/relevance, APNs & iOS 17.2+ push-to-start tokens               |
+| Home, Lock Screen, StandBy & iOS 18+ Control Center     | `leptoskit_plugin_home_widgets` (`home-widgets`, feature `home-widgets`)                      | App Group `UserDefaults` snapshots, multi-entry timelines, Control Center states & `ControlCenter.shared.reloadControls`       |
+| Quick Actions, CoreSpotlight, Handoff & Incoming Shares | `leptoskit_plugin_app_shortcuts` (`app-shortcuts`, feature `app-shortcuts`)                   | `UIApplicationShortcutItem`, `CSSearchableIndex`, `NSUserActivity`, `noteIncomingShare`, plus App Intent & iPadOS descriptors  |
+| iPadOS / Catalyst Menu Bar & `UIKeyCommand` HUD         | `leptoskit_plugin_menu` (feature `menu`)                                                      | Validated `IosMenuBar`, `IosMenuSection`, `KeyCommand`, and `UIMenuBuilder` placement slots                                    |
+| Local & APNs Push Notifications, App Icon Badge         | `notifications`, `badge`                                                                      | `UNUserNotificationCenter`, APNs device-token enrollment, and icon badge counts (paired with [notifications](../guide/notifications/readme.md)) |
+| Passkeys, Sign in with Apple, Biometrics & Keychain     | `passkeys`, `web-auth`, `local-authentication`, `device-keys`, `secure-store`                 | `ASAuthorizationController`, `ASWebAuthenticationSession`, Face ID / Touch ID, Secure Enclave P-256 keys, and Keychain storage |
+| HealthKit, BLE, NFC & Apple Watch Companion             | `health`, `ble`, `nfc`, `watch-sync`, `wearable`                                              | HealthKit reads, CoreBluetooth GATT central, Core NFC NDEF reads, WatchConnectivity sync, and watchOS workout sensors          |
+| ARKit, 3D Scenes & Rive                                 | `xr`, `leptoskit` (`3d`, `rive`)                                                              | ARKit world/plane/depth tracking, Metal `Scene3d` overlays, and native Rive vector animations                                  |
+| Camera, Video, Audio, Background Recorder & Live Photos | `camera`, `video`, `video-thumbnails`, `audio`, `recorder`, `live-photo`                      | `AVCaptureSession`, `AVPlayer`, Core Audio engine, background `.m4a` recording, thumbnail extraction, and `PHLivePhotoView`    |
+| Maps, Photos, Contacts, Calendar, Files & System Sheets | `maps`, `media-library`, `image-picker`, `document-picker`, `contacts`, `calendar`, `sharing`, `print`, `sms`, `mail-composer`, `web-browser` | MapKit, PhotoKit, PHPicker, EventKit, CNContactStore, `UIActivityViewController`, AirPrint, MessageUI, and `SFSafariViewController` |
+| App Tracking Transparency, In-App Review & Capture      | `tracking-transparency`, `store-review`, `screen-capture`                                     | `ATTrackingManager`, `SKStoreReviewController`, and scene capture / screenshot observation                                     |
+| Background Tasks, Location, Motion & Device State       | `background`, `location`, `sensors`, `pedometer`, `battery`, `thermal`, `network`, `network-info`, `cellular`, `haptics`, `speech`, `keep-awake`, `brightness`, `screen-orientation` | `BGTaskScheduler`, CoreLocation (including visits & significant change), CoreMotion, TTS (`AVSpeechSynthesizer`), and haptics |
+| Over-the-air Wasm updates                               | `leptoskit_codepush` (feature `codepush`)                                                     | Signed, verified Wasm UI releases and rollback without a new App Store binary                                                  |
+
+### iOS capabilities not yet wired as built-in plugins
+
+These OS frameworks do not have a built-in leptoskit runtime plugin yet (`Capability::has_builtin_plugin()` returns `false`). To use them today, register your own Swift `NativePlugin` inside `ios/`:
+
+| iOS / iPadOS capability           | Native Apple framework                                 | Current status in leptoskit                                                                         |
+| --------------------------------- | ------------------------------------------------------ | --------------------------------------------------------------------------------------------------- |
+| In-App Purchases & Subscriptions  | `StoreKit` 2                                           | Not wired; implement in a host Swift plugin                                                         |
+| Apple Pay & Apple Wallet passes   | `PassKit`                                              | Not wired; implement in a host Swift plugin                                                         |
+| System VoIP calling UI            | `CallKit` / `PushKit`                                  | Not wired; implement in a host Swift plugin                                                         |
+| Camera document & barcode scanner | `VisionKit` (`DataScannerViewController`)              | Not wired (`camera` captures still images only)                                                     |
+| Live speech-to-text recognition   | `Speech` (`SFSpeechRecognizer`)                        | Not wired (`speech` is text-to-speech via `AVSpeechSynthesizer`)                                    |
+| Lock Screen Now Playing controls  | `MediaPlayer` (`MPNowPlayingInfoCenter`)               | Not wired (`audio` and `video` handle playback without remote transport controls)                   |
+| On-device AI / Core ML            | Foundation Models / `CoreML`                           | Not wired; call from a host Swift plugin                                                            |
+| App Clips & SharePlay             | App Clips / `GroupActivities`                          | Not wired; requires dedicated Xcode targets and host wiring                                         |
+| CloudKit & iCloud Key-Value Sync  | `CloudKit` / `NSUbiquitousKeyValueStore`               | Not wired; use `leptoskit::rpc` or a host Swift plugin                                              |
+| Screen Time & parental shields    | `FamilyControls` / `ManagedSettings` / `DeviceActivity`| Not wired (`app-usage` observes screen lock/unlock events only on iOS)                              |
+| Hardware app attestation          | `DeviceCheck` App Attest                               | `app-integrity` currently ships an `Unavailable` stub until live App Attest wiring lands            |
+| AirPlay routing & OS geofencing   | `AVRoutePickerView` / `CLMonitor`                      | Not wired (`location` covers fixes, continuous updates, visits, and significant change)             |
+| Video Picture-in-Picture entry    | `AVPictureInPictureController`                         | `picture-in-picture` reports capability only on iOS until attached-player PiP lands                 |
+

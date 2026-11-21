@@ -89,11 +89,53 @@ assert_eq!(badge, "Glance");
 
 ## Querying OS capabilities
 
-`PlatformCapabilities::for_platform(platform)` returns `CapabilitySupport::Supported`, `CapabilitySupport::Conditional`, or `CapabilitySupport::Unavailable` for each `Capability` variant:
+`PlatformCapabilities::for_platform(platform)` returns `CapabilitySupport::Supported`, `CapabilitySupport::Conditional`, or `CapabilitySupport::Unavailable` for every `Capability` variant, and `TargetPlatform::supports(capability)` checks whether a capability is available (`Supported` or `Conditional`):
 
-- `Supported`: first-class OS feature on that platform (for example, `Capability::IosMenuBar` on iOS, `Capability::AndroidQuickSettingsTiles` on Android, `Capability::AlwaysOnTopWindow` on macOS/Windows/Linux, `Capability::DigitalCrown` on watchOS/Wear OS).
-- `Conditional`: depends on the host, browser family, or OS version (for example, `Capability::ExtensionSidePanel` works on Chromium and Firefox but not Safari; `Capability::GlobalShortcuts` works on Linux X11 but not Wayland; `Capability::LiveActivities` on Android maps to Android 16+ Live Updates).
+- `Supported`: first-class OS feature on that platform (for example, `Capability::IosMenuBar` and `Capability::LiveActivities` on iOS, `Capability::AndroidQuickSettingsTiles` and `Capability::AndroidExactAlarms` on Android, `Capability::AlwaysOnTopWindow` on macOS/Windows/Linux, `Capability::DigitalCrown` on watchOS/Wear OS).
+- `Conditional`: depends on the host, browser family, or OS version (for example, `Capability::ExtensionSidePanel` works on Chromium and Firefox but not Safari; `Capability::GlobalShortcuts` works on Linux X11 but not Wayland; `Capability::LiveActivities` on Android maps to Android 16+ Live Updates with a standard progress-notification fallback on older Android).
 - `Unavailable`: the OS does not expose that concept.
+
+Every `Capability` entry in `Capability::ALL` also reports whether leptoskit ships a built-in crate/plugin for it or whether it currently requires host-supplied native code:
+
+```rust
+use leptoskit::target::Capability;
+use leptoskit::target::PlatformCapabilities;
+use leptoskit::target::TargetPlatform;
+
+let ios = PlatformCapabilities::for_platform(TargetPlatform::Ios);
+for cap in ios.available_capabilities() {
+	if cap.has_builtin_plugin() {
+		// cap.plugin_crate(), cap.runtime_plugin_name(), cap.cargo_feature()
+		let _ = (cap.as_str(), cap.plugin_crate(), cap.summary());
+	}
+}
+```
+
+Use `supported_capabilities()` to iterate strictly over `Supported` entries, or `available_capabilities()` to include `Conditional` ones. Unwired OS features such as `Capability::InAppPurchases`, `Capability::NativePayments`, `Capability::WalletPasses`, `Capability::VoipCalling`, `Capability::SpeechRecognition`, and `Capability::AppAttestation` honestly report `has_builtin_plugin() == false` and `plugin_crate() == None`.
+
+## Opting into platform integrations from `leptoskit`
+
+Your app crate can opt into mobile and desktop OS integrations directly through Cargo features on `leptoskit` and import them under `leptoskit::platform::*`:
+
+```toml
+[dependencies]
+# Pick individual features or the mobile-surfaces / desktop-extras bundles:
+leptoskit = { version = "0.3", features = ["mobile-surfaces"] }
+```
+
+| `leptoskit` Cargo feature | Re-exported module                        | Covers                                                                                   |
+| ------------------------- | ----------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `live-activities`         | `leptoskit::platform::live_activities`    | iOS ActivityKit Live Activities, Dynamic Island, push-to-start, Android 16+ Live Updates |
+| `home-widgets`            | `leptoskit::platform::home_widgets`       | Home, Lock Screen, StandBy, iOS 18+ Control Center, Android App Widgets & Quick Settings |
+| `app-shortcuts`           | `leptoskit::platform::app_shortcuts`      | Quick Actions, Launcher Shortcuts, CoreSpotlight, Handoff, incoming share intake         |
+| `android-intent`          | `leptoskit::platform::android_intent`     | Explicit/implicit Android Intents, choosers, broadcasts, and `intent:` URIs              |
+| `menu`                    | `leptoskit::platform::menu`               | Desktop menu bars, context menus, and iOS/iPadOS `UIMenuBuilder` / `UIKeyCommand`        |
+| `window-state`            | `leptoskit::platform::window_state`       | Window placement, floating/always-on-top overlays, custom chrome, background-only mode   |
+| `updater`                 | `leptoskit::platform::updater`            | Native desktop executable auto-updater hooks and feeds                                   |
+| `mobile-surfaces`         | Bundle                                    | Enables `live-activities`, `home-widgets`, `app-shortcuts`, `android-intent`, and `menu` |
+| `desktop-extras`          | Bundle                                    | Enables `menu`, `window-state`, and `updater`                                            |
+
+When you also enable `leptoskit/guest`, the `guest` bridge client feature forwards automatically to each enabled runtime plugin. Because native hosts intentionally discover runtime plugins only from direct Cargo dependencies for entitlement auditing, also add each runtime plugin crate to your platform host package and list its runtime name under `native.plugins` in `leptoskit.toml`.
 
 ## Swapping whole modules with `platform_module!`
 
@@ -109,8 +151,8 @@ Create `src/chrome.rs` as the shared fallback, and add any target overrides next
 
 | Platform family        | Guide                              | Key APIs                                                                                                                                                           |
 | ---------------------- | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| iOS & iPadOS           | [iOS](ios.md)                      | Menu bar (`leptoskit_plugin_menu::ios`), Live Activities & Dynamic Island, WidgetKit & Control Center, App Intents & Spotlight, Handoff                            |
-| Android                | [Android](android.md)              | Quick Settings tiles, App Widgets, Intents, Bubbles, Material You, Picture-in-Picture & overlay windows, Live Updates                                              |
+| iOS & iPadOS           | [iOS](ios.md)                      | Menu bar (`leptoskit::platform::menu::ios`), Live Activities & Dynamic Island, WidgetKit & Control Center, Quick Actions, CoreSpotlight, Handoff, incoming shares  |
+| Android                | [Android](android.md)              | App Widgets & timelines, Quick Settings tiles, Android 16+ Live Updates, Intents, incoming shares, exact alarms, Picture-in-Picture & overlays, foldables          |
 | watchOS & Wear OS      | [Watch UIs](watch.md)              | Pages, tiles, glances, complications, Digital Crown / rotary input, Always-On Display, workouts, companion sync                                                    |
 | macOS, Windows & Linux | [Electron concepts](electron.md)   | Native menus & context menus, system tray, always-on-top overlays, frameless/vibrancy windows, menu-bar/background-only mode, auto-updater                         |
 | Browser extensions     | [Browser extensions](extension.md) | Browser detection (`Chrome`, `Edge`, `Brave`, `Opera`, `Arc`, `Vivaldi`, `Firefox`, `Safari`), side panel / sidebar, windows, offscreen, omnibox, native messaging |

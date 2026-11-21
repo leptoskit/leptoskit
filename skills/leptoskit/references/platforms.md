@@ -37,10 +37,15 @@ pub fn screen() -> Element {
 Helpers in `leptoskit::target`:
 
 - `TargetPlatform`: `Web`, `Extension`, `Ios`, `Android`, `Macos`, `Windows`, `Linux`, `Harmonyos`, `Wearos`, `Watchos`, `Quest`, `Tui`, `Server`, `Shared`.
-- `PlatformCapabilities::for_platform(p)` and `caps.is_supported(Capability::…)` / `caps.is_available(Capability::…)`: query platform support without hand-rolled `#[cfg]` trees.
+- `PlatformCapabilities::for_platform(p)`, `p.supports(cap)`, `caps.is_supported(cap)`, `caps.is_available(cap)`, `caps.supported_capabilities()`, `caps.available_capabilities()`: query platform support without hand-rolled `#[cfg]` trees.
+- `Capability::ALL`, `cap.as_str()`, `cap.has_builtin_plugin()`, `cap.plugin_crate()`, `cap.runtime_plugin_name()`, `cap.cargo_feature()`, `cap.summary()`: inspect what leptoskit wires natively vs. what requires host-supplied native code.
 - `on_ios`, `on_android`, `on_mobile`, `on_macos`, `on_windows`, `on_linux`, `on_desktop`, `on_apple`, `on_watch`, `on_extension`, `on_web`, `with_platform`: ergonomic conditional and testing helpers.
 - `leptoskit::platform_module!`: load separate module files per platform (`foo.ios.rs`, `foo.android.rs`, `foo.extension.rs`, …) when implementations diverge.
 - Build scripts: `leptoskit_build::platforms()` inspects the crate's platform Cargo features (`web`, `ios`, `android`, `macos`, `windows`, `linux`, `harmonyos`, `wearos`, `watchos`, `quest`, `tui`, `extension`) and sets `LEPTOSKIT_PLATFORM` for both `platform_module!` and `TargetPlatform::current()`.
+
+## Opting in through `leptoskit` Cargo features
+
+Enable individual features (`live-activities`, `home-widgets`, `app-shortcuts`, `android-intent`, `menu`, `window-state`, `updater`) or bundles (`mobile-surfaces`, `desktop-extras`) on `leptoskit` to import from `leptoskit::platform::*`. Enabling `leptoskit/guest` forwards `guest` to each enabled runtime plugin. For native host auto-registration, also add each runtime plugin crate as a direct dependency of the platform host package and list its runtime name under `native.plugins` in `leptoskit.toml`.
 
 ## iOS and iPadOS
 
@@ -48,56 +53,59 @@ Enable plugins in `leptoskit.toml` under `[native] plugins = [...]` or through h
 
 | Capability | Plugin / API | Notes |
 | --- | --- | --- |
-| Live Activities & Dynamic Island | `leptoskit_plugin_live_activities` (`live-activities`) | ActivityKit `start`/`update`/`end`, push tokens, `DynamicIslandLayout` (`compact`, `minimal`, `expanded`), `ActivitySchedule` (`stale_after_seconds`, `relevance_score`, `allow_push_to_start`). Requires `NSSupportsLiveActivities`, a Widget Extension rendering `LeptosKitLiveActivityAttributes`, and Push Notifications for APNs updates. |
-| Home, Lock Screen, StandBy & Control Center widgets | `leptoskit_plugin_home_widgets` (`home-widgets`) | Publishes bounded snapshots into shared `UserDefaults(suiteName:)` and reloads `WidgetCenter`. Multi-entry `TimelineSchedule` and iOS 18+ `ControlCenterControl` helpers live in `leptoskit_plugin_home_widgets::surfaces`. App supplies the WidgetKit extension target and App Group. |
-| iPadOS / Catalyst menu bar & shortcuts | `leptoskit_plugin_menu` (`ios::IosMenuBar`) | `MenuBar`, `Submenu`, `Command`, `Check`, `RadioGroup`, `StandardRole`, `ContextMenu`, and `UIMenuBuilder` / `UIKeyCommand` descriptors. |
-| Quick Actions, CoreSpotlight, Handoff & Share | `leptoskit_plugin_app_shortcuts` (`app-shortcuts`) | Dynamic `UIApplicationShortcutItem` quick actions (`set`/`clear`/`consume_launch`), plus `SpotlightItem`, `UserActivity` (Handoff), `IncomingShare`, and `AppIntentDefinition` in `integrations`. |
+| Live Activities & Dynamic Island | `leptoskit::platform::live_activities` / `leptoskit_plugin_live_activities` (`live-activities`) | ActivityKit `start`/`update`/`end`/`list`, `DynamicIslandLayout` via `ContentState::with_dynamic_island`, `start_scheduled`/`update_scheduled` (`ActivitySchedule`), `wait_push_token`, and iOS 17.2+ `wait_push_to_start_token`. Requires `NSSupportsLiveActivities`, a Widget Extension rendering `LeptosKitLiveActivityAttributes`, and Push Notifications for APNs updates. |
+| Home, Lock Screen, StandBy & Control Center widgets | `leptoskit::platform::home_widgets` / `leptoskit_plugin_home_widgets` (`home-widgets`) | `set`/`get`/`clear`/`reload`, `set_timeline`/`get_timeline` (`TimelineSchedule`), and iOS 18+ `set_control`/`get_control`/`reload_controls` (`ControlCenterControl`). Reads `LeptosKitAppGroup` from `Info.plist` automatically; Swift extensions decode via `LeptosKitWidgetStore.readSnapshot` / `readControl`. |
+| iPadOS / Catalyst menu bar & shortcuts | `leptoskit::platform::menu::ios` / `leptoskit_plugin_menu` (`ios::IosMenuBar`) | `MenuBar`, `Submenu`, `Command`, `Check`, `Radio`, `Role`, `MenuRole`, `ContextMenu`, and `UIMenuBuilder` / `UIKeyCommand` descriptors. |
+| Quick Actions, CoreSpotlight, Handoff & Share | `leptoskit::platform::app_shortcuts` / `leptoskit_plugin_app_shortcuts` (`app-shortcuts`) | `UIApplicationShortcutItem` (`set`/`clear`/`consume_launch`), `CoreSpotlight` (`index_spotlight`/`delete_spotlight`), `NSUserActivity` Handoff (`start_user_activity`/`end_user_activity`), `consume_incoming_share` (via `noteIncomingShare`), plus `AppIntentDefinition`, `MultiSceneConfig`, `PencilPreference` in `integrations`. |
 | Sign-in, Passkeys & Hardware Keys | `passkeys`, `web-auth`, `device-keys`, `local-authentication` | `ASAuthorizationController`, Face ID / Touch ID, Secure Enclave keys. |
 | Health, BLE, NFC, Watch & XR | `health`, `ble`, `nfc`, `watch-sync`, `wearable`, `xr` | HealthKit, CoreBluetooth, CoreNFC NDEF read, WatchConnectivity, ARKit + `Scene3d`. |
 | Media, Camera, Live Photo & Maps | `camera`, `video`, `audio`, `recorder`, `live-photo`, `maps`, `sharing` | `AVCaptureSession`, `AVPlayer`, Core Audio, Live Photos, MapKit, `UIActivityViewController`. |
-| Privacy, Store Review & Push | `tracking-transparency`, `store-review`, `push`, `local-notifications`, `badge` | ATT prompt, `SKStoreReviewController`, APNs enrollment, `UNUserNotificationCenter`, icon badge. |
+| Privacy, Store Review, Screen Capture & Push | `tracking-transparency`, `store-review`, `screen-capture`, `notifications`, `badge` | ATT prompt, `SKStoreReviewController`, capture observation, APNs enrollment & local notifications, icon badge. |
 
 ### iOS capabilities not yet wired as native plugins
 
-Do not assume a built-in leptoskit plugin exists for these yet — use a host-registered Swift plugin or native code:
+`Capability::has_builtin_plugin()` returns `false` for these — use a host-registered Swift `NativePlugin`:
 
 - StoreKit 2 in-app purchases & subscriptions
 - Apple Pay (`PassKit`) & Apple Wallet passes
-- CallKit VoIP calling UI
+- CallKit / PushKit VoIP calling UI
 - VisionKit document / barcode / Live Text scanner
-- `SFSpeechRecognizer` speech-to-text & `MPNowPlayingInfoCenter` media controls
-- Apple Intelligence / Foundation Models on-device inference
-- App Clips, SharePlay (`GroupActivities`), CloudKit / iCloud Key-Value Sync
-- `BGTaskScheduler` Apple background refresh (Android has `android_alarm_manager`; `background_task` is host-provided)
+- `SFSpeechRecognizer` speech-to-text (`speech` is TTS only) & `MPNowPlayingInfoCenter` media controls
+- Apple Intelligence / Foundation Models / Core ML on-device inference
+- App Clips, SharePlay (`GroupActivities`), CloudKit / iCloud Key-Value Sync, AirPlay, `CLMonitor` geofencing, FamilyControls / Screen Time shields
+- Live App Attest (`app-integrity` currently ships an `Unavailable` stub)
+- Periodic `background-task` (returns `Unavailable` on Apple until declared `BGTaskScheduler` IDs land; use `background` for basic iOS background tasks)
 
 ## Android
 
 | Capability | Plugin / API | Notes |
 | --- | --- | --- |
-| App Widgets, Glance & Quick Settings tiles | `leptoskit_plugin_home_widgets` (`home-widgets`) | Persists snapshots in `SharedPreferences`, triggers `APPWIDGET_UPDATE`, supports `TimelineSchedule` and `QuickSettingsTile` metadata. App supplies the `AppWidgetProvider` / Glance receiver or `TileService`. |
-| Android 16+ Live Updates & ongoing notifications | `leptoskit_plugin_live_activities` (`live-activities`) | Progress-centric ongoing notifications (`AndroidLiveUpdate` / `Notification.ProgressStyle` on API 36+, standard ongoing progress notification fallback on older Android). |
-| Intents & Exact Background Alarms | `leptoskit_plugin_android_intent` (`android_intent`), `android_alarm_manager` | Launch/broadcast/resolve intents; exact alarms that can wake the guest headlessly for up to 8 seconds. |
+| App Widgets, Glance & Quick Settings tiles | `leptoskit::platform::home_widgets` / `leptoskit_plugin_home_widgets` (`home-widgets`) | `set`/`get`/`clear`/`reload`/`installed`, `set_timeline`/`get_timeline`, and `set_quick_tile`/`get_quick_tile` (`QuickSettingsTile`). Kotlin `AppWidgetProvider` / Glance / `TileService` subclasses read via `HomeWidgetsPlugin.readSnapshot` / `readQuickTile`. |
+| Android 16+ Live Updates & ongoing notifications | `leptoskit::platform::live_activities` / `leptoskit_plugin_live_activities` (`live-activities`) | `post_android_live_update` / `end_android_live_update`: API 36 `Notification.ProgressStyle` + promoted ongoing chip with automatic standard ongoing progress notification fallback on API < 36. |
+| Intents & Exact Background Alarms | `leptoskit::platform::android_intent` (`android_intent`), `android_alarm_manager` | Launch/broadcast/resolve intents; exact/wakeup/reboot alarms that can wake the guest headlessly for up to 8 seconds (without code push). |
 | PiP, Draw Over Apps & Foldables | `picture-in-picture`, `posture` | Activity PiP, `SYSTEM_ALERT_WINDOW` system overlay, Jetpack WindowManager folding posture. |
-| Shortcuts, Badges, Shares & NFC | `app-shortcuts`, `badge`, `nfc`, `sharing` | `ShortcutManagerCompat` pinned/dynamic shortcuts, incoming `ACTION_SEND` share payloads, NDEF reads. |
-| Health, BLE, Wearables, Security & Device Policy | `health`, `ble`, `wearable`, `watch-sync`, `device-keys`, `passkeys`, `local-authentication`, `device-policy`, `app-usage` | Health Connect, Android BLE, Wear OS Data Layer, StrongBox, Credential Manager, Device Admin, UsageStatsManager. |
+| Shortcuts, Incoming Shares, Badges & NFC | `leptoskit::platform::app_shortcuts` (`app-shortcuts`), `badge`, `nfc`, `sharing` | Dynamic `ShortcutManager` shortcuts, automatic incoming `ACTION_SEND` share capture (`consume_incoming_share`), NDEF reads, badges. |
+| Health, BLE, Wearables, Security, MDM & Capture | `health`, `ble`, `wearable`, `watch-sync`, `device-keys`, `passkeys`, `local-authentication`, `device-policy`, `app-usage`, `screen-capture`, `store-review`, `background`, `background-task` | Health Connect, Android BLE, Wear OS Data Layer, StrongBox, Credential Manager, Device Admin, UsageStatsManager, `FLAG_SECURE`, WorkManager. |
 | Media, Camera, Maps & ARCore | `camera`, `video`, `audio`, `recorder`, `maps`, `xr` | CameraX, Media3, OpenGL ES/Vulkan `Scene3d` + ARCore, Google Maps. |
 
 ### Android capabilities not yet wired as native plugins
 
-Do not assume a built-in leptoskit plugin exists for these yet:
+`Capability::has_builtin_plugin()` returns `false` for these (or only typed descriptors exist):
 
-- Google Play Billing (in-app purchases & subscriptions) and Google Play In-App Updates
+- Google Play Billing (in-app purchases & subscriptions) and Google Play In-App Updates (`AppUpdateManager`)
 - Google Pay & Google Wallet passes
-- `MediaSession` / media notification controls
-- ML Kit barcode & document scanner, `SpeechRecognizer`
-- Android Auto / Automotive OS templates, Gemini Nano (`AICore`) on-device inference
-- Live Play Integrity attestation backend (`app-integrity` currently needs a host-supplied backend)
+- `MediaSession` / lock-screen media transport controls
+- ML Kit barcode & document scanner, `SpeechRecognizer` (`speech` is TTS only)
+- Posting `Notification.BubbleMetadata` & Material You dynamic theme extraction (typed `BubbleConfig` / `DynamicColorRole` descriptors exist in `app-shortcuts`)
+- Jetpack `AppSearch` (`index_spotlight` returns `Unavailable` on Android), `GeofencingClient`, Google Cast, `ConnectionService` VoIP
+- Predictive back swipe animations beyond `OnBackInvokedCallback` routing, Android Auto, Gemini Nano (`AICore`), Play Instant, Cloud Backup
+- Live Play Integrity attestation (`app-integrity` currently ships an `Unavailable` stub)
 
 ## Desktop (macOS, Windows, Linux)
 
-- **Windowing & background apps:** `leptoskit_plugin_window_state::desktop` (`WindowOptions`, `WindowLevel`, `WindowChrome`, `VibrancyMaterial`, `CloseBehavior`, `ActivationPolicy`, `TaskbarProgress`, `DockAttention`, `WindowController`), `NativeMode::Background`, and `[native.window]` in `leptoskit.toml`.
-- **Menus & context menus:** `leptoskit_plugin_menu` (`MenuBar`, `Submenu`, `Command`, `Check`, `Radio`, `Role`, `MenuRole`, `ContextMenu`).
-- **Auto-updates:** `leptoskit_plugin_updater` (`Updater`, `FeedBackend`, `ReleaseManifest`, `UpdateChannel`, `UpdatePolicy`).
+- **Windowing & background apps:** `leptoskit::platform::window_state::desktop` (`WindowOptions`, `WindowLevel`, `WindowChrome`, `VibrancyMaterial`, `CloseBehavior`, `ActivationPolicy`, `TaskbarProgress`, `DockAttention`, `WindowController`), `NativeMode::Background`, and `[native.window]` in `leptoskit.toml`.
+- **Menus & context menus:** `leptoskit::platform::menu` (`MenuBar`, `Submenu`, `Command`, `Check`, `Radio`, `Role`, `MenuRole`, `ContextMenu`).
+- **Auto-updates:** `leptoskit::platform::updater` (`Updater`, `FeedBackend`, `ReleaseManifest`, `UpdateChannel`, `UpdatePolicy`).
 - **Tray, lifecycle & system hooks:** `tray`, `single_instance`, `power_monitor`, `deep_link`, `shell`, `dialog`, `clipboard`, `notifications`.
 
 ## Watches (watchOS, Wear OS, HarmonyOS)
