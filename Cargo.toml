@@ -294,6 +294,7 @@ leptoskit_native = { path = "crates/leptoskit_native", version = "0.3.0" }
 leptoskit_notifications = { path = "crates/leptoskit_notifications", version = "0.3.0" }
 leptoskit_platform = { path = "crates/leptoskit_platform", version = "0.3.0" }
 leptoskit_platform_harmonyos = { path = "crates/leptoskit_platform_harmonyos", version = "0.3.0" }
+leptoskit_platform_horizon = { path = "crates/leptoskit_platform_horizon", version = "0.3.0" }
 leptoskit_platform_oculus = { path = "crates/leptoskit_platform_oculus", version = "0.3.0" }
 leptoskit_plugin = { path = "crates/leptoskit_plugin", version = "0.3.0" }
 leptoskit_plugin_accelerometer = { path = "crates/leptoskit_plugin_accelerometer", version = "0.3.0" }

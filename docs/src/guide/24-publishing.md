@@ -186,7 +186,7 @@ An upload:
 2. prepares the Quest host and builds the release APK with Gradle (`assembleRelease`), passing the keystore values only to that Gradle invocation, and copies the APK to `.leptoskit/publish/quest/app-release.apk`;
 3. invokes `ovr-platform-util upload-quest-build` (or the executable set in `LEPTOSKIT_OVR_PLATFORM_UTIL`) with `-a`, `-s` / `-t`, `--apk`, `-c`, `--age-group` (mapped to `TEENS_AND_ADULTS`, `MIXED_AGES`, or `CHILDREN`), `-n` (from `store/en-US/release_notes.md`), and `--draft` unless `--submit` is passed with `age_group` set and `draft = false`. Secret values are redacted from error output if the command fails.
 
-`ovr-platform-util` uploads the binary and release notes only. Store listing copy, cover art, Data Use Checkup, age ratings, and submitting a build for Meta Horizon Store / VRC review stay in the [Meta Horizon Developer Dashboard](https://developers.meta.com/horizon/manage/); every run prints the remaining steps for your app. See [Meta Quest](../platforms/quest.md) for headset builds.
+`ovr-platform-util` uploads the binary and release notes only. Store listing copy, cover art, Data Use Checkup, age ratings, and submitting a build for Meta Horizon Store / VRC review stay in the [Meta Horizon Developer Dashboard](https://developers.meta.com/horizon/manage/); every run prints the remaining steps for your app. See [Meta Quest](../platforms/quest.md) for headset builds and [Meta Horizon extension](../platforms/horizon.md) for Horizon Worlds TypeScript UI and MHCP web-zip submissions.
 
 ## A notarized macOS download
 
