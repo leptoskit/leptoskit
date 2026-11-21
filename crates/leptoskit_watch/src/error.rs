@@ -53,4 +53,8 @@ pub enum WatchError {
 	/// A balanced sampling policy interval must be positive.
 	#[error("wearable sampling interval must be greater than zero seconds")]
 	InvalidInterval,
+	/// An invalid configuration or lifecycle transition (for example workout
+	/// state, rotary bounds, or companion payload size).
+	#[error("{0}")]
+	InvalidState(String),
 }
