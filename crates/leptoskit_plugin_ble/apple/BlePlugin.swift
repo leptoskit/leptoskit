@@ -214,7 +214,7 @@ extension BlePlugin: CBCentralManagerDelegate, CBPeripheralDelegate {
         let services = (advertisementData[CBAdvertisementDataServiceUUIDsKey] as? [CBUUID])?
             .map { $0.uuidString.lowercased() } ?? []
         let rssi = RSSI.intValue
-        Task { @MainActor in
+        MainActor.assumeIsolated {
             self.discovered[peripheral.identifier] = (peripheral, rssi, services)
         }
     }
@@ -229,7 +229,7 @@ extension BlePlugin: CBCentralManagerDelegate, CBPeripheralDelegate {
         error: Error?
     ) {
         let id = peripheral.identifier
-        Task { @MainActor in
+        MainActor.assumeIsolated {
             self.connectWaiters.removeValue(forKey: id)?.resume(throwing: PluginError.native)
         }
     }
@@ -237,7 +237,7 @@ extension BlePlugin: CBCentralManagerDelegate, CBPeripheralDelegate {
     public nonisolated func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
         let id = peripheral.identifier
         if error != nil {
-            Task { @MainActor in
+            MainActor.assumeIsolated {
                 self.connectWaiters.removeValue(forKey: id)?.resume(throwing: PluginError.native)
             }
             return
@@ -245,7 +245,7 @@ extension BlePlugin: CBCentralManagerDelegate, CBPeripheralDelegate {
         for service in peripheral.services ?? [] {
             peripheral.discoverCharacteristics(nil, for: service)
         }
-        Task { @MainActor in
+        MainActor.assumeIsolated {
             self.connected[id] = peripheral
             self.connectWaiters.removeValue(forKey: id)?.resume()
         }
@@ -260,7 +260,7 @@ extension BlePlugin: CBCentralManagerDelegate, CBPeripheralDelegate {
         let devId = peripheral.identifier.uuidString
         let serviceId = characteristic.service?.uuid.uuidString.lowercased() ?? ""
         let charId = characteristic.uuid.uuidString.lowercased()
-        Task { @MainActor in
+        MainActor.assumeIsolated {
             self.enqueue(deviceId: devId, service: serviceId, charUuid: charId, value: value)
         }
     }
@@ -275,17 +275,19 @@ private struct WireReader {
 
     mutating func u32() throws -> UInt32 {
         guard bytes.count - pos >= 4 else { throw PluginError.invalidArgument }
-        defer { pos += 4 }
+        let offset = pos
+        pos += 4
         return bytes.withUnsafeBytes {
-            UInt32(littleEndian: $0.loadUnaligned(fromByteOffset: pos, as: UInt32.self))
+            UInt32(littleEndian: $0.loadUnaligned(fromByteOffset: offset, as: UInt32.self))
         }
     }
 
     mutating func string() throws -> String {
         let len = Int(try u32())
         guard len >= 0, bytes.count - pos >= len else { throw PluginError.invalidArgument }
-        defer { pos += len }
-        guard let text = String(bytes: bytes[pos..<(pos + len)], encoding: .utf8) else {
+        let start = pos
+        pos += len
+        guard let text = String(bytes: bytes[start..<(start + len)], encoding: .utf8) else {
             throw PluginError.invalidArgument
         }
         return text

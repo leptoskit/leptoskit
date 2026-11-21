@@ -18,14 +18,17 @@ import androidx.health.services.client.data.DataType
 import androidx.health.services.client.data.DeltaDataType
 import androidx.health.services.client.data.PassiveListenerConfig
 import androidx.health.services.client.data.SampleDataPoint
+import com.google.common.util.concurrent.ListenableFuture
 import dev.leptoskit.bridge.NativePlugin
 import dev.leptoskit.bridge.PluginException
 import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.guava.await
+import kotlinx.coroutines.suspendCancellableCoroutine
 import java.io.ByteArrayOutputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.ArrayDeque
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 
 /**
  * Direct on-watch biometric sensor plugin for Wear OS devices (Pixel Watch,
@@ -235,7 +238,11 @@ class WearablePlugin(
     private suspend fun stopPassive(): ByteArray {
         if (passiveRunning) {
             runCatching {
-                HealthServices.getClient(context).passiveMonitoringClient.clearPassiveListenerCallbackAsync().await()
+                HealthServices
+                    .getClient(context)
+                    .passiveMonitoringClient
+                    .clearPassiveListenerCallbackAsync()
+                    .awaitResult()
             }
             passiveRunning = false
         }
@@ -247,7 +254,7 @@ class WearablePlugin(
         if (buf.remaining() != 12) throw PluginException(PluginException.INVALID_ARGUMENT)
         val mask = buf.int
         val intervalMs = buf.int
-        val _activity = buf.int
+        buf.int // activity hint
         if (mask == 0 || intervalMs < 200) throw PluginException(PluginException.INVALID_ARGUMENT)
 
         val delayUs = intervalMs * 1000
@@ -282,7 +289,7 @@ class WearablePlugin(
             runCatching {
                 HealthServices.getClient(context).measureClient
                     .unregisterMeasureCallbackAsync(DataType.HEART_RATE_BPM, measureCallback)
-                    .await()
+                    .awaitResult()
             }
         }
         liveRunning = false
@@ -411,3 +418,19 @@ class WearablePlugin(
                 .array()
     }
 }
+
+private suspend fun <T> ListenableFuture<T>.awaitResult(): T =
+    suspendCancellableCoroutine { cont ->
+        addListener(
+            {
+                if (!cont.isActive) return@addListener
+                try {
+                    cont.resume(get())
+                } catch (error: Throwable) {
+                    cont.resumeWithException(error)
+                }
+            },
+            { command -> command.run() },
+        )
+        cont.invokeOnCancellation { cancel(false) }
+    }

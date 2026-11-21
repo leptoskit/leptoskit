@@ -196,17 +196,19 @@ private struct WireReader {
 
     mutating func u32() throws -> UInt32 {
         guard bytes.count - pos >= 4 else { throw PluginError.invalidArgument }
-        defer { pos += 4 }
+        let offset = pos
+        pos += 4
         return bytes.withUnsafeBytes {
-            UInt32(littleEndian: $0.loadUnaligned(fromByteOffset: pos, as: UInt32.self))
+            UInt32(littleEndian: $0.loadUnaligned(fromByteOffset: offset, as: UInt32.self))
         }
     }
 
     mutating func bytes() throws -> Data {
         let len = Int(try u32())
         guard len >= 0, bytes.count - pos >= len else { throw PluginError.invalidArgument }
-        defer { pos += len }
-        return Data(bytes[pos..<(pos + len)])
+        let start = pos
+        pos += len
+        return Data(bytes[start..<(start + len)])
     }
 
     mutating func string() throws -> String {

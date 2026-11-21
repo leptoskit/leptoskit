@@ -269,12 +269,7 @@ public final class HealthPlugin: NativePlugin {
         case HealthWire.steps: .stepCount
         case HealthWire.oxygenSaturation: .oxygenSaturation
         case HealthWire.respiratoryRate: .respiratoryRate
-        case HealthWire.skinTemperature:
-            if #available(iOS 16.0, watchOS 9.0, *) {
-                .appleSleepingWristTemperature
-            } else {
-                .bodyTemperature
-            }
+        case HealthWire.skinTemperature: .appleSleepingWristTemperature
         case HealthWire.activeCalories: .activeEnergyBurned
         case HealthWire.distance: .distanceWalkingRunning
         case HealthWire.floorsClimbed: .flightsClimbed
