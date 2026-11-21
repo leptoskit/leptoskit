@@ -202,10 +202,10 @@ public final class BlePlugin: NSObject, NativePlugin {
 }
 
 #if canImport(CoreBluetooth)
-extension BlePlugin: CBCentralManagerDelegate, CBPeripheralDelegate {
-    public nonisolated func centralManagerDidUpdateState(_ central: CBCentralManager) {}
+extension BlePlugin: @preconcurrency CBCentralManagerDelegate, @preconcurrency CBPeripheralDelegate {
+    public func centralManagerDidUpdateState(_ central: CBCentralManager) {}
 
-    public nonisolated func centralManager(
+    public func centralManager(
         _ central: CBCentralManager,
         didDiscover peripheral: CBPeripheral,
         advertisementData: [String: Any],
@@ -213,45 +213,35 @@ extension BlePlugin: CBCentralManagerDelegate, CBPeripheralDelegate {
     ) {
         let services = (advertisementData[CBAdvertisementDataServiceUUIDsKey] as? [CBUUID])?
             .map { $0.uuidString.lowercased() } ?? []
-        let rssi = RSSI.intValue
-        MainActor.assumeIsolated {
-            self.discovered[peripheral.identifier] = (peripheral, rssi, services)
-        }
+        discovered[peripheral.identifier] = (peripheral, RSSI.intValue, services)
     }
 
-    public nonisolated func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
+    public func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
         peripheral.discoverServices(nil)
     }
 
-    public nonisolated func centralManager(
+    public func centralManager(
         _ central: CBCentralManager,
         didFailToConnect peripheral: CBPeripheral,
         error: Error?
     ) {
-        let id = peripheral.identifier
-        MainActor.assumeIsolated {
-            self.connectWaiters.removeValue(forKey: id)?.resume(throwing: PluginError.native)
-        }
+        connectWaiters.removeValue(forKey: peripheral.identifier)?.resume(throwing: PluginError.native)
     }
 
-    public nonisolated func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
+    public func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
         let id = peripheral.identifier
         if error != nil {
-            MainActor.assumeIsolated {
-                self.connectWaiters.removeValue(forKey: id)?.resume(throwing: PluginError.native)
-            }
+            connectWaiters.removeValue(forKey: id)?.resume(throwing: PluginError.native)
             return
         }
         for service in peripheral.services ?? [] {
             peripheral.discoverCharacteristics(nil, for: service)
         }
-        MainActor.assumeIsolated {
-            self.connected[id] = peripheral
-            self.connectWaiters.removeValue(forKey: id)?.resume()
-        }
+        connected[id] = peripheral
+        connectWaiters.removeValue(forKey: id)?.resume()
     }
 
-    public nonisolated func peripheral(
+    public func peripheral(
         _ peripheral: CBPeripheral,
         didUpdateValueFor characteristic: CBCharacteristic,
         error: Error?
@@ -260,9 +250,7 @@ extension BlePlugin: CBCentralManagerDelegate, CBPeripheralDelegate {
         let devId = peripheral.identifier.uuidString
         let serviceId = characteristic.service?.uuid.uuidString.lowercased() ?? ""
         let charId = characteristic.uuid.uuidString.lowercased()
-        MainActor.assumeIsolated {
-            self.enqueue(deviceId: devId, service: serviceId, charUuid: charId, value: value)
-        }
+        enqueue(deviceId: devId, service: serviceId, charUuid: charId, value: value)
     }
 }
 #endif
