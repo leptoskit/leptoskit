@@ -19,6 +19,17 @@ use leptoskit_bridge::MethodId;
 use leptoskit_bridge::codec::Decoder;
 use leptoskit_bridge::codec::Encoder;
 
+pub mod surfaces;
+pub use surfaces::ControlCenterControl;
+pub use surfaces::ControlKind;
+pub use surfaces::QuickSettingsTile;
+pub use surfaces::ReloadPolicy;
+pub use surfaces::SurfaceKind;
+pub use surfaces::TileState;
+pub use surfaces::TimelineEntry;
+pub use surfaces::TimelineSchedule;
+pub use surfaces::WidgetAction;
+
 /// Stable native registration name.
 pub const NAME: &str = "home-widgets";
 /// Empty payload; four-byte [`Capability`] flags.

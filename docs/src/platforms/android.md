@@ -99,9 +99,15 @@ cd android
 - [Android intents](#android-intents) (`android_intent`) launch, broadcast, and resolve arbitrary intents with typed extras. Other platforms return `Unavailable`.
 - [Device policy](plugins.md#notes-on-specific-plugins) (`device-policy`) can lock the screen, set password rules, disable the camera, or wipe the device after the user enables an app-owned device-admin receiver. Status never prompts. Your `AndroidManifest.xml` must declare `DevicePolicyReceiver` with `BIND_DEVICE_ADMIN`, and `res/xml/device_admin.xml` must list only the policies you call. Google Play restricts Device Admin for many consumer apps; wipe in particular needs a clear enterprise reason.
 
-## Home-screen widgets
+## Home-screen widgets, Quick Settings tiles, and Live Updates
 
-The [`home-widgets`](plugin-inventory.md) plugin publishes a bounded text snapshot into app-private preferences and asks `AppWidgetManager` to refresh the app's own App Widget providers. Your app still owns each `AppWidgetProvider` and its layout. Kind-to-provider matching is best-effort by class name; name providers after their kinds when you need a precise reload. `installed` reports whether any matching provider currently has pinned instances, and returns none when no provider class name matches the kind. Snapshot URLs must be HTTP(S) or an app deep-link scheme (`javascript:`, `data:`, `file:`, `blob:`, and `vbscript:` are rejected).
+The [`home-widgets`](plugin-inventory.md) plugin publishes bounded snapshots into app-private preferences and asks `AppWidgetManager` to refresh the app's own App Widget providers. Your app still owns each `AppWidgetProvider` (or Jetpack Glance receiver) and its layout. Kind-to-provider matching is best-effort by class name; name providers after their kinds when you need a precise reload. `installed` reports whether any matching provider currently has pinned instances, and returns none when no provider class name matches the kind. Snapshot URLs must be HTTP(S) or an app deep-link scheme (`javascript:`, `data:`, `file:`, `blob:`, and `vbscript:` are rejected).
+
+Additional Android-native surfaces live in the same plugin family:
+
+- **Quick Settings tiles** (`leptoskit_plugin_home_widgets::surfaces::QuickSettingsTile`): model `TileState::Active`, `Inactive`, and `Unavailable` with label, subtitle, icon resource, and tap action for `android.service.quicksettings.TileService`.
+- **Android 16+ Live Updates** (`leptoskit_plugin_live_activities::island::AndroidLiveUpdate`): model `Notification.ProgressStyle` progress bars, colored `ProgressSegment`s, and short status-bar critical chips alongside iOS Live Activities.
+- **App Actions, AppSearch, Share Targets, Bubbles, and Material You** (`leptoskit_plugin_app_shortcuts::integrations`): `AppIntentDefinition`, `SpotlightItem`, `IncomingShare`, `BubbleConfig` (`Notification.BubbleMetadata`), `StatusBarConfig`, and `DynamicColorRole` (Monet dynamic palette roles).
 
 ## Android intents
 

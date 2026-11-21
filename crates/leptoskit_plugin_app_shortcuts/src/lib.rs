@@ -19,6 +19,22 @@ use leptoskit_bridge::MethodId;
 use leptoskit_bridge::codec::Decoder;
 use leptoskit_bridge::codec::Encoder;
 
+pub mod integrations;
+pub use integrations::AppIntentDefinition;
+pub use integrations::BubbleConfig;
+pub use integrations::DynamicColorRole;
+pub use integrations::IncomingShare;
+pub use integrations::MemoryMobileIntegrationHost;
+pub use integrations::MobileIntegrationHost;
+pub use integrations::MultiSceneConfig;
+pub use integrations::PencilPreference;
+pub use integrations::SharedAttachment;
+pub use integrations::SheetDetent;
+pub use integrations::SpotlightItem;
+pub use integrations::StatusBarConfig;
+pub use integrations::StatusBarStyle;
+pub use integrations::UserActivity;
+
 /// Native registration name.
 pub const NAME: &str = "app-shortcuts";
 /// Replaces the published static shortcut list.
