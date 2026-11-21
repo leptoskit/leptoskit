@@ -100,12 +100,17 @@ pub(crate) struct Opened {
 	pub resume_floor: Option<u64>,
 	/// Kept current with the identity's caller.
 	pub caller: CallerSlot,
+	/// Where the connection came from, for the server's guards.
+	pub address: Option<std::net::IpAddr>,
 }
 
 /// A server that owns live sessions, as its transports see it.
 pub(crate) trait Host: Clone + Send + Sync + 'static {
 	/// How a request becomes a caller.
 	fn identifier(&self) -> &dyn Identify;
+
+	/// What runs before every operation a connection sends.
+	fn guards(&self) -> &crate::server::Guards;
 
 	/// The one origin a browser connection may come from, when one is set.
 	fn allowed_origin(&self) -> Option<&str>;

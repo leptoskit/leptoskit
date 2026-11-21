@@ -167,6 +167,9 @@ Run `leptoskit codepush serve` as a user that can read `releases/` and write not
 
 ### 5. Rate-limit what is left
 
+Your queries, mutations, and actions can limit their callers themselves: `Server::rate_limit(RateLimit::new())` counts every caller, by address or by who they are, and `#[rpc::mutation(rate_limit = 5 / 1h, timeout = 10s, max_body = 16KiB)]` narrows one operation. [Limiting how often, how long, and how much](13-sharing-the-rpc.md#limiting-how-often-how-long-and-how-much) covers both. A per-address limit at the proxy still belongs in front of them, because it stops a flood before your server spends anything on it.
+
+
 After the steps above, the routes that do more than read a file are the registry's dynamic `check` and `delta`: each reads the container the client says it runs and hashes it, `check` to learn whether a delta applies and `delta` to find it. That is bounded by your bundle size and takes a few milliseconds for a few megabytes, but it is work an anonymous caller can request as often as they like, so give both a per-address rate limit at the proxy (`limit_req` above). The current client never calls the dynamic routes, so if nothing older is in the field you can block `check`, `download`, and `delta` at the proxy outright.
 
 ## Scaling

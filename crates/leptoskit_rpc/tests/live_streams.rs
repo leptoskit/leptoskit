@@ -252,6 +252,41 @@ async fn a_stream_that_will_not_open_says_why() {
 	still_open(&mut socket).await;
 }
 
+/// A streams-only server counts each stream a connection opens against
+/// its caller, and a refused one ends without closing the connection.
+#[tokio::test(flavor = "multi_thread")]
+async fn opening_streams_is_rate_limited() {
+	let live = LiveStreams::new()
+		.identify(Caller)
+		.client_ip_header("x-real-ip")
+		.rate_limit(rpc::server::RateLimit::new().signed_in(rpc::server::Rate::per_minute(1)));
+	let app = live.router::<()>();
+	let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+	let address = listener.local_addr().unwrap();
+	let task = tokio::spawn(async move {
+		axum::serve(listener, app).await.unwrap();
+	});
+	let server = Server {
+		live,
+		address,
+		task,
+	};
+	let mut socket = connect(&server, Some("ada")).await;
+
+	send(&mut socket, open(1, "three", json!({}), 10)).await;
+	for n in 1..=3 {
+		assert_eq!(item(&mut socket, 1).await, json!(n));
+	}
+	assert_eq!(end(&mut socket, 1).await.0, "done");
+
+	send(&mut socket, open(2, "three", json!({}), 10)).await;
+	let (reason, err) = end(&mut socket, 2).await;
+	let err = err.expect("why");
+	assert_eq!((reason.as_str(), err.status), ("failed", 429));
+	assert_eq!(err.code.as_deref(), Some(rpc::RATE_LIMITED));
+	still_open(&mut socket).await;
+}
+
 /// Everything that needs a database is answered with why it isn't here,
 /// and the connection stays open for streams.
 #[tokio::test(flavor = "multi_thread")]

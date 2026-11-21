@@ -290,6 +290,7 @@ const _: () = {
 			kind: <crate::inbox::InboxArgs as Operation>::KIND,
 			module_path: module_path!(),
 			service: None,
+			limits: crate::server::OperationLimits::NONE,
 			handler: handle::<crate::inbox::InboxArgs>,
 		}
 	}
@@ -299,6 +300,7 @@ const _: () = {
 			kind: <crate::inbox::MarkRead as Operation>::KIND,
 			module_path: module_path!(),
 			service: None,
+			limits: crate::server::OperationLimits::NONE,
 			handler: handle::<crate::inbox::MarkRead>,
 		}
 	}
@@ -308,6 +310,7 @@ const _: () = {
 			kind: <crate::inbox::MarkAllRead as Operation>::KIND,
 			module_path: module_path!(),
 			service: None,
+			limits: crate::server::OperationLimits::NONE,
 			handler: handle::<crate::inbox::MarkAllRead>,
 		}
 	}

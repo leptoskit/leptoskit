@@ -49,6 +49,7 @@ use super::transport::STALL;
 use super::transport::socket;
 use super::transport::sse;
 use crate::live::ClientFrame;
+use crate::live::EndReason;
 use crate::live::HEARTBEAT_SECONDS;
 use crate::live::ServerFrame;
 use crate::live::WireError;
@@ -73,6 +74,8 @@ struct Inner {
 	service: Option<&'static str>,
 	live_path: String,
 	stall: Duration,
+	/// What runs before every stream a connection opens.
+	guards: super::Guards,
 	shared: Arc<Shared>,
 }
 
@@ -100,6 +103,7 @@ impl LiveStreams {
 				service: None,
 				live_path: crate::live::LIVE_PATH.to_owned(),
 				stall: STALL,
+				guards: super::Guards::default(),
 				shared: Arc::new(Shared {
 					drain: broadcast::channel(8).0,
 					connections: AtomicU64::new(0),
@@ -114,6 +118,37 @@ impl LiveStreams {
 	#[must_use]
 	pub fn identify(self, identify: impl Identify) -> Self {
 		self.identify_arc(Arc::new(identify))
+	}
+
+	/// Runs `guard` before every stream a connection opens, as
+	/// [`Server::guard`](super::Server::guard) does for calls over HTTP.
+	#[must_use]
+	pub fn guard(self, guard: impl super::Guard) -> Self {
+		self.with(|inner| inner.guards.push(Arc::new(guard)))
+	}
+
+	/// Limits how often each caller may open a stream, as
+	/// [`Server::rate_limit`](super::Server::rate_limit) does.
+	#[must_use]
+	pub fn rate_limit(self, limit: super::RateLimit) -> Self {
+		self.with(|inner| inner.guards.set_rate_limit(limit))
+	}
+
+	/// Reads where a connection came from from `header`, as
+	/// [`Server::client_ip_header`](super::Server::client_ip_header) does.
+	///
+	/// # Panics
+	///
+	/// When `header` isn't a header name.
+	#[must_use]
+	pub fn client_ip_header(self, header: &str) -> Self {
+		let name = http::HeaderName::try_from(header)
+			.unwrap_or_else(|_| panic!("`{header}` isn't a header name"));
+		self.with(|inner| {
+			inner
+				.guards
+				.set_client_ip(super::guard::ClientIp::Header(name));
+		})
 	}
 
 	/// [`identify`](Self::identify) with an already shared implementation.
@@ -200,6 +235,7 @@ impl LiveStreams {
 			service: self.inner.service,
 			live_path: self.inner.live_path.clone(),
 			stall: self.inner.stall,
+			guards: self.inner.guards.clone(),
 			shared: Arc::clone(&self.inner.shared),
 		};
 		change(&mut inner);
@@ -219,10 +255,12 @@ impl LiveStreams {
 			out,
 			resume_floor: _,
 			caller,
+			address,
 		} = opened;
 		let mut session = Session {
 			live: self.clone(),
 			identity,
+			address,
 			lease: IdentityLease::default(),
 			caller,
 			out,
@@ -266,6 +304,10 @@ impl Host for LiveStreams {
 		&*self.inner.identify
 	}
 
+	fn guards(&self) -> &crate::server::Guards {
+		&self.inner.guards
+	}
+
 	fn allowed_origin(&self) -> Option<&str> {
 		self.inner.origin.as_deref()
 	}
@@ -301,6 +343,8 @@ impl Host for LiveStreams {
 struct Session {
 	live: LiveStreams,
 	identity: Identity,
+	/// Where the connection came from, for the guards.
+	address: Option<std::net::IpAddr>,
 	lease: IdentityLease,
 	caller: CallerSlot,
 	out: mpsc::Sender<Outbound>,
@@ -436,6 +480,26 @@ impl Session {
 				args,
 				credits,
 			} => {
+				let checked = self
+					.live
+					.inner
+					.guards
+					.check(&super::Call {
+						name: &name,
+						kind: crate::Kind::Stream,
+						identity: &self.identity,
+						address: self.address,
+						via: super::Via::Live,
+						limits: &super::OperationLimits::NONE,
+					})
+					.await;
+
+				if let Err(error) = checked {
+					return self
+						.send(EndReason::Failed(WireError::new(&error)).frame(stream))
+						.await;
+				}
+
 				let cx = StreamOpen::new(self.identity.clone());
 				let refused =
 					self.streams

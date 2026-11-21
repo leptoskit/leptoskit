@@ -44,6 +44,7 @@ pub struct Server {
 	inner: Arc<Inner>,
 }
 
+#[derive(Clone)]
 struct Inner {
 	db: Db,
 	identify: Arc<dyn Identify>,
@@ -54,6 +55,10 @@ struct Inner {
 	/// Where [`live`](Self::live) serves its socket: the `[rpc]` config's
 	/// resolved live path, `/live` by default.
 	live_path: String,
+	/// What runs before every call a client sends.
+	guards: super::Guards,
+	/// The largest arguments a call may send, unless its operation says.
+	max_body: usize,
 }
 
 impl Server {
@@ -68,7 +73,18 @@ impl Server {
 				transports: crate::wire::TransportSet::default(),
 				route_prefix: crate::RPC_ROUTE_PREFIX.to_owned(),
 				live_path: crate::live::LIVE_PATH.to_owned(),
+				guards: super::Guards::default(),
+				max_body: BODY_LIMIT,
 			}),
+		}
+	}
+
+	/// A copy with `change` made to its settings.
+	fn with(self, change: impl FnOnce(&mut Inner)) -> Self {
+		let mut inner = Arc::unwrap_or_clone(self.inner);
+		change(&mut inner);
+		Self {
+			inner: Arc::new(inner),
 		}
 	}
 
@@ -80,32 +96,84 @@ impl Server {
 	pub fn rpc_config(self, config: &leptoskit_config::RpcConfig) -> Self {
 		let route_prefix = config.path.trim_end_matches('/').to_owned();
 
-		Self {
-			inner: Arc::new(Inner {
-				db: self.inner.db.clone(),
-				identify: Arc::clone(&self.inner.identify),
-				service: self.inner.service,
-				transports: crate::wire::TransportSet::from_names(&config.transports),
-				route_prefix,
-				live_path: super::mount_path(&config.resolved_live_path()),
-			}),
-		}
+		self.with(|inner| {
+			inner.transports = crate::wire::TransportSet::from_names(&config.transports);
+			inner.route_prefix = route_prefix;
+			inner.live_path = super::mount_path(&config.resolved_live_path());
+		})
 	}
 
 	/// Tells callers apart with `identify`, such as `leptoskit_auth`'s
 	/// `Auth`.
 	#[must_use]
 	pub fn identify(self, identify: impl Identify) -> Self {
-		Self {
-			inner: Arc::new(Inner {
-				db: self.inner.db.clone(),
-				identify: Arc::new(identify),
-				service: self.inner.service,
-				transports: self.inner.transports,
-				route_prefix: self.inner.route_prefix.clone(),
-				live_path: self.inner.live_path.clone(),
-			}),
-		}
+		self.with(|inner| inner.identify = Arc::new(identify))
+	}
+
+	/// Runs `guard` before every call a client sends, over HTTP and over
+	/// the [live](Self::live) connections, after the caller is identified
+	/// and before the operation's body runs. Guards run in the order they
+	/// are added, and the first to refuse answers the call.
+	///
+	/// ```ignore
+	/// let rpc = Server::new(db).identify(auth).guard(SignedInOnly);
+	/// ```
+	#[must_use]
+	pub fn guard(self, guard: impl super::Guard) -> Self {
+		self.with(|inner| inner.guards.push(Arc::new(guard)))
+	}
+
+	/// Limits how often each caller may call, counted before any
+	/// [`guard`](Self::guard) runs: see [`RateLimit`](super::RateLimit). An
+	/// operation's own `rate_limit` is counted on top, with this limit's
+	/// keys and store. Calling it again replaces the limit.
+	///
+	/// ```ignore
+	/// let rpc = Server::new(db).identify(auth).rate_limit(RateLimit::new());
+	/// ```
+	#[must_use]
+	pub fn rate_limit(self, limit: super::RateLimit) -> Self {
+		self.with(|inner| inner.guards.set_rate_limit(limit))
+	}
+
+	/// Reads where a call came from from `header`, which the proxy in
+	/// front of the server sets, such as `fly-client-ip`, `x-real-ip`, or
+	/// `cf-connecting-ip`, instead of the connection's own address. The
+	/// last value of the header is read, since a proxy adds its own after
+	/// any the client sent, and it must be one address. A request without
+	/// it is counted by its connection.
+	///
+	/// Only set it when a proxy always sets the header: otherwise a client
+	/// can write any address it likes there.
+	///
+	/// # Panics
+	///
+	/// When `header` isn't a header name.
+	#[must_use]
+	pub fn client_ip_header(self, header: &str) -> Self {
+		let name = http::HeaderName::try_from(header)
+			.unwrap_or_else(|_| panic!("`{header}` isn't a header name"));
+		self.with(|inner| {
+			inner
+				.guards
+				.set_client_ip(super::guard::ClientIp::Header(name));
+		})
+	}
+
+	/// How long a call may run before it is answered `504` (`timed_out`),
+	/// unless its operation says otherwise with `timeout`. No limit by
+	/// default.
+	#[must_use]
+	pub fn timeout(self, timeout: std::time::Duration) -> Self {
+		self.with(|inner| inner.guards.set_timeout(Some(timeout)))
+	}
+
+	/// The largest arguments, in bytes, a call over HTTP may send, unless
+	/// its operation says otherwise with `max_body`: 2 MiB by default. A
+	/// call over it is answered `413` (`too_large`).
+	#[must_use]
+	pub fn max_body(self, bytes: usize) -> Self {
+		self.with(|inner| inner.max_body = bytes)
 	}
 
 	/// Serves the operations of the service `name`, declared with
@@ -137,16 +205,7 @@ impl Server {
 			"`{name}` isn't a service name: a lowercase letter, then lowercase letters, digits, \
 			 and `-`"
 		);
-		Self {
-			inner: Arc::new(Inner {
-				db: self.inner.db.clone(),
-				identify: Arc::clone(&self.inner.identify),
-				service: Some(name),
-				transports: self.inner.transports,
-				route_prefix: self.inner.route_prefix.clone(),
-				live_path: self.inner.live_path.clone(),
-			}),
-		}
+		self.with(|inner| inner.service = Some(name))
 	}
 
 	/// The service these operations belong to, or `None` for the app's.
@@ -180,6 +239,7 @@ impl Server {
 			.identify_arc(Arc::clone(&self.inner.identify))
 			.for_service(self.inner.service)
 			.with_live_path(self.inner.live_path.clone())
+			.with_guards(self.inner.guards.clone())
 	}
 
 	/// Makes this the server that in-process calls use, such as
@@ -249,10 +309,32 @@ impl Server {
 
 	async fn serve(&self, registration: &'static Registration, request: Request) -> Response {
 		let (parts, body) = request.into_parts();
-		let Ok(bytes) = axum::body::to_bytes(body, BODY_LIMIT).await else {
-			return failure(&Error::invalid(
-				"the request body is too large, or didn't arrive",
-			));
+
+		// Who is calling, and whether they may, before the body is read: a
+		// caller who is refused costs no more than their headers.
+		let identity = match self.inner.identify.identify(&parts).await {
+			Ok(identity) => identity,
+			Err(error) => return failure(&error),
+		};
+		let guards = &self.inner.guards;
+		let checked = guards
+			.check(&super::Call {
+				name: registration.name,
+				kind: registration.kind,
+				identity: &identity,
+				address: guards.address(&parts),
+				via: super::Via::Http,
+				limits: &registration.limits,
+			})
+			.await;
+
+		if let Err(error) = checked {
+			return failure(&error);
+		}
+
+		let limit = registration.limits.max_body.unwrap_or(self.inner.max_body);
+		let Ok(bytes) = axum::body::to_bytes(body, limit).await else {
+			return failure(&super::guard::too_large(limit));
 		};
 
 		let content_type = parts
@@ -303,22 +385,24 @@ impl Server {
 			));
 		};
 
-		match self
-			.call(
-				&parts,
-				registration,
-				arguments,
-				response_transport,
-				request_id,
-			)
-			.await
-		{
+		let run = Self::invoke(
+			&self.inner.db,
+			registration,
+			identity,
+			arguments,
+			response_transport,
+			request_id,
+		);
+
+		match guards.within(&registration.limits, run).await {
 			Ok(body) => body.into_response(),
 			Err(error) => failure(&error),
 		}
 	}
 
-	/// Runs `registration` for the request `parts` came with.
+	/// Runs `registration` for the request `parts` came with, in process:
+	/// a call the server makes while it renders that request, which was
+	/// checked when it arrived, so no guard runs again.
 	pub(crate) async fn call(
 		&self,
 		parts: &http::request::Parts,
@@ -328,7 +412,26 @@ impl Server {
 		request_id: Option<String>,
 	) -> crate::Result<crate::wire::WireBody> {
 		let identity = self.inner.identify.identify(parts).await?;
-		let db = self.inner.db.with_context(identity.context.clone());
+		Self::invoke(
+			&self.inner.db,
+			registration,
+			identity,
+			arguments,
+			response,
+			request_id,
+		)
+		.await
+	}
+
+	async fn invoke(
+		db: &Db,
+		registration: &'static Registration,
+		identity: super::Identity,
+		arguments: crate::wire::WireArgs,
+		response: crate::wire::Transport,
+		request_id: Option<String>,
+	) -> crate::Result<crate::wire::WireBody> {
+		let db = db.with_context(identity.context.clone());
 		(registration.handler)(Invocation {
 			db,
 			identity,

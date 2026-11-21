@@ -81,6 +81,8 @@ struct Session {
 	live: Live,
 	number: u32,
 	identity: Identity,
+	/// Where the connection came from, for the server's guards.
+	address: Option<std::net::IpAddr>,
 	/// Changes whenever this connection accepts a different authentication.
 	epoch: u64,
 	lease: IdentityLease,
@@ -184,6 +186,7 @@ impl Live {
 			out,
 			resume_floor,
 			caller,
+			address,
 		} = opened;
 
 		if let Err(error) = self.start().await {
@@ -216,6 +219,7 @@ impl Live {
 			number,
 			db: self.inner.db.with_context(identity.context.clone()),
 			identity,
+			address,
 			epoch: 0,
 			lease: IdentityLease::default(),
 			member,
@@ -455,15 +459,63 @@ impl Session {
 		true
 	}
 
-	/// Why the connection's identity may not send one more operation now,
-	/// when [`Identify::admit`](crate::server::Identify::admit) says so.
-	fn admit(&self) -> Option<WireError> {
+	/// Why the connection's identity may not send the operation `name` of
+	/// `kind` now: when [`Identify::admit`](crate::server::Identify::admit)
+	/// says so, or one of the server's guards refuses it.
+	async fn admit(&self, name: &str, kind: Kind) -> Option<WireError> {
+		if let Err(error) = self.live.inner.identify.admit(&self.identity) {
+			return Some(WireError::new(&error));
+		}
+
+		let limits = self.limits(name, kind);
 		self.live
 			.inner
-			.identify
-			.admit(&self.identity)
+			.guards
+			.check(&crate::server::Call {
+				name,
+				kind,
+				identity: &self.identity,
+				address: self.address,
+				via: crate::server::Via::Live,
+				limits: &limits,
+			})
+			.await
 			.err()
 			.map(|error| WireError::new(&error))
+	}
+
+	/// The limits of the operation `name`, when it is one of `kind`; none
+	/// otherwise, and the frame is refused for naming it wrongly later.
+	fn limits(&self, name: &str, kind: Kind) -> crate::server::OperationLimits {
+		registration_in(self.live.service_name(), name)
+			.filter(|registration| registration.kind == kind)
+			.map_or(crate::server::OperationLimits::NONE, |registration| {
+				registration.limits
+			})
+	}
+
+	/// Answers a frame that starts an operation the connection may not
+	/// send now, and says whether the connection stays open; `None` for a
+	/// frame that may go ahead.
+	async fn refuse(&mut self, frame: &ClientFrame) -> Option<bool> {
+		let (name, kind) = match frame {
+			ClientFrame::Sub { query, .. } => (query, Kind::Query),
+			ClientFrame::Mutate { name, .. } => (name, Kind::Mutation),
+			ClientFrame::Act { name, .. } => (name, Kind::Action),
+			ClientFrame::Stream { name, .. } => (name, Kind::Stream),
+			_ => return None,
+		};
+		let error = self.admit(name, kind).await?;
+
+		Some(match frame {
+			ClientFrame::Stream { stream, .. } => {
+				self.send(EndReason::Failed(error).frame(*stream)).await
+			}
+			ClientFrame::Sub { id: request, .. }
+			| ClientFrame::Mutate { request, .. }
+			| ClientFrame::Act { request, .. } => self.done(*request, Err(error)).await,
+			_ => true,
+		})
 	}
 
 	/// Handles one frame. Returns whether the connection stays open.
@@ -487,6 +539,10 @@ impl Session {
 			Incoming::Invalid(error) => return self.done(0, Err(error)).await,
 		};
 
+		if let Some(open) = self.refuse(&frame).await {
+			return open;
+		}
+
 		match frame {
 			ClientFrame::Hello { resume } => {
 				match resume {
@@ -496,12 +552,7 @@ impl Session {
 			}
 			ClientFrame::Unknown => true,
 			ClientFrame::Ping => self.send(ServerFrame::Pong).await,
-			ClientFrame::Sub { id, query, args } => {
-				match self.admit() {
-					Some(error) => self.done(id, Err(error)).await,
-					None => self.subscribe(id, query, args).await,
-				}
-			}
+			ClientFrame::Sub { id, query, args } => self.subscribe(id, query, args).await,
 			ClientFrame::Unsub { id } => {
 				if let Some(pending) = &mut self.pending {
 					pending.remove(id);
@@ -531,34 +582,19 @@ impl Session {
 				name,
 				args,
 				key,
-			} => {
-				match self.admit() {
-					Some(error) => self.done(request, Err(error)).await,
-					None => self.mutate(request, &name, args, key).await,
-				}
-			}
+			} => self.mutate(request, &name, args, key).await,
 			ClientFrame::Act {
 				request,
 				name,
 				args,
-			} => {
-				match self.admit() {
-					Some(error) => self.done(request, Err(error)).await,
-					None => self.act(request, &name, args).await,
-				}
-			}
+			} => self.act(request, &name, args).await,
 			ClientFrame::Auth { token } => self.authenticate(token).await,
 			ClientFrame::Stream {
 				stream,
 				name,
 				args,
 				credits,
-			} => {
-				match self.admit() {
-					Some(error) => self.send(EndReason::Failed(error).frame(stream)).await,
-					None => self.open_stream(stream, &name, args, credits).await,
-				}
-			}
+			} => self.open_stream(stream, &name, args, credits).await,
 			ClientFrame::Credit { stream, n } => {
 				self.streams.credit(stream, n);
 				true
@@ -845,15 +881,16 @@ impl Session {
 				.await;
 		}
 
-		let (result, version) = recording_commits((registration.handler)(Invocation {
+		let run = (registration.handler)(Invocation {
 			db: self.db.clone(),
 			identity: self.identity.clone(),
 			request_id: key,
 			arguments: crate::wire::WireArgs::Json(args),
 			response: crate::wire::Transport::Json,
 			reads: None,
-		}))
-		.await;
+		});
+		let (result, version) =
+			recording_commits(self.live.inner.guards.within(&registration.limits, run)).await;
 		let result = result.map(|body| {
 			let crate::wire::WireBody::Json(value) = body;
 			value
@@ -921,10 +958,13 @@ impl Session {
 			reads: None,
 		};
 		let handler = registration.handler;
+		let limits = registration.limits;
+		let guards = self.live.inner.guards.clone();
 		let finished = self.acts.clone();
 		let epoch = self.epoch;
 		tokio::spawn(async move {
-			let (result, version) = recording_commits(handler(invocation)).await;
+			let (result, version) =
+				recording_commits(guards.within(&limits, handler(invocation))).await;
 			let result = result
 				.map(|body| {
 					let crate::wire::WireBody::Json(value) = body;
