@@ -18,14 +18,6 @@ ignore = [
 	# `paste` is unmaintained but harmless (a compile-time macro) and arrives
 	# transitively through the leptos 0.8 beta toolchain.
 	{ id = "RUSTSEC-2024-0436", reason = "transitive via leptos 0.8-beta; compile-time macro only" },
-	# `proc-macro-error2` is the community fork of proc-macro-error and arrives
-	# transitively through rstml in the leptos macro stack.
-	{ id = "RUSTSEC-2026-0173", reason = "transitive via rstml/leptos macros; the maintained fork of proc-macro-error" },
-	# webpki-roots 0.26.11 is the semver-trick release that re-exports
-	# webpki-roots 1.x; tokio-tungstenite 0.30 still names 0.26. The lockfile
-	# resolves 1.x to a fixed release (>= 1.0.10), so the distrusted roots are
-	# not compiled in. Drop this once tokio-tungstenite depends on 1.x.
-	{ id = "RUSTSEC-2026-0381", reason = "0.26.11 re-exports the locked webpki-roots >= 1.0.10, which removes the distrusted roots" },
 	# zbus 6 absorbed zvariant, zvariant_derive and zbus_names, so the standalone
 	# crates are unmaintained rather than vulnerable. They arrive through ksni 0.3
 	# (the Linux tray backend), whose latest release still depends on zbus 5.
@@ -33,12 +25,6 @@ ignore = [
 	{ id = "RUSTSEC-2026-0370", reason = "zvariant via ksni 0.3 / zbus 5; merged into zbus 6, which ksni has not adopted" },
 	{ id = "RUSTSEC-2026-0371", reason = "zbus_names via ksni 0.3 / zbus 5; merged into zbus 6, which ksni has not adopted" },
 	{ id = "RUSTSEC-2026-0372", reason = "zvariant_derive via ksni 0.3 / zbus 5; merged into zbus 6, which ksni has not adopted" },
-	# `pin-utils` is unmaintained, not vulnerable. It arrives only through
-	# wasmtimer, which reqwest-retry uses on wasm targets, under
-	# postgresql_embedded in the CLI; the CLI never builds for wasm. The
-	# latest postgresql_embedded, reqwest-retry and wasmtimer all still
-	# depend on it. Drop this once wasmtimer replaces it.
-	{ id = "RUSTSEC-2026-0441", reason = "pin-utils via wasmtimer (wasm only) under postgresql_embedded; never compiled for the CLI's targets" },
 	# `chrono` is unmaintained, not vulnerable, and no release fixes that.
 	# `leptoskit_db::Timestamp` and every service's time handling are built
 	# on it, so leaving it is a workspace-wide migration to `jiff` or `time`,
