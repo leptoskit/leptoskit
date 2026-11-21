@@ -77,6 +77,7 @@ Your screens run as WebAssembly inside a small interpreter that ships in the app
 ## Pages in this section
 
 - [Code reuse](code-reuse.md): what you write once, what you write per platform, and where the seams are.
+- [Platform-specific features](platform-specific.md): detect the active platform, branch with `PlatformSwitch`, query capabilities, and opt into OS-specific features.
 - [Web](web.md): server rendering, hydration, and serving.
 - [iOS](ios.md), [Android](android.md), [macOS](macos.md), and [Windows and Linux](windows-linux.md): each platform's build, run, and release steps.
 - [HarmonyOS](harmonyos.md): the experimental target and its limits.

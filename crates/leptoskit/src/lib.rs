@@ -207,6 +207,14 @@ pub mod shortcut {
 	pub use leptoskit_native::shortcut::*;
 }
 
+pub mod target {
+	//! Target platform detection, conditional branching, and capability
+	//! queries: [`TargetPlatform`], [`PlatformSwitch`],
+	//! [`PlatformCapabilities`], and [`on_ios`] / [`on_android`] /
+	//! [`on_desktop`] / [`on_extension`].
+	pub use leptoskit_native::target::*;
+}
+
 pub mod store {
 	//! Leptos stores: a state struct whose fields notify separately.
 	//!
@@ -578,6 +586,12 @@ pub mod prelude {
 	pub use leptoskit_native::tailwind::Tailwind;
 	pub use leptoskit_native::tailwind::Theme;
 	pub use leptoskit_native::tailwind::ThemeLength;
+	pub use leptoskit_native::target::Capability;
+	pub use leptoskit_native::target::CapabilitySupport;
+	pub use leptoskit_native::target::PlatformCapabilities;
+	pub use leptoskit_native::target::PlatformFamily;
+	pub use leptoskit_native::target::PlatformSwitch;
+	pub use leptoskit_native::target::TargetPlatform;
 	pub use leptoskit_native::view::Children;
 	pub use leptoskit_native::view::Fragment;
 	pub use leptoskit_native::view::IntoChildren;

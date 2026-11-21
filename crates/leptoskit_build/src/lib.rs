@@ -13,13 +13,17 @@
 use std::fmt;
 use std::path::PathBuf;
 
-const PLATFORMS: [&str; 8] = [
+const PLATFORMS: [&str; 12] = [
 	"web",
 	"ios",
 	"android",
 	"macos",
 	"windows",
 	"linux",
+	"harmonyos",
+	"wearos",
+	"watchos",
+	"quest",
 	"tui",
 	"extension",
 ];
@@ -27,12 +31,13 @@ const PLATFORMS: [&str; 8] = [
 /// Configures platform module selection for the application being built.
 ///
 /// Features named `web`, `ios`, `android`, `macos`, `windows`, `linux`,
-/// `tui`, and `extension` select the corresponding `.<platform>.rs`
-/// overrides. An extension is built from the web client, so `extension`
-/// together with `web` selects `extension`. With no platform
-/// feature enabled, modules use their shared `.rs` source. Multiple platform
-/// features are rejected because native guests all target Wasm, so the Rust
-/// compilation target cannot identify which device the application is for.
+/// `harmonyos`, `wearos`, `watchos`, `quest`, `tui`, and `extension` select
+/// the corresponding `.<platform>.rs` overrides. An extension is built from
+/// the web client, so `extension` together with `web` selects `extension`.
+/// With no platform feature enabled, modules use their shared `.rs` source.
+/// Multiple platform features are rejected because native guests all target
+/// Wasm, so the Rust compilation target cannot identify which device the
+/// application is for.
 ///
 /// This belongs in the application's build script, rather than the SDK's:
 /// SDK features remain additive, while one application build selects one
