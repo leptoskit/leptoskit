@@ -369,26 +369,22 @@ fn scaffold_into(host: &Path, config: &LeptoskitConfig) -> Result<()> {
 pub(super) fn build(root: &Path, target: Target, release: bool) -> Result<()> {
 	let host = harmonyos_host_dir(root, target);
 	let executable = std::env::var_os("HVIGORW").unwrap_or_else(|| "hvigorw".into());
-	super::run_tool(
-		Command::new(executable)
-			.current_dir(&host)
-			.args([
-				"--mode",
-				"module",
-				"-p",
-				"product=default",
-				"-p",
-				"module=entry@default",
-				"-p",
-				if release {
-					"buildMode=release"
-				} else {
-					"buildMode=debug"
-				},
-				"assembleHap",
-				"--no-daemon",
-			]),
-	)
+	super::run_tool(Command::new(executable).current_dir(&host).args([
+		"--mode",
+		"module",
+		"-p",
+		"product=default",
+		"-p",
+		"module=entry@default",
+		"-p",
+		if release {
+			"buildMode=release"
+		} else {
+			"buildMode=debug"
+		},
+		"assembleHap",
+		"--no-daemon",
+	]))
 	.context(
 		"HarmonyOS HAP packaging requires DevEco's hvigorw on PATH (or set HVIGORW); sync the \
 		 project with ohpm install first",
