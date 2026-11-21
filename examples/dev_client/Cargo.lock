@@ -2056,6 +2056,11 @@ dependencies = [
  "leptoskit_macros",
  "leptoskit_native",
  "leptoskit_plugin",
+ "leptoskit_plugin_android_intent",
+ "leptoskit_plugin_app_shortcuts",
+ "leptoskit_plugin_home_widgets",
+ "leptoskit_plugin_live_activities",
+ "leptoskit_plugin_updater",
  "leptoskit_query",
  "leptoskit_rive",
  "leptoskit_rpc",
@@ -2340,6 +2345,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "leptoskit_plugin_android_intent"
+version = "0.3.0"
+dependencies = [
+ "leptoskit_bridge",
+]
+
+[[package]]
+name = "leptoskit_plugin_app_shortcuts"
+version = "0.3.0"
+dependencies = [
+ "leptoskit_bridge",
+]
+
+[[package]]
 name = "leptoskit_plugin_crypto"
 version = "0.3.0"
 dependencies = [
@@ -2381,6 +2400,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "leptoskit_plugin_home_widgets"
+version = "0.3.0"
+dependencies = [
+ "leptoskit_bridge",
+]
+
+[[package]]
 name = "leptoskit_plugin_http"
 version = "0.3.0"
 dependencies = [
@@ -2401,6 +2427,13 @@ dependencies = [
  "open",
  "url",
  "web-sys",
+]
+
+[[package]]
+name = "leptoskit_plugin_live_activities"
+version = "0.3.0"
+dependencies = [
+ "leptoskit_bridge",
 ]
 
 [[package]]
@@ -2434,6 +2467,14 @@ dependencies = [
  "serde_json",
  "wasm-bindgen",
  "web-sys",
+]
+
+[[package]]
+name = "leptoskit_plugin_updater"
+version = "0.3.0"
+dependencies = [
+ "leptoskit_bridge",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
