@@ -26,9 +26,9 @@ public final class BlePlugin: NSObject, NativePlugin {
 
     private func ensureCentral() -> CBCentralManager {
         if let central { return central }
-        let c = CBCentralManager(delegate: self, queue: .main)
-        central = c
-        return c
+        let manager = CBCentralManager(delegate: self, queue: .main)
+        central = manager
+        return manager
     }
 
     public func invoke(method: UInt32, payload: NativeBuffer) async throws -> Data {
@@ -36,8 +36,8 @@ public final class BlePlugin: NSObject, NativePlugin {
         let data = payload.withUnsafeBytes { Data($0) }
         switch method {
         case 0, 1:
-            let c = ensureCentral()
-            return encodeU32(mapState(c.state))
+            let manager = ensureCentral()
+            return encodeU32(mapState(manager.state))
         case 2:
             return try await scan(data)
         case 3:
@@ -83,8 +83,8 @@ public final class BlePlugin: NSObject, NativePlugin {
     }
 
     private func scan(_ data: Data) async throws -> Data {
-        let c = ensureCentral()
-        guard c.state == .poweredOn else { throw PluginError.unavailable }
+        let manager = ensureCentral()
+        guard manager.state == .poweredOn else { throw PluginError.unavailable }
         var reader = WireReader(data)
         let timeoutMs = min(max(try reader.u32(), 500), 30_000)
         let count = Int(try reader.u32())
@@ -95,21 +95,21 @@ public final class BlePlugin: NSObject, NativePlugin {
         try reader.finished()
 
         discovered.removeAll()
-        c.scanForPeripherals(withServices: filters.isEmpty ? nil : filters, options: nil)
+        manager.scanForPeripherals(withServices: filters.isEmpty ? nil : filters, options: nil)
         try await Task.sleep(nanoseconds: UInt64(timeoutMs) * 1_000_000)
-        c.stopScan()
+        manager.stopScan()
         return encodeDevices()
     }
 
     private func connect(id: String) async throws {
-        let c = ensureCentral()
+        let manager = ensureCentral()
         guard let uuid = UUID(uuidString: id),
-              let peripheral = discovered[uuid]?.0 ?? c.retrievePeripherals(withIdentifiers: [uuid]).first
+              let peripheral = discovered[uuid]?.0 ?? manager.retrievePeripherals(withIdentifiers: [uuid]).first
         else { throw PluginError.invalidArgument }
         peripheral.delegate = self
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             connectWaiters[uuid] = continuation
-            c.connect(peripheral, options: nil)
+            manager.connect(peripheral, options: nil)
         }
     }
 
@@ -179,16 +179,16 @@ public final class BlePlugin: NSObject, NativePlugin {
             }
             appendI32(&out, Int32(rssi))
             appendU32(&out, UInt32(services.count))
-            for s in services { appendBytes(&out, Data(s.utf8)) }
+            for service in services { appendBytes(&out, Data(service.utf8)) }
         }
         return out
     }
 
     private func readSingleString(_ data: Data) throws -> String {
         var reader = WireReader(data)
-        let s = try reader.string()
+        let text = try reader.string()
         try reader.finished()
-        return s
+        return text
     }
     #else
     public override init() { super.init() }
@@ -285,10 +285,10 @@ private struct WireReader {
         let len = Int(try u32())
         guard len >= 0, bytes.count - pos >= len else { throw PluginError.invalidArgument }
         defer { pos += len }
-        guard let s = String(bytes: bytes[pos..<(pos + len)], encoding: .utf8) else {
+        guard let text = String(bytes: bytes[pos..<(pos + len)], encoding: .utf8) else {
             throw PluginError.invalidArgument
         }
-        return s
+        return text
     }
 
     func finished() throws {
@@ -308,16 +308,16 @@ private func appendBytes(_ out: inout Data, _ data: Data) {
 }
 
 private func appendU32(_ out: inout Data, _ value: UInt32) {
-    var v = value.littleEndian
-    withUnsafeBytes(of: &v) { out.append(contentsOf: $0) }
+    var encoded = value.littleEndian
+    withUnsafeBytes(of: &encoded) { out.append(contentsOf: $0) }
 }
 
 private func appendI32(_ out: inout Data, _ value: Int32) {
-    var v = value.littleEndian
-    withUnsafeBytes(of: &v) { out.append(contentsOf: $0) }
+    var encoded = value.littleEndian
+    withUnsafeBytes(of: &encoded) { out.append(contentsOf: $0) }
 }
 
 private func appendI64(_ out: inout Data, _ value: Int64) {
-    var v = value.littleEndian
-    withUnsafeBytes(of: &v) { out.append(contentsOf: $0) }
+    var encoded = value.littleEndian
+    withUnsafeBytes(of: &encoded) { out.append(contentsOf: $0) }
 }

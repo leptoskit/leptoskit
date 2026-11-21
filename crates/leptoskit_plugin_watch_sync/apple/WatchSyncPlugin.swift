@@ -100,7 +100,7 @@ public final class WatchSyncPlugin: NSObject, NativePlugin {
         WCSession.default.transferUserInfo([
             "id": id,
             "topic": topic,
-            "payload": payload,
+            "payload": payload
         ])
     }
 
@@ -211,8 +211,8 @@ private struct WireReader {
 
     mutating func string() throws -> String {
         let data = try bytes()
-        guard let s = String(data: data, encoding: .utf8) else { throw PluginError.invalidArgument }
-        return s
+        guard let text = String(data: data, encoding: .utf8) else { throw PluginError.invalidArgument }
+        return text
     }
 
     func finished() throws {
@@ -247,11 +247,11 @@ private func appendBytes(_ out: inout Data, _ data: Data) {
 }
 
 private func appendU32(_ out: inout Data, _ value: UInt32) {
-    var v = value.littleEndian
-    withUnsafeBytes(of: &v) { out.append(contentsOf: $0) }
+    var encoded = value.littleEndian
+    withUnsafeBytes(of: &encoded) { out.append(contentsOf: $0) }
 }
 
 private func appendI64(_ out: inout Data, _ value: Int64) {
-    var v = value.littleEndian
-    withUnsafeBytes(of: &v) { out.append(contentsOf: $0) }
+    var encoded = value.littleEndian
+    withUnsafeBytes(of: &encoded) { out.append(contentsOf: $0) }
 }

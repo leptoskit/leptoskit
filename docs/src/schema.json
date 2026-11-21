@@ -4898,7 +4898,7 @@
 			"type": "object",
 			"properties": {
 				"companion-bundle-id": {
-					"description": "Optional paired iOS companion bundle identifier (`WKCompanionAppBundleIdentifier`).",
+					"description": "Optional paired iOS companion bundle identifier\n(`WKCompanionAppBundleIdentifier`).",
 					"type": [
 						"string",
 						"null"

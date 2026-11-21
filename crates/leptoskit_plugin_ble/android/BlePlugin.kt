@@ -104,7 +104,12 @@ class BlePlugin(
                     found[result.device.address] = result
                 }
             }
-        val filters = uuids.mapNotNull { runCatching { ScanFilter.Builder().setServiceUuid(ParcelUuid(UUID.fromString(it))).build() }.getOrNull() }
+        val filters =
+            uuids.mapNotNull {
+                runCatching {
+                    ScanFilter.Builder().setServiceUuid(ParcelUuid(UUID.fromString(it))).build()
+                }.getOrNull()
+            }
         val settings = ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY).build()
         scanner.startScan(filters, settings, callback)
         try {

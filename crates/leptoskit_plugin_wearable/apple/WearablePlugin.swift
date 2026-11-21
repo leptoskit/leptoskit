@@ -81,13 +81,34 @@ public final class WearablePlugin: NSObject, NativePlugin {
 
     private func requestPermissions(mask: UInt32) async throws {
         var readTypes = Set<HKObjectType>()
-        if mask & (1 << 0) != 0, let hr = HKObjectType.quantityType(forIdentifier: .heartRate) { readTypes.insert(hr) }
-        if mask & (1 << 1) != 0, let hrv = HKObjectType.quantityType(forIdentifier: .heartRateVariabilitySDNN) { readTypes.insert(hrv) }
-        if mask & (1 << 2) != 0, let spo2 = HKObjectType.quantityType(forIdentifier: .oxygenSaturation) { readTypes.insert(spo2) }
-        if mask & (1 << 4) != 0, let steps = HKObjectType.quantityType(forIdentifier: .stepCount) { readTypes.insert(steps) }
-        if mask & (1 << 5) != 0, let floors = HKObjectType.quantityType(forIdentifier: .flightsClimbed) { readTypes.insert(floors) }
-        if mask & (1 << 6) != 0, let cal = HKObjectType.quantityType(forIdentifier: .activeEnergyBurned) { readTypes.insert(cal) }
-        if mask & (1 << 7) != 0, let dist = HKObjectType.quantityType(forIdentifier: .distanceWalkingRunning) { readTypes.insert(dist) }
+        if mask & (1 << 0) != 0,
+           let heartRate = HKObjectType.quantityType(forIdentifier: .heartRate) {
+            readTypes.insert(heartRate)
+        }
+        if mask & (1 << 1) != 0,
+           let hrv = HKObjectType.quantityType(forIdentifier: .heartRateVariabilitySDNN) {
+            readTypes.insert(hrv)
+        }
+        if mask & (1 << 2) != 0,
+           let spo2 = HKObjectType.quantityType(forIdentifier: .oxygenSaturation) {
+            readTypes.insert(spo2)
+        }
+        if mask & (1 << 4) != 0,
+           let steps = HKObjectType.quantityType(forIdentifier: .stepCount) {
+            readTypes.insert(steps)
+        }
+        if mask & (1 << 5) != 0,
+           let floors = HKObjectType.quantityType(forIdentifier: .flightsClimbed) {
+            readTypes.insert(floors)
+        }
+        if mask & (1 << 6) != 0,
+           let cal = HKObjectType.quantityType(forIdentifier: .activeEnergyBurned) {
+            readTypes.insert(cal)
+        }
+        if mask & (1 << 7) != 0,
+           let dist = HKObjectType.quantityType(forIdentifier: .distanceWalkingRunning) {
+            readTypes.insert(dist)
+        }
         let shareTypes: Set<HKSampleType> = [HKObjectType.workoutType()]
         try await healthStore.requestAuthorization(toShare: shareTypes, read: readTypes)
     }
@@ -98,7 +119,7 @@ public final class WearablePlugin: NSObject, NativePlugin {
             (1 << 0, .heartRate),
             (1 << 2, .oxygenSaturation),
             (1 << 4, .stepCount),
-            (1 << 6, .activeEnergyBurned),
+            (1 << 6, .activeEnergyBurned)
         ]
         for (bit, identifier) in ids where mask & bit != 0 {
             guard let sampleType = HKObjectType.quantityType(forIdentifier: identifier) else { continue }
@@ -123,8 +144,12 @@ public final class WearablePlugin: NSObject, NativePlugin {
 
     private func startLive(data: Data) async throws {
         guard data.count == 12 else { throw PluginError.invalidArgument }
-        let mask = data.withUnsafeBytes { UInt32(littleEndian: $0.loadUnaligned(fromByteOffset: 0, as: UInt32.self)) }
-        let intervalMs = data.withUnsafeBytes { UInt32(littleEndian: $0.loadUnaligned(fromByteOffset: 4, as: UInt32.self)) }
+        let mask = data.withUnsafeBytes {
+            UInt32(littleEndian: $0.loadUnaligned(fromByteOffset: 0, as: UInt32.self))
+        }
+        let intervalMs = data.withUnsafeBytes {
+            UInt32(littleEndian: $0.loadUnaligned(fromByteOffset: 4, as: UInt32.self))
+        }
         guard mask != 0, intervalMs >= 200 else { throw PluginError.invalidArgument }
 
         stopLive()
@@ -165,7 +190,12 @@ public final class WearablePlugin: NSObject, NativePlugin {
         guard let sampleType = HKObjectType.quantityType(forIdentifier: identifier) else { return }
         let sort = [NSSortDescriptor(key: HKSampleSortIdentifierEndDate, ascending: false)]
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            let query = HKSampleQuery(sampleType: sampleType, predicate: nil, limit: 1, sortDescriptors: sort) { [weak self] _, samples, _ in
+            let query = HKSampleQuery(
+                sampleType: sampleType,
+                predicate: nil,
+                limit: 1,
+                sortDescriptors: sort
+            ) { [weak self] _, samples, _ in
                 if let sample = samples?.first as? HKQuantitySample {
                     Task { @MainActor in
                         self?.enqueueQuantity(sample)
@@ -332,16 +362,16 @@ private func encodeU32(_ value: UInt32) -> Data {
 }
 
 private func appendU32(_ out: inout Data, _ value: UInt32) {
-    var v = value.littleEndian
-    withUnsafeBytes(of: &v) { out.append(contentsOf: $0) }
+    var encoded = value.littleEndian
+    withUnsafeBytes(of: &encoded) { out.append(contentsOf: $0) }
 }
 
 private func appendI64(_ out: inout Data, _ value: Int64) {
-    var v = value.littleEndian
-    withUnsafeBytes(of: &v) { out.append(contentsOf: $0) }
+    var encoded = value.littleEndian
+    withUnsafeBytes(of: &encoded) { out.append(contentsOf: $0) }
 }
 
 private func appendF64(_ out: inout Data, _ value: Double) {
-    var v = value.bitPattern.littleEndian
-    withUnsafeBytes(of: &v) { out.append(contentsOf: $0) }
+    var encoded = value.bitPattern.littleEndian
+    withUnsafeBytes(of: &encoded) { out.append(contentsOf: $0) }
 }
