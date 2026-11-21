@@ -64,10 +64,10 @@ Before writing the archive, the packager checks:
 
 ## What works and what doesn't
 
-| Works | Doesn't work yet |
-| --- | --- |
-| `leptoskit native platform list` and `capabilities horizon` | Running an on-device Wasm interpreter inside Horizon Worlds (Horizon Worlds executes TypeScript only) |
-| `leptoskit native platform scaffold horizon` (`horizon/ui` scripts + MHCP templates) | `TextInput`, `PasswordInput`, `Vector`, and `Rive` in `horizon/ui` Custom UI |
-| `leptoskit native platform package horizon` deterministic offline `.zip` and validation | Programmatic `scroll_offset` on `horizon/ui` `ScrollView` and remote `Image` URLs |
-| Rewriting leptoskit web `index.html` root paths to relative offline paths | Automated upload to Devpost or Horizon Worlds (upload the `.zip` on Devpost or copy scripts into Desktop Editor) |
-| Meta Quest APK builds and Horizon Store uploads (see [Meta Quest](quest.md)) | Code push and runtime plugins on the `horizon` extension |
+| Works                                                                                   | Doesn't work yet                                                                                                 |
+| --------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `leptoskit native platform list` and `capabilities horizon`                             | Running an on-device Wasm interpreter inside Horizon Worlds (Horizon Worlds executes TypeScript only)            |
+| `leptoskit native platform scaffold horizon` (`horizon/ui` scripts + MHCP templates)    | `TextInput`, `PasswordInput`, `Vector`, and `Rive` in `horizon/ui` Custom UI                                     |
+| `leptoskit native platform package horizon` deterministic offline `.zip` and validation | Programmatic `scroll_offset` on `horizon/ui` `ScrollView` and remote `Image` URLs                                |
+| Rewriting leptoskit web `index.html` root paths to relative offline paths               | Automated upload to Devpost or Horizon Worlds (upload the `.zip` on Devpost or copy scripts into Desktop Editor) |
+| Meta Quest APK builds and Horizon Store uploads (see [Meta Quest](quest.md))            | Code push and runtime plugins on the `horizon` extension                                                         |

@@ -1,6 +1,6 @@
 [package]
 name = "leptoskit_cloud_worker"
-version = "0.3.0"
+version = "0.3.1"
 authors.workspace = true
 categories = ["command-line-utilities", "development-tools"]
 edition.workspace = true

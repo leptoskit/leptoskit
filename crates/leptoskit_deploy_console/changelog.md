@@ -4,6 +4,18 @@ All notable changes to this project are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1](https://github.com/leptoskit/leptoskit/releases/tag/v0.3.1) (2026-11-21)
+
+### Features
+
+#### `Store::schema_fingerprint()` and generation integrity
+
+_Owner:_ Ifiok Jr. · _Introduced in:_ [19fc493](https://github.com/leptoskit/leptoskit/commit/19fc493af2a2b28674f7c64e676c96f7080601fe)
+
+`leptoskit_deploy_console::control::Store` now exposes `Store::schema_fingerprint()`: a pure, non-I/O digest of the management migrations this build applies (version and SQL, length-framed), computed from the migration list itself so there is no second list to keep in step. Anyone holding a published state contract can now refuse schema drift _before_ `Store::open` runs — `Store::open` still verifies the journal and auto-applies new migrations, so before this API a caller had no way to detect a new migration ahead of the open that would apply it.
+
+The public demo runtime (an unreleased example) uses it for exactly that: its generation fingerprint now covers the deploy console's migrations alongside the analytics migrations and the linked SQLite schema, a published marker's seed count is treated as a historical receipt rather than a live invariant, corrupt markers fail closed instead of triggering a rebuild, retention keeps recent published generations across formats as rollback state, and publication is preceded by an explicit fsync barrier over the databases, their WALs, and the directory entries up to the volume root.
+
 ## [0.3.0](https://github.com/leptoskit/leptoskit/releases/tag/v0.3.0) (2026-11-06)
 
 ### Breaking changes
