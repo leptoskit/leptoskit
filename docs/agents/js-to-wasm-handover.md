@@ -352,7 +352,7 @@ The builders (Trends, Funnels, Retention, a saved insight) are `Page::Insight`, 
 
 - **Deleted:** `crates/leptoskit_admin/assets/admin.mjs` and its route; the SSE `{BASE}/api/analytics/live` route (`live_events`); the server's own shell (`src/shell.rs`: `Screen`, `frame`, `shell_css` with its attribute rules, `document`, `page`); `server::render` and `server::html`. `analytics::Shown` is now a plain wrapper around a `Page`.
 - **Tests:** `script.mjs` no longer serves the script or fakes the SSE stream; every page test still asserts that no `admin.mjs` script is in the page. `tests/script.mjs` passes as before.
-- **Next:** the analytics design brief as an installable module, then stop for ifi.
+- **Next:** the analytics design brief, [analytics-module-design.md](analytics-module-design.md), waits for the owner's answers. Nothing more on this stream until then.
 
 ### `feat/admin-signin`: admin conversion, part 5h (sign-in and refusal, merged, #964)
 
