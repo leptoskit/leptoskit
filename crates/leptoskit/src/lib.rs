@@ -51,6 +51,9 @@
 //! - `l10n` — typed translations in the style of Flutter's `gen_l10n`: the
 //!   runtime behind the module `leptoskit l10n` writes from ARB files (the
 //!   `l10n` feature).
+//! - `platform` — opt-in mobile and desktop OS integrations (`live-activities`,
+//!   `home-widgets`, `app-shortcuts`, `android-intent`, `menu`, `window-state`,
+//!   `updater`, or the `mobile-surfaces` / `desktop-extras` bundles).
 //!
 //! Screens are written as markup with [`view!`] and [`component`], or with
 //! the builder functions they expand to. Both produce the same element tree,
@@ -530,6 +533,96 @@ pub mod l10n {
 	//! Typed translations: locales, negotiation, plural rules, and the
 	//! reactive handle behind the generated messages module.
 	pub use leptoskit_l10n::*;
+}
+
+#[cfg(any(
+	feature = "live-activities",
+	feature = "home-widgets",
+	feature = "app-shortcuts",
+	feature = "android-intent",
+	feature = "menu",
+	feature = "window-state",
+	feature = "updater",
+))]
+pub mod platform {
+	//! Opt-in platform-specific mobile and desktop OS integrations.
+	//!
+	//! Enable individual Cargo features (`live-activities`, `home-widgets`,
+	//! `app-shortcuts`, `android-intent`, `menu`, `window-state`, `updater`)
+	//! or the convenience bundles (`mobile-surfaces`, `desktop-extras`) to
+	//! import these APIs from `leptoskit::platform::*`. Enabling
+	//! `leptoskit/guest` forwards the `guest` bridge client feature to each
+	//! enabled runtime plugin.
+	//!
+	//! Native hosts intentionally discover runtime plugins from direct Cargo
+	//! dependencies for entitlement auditing, so also add each runtime plugin
+	//! crate to the host package and list its runtime name under
+	//! `native.plugins` in `leptoskit.toml`.
+	//!
+	//! ```
+	//! # #[cfg(feature = "live-activities")]
+	//! # {
+	//! use leptoskit::platform::live_activities::ContentState;
+	//! use leptoskit::platform::live_activities::island::DynamicIslandLayout;
+	//!
+	//! let island = DynamicIslandLayout::new().compact("ETA", "4m");
+	//! let state = ContentState::new([("status", "En route")])
+	//! 	.unwrap()
+	//! 	.with_dynamic_island(&island)
+	//! 	.unwrap();
+	//! assert_eq!(state.dynamic_island().unwrap().compact_trailing, "4m");
+	//! # }
+	//! ```
+
+	/// Android explicit/implicit intents, choosers, broadcasts, and `intent:`
+	/// URIs (`android-intent` feature).
+	#[cfg(feature = "android-intent")]
+	pub mod android_intent {
+		pub use leptoskit_plugin_android_intent::*;
+	}
+
+	/// Launcher shortcuts, `CoreSpotlight`, `NSUserActivity` Handoff, incoming
+	/// share intake, and mobile integration descriptors (`app-shortcuts`
+	/// feature).
+	#[cfg(feature = "app-shortcuts")]
+	pub mod app_shortcuts {
+		pub use leptoskit_plugin_app_shortcuts::*;
+	}
+
+	/// Home-screen, Lock Screen, and `StandBy` widgets, iOS 18+ Control Center
+	/// controls, and Android Quick Settings tiles (`home-widgets` feature).
+	#[cfg(feature = "home-widgets")]
+	pub mod home_widgets {
+		pub use leptoskit_plugin_home_widgets::*;
+	}
+
+	/// iOS `ActivityKit` Live Activities, Dynamic Island, push-to-start, and
+	/// Android 16+ Live Updates (`live-activities` feature).
+	#[cfg(feature = "live-activities")]
+	pub mod live_activities {
+		pub use leptoskit_plugin_live_activities::*;
+	}
+
+	/// Native desktop and iOS/iPadOS menu bars, context menus, and keyboard
+	/// commands (`menu` feature).
+	#[cfg(feature = "menu")]
+	pub mod menu {
+		pub use leptoskit_plugin_menu::*;
+	}
+
+	/// Native desktop executable auto-updater hooks and feeds (`updater`
+	/// feature).
+	#[cfg(feature = "updater")]
+	pub mod updater {
+		pub use leptoskit_plugin_updater::*;
+	}
+
+	/// Desktop window geometry, always-on-top/overlay levels, chrome, and
+	/// background-only lifecycle (`window-state` feature).
+	#[cfg(feature = "window-state")]
+	pub mod window_state {
+		pub use leptoskit_plugin_window_state::*;
+	}
 }
 
 /// The everything-import for apps: markup macros, components, layout

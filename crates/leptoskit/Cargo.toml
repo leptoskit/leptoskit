@@ -39,6 +39,13 @@ leptoskit_macros = { workspace = true }
 leptoskit_native = { workspace = true }
 leptoskit_notifications = { workspace = true, optional = true }
 leptoskit_plugin = { workspace = true }
+leptoskit_plugin_android_intent = { workspace = true, optional = true }
+leptoskit_plugin_app_shortcuts = { workspace = true, optional = true }
+leptoskit_plugin_home_widgets = { workspace = true, optional = true }
+leptoskit_plugin_live_activities = { workspace = true, optional = true }
+leptoskit_plugin_menu = { workspace = true, optional = true }
+leptoskit_plugin_updater = { workspace = true, optional = true }
+leptoskit_plugin_window_state = { workspace = true, optional = true }
 leptoskit_query = { workspace = true, optional = true }
 leptoskit_rive = { workspace = true, optional = true }
 leptoskit_rpc = { workspace = true, optional = true }
@@ -148,6 +155,11 @@ guest = [
 	"leptoskit_rpc?/guest",
 	"leptoskit_devtools?/guest",
 	"leptoskit_3d?/guest",
+	"leptoskit_plugin_android_intent?/guest",
+	"leptoskit_plugin_app_shortcuts?/guest",
+	"leptoskit_plugin_home_widgets?/guest",
+	"leptoskit_plugin_live_activities?/guest",
+	"leptoskit_plugin_updater?/guest",
 ]
 # A pressed link with no handler of its own opens outside a native app, in
 # the person's browser, mail or phone app, through `leptoskit_plugin_linking`.
@@ -291,6 +303,21 @@ extension = ["web", "dep:leptoskit_extension"]
 # Page-side service workers for Progressive Web Apps: register, message, cache
 # strategies, and Web Push. Unavailable outside a secure browser context.
 service-worker = ["dep:leptoskit_service_worker"]
+# Opt-in platform integrations exposed under `leptoskit::platform::*`.
+live-activities = ["dep:leptoskit_plugin_live_activities"]
+home-widgets = ["dep:leptoskit_plugin_home_widgets"]
+app-shortcuts = ["dep:leptoskit_plugin_app_shortcuts"]
+android-intent = ["dep:leptoskit_plugin_android_intent"]
+menu = ["dep:leptoskit_plugin_menu"]
+window-state = ["dep:leptoskit_plugin_window_state"]
+updater = ["dep:leptoskit_plugin_updater"]
+# Convenience bundle for iOS/Android OS surfaces (Live Activities, Widgets,
+# Control Center, Quick Settings, Spotlight, Handoff, incoming shares, Intents,
+# and iOS/iPadOS menu bars).
+mobile-surfaces = ["live-activities", "home-widgets", "app-shortcuts", "android-intent", "menu"]
+# Convenience bundle for desktop OS integrations (menus, floating/custom chrome
+# windows, background-only lifecycle, and auto-updater hooks).
+desktop-extras = ["menu", "window-state", "updater"]
 windows = ["dep:leptoskit_windows"]
 
 [lints]
