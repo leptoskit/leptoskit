@@ -17,6 +17,7 @@ use crate::Rendered;
 use crate::Renderer;
 use crate::Summary;
 use crate::layout;
+use crate::llms;
 
 /// The file in an output directory that marks it as ours, so a rebuild may
 /// delete what is there.
@@ -284,7 +285,7 @@ impl Site {
 			}
 
 			match self.render_page(&root, source) {
-				Ok(rendered) => pages.push((*chapter, rendered)),
+				Ok((raw, rendered)) => pages.push((*chapter, raw, rendered)),
 				Err(problems) => diagnostics.extend(problems),
 			}
 		}
@@ -302,7 +303,7 @@ impl Site {
 
 		let outline = pages
 			.iter()
-			.map(|(chapter, _)| {
+			.map(|(chapter, ..)| {
 				layout::Neighbour {
 					title: &chapter.title,
 					output: output_path(chapter.path.as_deref().expect("pages have paths")),
@@ -311,11 +312,20 @@ impl Site {
 			.collect::<Vec<_>>();
 		let page_count = pages.len();
 		let mut search = Vec::new();
+		let mut llm_chapters = Vec::with_capacity(page_count);
 
-		for (index, (chapter, rendered)) in pages.into_iter().enumerate() {
+		for (index, (chapter, raw, rendered)) in pages.into_iter().enumerate() {
 			let source = chapter.path.as_deref().expect("pages have paths");
 			let output = &outline[index].output;
 			search.extend(search_entries(chapter, &rendered, output));
+
+			let cleaned = llms::clean_markdown(&raw);
+			write(&out.join(source), cleaned.as_bytes())?;
+			llm_chapters.push(llms::ChapterText {
+				source,
+				summary: rendered.summary.clone(),
+				markdown: cleaned,
+			});
 
 			let html = layout::page(layout::Page {
 				site: self,
@@ -337,6 +347,15 @@ impl Site {
 			});
 			write(&out.join(output), html.as_bytes())?;
 		}
+
+		write(
+			&out.join(llms::INDEX_FILE),
+			llms::render_index(self, &summary, &llm_chapters).as_bytes(),
+		)?;
+		write(
+			&out.join(llms::FULL_FILE),
+			llms::render_full(self, &llm_chapters).as_bytes(),
+		)?;
 
 		let not_found_root = self
 			.url
@@ -381,7 +400,11 @@ impl Site {
 		})
 	}
 
-	fn render_page(&self, root: &Path, source: &str) -> Result<Rendered, Vec<Diagnostic>> {
+	fn render_page(
+		&self,
+		root: &Path,
+		source: &str,
+	) -> Result<(String, Rendered), Vec<Diagnostic>> {
 		let text = read_book_source(root, source).map_err(|error| {
 			vec![
 				Diagnostic::new(
@@ -395,24 +418,25 @@ impl Site {
 		let document =
 			Document::parse(&text).map_err(|diagnostic| vec![diagnostic.in_file(source)])?;
 
-		Renderer::new(&self.components)
+		let rendered = Renderer::new(&self.components)
 			.rewrite_urls(page_url)
 			.render(&document)
 			.map_err(|diagnostics| {
 				diagnostics
 					.into_iter()
 					.map(|diagnostic| diagnostic.in_file(source))
-					.collect()
-			})
+					.collect::<Vec<_>>()
+			})?;
+		Ok((text, rendered))
 	}
 
 	/// Checks every relative link and image: a `.md` target must be a page,
 	/// an `#anchor` must be a heading or footnote on its page, and anything
 	/// else must be a file in the book.
-	fn check_links(&self, pages: &[(&Chapter, Rendered)]) -> Vec<Diagnostic> {
+	fn check_links(&self, pages: &[(&Chapter, String, Rendered)]) -> Vec<Diagnostic> {
 		let anchors: HashMap<&str, HashSet<&str>> = pages
 			.iter()
-			.map(|(chapter, rendered)| {
+			.map(|(chapter, _, rendered)| {
 				(
 					chapter.path.as_deref().expect("pages have paths"),
 					rendered.anchors().collect(),
@@ -421,7 +445,7 @@ impl Site {
 			.collect();
 		let mut diagnostics = Vec::new();
 
-		for (chapter, rendered) in pages {
+		for (chapter, _, rendered) in pages {
 			let source = chapter.path.as_deref().expect("pages have paths");
 
 			for link in &rendered.links {
@@ -477,6 +501,9 @@ impl Site {
 					return Some("points outside the book".to_owned());
 				};
 				if markdown_stem(&target).is_none() {
+					if target == llms::INDEX_FILE || target == llms::FULL_FILE {
+						return None;
+					}
 					if target
 						.strip_prefix("_leptoskit/generated/")
 						.is_some_and(|name| self.generated_assets.contains_key(name))

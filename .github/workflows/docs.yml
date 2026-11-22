@@ -117,6 +117,10 @@ jobs:
           set -euo pipefail
           test -f docs/dist/index.html
           test -f docs/dist/docs/index.html
+          test -f docs/dist/llms.txt
+          test -f docs/dist/llms-full.txt
+          test -f docs/dist/docs/llms.txt
+          test -f docs/dist/docs/llms-full.txt
           test -f docs/dist/docs/_leptoskit/search.json
           test -f docs/dist/pkg/leptoskit_app_bg.wasm
           test ! -e docs/dist/console

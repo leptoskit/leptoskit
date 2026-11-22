@@ -42,6 +42,7 @@ mod diagnostic;
 mod document;
 mod highlight;
 mod layout;
+mod llms;
 mod props;
 mod render;
 

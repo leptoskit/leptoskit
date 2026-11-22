@@ -251,6 +251,47 @@ async fn assert_playground_policy(app: &Router) {
 	}
 }
 
+#[tokio::test]
+async fn one_origin_serves_llms_txt_and_markdown_chapters() {
+	let directory = tempfile::tempdir().unwrap();
+	web_assets(directory.path());
+	let docs = directory.path().join("docs");
+	leptoskit_docs_site::site(leptoskit_docs_site::book())
+		.url("https://deploy.example.test/docs/")
+		.build(&docs)
+		.unwrap();
+	let app = leptoskit_app::site::router(
+		Router::new(),
+		directory.path(),
+		&docs,
+		"https://deploy.example.test",
+	)
+	.unwrap();
+
+	for path in [
+		"/llms.txt",
+		"/llms-full.txt",
+		"/docs/llms.txt",
+		"/docs/llms-full.txt",
+		"/docs/platforms/ios.md",
+	] {
+		let response = app
+			.clone()
+			.oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+			.await
+			.unwrap();
+		assert_eq!(response.status(), StatusCode::OK, "{path}");
+		let body = to_bytes(response.into_body(), 8 * 1024 * 1024)
+			.await
+			.unwrap();
+		let text = String::from_utf8(body.to_vec()).unwrap();
+		assert!(!text.is_empty(), "{path}");
+		if path.ends_with("llms.txt") {
+			assert!(text.contains("platforms/ios.md"), "{path}");
+		}
+	}
+}
+
 fn check_documentation_links(element: &leptoskit::prelude::Element, docs: &Path) {
 	if let Some(href) = element
 		.props

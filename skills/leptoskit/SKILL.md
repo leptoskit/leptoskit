@@ -186,11 +186,14 @@ Pass `session` (an id, `web`, `ios`, … or the app name) when more than one app
 
 Read the one the task needs:
 
+- [Platform-specific features](references/platforms.md): `leptoskit::target` capability checks and iOS, Android, desktop, watch, and extension APIs (including Live Activities, home/lock/Control Center widgets, menus, auto-updates, and current gaps).
 - [Releasing to the stores](references/publishing.md): `leptoskit publish`, the steps it leaves, and how to finish them in each store's dashboard with computer use.
 - [Browser extensions](references/extensions.md): the extension's surfaces, building, developing, and testing it.
 
 ## More
 
+- LLM docs index (plain Markdown for every chapter): https://leptoskit.dev/llms.txt
+- Full plain-Markdown docs in one file: https://leptoskit.dev/llms-full.txt
 - LeptosKit Cloud guide: https://leptoskit.dev/docs/guide/41-leptoskit-cloud.html
 - Linting rules and configuration: https://leptoskit.dev/docs/guide/23-linting.html
 - How markup maps to builder calls: https://leptoskit.dev/docs/reference/view.html

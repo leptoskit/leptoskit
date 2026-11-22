@@ -63,6 +63,8 @@ pub fn router(api: Router, assets: &Path, docs: &Path, origin: &str) -> Result<R
 		"guide/01-installation.html",
 		"guide/29-hosted-deployments.html",
 		"schema.json",
+		"llms.txt",
+		"llms-full.txt",
 		"_leptoskit/theme.js",
 		"_leptoskit/site.js",
 		"_leptoskit/site.css",
@@ -126,6 +128,8 @@ pub fn router(api: Router, assets: &Path, docs: &Path, origin: &str) -> Result<R
 			get(|| async { Redirect::permanent("/console/") }),
 		)
 		.route_service("/console/", console)
+		.route_service("/llms.txt", ServeFile::new(docs.join("llms.txt")))
+		.route_service("/llms-full.txt", ServeFile::new(docs.join("llms-full.txt")))
 		.route("/docs", get(|| async { Redirect::permanent("/docs/") }))
 		.nest_service("/docs/", ServeDir::new(docs))
 		.fallback_service(ServeDir::new(assets))

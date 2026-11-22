@@ -186,3 +186,13 @@ the docs have 3 problems:
 - Links to local addresses such as `http://localhost:3000` or `http://127.0.0.1:3000`, including bare URLs that GitHub-flavoured Markdown would turn into links. They only work on the reader's own machine, so write them as inline code.
 
 Nothing is written until the build is clean, so a broken link never ships.
+
+## Machine-readable output (`llms.txt`)
+
+Every `Site::build` writes plain-text files alongside the HTML pages so coding agents and LLMs can read a book without scraping HTML:
+
+- **`llms.txt`** at the built site's root lists every chapter in `SUMMARY.md` order with its plain-Markdown URL and one-line summary, following the `llms.txt` convention.
+- **`llms-full.txt`** concatenates every chapter in reading order into one Markdown file with source headings.
+- **Plain `.md` copies** sit beside every chapter (`guide/installation.md` next to `guide/installation.html`), with template directive comments removed.
+
+On `leptoskit.dev`, the same files are published at both `/llms.txt` and `/docs/llms.txt` (and `/llms-full.txt` and `/docs/llms-full.txt`). Chapters inside a book can link to `[llms.txt](../llms.txt)` or `[llms-full.txt](../llms-full.txt)` without tripping the broken-link check.

@@ -44,7 +44,22 @@ fn builds_every_chapter_of_the_book() {
 			html.contains("edit/main/docs/src/"),
 			"{page} links to its source"
 		);
+		assert!(
+			out.path().join(source).is_file(),
+			"{source} plain Markdown copy was not written"
+		);
 	}
+
+	let llms = read(out.path().join("llms.txt"));
+	assert!(llms.starts_with("# leptoskit\n"), "{llms}");
+	assert!(llms.contains("https://leptoskit.dev/docs/llms-full.txt"));
+	assert!(llms.contains("https://leptoskit.dev/docs/platforms/ios.md"));
+	assert!(llms.contains("https://leptoskit.dev/docs/platforms/android.md"));
+	assert!(llms.contains("https://leptoskit.dev/docs/platforms/platform-specific.md"));
+
+	let llms_full = read(out.path().join("llms-full.txt"));
+	assert!(llms_full.contains("Source: https://leptoskit.dev/docs/platforms/ios.md"));
+	assert!(llms_full.contains("Source: https://leptoskit.dev/docs/platforms/android.md"));
 }
 
 #[test]
