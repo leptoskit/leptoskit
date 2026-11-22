@@ -11,11 +11,15 @@
 //!   sheet detents, Android Material You dynamic color roles, Android
 //!   conversation bubbles, and iPadOS multi-scene / Apple Pencil preferences.
 
+use leptoskit_bridge::Bytes;
 use leptoskit_bridge::Error;
+use leptoskit_bridge::codec::Decoder;
+use leptoskit_bridge::codec::Encoder;
 
 const MAX_ID_BYTES: usize = 64;
 const MAX_TITLE_BYTES: usize = 128;
 const MAX_TEXT_BYTES: usize = 1024;
+const MAX_SHARE_TEXT_BYTES: usize = 4096;
 const MAX_URL_BYTES: usize = 2048;
 const MAX_PHRASES: usize = 8;
 const MAX_KEYWORDS: usize = 16;
@@ -279,6 +283,74 @@ impl SpotlightItem {
 	pub fn title(&self) -> &str {
 		&self.title
 	}
+
+	/// Encodes this Spotlight item for the binary plugin bridge (version 1).
+	pub fn encode(&self) -> Result<Bytes, Error> {
+		let mut out = Encoder::with_capacity(128);
+		out.u32(1);
+		out.bytes(self.id.as_bytes())?;
+		out.bytes(self.domain.as_bytes())?;
+		out.bytes(self.title.as_bytes())?;
+		out.bytes(self.description.as_bytes())?;
+		out.bytes(self.deep_link.as_bytes())?;
+		out.u32(u32::try_from(self.keywords.len()).map_err(|_| Error::TooLarge)?);
+		for keyword in &self.keywords {
+			out.bytes(keyword.as_bytes())?;
+		}
+		match self.expiration_epoch_secs {
+			None => {
+				out.u32(0);
+				out.u32(0);
+				out.u32(0);
+			}
+			Some(epoch) => {
+				out.u32(1);
+				out.u32((epoch & 0xFFFF_FFFF) as u32);
+				out.u32((epoch >> 32) as u32);
+			}
+		}
+		Ok(out.finish())
+	}
+
+	/// Decodes a Spotlight item from binary bridge bytes.
+	pub fn decode(bytes: &[u8]) -> Result<Self, Error> {
+		let mut input = Decoder::new(bytes);
+		if input.u32()? != 1 {
+			return Err(Error::InvalidArgument);
+		}
+		let id = input.string()?;
+		let domain = input.string()?;
+		let title = input.string()?;
+		let description = input.string()?;
+		let deep_link = input.string()?;
+		let count = input.u32()? as usize;
+		if count > MAX_KEYWORDS {
+			return Err(Error::TooLarge);
+		}
+		let mut keywords = Vec::with_capacity(count);
+		for _ in 0..count {
+			keywords.push(input.string()?.to_owned());
+		}
+		let has_exp = input.u32()?;
+		let exp_lo = input.u32()?;
+		let exp_hi = input.u32()?;
+		let expiration = match has_exp {
+			0 => {
+				if exp_lo != 0 || exp_hi != 0 {
+					return Err(Error::InvalidArgument);
+				}
+				None
+			}
+			1 => Some(u64::from(exp_lo) | (u64::from(exp_hi) << 32)),
+			_ => return Err(Error::InvalidArgument),
+		};
+		input.finish()?;
+		let mut item = Self::new(id, domain, title, description, deep_link)?.keywords(keywords)?;
+		if let Some(epoch) = expiration {
+			item = item.expires_at(epoch);
+		}
+		Ok(item)
+	}
 }
 
 /// Apple Handoff / Continuity user activity (`NSUserActivity`).
@@ -321,7 +393,10 @@ impl UserActivity {
 	/// Returns [`Error::InvalidArgument`] unless `url` starts with `https://`.
 	pub fn webpage_url(mut self, url: impl Into<String>) -> Result<Self, Error> {
 		let url = url.into();
-		if !url.starts_with("https://") || url.len() > MAX_URL_BYTES {
+		if !url.starts_with("https://")
+			|| url.len() > MAX_URL_BYTES
+			|| url.chars().any(char::is_control)
+		{
 			return Err(Error::InvalidArgument);
 		}
 		self.webpage_url = Some(url);
@@ -384,6 +459,61 @@ impl UserActivity {
 	pub fn webpage(&self) -> Option<&str> {
 		self.webpage_url.as_deref()
 	}
+
+	/// Encodes this user activity for the binary plugin bridge (version 1).
+	pub fn encode(&self) -> Result<Bytes, Error> {
+		let mut out = Encoder::with_capacity(96);
+		out.u32(1);
+		out.bytes(self.activity_type.as_bytes())?;
+		out.bytes(self.title.as_bytes())?;
+		match self.webpage_url.as_deref() {
+			None => out.u32(0),
+			Some(url) => {
+				out.u32(1);
+				out.bytes(url.as_bytes())?;
+			}
+		}
+		let mut flags = 0u32;
+		if self.eligible_for_handoff {
+			flags |= 1;
+		}
+		if self.eligible_for_search {
+			flags |= 1 << 1;
+		}
+		if self.eligible_for_prediction {
+			flags |= 1 << 2;
+		}
+		out.u32(flags);
+		Ok(out.finish())
+	}
+
+	/// Decodes a user activity from binary bridge bytes.
+	pub fn decode(bytes: &[u8]) -> Result<Self, Error> {
+		let mut input = Decoder::new(bytes);
+		if input.u32()? != 1 {
+			return Err(Error::InvalidArgument);
+		}
+		let activity_type = input.string()?;
+		let title = input.string()?;
+		let webpage = match input.u32()? {
+			0 => None,
+			1 => Some(input.string()?.to_owned()),
+			_ => return Err(Error::InvalidArgument),
+		};
+		let flags = input.u32()?;
+		if flags & !0b111 != 0 {
+			return Err(Error::InvalidArgument);
+		}
+		input.finish()?;
+		let mut activity = Self::new(activity_type, title)?
+			.handoff(flags & 1 != 0)
+			.search(flags & (1 << 1) != 0)
+			.prediction(flags & (1 << 2) != 0);
+		if let Some(url) = webpage {
+			activity = activity.webpage_url(url)?;
+		}
+		Ok(activity)
+	}
 }
 
 /// One attachment received by an iOS Share Extension or Android `ACTION_SEND`
@@ -412,20 +542,147 @@ pub struct IncomingShare {
 }
 
 impl IncomingShare {
-	/// Validates attachment bounds and safe URL schemes.
+	/// Validates attachment bounds, text bounds, and safe URL schemes.
 	///
 	/// # Errors
 	///
 	/// Returns [`Error::TooLarge`] above 32 attachments or
-	/// [`Error::InvalidArgument`] for unsafe URLs.
+	/// [`Error::InvalidArgument`] for unsafe URLs or oversized/control text.
 	pub fn validate(&self) -> Result<(), Error> {
 		if self.attachments.len() > MAX_ATTACHMENTS {
 			return Err(Error::TooLarge);
 		}
+		if let Some(text) = self.text.as_deref()
+			&& (text.len() > MAX_SHARE_TEXT_BYTES
+				|| text
+					.chars()
+					.any(|ch| ch.is_control() && !matches!(ch, '\n' | '\r' | '\t')))
+		{
+			return Err(Error::InvalidArgument);
+		}
 		if let Some(url) = self.url.as_deref() {
 			validate_safe_url(url)?;
 		}
+		if let Some(subject) = self.subject.as_deref() {
+			validate_text(subject, 256, true)?;
+		}
+		for attachment in &self.attachments {
+			validate_text(&attachment.mime_type, 128, false)?;
+			if let Some(name) = attachment.file_name.as_deref() {
+				validate_text(name, 256, false)?;
+			}
+		}
 		Ok(())
+	}
+
+	/// Encodes this incoming share into binary bridge bytes (version 1).
+	pub fn encode(&self) -> Result<Bytes, Error> {
+		let mut out = Encoder::with_capacity(128);
+		self.encode_into(&mut out)?;
+		Ok(out.finish())
+	}
+
+	pub(crate) fn encode_into(&self, out: &mut Encoder) -> Result<(), Error> {
+		self.validate()?;
+		out.u32(1);
+		encode_opt_string(out, self.text.as_deref())?;
+		encode_opt_string(out, self.url.as_deref())?;
+		encode_opt_string(out, self.subject.as_deref())?;
+		out.u32(u32::try_from(self.attachments.len()).map_err(|_| Error::TooLarge)?);
+		for attachment in &self.attachments {
+			out.bytes(attachment.mime_type.as_bytes())?;
+			encode_opt_string(out, attachment.file_name.as_deref())?;
+			out.u32((attachment.byte_len & 0xFFFF_FFFF) as u32);
+			out.u32((attachment.byte_len >> 32) as u32);
+		}
+		Ok(())
+	}
+
+	/// Decodes an incoming share from binary bridge bytes.
+	pub fn decode(bytes: &[u8]) -> Result<Self, Error> {
+		let mut input = Decoder::new(bytes);
+		let share = Self::decode_from(&mut input)?;
+		input.finish()?;
+		Ok(share)
+	}
+
+	pub(crate) fn decode_from(input: &mut Decoder<'_>) -> Result<Self, Error> {
+		if input.u32()? != 1 {
+			return Err(Error::InvalidArgument);
+		}
+		let text = decode_opt_string(input)?;
+		let url = decode_opt_string(input)?;
+		let subject = decode_opt_string(input)?;
+		let count = input.u32()? as usize;
+		if count > MAX_ATTACHMENTS {
+			return Err(Error::TooLarge);
+		}
+		let mut attachments = Vec::with_capacity(count);
+		for _ in 0..count {
+			let mime_type = input.string()?.to_owned();
+			let file_name = decode_opt_string(input)?;
+			let lo = u64::from(input.u32()?);
+			let hi = u64::from(input.u32()?);
+			attachments.push(SharedAttachment {
+				mime_type,
+				file_name,
+				byte_len: lo | (hi << 32),
+			});
+		}
+		let share = Self {
+			text,
+			url,
+			subject,
+			attachments,
+		};
+		share.validate()?;
+		Ok(share)
+	}
+}
+
+/// Encodes an optional [`IncomingShare`] reply (`0` = none, `1` = share).
+pub fn encode_optional_incoming_share(share: Option<&IncomingShare>) -> Result<Bytes, Error> {
+	let mut out = Encoder::with_capacity(64);
+	match share {
+		None => out.u32(0),
+		Some(share) => {
+			out.u32(1);
+			share.encode_into(&mut out)?;
+		}
+	}
+	Ok(out.finish())
+}
+
+/// Decodes an optional [`IncomingShare`] reply.
+pub fn decode_optional_incoming_share(bytes: &[u8]) -> Result<Option<IncomingShare>, Error> {
+	let mut input = Decoder::new(bytes);
+	let result = match input.u32()? {
+		0 => None,
+		1 => Some(IncomingShare::decode_from(&mut input)?),
+		_ => return Err(Error::InvalidArgument),
+	};
+	input.finish()?;
+	Ok(result)
+}
+
+fn encode_opt_string(out: &mut Encoder, value: Option<&str>) -> Result<(), Error> {
+	match value {
+		None => {
+			out.u32(0);
+			Ok(())
+		}
+		Some(text) => {
+			out.u32(1);
+			out.bytes(text.as_bytes())
+		}
+	}
+}
+
+fn decode_opt_string(input: &mut Decoder<'_>) -> Result<Option<String>, Error> {
+	match input.u32()? {
+		0 => Ok(None),
+		1 => Ok(Some(input.string()?.to_owned())),
+		_ => Err(Error::InvalidArgument),
 	}
 }
 

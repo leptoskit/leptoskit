@@ -44,6 +44,42 @@ impl HomeWidgets {
 		Installed::decode(&self.0.call(INSTALLED, &kind.encode()?)?.await?)
 	}
 
+	/// Publishes a multi-entry [`TimelineSchedule`] for `WidgetKit` or Android
+	/// App Widgets.
+	pub async fn set_timeline(self, schedule: &TimelineSchedule) -> Result<(), Error> {
+		self.empty(SET_TIMELINE, &schedule.encode()?).await
+	}
+
+	/// Reads the [`TimelineSchedule`] previously published for `kind`.
+	pub async fn get_timeline(self, kind: &Kind) -> Result<TimelineSchedule, Error> {
+		TimelineSchedule::decode(&self.0.call(GET_TIMELINE, &kind.encode()?)?.await?)
+	}
+
+	/// Publishes state for an iOS 18+ Control Center `ControlWidget`.
+	pub async fn set_control(self, control: &ControlCenterControl) -> Result<(), Error> {
+		self.empty(SET_CONTROL, &control.encode()?).await
+	}
+
+	/// Reads the [`ControlCenterControl`] previously stored for `id`.
+	pub async fn get_control(self, id: &Kind) -> Result<ControlCenterControl, Error> {
+		ControlCenterControl::decode(&self.0.call(GET_CONTROL, &id.encode()?)?.await?)
+	}
+
+	/// Asks iOS 18+ `ControlCenter` to reload controls (`None` reloads all).
+	pub async fn reload_controls(self, kind: Option<&Kind>) -> Result<(), Error> {
+		self.empty(RELOAD_CONTROLS, &encode_reload(kind)?).await
+	}
+
+	/// Publishes state for an Android Quick Settings `TileService`.
+	pub async fn set_quick_tile(self, tile: &QuickSettingsTile) -> Result<(), Error> {
+		self.empty(SET_QUICK_TILE, &tile.encode()?).await
+	}
+
+	/// Reads the [`QuickSettingsTile`] previously stored for `id`.
+	pub async fn get_quick_tile(self, id: &Kind) -> Result<QuickSettingsTile, Error> {
+		QuickSettingsTile::decode(&self.0.call(GET_QUICK_TILE, &id.encode()?)?.await?)
+	}
+
 	async fn empty(self, method: MethodId, payload: &[u8]) -> Result<(), Error> {
 		if self.0.call(method, payload)?.await?.is_empty() {
 			Ok(())

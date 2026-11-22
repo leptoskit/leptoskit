@@ -16,16 +16,52 @@ import java.nio.charset.CharacterCodingException
 import java.nio.charset.CodingErrorAction
 import java.nio.charset.StandardCharsets
 
+/** Decoded widget snapshot for `AppWidgetProvider` and Jetpack Glance targets. */
+data class WidgetSnapshotData(
+    val kind: String,
+    val family: Int,
+    val title: String,
+    val body: String,
+    val url: String,
+)
+
+/** Decoded Android Quick Settings tile state for `TileService` subclasses. */
+data class QuickTileData(
+    val id: String,
+    val label: String,
+    val subtitle: String,
+    val iconName: String,
+    /** `0` = Unavailable, `1` = Inactive, `2` = Active. */
+    val state: Int,
+    val actionId: String,
+)
+
 /**
- * Publishes snapshot bytes for Android App Widgets and asks AppWidgetManager to
- * refresh them. Does not declare or draw a widget provider; the app still owns
- * its AppWidgetProvider subclasses.
+ * Publishes snapshot, timeline, and Quick Settings tile bytes for Android App
+ * Widgets / Jetpack Glance / `TileService` and asks AppWidgetManager to refresh
+ * providers. Does not declare or draw a widget provider; the app still owns its
+ * `AppWidgetProvider` and `TileService` subclasses.
  */
 class HomeWidgetsPlugin(
     private val context: Context,
 ) : NativePlugin {
     override val name = "home-widgets"
-    override val methods = intArrayOf(CAPABILITY, SET, GET, CLEAR, RELOAD, INSTALLED)
+    override val methods =
+        intArrayOf(
+            CAPABILITY,
+            SET,
+            GET,
+            CLEAR,
+            RELOAD,
+            INSTALLED,
+            SET_TIMELINE,
+            GET_TIMELINE,
+            SET_CONTROL,
+            GET_CONTROL,
+            RELOAD_CONTROLS,
+            SET_QUICK_TILE,
+            GET_QUICK_TILE,
+        )
 
     private val prefs = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
     private var closed = false
@@ -51,24 +87,13 @@ class HomeWidgetsPlugin(
 
             SET -> {
                 val snapshot = Snapshot.decode(payload)
-                // Store raw wire bytes so GET round-trips the guest payload.
-                // commit() so a successful SET is durable before GET/RELOAD.
-                if (!prefs
-                        .edit()
-                        .putString(PREFIX + snapshot.kind, snapshot.encodedBase64())
-                        .commit()
-                ) {
-                    throw PluginException(PluginException.NATIVE)
-                }
+                writeBytes(PREFIX + snapshot.kind, snapshot.raw)
                 byteArrayOf()
             }
 
             GET -> {
                 val kind = Kind.decode(payload)
-                val encoded =
-                    prefs.getString(PREFIX + kind, null)
-                        ?: throw PluginException(PluginException.UNAVAILABLE)
-                android.util.Base64.decode(encoded, android.util.Base64.NO_WRAP)
+                readBytes(PREFIX + kind)
             }
 
             CLEAR -> {
@@ -92,10 +117,65 @@ class HomeWidgetsPlugin(
                 installed(kind).toByteArray()
             }
 
+            SET_TIMELINE -> {
+                val timeline = TimelinePayload.decode(payload)
+                writeBytes(TIMELINE_PREFIX + timeline.kind, timeline.raw)
+                byteArrayOf()
+            }
+
+            GET_TIMELINE -> {
+                val kind = Kind.decode(payload)
+                readBytes(TIMELINE_PREFIX + kind)
+            }
+
+            SET_CONTROL -> {
+                ControlPayload.decode(payload)
+                throw PluginException(PluginException.UNAVAILABLE)
+            }
+
+            GET_CONTROL -> {
+                Kind.decode(payload)
+                throw PluginException(PluginException.UNAVAILABLE)
+            }
+
+            RELOAD_CONTROLS -> {
+                optionalKind(payload)
+                throw PluginException(PluginException.UNAVAILABLE)
+            }
+
+            SET_QUICK_TILE -> {
+                val tile = QuickTilePayload.decode(payload)
+                writeBytes(TILE_PREFIX + tile.data.id, tile.raw)
+                byteArrayOf()
+            }
+
+            GET_QUICK_TILE -> {
+                val id = Kind.decode(payload)
+                readBytes(TILE_PREFIX + id)
+            }
+
             else -> {
                 throw PluginException(PluginException.UNAVAILABLE)
             }
         }
+    }
+
+    private fun writeBytes(
+        key: String,
+        raw: ByteArray,
+    ) {
+        val encoded = android.util.Base64.encodeToString(raw, android.util.Base64.NO_WRAP)
+        // commit() so a successful write is durable before GET/RELOAD.
+        if (!prefs.edit().putString(key, encoded).commit()) {
+            throw PluginException(PluginException.NATIVE)
+        }
+    }
+
+    private fun readBytes(key: String): ByteArray {
+        val encoded =
+            prefs.getString(key, null)
+                ?: throw PluginException(PluginException.UNAVAILABLE)
+        return android.util.Base64.decode(encoded, android.util.Base64.NO_WRAP)
     }
 
     private fun capability(): ByteArray {
@@ -187,19 +267,59 @@ class HomeWidgetsPlugin(
         }
     }
 
-    private companion object {
-        const val CAPABILITY = 0
-        const val SET = 1
-        const val GET = 2
-        const val CLEAR = 3
-        const val RELOAD = 4
-        const val INSTALLED = 5
+    companion object {
+        private const val CAPABILITY = 0
+        private const val SET = 1
+        private const val GET = 2
+        private const val CLEAR = 3
+        private const val RELOAD = 4
+        private const val INSTALLED = 5
+        private const val SET_TIMELINE = 6
+        private const val GET_TIMELINE = 7
+        private const val SET_CONTROL = 8
+        private const val GET_CONTROL = 9
+        private const val RELOAD_CONTROLS = 10
+        private const val SET_QUICK_TILE = 11
+        private const val GET_QUICK_TILE = 12
         const val PREFS = "leptoskit.home_widgets"
         const val PREFIX = "leptoskit.home-widgets."
-        const val INSTALLED_UNKNOWN = 0
-        const val INSTALLED_NONE = 1
-        const val INSTALLED_SOME = 2
-        const val MAX_SNAPSHOT = 16 + 64 + 256 + 1024 + 2048
+        const val TIMELINE_PREFIX = "leptoskit.home-widgets.timeline."
+        const val TILE_PREFIX = "leptoskit.home-widgets.tile."
+        private const val INSTALLED_UNKNOWN = 0
+        private const val INSTALLED_NONE = 1
+        private const val INSTALLED_SOME = 2
+
+        /** Reads the latest widget snapshot stored for `kind`. */
+        @JvmStatic
+        fun readSnapshot(
+            context: Context,
+            kind: String,
+        ): WidgetSnapshotData? {
+            val prefs = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            val encoded = prefs.getString(PREFIX + kind, null) ?: return null
+            return try {
+                val raw = android.util.Base64.decode(encoded, android.util.Base64.NO_WRAP)
+                Snapshot.decode(ByteBuffer.wrap(raw)).data
+            } catch (_: Throwable) {
+                null
+            }
+        }
+
+        /** Reads the latest Quick Settings tile state stored for `id`. */
+        @JvmStatic
+        fun readQuickTile(
+            context: Context,
+            id: String,
+        ): QuickTileData? {
+            val prefs = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            val encoded = prefs.getString(TILE_PREFIX + id, null) ?: return null
+            return try {
+                val raw = android.util.Base64.decode(encoded, android.util.Base64.NO_WRAP)
+                QuickTilePayload.decode(ByteBuffer.wrap(raw)).data
+            } catch (_: Throwable) {
+                null
+            }
+        }
     }
 }
 
@@ -239,6 +359,20 @@ private fun Int.toByteArray(): ByteArray =
         .putInt(this)
         .array()
 
+private fun sliceRaw(
+    payload: ByteBuffer,
+    start: Int,
+    end: Int,
+): ByteArray {
+    val raw = ByteArray(end - start)
+    payload.duplicate().also {
+        it.position(start)
+        it.limit(end)
+        it.get(raw)
+    }
+    return raw
+}
+
 private object Kind {
     fun decode(payload: ByteBuffer): String {
         val reader = Reader(payload, 68)
@@ -251,10 +385,9 @@ private object Kind {
 
 private class Snapshot(
     val kind: String,
+    val data: WidgetSnapshotData,
     val raw: ByteArray,
 ) {
-    fun encodedBase64(): String = android.util.Base64.encodeToString(raw, android.util.Base64.NO_WRAP)
-
     companion object {
         fun decode(payload: ByteBuffer): Snapshot {
             val start = payload.position()
@@ -263,9 +396,8 @@ private class Snapshot(
             val family = reader.u32()
 
             if (family !in 0..4) throw PluginException(PluginException.INVALID_ARGUMENT)
-            reader.text(256, multiline = false, required = true)
-            reader.text(1024, multiline = true, required = false)
-
+            val title = reader.text(256, multiline = false, required = true)
+            val body = reader.text(1024, multiline = true, required = false)
             val url = reader.text(2048, multiline = false, required = false)
 
             if (url.isNotEmpty() && !isAllowedUrl(url)) {
@@ -274,17 +406,99 @@ private class Snapshot(
 
             reader.finish()
             val end = payload.position()
-            val raw = ByteArray(end - start)
-            payload.duplicate().also {
-                it.position(start)
-                it.limit(end)
-                it.get(raw)
-            }
+            val raw = sliceRaw(payload, start, end)
 
-            return Snapshot(kind, raw)
+            return Snapshot(kind, WidgetSnapshotData(kind, family, title, body, url), raw)
         }
 
-        private const val MAX_SNAPSHOT = 16 + 64 + 256 + 1024 + 2048
+        const val MAX_SNAPSHOT = 16 + 64 + 256 + 1024 + 2048
+    }
+}
+
+private class TimelinePayload(
+    val kind: String,
+    val raw: ByteArray,
+) {
+    companion object {
+        fun decode(payload: ByteBuffer): TimelinePayload {
+            val start = payload.position()
+            val reader = Reader(payload, 32 * 4096)
+            if (reader.u32() != 1) throw PluginException(PluginException.INVALID_ARGUMENT)
+            val surface = reader.u32()
+            if (surface !in 0..6) throw PluginException(PluginException.INVALID_ARGUMENT)
+            val policyTag = reader.u32()
+            val policySeconds = reader.u32()
+            when (policyTag) {
+                0, 2 -> if (policySeconds != 0) throw PluginException(PluginException.INVALID_ARGUMENT)
+                1 -> if (policySeconds <= 0) throw PluginException(PluginException.INVALID_ARGUMENT)
+                else -> throw PluginException(PluginException.INVALID_ARGUMENT)
+            }
+            val count = reader.u32()
+            if (count <= 0) throw PluginException(PluginException.INVALID_ARGUMENT)
+            if (count > 32) throw PluginException(PluginException.TOO_LARGE)
+            var expectedKind: String? = null
+            var prevEpoch = 0L
+            for (index in 0 until count) {
+                val lo = reader.u32().toLong() and 0xFFFF_FFFFL
+                val hi = reader.u32().toLong() and 0xFFFF_FFFFL
+                val epoch = lo or (hi shl 32)
+                if (index > 0 && java.lang.Long.compareUnsigned(epoch, prevEpoch) < 0) {
+                    throw PluginException(PluginException.INVALID_ARGUMENT)
+                }
+                prevEpoch = epoch
+                val snapBytes = reader.rawBytes(Snapshot.MAX_SNAPSHOT)
+                val snap = Snapshot.decode(ByteBuffer.wrap(snapBytes))
+                if (expectedKind == null) {
+                    expectedKind = snap.kind
+                } else if (expectedKind != snap.kind) {
+                    throw PluginException(PluginException.INVALID_ARGUMENT)
+                }
+            }
+            reader.finish()
+            val raw = sliceRaw(payload, start, payload.position())
+            return TimelinePayload(expectedKind!!, raw)
+        }
+    }
+}
+
+private object ControlPayload {
+    fun decode(payload: ByteBuffer) {
+        val reader = Reader(payload, 2048)
+        if (reader.u32() != 1) throw PluginException(PluginException.INVALID_ARGUMENT)
+        reader.identifier()
+        reader.text(128, multiline = false, required = true)
+        reader.text(128, multiline = false, required = false)
+        reader.identifier()
+        val kindTag = reader.u32()
+        if (kindTag !in 0..2) throw PluginException(PluginException.INVALID_ARGUMENT)
+        reader.identifier()
+        reader.finish()
+    }
+}
+
+private class QuickTilePayload(
+    val data: QuickTileData,
+    val raw: ByteArray,
+) {
+    companion object {
+        fun decode(payload: ByteBuffer): QuickTilePayload {
+            val start = payload.position()
+            val reader = Reader(payload, 2048)
+            if (reader.u32() != 1) throw PluginException(PluginException.INVALID_ARGUMENT)
+            val id = reader.identifier()
+            val label = reader.text(128, multiline = false, required = true)
+            val subtitle = reader.text(128, multiline = false, required = false)
+            val iconName = reader.identifier()
+            val state = reader.u32()
+            if (state !in 0..2) throw PluginException(PluginException.INVALID_ARGUMENT)
+            val actionId = reader.identifier()
+            reader.finish()
+            val raw = sliceRaw(payload, start, payload.position())
+            return QuickTilePayload(
+                QuickTileData(id, label, subtitle, iconName, state, actionId),
+                raw,
+            )
+        }
     }
 }
 
@@ -304,6 +518,16 @@ private class Reader(
         if (buffer.remaining() < 4) throw PluginException(PluginException.INVALID_ARGUMENT)
 
         return buffer.int
+    }
+
+    fun rawBytes(maximum: Int): ByteArray {
+        val length = u32()
+        if (length < 0 || length > maximum || length > buffer.remaining()) {
+            throw PluginException(PluginException.INVALID_ARGUMENT)
+        }
+        val bytes = ByteArray(length)
+        buffer.get(bytes)
+        return bytes
     }
 
     fun identifier(): String {

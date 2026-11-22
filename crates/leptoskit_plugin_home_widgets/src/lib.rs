@@ -44,8 +44,38 @@ pub const CLEAR: MethodId = MethodId(3);
 pub const RELOAD: MethodId = MethodId(4);
 /// One length-prefixed kind; four-byte [`Installed`] reply.
 pub const INSTALLED: MethodId = MethodId(5);
+/// One [`TimelineSchedule`]; empty reply. Replaces any prior timeline for that
+/// widget kind.
+pub const SET_TIMELINE: MethodId = MethodId(6);
+/// One length-prefixed kind; replies with the stored [`TimelineSchedule`].
+pub const GET_TIMELINE: MethodId = MethodId(7);
+/// One [`ControlCenterControl`]; empty reply (iOS 18+ Control Center).
+pub const SET_CONTROL: MethodId = MethodId(8);
+/// One length-prefixed control id; replies with the stored
+/// [`ControlCenterControl`].
+pub const GET_CONTROL: MethodId = MethodId(9);
+/// Optional control kind string (empty payload reloads every control).
+pub const RELOAD_CONTROLS: MethodId = MethodId(10);
+/// One [`QuickSettingsTile`]; empty reply (Android `TileService`).
+pub const SET_QUICK_TILE: MethodId = MethodId(11);
+/// One length-prefixed tile id; replies with the stored [`QuickSettingsTile`].
+pub const GET_QUICK_TILE: MethodId = MethodId(12);
 /// Independently grantable operations.
-pub const METHODS: &[MethodId] = &[CAPABILITY, SET, GET, CLEAR, RELOAD, INSTALLED];
+pub const METHODS: &[MethodId] = &[
+	CAPABILITY,
+	SET,
+	GET,
+	CLEAR,
+	RELOAD,
+	INSTALLED,
+	SET_TIMELINE,
+	GET_TIMELINE,
+	SET_CONTROL,
+	GET_CONTROL,
+	RELOAD_CONTROLS,
+	SET_QUICK_TILE,
+	GET_QUICK_TILE,
+];
 
 /// Maximum UTF-8 bytes for a snapshot title.
 pub const MAX_TITLE_BYTES: usize = 256;

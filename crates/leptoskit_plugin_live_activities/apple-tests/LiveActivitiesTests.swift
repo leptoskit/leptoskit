@@ -82,6 +82,40 @@ private final class FakeLiveActivities: LiveActivityService {
         }
     }
 
+    var lastStaleAfterSeconds: UInt32?
+    var lastRelevanceScore: Double = 0.0
+    var pushToStartToken: Data?
+
+    func startScheduled(
+        id: String,
+        kind: String,
+        title: String,
+        fields: [String: String],
+        pushUpdates: Bool,
+        staleAfterSeconds: UInt32?,
+        relevanceScore: Double
+    ) async throws {
+        lastStaleAfterSeconds = staleAfterSeconds
+        lastRelevanceScore = relevanceScore
+        try await start(id: id, kind: kind, title: title, fields: fields, pushUpdates: pushUpdates)
+    }
+
+    func updateScheduled(
+        id: String,
+        fields: [String: String],
+        staleAfterSeconds: UInt32?,
+        relevanceScore: Double
+    ) async throws {
+        lastStaleAfterSeconds = staleAfterSeconds
+        lastRelevanceScore = relevanceScore
+        try await update(id: id, fields: fields)
+    }
+
+    func waitPushToStartToken() async throws -> Data {
+        guard let token = pushToStartToken else { throw PluginError.unavailable }
+        return token
+    }
+
     func list() -> [String] {
         Array(activities.keys).sorted()
     }
@@ -128,6 +162,57 @@ final class LiveActivitiesTests: XCTestCase {
             XCTFail("Closed plugin answered")
         } catch {
             XCTAssertEqual(error as? PluginError, .cancelled)
+        }
+    }
+
+    func testScheduledStartUpdatePushToStartAndAndroidUnavailable() async throws {
+        let service = FakeLiveActivities()
+        service.pushToStartToken = Data([0xCA, 0xFE])
+        let plugin = LiveActivitiesPlugin(service: service)
+
+        let token = try await plugin.invoke(method: 7, payload: NativeBuffer(taking: lk_buffer()))
+        XCTAssertEqual(try bytes(token), Data([0xCA, 0xFE]))
+
+        var scheduledStart = Data()
+        try append("ride-2", to: &scheduledStart)
+        try append("ride", to: &scheduledStart)
+        try append("Driver nearby", to: &scheduledStart)
+        append(UInt32(1), to: &scheduledStart)
+        append(UInt32(1), to: &scheduledStart)
+        try append("_lk_di_cl", to: &scheduledStart)
+        try append("Courier", to: &scheduledStart)
+        // Schedule version=1, hasStale=1, stale=120s, relevance=0.75, allowPushToStart=1
+        append(UInt32(1), to: &scheduledStart)
+        append(UInt32(1), to: &scheduledStart)
+        append(UInt32(120), to: &scheduledStart)
+        append(Float(0.75).bitPattern, to: &scheduledStart)
+        append(UInt32(1), to: &scheduledStart)
+
+        let started = try await plugin.invoke(method: 8, payload: buffer(scheduledStart))
+        XCTAssertEqual(try identifier(started), "ride-2")
+        XCTAssertEqual(service.lastStaleAfterSeconds, 120)
+        XCTAssertEqual(service.lastRelevanceScore, 0.75, accuracy: 0.001)
+
+        var scheduledUpdate = Data()
+        try append("ride-2", to: &scheduledUpdate)
+        append(UInt32(1), to: &scheduledUpdate)
+        try append("_lk_di_ct", to: &scheduledUpdate)
+        try append("1m", to: &scheduledUpdate)
+        append(UInt32(1), to: &scheduledUpdate)
+        append(UInt32(0), to: &scheduledUpdate)
+        append(UInt32(0), to: &scheduledUpdate)
+        append(Float(1.0).bitPattern, to: &scheduledUpdate)
+        append(UInt32(0), to: &scheduledUpdate)
+
+        _ = try await plugin.invoke(method: 9, payload: buffer(scheduledUpdate))
+        XCTAssertNil(service.lastStaleAfterSeconds)
+        XCTAssertEqual(service.lastRelevanceScore, 1.0, accuracy: 0.001)
+
+        do {
+            _ = try await plugin.invoke(method: 11, payload: idPayload("ride-2"))
+            XCTFail("Android Live Update end should be unavailable on Apple")
+        } catch {
+            XCTAssertEqual(error as? PluginError, .unavailable)
         }
     }
 

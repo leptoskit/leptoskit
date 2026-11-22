@@ -16,6 +16,23 @@ public struct LeptosKitLiveActivityAttributes: ActivityAttributes {
         public init(fields: [String: String]) {
             self.fields = fields
         }
+
+        /// Dynamic Island compact leading slot (`_lk_di_cl`), if set.
+        public var compactLeading: String? { fields["_lk_di_cl"] }
+        /// Dynamic Island compact trailing slot (`_lk_di_ct`), if set.
+        public var compactTrailing: String? { fields["_lk_di_ct"] }
+        /// Dynamic Island minimal badge slot (`_lk_di_min`), if set.
+        public var minimal: String? { fields["_lk_di_min"] }
+        /// Dynamic Island expanded leading slot (`_lk_di_el`), if set.
+        public var expandedLeading: String? { fields["_lk_di_el"] }
+        /// Dynamic Island expanded trailing slot (`_lk_di_et`), if set.
+        public var expandedTrailing: String? { fields["_lk_di_et"] }
+        /// Dynamic Island expanded center headline (`_lk_di_ec`), if set.
+        public var expandedCenter: String? { fields["_lk_di_ec"] }
+        /// Dynamic Island expanded bottom region (`_lk_di_eb`), if set.
+        public var expandedBottom: String? { fields["_lk_di_eb"] }
+        /// Optional `#RRGGBB` Dynamic Island keyline tint (`_lk_di_tint`).
+        public var keylineTintHex: String? { fields["_lk_di_tint"] }
     }
 
     /// Application-chosen activity identifier.

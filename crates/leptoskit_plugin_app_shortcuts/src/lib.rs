@@ -34,6 +34,8 @@ pub use integrations::SpotlightItem;
 pub use integrations::StatusBarConfig;
 pub use integrations::StatusBarStyle;
 pub use integrations::UserActivity;
+pub use integrations::decode_optional_incoming_share;
+pub use integrations::encode_optional_incoming_share;
 
 /// Native registration name.
 pub const NAME: &str = "app-shortcuts";
@@ -43,8 +45,27 @@ pub const SET: MethodId = MethodId(0);
 pub const CLEAR: MethodId = MethodId(1);
 /// Returns the launch shortcut id, then clears it so the next call is empty.
 pub const CONSUME_LAUNCH: MethodId = MethodId(2);
+/// Indexes a [`SpotlightItem`] in Apple `CoreSpotlight` (or custom host store).
+pub const INDEX_SPOTLIGHT: MethodId = MethodId(3);
+/// Removes an indexed [`SpotlightItem`] by its identifier.
+pub const DELETE_SPOTLIGHT: MethodId = MethodId(4);
+/// Starts/publishes an Apple Handoff [`UserActivity`] (`NSUserActivity`).
+pub const START_USER_ACTIVITY: MethodId = MethodId(5);
+/// Invalidates the currently active Handoff [`UserActivity`].
+pub const END_USER_ACTIVITY: MethodId = MethodId(6);
+/// Returns the next pending [`IncomingShare`], then clears it.
+pub const CONSUME_INCOMING_SHARE: MethodId = MethodId(7);
 /// Independently grantable methods.
-pub const METHODS: &[MethodId] = &[SET, CLEAR, CONSUME_LAUNCH];
+pub const METHODS: &[MethodId] = &[
+	SET,
+	CLEAR,
+	CONSUME_LAUNCH,
+	INDEX_SPOTLIGHT,
+	DELETE_SPOTLIGHT,
+	START_USER_ACTIVITY,
+	END_USER_ACTIVITY,
+	CONSUME_INCOMING_SHARE,
+];
 
 const MAX_SHORTCUTS: usize = 8;
 const MAX_ID_BYTES: usize = 64;
@@ -247,12 +268,26 @@ pub fn validate(method: MethodId, payload: &[u8]) -> Result<(), Error> {
 			ShortcutList::decode(payload)?;
 			Ok(())
 		}
-		CLEAR | CONSUME_LAUNCH => {
+		CLEAR | CONSUME_LAUNCH | END_USER_ACTIVITY | CONSUME_INCOMING_SHARE => {
 			if payload.is_empty() {
 				Ok(())
 			} else {
 				Err(Error::InvalidArgument)
 			}
+		}
+		INDEX_SPOTLIGHT => {
+			SpotlightItem::decode(payload)?;
+			Ok(())
+		}
+		DELETE_SPOTLIGHT => {
+			let mut decoder = Decoder::new(payload);
+			let id = decoder.string()?;
+			decoder.finish()?;
+			validate_id(id)
+		}
+		START_USER_ACTIVITY => {
+			UserActivity::decode(payload)?;
+			Ok(())
 		}
 		_ => Err(Error::Unavailable),
 	}
@@ -265,6 +300,9 @@ pub fn validate(method: MethodId, payload: &[u8]) -> Result<(), Error> {
 pub struct Registry {
 	items: Vec<Shortcut>,
 	launch: Option<String>,
+	spotlight: Vec<SpotlightItem>,
+	active_user_activity: Option<UserActivity>,
+	incoming_share: Option<IncomingShare>,
 }
 
 impl Registry {
@@ -291,10 +329,34 @@ impl Registry {
 		self.launch.take()
 	}
 
+	/// Records a pending incoming share from another app.
+	pub fn note_incoming_share(&mut self, share: IncomingShare) -> Result<(), Error> {
+		share.validate()?;
+		self.incoming_share = Some(share);
+		Ok(())
+	}
+
+	/// Returns and clears the pending incoming share.
+	pub fn consume_incoming_share(&mut self) -> Option<IncomingShare> {
+		self.incoming_share.take()
+	}
+
 	/// Currently published shortcuts.
 	#[must_use]
 	pub fn items(&self) -> &[Shortcut] {
 		&self.items
+	}
+
+	/// Indexed Spotlight items.
+	#[must_use]
+	pub fn spotlight_items(&self) -> &[SpotlightItem] {
+		&self.spotlight
+	}
+
+	/// Currently active Handoff user activity, if any.
+	#[must_use]
+	pub fn active_user_activity(&self) -> Option<&UserActivity> {
+		self.active_user_activity.as_ref()
 	}
 }
 
@@ -316,9 +378,28 @@ impl leptoskit_bridge::Plugin for Registry {
 		} else if method == CLEAR {
 			self.clear();
 			Ok(Bytes::new())
-		} else {
-			// CONSUME_LAUNCH — `validate` already rejected anything else.
+		} else if method == CONSUME_LAUNCH {
 			encode_launch_id(self.consume_launch().as_deref())
+		} else if method == INDEX_SPOTLIGHT {
+			let item = SpotlightItem::decode(&payload)?;
+			self.spotlight.retain(|existing| existing.id() != item.id());
+			self.spotlight.push(item);
+			Ok(Bytes::new())
+		} else if method == DELETE_SPOTLIGHT {
+			let mut decoder = Decoder::new(&payload);
+			let id = decoder.string()?.to_owned();
+			decoder.finish()?;
+			self.spotlight.retain(|existing| existing.id() != id);
+			Ok(Bytes::new())
+		} else if method == START_USER_ACTIVITY {
+			self.active_user_activity = Some(UserActivity::decode(&payload)?);
+			Ok(Bytes::new())
+		} else if method == END_USER_ACTIVITY {
+			self.active_user_activity = None;
+			Ok(Bytes::new())
+		} else {
+			// CONSUME_INCOMING_SHARE — `validate` already checked all others.
+			encode_optional_incoming_share(self.consume_incoming_share().as_ref())
 		}
 	}
 }
@@ -351,6 +432,40 @@ pub mod guest {
 		pub async fn consume_launch(self) -> Result<Option<String>, Error> {
 			decode_launch_id(&self.0.call(CONSUME_LAUNCH, &[])?.await?)
 		}
+
+		/// Indexes an item in Apple `CoreSpotlight`.
+		pub async fn index_spotlight(self, item: &SpotlightItem) -> Result<(), Error> {
+			require_empty(&self.0.call(INDEX_SPOTLIGHT, &item.encode()?)?.await?)
+		}
+
+		/// Removes an item previously indexed in Apple `CoreSpotlight`.
+		pub async fn delete_spotlight(self, id: &str) -> Result<(), Error> {
+			validate_id(id)?;
+			let mut encoder = Encoder::with_capacity(4 + id.len());
+			encoder.bytes(id.as_bytes())?;
+			require_empty(&self.0.call(DELETE_SPOTLIGHT, &encoder.finish())?.await?)
+		}
+
+		/// Starts an Apple Handoff / Continuity `NSUserActivity`.
+		pub async fn start_user_activity(self, activity: &UserActivity) -> Result<(), Error> {
+			require_empty(
+				&self
+					.0
+					.call(START_USER_ACTIVITY, &activity.encode()?)?
+					.await?,
+			)
+		}
+
+		/// Invalidates the currently active Handoff `NSUserActivity`.
+		pub async fn end_user_activity(self) -> Result<(), Error> {
+			require_empty(&self.0.call(END_USER_ACTIVITY, &[])?.await?)
+		}
+
+		/// Returns and clears the pending [`IncomingShare`], if another app
+		/// shared text, a URL, or attachments into this app.
+		pub async fn consume_incoming_share(self) -> Result<Option<IncomingShare>, Error> {
+			decode_optional_incoming_share(&self.0.call(CONSUME_INCOMING_SHARE, &[])?.await?)
+		}
 	}
 }
 
@@ -372,6 +487,31 @@ pub mod web {
 
 	/// Always unavailable in the browser.
 	pub fn consume_launch() -> Result<Option<String>, Error> {
+		Err(Error::Unavailable)
+	}
+
+	/// Always unavailable in the browser.
+	pub fn index_spotlight(_item: &SpotlightItem) -> Result<(), Error> {
+		Err(Error::Unavailable)
+	}
+
+	/// Always unavailable in the browser.
+	pub fn delete_spotlight(_id: &str) -> Result<(), Error> {
+		Err(Error::Unavailable)
+	}
+
+	/// Always unavailable in the browser.
+	pub fn start_user_activity(_activity: &UserActivity) -> Result<(), Error> {
+		Err(Error::Unavailable)
+	}
+
+	/// Always unavailable in the browser.
+	pub fn end_user_activity() -> Result<(), Error> {
+		Err(Error::Unavailable)
+	}
+
+	/// Always unavailable in the browser.
+	pub fn consume_incoming_share() -> Result<Option<IncomingShare>, Error> {
 		Err(Error::Unavailable)
 	}
 }
@@ -452,5 +592,84 @@ mod tests {
 			plugin.invoke(MethodId(99), Bytes::new()),
 			Err(Error::Unavailable)
 		);
+	}
+
+	#[test]
+	fn spotlight_handoff_and_incoming_share_round_trip_through_registry() {
+		let mut plugin = Registry::default();
+
+		let item = SpotlightItem::new(
+			"note_42",
+			"notes",
+			"Architecture Plan",
+			"Cross-platform design",
+			"myapp://notes/42",
+		)
+		.unwrap()
+		.keywords(["rust", "mobile"])
+		.unwrap()
+		.expires_at(1_900_000_000);
+		let item_wire = item.encode().unwrap();
+		assert_eq!(SpotlightItem::decode(&item_wire).unwrap(), item);
+		assert!(
+			plugin
+				.invoke(INDEX_SPOTLIGHT, item_wire)
+				.unwrap()
+				.is_empty()
+		);
+		assert_eq!(plugin.spotlight_items(), &[item]);
+
+		let mut delete_req = Encoder::with_capacity(16);
+		delete_req.bytes(b"note_42").unwrap();
+		assert!(
+			plugin
+				.invoke(DELETE_SPOTLIGHT, delete_req.finish())
+				.unwrap()
+				.is_empty()
+		);
+		assert_eq!(plugin.spotlight_items(), []);
+
+		let activity = UserActivity::new("com.example.notes.view", "Architecture Plan")
+			.unwrap()
+			.webpage_url("https://example.com/notes/42")
+			.unwrap()
+			.search(true)
+			.prediction(true);
+		let activity_wire = activity.encode().unwrap();
+		assert_eq!(UserActivity::decode(&activity_wire).unwrap(), activity);
+		assert!(
+			plugin
+				.invoke(START_USER_ACTIVITY, activity_wire)
+				.unwrap()
+				.is_empty()
+		);
+		assert_eq!(plugin.active_user_activity(), Some(&activity));
+		assert!(
+			plugin
+				.invoke(END_USER_ACTIVITY, Bytes::new())
+				.unwrap()
+				.is_empty()
+		);
+		assert!(plugin.active_user_activity().is_none());
+
+		let share = IncomingShare {
+			text: Some("Read this".into()),
+			url: Some("https://leptoskit.dev".into()),
+			subject: Some("Link".into()),
+			attachments: vec![SharedAttachment {
+				mime_type: "image/png".into(),
+				file_name: Some("diagram.png".into()),
+				byte_len: 4096,
+			}],
+		};
+		assert_eq!(
+			IncomingShare::decode(&share.encode().unwrap()).unwrap(),
+			share
+		);
+		plugin.note_incoming_share(share.clone()).unwrap();
+		let first = plugin.invoke(CONSUME_INCOMING_SHARE, Bytes::new()).unwrap();
+		assert_eq!(decode_optional_incoming_share(&first).unwrap(), Some(share));
+		let second = plugin.invoke(CONSUME_INCOMING_SHARE, Bytes::new()).unwrap();
+		assert_eq!(decode_optional_incoming_share(&second).unwrap(), None);
 	}
 }
