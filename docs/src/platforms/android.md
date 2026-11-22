@@ -99,23 +99,74 @@ cd android
 - [Android intents](#android-intents) (`android_intent`) launch, broadcast, and resolve arbitrary intents with typed extras. Other platforms return `Unavailable`.
 - [Device policy](plugins.md#notes-on-specific-plugins) (`device-policy`) can lock the screen, set password rules, disable the camera, or wipe the device after the user enables an app-owned device-admin receiver. Status never prompts. Your `AndroidManifest.xml` must declare `DevicePolicyReceiver` with `BIND_DEVICE_ADMIN`, and `res/xml/device_admin.xml` must list only the policies you call. Google Play restricts Device Admin for many consumer apps; wipe in particular needs a clear enterprise reason.
 
-## Home-screen widgets, Quick Settings tiles, and Live Updates
+## Home-screen widgets, Quick Settings tiles, Live Updates, and incoming shares
 
-The [`home-widgets`](plugin-inventory.md) plugin publishes bounded snapshots into app-private preferences and asks `AppWidgetManager` to refresh the app's own App Widget providers. Your app still owns each `AppWidgetProvider` (or Jetpack Glance receiver) and its layout. Kind-to-provider matching is best-effort by class name; name providers after their kinds when you need a precise reload. `installed` reports whether any matching provider currently has pinned instances, and returns none when no provider class name matches the kind. Snapshot URLs must be HTTP(S) or an app deep-link scheme (`javascript:`, `data:`, `file:`, `blob:`, and `vbscript:` are rejected).
+Enable `leptoskit`'s `mobile-surfaces` feature (or individual features `home-widgets`, `live-activities`, `app-shortcuts`, `android-intent`) in your app crate, add the matching plugin crates to your Android host package, and list their runtime names (`"home-widgets"`, `"live-activities"`, `"app-shortcuts"`, `"android_intent"`) under `native.plugins` in `leptoskit.toml`.
 
-Additional Android-native surfaces live in the same plugin family:
+### App Widgets, Jetpack Glance, and Quick Settings tiles
 
-- **Quick Settings tiles** (`leptoskit_plugin_home_widgets::surfaces::QuickSettingsTile`): model `TileState::Active`, `Inactive`, and `Unavailable` with label, subtitle, icon resource, and tap action for `android.service.quicksettings.TileService`.
-- **Android 16+ Live Updates** (`leptoskit_plugin_live_activities::island::AndroidLiveUpdate`): model `Notification.ProgressStyle` progress bars, colored `ProgressSegment`s, and short status-bar critical chips alongside iOS Live Activities.
-- **App Actions, AppSearch, Share Targets, Bubbles, and Material You** (`leptoskit_plugin_app_shortcuts::integrations`): `AppIntentDefinition`, `SpotlightItem`, `IncomingShare`, `BubbleConfig` (`Notification.BubbleMetadata`), `StatusBarConfig`, and `DynamicColorRole` (Monet dynamic palette roles).
+The [`home-widgets`](plugin-inventory.md) plugin stores bounded widget payloads in app-private `SharedPreferences` and triggers `AppWidgetManager` refreshes:
+
+- **Snapshots & multi-entry timelines:** `set` / `get` / `clear`, `set_timeline` / `get_timeline` (`TimelineSchedule`), `reload`, and `installed`. Snapshot URLs must be HTTP(S) or an app deep-link scheme (`javascript:`, `data:`, `file:`, `blob:`, and `vbscript:` are rejected).
+- **Quick Settings tiles:** `set_quick_tile` / `get_quick_tile` (`QuickSettingsTile` with `TileState::Active`, `Inactive`, or `Unavailable`, label, subtitle, icon resource name, and action ID).
+
+Your app still owns each `AppWidgetProvider` (or Jetpack Glance receiver) and `TileService` subclass. Read published values directly in Kotlin with `HomeWidgetsPlugin.readSnapshot` and `HomeWidgetsPlugin.readQuickTile`:
+
+```kotlin
+import dev.leptoskit.plugins.homewidgets.HomeWidgetsPlugin
+
+// Inside an AppWidgetProvider or GlanceAppWidget:
+val snapshot = HomeWidgetsPlugin.readSnapshot(context, "summary")
+
+// Inside an android.service.quicksettings.TileService:
+val tile = HomeWidgetsPlugin.readQuickTile(this, "focus-mode")
+```
+
+Kind-to-provider matching is best-effort by class name; name providers after their kinds when you need a precise reload. `installed` reports whether any matching provider currently has pinned instances, and returns none when no provider class name matches the kind.
+
+### Android 16+ Live Updates
+
+The [`live-activities`](plugin-inventory.md) plugin wires `post_android_live_update` and `end_android_live_update` on Android: on Android 16 (API 36) and newer it builds a promoted ongoing `Notification.ProgressStyle` with colored `ProgressSegment`s and a short status-bar critical chip, and on older Android versions it falls back automatically to a standard ongoing progress notification on channel `dev.leptoskit.live_updates`.
+
+```rust
+use leptoskit::platform::live_activities::AndroidLiveUpdateRequest;
+use leptoskit::platform::live_activities::Identifier;
+use leptoskit::platform::live_activities::guest::LiveActivities;
+use leptoskit::platform::live_activities::island::AndroidLiveUpdate;
+use leptoskit::platform::live_activities::island::ProgressSegment;
+
+let update = AndroidLiveUpdate::new(
+	"Order #42",
+	"Driver is 4 minutes away",
+	"4m",
+	0.7,
+	vec![
+		ProgressSegment { length: 70, color_hex: Some("#22C55E".into()) },
+		ProgressSegment { length: 30, color_hex: Some("#CBD5E1".into()) },
+	],
+)?;
+let activities = LiveActivities::new()?;
+activities
+	.post_android_live_update(&AndroidLiveUpdateRequest::new(
+		Identifier::new("order-42")?,
+		update,
+	))
+	.await?;
+```
+
+### Incoming shares, shortcuts, Bubbles, and Material You
+
+- **Incoming `ACTION_SEND` share target:** when your `AndroidManifest.xml` declares an `ACTION_SEND` intent filter, generated Android hosts capture incoming shared text, URLs, and subjects automatically through `AppShortcutsPlugin`, and your guest drains them via `leptoskit::platform::app_shortcuts::guest::AppShortcuts::consume_incoming_share()`.
+- **Launcher shortcuts:** `set`, `clear`, and `consume_launch` publish dynamic `ShortcutManager` shortcuts.
+- **Typed Android descriptors:** `AppIntentDefinition`, `BubbleConfig` (`Notification.BubbleMetadata`), `StatusBarConfig`, and `DynamicColorRole` (Material You Monet palette roles) live in `leptoskit::platform::app_shortcuts::integrations`.
 
 ## Android intents
 
-Some things only exist on Android: opening one particular settings page, handing a link to a specific app with the extras it expects, or sending a broadcast your own receiver listens for. The [`android_intent`](plugin-inventory.md) plugin sends any intent you describe, as Flutter's `android_intent_plus` does. Add `leptoskit_plugin_android_intent` to your app and `"android_intent"` to `native.plugins`:
+Some things only exist on Android: opening one particular settings page, handing a link to a specific app with the extras it expects, or sending a broadcast your own receiver listens for. The [`android_intent`](plugin-inventory.md) plugin sends any intent you describe, as Flutter's `android_intent_plus` does. Enable `leptoskit`'s `android-intent` (or `mobile-surfaces`) feature, add `leptoskit_plugin_android_intent` to your Android host package, and add `"android_intent"` to `native.plugins`:
 
 ```rust
-use leptoskit_plugin_android_intent::guest::AndroidIntent;
-use leptoskit_plugin_android_intent::{action, Intent};
+use leptoskit::platform::android_intent::guest::AndroidIntent;
+use leptoskit::platform::android_intent::{Intent, action};
 
 // Unavailable on the web, iOS, macOS, Windows, Linux, the terminal, HarmonyOS,
 // Wear OS, and watchOS: only Android phones and tablets register the plugin.
@@ -131,6 +182,53 @@ It can also open an intent through a titled chooser, send broadcasts, start serv
 Because your screens can be updated over the air, the plugin never lets an intent give another app access to your app's files: it refuses the `FLAG_GRANT_*_URI_PERMISSION` flags and `file:` links, and extras can only be numbers, text, arrays, and nested bundles. It can still reach anything your app's own permissions allow, so only select it when you need it.
 
 On Android 11 and later, asking whether an app can handle an intent only sees apps your manifest declares. Add a `<queries>` element to `android/app/src/main/AndroidManifest.xml` listing the intents or packages you check; launching doesn't need it.
+
+## Complete Android capability map
+
+Query any capability at runtime with `leptoskit::target::Capability` and `PlatformCapabilities::for_platform(TargetPlatform::Android)`, or inspect `Capability::ALL` (each item reports `has_builtin_plugin()`, `plugin_crate()`, `runtime_plugin_name()`, and `cargo_feature()`).
+
+### Built into leptoskit today
+
+| Android feature                                           | Crate / `native.plugins` name                                                                 | What works today                                                                                                                      |
+| --------------------------------------------------------- | --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| App Widgets, Glance Timelines & Quick Settings Tiles      | `leptoskit_plugin_home_widgets` (`home-widgets`, feature `home-widgets`)                      | `SharedPreferences` snapshots & timelines, `APPWIDGET_UPDATE` reloads, `QuickSettingsTile` storage, `readSnapshot` / `readQuickTile`  |
+| Android 16+ Live Updates & Ongoing Progress Notifications | `leptoskit_plugin_live_activities` (`live-activities`, feature `live-activities`)             | API 36 `Notification.ProgressStyle` + promoted ongoing chip with automatic standard ongoing progress notification fallback below API 36 |
+| Arbitrary Explicit/Implicit Intents & Choosers            | `leptoskit_plugin_android_intent` (`android_intent`, feature `android-intent`)                | Start activities, choosers, broadcasts, services, `can_resolve_activity`, and safe `intent:` URI launches                             |
+| Exact, Wake-up, Boot-Persisted & Headless Alarms          | `android_alarm_manager`                                                                       | `AlarmManager` exact/alarm-clock/reboot alarms, durable fired queue, and up to 8-second headless guest wake (without code push)       |
+| Picture-in-Picture & Draw-Over-Apps System Overlay        | `picture-in-picture`                                                                          | Activity PiP leases (`supportsPictureInPicture`) plus `SYSTEM_ALERT_WINDOW` status, grant screen launch, and overlay leases           |
+| Foldable Posture & Hinge Sensor                           | `posture`                                                                                     | Jetpack WindowManager folding features (`isSeparating`, axis, bounds) and hinge angle sensor for dual-pane and tabletop layouts       |
+| Launcher Shortcuts, Incoming Shares & Badges              | `leptoskit_plugin_app_shortcuts` (`app-shortcuts`, feature `app-shortcuts`), `badge`          | Dynamic `ShortcutManager` shortcuts, automatic incoming `ACTION_SEND` share capture, and launcher badge counts                        |
+| Local & FCM Push Notifications & Channels                 | `notifications`                                                                               | Notification channels, local posting, and FCM registration token enrollment (paired with [notifications](../guide/notifications/readme.md)) |
+| Foreground Services & WorkManager Background Tasks        | `background`, `background-task`                                                               | Persistent foreground services (e.g. location/microphone) and periodic WorkManager tasks (interval ≥ 15 min)                          |
+| Passkeys, Biometrics, StrongBox & Keystore                | `passkeys`, `web-auth`, `local-authentication`, `device-keys`, `secure-store`                 | Credential Manager passkeys, Chrome 137+ Auth Tab, API 30+ strong `BiometricPrompt`, AndroidKeyStore/StrongBox keys, AES-GCM secrets  |
+| Health Connect, BLE, NFC & Wear OS Companion              | `health`, `ble`, `nfc`, `watch-sync`, `wearable`                                              | Health Connect reads + change tokens, Android BLE GATT central, NFC reader mode NDEF reads, Wear OS Data Layer sync, watch sensors    |
+| ARCore, 3D Scenes & Rive                                  | `xr`, `leptoskit` (`3d`, `rive`)                                                              | ARCore / Camera2 tracking + depth, OpenGL ES / Vulkan `Scene3d` overlays, and native Rive vector animations                           |
+| CameraX, Media3 Video, Audio, Recorder & Google Maps      | `camera`, `video`, `video-thumbnails`, `audio`, `recorder`, `maps`                            | CameraX preview/still capture, Media3 ExoPlayer, Rust audio engine, AAC background recording, thumbnails, and Google Maps `MapView`   |
+| MediaStore, Contacts, Calendar, Print, Share & Pickers    | `media-library`, `image-picker`, `document-picker`, `contacts`, `calendar`, `sharing`, `print`, `sms`, `mail-composer`, `web-browser` | MediaStore, system pickers, `ContactsContract`, `CalendarContract`, `FileProvider` sharing, `PrintManager`, and Custom Tabs |
+| Screen Capture Protection, In-App Review, MDM & Usage     | `screen-capture`, `store-review`, `device-policy`, `app-usage`                                | `FLAG_SECURE` window protection, Google Play In-App Review, `DevicePolicyManager` admin actions, and `UsageStatsManager` summaries    |
+| Location, Sensors, Light Sensor, Cellular & Device State  | `location`, `sensors`, `light_sensor`, `pedometer`, `battery`, `thermal`, `network`, `network-info`, `cellular`, `haptics`, `speech`, `keep-awake`, `brightness`, `screen-orientation` | `LocationManager`, `SensorManager` (including ambient lux), TTS (`TextToSpeech`), haptics, and connectivity/VPN/satellite hints |
+| Over-the-air Wasm updates                                 | `leptoskit_codepush` (feature `codepush`)                                                     | Signed, verified Wasm UI releases and rollback without a new Play Store binary                                                        |
+
+### Android capabilities not yet wired as built-in plugins
+
+These Android APIs do not have a built-in leptoskit runtime plugin yet (`Capability::has_builtin_plugin()` returns `false`, or only typed descriptors exist). To use them today, register your own Kotlin `NativePlugin` inside `android/`:
+
+| Android capability                      | Native Android / Play API                              | Current status in leptoskit                                                                                   |
+| --------------------------------------- | ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------- |
+| In-App Purchases & Subscriptions        | Google Play Billing Library                            | Not wired; implement in a host Kotlin plugin                                                                  |
+| Native Binary In-App Updates            | Google Play In-App Updates (`AppUpdateManager`)        | Not wired (distinct from Wasm code push)                                                                      |
+| Google Pay & Google Wallet passes       | Google Pay API / Wallet API                            | Not wired; implement in a host Kotlin plugin                                                                  |
+| Lock Screen & Media Transport Controls  | Media3 `MediaSession`                                  | Not wired (`audio` and `video` handle playback without media session controls)                                |
+| Camera Barcode & Document Scanner       | ML Kit Barcode / Document Scanner                      | Not wired (`dev-client` only scans dev URLs; `camera` captures still images only)                             |
+| Live Speech-to-Text Recognition         | `android.speech.SpeechRecognizer`                      | Not wired (`speech` is text-to-speech via `TextToSpeech`)                                                     |
+| Conversation Bubbles & Material You     | `Notification.BubbleMetadata` / DynamicColors          | Typed `BubbleConfig` and `DynamicColorRole` descriptors exist in `app-shortcuts`; host posting/theming custom |
+| On-Device Search Indexing               | Jetpack `AppSearch`                                    | Not wired (`app-shortcuts` wires `CoreSpotlight` on Apple only; returns `Unavailable` on Android)             |
+| Predictive Back Transition Animations   | `OnBackAnimationCallback`                              | Generated host wires `OnBackInvokedCallback` to the file router without home-preview swipe animations         |
+| System VoIP Calling UI                  | `android.telecom.ConnectionService`                    | Not wired; implement in a host Kotlin plugin                                                                  |
+| Background Geofencing & Google Cast     | `GeofencingClient` / Google Cast SDK                   | Not wired (`location` handles fixes and foreground-service continuous streams)                                |
+| On-Device AI & Android Auto             | Gemini Nano (`AICore`) / Car App Library               | Not wired; requires dedicated Android host modules                                                            |
+| Google Play Instant & Cloud Backup      | Play Instant / Android Backup / Block Store            | Not wired; use `leptoskit::rpc` or host Android manifest/backup wiring                                        |
+| Hardware App Attestation                | Google Play Integrity API                              | `app-integrity` currently ships an `Unavailable` stub until live Play Integrity wiring lands                  |
 
 ## Ship an update without the Play Store
 
