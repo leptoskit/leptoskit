@@ -17,11 +17,9 @@ use crate::RunMode;
 use crate::Size;
 use crate::Style;
 use crate::Yoga;
-use crate::bounded_by_max;
-use crate::clamp_height;
-use crate::clamp_width;
+use crate::bounded_by_max_with_metrics;
 use crate::content_available;
-use crate::definite_border_box;
+use crate::definite_border_box_with_metrics;
 use crate::inner_definite;
 use crate::relative_offset;
 use crate::resolve_margins;
@@ -265,18 +263,19 @@ impl Yoga {
 		node: NodeId,
 		style: &Style,
 		ctx: crate::SizingCtx,
-		inner_padding: Edges,
-		border: Edges,
+		metrics: &BoxMetrics,
 		mode: RunMode,
 	) -> Size<f32> {
+		let inner_padding = metrics.inner_padding;
+		let border = metrics.border;
 		let mut grid = style.grid.as_deref().cloned().unwrap_or_default();
 		let explicit_columns = grid.template_columns.len();
 		let explicit_rows = grid.template_rows.len();
-		let definite_border = definite_border_box(style, &ctx);
+		let definite_border = definite_border_box_with_metrics(style, &ctx, metrics);
 		let child_basis = inner_definite(definite_border, inner_padding);
 		let inner_available = content_available(
 			child_basis,
-			bounded_by_max(style, ctx.available, ctx.percent_basis),
+			bounded_by_max_with_metrics(ctx.available, metrics),
 			inner_padding,
 		);
 
@@ -329,7 +328,7 @@ impl Yoga {
 				gap: column_gap,
 				alignment: justify_to_align(style.justify_content),
 			},
-			|width| clamp_width(style, width, ctx.percent_basis),
+			|width| width.clamp(metrics.min.width, metrics.max.width),
 		);
 
 		// Rows: content contributions at the width of the spanned columns.
@@ -344,7 +343,7 @@ impl Yoga {
 				gap: row_gap,
 				alignment: style.align_content,
 			},
-			|height| clamp_height(style, height, ctx.percent_basis),
+			|height| height.clamp(metrics.min.height, metrics.max.height),
 		);
 
 		let sized = SizedGrid {

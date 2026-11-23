@@ -210,6 +210,48 @@ pub(crate) fn is_pressable(kind: NativeKind) -> bool {
 	matches!(kind, NativeKind::Button | NativeKind::Pressable)
 }
 
+/// The subset of a parent's resolved props inherited by its children.
+///
+/// Kept small and `Copy` (~40 bytes) so patching and streaming reconciliation
+/// never clone the parent's full `NativeProps`.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct InheritedProps {
+	pub(crate) color: Option<Color>,
+	pub(crate) font_size: Option<f32>,
+	pub(crate) font_weight: Option<FontWeight>,
+	pub(crate) line_height: Option<crate::props::LineHeight>,
+	pub(crate) italic: Option<bool>,
+	pub(crate) text_align: Option<TextAlign>,
+	pub(crate) disabled: bool,
+	pub(crate) aria_hidden: bool,
+	pub(crate) hidden: bool,
+}
+
+impl InheritedProps {
+	#[inline]
+	pub(crate) fn from_props(props: &NativeProps) -> Self {
+		Self {
+			color: props.color,
+			font_size: props.font_size,
+			font_weight: props.font_weight,
+			line_height: props.line_height,
+			italic: props.italic,
+			text_align: props.text_align,
+			disabled: props.enabled == Some(false),
+			aria_hidden: props.aria().hidden == Some(true),
+			hidden: props.hidden == Some(true),
+		}
+	}
+}
+
+/// The resolved fields of a single element without cloning its children,
+/// handlers, bindings, or region metadata.
+pub(crate) struct ResolvedOwn {
+	pub(crate) kind: NativeKind,
+	pub(crate) style: Style,
+	pub(crate) props: NativeProps,
+}
+
 impl Element {
 	/// Checks structural control and accessibility contracts before any
 	/// backend mutations occur.
@@ -423,7 +465,7 @@ impl Element {
 					.accessibility_label
 					.as_deref()
 					.is_none_or(|label| label.trim().is_empty())
-				&& self.props.aria().hidden != Some(true)))
+					&& self.props.aria().hidden != Some(true)))
 		{
 			return Err(ControlTreeError::InvalidRive);
 		}
@@ -470,7 +512,11 @@ impl Element {
 		}
 
 		if matches!(self.kind, NativeKind::TextInput | NativeKind::PasswordInput)
-			&& self.props.aria.as_deref().is_some_and(|a| a.multiline == Some(true))
+			&& self
+				.props
+				.aria
+				.as_deref()
+				.is_some_and(|a| a.multiline == Some(true))
 		{
 			return Err(ControlTreeError::MultilineTextInput { kind: self.kind });
 		}
@@ -953,7 +999,7 @@ impl Element {
 		held: Option<&[usize]>,
 	) -> (Self, bool) {
 		let (mut element, uses_aria) =
-			self.resolve_inherited(context, &NativeProps::default(), held);
+			self.resolve_inherited(context, InheritedProps::default(), held);
 		// Nothing resolves relationships, set positions, or live text in a
 		// tree that declares none, and the walk would dominate commits.
 		if uses_aria {
@@ -963,17 +1009,18 @@ impl Element {
 		(element, uses_aria)
 	}
 
-	/// Resolves this subtree under its parent's resolved props, without the
+	/// Resolves this subtree under its parent's inherited props, without the
 	/// tree-wide accessibility pass. Callers check
 	/// [`Self::declares_relationships`] first.
 	pub(crate) fn resolve_inherited(
 		&self,
 		context: &StyleContext,
-		parent: &NativeProps,
+		parent: InheritedProps,
 		held: Option<&[usize]>,
 	) -> (Self, bool) {
 		let mut element = self.resolve_own(context, parent, held);
 		let uses_aria = element.declares_relationships();
+		let child_parent = InheritedProps::from_props(&element.props);
 		let mut children_uses_aria = false;
 		element.children = self
 			.children
@@ -985,7 +1032,7 @@ impl Element {
 					_ => None,
 				};
 
-				let (child, uses) = child.resolve_inherited(context, &element.props, held);
+				let (child, uses) = child.resolve_inherited(context, child_parent, held);
 				children_uses_aria |= uses;
 				child
 			})
@@ -996,6 +1043,7 @@ impl Element {
 	/// Whether this element takes part in the tree-wide accessibility pass:
 	/// it has an id, references other ids, is a radio option, or announces
 	/// live changes.
+	#[inline]
 	pub(crate) fn declares_relationships(&self) -> bool {
 		self.props.id.is_some()
 			|| self.kind == NativeKind::Radio
@@ -1007,20 +1055,128 @@ impl Element {
 			})
 	}
 
-	/// Resolves this element alone under its parent's resolved props. The
+	/// Whether any element in this subtree declares accessibility
+	/// relationships. Read-only scan that allocates nothing.
+	pub(crate) fn tree_declares_relationships(&self) -> bool {
+		if self.declares_relationships() {
+			return true;
+		}
+
+		self.children.iter().any(Self::tree_declares_relationships)
+	}
+
+	/// Resolves this element's own kind, layout style, and props without
+	/// constructing a full `Element` or cloning children/bindings/region.
+	pub(crate) fn resolve_own_into(
+		&self,
+		context: &StyleContext,
+		parent: InheritedProps,
+		held: Option<&[usize]>,
+	) -> ResolvedOwn {
+		let mut kind = self.kind;
+		let mut style = self.style.clone();
+		let mut props = self.props.clone();
+
+		props.color = props.color.or(parent.color);
+		props.font_size = props.font_size.or(parent.font_size);
+		props.font_weight = props.font_weight.or(parent.font_weight);
+		props.line_height = props.line_height.or(parent.line_height);
+		props.italic = props.italic.or(parent.italic);
+		props.text_align = props.text_align.or(parent.text_align);
+
+		if parent.disabled {
+			props.enabled = Some(false);
+		}
+
+		if parent.aria_hidden {
+			props.aria_mut().hidden = Some(true);
+		}
+
+		// Disabled controls cannot be pressed, even if a hold began before
+		// the application disabled them.
+		let pressed = is_pressable(self.kind)
+			&& props.enabled != Some(false)
+			&& (context.active || held.is_some_and(<[usize]>::is_empty));
+		self.classes.apply(
+			&mut style,
+			&mut props,
+			&StyleContext {
+				active: pressed,
+				..*context
+			},
+		);
+		props.direction = Some(style.direction);
+
+		// Native backends paint fixed colors; `currentColor` becomes the text
+		// color this element inherited or set, else CSS's initial black. The
+		// web keeps the keyword and lets CSS resolve it.
+		if let Some(drawing) = &mut props.drawing {
+			drawing.resolve_current_color(props.color.unwrap_or(Color::rgba(0, 0, 0, 255)));
+		}
+
+		if let Some(overlay) = &props.overlay {
+			if overlay.open {
+				style.position = leptoskit_yoga::PositionType::Absolute;
+
+				if kind == NativeKind::Modal {
+					style.width =
+						leptoskit_yoga::Dimension::Points(context.viewport.width.max(0.0));
+					style.height =
+						leptoskit_yoga::Dimension::Points(context.viewport.height.max(0.0));
+				}
+			} else {
+				style.display = leptoskit_yoga::Display::None;
+			}
+		}
+
+		if style.overflow == leptoskit_yoga::Overflow::Scroll && kind == NativeKind::View {
+			kind = NativeKind::ScrollView;
+		}
+
+		if kind == NativeKind::ScrollView
+			&& (style.overflow == leptoskit_yoga::Overflow::Hidden || props.clip == Some(false))
+		{
+			kind = NativeKind::View;
+		}
+
+		props.sanitize_motion();
+		props.hidden = (style.display == leptoskit_yoga::Display::None)
+			.then_some(true)
+			.or(props.hidden);
+
+		if parent.hidden {
+			props.hidden = Some(true);
+		}
+
+		props.clip = (style.overflow != leptoskit_yoga::Overflow::Visible
+			|| kind == NativeKind::ScrollView
+			|| props.corner_radius.is_some_and(|radius| radius > 0.0))
+		.then_some(true)
+		.or(props.clip);
+
+		if pressed
+			&& self.classes.active_class().is_none()
+			&& (self.kind == NativeKind::Pressable || props.is_custom_drawn())
+		{
+			props.opacity = Some(props.opacity.unwrap_or(1.0) * DEFAULT_PRESSED_OPACITY);
+		}
+
+		ResolvedOwn { kind, style, props }
+	}
+
+	/// Resolves this element alone under its parent's inherited props. The
 	/// result has no children.
 	pub(crate) fn resolve_own(
 		&self,
 		context: &StyleContext,
-		parent: &NativeProps,
+		parent: InheritedProps,
 		held: Option<&[usize]>,
 	) -> Self {
-		// Resolve each node once. Cloning its descendants here would repeat
-		// the entire subtree clone at every level of a nested component tree.
-		let mut element = Self {
-			kind: self.kind,
-			style: self.style.clone(),
-			props: self.props.clone(),
+		let resolved = self.resolve_own_into(context, parent, held);
+		Self {
+			kind: resolved.kind,
+			style: resolved.style,
+			props: resolved.props,
 			children: Vec::new(),
 			#[cfg(feature = "devtools")]
 			source: self.source,
@@ -1033,69 +1189,6 @@ impl Element {
 			gesture: self.gesture.clone(),
 			bindings: self.bindings.clone(),
 			region: self.region.clone(),
-		};
-		element.props.color = element.props.color.or(parent.color);
-		element.props.font_size = element.props.font_size.or(parent.font_size);
-		element.props.font_weight = element.props.font_weight.or(parent.font_weight);
-		element.props.line_height = element.props.line_height.or(parent.line_height);
-		element.props.italic = element.props.italic.or(parent.italic);
-		element.props.text_align = element.props.text_align.or(parent.text_align);
-
-		if parent.enabled == Some(false) {
-			element.props.enabled = Some(false);
-		}
-
-		if parent.aria().hidden == Some(true) {
-			element.props.aria_mut().hidden = Some(true);
-		}
-
-		// Disabled controls cannot be pressed, even if a hold began before
-		// the application disabled them.
-		let pressed = is_pressable(self.kind)
-			&& element.props.enabled != Some(false)
-			&& (context.active || held.is_some_and(<[usize]>::is_empty));
-		self.classes.apply(
-			&mut element.style,
-			&mut element.props,
-			&StyleContext {
-				active: pressed,
-				..*context
-			},
-		);
-		element.props.direction = Some(element.style.direction);
-
-		// Native backends paint fixed colors; `currentColor` becomes the text
-		// color this element inherited or set, else CSS's initial black. The
-		// web keeps the keyword and lets CSS resolve it.
-		if let Some(drawing) = &mut element.props.drawing {
-			drawing.resolve_current_color(element.props.color.unwrap_or(Color::rgba(0, 0, 0, 255)));
-		}
-
-		element.settle_overlay(context.viewport);
-
-		Self::settle(element, self, parent, pressed)
-	}
-
-	/// Takes an overlay out of its parent's layout. A closed one takes no
-	/// space and shows nothing. An open modal covers the viewport and an
-	/// open popover is as large as what it holds; the surface then places
-	/// both in viewport coordinates.
-	fn settle_overlay(&mut self, viewport: leptoskit_yoga::Size<f32>) {
-		let Some(overlay) = &self.props.overlay else {
-			return;
-		};
-
-		if !overlay.open {
-			self.style.display = leptoskit_yoga::Display::None;
-
-			return;
-		}
-
-		self.style.position = leptoskit_yoga::PositionType::Absolute;
-
-		if self.kind == NativeKind::Modal {
-			self.style.width = leptoskit_yoga::Dimension::Points(viewport.width.max(0.0));
-			self.style.height = leptoskit_yoga::Dimension::Points(viewport.height.max(0.0));
 		}
 	}
 
@@ -1117,49 +1210,6 @@ impl Element {
 	pub(crate) fn replace_own(&mut self, mut next: Self) {
 		next.children = std::mem::take(&mut self.children);
 		*self = next;
-	}
-
-	/// The kind, hidden, clip, and pressed opacity the element resolves to.
-	fn settle(mut element: Self, source: &Self, parent: &NativeProps, pressed: bool) -> Self {
-		if element.style.overflow == leptoskit_yoga::Overflow::Scroll
-			&& element.kind == NativeKind::View
-		{
-			element.kind = NativeKind::ScrollView;
-		}
-
-		if element.kind == NativeKind::ScrollView
-			&& (element.style.overflow == leptoskit_yoga::Overflow::Hidden
-				|| element.props.clip == Some(false))
-		{
-			element.kind = NativeKind::View;
-		}
-
-		element.props.sanitize_motion();
-		element.props.hidden = (element.style.display == leptoskit_yoga::Display::None)
-			.then_some(true)
-			.or(element.props.hidden);
-
-		if parent.hidden == Some(true) {
-			element.props.hidden = Some(true);
-		}
-
-		element.props.clip = (element.style.overflow != leptoskit_yoga::Overflow::Visible
-			|| element.kind == NativeKind::ScrollView
-			|| element
-				.props
-				.corner_radius
-				.is_some_and(|radius| radius > 0.0))
-		.then_some(true)
-		.or(element.props.clip);
-
-		if pressed
-			&& source.classes.active_class().is_none()
-			&& (source.kind == NativeKind::Pressable || element.props.is_custom_drawn())
-		{
-			element.props.opacity =
-				Some(element.props.opacity.unwrap_or(1.0) * DEFAULT_PRESSED_OPACITY);
-		}
-		element
 	}
 
 	/// Folds relationships, radio set positions, and live-region text into

@@ -4,6 +4,7 @@ use leptoskit_yoga::AvailableSpace;
 use leptoskit_yoga::NodeId;
 use leptoskit_yoga::Size;
 
+use super::ChildOrder;
 use super::Frame;
 use super::HitArea;
 use super::HitBounds;
@@ -33,10 +34,15 @@ impl<B: NativeBackend> NativeSurface<B> {
 			self.yoga.calculate_layout(root, available);
 		}
 
-		let mut frames = MutationList::new();
+		let pass = self.yoga.current_pass();
+		let mut frames = if self.frames.get(root.index()).copied().flatten().is_none() {
+			MutationList::with_capacity(self.shadows.len())
+		} else {
+			MutationList::new()
+		};
 		self.overlays.clear();
-		self.collect_frames(root, 0.0, 0.0, &mut frames);
-		self.place_popovers(&mut frames);
+		self.collect_frames(root, 0.0, 0.0, pass, &mut frames);
+		self.place_popovers(pass, &mut frames);
 		self.scroll_to_reveals(&mut frames);
 		self.backend.apply(&frames);
 		#[cfg(feature = "devtools")]
@@ -122,7 +128,7 @@ impl<B: NativeBackend> NativeSurface<B> {
 
 	/// Pushes changed frames for a subtree and rebuilds its hit areas.
 	/// `origin_x` and `origin_y` are the parent's viewport position, and the
-	/// returned bounds are the subtree's [`HitBounds`].
+	/// returned tuple is `(subtree_bounds, subtree_has_open_overlay)`.
 	///
 	/// An open overlay is not part of its parent's subtree here: it is
 	/// placed in the viewport (see [`Self::overlay_frame`] for the frame
@@ -135,17 +141,18 @@ impl<B: NativeBackend> NativeSurface<B> {
 		id: NodeId,
 		origin_x: f32,
 		origin_y: f32,
+		pass: u64,
 		out: &mut MutationList,
-	) -> HitBounds {
+	) -> (HitBounds, bool) {
 		if self.shadows[id.index()].is_open_overlay() {
 			self.overlays.push(id);
 
 			if self.shadows[id.index()].kind == NativeKind::Modal {
 				let frame = self.overlay_frame((0.0, 0.0), (origin_x, origin_y));
-				self.place(id, frame, (0.0, 0.0), out);
+				self.place(id, frame, (0.0, 0.0), pass, out);
 			}
 
-			return HitBounds::EMPTY;
+			return (HitBounds::EMPTY, true);
 		}
 
 		let layout = *self.yoga.layout(id);
@@ -154,6 +161,7 @@ impl<B: NativeBackend> NativeSurface<B> {
 			id,
 			(layout.x, layout.y),
 			(origin_x + layout.x, origin_y + layout.y),
+			pass,
 			out,
 		)
 	}
@@ -166,8 +174,10 @@ impl<B: NativeBackend> NativeSurface<B> {
 		id: NodeId,
 		frame: (f32, f32),
 		position: (f32, f32),
+		pass: u64,
 		out: &mut MutationList,
-	) -> HitBounds {
+	) -> (HitBounds, bool) {
+		let idx = id.index();
 		let layout = *self.yoga.layout(id);
 		let frame = Frame {
 			x: frame.0,
@@ -175,28 +185,74 @@ impl<B: NativeBackend> NativeSurface<B> {
 			width: layout.width,
 			height: layout.height,
 		};
+		let had_frame = self.frames.get(idx).copied().flatten().is_some();
 
 		self.push_changed_frame(id, frame, out);
 
 		let (left, top) = position;
+		let prev_area = self.hit_areas[idx];
+
+		// If neither layout nor structural/hit metadata changed anywhere in
+		// this subtree, its viewport origin and size stayed identical, and it
+		// contains no open overlays, every descendant's frame and hit area is
+		// guaranteed unchanged.
+		if had_frame
+			&& !self.meta_dirty[idx]
+			&& !self.subtree_has_overlay[idx]
+			&& !self.yoga.subtree_changed_in(id, pass)
+			&& prev_area.left.to_bits() == left.to_bits()
+			&& prev_area.top.to_bits() == top.to_bits()
+			&& prev_area.width.to_bits() == layout.width.to_bits()
+			&& prev_area.height.to_bits() == layout.height.to_bits()
+		{
+			return (prev_area.subtree, false);
+		}
+
 		let mut subtree = HitBounds {
 			left,
 			top,
 			right: left + layout.width,
 			bottom: top + layout.height,
 		};
-		let shadow = &self.shadows[id.index()];
+		let shadow = &self.shadows[idx];
 		let inert = shadow.is_inert();
 		// Clipped overflow is only hit inside the node's own frame, and a
 		// pressable's children are decorative, so neither widens the bounds.
 		let overflows = shadow.props.clip != Some(true) && shadow.kind != NativeKind::Pressable;
+		let child_count = shadow.children.len();
+		let mut has_overlay = false;
+		let mut mono_y = child_count >= 8;
+		let mut mono_x = child_count >= 8;
+		let mut prev_bottom = f32::NEG_INFINITY;
+		let mut prev_right = f32::NEG_INFINITY;
 
-		for index in 0..shadow.children.len() {
-			let child = self.shadows[id.index()].children[index];
-			let child_bounds = self.collect_frames(child, left, top, out);
+		for index in 0..child_count {
+			let child = self.shadows[idx].children[index];
+			let (child_bounds, child_overlay) = self.collect_frames(child, left, top, pass, out);
+			has_overlay |= child_overlay;
 
 			if overflows {
 				subtree = subtree.union(child_bounds);
+			}
+
+			if mono_y || mono_x {
+				if child_bounds.left <= child_bounds.right
+					&& child_bounds.top <= child_bounds.bottom
+				{
+					if child_bounds.top < prev_bottom {
+						mono_y = false;
+					}
+
+					if child_bounds.left < prev_right {
+						mono_x = false;
+					}
+
+					prev_bottom = child_bounds.bottom;
+					prev_right = child_bounds.right;
+				} else {
+					mono_y = false;
+					mono_x = false;
+				}
 			}
 		}
 
@@ -204,20 +260,31 @@ impl<B: NativeBackend> NativeSurface<B> {
 			subtree = HitBounds::EMPTY;
 		}
 
-		self.hit_areas[id.index()] = HitArea {
+		let child_order = if mono_y {
+			ChildOrder::MonotonicY
+		} else if mono_x {
+			ChildOrder::MonotonicX
+		} else {
+			ChildOrder::Unordered
+		};
+
+		self.hit_areas[idx] = HitArea {
 			left,
 			top,
 			width: layout.width,
 			height: layout.height,
 			subtree,
+			child_order,
 		};
-		subtree
+		self.subtree_has_overlay[idx] = has_overlay;
+		self.meta_dirty[idx] = false;
+		(subtree, has_overlay)
 	}
 
 	/// Places each open popover beside its anchor, once every node outside
 	/// the popovers has a position. A popover inside a popover is found
 	/// while its parent is placed, and placed after it.
-	fn place_popovers(&mut self, out: &mut MutationList) {
+	fn place_popovers(&mut self, pass: u64, out: &mut MutationList) {
 		let mut next = 0;
 
 		while let Some(&id) = self.overlays.get(next) {
@@ -266,7 +333,7 @@ impl<B: NativeBackend> NativeSurface<B> {
 					(area.left, area.top)
 				});
 			let frame = self.overlay_frame(position, parent);
-			self.place(id, frame, position, out);
+			self.place(id, frame, position, pass, out);
 		}
 	}
 

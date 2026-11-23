@@ -14,6 +14,8 @@ use crate::backend::Mutation;
 use crate::backend::MutationList;
 use crate::backend::NativeBackend;
 use crate::element::Element;
+use crate::element::InheritedProps;
+use crate::element::ResolvedOwn;
 use crate::props::NativeKind;
 use crate::props::NativeProps;
 use crate::tailwind::StyleContext;
@@ -22,7 +24,7 @@ impl<B: NativeBackend> NativeSurface<B> {
 	pub(super) fn commit_source(&mut self) {
 		self.adopt_root_appearance();
 
-		let Some(source) = &self.source else {
+		let Some(source) = self.source.take() else {
 			return;
 		};
 		// Reconciliation is positional, so the held node's path in the
@@ -31,23 +33,60 @@ impl<B: NativeBackend> NativeSurface<B> {
 			.pressed
 			.filter(|&id| self.is_committed(id))
 			.map(|id| self.path_to(id));
-		let (element, relationships) = source.resolved_tracking(
-			&StyleContext {
-				viewport: self.viewport,
-				dark: self.dark,
-				safe_area: self.safe_area,
-				active: false,
-			},
-			held.as_deref(),
-		);
-		self.relationships = relationships;
-		let mut mutations = MutationList::new();
+		let context = StyleContext {
+			viewport: self.viewport,
+			dark: self.dark,
+			safe_area: self.safe_area,
+			active: false,
+		};
+		self.uses_viewport = false;
+		self.uses_safe_area = false;
+		self.uses_dark = false;
 
-		let new_root = match self.root {
-			None => self.build_subtree(None, &element, &mut mutations),
-			Some(root) => self.update_node(root, &element, &mut mutations),
+		let mut mutations = if self.root.is_none() {
+			let count = count_nodes(&source);
+			self.reserve_nodes(count);
+			MutationList::with_capacity(count.saturating_mul(2))
+		} else {
+			MutationList::new()
+		};
+		let new_root = if source.tree_declares_relationships() {
+			self.record_tree_context_flags(&source);
+			let (element, relationships) = source.resolved_tracking(&context, held.as_deref());
+			self.relationships = relationships;
+
+			match self.root {
+				None => self.build_subtree_owned(None, element, &mut mutations),
+				Some(root) => self.update_node_owned(root, element, &mut mutations),
+			}
+		} else {
+			self.relationships = false;
+
+			match self.root {
+				None => {
+					self.build_source_subtree(
+						None,
+						&source,
+						&context,
+						InheritedProps::default(),
+						held.as_deref(),
+						&mut mutations,
+					)
+				}
+				Some(root) => {
+					self.update_source_node(
+						root,
+						&source,
+						&context,
+						InheritedProps::default(),
+						held.as_deref(),
+						&mut mutations,
+					)
+				}
+			}
 		};
 
+		self.source = Some(source);
 		self.root = Some(new_root);
 		self.apply_and_lay_out(mutations);
 
@@ -59,6 +98,43 @@ impl<B: NativeBackend> NativeSurface<B> {
 		{
 			self.pressed = None;
 			self.commit_source();
+		}
+	}
+
+	/// Records whether `element` depends on viewport, safe area, or dark mode.
+	#[inline]
+	pub(super) fn record_element_context_flags(&mut self, element: &Element) {
+		self.uses_viewport |=
+			element.classes().uses_viewport() || element.kind == NativeKind::Modal;
+		self.uses_safe_area |= element.classes().uses_safe_area();
+		self.uses_dark |= element.classes().uses_dark();
+	}
+
+	/// Records context dependency flags across an entire subtree.
+	pub(super) fn record_tree_context_flags(&mut self, element: &Element) {
+		self.record_element_context_flags(element);
+
+		for child in &element.children {
+			self.record_tree_context_flags(child);
+		}
+	}
+
+	/// Marks `id` and its ancestors as having layout-independent metadata
+	/// changes (structure, inert, clip, or overlay state) so the next
+	/// `collect_frames` walk recomputes their hit areas and overlay list.
+	#[inline]
+	pub(super) fn mark_meta_dirty(&mut self, id: NodeId) {
+		let mut current = Some(id);
+
+		while let Some(node) = current {
+			let idx = node.index();
+
+			if self.meta_dirty[idx] {
+				break;
+			}
+
+			self.meta_dirty[idx] = true;
+			current = self.shadows[idx].parent;
 		}
 	}
 
@@ -83,6 +159,15 @@ impl<B: NativeBackend> NativeSurface<B> {
 		self.commit_layout();
 	}
 
+	fn reserve_nodes(&mut self, additional: usize) {
+		self.yoga.reserve(additional);
+		self.shadows.reserve(additional);
+		self.frames.reserve(additional);
+		self.hit_areas.reserve(additional);
+		self.meta_dirty.reserve(additional);
+		self.subtree_has_overlay.reserve(additional);
+	}
+
 	pub(super) fn allocate(&mut self, kind: NativeKind) -> NodeId {
 		let id = self.yoga.create_node();
 		debug_assert_eq!(id.index(), self.shadows.len());
@@ -103,65 +188,213 @@ impl<B: NativeBackend> NativeSurface<B> {
 		});
 		self.frames.push(None);
 		self.hit_areas.push(HitArea::DETACHED);
+		self.meta_dirty.push(true);
+		self.subtree_has_overlay.push(false);
 		id
 	}
 
-	/// Builds a fresh subtree for `element`.
-	///
-	/// When `slot` is `Some((parent, index))` the new root is inserted into
-	/// `parent` at `index` — once, in the shadow tree, the layout tree, and the
-	/// mutation stream — before its own children are built, so the batch stays
-	/// top-down. With `None` the subtree is left detached.
-	pub(super) fn build_subtree(
+	/// Streaming build from an unresolved source element, avoiding the
+	/// intermediate resolved `Element` tree allocation.
+	fn build_source_subtree(
 		&mut self,
 		slot: Option<(NodeId, usize)>,
-		element: &Element,
+		source: &Element,
+		context: &StyleContext,
+		parent_inherited: InheritedProps,
+		held: Option<&[usize]>,
 		out: &mut MutationList,
 	) -> NodeId {
-		let id = self.allocate(element.kind);
-		self.shadows[id.index()].props = element.props.clone();
-		self.shadows[id.index()].handlers = element.handlers().to_vec();
-		self.shadows[id.index()].gesture = element.attached_gesture().cloned();
-		#[cfg(feature = "devtools")]
-		{
-			self.shadows[id.index()].source = element.source_location();
-			self.shadows[id.index()].component = element.component_name();
-			self.shadows[id.index()].classes = element
-				.applied_classes()
-				.classes()
-				.split_whitespace()
-				.map(str::to_owned)
-				.collect();
-		}
-		self.yoga.set_style(id, element.style.clone());
+		self.record_element_context_flags(source);
+		let resolved = source.resolve_own_into(context, parent_inherited, held);
+		let child_inherited = InheritedProps::from_props(&resolved.props);
+		let id = self.create_resolved_node(slot, resolved, source, out);
 
-		if let Some(text) = measured_content(element) {
+		for (index, child) in source.children.iter().enumerate() {
+			let child_held = match held {
+				Some([first, rest @ ..]) if *first == index => Some(rest),
+				_ => None,
+			};
+			self.build_source_subtree(
+				Some((id, index)),
+				child,
+				context,
+				child_inherited,
+				child_held,
+				out,
+			);
+		}
+
+		id
+	}
+
+	/// Streaming update from an unresolved source element, avoiding the
+	/// intermediate resolved `Element` tree allocation.
+	pub(super) fn update_source_node(
+		&mut self,
+		id: NodeId,
+		source: &Element,
+		context: &StyleContext,
+		parent_inherited: InheritedProps,
+		held: Option<&[usize]>,
+		out: &mut MutationList,
+	) -> NodeId {
+		self.record_element_context_flags(source);
+		let resolved = source.resolve_own_into(context, parent_inherited, held);
+
+		if !self.keeps_identity_parts(id, resolved.kind, &resolved.props) {
+			let slot = self.node_slot(id);
+			self.teardown(id, out);
+			let child_inherited = InheritedProps::from_props(&resolved.props);
+			let new_id = self.create_resolved_node(slot, resolved, source, out);
+
+			for (index, child) in source.children.iter().enumerate() {
+				let child_held = match held {
+					Some([first, rest @ ..]) if *first == index => Some(rest),
+					_ => None,
+				};
+				self.build_source_subtree(
+					Some((new_id, index)),
+					child,
+					context,
+					child_inherited,
+					child_held,
+					out,
+				);
+			}
+
+			return new_id;
+		}
+
+		let child_inherited = InheritedProps::from_props(&resolved.props);
+		self.update_own_resolved(id, resolved, source, out);
+
+		let old_len = self.shadows[id.index()].children.len();
+		let new_len = source.children.len();
+		let common = old_len.min(new_len);
+
+		for index in 0..common {
+			let child_id = self.shadows[id.index()].children[index];
+			let child_held = match held {
+				Some([first, rest @ ..]) if *first == index => Some(rest),
+				_ => None,
+			};
+			self.update_source_node(
+				child_id,
+				&source.children[index],
+				context,
+				child_inherited,
+				child_held,
+				out,
+			);
+		}
+
+		for (offset, child) in source.children[old_len..new_len].iter().enumerate() {
+			let index = old_len + offset;
+			let child_held = match held {
+				Some([first, rest @ ..]) if *first == index => Some(rest),
+				_ => None,
+			};
+			self.build_source_subtree(
+				Some((id, index)),
+				child,
+				context,
+				child_inherited,
+				child_held,
+				out,
+			);
+		}
+
+		for index in (new_len..old_len).rev() {
+			let child_id = self.shadows[id.index()].children[index];
+			self.teardown(child_id, out);
+		}
+
+		id
+	}
+
+	/// Creates one committed node from its resolved kind/style/props and source
+	/// metadata (handlers, gesture, devtools).
+	fn create_resolved_node(
+		&mut self,
+		slot: Option<(NodeId, usize)>,
+		resolved: ResolvedOwn,
+		meta: &Element,
+		out: &mut MutationList,
+	) -> NodeId {
+		let id = self.allocate(resolved.kind);
+		let kind = resolved.kind;
+		self.yoga.set_style(id, resolved.style);
+
+		if let Some(text) = measured_content(kind, &resolved.props) {
 			self.attach_text_measure(
 				id,
 				MeasuredText {
 					content: text.to_owned(),
-					style: super::measurement::measured_style(element),
-					native_chrome: has_native_chrome(element),
+					style: super::measurement::measured_style(kind, &resolved.props),
+					native_chrome: has_native_chrome(kind, &resolved.props),
 				},
 			);
 		}
 
-		let props = self.props_to_send(id, &element.props);
+		let send_props = self.props_to_send(id, &resolved.props);
+		let shadow = &mut self.shadows[id.index()];
+		shadow.props = resolved.props;
+
+		if !meta.handlers().is_empty() {
+			shadow.handlers = meta.handlers().to_vec();
+		}
+
+		shadow.gesture = meta.attached_gesture().cloned();
+		#[cfg(feature = "devtools")]
+		{
+			shadow.source = meta.source_location();
+			shadow.component = meta.component_name();
+			let classes = if meta.applied_classes().classes().is_empty() {
+				meta.classes().classes()
+			} else {
+				meta.applied_classes().classes()
+			};
+			shadow.classes = classes.split_whitespace().map(str::to_owned).collect();
+		}
+
 		// A backend with no overlays of its own shows one as a container.
-		let overlay = matches!(element.kind, NativeKind::Modal | NativeKind::Popover);
-		let kind = if overlay && !self.backend.presents_overlays() {
+		let overlay = matches!(kind, NativeKind::Modal | NativeKind::Popover);
+		let backend_kind = if overlay && !self.backend.presents_overlays() {
 			NativeKind::View
 		} else {
-			element.kind
+			kind
 		};
-		out.push(Mutation::Create { id, kind, props });
+		out.push(Mutation::Create {
+			id,
+			kind: backend_kind,
+			props: send_props,
+		});
 
 		if let Some((parent, index)) = slot {
 			self.attach_child(parent, id, index, out);
 		}
 
-		for (index, child) in element.children.iter().enumerate() {
-			self.build_subtree(Some((id, index)), child, out);
+		id
+	}
+
+	/// Builds a fresh subtree from an already-resolved owned `Element` (used
+	/// when tree-wide ARIA resolution ran or when reconciling a patch subtree).
+	pub(super) fn build_subtree_owned(
+		&mut self,
+		slot: Option<(NodeId, usize)>,
+		mut element: Element,
+		out: &mut MutationList,
+	) -> NodeId {
+		let children = std::mem::take(&mut element.children);
+		let resolved = ResolvedOwn {
+			kind: element.kind,
+			style: std::mem::take(&mut element.style),
+			props: std::mem::take(&mut element.props),
+		};
+		let id = self.create_resolved_node(slot, resolved, &element, out);
+
+		for (index, child) in children.into_iter().enumerate() {
+			self.build_subtree_owned(Some((id, index)), child, out);
 		}
 
 		id
@@ -182,6 +415,7 @@ impl<B: NativeBackend> NativeSurface<B> {
 		children.insert(index, child);
 		self.shadows[child.index()].parent = Some(parent);
 		self.yoga.insert_child(parent, child, index);
+		self.mark_meta_dirty(parent);
 		out.push(Mutation::InsertChild {
 			parent,
 			child,
@@ -189,10 +423,21 @@ impl<B: NativeBackend> NativeSurface<B> {
 		});
 	}
 
-	pub(super) fn update_node(
+	fn node_slot(&self, id: NodeId) -> Option<(NodeId, usize)> {
+		self.shadows[id.index()].parent.map(|parent| {
+			let index = self.shadows[parent.index()]
+				.children
+				.iter()
+				.position(|&child| child == id)
+				.expect("a child is listed under its parent");
+			(parent, index)
+		})
+	}
+
+	pub(super) fn update_node_owned(
 		&mut self,
 		id: NodeId,
-		element: &Element,
+		mut element: Element,
 		out: &mut MutationList,
 	) -> NodeId {
 		// A different widget kind is a different widget, and so is a different
@@ -200,36 +445,55 @@ impl<B: NativeBackend> NativeSurface<B> {
 		// created (GTK's accessible role is construct-only), so a role change
 		// tears the old subtree down and builds the replacement in the same
 		// slot.
-		if !self.keeps_identity(id, element) {
-			let slot = self.shadows[id.index()].parent.map(|parent| {
-				let index = self.shadows[parent.index()]
-					.children
-					.iter()
-					.position(|&child| child == id)
-					.expect("a child is listed under its parent");
-				(parent, index)
-			});
+		if !self.keeps_identity_parts(id, element.kind, &element.props) {
+			let slot = self.node_slot(id);
 			self.teardown(id, out);
 
-			return self.build_subtree(slot, element, out);
+			return self.build_subtree_owned(slot, element, out);
 		}
 
-		self.update_own(id, element, out);
+		let children = std::mem::take(&mut element.children);
+		let resolved = ResolvedOwn {
+			kind: element.kind,
+			style: std::mem::take(&mut element.style),
+			props: std::mem::take(&mut element.props),
+		};
+		self.update_own_resolved(id, resolved, &element, out);
 
-		// The snapshot lives in scratch space reused across commits, so
-		// walking an unchanged tree allocates nothing.
-		let mut old_children = std::mem::take(&mut self.scratch_children);
-		old_children.clone_from(&self.shadows[id.index()].children);
-		self.reconcile_children(id, &old_children, &element.children, out);
-		self.scratch_children = old_children;
+		let old_len = self.shadows[id.index()].children.len();
+		let new_len = children.len();
+		let common = old_len.min(new_len);
+		let mut new_iter = children.into_iter();
+
+		for index in 0..common {
+			let child_id = self.shadows[id.index()].children[index];
+			let child_el = new_iter.next().expect("index < new_len");
+			self.update_node_owned(child_id, child_el, out);
+		}
+
+		for (offset, child_el) in new_iter.enumerate() {
+			self.build_subtree_owned(Some((id, common + offset)), child_el, out);
+		}
+
+		for index in (new_len..old_len).rev() {
+			let child_id = self.shadows[id.index()].children[index];
+			self.teardown(child_id, out);
+		}
+
 		id
 	}
 
-	/// Whether `element` keeps the identity of committed node `id`: the same
-	/// widget kind and accessibility role.
-	pub(super) fn keeps_identity(&self, id: NodeId, element: &Element) -> bool {
-		self.shadows[id.index()].kind == element.kind
-			&& self.shadows[id.index()].props.aria().role == element.props.aria().role
+	/// Whether `kind` and `props` keep the identity of committed node `id`: the
+	/// same widget kind and accessibility role.
+	#[inline]
+	pub(super) fn keeps_identity_parts(
+		&self,
+		id: NodeId,
+		kind: NativeKind,
+		props: &NativeProps,
+	) -> bool {
+		let shadow = &self.shadows[id.index()];
+		shadow.kind == kind && shadow.props.aria().role == props.aria().role
 	}
 
 	/// The props a backend receives. A focus request travels once, with the
@@ -257,18 +521,50 @@ impl<B: NativeBackend> NativeSurface<B> {
 	}
 
 	/// Updates a node that keeps its identity, leaving its children alone.
-	pub(super) fn update_own(&mut self, id: NodeId, element: &Element, out: &mut MutationList) {
-		if self.shadows[id.index()].props != element.props {
-			self.shadows[id.index()].props = element.props.clone();
-			self.update_text_measure(id, element);
-			let props = self.props_to_send(id, &element.props);
-			out.push(Mutation::UpdateProps { id, props });
+	pub(super) fn update_own_resolved(
+		&mut self,
+		id: NodeId,
+		resolved: ResolvedOwn,
+		meta: &Element,
+		out: &mut MutationList,
+	) {
+		let idx = id.index();
+
+		if self.shadows[idx].props != resolved.props {
+			let prev_inert = self.shadows[idx].is_inert();
+			let prev_clip = self.shadows[idx].props.clip == Some(true);
+			let prev_overlay = self.shadows[idx].is_open_overlay();
+			let send_props = self.props_to_send(id, &resolved.props);
+			self.shadows[idx].props = resolved.props;
+
+			let new_inert = self.shadows[idx].is_inert();
+			let new_clip = self.shadows[idx].props.clip == Some(true);
+			let new_overlay = self.shadows[idx].is_open_overlay();
+
+			if prev_inert != new_inert || prev_clip != new_clip || prev_overlay != new_overlay {
+				self.mark_meta_dirty(id);
+			}
+
+			self.update_text_measure(id, resolved.kind, &send_props);
+			out.push(Mutation::UpdateProps {
+				id,
+				props: send_props,
+			});
 		}
 
-		self.shadows[id.index()].handlers = element.handlers().to_vec();
+		let handlers = meta.handlers();
+		let shadow_handlers = &mut self.shadows[idx].handlers;
+
+		if handlers.is_empty() {
+			shadow_handlers.clear();
+		} else {
+			shadow_handlers.clear();
+			shadow_handlers.extend_from_slice(handlers);
+		}
+
 		let gesture_removed =
-			self.shadows[id.index()].gesture.is_some() && element.attached_gesture().is_none();
-		self.shadows[id.index()].gesture = element.attached_gesture().cloned();
+			self.shadows[idx].gesture.is_some() && meta.attached_gesture().is_none();
+		self.shadows[idx].gesture = meta.attached_gesture().cloned();
 
 		if gesture_removed {
 			let effects = {
@@ -281,41 +577,16 @@ impl<B: NativeBackend> NativeSurface<B> {
 
 		#[cfg(feature = "devtools")]
 		{
-			self.shadows[id.index()].source = element.source_location();
-			self.shadows[id.index()].component = element.component_name();
-			self.shadows[id.index()].classes = element
-				.applied_classes()
-				.classes()
-				.split_whitespace()
-				.map(str::to_owned)
-				.collect();
+			self.shadows[idx].source = meta.source_location();
+			self.shadows[idx].component = meta.component_name();
+			let classes = if meta.applied_classes().classes().is_empty() {
+				meta.classes().classes()
+			} else {
+				meta.applied_classes().classes()
+			};
+			self.shadows[idx].classes = classes.split_whitespace().map(str::to_owned).collect();
 		}
-		self.yoga.set_style(id, element.style.clone());
-	}
-
-	pub(super) fn reconcile_children(
-		&mut self,
-		parent: NodeId,
-		old: &[NodeId],
-		new: &[Element],
-		out: &mut MutationList,
-	) {
-		for (index, element) in new.iter().enumerate() {
-			match old.get(index) {
-				Some(&child) => {
-					self.update_node(child, element, out);
-				}
-				None => {
-					self.build_subtree(Some((parent, index)), element, out);
-				}
-			}
-		}
-
-		// Extra old children are removed back to front so the indices in the
-		// removal mutations stay valid as the backend applies them.
-		for &child in old.iter().skip(new.len()).rev() {
-			self.teardown(child, out);
-		}
+		self.yoga.set_style(id, resolved.style);
 	}
 
 	/// Removes a subtree, post-order: every node is detached from its parent
@@ -326,9 +597,9 @@ impl<B: NativeBackend> NativeSurface<B> {
 	/// inert: no handlers, no parent, no children, and no measure function, so
 	/// a stale id can neither receive events nor keep closures alive.
 	///
-	/// Children go last to first, as [`Self::reconcile_children`] removes
-	/// them, so each removal finds its child at the end of the parent's list
-	/// and clearing a long list costs its length rather than its square.
+	/// Children go last to first, as reconciliation removes them, so each
+	/// removal finds its child at the end of the parent's list and clearing a
+	/// long list costs its length rather than its square.
 	pub(super) fn teardown(&mut self, id: NodeId, out: &mut MutationList) {
 		let children = std::mem::take(&mut self.shadows[id.index()].children);
 
@@ -344,6 +615,7 @@ impl<B: NativeBackend> NativeSurface<B> {
 			}
 
 			self.yoga.detach(id);
+			self.mark_meta_dirty(parent);
 			out.push(Mutation::RemoveChild { parent, child: id });
 		}
 
@@ -367,7 +639,19 @@ impl<B: NativeBackend> NativeSurface<B> {
 
 		self.frames[id.index()] = None;
 		self.hit_areas[id.index()] = HitArea::DETACHED;
+		self.meta_dirty[id.index()] = true;
+		self.subtree_has_overlay[id.index()] = false;
 		self.scrolled.borrow_mut().remove(&id);
 		out.push(Mutation::Delete { id });
 	}
+}
+
+fn count_nodes(element: &Element) -> usize {
+	let mut count = 1usize;
+
+	for child in &element.children {
+		count += count_nodes(child);
+	}
+
+	count
 }

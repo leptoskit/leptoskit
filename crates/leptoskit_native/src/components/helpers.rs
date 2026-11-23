@@ -227,7 +227,7 @@ pub fn Wrap() -> Element {
 pub fn Grid(columns: NonZeroU8) -> Element {
 	View().with_style(|style| {
 		style.display = Display::Grid;
-		style.grid = Some(equal_columns(columns));
+		style.grid = Some(Box::new(equal_columns(columns)));
 	})
 }
 
@@ -604,16 +604,16 @@ pub fn GridView(columns: NonZeroU8) -> Element {
 		style.flex_shrink = 1.0;
 		style.min_width = Dimension::Points(0.0);
 		style.min_height = Dimension::Points(0.0);
-		style.grid = Some(equal_columns(columns));
+		style.grid = Some(Box::new(equal_columns(columns)));
 	})
 }
 
-fn equal_columns(columns: NonZeroU8) -> Box<GridStyle> {
-	Box::new(GridStyle {
+fn equal_columns(columns: NonZeroU8) -> GridStyle {
+	GridStyle {
 		template_columns: vec![fraction_track(); usize::from(columns.get())],
 		justify_items: BoxAlign::Stretch,
 		..GridStyle::default()
-	})
+	}
 }
 
 fn fraction_track() -> TrackSizing {

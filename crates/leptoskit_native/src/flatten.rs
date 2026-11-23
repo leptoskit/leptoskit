@@ -24,8 +24,6 @@
 //! Hit testing and event dispatch run on the surface's own tree, so they are
 //! unaffected; only what the platform draws changes.
 
-use std::collections::HashMap;
-
 use leptoskit_yoga::NodeId;
 
 use crate::Mutation;
@@ -33,7 +31,6 @@ use crate::MutationList;
 use crate::NativeKind;
 use crate::NativeProps;
 use crate::aria::Aria;
-use crate::hash::FastHash;
 
 /// Whether an element of `kind` with `props` draws nothing of its own.
 ///
@@ -223,7 +220,10 @@ struct Node {
 /// order.
 #[derive(Debug, Default)]
 pub struct Flattener {
-	nodes: HashMap<NodeId, Node, FastHash>,
+	nodes: Vec<Option<Node>>,
+	/// Nodes created during the current batch whose native-vs-flattened
+	/// decision is still pending.
+	undecided: Vec<NodeId>,
 }
 
 impl Flattener {
@@ -237,55 +237,69 @@ impl Flattener {
 
 		// A node created but never inserted and never given children is a
 		// new root with no content yet; it must exist natively.
-		let undecided: Vec<NodeId> = self
-			.nodes
-			.iter()
-			.filter(|(_, node)| node.undecided)
-			.map(|(id, _)| *id)
-			.collect();
+		let mut pending = std::mem::take(&mut self.undecided);
 
-		for id in undecided {
-			self.decide(id, true, &mut out);
+		for id in pending.drain(..) {
+			if self
+				.nodes
+				.get(id.index())
+				.and_then(Option::as_ref)
+				.is_some_and(|node| node.undecided)
+			{
+				self.decide(id, true, &mut out);
+			}
 		}
 
+		self.undecided = pending;
 		out.into_mutations()
 	}
 
 	/// Whether the platform has a view for `id`.
 	#[must_use]
 	pub fn is_native(&self, id: NodeId) -> bool {
-		self.nodes.get(&id).is_some_and(|node| node.native)
+		self.nodes
+			.get(id.index())
+			.and_then(Option::as_ref)
+			.is_some_and(|node| node.native)
 	}
 
+	#[inline]
 	fn node(&self, id: NodeId) -> &Node {
 		self.nodes
-			.get(&id)
+			.get(id.index())
+			.and_then(Option::as_ref)
 			.expect("the surface names only elements it created")
 	}
 
+	#[inline]
 	fn node_mut(&mut self, id: NodeId) -> &mut Node {
 		self.nodes
-			.get_mut(&id)
+			.get_mut(id.index())
+			.and_then(Option::as_mut)
 			.expect("the surface names only elements it created")
 	}
 
 	fn apply(&mut self, mutation: Mutation, out: &mut MutationList) {
 		match mutation {
 			Mutation::Create { id, kind, props } => {
-				self.nodes.insert(
-					id,
-					Node {
-						kind,
-						props,
-						parent: None,
-						children: Vec::new(),
-						frame: None,
-						native: false,
-						undecided: true,
-						roots: 0,
-						inner: 0,
-					},
-				);
+				let idx = id.index();
+
+				if self.nodes.len() <= idx {
+					self.nodes.resize_with(idx + 1, || None);
+				}
+
+				self.nodes[idx] = Some(Node {
+					kind,
+					props,
+					parent: None,
+					children: Vec::new(),
+					frame: None,
+					native: false,
+					undecided: true,
+					roots: 0,
+					inner: 0,
+				});
+				self.undecided.push(id);
 			}
 			Mutation::InsertChild {
 				parent,
@@ -294,18 +308,26 @@ impl Flattener {
 			} => self.insert(parent, child, index, out),
 			Mutation::RemoveChild { parent, child } => self.remove(parent, child, out),
 			Mutation::Delete { id } => {
-				if self.nodes.remove(&id).is_some_and(|node| node.native) {
+				if self
+					.nodes
+					.get_mut(id.index())
+					.and_then(Option::take)
+					.is_some_and(|node| node.native)
+				{
 					out.push(Mutation::Delete { id });
 				}
 			}
 			Mutation::UpdateProps { id, props } => {
 				let node = self.node_mut(id);
-				node.props = props.clone();
 
 				if node.native {
 					out.push(Mutation::UpdateProps { id, props });
-				} else if !node.undecided && !is_layout_only(node.kind, &node.props) {
-					self.promote(id, out);
+				} else {
+					node.props = props;
+
+					if !node.undecided && !is_layout_only(node.kind, &node.props) {
+						self.promote(id, out);
+					}
 				}
 			}
 			Mutation::UpdateLayout {
@@ -344,7 +366,7 @@ impl Flattener {
 			out.push(Mutation::Create {
 				id,
 				kind: node.kind,
-				props: node.props.clone(),
+				props: std::mem::take(&mut node.props),
 			});
 		}
 	}
@@ -440,7 +462,7 @@ impl Flattener {
 		out.push(Mutation::Create {
 			id,
 			kind: node.kind,
-			props: node.props.clone(),
+			props: std::mem::take(&mut node.props),
 		});
 		out.push(Mutation::InsertChild {
 			parent: host,

@@ -139,6 +139,9 @@ thread_local! {
 const FLAG_ACTIVE: u8 = 1 << 0;
 const FLAG_STARTING: u8 = 1 << 1;
 const FLAG_MAY_SCROLL: u8 = 1 << 2;
+const FLAG_VIEWPORT: u8 = 1 << 3;
+const FLAG_SAFE_AREA: u8 = 1 << 4;
+const FLAG_DARK: u8 = 1 << 5;
 
 #[derive(Debug, PartialEq)]
 struct TailwindInner {
@@ -273,7 +276,7 @@ impl Tailwind {
 		if tokens.is_empty() {
 			return Ok(Self::default());
 		}
-		insertion_sort_by(&mut tokens, |a, b| a.cmp(b));
+		insertion_sort_by(&mut tokens, Ord::cmp);
 		tokens.dedup();
 		let classes = tokens.join(" ");
 		let mut rules = Vec::with_capacity(tokens.len());
@@ -293,6 +296,21 @@ impl Tailwind {
 
 			if rule.conditions.starting {
 				flags |= FLAG_STARTING;
+			}
+
+			if rule.conditions.dark {
+				flags |= FLAG_DARK;
+			}
+
+			if rule.conditions.min_width.is_some()
+				|| rule.conditions.max_width.is_some()
+				|| rule.declarations.iter().any(Declaration::uses_viewport)
+			{
+				flags |= FLAG_VIEWPORT;
+			}
+
+			if rule.declarations.iter().any(Declaration::uses_safe_area) {
+				flags |= FLAG_SAFE_AREA;
 			}
 
 			if rule.declarations.iter().any(|declaration| {
@@ -323,7 +341,7 @@ impl Tailwind {
 
 	/// Fast check whether two `Tailwind` sets have the exact same normalized
 	/// class string, short-circuiting via `Arc::ptr_eq`.
-	#[cfg_attr(not(feature = "guest"), allow(dead_code))]
+	#[allow(dead_code)]
 	#[inline]
 	pub(crate) fn same_classes(&self, other: &Self) -> bool {
 		match (&self.0, &other.0) {
@@ -358,6 +376,30 @@ impl Tailwind {
 			.is_some_and(|inner| inner.flags & FLAG_MAY_SCROLL != 0)
 	}
 
+	/// Whether any rule or length depends on `StyleContext::viewport`.
+	#[inline]
+	pub(crate) fn uses_viewport(&self) -> bool {
+		self.0
+			.as_deref()
+			.is_some_and(|inner| inner.flags & FLAG_VIEWPORT != 0)
+	}
+
+	/// Whether any declaration depends on `StyleContext::safe_area`.
+	#[inline]
+	pub(crate) fn uses_safe_area(&self) -> bool {
+		self.0
+			.as_deref()
+			.is_some_and(|inner| inner.flags & FLAG_SAFE_AREA != 0)
+	}
+
+	/// Whether any rule depends on `StyleContext::dark`.
+	#[inline]
+	pub(crate) fn uses_dark(&self) -> bool {
+		self.0
+			.as_deref()
+			.is_some_and(|inner| inner.flags & FLAG_DARK != 0)
+	}
+
 	/// Applies active declarations over the supplied base style and props.
 	///
 	/// Start from the same unmodified base values on each call: rules which
@@ -368,7 +410,7 @@ impl Tailwind {
 			return;
 		};
 
-		for rule in inner.rules.iter() {
+		for rule in &inner.rules {
 			if rule.conditions.active(context) {
 				for declaration in &rule.declarations {
 					declaration.apply(style, props, context);
@@ -383,7 +425,7 @@ impl Tailwind {
 		}
 
 		if inner.flags & FLAG_STARTING != 0 {
-			self.apply_starting(inner, style, props, context);
+			Self::apply_starting(inner, style, props, context);
 		}
 
 		props.sanitize_motion();
@@ -394,7 +436,6 @@ impl Tailwind {
 	/// describe, for the properties its transition animates, along the
 	/// transition's curve. Natively that covers opacity and transforms.
 	fn apply_starting(
-		&self,
 		inner: &TailwindInner,
 		style: &Style,
 		props: &mut NativeProps,
@@ -474,7 +515,7 @@ impl Tailwind {
 		};
 		let mut css = String::new();
 
-		for rule in inner.rules.iter() {
+		for rule in &inner.rules {
 			if rule.conditions.dark {
 				// The device's dark setting, unless the app chose light...
 				css.push_str("@media (prefers-color-scheme:dark){");
@@ -765,7 +806,11 @@ impl Tailwind {
 	/// Every class active in `context`, with its declarations and variant.
 	#[must_use]
 	pub fn explain(&self, context: &StyleContext) -> Vec<ClassExplanation> {
-		self.rules
+		let Some(inner) = self.0.as_deref() else {
+			return Vec::new();
+		};
+		inner
+			.rules
 			.iter()
 			.filter(|rule| rule.conditions.active(context))
 			.map(|rule| {

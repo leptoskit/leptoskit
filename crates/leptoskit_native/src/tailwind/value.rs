@@ -43,6 +43,14 @@ impl Length {
 		}
 	}
 
+	/// Whether resolving this length natively can depend on `context.viewport`.
+	pub(super) fn uses_viewport(&self) -> bool {
+		match self {
+			Self::Vw(_) | Self::Vh(_) | Self::Var { .. } => true,
+			Self::Auto | Self::Px(_) | Self::Rem(_) | Self::Percent(_) => false,
+		}
+	}
+
 	pub(super) fn parse(value: &str, negative: bool, auto: bool) -> Result<Self, String> {
 		let value = arbitrary(value).unwrap_or(value);
 

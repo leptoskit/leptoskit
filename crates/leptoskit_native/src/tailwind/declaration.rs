@@ -225,7 +225,44 @@ pub(super) fn write(output: &mut String, important: bool, name: &str, value: &st
 	);
 }
 
+impl Track {
+	pub(super) fn uses_viewport(&self) -> bool {
+		match self {
+			Self::Length(length) => length.uses_viewport(),
+			Self::MinMax(min, max) => min.uses_viewport() || max.uses_viewport(),
+			Self::Auto | Self::Fraction(_) => false,
+		}
+	}
+}
+
 impl Declaration {
+	/// Whether applying this declaration natively can depend on
+	/// `context.viewport`.
+	pub(super) fn uses_viewport(&self) -> bool {
+		match self {
+			Self::Size(_, length)
+			| Self::Edge(_, _, length)
+			| Self::SafePadding(_, length)
+			| Self::Gap(_, length)
+			| Self::Flex(_, _, length)
+			| Self::FontSize(length)
+			| Self::BorderWidth(length)
+			| Self::EdgeBorderWidth(_, length)
+			| Self::Radius(length)
+			| Self::LineHeight(Leading::Length(length))
+			| Self::Motion(super::motion::Motion::Translate(_, length)) => length.uses_viewport(),
+			Self::GridTracks(_, tracks) => tracks.iter().any(Track::uses_viewport),
+			Self::GridAutoTrack(_, track) => track.uses_viewport(),
+			_ => false,
+		}
+	}
+
+	/// Whether applying this declaration natively depends on
+	/// `context.safe_area`.
+	pub(super) fn uses_safe_area(&self) -> bool {
+		matches!(self, Self::SafePadding(_, _))
+	}
+
 	pub(super) fn apply(&self, style: &mut Style, props: &mut NativeProps, context: &StyleContext) {
 		if self.apply_box(style, props, context) {
 			return;
