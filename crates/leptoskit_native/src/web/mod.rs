@@ -17,14 +17,13 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::sync::Arc;
 
+use leptos::either::Either;
 use leptos::ev;
 use leptos::html;
 use leptos::prelude::*;
 use leptos::tachys::html::attribute::Attribute;
 use leptos::tachys::html::attribute::custom::custom_attribute;
 use leptos::tachys::html::event::on;
-use sha2::Digest;
-use sha2::Sha256;
 use wasm_bindgen::JsCast;
 
 use crate::Capitalize;
@@ -32,6 +31,7 @@ use crate::Element;
 use crate::EventOutcome;
 use crate::Keyboard;
 use crate::NativeEvent;
+use crate::NativeEventSlot;
 use crate::NativeKind;
 use crate::NativeProps;
 use crate::Progress;
@@ -55,6 +55,49 @@ pub use rive::provide_rive_runtime;
 use semantics::Tag;
 
 type Handlers = Arc<[HandlerEntry]>;
+
+/// Deterministic, allocation-free 64-bit hasher for CSS scope identifiers.
+///
+/// Server rendering and browser hydration hash the same inputs to the same
+/// scope without linking a cryptographic hash crate into every web bundle.
+struct ScopeHasher(u64);
+
+impl ScopeHasher {
+	const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+	const PRIME: u64 = 0x0000_0100_0000_01b3;
+
+	#[inline]
+	const fn new() -> Self {
+		Self(Self::OFFSET)
+	}
+
+	#[inline]
+	fn update(&mut self, bytes: &[u8]) {
+		let mut state = self.0;
+
+		for &byte in bytes {
+			state ^= u64::from(byte);
+			state = state.wrapping_mul(Self::PRIME);
+		}
+
+		self.0 = state;
+	}
+
+	#[inline]
+	const fn finish(self) -> u64 {
+		let mut z = self.0;
+		z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+		z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+		z ^ (z >> 31)
+	}
+}
+
+#[inline]
+pub(super) fn scope_hash(bytes: &[u8]) -> u64 {
+	let mut hasher = ScopeHasher::new();
+	hasher.update(bytes);
+	hasher.finish()
+}
 
 /// A screen that rebuilds whenever a signal `view` reads changes, keeping
 /// what it [remembers](crate::remember::remember) between builds.
@@ -129,12 +172,10 @@ pub fn render(mut element: Element) -> AnyView {
 	element
 		.validate()
 		.unwrap_or_else(|error| panic!("invalid leptoskit element tree: {error}"));
-	let wants_focus = asks_for_focus(&element);
-	let scrolls = sets_scroll_offset(&element);
-	let reveals = asks_to_reveal(&element);
 	let mut sheets = BTreeMap::new();
 	let mut labels = labels::Labels::default();
-	labels.collect(std::slice::from_ref(&element));
+	let mut scan = TreeScan::default();
+	scan_tree(&element, &mut labels, &mut scan);
 	let root = render_node(
 		element,
 		Inherited::ROOT,
@@ -145,23 +186,29 @@ pub fn render(mut element: Element) -> AnyView {
 	);
 	let mut css = crate::Theme::css();
 	let scope = root_scope(&sheets);
+	let defaults = styles::defaults();
+	let sheets_len: usize = sheets.values().map(String::len).sum();
+	css.reserve(defaults.len() + sheets_len + 96);
 	write!(
 		css,
-		":where([data-lk-root=\"{scope}\"],[data-lk-root=\"{scope}\"] [data-lk-style]){{{}}}",
-		styles::defaults()
+		":where([data-lk-root=\"{scope}\"],[data-lk-root=\"{scope}\"] \
+		 [data-lk-style]){{{defaults}}}"
 	)
 	.expect("write to String");
-	css.push_str(&sheets.into_values().collect::<String>());
 
-	if wants_focus {
+	for sheet in sheets.into_values() {
+		css.push_str(&sheet);
+	}
+
+	if scan.wants_focus {
 		focus_after_render();
 	}
 
-	if scrolls {
+	if scan.scrolls {
 		scroll_after_render();
 	}
 
-	if reveals {
+	if scan.reveals {
 		reveal_after_render();
 	}
 
@@ -219,21 +266,34 @@ pub(crate) fn lift_splash() {
 	}
 }
 
-/// Whether any element in the tree asks for keyboard focus.
-fn asks_for_focus(element: &Element) -> bool {
-	element.props.focused == Some(true)
-		|| element.props.focus_request.is_some()
-		|| element.children.iter().any(asks_for_focus)
+/// Post-render browser work discovered in one pass over the element tree.
+#[derive(Default)]
+struct TreeScan {
+	wants_focus: bool,
+	scrolls: bool,
+	reveals: bool,
 }
 
-/// Whether any element in the tree sets a scroll offset.
-fn sets_scroll_offset(element: &Element) -> bool {
-	element.props.scroll_offset.is_some() || element.children.iter().any(sets_scroll_offset)
-}
+/// Collects label targets and post-render focus/scroll/reveal flags in one
+/// walk.
+fn scan_tree(element: &Element, labels: &mut labels::Labels, scan: &mut TreeScan) {
+	if element.props.focused == Some(true) || element.props.focus_request.is_some() {
+		scan.wants_focus = true;
+	}
 
-/// Whether any element in the tree asks to be scrolled into view.
-fn asks_to_reveal(element: &Element) -> bool {
-	element.props.reveal.is_some() || element.children.iter().any(asks_to_reveal)
+	if element.props.scroll_offset.is_some() {
+		scan.scrolls = true;
+	}
+
+	if element.props.reveal.is_some() {
+		scan.reveals = true;
+	}
+
+	labels.record(element);
+
+	for child in &element.children {
+		scan_tree(child, labels, scan);
+	}
 }
 
 /// Scrolls the element carrying the newest reveal request into view, once
@@ -502,6 +562,10 @@ fn announce_read_only(kind: NativeKind, props: &mut NativeProps) {
 }
 
 /// Builds each typed DOM control before adding attributes common to all kinds.
+#[expect(
+	clippy::too_many_lines,
+	reason = "single-pass node render keeps lazy event listener and style emission inline"
+)]
 fn render_node(
 	element: Element,
 	inherited: Inherited,
@@ -520,35 +584,45 @@ fn render_node(
 	let devtools = path.attributes(&element);
 	// The render's stylesheet sets the defaults once, so each scope's sheet
 	// holds only what differs from them.
-	let base = styles::delta(&styles::base(&element, root));
+	let base = styles::delta_for(&element, root);
 	let styles_active = element.classes().active_class().is_some();
-	let control = styles::control("", element.kind, styles_active);
 	let motion = element
 		.props
 		.motion
 		.as_deref()
 		.map(|props| motion::css(props, stagger))
 		.unwrap_or_default();
-	let scope = style_scope(&base, element.classes().classes(), &control);
-	sheets.entry(scope.clone()).or_insert_with(|| {
-		scoped_sheet(
+	let scope = style_scope(
+		&base,
+		element.classes().classes(),
+		element.kind,
+		styles_active,
+	);
+
+	if !sheets.contains_key(&scope) {
+		let sheet = scoped_sheet(
 			&scope,
 			&base,
 			element.classes(),
 			element.kind,
 			styles_active,
 			&styles::motion_rules(&element.props),
-		)
-	});
+		);
+		sheets.insert(scope.clone(), sheet);
+	}
+
 	// Motion has a scope of its own, so moving elements still share their
 	// style scope's sheet with the elements that look like them.
 	let motion_scope = (!motion.rules.is_empty()).then(|| motion_scope(&motion.rules));
 
-	if let Some(motion_scope) = &motion_scope {
-		sheets.entry(motion_scope.clone()).or_insert_with(|| {
-			let selector = format!("[data-lk-motion=\"{motion_scope}\"]");
-			motion.rules.replace(motion::SELECTOR, &selector)
-		});
+	if let Some(motion_scope) = &motion_scope
+		&& !sheets.contains_key(motion_scope)
+	{
+		let selector = format!("[data-lk-motion=\"{motion_scope}\"]");
+		sheets.insert(
+			motion_scope.clone(),
+			motion.rules.replace(motion::SELECTOR, &selector),
+		);
 	}
 
 	if let Some((name, keyframes)) = motion.keyframes {
@@ -561,9 +635,15 @@ fn render_node(
 		.as_deref()
 		.and_then(|props| props.stagger)
 		.unwrap_or_default();
-	let handlers: Handlers = element.handlers().to_vec().into();
-	let mut chain = ancestors.to_vec();
-	chain.push(Arc::clone(&handlers));
+	let handlers: Option<Handlers> =
+		(!element.handlers().is_empty()).then(|| element.handlers().to_vec().into());
+	let owned_chain: Option<Vec<Handlers>> = handlers.as_ref().map(|current| {
+		let mut chain = Vec::with_capacity(ancestors.len() + 1);
+		chain.extend_from_slice(ancestors);
+		chain.push(Arc::clone(current));
+		chain
+	});
+	let chain_slice: &[Handlers] = owned_chain.as_deref().unwrap_or(ancestors);
 	let classes = element.classes().classes().to_owned();
 	let kind = element.kind;
 	let mut props = element.props;
@@ -587,29 +667,58 @@ fn render_node(
 		.accessibility_label
 		.clone()
 		.or_else(|| (kind == NativeKind::ActivityIndicator).then(|| "Loading".to_owned()));
-	let text = props.text.clone().unwrap_or_default();
+	let is_text_input = matches!(
+		kind,
+		NativeKind::TextInput | NativeKind::TextArea | NativeKind::PasswordInput
+	);
 	// Styled runs render as inline spans; plain text is one text node.
-	let content = match props.spans.take() {
-		Some(spans) => spans_view(spans),
-		None => text.clone().into_any(),
+	let (text, content) = if is_text_input {
+		(
+			props.text.take().unwrap_or_default(),
+			String::new().into_any(),
+		)
+	} else {
+		let content = match props.spans.take() {
+			Some(spans) => spans_view(spans),
+			None => props.text.take().unwrap_or_default().into_any(),
+		};
+		(String::new(), content)
 	};
 
 	let custom_control = semantics::custom_control(kind, props.aria());
 
-	let child_paths = path.children(&element.children);
+	#[cfg(feature = "devtools")]
+	let children = {
+		let child_paths = path.children(&element.children);
+		element
+			.children
+			.into_iter()
+			.zip(child_paths)
+			.enumerate()
+			.map(|(index, (child, child_path))| {
+				let inherited = Inherited {
+					root: false,
+					enabled,
+					hidden,
+					stagger: child_stagger.saturating_mul(u32::try_from(index).unwrap_or(u32::MAX)),
+				};
+				render_node(child, inherited, chain_slice, sheets, &child_path, labels)
+			})
+			.collect::<Vec<_>>()
+	};
+	#[cfg(not(feature = "devtools"))]
 	let children = element
 		.children
 		.into_iter()
-		.zip(child_paths)
 		.enumerate()
-		.map(|(index, (child, child_path))| {
+		.map(|(index, child)| {
 			let inherited = Inherited {
 				root: false,
 				enabled,
 				hidden,
 				stagger: child_stagger.saturating_mul(u32::try_from(index).unwrap_or(u32::MAX)),
 			};
-			render_node(child, inherited, &chain, sheets, &child_path, labels)
+			render_node(child, inherited, chain_slice, sheets, path, labels)
 		})
 		.collect::<Vec<_>>();
 	let focused = props.focused == Some(true);
@@ -618,6 +727,31 @@ fn render_node(
 	let reveal = props.reveal.map(reveal_target);
 	// Every sheet is in by now: the children's were added above.
 	let render_scope = root.then(|| root_scope(sheets));
+	let scroll_chain = chain_slice
+		.iter()
+		.any(|group| {
+			group
+				.iter()
+				.any(|entry| entry.event == NativeEventSlot::Scroll)
+		})
+		.then(|| chain_slice.to_vec());
+	let needs_chain = matches!(
+		kind,
+		NativeKind::TextInput
+			| NativeKind::TextArea
+			| NativeKind::PasswordInput
+			| NativeKind::Switch
+			| NativeKind::Checkbox
+			| NativeKind::Radio
+			| NativeKind::Slider
+			| NativeKind::Modal
+			| NativeKind::Popover
+	);
+	let control_chain = if needs_chain {
+		owned_chain.unwrap_or_else(|| ancestors.to_vec())
+	} else {
+		Vec::new()
+	};
 
 	let attrs = (
 		custom_attribute("data-lk-root", render_scope),
@@ -644,7 +778,7 @@ fn render_node(
 			hidden || decorative,
 			custom_control,
 		),
-		listeners(handlers, chain.clone(), link, custom_control),
+		listeners(handlers, scroll_chain, link, custom_control),
 	);
 	let node = typed_element(
 		NodeParts {
@@ -657,7 +791,7 @@ fn render_node(
 			enabled,
 			href,
 			label,
-			chain,
+			chain: control_chain,
 		},
 		attrs,
 	);
@@ -676,6 +810,28 @@ fn render_node(
 	}
 }
 
+/// Discriminates control decoration outputs of [`styles::control`] without
+/// formatting the rule on cache hits.
+#[inline]
+fn control_discriminant(kind: NativeKind, styles_active: bool) -> u8 {
+	match kind {
+		NativeKind::Button => u8::from(!styles_active),
+		NativeKind::Pressable => {
+			if styles_active {
+				2
+			} else {
+				3
+			}
+		}
+		NativeKind::Vector => 4,
+		NativeKind::Modal => 5,
+		NativeKind::Popover => 6,
+		NativeKind::Switch => 7,
+		NativeKind::ActivityIndicator => 8,
+		_ => 0,
+	}
+}
+
 /// The style scope a node's content hashes to, so equal styles share one
 /// sheet.
 ///
@@ -684,14 +840,14 @@ fn render_node(
 /// normalized classes determine the generated utilities — the same string
 /// always compiles to the same CSS — so hashing the string costs a fraction
 /// of generating the stylesheet to hash it.
-fn style_scope(base: &str, classes: &str, control: &str) -> String {
-	let mut hasher = Sha256::new();
-	hasher.update(base);
+fn style_scope(base: &str, classes: &str, kind: NativeKind, styles_active: bool) -> String {
+	let mut hasher = ScopeHasher::new();
+	hasher.update(base.as_bytes());
 	hasher.update(b"\0");
-	hasher.update(classes);
+	hasher.update(classes.as_bytes());
 	hasher.update(b"\0");
-	hasher.update(control);
-	short_scope("lk-", &hasher.finalize())
+	hasher.update(&[control_discriminant(kind, styles_active)]);
+	short_scope("lk-", hasher.finish())
 }
 
 /// The scope of one render: the defaults its stylesheet writes apply only
@@ -700,25 +856,22 @@ fn style_scope(base: &str, classes: &str, control: &str) -> String {
 /// when they wrote the same sheets, so either one's defaults are followed by
 /// every delta both trees need.
 fn root_scope(sheets: &BTreeMap<String, String>) -> String {
-	let mut hasher = Sha256::new();
+	let mut hasher = ScopeHasher::new();
 
 	for scope in sheets.keys() {
-		hasher.update(scope);
+		hasher.update(scope.as_bytes());
 		hasher.update(b"\0");
 	}
 
-	short_scope("lk-r", &hasher.finalize())
+	short_scope("lk-r", hasher.finish())
 }
 
-/// `prefix` and the first 64 bits of `digest` in hex: unique enough within
+/// `prefix` and 64 bits of `digest` in hex: unique enough within
 /// one document, and short, since every element carries its scope.
-fn short_scope(prefix: &str, digest: &[u8]) -> String {
-	let mut scope = String::from(prefix);
-
-	for byte in &digest[..8] {
-		write!(scope, "{byte:02x}").expect("write to String");
-	}
-
+fn short_scope(prefix: &str, digest: u64) -> String {
+	let mut scope = String::with_capacity(prefix.len() + 16);
+	scope.push_str(prefix);
+	write!(scope, "{digest:016x}").expect("write to String");
 	scope
 }
 
@@ -726,7 +879,7 @@ fn short_scope(prefix: &str, digest: &[u8]) -> String {
 /// one sheet. Motion rules differ by delay as well as by movement, so a
 /// short hash keeps the many scopes of a staggered list small.
 fn motion_scope(rules: &str) -> String {
-	short_scope("lk-m", &Sha256::digest(rules.as_bytes()))
+	short_scope("lk-m", scope_hash(rules.as_bytes()))
 }
 
 /// The node's stylesheet: typed base styles that differ from the defaults,
@@ -780,26 +933,41 @@ fn link_href(kind: NativeKind, props: &mut NativeProps) -> Option<String> {
 	Some(href)
 }
 
-/// The DOM listeners every node carries, which translate browser events into
-/// platform-neutral ones for the node's handlers.
+/// The DOM listeners a node carries, attached only for event slots the node
+/// (or its scroll ancestor chain) actually handles.
 fn listeners(
-	handlers: Handlers,
-	scroll_chain: Vec<Handlers>,
+	handlers: Option<Handlers>,
+	scroll_chain: Option<Vec<Handlers>>,
 	link: bool,
 	custom_control: bool,
 ) -> impl Attribute {
-	let listens_for_keys = handlers
-		.iter()
-		.any(|entry| entry.event == crate::NativeEventSlot::Key);
-	let press = Arc::clone(&handlers);
-	let keys = Arc::clone(&handlers);
-	let key_press = Arc::clone(&handlers);
-	let submit = Arc::clone(&handlers);
-	let focus = Arc::clone(&handlers);
-	let blur = handlers;
+	let (has_press, listens_for_keys, has_submit, has_focus, has_blur) = match &handlers {
+		Some(handlers) => {
+			let mut press = false;
+			let mut key = false;
+			let mut submit = false;
+			let mut focus = false;
+			let mut blur = false;
 
-	(
-		on(ev::click, move |event| {
+			for entry in handlers.iter() {
+				match entry.event {
+					NativeEventSlot::Press => press = true,
+					NativeEventSlot::Key => key = true,
+					NativeEventSlot::Submit => submit = true,
+					NativeEventSlot::Focus => focus = true,
+					NativeEventSlot::Blur => blur = true,
+					_ => {}
+				}
+			}
+
+			(press, key, submit, focus, blur)
+		}
+		None => (false, false, false, false, false),
+	};
+
+	let click = if has_press {
+		let press = Arc::clone(handlers.as_ref().expect("press handler present"));
+		Either::Left(on(ev::click, move |event| {
 			if !controls::interactive(&event) || controls::typed_target(&event) {
 				return;
 			}
@@ -813,33 +981,63 @@ fn listeners(
 			if link && outcome == EventOutcome::Handled {
 				event.prevent_default();
 			}
-		}),
-		on(ev::keydown, move |event| {
+		}))
+	} else {
+		Either::Right(())
+	};
+
+	let keydown = if listens_for_keys || has_submit || (custom_control && has_press) {
+		let keys = Arc::clone(handlers.as_ref().expect("keydown handler present"));
+		Either::Left(on(ev::keydown, move |event| {
 			on_keydown(
 				keys.as_ref(),
-				submit.as_ref(),
-				key_press.as_ref(),
+				keys.as_ref(),
+				keys.as_ref(),
 				listens_for_keys,
 				custom_control,
 				&event,
 			);
-		}),
-		on(ev::focusin, move |event| {
+		}))
+	} else {
+		Either::Right(())
+	};
+
+	let focusin = if has_focus {
+		let focus = Arc::clone(handlers.as_ref().expect("focus handler present"));
+		Either::Left(on(ev::focusin, move |event| {
 			if !controls::interactive(event.as_ref()) {
 				return;
 			}
 
 			dispatch(&focus, &NativeEvent::Focus, event.as_ref());
-		}),
-		on(ev::focusout, move |event| {
+		}))
+	} else {
+		Either::Right(())
+	};
+
+	let focusout = if has_blur {
+		let blur = handlers.expect("blur handler present");
+		Either::Left(on(ev::focusout, move |event| {
 			if !controls::interactive(event.as_ref()) {
 				return;
 			}
 
 			dispatch(&blur, &NativeEvent::Blur, event.as_ref());
-		}),
-		on(ev::scroll, move |event| on_scroll(&scroll_chain, &event)),
-	)
+		}))
+	} else {
+		Either::Right(())
+	};
+
+	let scroll = match scroll_chain {
+		Some(scroll_chain) => {
+			Either::Left(on(ev::scroll, move |event| {
+				on_scroll(&scroll_chain, &event);
+			}))
+		}
+		None => Either::Right(()),
+	};
+
+	(click, keydown, focusin, focusout, scroll)
 }
 
 /// The DOM element for a node's kind, with the shared attributes added.
@@ -850,15 +1048,7 @@ fn listeners(
 /// Where a node sits, for the `DevTools` attributes: its path from the
 /// render root, and its cross-platform match key.
 struct NodePath {
-	// Nothing reads the path without the devtools feature: the attributes it
-	// names are absent, so child paths are never formatted.
-	#[cfg_attr(
-		not(feature = "devtools"),
-		expect(
-			dead_code,
-			reason = "the path names nodes only with the devtools feature"
-		)
-	)]
+	#[cfg(feature = "devtools")]
 	path: String,
 	#[cfg(feature = "devtools")]
 	key: u64,
@@ -877,6 +1067,7 @@ struct DevtoolsAttributes {
 impl NodePath {
 	fn root() -> Self {
 		Self {
+			#[cfg(feature = "devtools")]
 			path: String::new(),
 			#[cfg(feature = "devtools")]
 			key: crate::devtools::ROOT,
@@ -884,47 +1075,26 @@ impl NodePath {
 	}
 
 	/// Each child's path, in order.
-	#[cfg_attr(
-		not(feature = "devtools"),
-		expect(
-			clippy::unused_self,
-			reason = "the path names nodes only with the devtools feature"
-		)
-	)]
+	#[cfg(feature = "devtools")]
 	fn children(&self, children: &[Element]) -> Vec<Self> {
-		#[cfg(feature = "devtools")]
-		{
-			use crate::devtools::Origin;
+		use crate::devtools::Origin;
 
-			let origins: Vec<Origin> = children
-				.iter()
-				.map(|child| Origin::of(child.source_location(), child.kind))
-				.collect();
-			let ordinals = crate::devtools::ordinals(origins.iter().copied());
-			origins
-				.into_iter()
-				.zip(ordinals)
-				.enumerate()
-				.map(|(index, (origin, ordinal))| {
-					Self {
-						path: format!("{}.{index}", self.path),
-						key: crate::devtools::child(self.key, origin, ordinal),
-					}
-				})
-				.collect()
-		}
-		#[cfg(not(feature = "devtools"))]
-		{
-			// Nothing reads the path without the feature — the attributes
-			// it names are absent — so the string is never built.
-			(0..children.len())
-				.map(|_| {
-					Self {
-						path: String::new(),
-					}
-				})
-				.collect()
-		}
+		let origins: Vec<Origin> = children
+			.iter()
+			.map(|child| Origin::of(child.source_location(), child.kind))
+			.collect();
+		let ordinals = crate::devtools::ordinals(origins.iter().copied());
+		origins
+			.into_iter()
+			.zip(ordinals)
+			.enumerate()
+			.map(|(index, (origin, ordinal))| {
+				Self {
+					path: format!("{}.{index}", self.path),
+					key: crate::devtools::child(self.key, origin, ordinal),
+				}
+			})
+			.collect()
 	}
 
 	#[cfg_attr(

@@ -42,19 +42,14 @@ impl Labels {
 		self.field(id?).map(str::to_owned)
 	}
 
-	/// Adds the labels declared by the fields in `elements` and below.
-	pub(super) fn collect(&mut self, elements: &[Element]) {
-		let mut pending = elements.iter().collect::<Vec<_>>();
-
-		while let Some(element) = pending.pop() {
-			if let Some((label, field)) = labelled_field(element) {
-				self.fields
-					.entry(label.to_owned())
-					.and_modify(|target| *target = None)
-					.or_insert_with(|| Some(field.to_owned()));
-			}
-
-			pending.extend(&element.children);
+	/// Records any label declared by `element`.
+	#[inline]
+	pub(super) fn record(&mut self, element: &Element) {
+		if let Some((label, field)) = labelled_field(element) {
+			self.fields
+				.entry(label.to_owned())
+				.and_modify(|target| *target = None)
+				.or_insert_with(|| Some(field.to_owned()));
 		}
 	}
 }

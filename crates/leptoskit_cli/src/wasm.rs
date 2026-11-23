@@ -700,12 +700,15 @@ pub fn esbuild_version() -> Result<String> {
 	Ok(version.trim().to_owned())
 }
 
-/// Optimizes the processed wasm in place with `wasm-opt -Oz`, its most
-/// aggressive size optimization. Pure.
+/// Optimizes the processed wasm in place with `wasm-opt -Oz`, stripping
+/// producer metadata and enabling `--low-memory-unused` (LLVM reserves low
+/// linear memory as a null guard). Pure.
 pub fn optimize(wasm_path: &Path) -> Result<()> {
 	let status = Command::new("wasm-opt")
 		.arg("-Oz")
 		.args(WASM_OPT_FEATURES)
+		.arg("--strip-producers")
+		.arg("--low-memory-unused")
 		.arg(wasm_path)
 		.arg("-o")
 		.arg(wasm_path)
@@ -844,6 +847,7 @@ pub fn optimize_guest(wasm_path: &Path) -> Result<()> {
 		.arg("-Oz")
 		.args(WASM_OPT_FEATURES)
 		.arg("--strip-producers")
+		.arg("--low-memory-unused")
 		.arg(wasm_path)
 		.arg("-o")
 		.arg(wasm_path)

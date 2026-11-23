@@ -1,15 +1,19 @@
 //! Serialize typed base styles below the specificity of utility classes.
 
-use std::collections::HashMap;
-use std::collections::HashSet;
 use std::fmt::Write;
 use std::sync::LazyLock;
 
+use leptoskit_yoga::Align;
+use leptoskit_yoga::BoxSizing;
 use leptoskit_yoga::Dimension;
 use leptoskit_yoga::Direction;
 use leptoskit_yoga::Display;
+use leptoskit_yoga::FlexDirection;
+use leptoskit_yoga::FlexWrap;
 use leptoskit_yoga::GridStyle;
+use leptoskit_yoga::JustifyContent;
 use leptoskit_yoga::Overflow;
+use leptoskit_yoga::PositionType;
 use leptoskit_yoga::Rect;
 use leptoskit_yoga::TrackSizing;
 
@@ -22,50 +26,260 @@ use crate::tailwind::keyword;
 
 /// The typed base styles of a plain, unstyled `View`, which most elements
 /// share almost entirely. [`super::render`] writes them once per
-/// stylesheet, and each scope's sheet holds only its [`delta`] from them.
+/// stylesheet, and each scope's sheet holds only its [`delta_for`] from them.
 pub(super) fn defaults() -> &'static str {
 	static DEFAULTS: LazyLock<String> = LazyLock::new(|| base(&Element::view(), false));
 	&DEFAULTS
 }
 
-/// The declarations of an element's `base` styles that [`defaults`] doesn't
-/// already set to the same value, in their order. Written after the
-/// defaults at the same specificity, they give each property the value
-/// `base` alone would.
+/// Emits only the typed base declarations of `element` that differ from
+/// [`defaults`], directly without formatting or filtering default properties.
 ///
-/// Properties compare by name, so this relies on `base` writing shorthands,
-/// such as `margin` and `font`, only in its fixed reset, which every element
-/// shares with the defaults; everything after the reset is a longhand or
-/// stands alone.
-pub(super) fn delta(base: &str) -> String {
-	static DEFAULTS: LazyLock<HashMap<&'static str, &'static str>> =
-		LazyLock::new(|| declarations(defaults()).collect());
-
-	let mut seen = HashSet::new();
-	// The last declaration of a property is the one that counts.
-	let mut kept = declarations(base)
-		.rev()
-		.filter(|&(name, value)| seen.insert(name) && DEFAULTS.get(name) != Some(&value))
-		.collect::<Vec<_>>();
-	kept.reverse();
-
+/// For plain `View` / `Text` nodes styled with Tailwind classes, this returns
+/// an empty `String` with zero heap allocations.
+#[expect(
+	clippy::too_many_lines,
+	clippy::cognitive_complexity,
+	reason = "flat exhaustive emission of non-default base CSS declarations keeps hot-path \
+	          zero-allocation"
+)]
+pub(super) fn delta_for(element: &Element, root: bool) -> String {
 	let mut css = String::new();
+	let props = &element.props;
+	let style = &element.style;
 
-	for (name, value) in kept {
-		property(&mut css, name, value);
+	// Widget defaults that differ from a plain View.
+	if matches!(
+		super::semantics::tag(
+			element.kind,
+			props.aria(),
+			props.names_itself(),
+			element.children.is_empty(),
+		),
+		super::semantics::Tag::List | super::semantics::Tag::ListItem
+	) {
+		css.push_str("list-style:none;");
 	}
 
+	if matches!(
+		element.kind,
+		NativeKind::Checkbox
+			| NativeKind::Radio
+			| NativeKind::Slider
+			| NativeKind::LinearProgressIndicator
+	) {
+		css.push_str("appearance:auto;accent-color:currentColor;");
+	}
+
+	if element.kind == NativeKind::Switch {
+		if props.corner_radius.is_none() {
+			css.push_str("border-radius:999px;");
+		}
+
+		if props.background.is_none() {
+			css.push_str("background-color:#777;");
+		}
+
+		css.push_str(
+			"background-image:radial-gradient(circle,#fff 68%,transparent \
+			 72%);background-size:20px 20px;background-repeat:no-repeat;background-position:2px \
+			 center;",
+		);
+
+		if let Some(color) = props.background {
+			write_color(&mut css, "--lk-switch-active", color);
+		}
+	}
+
+	if root {
+		css.push_str("font-family:system-ui,sans-serif;");
+
+		if props.font_size.is_none() {
+			write!(css, "font-size:{}px;", TextStyle::DEFAULT_FONT_SIZE).expect("write to String");
+		}
+
+		if props.font_weight.is_none() {
+			css.push_str("font-weight:400;");
+		}
+
+		if props.text_align.is_none() && element.kind != NativeKind::Button {
+			css.push_str("text-align:start;");
+		}
+	}
+
+	// Box layout fields that differ from `Style::default()`.
+	let final_display = if props.hidden == Some(true) {
+		"none"
+	} else if style.display == Display::Flex && props.spans.is_some() {
+		"block"
+	} else {
+		keyword::display(style.display)
+	};
+
+	if final_display != "flex" {
+		property(&mut css, "display", final_display);
+	}
+
+	if style.box_sizing != BoxSizing::BorderBox {
+		property(
+			&mut css,
+			"box-sizing",
+			keyword::box_sizing(style.box_sizing),
+		);
+	}
+
+	if style.position != PositionType::Relative {
+		property(&mut css, "position", keyword::position(style.position));
+	}
+
+	if style.direction != Direction::Ltr {
+		property(&mut css, "direction", direction(style.direction));
+	}
+
+	if style.flex_direction != FlexDirection::Column {
+		property(
+			&mut css,
+			"flex-direction",
+			keyword::flex_direction(style.flex_direction),
+		);
+	}
+
+	if style.flex_wrap != FlexWrap::NoWrap {
+		property(&mut css, "flex-wrap", keyword::flex_wrap(style.flex_wrap));
+	}
+
+	if style.justify_content != JustifyContent::FlexStart {
+		property(
+			&mut css,
+			"justify-content",
+			keyword::justify_content(style.justify_content),
+		);
+	}
+
+	if style.align_items != Align::Stretch {
+		property(&mut css, "align-items", keyword::align(style.align_items));
+	}
+
+	if style.align_self != Align::Auto {
+		property(&mut css, "align-self", keyword::align(style.align_self));
+	}
+
+	if style.align_content != Align::Auto {
+		property(
+			&mut css,
+			"align-content",
+			keyword::align(style.align_content),
+		);
+	}
+
+	let final_overflow = if props.clip == Some(true) && element.kind != NativeKind::ScrollView {
+		"hidden"
+	} else {
+		overflow(element.kind, style.overflow)
+	};
+
+	if final_overflow != "visible" {
+		property(&mut css, "overflow", final_overflow);
+	}
+
+	if style.flex_grow != 0.0 {
+		write!(css, "flex-grow:{};", style.flex_grow).expect("write to String");
+	}
+
+	if style.flex_shrink != 0.0 {
+		write!(css, "flex-shrink:{};", style.flex_shrink).expect("write to String");
+	}
+
+	if style.flex_basis != Dimension::Auto {
+		write_dimension(&mut css, "flex-basis", style.flex_basis, "auto");
+	}
+
+	if style.width != Dimension::Auto {
+		write_dimension(&mut css, "width", style.width, "auto");
+	}
+
+	if style.height != Dimension::Auto {
+		write_dimension(&mut css, "height", style.height, "auto");
+	}
+
+	if !matches!(style.min_width, Dimension::Auto) && style.min_width != Dimension::Points(0.0) {
+		write_dimension(&mut css, "min-width", style.min_width, "0px");
+	}
+
+	if !matches!(style.min_height, Dimension::Auto) && style.min_height != Dimension::Points(0.0) {
+		write_dimension(&mut css, "min-height", style.min_height, "0px");
+	}
+
+	if style.max_width != Dimension::Auto {
+		write_dimension(&mut css, "max-width", style.max_width, "none");
+	}
+
+	if style.max_height != Dimension::Auto {
+		write_dimension(&mut css, "max-height", style.max_height, "none");
+	}
+
+	if !matches!(style.gap.top, Dimension::Auto) && style.gap.top != Dimension::Points(0.0) {
+		write_dimension(&mut css, "row-gap", style.gap.top, "0px");
+	}
+
+	if !matches!(style.gap.left, Dimension::Auto) && style.gap.left != Dimension::Points(0.0) {
+		write_dimension(&mut css, "column-gap", style.gap.left, "0px");
+	}
+
+	for (name, value) in [
+		("margin-top", style.margin.top),
+		("margin-right", style.margin.right),
+		("margin-bottom", style.margin.bottom),
+		("margin-left", style.margin.left),
+	] {
+		if value != Dimension::Points(0.0) {
+			write_dimension(&mut css, name, value, "auto");
+		}
+	}
+
+	for (name, value) in [
+		("padding-top", style.padding.top),
+		("padding-right", style.padding.right),
+		("padding-bottom", style.padding.bottom),
+		("padding-left", style.padding.left),
+	] {
+		if !matches!(value, Dimension::Auto) && value != Dimension::Points(0.0) {
+			write_dimension(&mut css, name, value, "0px");
+		}
+	}
+
+	for (edge, inset, border) in [
+		("top", style.inset.top, style.border.top),
+		("right", style.inset.right, style.border.right),
+		("bottom", style.inset.bottom, style.border.bottom),
+		("left", style.inset.left, style.border.left),
+	] {
+		if inset != Dimension::Auto {
+			write_dimension(&mut css, edge, inset, "auto");
+		}
+
+		if border != 0.0 {
+			write!(css, "border-{edge}-width:{border}px;").expect("write to String");
+		}
+	}
+
+	if let Some(ratio) = style.aspect_ratio {
+		write!(css, "aspect-ratio:{ratio};").expect("write to String");
+	}
+
+	if let Some(grid) = &style.grid {
+		grid_layout(&mut css, grid);
+	}
+
+	paints(&mut css, props);
+	corners(&mut css, props);
+	motion(&mut css, props);
+	text(&mut css, element);
 	css
 }
 
-/// Each `name:value` of a declaration block that [`base`] wrote.
-fn declarations(css: &str) -> impl DoubleEndedIterator<Item = (&str, &str)> {
-	css.split_terminator(';')
-		.filter_map(|declaration| declaration.split_once(':'))
-}
-
 /// Native defaults are explicit so browser defaults cannot change layout.
-pub(super) fn base(element: &Element, root: bool) -> String {
+fn base(element: &Element, root: bool) -> String {
 	let mut css = String::from(
 		"appearance:none;margin:0;border:0 solid \
 		 transparent;--lk-border-color:currentColor;background:transparent;font:inherit;color:\
@@ -128,7 +342,7 @@ fn widget_defaults(css: &mut String, element: &Element) {
 		);
 
 		if let Some(color) = props.background {
-			property(css, "--lk-switch-active", &color_css(color));
+			write_color(css, "--lk-switch-active", color);
 		}
 	}
 }
@@ -184,7 +398,7 @@ fn box_layout(css: &mut String, element: &Element) {
 		("row-gap", style.gap.top, "0px"),
 		("column-gap", style.gap.left, "0px"),
 	] {
-		property(css, name, &dimension(value, auto));
+		write_dimension(css, name, value, auto);
 	}
 
 	edges(css, "margin", style.margin, "auto");
@@ -196,7 +410,7 @@ fn box_layout(css: &mut String, element: &Element) {
 		("bottom", style.inset.bottom, style.border.bottom),
 		("left", style.inset.left, style.border.left),
 	] {
-		property(css, edge, &dimension(value, "auto"));
+		write_dimension(css, edge, value, "auto");
 		write!(css, "border-{edge}-width:{border}px;").expect("write to String");
 	}
 
@@ -314,16 +528,7 @@ fn motion_keyframes(animation: &crate::Animation) -> Vec<(String, String)> {
 }
 
 fn keyframes_name(kind: &str, rule: &str) -> String {
-	use sha2::Digest;
-
-	let digest = sha2::Sha256::digest(rule.as_bytes());
-	let mut name = format!("lk-{kind}");
-
-	for byte in &digest[..8] {
-		write!(name, "{byte:02x}").expect("write to String");
-	}
-
-	name
+	format!("lk-{kind}{:016x}", super::scope_hash(rule.as_bytes()))
 }
 
 /// The colors and borders that paint inside the box.
@@ -334,7 +539,7 @@ fn paints(css: &mut String, props: &NativeProps) {
 		("--lk-border-color", props.border_color),
 	] {
 		if let Some(color) = color {
-			property(css, name, &color_css(color));
+			write_color(css, name, color);
 		}
 	}
 
@@ -511,12 +716,17 @@ fn property(css: &mut String, name: &str, value: &str) {
 	write!(css, "{name}:{value};").expect("write to String");
 }
 
-fn dimension(value: Dimension, auto: &str) -> String {
+fn write_dimension(css: &mut String, name: &str, value: Dimension, auto: &str) {
 	match value {
-		Dimension::Auto => auto.to_owned(),
-		Dimension::Points(value) => format!("{value}px"),
-		Dimension::Percent(value) => format!("{}%", value * 100.0),
+		Dimension::Auto => write!(css, "{name}:{auto};"),
+		Dimension::Points(value) => write!(css, "{name}:{value}px;"),
+		Dimension::Percent(value) => write!(css, "{name}:{}%;", value * 100.0),
 	}
+	.expect("write to String");
+}
+
+fn write_color(css: &mut String, name: &str, color: Color) {
+	write!(css, "{name}:#{:08x};", color.0).expect("write to String");
 }
 
 fn edges(css: &mut String, name: &str, edges: Rect<Dimension>, auto: &str) {
@@ -526,7 +736,12 @@ fn edges(css: &mut String, name: &str, edges: Rect<Dimension>, auto: &str) {
 		("bottom", edges.bottom),
 		("left", edges.left),
 	] {
-		write!(css, "{name}-{edge}:{};", dimension(value, auto)).expect("write to String");
+		match value {
+			Dimension::Auto => write!(css, "{name}-{edge}:{auto};"),
+			Dimension::Points(value) => write!(css, "{name}-{edge}:{value}px;"),
+			Dimension::Percent(value) => write!(css, "{name}-{edge}:{}%;", value * 100.0),
+		}
+		.expect("write to String");
 	}
 }
 
@@ -576,11 +791,11 @@ pub(super) fn span(span: &crate::TextSpan) -> String {
 	let mut css = String::new();
 
 	if let Some(color) = span.color {
-		property(&mut css, "color", &color_css(color));
+		write_color(&mut css, "color", color);
 	}
 
 	if let Some(background) = span.background {
-		property(&mut css, "background-color", &color_css(background));
+		write_color(&mut css, "background-color", background);
 	}
 
 	if let Some(weight) = span.font_weight {
@@ -604,6 +819,17 @@ mod tests {
 	use crate::BorderWidths;
 	use crate::FontWeight;
 	use crate::TextAlign;
+
+	/// Each `name:value;` pair in a flat CSS declaration list.
+	fn declarations(css: &str) -> impl Iterator<Item = (&str, &str)> {
+		css.split(';')
+			.filter(|entry| !entry.is_empty())
+			.map(|entry| {
+				entry
+					.split_once(':')
+					.expect("base style declarations have a name and a value")
+			})
+	}
 
 	/// Each property's value once every declaration has applied in order.
 	fn cascade<'a>(
@@ -648,6 +874,7 @@ mod tests {
 				Element::new(NativeKind::Switch).background(Color::rgba(0, 0, 255, 255)),
 				false,
 			),
+			(Element::new(NativeKind::Switch), false),
 			(Element::new(NativeKind::Checkbox), false),
 			(styled, false),
 			(
@@ -659,11 +886,11 @@ mod tests {
 			),
 		];
 
-		assert_eq!(delta(defaults()), "");
+		assert_eq!(delta_for(&Element::view(), false), "");
 
 		for (element, root) in cases {
 			let base = base(&element, root);
-			let delta = delta(&base);
+			let delta = delta_for(&element, root);
 
 			assert_eq!(
 				cascade(declarations(defaults()).chain(declarations(&delta))),

@@ -82,10 +82,17 @@ pub fn router(api: Router, assets: &Path, docs: &Path, origin: &str) -> Result<R
 		);
 	}
 	let landing: Arc<str> = landing_html(origin, Mode::Hosted).into();
-	let console = ServeFile::new(assets.join("console/index.html"));
+	let console = ServeFile::new(assets.join("console/index.html"))
+		.precompressed_br()
+		.precompressed_gzip();
 	Ok(api
 		.route("/play", get(|| async { Redirect::permanent("/play/") }))
-		.route_service("/play/", ServeFile::new(assets.join("play/index.html")))
+		.route_service(
+			"/play/",
+			ServeFile::new(assets.join("play/index.html"))
+				.precompressed_br()
+				.precompressed_gzip(),
+		)
 		.route(
 			"/play/frame.html",
 			get(|| {
@@ -128,11 +135,32 @@ pub fn router(api: Router, assets: &Path, docs: &Path, origin: &str) -> Result<R
 			get(|| async { Redirect::permanent("/console/") }),
 		)
 		.route_service("/console/", console)
-		.route_service("/llms.txt", ServeFile::new(docs.join("llms.txt")))
-		.route_service("/llms-full.txt", ServeFile::new(docs.join("llms-full.txt")))
+		.route_service(
+			"/llms.txt",
+			ServeFile::new(docs.join("llms.txt"))
+				.precompressed_br()
+				.precompressed_gzip(),
+		)
+		.route_service(
+			"/llms-full.txt",
+			ServeFile::new(docs.join("llms-full.txt"))
+				.precompressed_br()
+				.precompressed_gzip(),
+		)
 		.route("/docs", get(|| async { Redirect::permanent("/docs/") }))
-		.nest_service("/docs/", ServeDir::new(docs))
-		.fallback_service(ServeDir::new(assets))
+		.nest_service(
+			"/docs/",
+			ServeDir::new(docs).precompressed_br().precompressed_gzip(),
+		)
+		.fallback_service(
+			ServeDir::new(assets)
+				.precompressed_br()
+				.precompressed_gzip(),
+		)
+		.layer(SetResponseHeaderLayer::if_not_present(
+			axum::http::header::VARY,
+			HeaderValue::from_static("accept-encoding"),
+		))
 		.layer(axum::middleware::from_fn(played_example_headers))
 		.layer(SetResponseHeaderLayer::if_not_present(
 			CONTENT_SECURITY_POLICY,
