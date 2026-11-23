@@ -618,3 +618,31 @@ fn native_text_receives_the_nodes_layout_direction() {
 		leptoskit_yoga::Direction::Ltr
 	);
 }
+
+#[test]
+fn shrinking_children_list_reconciles_and_tears_down_removed_nodes() {
+	let mut surface = NativeSurface::new(HeadlessBackend::new());
+	surface.set_viewport(320.0, 240.0);
+	surface.set_root(
+		&Element::view()
+			.child(Element::text("first"))
+			.child(Element::text("second"))
+			.child(Element::text("third")),
+	);
+	let root = surface.root().unwrap();
+	let first = surface.children(root)[0];
+	assert_eq!(surface.children(root).len(), 3);
+
+	surface.set_root(&Element::view().child(Element::text("only")));
+	assert_eq!(surface.children(root), &[first]);
+
+	surface.set_root(&Element::view());
+	assert!(surface.children(root).is_empty());
+
+	surface.set_root(
+		&Element::view()
+			.child(Element::text("rebuilt-a"))
+			.child(Element::text("rebuilt-b")),
+	);
+	assert_eq!(surface.children(root).len(), 2);
+}
