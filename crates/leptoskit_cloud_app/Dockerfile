@@ -1,15 +1,16 @@
 # syntax=docker/dockerfile:1
 
-FROM rustlang/rust:nightly-bookworm AS builder
+FROM rustlang/rust:nightly-2026-10-21 AS builder
+ENV RUSTUP_TOOLCHAIN=nightly-2026-10-21 \
+	CARGO_NET_RETRY=10
 WORKDIR /src
 
 RUN apt-get update \
-	&& apt-get install -y --no-install-recommends pkg-config libssl-dev cmake clang \
+	&& apt-get install -y --no-install-recommends build-essential pkg-config libssl-dev cmake clang \
 	&& rm -rf /var/lib/apt/lists/* \
 	&& rustup target add wasm32-unknown-unknown
 
-COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
-COPY crates ./crates
+COPY . .
 
 # Build the production control plane binary (SSR console + Postgres + SQLite)
 # and the Wasm hydration bundle served from LEPTOSKIT_CLOUD_SITE.
@@ -24,7 +25,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 		-p leptoskit_cloud_app --lib --no-default-features --features hydrate \
 	&& cp /src/target/wasm32-unknown-unknown/release/leptoskit_cloud_app.wasm /srv/site/pkg/
 
-FROM debian:bookworm-slim AS runtime
+FROM debian:trixie-slim AS runtime
 RUN apt-get update \
 	&& apt-get install -y --no-install-recommends ca-certificates curl \
 	&& rm -rf /var/lib/apt/lists/* \
