@@ -28,12 +28,20 @@ struct Node {
 	element: Element,
 	parent: Option<i64>,
 	children: Vec<i64>,
-	/// Byte range in [`Tree::wire_arena`] pending upload to the host.
-	wire: Option<(u32, u32)>,
 	/// The key a [`For`](crate::reactive::For) or
 	/// [`Show`](crate::reactive::Show) reuses this node by. `None` for a
 	/// node that was not built as one of their children.
 	key: Option<u64>,
+}
+
+/// Staged host mutation metadata recorded in build order so `publish`/`splice`
+/// stream mutations linearly without repeated hash-map probes.
+struct BuildOp {
+	id: i64,
+	kind: i32,
+	is_new: bool,
+	children_changed: bool,
+	wire: Option<(u32, u32)>,
 }
 
 /// The guest retains handlers and the host retains the corresponding wire tree.
@@ -48,6 +56,10 @@ pub(super) struct Tree {
 	bound: Vec<i64>,
 	/// Shared staging buffer for serialized wire payloads during one commit.
 	wire_arena: Vec<u8>,
+	/// Staged build-order operations for the current `update` or `splice`.
+	build_ops: Vec<BuildOp>,
+	/// Number of existing nodes reused during the current `update`.
+	reused_count: usize,
 	root: Option<i64>,
 	next_id: i64,
 	/// Regions subscribed on this tree, keyed by the node that owns them.
@@ -98,11 +110,15 @@ impl Tree {
 		// size spares the map from growing node by node.
 		let mut wire_arena = std::mem::take(&mut self.wire_arena);
 		wire_arena.clear();
+		let mut build_ops = std::mem::take(&mut self.build_ops);
+		build_ops.clear();
 		let mut next = Self {
 			nodes: HashMap::with_capacity_and_hasher(self.nodes.len(), FastHash::default()),
 			order: Vec::with_capacity(self.order.len()),
 			bound: Vec::new(),
 			wire_arena,
+			build_ops,
+			reused_count: 0,
 			root: None,
 			next_id: self.next_id,
 			regions: HashMap::with_capacity_and_hasher(self.regions.len(), FastHash::default()),
@@ -110,6 +126,7 @@ impl Tree {
 		next.root = Some(next.build(element, None, self.root, self, 1));
 		Self::publish(self, &mut next, host);
 		next.wire_arena.clear();
+		next.build_ops.clear();
 		*self = next;
 	}
 
@@ -186,7 +203,8 @@ impl Tree {
 			})
 			.collect();
 		let child_depth = depth_of(self, parent) + 1;
-		let built_from = self.order.len();
+		self.build_ops.clear();
+		self.wire_arena.clear();
 		let mut child_ids = Vec::with_capacity(children.len());
 
 		for (key, child) in children {
@@ -208,15 +226,13 @@ impl Tree {
 			host.delete(*id);
 		}
 
-		for &id in &self.order[built_from..] {
-			let node = self.nodes.get_mut(&id).expect("every built id has a node");
-
-			if !old.nodes.contains_key(&id) {
-				host.create(id, kind_code(node.element.kind));
+		for op in &self.build_ops {
+			if op.is_new {
+				host.create(op.id, op.kind);
 			}
 
-			if let Some((start, end)) = node.wire.take() {
-				host.props(id, &self.wire_arena[start as usize..end as usize]);
+			if let Some((start, end)) = op.wire {
+				host.props(op.id, &self.wire_arena[start as usize..end as usize]);
 			}
 		}
 
@@ -232,56 +248,49 @@ impl Tree {
 			node.children = child_ids;
 		}
 
-		for &id in &self.order[built_from..] {
-			let node = &self.nodes[&id];
-
-			if old
-				.nodes
-				.get(&id)
-				.is_some_and(|previous| previous.children == node.children)
-			{
+		for op in &self.build_ops {
+			if !op.children_changed {
 				continue;
 			}
 
+			let node = &self.nodes[&op.id];
+
 			for (index, &child) in node.children.iter().enumerate() {
-				host.insert(id, child, index as i32);
+				host.insert(op.id, child, index as i32);
 			}
 		}
 
+		self.build_ops.clear();
 		host.commit();
 	}
 
 	/// Sends the difference between `old` and `next`, then commits.
 	fn publish(old: &Self, next: &mut Self, host: &mut impl Host) {
-		for id in old.order.iter().filter(|id| !next.nodes.contains_key(id)) {
-			host.delete(*id);
-		}
-
-		for &id in &next.order {
-			let node = next.nodes.get_mut(&id).expect("every built id has a node");
-
-			if !old.nodes.contains_key(&id) {
-				host.create(id, kind_code(node.element.kind));
-			}
-
-			if let Some((start, end)) = node.wire.take() {
-				host.props(id, &next.wire_arena[start as usize..end as usize]);
+		if next.reused_count < old.order.len() {
+			for id in old.order.iter().filter(|id| !next.nodes.contains_key(id)) {
+				host.delete(*id);
 			}
 		}
 
-		for &id in &next.order {
-			let node = &next.nodes[&id];
+		for op in &next.build_ops {
+			if op.is_new {
+				host.create(op.id, op.kind);
+			}
 
-			if old
-				.nodes
-				.get(&id)
-				.is_some_and(|previous| previous.children == node.children)
-			{
+			if let Some((start, end)) = op.wire {
+				host.props(op.id, &next.wire_arena[start as usize..end as usize]);
+			}
+		}
+
+		for op in &next.build_ops {
+			if !op.children_changed {
 				continue;
 			}
 
+			let node = &next.nodes[&op.id];
+
 			for (index, &child) in node.children.iter().enumerate() {
-				host.insert(id, child, index as i32);
+				host.insert(op.id, child, index as i32);
 			}
 		}
 
@@ -365,21 +374,33 @@ impl Tree {
 		assert!(depth <= 256, "the native guest tree exceeds 256 levels");
 		// Custom kinds have no code in this ABI; failing here avoids silently
 		// rendering an unrelated container on the host.
-		let _ = kind_code(element.kind);
+		let kind = kind_code(element.kind);
 		let previous = previous
 			.and_then(|id| old.nodes.get(&id).map(|node| (id, node)))
 			.filter(|(_, node)| node.element.kind == element.kind);
-		let id = previous.map_or_else(
-			|| {
+		let is_new = previous.is_none();
+		let id = match previous {
+			Some((id, _)) => {
+				self.reused_count += 1;
+				id
+			}
+			None => {
 				self.next_id = self
 					.next_id
 					.checked_add(1)
 					.expect("guest node ids exhausted");
 				self.next_id
-			},
-			|(id, _)| id,
-		);
+			}
+		};
 		self.order.push(id);
+		let op_index = self.build_ops.len();
+		self.build_ops.push(BuildOp {
+			id,
+			kind,
+			is_new,
+			children_changed: false,
+			wire: None,
+		});
 
 		if !element.bindings().is_empty() {
 			self.bound.push(id);
@@ -413,11 +434,14 @@ impl Tree {
 			}
 		}
 
+		let children_changed =
+			previous.is_none_or(|(_, node)| node.children != children) && !children.is_empty();
+
 		// Comparing shared drawings avoids serializing unchanged paths.
 		let changed = previous.is_none_or(|(_, node)| {
-			node.element.props != element.props
+			!node.element.classes().same_classes(element.classes())
+				|| node.element.props != element.props
 				|| node.element.style != element.style
-				|| node.element.classes().classes() != element.classes().classes()
 				|| moved(&node.element, &element)
 		});
 		let wire = changed.then(|| {
@@ -460,13 +484,14 @@ impl Tree {
 			let end = self.wire_arena.len() as u32;
 			(start, end)
 		});
+		self.build_ops[op_index].children_changed = children_changed;
+		self.build_ops[op_index].wire = wire;
 		self.nodes.insert(
 			id,
 			Node {
 				element,
 				parent,
 				children,
-				wire,
 				key: None,
 			},
 		);

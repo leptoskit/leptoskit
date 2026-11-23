@@ -166,10 +166,10 @@ fn existing_implicit_lines_are_valid_but_negative_lines_anchor_to_explicit_track
 	yoga.set_style(
 		in_flow,
 		Style {
-			grid: Some(GridStyle {
+			grid: Some(Box::new(GridStyle {
 				column: GridPlacement::line(3, 4),
 				..GridStyle::default()
-			}),
+			})),
 			..Style::default()
 		},
 	);
@@ -531,11 +531,11 @@ fn fractional_intrinsic_grid_does_not_fill_a_bounded_nonstretch_parent() {
 		grid,
 		Style {
 			display: Display::Grid,
-			grid: Some(GridStyle {
+			grid: Some(Box::new(GridStyle {
 				template_columns: vec![track.clone()],
 				template_rows: vec![track],
 				..GridStyle::default()
-			}),
+			})),
 			..Style::default()
 		},
 	);
@@ -548,11 +548,11 @@ fn fractional_intrinsic_grid_does_not_fill_a_bounded_nonstretch_parent() {
 			Style {
 				width: Dimension::Points(width),
 				height: Dimension::Points(height),
-				grid: Some(GridStyle {
+				grid: Some(Box::new(GridStyle {
 					column: GridPlacement::line(1, 2),
 					row: GridPlacement::line(1, 2),
 					..GridStyle::default()
-				}),
+				})),
 				..Style::default()
 			},
 		);
@@ -593,10 +593,10 @@ fn intrinsic_percentage_rows_measure_content_before_resolving_used_tracks() {
 			Style {
 				display: Display::Grid,
 				width: Dimension::Points(80.0),
-				grid: Some(GridStyle {
+				grid: Some(Box::new(GridStyle {
 					template_rows: vec![TrackSizing::Percent(0.5)],
 					..GridStyle::default()
-				}),
+				})),
 				..Style::default()
 			},
 		);
@@ -649,7 +649,7 @@ fn intrinsic_percentage_columns_and_fractional_tracks_resolve_after_container_si
 		root,
 		Style {
 			display: Display::Grid,
-			grid: Some(GridStyle {
+			grid: Some(Box::new(GridStyle {
 				template_columns: vec![
 					TrackSizing::Percent(0.9),
 					TrackSizing::MinMax(Box::new(leptoskit_yoga::MinMax {
@@ -659,7 +659,7 @@ fn intrinsic_percentage_columns_and_fractional_tracks_resolve_after_container_si
 				],
 				template_rows: vec![TrackSizing::Points(20.0)],
 				..GridStyle::default()
-			}),
+			})),
 			..Style::default()
 		},
 	);
@@ -671,10 +671,10 @@ fn intrinsic_percentage_columns_and_fractional_tracks_resolve_after_container_si
 			Style {
 				width: Dimension::Points(80.0),
 				height: Dimension::Points(20.0),
-				grid: Some(GridStyle {
+				grid: Some(Box::new(GridStyle {
 					column,
 					..GridStyle::default()
-				}),
+				})),
 				..Style::default()
 			},
 		);
@@ -725,13 +725,13 @@ fn intrinsic_minmax_percentages_keep_auto_minimums_and_auto_maximums() {
 			Style {
 				display: Display::Grid,
 				width: Dimension::Points(80.0),
-				grid: Some(GridStyle {
+				grid: Some(Box::new(GridStyle {
 					template_rows: vec![TrackSizing::MinMax(Box::new(leptoskit_yoga::MinMax {
 						min,
 						max,
 					}))],
 					..GridStyle::default()
-				}),
+				})),
 				..Style::default()
 			},
 		);
@@ -762,10 +762,10 @@ fn intrinsic_percentage_tracks_resolve_against_the_settled_content_box() {
 	let (mut yoga, root) = grid();
 	let mut style = yoga.style(root).clone();
 	style.height = Dimension::Auto;
-	style.grid = Some(GridStyle {
+	style.grid = Some(Box::new(GridStyle {
 		template_rows: vec![TrackSizing::Percent(0.5)],
 		..GridStyle::default()
-	});
+	}));
 	style.gap = Rect::default();
 	yoga.set_style(root, style);
 	let content = yoga.create_node();
@@ -813,12 +813,12 @@ fn grid() -> (Yoga, NodeId) {
 				Dimension::Points(10.0),
 				Dimension::Points(10.0),
 			),
-			grid: Some(GridStyle {
+			grid: Some(Box::new(GridStyle {
 				template_columns: vec![TrackSizing::Points(60.0), TrackSizing::Points(80.0)],
 				template_rows: vec![TrackSizing::Points(30.0), TrackSizing::Points(50.0)],
 				auto_columns: TrackSizing::Points(25.0),
 				..GridStyle::default()
-			}),
+			})),
 			..Style::default()
 		},
 	);
@@ -837,11 +837,11 @@ fn child(yoga: &mut Yoga, parent: NodeId, column: GridPlacement, row: GridPlacem
 				Dimension::Points(0.0),
 				Dimension::Points(0.0),
 			),
-			grid: Some(GridStyle {
+			grid: Some(Box::new(GridStyle {
 				column,
 				row,
 				..GridStyle::default()
-			}),
+			})),
 			..Style::default()
 		},
 	);

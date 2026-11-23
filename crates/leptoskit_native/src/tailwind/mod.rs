@@ -140,12 +140,29 @@ const FLAG_ACTIVE: u8 = 1 << 0;
 const FLAG_STARTING: u8 = 1 << 1;
 const FLAG_MAY_SCROLL: u8 = 1 << 2;
 
-/// A validated, reusable set of platform-neutral utility declarations.
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct Tailwind {
-	classes: Arc<str>,
-	rules: Arc<[Rule]>,
+#[derive(Debug, PartialEq)]
+struct TailwindInner {
+	classes: Box<str>,
+	rules: Box<[Rule]>,
 	flags: u8,
+}
+
+/// A validated, reusable set of platform-neutral utility declarations.
+///
+/// Stored as a single optional `Arc` so empty class lists cost one null pointer
+/// (no allocations or refcount traffic) and cloning a cached class set bumps
+/// one atomic counter instead of two.
+#[derive(Debug, Clone, Default)]
+pub struct Tailwind(Option<Arc<TailwindInner>>);
+
+impl PartialEq for Tailwind {
+	fn eq(&self, other: &Self) -> bool {
+		match (&self.0, &other.0) {
+			(None, None) => true,
+			(Some(a), Some(b)) => Arc::ptr_eq(a, b) || a == b,
+			_ => false,
+		}
+	}
 }
 
 /// Stable insertion sort for short class lists (typically 1–16 utilities).
@@ -253,7 +270,10 @@ impl Tailwind {
 
 	fn parse_uncached(classes: &str) -> Result<Self, ClassError> {
 		let mut tokens = classes.split_whitespace().collect::<Vec<_>>();
-		insertion_sort_by(&mut tokens, Ord::cmp);
+		if tokens.is_empty() {
+			return Ok(Self::default());
+		}
+		insertion_sort_by(&mut tokens, |a, b| a.cmp(b));
 		tokens.dedup();
 		let classes = tokens.join(" ");
 		let mut rules = Vec::with_capacity(tokens.len());
@@ -288,26 +308,42 @@ impl Tailwind {
 		}
 
 		insertion_sort_by(&mut rules, |a, b| a.precedence().cmp(&b.precedence()));
-		Ok(Self {
+		Ok(Self(Some(Arc::new(TailwindInner {
 			classes: classes.into(),
 			rules: rules.into(),
 			flags,
-		})
+		}))))
 	}
 
 	/// The normalized class attribute, with duplicate tokens removed.
+	#[inline]
 	pub fn classes(&self) -> &str {
-		&self.classes
+		self.0.as_deref().map_or("", |inner| &inner.classes)
+	}
+
+	/// Fast check whether two `Tailwind` sets have the exact same normalized
+	/// class string, short-circuiting via `Arc::ptr_eq`.
+	#[cfg_attr(not(feature = "guest"), allow(dead_code))]
+	#[inline]
+	pub(crate) fn same_classes(&self, other: &Self) -> bool {
+		match (&self.0, &other.0) {
+			(None, None) => true,
+			(Some(a), Some(b)) => Arc::ptr_eq(a, b) || a.classes == b.classes,
+			_ => false,
+		}
 	}
 
 	/// The first class styling the pressed state, which only pressable
 	/// controls have.
+	#[inline]
 	pub(crate) fn active_class(&self) -> Option<&str> {
-		if self.flags & FLAG_ACTIVE == 0 {
+		let inner = self.0.as_deref()?;
+		if inner.flags & FLAG_ACTIVE == 0 {
 			return None;
 		}
 
-		self.rules
+		inner
+			.rules
 			.iter()
 			.find(|rule| rule.conditions.active)
 			.map(|rule| rule.class.as_str())
@@ -315,8 +351,11 @@ impl Tailwind {
 
 	/// Structural contracts prohibit scrollable descendants of buttons at
 	/// every breakpoint, including rules inactive in the current environment.
+	#[inline]
 	pub(crate) fn may_scroll(&self) -> bool {
-		self.flags & FLAG_MAY_SCROLL != 0
+		self.0
+			.as_deref()
+			.is_some_and(|inner| inner.flags & FLAG_MAY_SCROLL != 0)
 	}
 
 	/// Applies active declarations over the supplied base style and props.
@@ -324,12 +363,12 @@ impl Tailwind {
 	/// Start from the same unmodified base values on each call: rules which
 	/// become inactive do not reset declarations from an earlier application.
 	pub fn apply(&self, style: &mut Style, props: &mut NativeProps, context: &StyleContext) {
-		if self.rules.is_empty() {
+		let Some(inner) = self.0.as_deref() else {
 			props.sanitize_motion();
 			return;
-		}
+		};
 
-		for rule in self.rules.iter() {
+		for rule in inner.rules.iter() {
 			if rule.conditions.active(context) {
 				for declaration in &rule.declarations {
 					declaration.apply(style, props, context);
@@ -343,8 +382,8 @@ impl Tailwind {
 			props.border_color = Some(props.color.unwrap_or(Color::rgba(0, 0, 0, 255)));
 		}
 
-		if self.flags & FLAG_STARTING != 0 {
-			self.apply_starting(style, props, context);
+		if inner.flags & FLAG_STARTING != 0 {
+			self.apply_starting(inner, style, props, context);
 		}
 
 		props.sanitize_motion();
@@ -354,8 +393,14 @@ impl Tailwind {
 	/// `@starting-style` does: the widget enters from the look those rules
 	/// describe, for the properties its transition animates, along the
 	/// transition's curve. Natively that covers opacity and transforms.
-	fn apply_starting(&self, style: &Style, props: &mut NativeProps, context: &StyleContext) {
-		let mut starting = self
+	fn apply_starting(
+		&self,
+		inner: &TailwindInner,
+		style: &Style,
+		props: &mut NativeProps,
+		context: &StyleContext,
+	) {
+		let mut starting = inner
 			.rules
 			.iter()
 			.filter(|rule| {
@@ -424,9 +469,12 @@ impl Tailwind {
 	}
 
 	fn stylesheet(&self, scope: Option<&str>) -> String {
+		let Some(inner) = self.0.as_deref() else {
+			return String::new();
+		};
 		let mut css = String::new();
 
-		for rule in self.rules.iter() {
+		for rule in inner.rules.iter() {
 			if rule.conditions.dark {
 				// The device's dark setting, unless the app chose light...
 				css.push_str("@media (prefers-color-scheme:dark){");

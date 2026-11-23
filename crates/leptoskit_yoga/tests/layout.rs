@@ -772,11 +772,11 @@ fn grid_style(columns: Vec<TrackSizing>, rows: Vec<TrackSizing>) -> Style {
 		display: Display::Grid,
 		width: points(300.0),
 		height: points(200.0),
-		grid: Some(GridStyle {
+		grid: Some(Box::new(GridStyle {
 			template_columns: columns,
 			template_rows: rows,
 			..GridStyle::default()
-		}),
+		})),
 		..Style::default()
 	}
 }
@@ -843,10 +843,10 @@ fn grid_span_crosses_tracks() {
 		&mut tree,
 		root,
 		Style {
-			grid: Some(GridStyle {
+			grid: Some(Box::new(GridStyle {
 				column: GridPlacement::line(1, 3),
 				..GridStyle::default()
-			}),
+			})),
 			..Style::default()
 		},
 	);
@@ -985,10 +985,10 @@ fn grid_column_flow_walks_down_first() {
 		vec![TrackSizing::Points(100.0), TrackSizing::Points(100.0)],
 		vec![],
 	);
-	style.grid = Some(GridStyle {
+	style.grid = Some(Box::new(GridStyle {
 		auto_flow: GridAutoFlow::Column,
 		..GridStyle::default()
-	});
+	}));
 	style.align_content = Align::FlexStart;
 	tree.set_style(root, style);
 	simple_child(
@@ -1044,11 +1044,11 @@ fn grid_item_alignment_centers_within_area() {
 	let root = tree.create_node();
 	let mut style = grid_style(vec![TrackSizing::Points(200.0)], vec![]);
 	style.align_items = Align::Center;
-	style.grid = Some(GridStyle {
+	style.grid = Some(Box::new(GridStyle {
 		template_columns: vec![TrackSizing::Points(200.0)],
 		justify_items: Align::Center,
 		..GridStyle::default()
-	});
+	}));
 	tree.set_style(root, style);
 	simple_child(
 		&mut tree,
@@ -1526,11 +1526,11 @@ fn grid_partly_auto_item_keeps_its_definite_row() {
 		root,
 		Style {
 			display: Display::Grid,
-			grid: Some(GridStyle {
+			grid: Some(Box::new(GridStyle {
 				template_columns: vec![TrackSizing::Points(100.0); 2],
 				template_rows: vec![TrackSizing::Points(20.0); 3],
 				..GridStyle::default()
-			}),
+			})),
 			..Style::default()
 		},
 	);
@@ -1539,13 +1539,13 @@ fn grid_partly_auto_item_keeps_its_definite_row() {
 		&mut tree,
 		root,
 		Style {
-			grid: Some(GridStyle {
+			grid: Some(Box::new(GridStyle {
 				row: GridPlacement {
 					start: GridLine::Line(3),
 					end: GridLine::Auto,
 				},
 				..GridStyle::default()
-			}),
+			})),
 			..Style::default()
 		},
 	);
@@ -1553,13 +1553,13 @@ fn grid_partly_auto_item_keeps_its_definite_row() {
 		&mut tree,
 		root,
 		Style {
-			grid: Some(GridStyle {
+			grid: Some(Box::new(GridStyle {
 				column: GridPlacement {
 					start: GridLine::Line(1),
 					end: GridLine::Auto,
 				},
 				..GridStyle::default()
-			}),
+			})),
 			..Style::default()
 		},
 	);
@@ -1585,10 +1585,10 @@ fn grid_rows_measure_items_at_their_column_width() {
 		Style {
 			display: Display::Grid,
 			align_content: Align::FlexStart,
-			grid: Some(GridStyle {
+			grid: Some(Box::new(GridStyle {
 				template_columns: vec![TrackSizing::Points(80.0)],
 				..GridStyle::default()
-			}),
+			})),
 			..Style::default()
 		},
 	);
@@ -1611,10 +1611,10 @@ fn grid_minmax_grows_to_its_maximum() {
 		Style {
 			display: Display::Grid,
 			width: points(300.0),
-			grid: Some(GridStyle {
+			grid: Some(Box::new(GridStyle {
 				template_columns: vec![leptoskit_yoga::minmax(100.0, 200.0)],
 				..GridStyle::default()
-			}),
+			})),
 			..Style::default()
 		},
 	);
@@ -1632,10 +1632,10 @@ fn grid_flattens_display_contents_children() {
 		root,
 		Style {
 			display: Display::Grid,
-			grid: Some(GridStyle {
+			grid: Some(Box::new(GridStyle {
 				template_columns: vec![TrackSizing::Points(50.0); 2],
 				..GridStyle::default()
-			}),
+			})),
 			..Style::default()
 		},
 	);
@@ -1684,10 +1684,10 @@ fn grid_huge_line_numbers_are_clamped() {
 		root,
 		Style {
 			display: Display::Grid,
-			grid: Some(GridStyle {
+			grid: Some(Box::new(GridStyle {
 				auto_columns: TrackSizing::Points(1.0),
 				..GridStyle::default()
-			}),
+			})),
 			..Style::default()
 		},
 	);
@@ -1695,11 +1695,11 @@ fn grid_huge_line_numbers_are_clamped() {
 		&mut tree,
 		root,
 		Style {
-			grid: Some(GridStyle {
+			grid: Some(Box::new(GridStyle {
 				column: GridPlacement::line(50_000_000, 50_000_001),
 				row: GridPlacement::line(1, 2),
 				..GridStyle::default()
-			}),
+			})),
 			..Style::default()
 		},
 	);
@@ -1721,10 +1721,10 @@ fn grid_negative_line_counts_from_the_last_explicit_line() {
 		&mut tree,
 		root,
 		Style {
-			grid: Some(GridStyle {
+			grid: Some(Box::new(GridStyle {
 				column: GridPlacement::line(1, -1),
 				..GridStyle::default()
-			}),
+			})),
 			..Style::default()
 		},
 	);
