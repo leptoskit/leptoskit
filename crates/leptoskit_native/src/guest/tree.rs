@@ -1,9 +1,7 @@
-use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
 
 use serde::Deserialize;
-use serde::Serialize;
 
 use super::region::RegionSlot;
 use super::region::drain_dirty;
@@ -11,7 +9,6 @@ use crate::Element;
 use crate::EventOutcome;
 use crate::NativeEvent;
 use crate::NativeKind;
-use crate::NativeProps;
 use crate::element::HandlerEntry;
 use crate::hash::FastHash;
 use crate::reactive::Binding;
@@ -31,7 +28,8 @@ struct Node {
 	element: Element,
 	parent: Option<i64>,
 	children: Vec<i64>,
-	wire: Option<Vec<u8>>,
+	/// Byte range in [`Tree::wire_arena`] pending upload to the host.
+	wire: Option<(u32, u32)>,
 	/// The key a [`For`](crate::reactive::For) or
 	/// [`Show`](crate::reactive::Show) reuses this node by. `None` for a
 	/// node that was not built as one of their children.
@@ -48,40 +46,12 @@ pub(super) struct Tree {
 	/// Node ids that read application state: what a refresh visits, so it
 	/// costs the values that changed rather than the size of the tree.
 	bound: Vec<i64>,
+	/// Shared staging buffer for serialized wire payloads during one commit.
+	wire_arena: Vec<u8>,
 	root: Option<i64>,
 	next_id: i64,
 	/// Regions subscribed on this tree, keyed by the node that owns them.
 	regions: HashMap<i64, std::sync::Arc<RegionSlot>, FastHash>,
-}
-
-/// A node's properties as the host decodes them. Unset properties, a default
-/// style, and an empty class list are left out: the host fills each in with
-/// its default, and most nodes set almost nothing, so the bytes to encode in
-/// the interpreter shrink from about a kilobyte to a few dozen.
-#[derive(Serialize)]
-struct WireNode<'a> {
-	#[serde(flatten)]
-	props: &'a NativeProps,
-	// The host reads a missing style or class as the default, which most
-	// nodes have: their styling comes from classes the host compiles, and
-	// encoding a full default style is most of a render's cost, so the
-	// default style is sent as `None`.
-	#[serde(skip_serializing_if = "Option::is_none")]
-	style: Option<&'a leptoskit_yoga::Style>,
-	#[serde(skip_serializing_if = "str::is_empty")]
-	class: &'a str,
-	#[serde(skip_serializing_if = "Option::is_none")]
-	rive_inputs: Option<&'a BTreeMap<leptoskit_rive::Name, leptoskit_rive::Update>>,
-	/// Where the element was created, as `file:line:column`, so the host's
-	/// `DevTools` agent can name it and compute its match key. Sent as
-	/// `source_location`: `source` is the props' own image source.
-	#[cfg(feature = "devtools")]
-	#[serde(rename = "source_location", skip_serializing_if = "Option::is_none")]
-	source: Option<String>,
-	/// The `#[component]` whose body created the element.
-	#[cfg(feature = "devtools")]
-	#[serde(skip_serializing_if = "Option::is_none")]
-	component: Option<&'static str>,
 }
 
 /// Whether a node kept in place is now built somewhere else in the source,
@@ -126,16 +96,20 @@ impl Tree {
 			.unwrap_or_else(|error| panic!("invalid leptoskit element tree: {error}"));
 		// A render usually keeps most of the previous tree, so reserving its
 		// size spares the map from growing node by node.
+		let mut wire_arena = std::mem::take(&mut self.wire_arena);
+		wire_arena.clear();
 		let mut next = Self {
 			nodes: HashMap::with_capacity_and_hasher(self.nodes.len(), FastHash::default()),
 			order: Vec::with_capacity(self.order.len()),
 			bound: Vec::new(),
+			wire_arena,
 			root: None,
 			next_id: self.next_id,
 			regions: HashMap::with_capacity_and_hasher(self.regions.len(), FastHash::default()),
 		};
 		next.root = Some(next.build(element, None, self.root, self, 1));
 		Self::publish(self, &mut next, host);
+		next.wire_arena.clear();
 		*self = next;
 	}
 
@@ -241,10 +215,12 @@ impl Tree {
 				host.create(id, kind_code(node.element.kind));
 			}
 
-			if let Some(wire) = node.wire.take() {
-				host.props(id, &wire);
+			if let Some((start, end)) = node.wire.take() {
+				host.props(id, &self.wire_arena[start as usize..end as usize]);
 			}
 		}
+
+		self.wire_arena.clear();
 
 		if previous_children != child_ids {
 			for (index, &child) in child_ids.iter().enumerate() {
@@ -288,8 +264,8 @@ impl Tree {
 				host.create(id, kind_code(node.element.kind));
 			}
 
-			if let Some(wire) = node.wire.take() {
-				host.props(id, &wire);
+			if let Some((start, end)) = node.wire.take() {
+				host.props(id, &next.wire_arena[start as usize..end as usize]);
 			}
 		}
 
@@ -353,23 +329,24 @@ impl Tree {
 				continue;
 			}
 
-			let wire = serde_json::to_vec(&WireNode {
-				props: &node.element.props,
-				style: sent_style(&node.element.style),
-				class: node.element.classes().classes(),
-				rive_inputs: None,
+			self.wire_arena.clear();
+			crate::wire::encode_binary_into(
+				&mut self.wire_arena,
+				&node.element.props,
+				sent_style(&node.element.style),
+				node.element.classes().classes(),
+				false,
+				None,
 				// The host kept the source from the node's first render.
-				#[cfg(feature = "devtools")]
-				source: None,
-				#[cfg(feature = "devtools")]
-				component: None,
-			})
-			.expect("native element properties serialize");
-			host.props(id, &wire);
+				None,
+				None,
+			);
+			host.props(id, &self.wire_arena);
 			changed = true;
 		}
 
 		if changed {
+			self.wire_arena.clear();
 			host.commit();
 		}
 
@@ -444,7 +421,6 @@ impl Tree {
 				|| moved(&node.element, &element)
 		});
 		let wire = changed.then(|| {
-			let mut props = element.props.clone();
 			// Reuse only this node's previously transmitted scene. The host
 			// never looks up global asset identifiers or retains a separate
 			// file cache.
@@ -453,28 +429,36 @@ impl Tree {
 					.and_then(|(_, node)| node.element.props.rive.as_ref())
 					.is_some_and(|old| old.same_scene(content))
 			});
-			if retained.is_some() {
-				props.rive = None;
-			}
+			#[cfg(feature = "devtools")]
+			let source = element.source_location().map(|location| {
+				format!(
+					"{}:{}:{}",
+					location.file(),
+					location.line(),
+					location.column()
+				)
+			});
+			#[cfg(not(feature = "devtools"))]
+			let source: Option<String> = None;
+			#[cfg(feature = "devtools")]
+			let component = element.component_name();
+			#[cfg(not(feature = "devtools"))]
+			let component: Option<&str> = None;
 
-			serde_json::to_vec(&WireNode {
-				props: &props,
-				style: sent_style(&element.style),
-				class: element.classes().classes(),
-				rive_inputs: retained.map(|content| content.inputs()),
-				#[cfg(feature = "devtools")]
-				source: element.source_location().map(|location| {
-					format!(
-						"{}:{}:{}",
-						location.file(),
-						location.line(),
-						location.column()
-					)
-				}),
-				#[cfg(feature = "devtools")]
-				component: element.component_name(),
-			})
-			.expect("native element properties serialize")
+			let start = self.wire_arena.len() as u32;
+			let rive_inputs = retained.map(|content| content.inputs());
+			crate::wire::encode_binary_into(
+				&mut self.wire_arena,
+				&element.props,
+				sent_style(&element.style),
+				element.classes().classes(),
+				retained.is_some(),
+				rive_inputs,
+				source.as_deref(),
+				component,
+			);
+			let end = self.wire_arena.len() as u32;
+			(start, end)
 		});
 		self.nodes.insert(
 			id,

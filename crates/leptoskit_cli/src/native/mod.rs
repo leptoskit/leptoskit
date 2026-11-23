@@ -1433,16 +1433,16 @@ fn bundle(
 	if release && config.bundle.wasm_opt {
 		// Native builds cannot require binaryen the way the web client does:
 		// `native prepare` and `native bundle` also run on machines that only
-		// build for devices. Without it the guest ships unoptimized, with a
-		// warning saying so; the size report makes the difference visible.
-		match crate::wasm::wasm_opt_version() {
-			Ok(_) => crate::wasm::optimize_guest(&module)?,
-			Err(_) => {
-				crate::ui::warning(
-					"wasm-opt is not installed, so the guest wasm ships unoptimized; install \
-					 binaryen for the smaller build",
-				);
-			}
+		// build for devices. Without it we still strip dead wasm-bindgen
+		// sections in-process and warn that `wasm-opt` did not run.
+		if crate::wasm::wasm_opt_version().is_ok() {
+			crate::wasm::optimize_guest(&module)?;
+		} else {
+			crate::wasm::strip_guest_metadata(&module)?;
+			crate::ui::warning(
+				"wasm-opt is not installed, so the guest wasm ships unoptimized; install binaryen \
+				 for the smaller build",
+			);
 		}
 	}
 

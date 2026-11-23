@@ -715,9 +715,131 @@ pub fn optimize(wasm_path: &Path) -> Result<()> {
 	Ok(())
 }
 
-/// Optimizes a wasm guest in place: [`optimize`] plus the producers section,
-/// which the raw cargo output carries and nothing on a device reads.
+fn write_uleb128(out: &mut Vec<u8>, mut value: u32) {
+	loop {
+		let mut byte = (value & 0x7f) as u8;
+		value >>= 7;
+
+		if value != 0 {
+			byte |= 0x80;
+		}
+
+		out.push(byte);
+
+		if value == 0 {
+			break;
+		}
+	}
+}
+
+/// Strips dead browser `wasm-bindgen` metadata and exports from a native guest
+/// Wasm module in place.
+///
+/// Native guests share dependencies (such as `reactive_graph`) that pull in
+/// `wasm-bindgen` on `wasm32`, leaving large `__wasm_bindgen_unstable` custom
+/// sections and `__wbindgen_*` / `__wbg_*` exports that the native host never
+/// calls. Removing them lets `wasm-opt` dead-code-eliminate the unreachable
+/// browser glue as well.
+pub fn strip_guest_metadata(wasm_path: &Path) -> Result<()> {
+	let bytes = std::fs::read(wasm_path)
+		.with_context(|| format!("could not read {}", wasm_path.display()))?;
+	let stripped = strip_guest_metadata_bytes(&bytes)?;
+	std::fs::write(wasm_path, stripped)
+		.with_context(|| format!("could not write {}", wasm_path.display()))?;
+	Ok(())
+}
+
+/// Pure byte-to-byte implementation of [`strip_guest_metadata`].
+pub fn strip_guest_metadata_bytes(bytes: &[u8]) -> Result<Vec<u8>> {
+	anyhow::ensure!(
+		bytes.len() >= 8 && &bytes[..4] == b"\0asm",
+		"not a WebAssembly binary"
+	);
+
+	let mut out = Vec::with_capacity(bytes.len());
+	out.extend_from_slice(&bytes[..8]);
+
+	for payload in wasmparser::Parser::new(0).parse_all(bytes) {
+		let payload = payload.context("could not parse wasm guest module")?;
+
+		match payload {
+			wasmparser::Payload::CustomSection(reader)
+				if matches!(
+					reader.name(),
+					"__wasm_bindgen_unstable" | "producers" | "name"
+				) || reader.name().starts_with("__wasm_bindgen") => {}
+			wasmparser::Payload::ExportSection(reader) => {
+				let mut kept = Vec::new();
+
+				for export in reader {
+					let export = export.context("could not parse wasm export")?;
+
+					if export.name.starts_with("__wbindgen_") || export.name.starts_with("__wbg_") {
+						continue;
+					}
+
+					kept.push(export);
+				}
+
+				if !kept.is_empty() {
+					let mut section = Vec::new();
+					write_uleb128(
+						&mut section,
+						u32::try_from(kept.len()).context("too many wasm exports")?,
+					);
+
+					for export in kept {
+						write_uleb128(
+							&mut section,
+							u32::try_from(export.name.len())
+								.context("wasm export name too long")?,
+						);
+						section.extend_from_slice(export.name.as_bytes());
+						let kind = match export.kind {
+							wasmparser::ExternalKind::Func => 0x00,
+							wasmparser::ExternalKind::Table => 0x01,
+							wasmparser::ExternalKind::Memory => 0x02,
+							wasmparser::ExternalKind::Global => 0x03,
+							wasmparser::ExternalKind::Tag => 0x04,
+							other @ wasmparser::ExternalKind::FuncExact => {
+								anyhow::bail!("unsupported wasm export kind: {other:?}")
+							}
+						};
+						section.push(kind);
+						write_uleb128(&mut section, export.index);
+					}
+
+					out.push(7);
+					write_uleb128(
+						&mut out,
+						u32::try_from(section.len()).context("wasm export section too large")?,
+					);
+					out.extend_from_slice(&section);
+				}
+			}
+			other => {
+				if let Some((id, range)) = other.as_section() {
+					let start = usize::try_from(range.start).context("wasm section offset")?;
+					let end = usize::try_from(range.end).context("wasm section end")?;
+					let slice = &bytes[start..end];
+					out.push(id);
+					write_uleb128(
+						&mut out,
+						u32::try_from(slice.len()).context("wasm section too large")?,
+					);
+					out.extend_from_slice(slice);
+				}
+			}
+		}
+	}
+
+	Ok(out)
+}
+
+/// Optimizes a wasm guest in place: strips dead browser `wasm-bindgen`
+/// metadata/exports, then runs `wasm-opt -Oz` with `--strip-producers`.
 pub fn optimize_guest(wasm_path: &Path) -> Result<()> {
+	strip_guest_metadata(wasm_path)?;
 	let status = Command::new("wasm-opt")
 		.arg("-Oz")
 		.args(WASM_OPT_FEATURES)
@@ -1022,5 +1144,64 @@ mod tests {
 
 		assert_eq!(&optimized[..4], b"\0asm", "still a wasm module");
 		std::fs::remove_dir_all(root).unwrap();
+	}
+
+	#[test]
+	fn strip_guest_metadata_drops_bindgen_sections_and_exports() {
+		let mut module = Vec::from(*b"\0asm\x01\0\0\0");
+		// Type section: () -> ()
+		module.extend_from_slice(&[1, 4, 1, 0x60, 0, 0]);
+		// Function section: 2 funcs of type 0
+		module.extend_from_slice(&[3, 3, 2, 0, 0]);
+		// Export section: leptoskit_main (func 0), __wbindgen_malloc (func 1),
+		// __wbg_foo (func 1)
+		let mut exports = Vec::new();
+		exports.push(3);
+		for (name, idx) in [
+			("leptoskit_main", 0u8),
+			("__wbindgen_malloc", 1u8),
+			("__wbg_foo", 1u8),
+		] {
+			exports.push(name.len() as u8);
+			exports.extend_from_slice(name.as_bytes());
+			exports.push(0x00);
+			exports.push(idx);
+		}
+		module.push(7);
+		module.push(exports.len() as u8);
+		module.extend_from_slice(&exports);
+		// Code section: 2 empty bodies
+		module.extend_from_slice(&[10, 7, 2, 2, 0, 0x0b, 2, 0, 0x0b]);
+		// Custom section: __wasm_bindgen_unstable
+		let custom_name = b"__wasm_bindgen_unstable";
+		let mut custom = Vec::new();
+		custom.push(custom_name.len() as u8);
+		custom.extend_from_slice(custom_name);
+		custom.extend_from_slice(&[1, 2, 3, 4]);
+		module.push(0);
+		module.push(custom.len() as u8);
+		module.extend_from_slice(&custom);
+
+		let stripped = strip_guest_metadata_bytes(&module).expect("strip succeeds");
+		wasmparser::validate(&stripped).expect("stripped module is valid wasm");
+
+		let mut kept_exports = Vec::new();
+		let mut custom_names = Vec::new();
+		for payload in wasmparser::Parser::new(0).parse_all(&stripped) {
+			match payload.unwrap() {
+				wasmparser::Payload::ExportSection(reader) => {
+					for export in reader {
+						kept_exports.push(export.unwrap().name.to_owned());
+					}
+				}
+				wasmparser::Payload::CustomSection(reader) => {
+					custom_names.push(reader.name().to_owned());
+				}
+				_ => {}
+			}
+		}
+
+		assert_eq!(kept_exports, ["leptoskit_main"]);
+		assert!(custom_names.is_empty());
 	}
 }

@@ -4,8 +4,6 @@ use std::sync::Mutex;
 use std::sync::atomic::AtomicI32;
 use std::sync::atomic::Ordering;
 
-use serde_json::Value;
-
 use super::Host;
 use super::Tree;
 use super::decode_event;
@@ -18,11 +16,13 @@ use crate::NativeKind;
 use crate::SliderState;
 use crate::reactive::Get;
 use crate::reactive::Set;
+use crate::wire::WireNode;
 
 #[derive(Default)]
 struct RecordedNode {
 	kind: i32,
-	props: Value,
+	wire: WireNode,
+	wire_bytes: Vec<u8>,
 	children: Vec<i64>,
 }
 
@@ -51,7 +51,9 @@ impl Host for RecordedHost {
 
 	fn props(&mut self, id: i64, bytes: &[u8]) {
 		self.updated.push(id);
-		self.nodes.get_mut(&id).unwrap().props = serde_json::from_slice(bytes).unwrap();
+		let node = self.nodes.get_mut(&id).unwrap();
+		node.wire = WireNode::from_wire(bytes).unwrap();
+		node.wire_bytes = bytes.to_vec();
 	}
 
 	fn insert(&mut self, parent: i64, child: i64, index: i32) {
@@ -119,21 +121,24 @@ fn rive_input_updates_reuse_only_the_asset_already_installed_on_the_same_node() 
 	assert_eq!(host.nodes[&root].kind, 16);
 
 	assert!(
-		host.nodes[&root].props["rive"]["asset"]
-			.as_str()
-			.unwrap()
-			.len()
-			> 1024 * 1024
+		host.nodes[&root].wire.props.rive.is_some()
+			&& host.nodes[&root].wire_bytes.len() > 1024 * 1024
 	);
 	playback
 		.set_input(Name::new("amount").unwrap(), Input::Number(0.5), 0)
 		.unwrap();
 	tree.update(Element::rive(playback.clone()).aria_hidden(true), &mut host);
-	let update = &host.nodes[&root].props;
-	assert!(update.get("rive").is_none());
-	assert!(update["rive_inputs"].get("amount").is_some());
+	let update = &host.nodes[&root];
+	assert!(update.wire.props.rive.is_none());
 	assert!(
-		serde_json::to_vec(update).unwrap().len() < 8192,
+		update
+			.wire
+			.rive_inputs
+			.as_ref()
+			.is_some_and(|inputs| inputs.contains_key(&Name::new("amount").unwrap()))
+	);
+	assert!(
+		update.wire_bytes.len() < 8192,
 		"an input update must not re-encode the asset"
 	);
 	// A different-kind node cannot inherit the previous node's scene.
@@ -143,7 +148,7 @@ fn rive_input_updates_reuse_only_the_asset_already_installed_on_the_same_node() 
 	);
 
 	let child = host.nodes[&tree.root.unwrap()].children[0];
-	assert!(host.nodes[&child].props["rive"]["asset"].is_string());
+	assert!(host.nodes[&child].wire.props.rive.is_some());
 }
 
 #[test]
@@ -160,14 +165,17 @@ fn shared_counter_preserves_wire_ids_after_its_handler_changes_state() {
 	assert_eq!(invoke(&event, &handlers), EventOutcome::Handled);
 	tree.update(counter(&count), &mut host);
 
-	assert_eq!(host.nodes[&children[0]].props["text"], "Count: 1");
+	assert_eq!(
+		host.nodes[&children[0]].wire.props.text.as_deref(),
+		Some("Count: 1")
+	);
 	assert_eq!(host.nodes[&root].children, children);
 	assert_eq!(host.nodes[&button].kind, 6);
 	assert_eq!(host.created.len(), 3);
 	assert_eq!(host.deleted, [] as [i64; 0]);
 	assert_eq!(host.commits, 2);
 	assert_eq!(
-		host.nodes[&root].props["class"],
+		host.nodes[&root].wire.class,
 		"dark:bg-slate-950 flex-col gap-4 p-6"
 	);
 }
@@ -206,8 +214,14 @@ fn refreshing_bindings_sends_only_the_labels_that_changed() {
 	assert!(tree.refresh_reactive(&mut host));
 	assert_eq!(host.updated, vec![children[1]]);
 	assert_eq!(host.commits, 2);
-	assert_eq!(host.nodes[&children[1]].props["text"], "Row !");
-	assert_eq!(host.nodes[&children[0]].props["text"], "fixed");
+	assert_eq!(
+		host.nodes[&children[1]].wire.props.text.as_deref(),
+		Some("Row !")
+	);
+	assert_eq!(
+		host.nodes[&children[0]].wire.props.text.as_deref(),
+		Some("fixed")
+	);
 
 	// A refresh with nothing to send costs no commit, so a frame that changes
 	// no bound value does not reach the host at all.
@@ -245,7 +259,10 @@ fn removing_and_replacing_subtrees_removes_stale_host_nodes() {
 
 	tree.update(Element::text("new root"), &mut host);
 	assert_eq!(host.nodes.len(), 1);
-	assert_eq!(host.nodes[&tree.root.unwrap()].props["text"], "new root");
+	assert_eq!(
+		host.nodes[&tree.root.unwrap()].wire.props.text.as_deref(),
+		Some("new root")
+	);
 }
 
 #[test]
@@ -443,7 +460,10 @@ fn unsupported_custom_widgets_are_rejected_instead_of_becoming_containers() {
 	assert!(failed.is_err());
 	assert_eq!(tree.root, root);
 	assert_eq!(host.nodes.len(), 1);
-	assert_eq!(host.nodes[&root.unwrap()].props["text"], "previous screen");
+	assert_eq!(
+		host.nodes[&root.unwrap()].wire.props.text.as_deref(),
+		Some("previous screen")
+	);
 	assert_eq!(host.commits, 1);
 }
 
@@ -455,14 +475,14 @@ fn the_wire_names_where_each_node_was_built() {
 	let line = line!() + 1;
 	tree.update(Element::view().child(Element::text("hello")), &mut host);
 	let root = tree.root.unwrap();
-	let source = host.nodes[&root].props["source_location"].as_str().unwrap();
+	let source = host.nodes[&root].wire.source.as_deref().unwrap();
 	assert!(
 		source.starts_with(&format!("{}:{line}:", file!())),
 		"{source}"
 	);
 	let text = host.nodes[&root].children[0];
 
-	assert!(host.nodes[&text].props["source_location"].is_string());
+	assert!(host.nodes[&text].wire.source.is_some());
 }
 
 #[cfg(feature = "devtools")]
@@ -503,7 +523,7 @@ fn a_rerender_sends_properties_only_for_the_nodes_that_changed() {
 	let changed = host
 		.nodes
 		.iter()
-		.find(|(_, node)| node.props["text"] == "Row 2 !")
+		.find(|(_, node)| node.wire.props.text.as_deref() == Some("Row 2 !"))
 		.map(|(id, _)| *id);
 	assert_eq!(
 		host.updated,
@@ -698,7 +718,7 @@ fn mutations_follow_the_build_order() {
 fn texts(host: &RecordedHost) -> Vec<String> {
 	host.nodes
 		.values()
-		.filter_map(|node| node.props.get("text").and_then(Value::as_str))
+		.filter_map(|node| node.wire.props.text.as_deref())
 		.map(str::to_owned)
 		.collect()
 }
@@ -720,7 +740,7 @@ fn a_binding_settles_without_recreating_its_siblings() {
 	let static_id = *host
 		.nodes
 		.iter()
-		.find(|(_, node)| node.props["text"] == "static")
+		.find(|(_, node)| node.wire.props.text.as_deref() == Some("static"))
 		.map(|(id, _)| id)
 		.unwrap();
 	host.created.clear();
@@ -757,7 +777,7 @@ fn a_list_region_replaces_its_rows_and_leaves_the_rest_of_the_screen() {
 	let static_id = *host
 		.nodes
 		.iter()
-		.find(|(_, node)| node.props["text"] == "static")
+		.find(|(_, node)| node.wire.props.text.as_deref() == Some("static"))
 		.map(|(id, _)| id)
 		.unwrap();
 	host.created.clear();
@@ -794,7 +814,7 @@ fn show_drops_its_child_without_touching_the_sibling() {
 	let static_id = *host
 		.nodes
 		.iter()
-		.find(|(_, node)| node.props["text"] == "static")
+		.find(|(_, node)| node.wire.props.text.as_deref() == Some("static"))
 		.map(|(id, _)| id)
 		.unwrap();
 

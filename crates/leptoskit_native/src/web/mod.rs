@@ -84,7 +84,22 @@ fn rebuilds(
 ) -> impl Fn() -> AnyView + Send + Sync + 'static {
 	let state = crate::remember::ScreenState::new();
 	state.provide();
-	move || render(state.build(&view))
+	move || render(crate::reactive::defer_regions_scope(|| state.build(&view)))
+}
+
+/// Expands every `For`/`Show` region in `element` once, subscribing the active
+/// Leptos observer to whatever signals the regions read.
+fn expand_regions(element: &mut Element) {
+	if let Some(region) = element.region.take() {
+		element.children = crate::reactive::defer_regions_scope(|| region.render())
+			.into_iter()
+			.map(|(_, child)| child)
+			.collect();
+	}
+
+	for child in &mut element.children {
+		expand_regions(child);
+	}
 }
 
 /// Converts a shared element tree into a Leptos view, including its stylesheet.
@@ -103,11 +118,13 @@ fn rebuilds(
 ///
 /// Panics for platform-specific `Custom` widgets or an invalid control tree
 /// (see [`Element::validate`]).
-pub fn render(element: Element) -> AnyView {
+pub fn render(mut element: Element) -> AnyView {
 	// In a browser, leptoskit's records and panics go to the console. A
 	// server rendering the same tree keeps its own logger.
 	#[cfg(target_arch = "wasm32")]
 	leptoskit_log::install();
+
+	expand_regions(&mut element);
 
 	element
 		.validate()
@@ -484,25 +501,9 @@ fn announce_read_only(kind: NativeKind, props: &mut NativeProps) {
 	}
 }
 
-/// Fills in the children a `For` or `Show` keeps in its region. Reading the
-/// region is what subscribes the leptos view that called `render`, so the web
-/// rebuilds this container when the list or the condition changes.
-///
-/// A region's children are only known now, so the labels among them are found
-/// here and returned with the ones the tree around them declared.
-fn expand_region(element: &mut Element, labels: &labels::Labels) -> Option<labels::Labels> {
-	let region = element.region.take()?;
-	element.children = region
-		.render()
-		.into_iter()
-		.map(|(_, child)| child)
-		.collect();
-	labels.with(&element.children)
-}
-
 /// Builds each typed DOM control before adding attributes common to all kinds.
 fn render_node(
-	mut element: Element,
+	element: Element,
 	inherited: Inherited,
 	ancestors: &[Handlers],
 	sheets: &mut BTreeMap<String, String>,
@@ -515,8 +516,6 @@ fn render_node(
 		hidden: parent_hidden,
 		stagger,
 	} = inherited;
-	let local = expand_region(&mut element, labels);
-	let labels = local.as_ref().unwrap_or(labels);
 
 	let devtools = path.attributes(&element);
 	// The render's stylesheet sets the defaults once, so each scope's sheet

@@ -136,11 +136,31 @@ thread_local! {
 	> = std::cell::RefCell::new(std::collections::HashMap::default());
 }
 
+const FLAG_ACTIVE: u8 = 1 << 0;
+const FLAG_STARTING: u8 = 1 << 1;
+const FLAG_MAY_SCROLL: u8 = 1 << 2;
+
 /// A validated, reusable set of platform-neutral utility declarations.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Tailwind {
 	classes: Arc<str>,
 	rules: Arc<[Rule]>,
+	flags: u8,
+}
+
+/// Stable insertion sort for short class lists (typically 1–16 utilities).
+///
+/// Avoids pulling `core::slice::sort::shared::smallsort::small_sort_network`
+/// and `quicksort` (~26 KB of Wasm code) into every web and native bundle.
+fn insertion_sort_by<T>(slice: &mut [T], mut cmp: impl FnMut(&T, &T) -> std::cmp::Ordering) {
+	for i in 1..slice.len() {
+		let mut j = i;
+
+		while j > 0 && cmp(&slice[j - 1], &slice[j]).is_gt() {
+			slice.swap(j - 1, j);
+			j -= 1;
+		}
+	}
 }
 
 /// Why a utility class cannot be compiled on every supported renderer.
@@ -202,6 +222,10 @@ impl Tailwind {
 	///
 	/// Returns [`ClassError`] describing the offending class and reason.
 	pub fn parse(classes: &str) -> Result<Self, ClassError> {
+		if classes.is_empty() {
+			return Ok(Self::default());
+		}
+
 		// Apps repeat a small set of class strings across many elements and
 		// every render; parsing is the costly part, especially inside the
 		// native guest's interpreter, so each distinct string parses once.
@@ -229,10 +253,11 @@ impl Tailwind {
 
 	fn parse_uncached(classes: &str) -> Result<Self, ClassError> {
 		let mut tokens = classes.split_whitespace().collect::<Vec<_>>();
-		tokens.sort_unstable();
+		insertion_sort_by(&mut tokens, Ord::cmp);
 		tokens.dedup();
 		let classes = tokens.join(" ");
 		let mut rules = Vec::with_capacity(tokens.len());
+		let mut flags = 0u8;
 
 		for token in tokens {
 			let rule = Rule::parse(token).map_err(|reason| {
@@ -241,13 +266,32 @@ impl Tailwind {
 					reason,
 				}
 			})?;
+
+			if rule.conditions.active {
+				flags |= FLAG_ACTIVE;
+			}
+
+			if rule.conditions.starting {
+				flags |= FLAG_STARTING;
+			}
+
+			if rule.declarations.iter().any(|declaration| {
+				matches!(
+					declaration,
+					Declaration::Overflow(leptoskit_yoga::Overflow::Scroll)
+				)
+			}) {
+				flags |= FLAG_MAY_SCROLL;
+			}
+
 			rules.push(rule);
 		}
 
-		rules.sort_by(|a, b| a.precedence().cmp(&b.precedence()));
+		insertion_sort_by(&mut rules, |a, b| a.precedence().cmp(&b.precedence()));
 		Ok(Self {
 			classes: classes.into(),
 			rules: rules.into(),
+			flags,
 		})
 	}
 
@@ -259,6 +303,10 @@ impl Tailwind {
 	/// The first class styling the pressed state, which only pressable
 	/// controls have.
 	pub(crate) fn active_class(&self) -> Option<&str> {
+		if self.flags & FLAG_ACTIVE == 0 {
+			return None;
+		}
+
 		self.rules
 			.iter()
 			.find(|rule| rule.conditions.active)
@@ -268,14 +316,7 @@ impl Tailwind {
 	/// Structural contracts prohibit scrollable descendants of buttons at
 	/// every breakpoint, including rules inactive in the current environment.
 	pub(crate) fn may_scroll(&self) -> bool {
-		self.rules.iter().any(|rule| {
-			rule.declarations.iter().any(|declaration| {
-				matches!(
-					declaration,
-					Declaration::Overflow(leptoskit_yoga::Overflow::Scroll)
-				)
-			})
-		})
+		self.flags & FLAG_MAY_SCROLL != 0
 	}
 
 	/// Applies active declarations over the supplied base style and props.
@@ -283,6 +324,11 @@ impl Tailwind {
 	/// Start from the same unmodified base values on each call: rules which
 	/// become inactive do not reset declarations from an earlier application.
 	pub fn apply(&self, style: &mut Style, props: &mut NativeProps, context: &StyleContext) {
+		if self.rules.is_empty() {
+			props.sanitize_motion();
+			return;
+		}
+
 		for rule in self.rules.iter() {
 			if rule.conditions.active(context) {
 				for declaration in &rule.declarations {
@@ -297,7 +343,10 @@ impl Tailwind {
 			props.border_color = Some(props.color.unwrap_or(Color::rgba(0, 0, 0, 255)));
 		}
 
-		self.apply_starting(style, props, context);
+		if self.flags & FLAG_STARTING != 0 {
+			self.apply_starting(style, props, context);
+		}
+
 		props.sanitize_motion();
 	}
 
