@@ -9,6 +9,8 @@ use super::Frame;
 use super::HitArea;
 use super::HitBounds;
 use super::NativeSurface;
+use super::TEXT_FIELD_CHROME_HEIGHT;
+use super::measured_content;
 use crate::backend::Mutation;
 use crate::backend::MutationList;
 use crate::backend::NativeBackend;
@@ -25,13 +27,48 @@ impl<B: NativeBackend> NativeSurface<B> {
 			AvailableSpace::Definite(self.viewport.width.max(0.0)),
 			AvailableSpace::Definite(self.viewport.height.max(0.0)),
 		);
+		let root_fills_width = matches!(self.kind(root), NativeKind::View | NativeKind::ScrollView);
+		let shadows = &mut self.shadows;
+		let measurer = &self.measurer;
+		let mut measure = |id: NodeId, mut available: Size<AvailableSpace>| {
+			let shadow = &mut shadows[id.index()];
+			let kind = shadow.kind;
+			let cache = shadow
+				.text_cache
+				.as_mut()
+				.expect("measured shadow node has a text cache");
+
+			if matches!(kind, NativeKind::TextInput | NativeKind::PasswordInput) {
+				available.width = AvailableSpace::MaxContent;
+			}
+
+			if let Some(size) = cache.size(available.width) {
+				return size;
+			}
+
+			let content = measured_content(kind, &shadow.props).unwrap_or_default();
+			let size = if kind == NativeKind::Button {
+				measurer.measure_button(content, cache.style, available, cache.native_chrome)
+			} else {
+				let mut size = measurer.measure(content, cache.style, available);
+				if cache.native_chrome {
+					size.height += TEXT_FIELD_CHROME_HEIGHT;
+				}
+
+				size
+			};
+			cache.remember(available.width, size);
+			size
+		};
 		// A container root fills the viewport's width, as its `<div>` does on
 		// the web, so a screen that centres its content centres it on the
 		// screen. Text and controls keep their intrinsic width there too.
-		if matches!(self.kind(root), NativeKind::View | NativeKind::ScrollView) {
-			self.yoga.calculate_layout_filling_width(root, available);
+		if root_fills_width {
+			self.yoga
+				.calculate_layout_filling_width_with_measure(root, available, &mut measure);
 		} else {
-			self.yoga.calculate_layout(root, available);
+			self.yoga
+				.calculate_layout_with_measure(root, available, &mut measure);
 		}
 
 		let pass = self.yoga.current_pass();
@@ -44,10 +81,12 @@ impl<B: NativeBackend> NativeSurface<B> {
 		self.collect_frames(root, 0.0, 0.0, pass, &mut frames);
 		self.place_popovers(pass, &mut frames);
 		self.scroll_to_reveals(&mut frames);
-		self.backend.apply(&frames);
+		#[cfg(feature = "devtools")]
+		let frames_len = frames.len();
+		self.backend.apply_owned(frames);
 		#[cfg(feature = "devtools")]
 		{
-			let commit = self.devtools.finish(frames.len(), layout_start);
+			let commit = self.devtools.finish(frames_len, layout_start);
 
 			if let Some(observer) = &mut self.devtools.observer {
 				observer(&commit);

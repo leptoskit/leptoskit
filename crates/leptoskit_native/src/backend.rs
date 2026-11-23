@@ -200,6 +200,12 @@ pub trait NativeBackend {
 		}
 	}
 
+	/// Applies an owned mutation batch, allowing recording backends to take
+	/// ownership of the batch without cloning every `NativeProps`.
+	fn apply_owned(&mut self, mutations: MutationList) {
+		self.apply(&mutations);
+	}
+
 	/// Applies a single mutation.
 	fn apply_one(&mut self, mutation: &Mutation) {
 		match mutation {
@@ -373,8 +379,27 @@ impl NativeBackend for HeadlessBackend {
 			return;
 		}
 
+		self.log.reserve(mutations.len());
+
 		for mutation in mutations.mutations() {
 			self.apply_one(mutation);
+		}
+	}
+
+	fn apply_owned(&mut self, mutations: MutationList) {
+		#[cfg(feature = "serde")]
+		if let Some(budget) = &mut self.log_budget
+			&& !budget.admit(mutations.mutations())
+		{
+			return;
+		}
+
+		let batch = mutations.into_mutations();
+
+		if self.log.is_empty() {
+			self.log = batch;
+		} else {
+			self.log.extend(batch);
 		}
 	}
 
@@ -420,8 +445,13 @@ impl NativeBackend for HeadlessBackend {
 	}
 
 	fn text_measurer(&self) -> SharedTextMeasurer {
+		static DEFAULT_MEASURER: std::sync::LazyLock<SharedTextMeasurer> =
+			std::sync::LazyLock::new(|| {
+				std::sync::Arc::new(crate::props::ApproxTextMeasurer::new())
+			});
+
 		self.measurer
 			.clone()
-			.unwrap_or_else(|| std::sync::Arc::new(crate::props::ApproxTextMeasurer::new()))
+			.unwrap_or_else(|| std::sync::Arc::clone(&DEFAULT_MEASURER))
 	}
 }

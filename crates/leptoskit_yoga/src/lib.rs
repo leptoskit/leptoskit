@@ -170,6 +170,9 @@ impl MeasureCache {
 	}
 }
 
+pub(crate) type ExternalMeasure<'a> =
+	Option<&'a mut dyn FnMut(NodeId, Size<AvailableSpace>) -> Size<f32>>;
+
 pub(crate) struct Node {
 	/// Shared so a layout pass can hold a node's style while it mutates the
 	/// tree, without copying it: layout reads every style on every pass.
@@ -178,6 +181,7 @@ pub(crate) struct Node {
 	pub(crate) parent: Option<NodeId>,
 	pub(crate) children: Vec<NodeId>,
 	pub(crate) measure: Option<MeasureFunc>,
+	pub(crate) has_external_measure: bool,
 	pub(crate) measure_cache: MeasureCache,
 	pub(crate) layout_cache: LayoutCache,
 	/// The latest [`Yoga::pass`] in which this node or a descendant ran layout.
@@ -196,12 +200,18 @@ impl Node {
 			parent: None,
 			children: Vec::new(),
 			measure: None,
+			has_external_measure: false,
 			measure_cache: MeasureCache::default(),
 			layout_cache: LayoutCache::default(),
 			subtree_pass: 0,
 			dirty: true,
 			queued: false,
 		}
+	}
+
+	#[inline]
+	pub(crate) fn is_measured(&self) -> bool {
+		self.has_external_measure || self.measure.is_some()
 	}
 }
 
@@ -652,6 +662,21 @@ impl Yoga {
 		}
 	}
 
+	/// Marks whether `node` supplies intrinsic measurements via the callback
+	/// passed to [`Self::calculate_layout_with_measure`], avoiding per-node
+	/// `Arc` closure allocations.
+	pub fn set_measured(&mut self, node: NodeId, measured: bool) {
+		self.nodes[node.0].has_external_measure = measured;
+		self.nodes[node.0].measure_cache.clear();
+		self.mark_dirty(node);
+	}
+
+	/// Clears `node`'s cached intrinsic measurements and marks it dirty.
+	pub fn clear_measure_cache(&mut self, node: NodeId) {
+		self.nodes[node.0].measure_cache.clear();
+		self.mark_dirty(node);
+	}
+
 	/// Returns `true` when the node still needs layout.
 	pub fn is_dirty(&self, node: NodeId) -> bool {
 		self.nodes[node.0].dirty
@@ -664,7 +689,19 @@ impl Yoga {
 	/// whose constraints changed, are laid out again; that is what makes
 	/// re-running layout after a small state change cheap.
 	pub fn calculate_layout(&mut self, root: NodeId, available: Size<AvailableSpace>) {
-		self.layout_root(root, available, Size::new(None, None));
+		self.layout_root(root, available, Size::new(None, None), &mut None);
+	}
+
+	/// Like [`Self::calculate_layout`], invoking `measure` for nodes marked
+	/// with [`Self::set_measured`].
+	pub fn calculate_layout_with_measure(
+		&mut self,
+		root: NodeId,
+		available: Size<AvailableSpace>,
+		measure: &mut dyn FnMut(NodeId, Size<AvailableSpace>) -> Size<f32>,
+	) {
+		let mut external = Some(measure);
+		self.layout_root(root, available, Size::new(None, None), &mut external);
 	}
 
 	/// Runs layout from `root` the way a block element fills its containing
@@ -677,18 +714,34 @@ impl Yoga {
 		root: NodeId,
 		available: Size<AvailableSpace>,
 	) {
+		let width = self.filling_width(root, available);
+		self.layout_root(root, available, Size::new(width, None), &mut None);
+	}
+
+	/// Like [`Self::calculate_layout_filling_width`], invoking `measure` for
+	/// nodes marked with [`Self::set_measured`].
+	pub fn calculate_layout_filling_width_with_measure(
+		&mut self,
+		root: NodeId,
+		available: Size<AvailableSpace>,
+		measure: &mut dyn FnMut(NodeId, Size<AvailableSpace>) -> Size<f32>,
+	) {
+		let width = self.filling_width(root, available);
+		let mut external = Some(measure);
+		self.layout_root(root, available, Size::new(width, None), &mut external);
+	}
+
+	fn filling_width(&self, root: NodeId, available: Size<AvailableSpace>) -> Option<f32> {
 		let style = &self.nodes[root.0].style;
 
-		let width = match available.width {
+		match available.width {
 			AvailableSpace::Definite(width) if style.width.is_auto() => {
 				let margin = resolve_margins(&style.margin, Some(width));
 				Some((width - margin.left - margin.right).max(0.0))
 			}
 
 			_ => None,
-		};
-
-		self.layout_root(root, available, Size::new(width, None));
+		}
 	}
 
 	fn layout_root(
@@ -696,6 +749,7 @@ impl Yoga {
 		root: NodeId,
 		available: Size<AvailableSpace>,
 		forced: Size<Option<f32>>,
+		external: &mut ExternalMeasure<'_>,
 	) {
 		let ctx = SizingCtx {
 			available,
@@ -704,14 +758,14 @@ impl Yoga {
 		};
 		self.pass += 1;
 		let pass = self.pass;
-		self.layout_node(root, ctx, RunMode::Commit);
+		self.layout_node(root, ctx, RunMode::Commit, external);
 		// Boundaries dirtied from inside: their ancestors stayed clean, so the
 		// pass above did not reach them. One the pass did reach is clean now.
 		for (node, ctx) in std::mem::take(&mut self.pending) {
 			self.nodes[node.0].queued = false;
 
 			if self.nodes[node.0].dirty {
-				self.layout_node(node, ctx, RunMode::Commit);
+				self.layout_node(node, ctx, RunMode::Commit, external);
 				// Mark ancestors so a frame walk starting at `root` knows a
 				// boundary inside them laid out during this pass.
 				let mut ancestor = self.nodes[node.0].parent;
@@ -756,16 +810,29 @@ impl Yoga {
 	}
 
 	/// Runs the node's measurement function through the cache.
-	pub(crate) fn measure(&mut self, node: NodeId, available: Size<AvailableSpace>) -> Size<f32> {
+	pub(crate) fn measure(
+		&mut self,
+		node: NodeId,
+		available: Size<AvailableSpace>,
+		external: &mut ExternalMeasure<'_>,
+	) -> Size<f32> {
 		if let Some(size) = self.nodes[node.0].measure_cache.get(available) {
 			return size;
 		}
 
-		let measure = self.nodes[node.0]
-			.measure
-			.clone()
-			.expect("measure called on a node without a measure function");
-		let output = measure(available);
+		let output = if self.nodes[node.0].has_external_measure {
+			external
+				.as_deref_mut()
+				.expect("external measure callback must be provided for set_measured nodes")(
+				node, available
+			)
+		} else {
+			let measure = self.nodes[node.0]
+				.measure
+				.clone()
+				.expect("measure called on a node without a measure function");
+			measure(available)
+		};
 		let output = Size::new(output.width.max(0.0), output.height.max(0.0));
 		self.nodes[node.0].measure_cache.insert(available, output);
 		output

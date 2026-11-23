@@ -51,6 +51,13 @@ pub(super) struct Tree {
 	/// Node ids in build order, parents before children: the order the host
 	/// hears about them, independent of the map's.
 	order: Vec<i64>,
+	/// Node ids evicted during the current [`Self::update`], recorded in
+	/// forward build order so [`Self::publish_in_place`] sends `host.delete`
+	/// in reverse order (leaves and trailing siblings first).
+	removed: Vec<i64>,
+	/// Reusable DFS stack for [`Self::evict_subtree`] and
+	/// [`Self::evict_slice`].
+	evict_stack: Vec<i64>,
 	/// Node ids that read application state: what a refresh visits, so it
 	/// costs the values that changed rather than the size of the tree.
 	bound: Vec<i64>,
@@ -58,8 +65,6 @@ pub(super) struct Tree {
 	wire_arena: Vec<u8>,
 	/// Staged build-order operations for the current `update` or `splice`.
 	build_ops: Vec<BuildOp>,
-	/// Number of existing nodes reused during the current `update`.
-	reused_count: usize,
 	root: Option<i64>,
 	next_id: i64,
 	/// Regions subscribed on this tree, keyed by the node that owns them.
@@ -90,6 +95,53 @@ fn sent_style(style: &leptoskit_yoga::Style) -> Option<&leptoskit_yoga::Style> {
 	DEFAULT.with(|default| style != default).then_some(style)
 }
 
+/// Encodes one node's wire payload into `wire_arena` and returns its byte
+/// range.
+fn encode_node_wire(
+	wire_arena: &mut Vec<u8>,
+	element: &Element,
+	prev_rive: Option<&leptoskit_rive::Playback>,
+) -> (u32, u32) {
+	// Reuse only this node's previously transmitted scene. The host
+	// never looks up global asset identifiers or retains a separate
+	// file cache.
+	let retained = element
+		.props
+		.rive
+		.as_ref()
+		.filter(|content| prev_rive.is_some_and(|old| old.same_scene(content)));
+	#[cfg(feature = "devtools")]
+	let source = element.source_location().map(|location| {
+		format!(
+			"{}:{}:{}",
+			location.file(),
+			location.line(),
+			location.column()
+		)
+	});
+	#[cfg(not(feature = "devtools"))]
+	let source: Option<String> = None;
+	#[cfg(feature = "devtools")]
+	let component = element.component_name();
+	#[cfg(not(feature = "devtools"))]
+	let component: Option<&str> = None;
+
+	let start = wire_arena.len() as u32;
+	let rive_inputs = retained.map(|content| content.inputs());
+	crate::wire::encode_binary_into(
+		wire_arena,
+		&element.props,
+		sent_style(&element.style),
+		element.classes().classes(),
+		retained.is_some(),
+		rive_inputs,
+		source.as_deref(),
+		component,
+	);
+	let end = wire_arena.len() as u32;
+	(start, end)
+}
+
 impl Tree {
 	/// Whether a refresh or a region can update this tree without rebuilding
 	/// it.
@@ -106,28 +158,18 @@ impl Tree {
 		element
 			.validate()
 			.unwrap_or_else(|error| panic!("invalid leptoskit element tree: {error}"));
-		// A render usually keeps most of the previous tree, so reserving its
-		// size spares the map from growing node by node.
-		let mut wire_arena = std::mem::take(&mut self.wire_arena);
-		wire_arena.clear();
-		let mut build_ops = std::mem::take(&mut self.build_ops);
-		build_ops.clear();
-		let mut next = Self {
-			nodes: HashMap::with_capacity_and_hasher(self.nodes.len(), FastHash::default()),
-			order: Vec::with_capacity(self.order.len()),
-			bound: Vec::new(),
-			wire_arena,
-			build_ops,
-			reused_count: 0,
-			root: None,
-			next_id: self.next_id,
-			regions: HashMap::with_capacity_and_hasher(self.regions.len(), FastHash::default()),
-		};
-		next.root = Some(next.build(element, None, self.root, self, 1));
-		Self::publish(self, &mut next, host);
-		next.wire_arena.clear();
-		next.build_ops.clear();
-		*self = next;
+		self.order.clear();
+		self.removed.clear();
+		self.bound.clear();
+		self.wire_arena.clear();
+		self.build_ops.clear();
+		self.regions.clear();
+		let prev_root = self.root;
+		self.root = Some(self.build_in_place(element, None, prev_root, 1));
+		self.publish_in_place(host);
+		self.wire_arena.clear();
+		self.build_ops.clear();
+		self.removed.clear();
 	}
 
 	/// Applies regions a signal write queued, then the bindings.
@@ -222,7 +264,13 @@ impl Tree {
 			child_ids.push(id);
 		}
 
-		for id in replaced.iter().filter(|id| !self.nodes.contains_key(id)) {
+		// Delete leaves and trailing siblings first so the host detaches each
+		// removed child from the tail of its parent's list in O(1).
+		for id in replaced
+			.iter()
+			.rev()
+			.filter(|id| !self.nodes.contains_key(id))
+		{
 			host.delete(*id);
 		}
 
@@ -264,30 +312,56 @@ impl Tree {
 		host.commit();
 	}
 
-	/// Sends the difference between `old` and `next`, then commits.
-	fn publish(old: &Self, next: &mut Self, host: &mut impl Host) {
-		if next.reused_count < old.order.len() {
-			for id in old.order.iter().filter(|id| !next.nodes.contains_key(id)) {
-				host.delete(*id);
+	/// Immediately removes an un-reused subtree from `self.nodes` in forward
+	/// build order and records its ids in `self.removed` so `self.nodes`
+	/// reclaims dead slots before new siblings trigger a table growth.
+	fn evict_subtree(&mut self, root: i64) {
+		self.evict_stack.clear();
+		self.evict_stack.push(root);
+		self.drain_evict_stack();
+	}
+
+	/// Evicts a slice of trailing sibling subtrees in forward build order,
+	/// reusing `self.evict_stack` with zero per-sibling allocations.
+	fn evict_slice(&mut self, roots: &[i64]) {
+		self.evict_stack.clear();
+		self.evict_stack.extend(roots.iter().rev().copied());
+		self.drain_evict_stack();
+	}
+
+	fn drain_evict_stack(&mut self) {
+		while let Some(id) = self.evict_stack.pop() {
+			if let Some(node) = self.nodes.remove(&id) {
+				self.removed.push(id);
+				self.evict_stack.extend(node.children.iter().rev().copied());
 			}
 		}
+	}
 
-		for op in &next.build_ops {
+	/// Sends evicted deletes (leaves and trailing siblings first so the host
+	/// detaches in O(1)), then staged creates, prop updates, and child
+	/// insertions before committing.
+	fn publish_in_place(&mut self, host: &mut impl Host) {
+		for &id in self.removed.iter().rev() {
+			host.delete(id);
+		}
+
+		for op in &self.build_ops {
 			if op.is_new {
 				host.create(op.id, op.kind);
 			}
 
 			if let Some((start, end)) = op.wire {
-				host.props(op.id, &next.wire_arena[start as usize..end as usize]);
+				host.props(op.id, &self.wire_arena[start as usize..end as usize]);
 			}
 		}
 
-		for op in &next.build_ops {
+		for op in &self.build_ops {
 			if !op.children_changed {
 				continue;
 			}
 
-			let node = &next.nodes[&op.id];
+			let node = &self.nodes[&op.id];
 
 			for (index, &child) in node.children.iter().enumerate() {
 				host.insert(op.id, child, index as i32);
@@ -362,7 +436,181 @@ impl Tree {
 		changed
 	}
 
-	/// Reuses the host renderer's positional, same-kind identity convention.
+	/// Reconciles `element` into `self.nodes` in place, reusing existing
+	/// same-kind node slots and child `Vec`s without allocating a replacement
+	/// map.
+	fn build_in_place(
+		&mut self,
+		mut element: Element,
+		parent: Option<i64>,
+		previous: Option<i64>,
+		depth: usize,
+	) -> i64 {
+		assert!(depth <= 256, "the native guest tree exceeds 256 levels");
+		let kind = kind_code(element.kind);
+
+		// Fast path for reused leaf nodes (e.g. Text): one map lookup, zero Vec
+		// allocations, and no staged BuildOp unless props/style/classes
+		// changed.
+		if element.children.is_empty()
+			&& element.region.is_none()
+			&& let Some(prev_id) = previous
+			&& let Some(node) = self.nodes.get_mut(&prev_id)
+			&& node.element.kind == element.kind
+			&& node.children.is_empty()
+		{
+			node.parent = parent;
+			node.key = None;
+			self.order.push(prev_id);
+
+			if !element.bindings().is_empty() {
+				self.bound.push(prev_id);
+			}
+
+			let changed = !node.element.classes().same_classes(element.classes())
+				|| node.element.props != element.props
+				|| node.element.style != element.style
+				|| moved(&node.element, &element);
+
+			if changed {
+				let prev_rive = node.element.props.rive.as_deref();
+				let wire = encode_node_wire(&mut self.wire_arena, &element, prev_rive);
+				self.build_ops.push(BuildOp {
+					id: prev_id,
+					kind,
+					is_new: false,
+					children_changed: false,
+					wire: Some(wire),
+				});
+			}
+
+			node.element = element;
+			return prev_id;
+		}
+
+		let reused = previous.filter(|id| {
+			self.nodes
+				.get(id)
+				.is_some_and(|node| node.element.kind == element.kind)
+		});
+		let is_new = reused.is_none();
+
+		if is_new && let Some(old_id) = previous {
+			self.evict_subtree(old_id);
+		}
+
+		let id = match reused {
+			Some(id) => id,
+			None => {
+				self.next_id = self
+					.next_id
+					.checked_add(1)
+					.expect("guest node ids exhausted");
+				self.next_id
+			}
+		};
+		self.order.push(id);
+		let op_index = self.build_ops.len();
+		self.build_ops.push(BuildOp {
+			id,
+			kind,
+			is_new,
+			children_changed: false,
+			wire: None,
+		});
+
+		if !element.bindings().is_empty() {
+			self.bound.push(id);
+		}
+
+		let mut child_keys = Vec::new();
+
+		if let Some(region) = element.region.clone() {
+			let slot = RegionSlot::new(id, region);
+			let produced = slot.evaluate();
+			child_keys = produced.iter().map(|(key, _)| *key).collect();
+			element.children = produced.into_iter().map(|(_, child)| child).collect();
+			self.regions.insert(id, slot);
+		}
+
+		let mut children = if is_new {
+			Vec::new()
+		} else {
+			let node = self.nodes.get_mut(&id).expect("reused node exists");
+			std::mem::take(&mut node.children)
+		};
+		let raw_children = std::mem::take(&mut element.children);
+		let old_len = children.len();
+		let new_len = raw_children.len();
+		let mut children_changed = is_new || old_len != new_len;
+		children.reserve(new_len.saturating_sub(old_len));
+
+		for (index, child) in raw_children.into_iter().enumerate() {
+			let previous_child = (index < old_len).then(|| children[index]);
+			let child_id = self.build_in_place(child, Some(id), previous_child, depth + 1);
+
+			if index < old_len {
+				if children[index] != child_id {
+					children_changed = true;
+					children[index] = child_id;
+				}
+			} else {
+				children.push(child_id);
+			}
+		}
+
+		if old_len > new_len {
+			self.evict_slice(&children[new_len..old_len]);
+		}
+
+		children.truncate(new_len);
+
+		if children.is_empty() {
+			children_changed = false;
+		}
+
+		for (child, key) in children.iter().zip(child_keys) {
+			if let Some(node) = self.nodes.get_mut(child) {
+				node.key = Some(key);
+			}
+		}
+
+		if is_new {
+			let wire = Some(encode_node_wire(&mut self.wire_arena, &element, None));
+			self.build_ops[op_index].children_changed = children_changed;
+			self.build_ops[op_index].wire = wire;
+			self.nodes.insert(
+				id,
+				Node {
+					element,
+					parent,
+					children,
+					key: None,
+				},
+			);
+		} else {
+			let node = self.nodes.get_mut(&id).expect("reused node exists");
+			let changed = !node.element.classes().same_classes(element.classes())
+				|| node.element.props != element.props
+				|| node.element.style != element.style
+				|| moved(&node.element, &element);
+			let wire = changed.then(|| {
+				let prev_rive = node.element.props.rive.as_deref();
+				encode_node_wire(&mut self.wire_arena, &element, prev_rive)
+			});
+			self.build_ops[op_index].children_changed = children_changed;
+			self.build_ops[op_index].wire = wire;
+			node.element = element;
+			node.parent = parent;
+			node.children = children;
+			node.key = None;
+		}
+
+		id
+	}
+
+	/// Reuses the host renderer's positional, same-kind identity convention
+	/// when splicing a region subtree out of `old`.
 	fn build(
 		&mut self,
 		mut element: Element,
@@ -380,10 +628,7 @@ impl Tree {
 			.filter(|(_, node)| node.element.kind == element.kind);
 		let is_new = previous.is_none();
 		let id = match previous {
-			Some((id, _)) => {
-				self.reused_count += 1;
-				id
-			}
+			Some((id, _)) => id,
 			None => {
 				self.next_id = self
 					.next_id
@@ -445,44 +690,8 @@ impl Tree {
 				|| moved(&node.element, &element)
 		});
 		let wire = changed.then(|| {
-			// Reuse only this node's previously transmitted scene. The host
-			// never looks up global asset identifiers or retains a separate
-			// file cache.
-			let retained = element.props.rive.as_ref().filter(|content| {
-				previous
-					.and_then(|(_, node)| node.element.props.rive.as_ref())
-					.is_some_and(|old| old.same_scene(content))
-			});
-			#[cfg(feature = "devtools")]
-			let source = element.source_location().map(|location| {
-				format!(
-					"{}:{}:{}",
-					location.file(),
-					location.line(),
-					location.column()
-				)
-			});
-			#[cfg(not(feature = "devtools"))]
-			let source: Option<String> = None;
-			#[cfg(feature = "devtools")]
-			let component = element.component_name();
-			#[cfg(not(feature = "devtools"))]
-			let component: Option<&str> = None;
-
-			let start = self.wire_arena.len() as u32;
-			let rive_inputs = retained.map(|content| content.inputs());
-			crate::wire::encode_binary_into(
-				&mut self.wire_arena,
-				&element.props,
-				sent_style(&element.style),
-				element.classes().classes(),
-				retained.is_some(),
-				rive_inputs,
-				source.as_deref(),
-				component,
-			);
-			let end = self.wire_arena.len() as u32;
-			(start, end)
+			let prev_rive = previous.and_then(|(_, node)| node.element.props.rive.as_deref());
+			encode_node_wire(&mut self.wire_arena, &element, prev_rive)
 		});
 		self.build_ops[op_index].children_changed = children_changed;
 		self.build_ops[op_index].wire = wire;

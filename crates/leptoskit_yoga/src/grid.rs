@@ -265,6 +265,7 @@ impl Yoga {
 		ctx: crate::SizingCtx,
 		metrics: &BoxMetrics,
 		mode: RunMode,
+		external: &mut crate::ExternalMeasure<'_>,
 	) -> Size<f32> {
 		let inner_padding = metrics.inner_padding;
 		let border = metrics.border;
@@ -318,7 +319,7 @@ impl Yoga {
 		// Columns: content contributions at max-content. The container width,
 		// and with it every column, is settled before rows are sized.
 		columns.init_bases(child_basis.width);
-		self.contribute_column_widths(&items, &mut columns, column_gap);
+		self.contribute_column_widths(&items, &mut columns, column_gap, external);
 		let width = columns.settle(
 			&AxisSpace {
 				basis: child_basis.width,
@@ -333,7 +334,14 @@ impl Yoga {
 
 		// Rows: content contributions at the width of the spanned columns.
 		rows.init_bases(child_basis.height);
-		self.contribute_row_heights(&items, &mut rows, &columns.bases, column_gap, row_gap);
+		self.contribute_row_heights(
+			&items,
+			&mut rows,
+			&columns.bases,
+			column_gap,
+			row_gap,
+			external,
+		);
 		let height = rows.settle(
 			&AxisSpace {
 				basis: child_basis.height,
@@ -363,13 +371,13 @@ impl Yoga {
 		let mut content_max_height = 0.0f32;
 
 		for (index, item) in items.iter().enumerate() {
-			let corner = self.place_grid_item(index, item, &sized);
+			let corner = self.place_grid_item(index, item, &sized, external);
 			content_max_width = content_max_width.max(corner.width);
 			content_max_height = content_max_height.max(corner.height);
 		}
 
 		for child in absolute {
-			let corner = self.place_absolute_grid_child(child, &sized);
+			let corner = self.place_absolute_grid_child(child, &sized, external);
 			content_max_width = content_max_width.max(corner.width);
 			content_max_height = content_max_height.max(corner.height);
 		}
@@ -387,7 +395,13 @@ impl Yoga {
 
 	/// Grows the intrinsic columns each item spans to fit its max-content
 	/// width.
-	fn contribute_column_widths(&mut self, items: &[GridItem], columns: &mut AxisTracks, gap: f32) {
+	fn contribute_column_widths(
+		&mut self,
+		items: &[GridItem],
+		columns: &mut AxisTracks,
+		gap: f32,
+		external: &mut crate::ExternalMeasure<'_>,
+	) {
 		for item in items {
 			if !columns.spans_intrinsic(item.col_start, item.col_span) {
 				continue;
@@ -401,6 +415,7 @@ impl Yoga {
 						item.node,
 						Size::new(AvailableSpace::MaxContent, AvailableSpace::MaxContent),
 						Size::new(None, None),
+						external,
 					)
 					.width
 				})
@@ -418,6 +433,7 @@ impl Yoga {
 		column_bases: &[f32],
 		column_gap: f32,
 		row_gap: f32,
+		external: &mut crate::ExternalMeasure<'_>,
 	) {
 		for item in items {
 			if !rows.spans_intrinsic(item.row_start, item.row_span) {
@@ -435,6 +451,7 @@ impl Yoga {
 							item.node,
 							Size::new(AvailableSpace::Definite(width), AvailableSpace::MaxContent),
 							Size::new(Some(area_width), None),
+							external,
 						)
 						.height
 					})
@@ -446,7 +463,13 @@ impl Yoga {
 	/// Lays out one in-flow item in its grid area and aligns it there by
 	/// `justify_self` and `align_self`, stretching auto-sized axes to fill the
 	/// area. Returns the far corner of the item's border box.
-	fn place_grid_item(&mut self, index: usize, item: &GridItem, sized: &SizedGrid) -> Size<f32> {
+	fn place_grid_item(
+		&mut self,
+		index: usize,
+		item: &GridItem,
+		sized: &SizedGrid,
+		external: &mut crate::ExternalMeasure<'_>,
+	) -> Size<f32> {
 		let SizedGrid {
 			columns,
 			rows,
@@ -506,7 +529,7 @@ impl Yoga {
 			forced: Size::new(width, height),
 			percent_basis: Size::new(Some(area_width), Some(area_height)),
 		};
-		let size = self.layout_node(item.node, child_ctx, sized.mode);
+		let size = self.layout_node(item.node, child_ctx, sized.mode, external);
 
 		// Alignment inside the area for non-stretched axes.
 		let free_x = (area_width - margins.horizontal() - size.width).max(0.0);
@@ -551,7 +574,12 @@ impl Yoga {
 	/// Positions an out-of-flow child against the grid area its lines name,
 	/// with the padding box standing in for auto or missing lines. Returns the
 	/// far corner of the child's border box.
-	fn place_absolute_grid_child(&mut self, child: NodeId, sized: &SizedGrid) -> Size<f32> {
+	fn place_absolute_grid_child(
+		&mut self,
+		child: NodeId,
+		sized: &SizedGrid,
+		external: &mut crate::ExternalMeasure<'_>,
+	) -> Size<f32> {
 		let SizedGrid {
 			border,
 			border_box,
@@ -594,6 +622,7 @@ impl Yoga {
 			sized.style,
 			sized.grid,
 			sized.mode,
+			external,
 		);
 		let layout = &self.nodes[child.0].layout;
 		Size::new(layout.x + layout.width, layout.y + layout.height)
@@ -607,6 +636,7 @@ impl Yoga {
 		parent: &Style,
 		grid: &crate::GridStyle,
 		mode: RunMode,
+		external: &mut crate::ExternalMeasure<'_>,
 	) {
 		let style = self.shared_style(child);
 		let width = (bounds.width.end - bounds.width.start).max(0.0);
@@ -657,6 +687,7 @@ impl Yoga {
 				percent_basis: basis,
 			},
 			mode,
+			external,
 		);
 		let layout = &mut self.nodes[child.0].layout;
 		layout.order = 0;

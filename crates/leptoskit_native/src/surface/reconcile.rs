@@ -5,10 +5,8 @@ use leptoskit_yoga::NodeId;
 use leptoskit_yoga::Style;
 
 use super::HitArea;
-use super::MeasuredText;
 use super::NativeSurface;
 use super::ShadowNode;
-use super::has_native_chrome;
 use super::measured_content;
 use crate::backend::Mutation;
 use crate::backend::MutationList;
@@ -140,21 +138,16 @@ impl<B: NativeBackend> NativeSurface<B> {
 
 	/// Hands a reconciled batch to the backend, then lays out and pushes the
 	/// changed frames.
-	#[cfg_attr(
-		not(all(feature = "rive", not(target_arch = "wasm32"))),
-		expect(
-			clippy::needless_pass_by_value,
-			reason = "Rive synchronization consumes the batch when the feature is on"
-		)
-	)]
 	pub(super) fn apply_and_lay_out(&mut self, mutations: MutationList) {
 		#[cfg(all(feature = "rive", not(target_arch = "wasm32")))]
 		let mutations = self.sync_rive(mutations);
 		#[cfg(feature = "devtools")]
 		let source_start = std::time::Instant::now();
-		self.backend.apply(&mutations);
 		#[cfg(feature = "devtools")]
-		self.devtools.source(mutations.len(), source_start);
+		let mutation_count = mutations.len();
+		self.backend.apply_owned(mutations);
+		#[cfg(feature = "devtools")]
+		self.devtools.source(mutation_count, source_start);
 
 		self.commit_layout();
 	}
@@ -178,7 +171,7 @@ impl<B: NativeBackend> NativeSurface<B> {
 			gesture: None,
 			children: Vec::new(),
 			parent: None,
-			text_cell: None,
+			text_cache: None,
 			#[cfg(feature = "devtools")]
 			source: None,
 			#[cfg(feature = "devtools")]
@@ -325,15 +318,8 @@ impl<B: NativeBackend> NativeSurface<B> {
 		let kind = resolved.kind;
 		self.yoga.set_style(id, resolved.style);
 
-		if let Some(text) = measured_content(kind, &resolved.props) {
-			self.attach_text_measure(
-				id,
-				MeasuredText {
-					content: text.to_owned(),
-					style: super::measurement::measured_style(kind, &resolved.props),
-					native_chrome: has_native_chrome(kind, &resolved.props),
-				},
-			);
+		if measured_content(kind, &resolved.props).is_some() {
+			self.attach_text_measure(id, kind, &resolved.props);
 		}
 
 		let send_props = self.props_to_send(id, &resolved.props);
@@ -534,6 +520,8 @@ impl<B: NativeBackend> NativeSurface<B> {
 			let prev_inert = self.shadows[idx].is_inert();
 			let prev_clip = self.shadows[idx].props.clip == Some(true);
 			let prev_overlay = self.shadows[idx].is_open_overlay();
+			let content_changed = measured_content(resolved.kind, &self.shadows[idx].props)
+				!= measured_content(resolved.kind, &resolved.props);
 			let send_props = self.props_to_send(id, &resolved.props);
 			self.shadows[idx].props = resolved.props;
 
@@ -545,7 +533,7 @@ impl<B: NativeBackend> NativeSurface<B> {
 				self.mark_meta_dirty(id);
 			}
 
-			self.update_text_measure(id, resolved.kind, &send_props);
+			self.update_text_measure(id, resolved.kind, content_changed);
 			out.push(Mutation::UpdateProps {
 				id,
 				props: send_props,
@@ -633,8 +621,8 @@ impl<B: NativeBackend> NativeSurface<B> {
 		shadow.props = NativeProps::default();
 		self.yoga.set_style(id, Style::default());
 
-		if shadow.text_cell.take().is_some() {
-			self.yoga.set_measure_func(id, None);
+		if shadow.text_cache.take().is_some() {
+			self.yoga.set_measured(id, false);
 		}
 
 		self.frames[id.index()] = None;
