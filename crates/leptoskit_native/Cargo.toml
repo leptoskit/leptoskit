@@ -28,7 +28,6 @@ reactive_stores = { workspace = true }
 roxmltree = { workspace = true, optional = true }
 serde = { workspace = true, optional = true, features = ["derive"] }
 serde_json = { workspace = true, optional = true }
-sha2 = { workspace = true, optional = true }
 wasm-bindgen = { workspace = true, optional = true }
 web-sys = { workspace = true, optional = true, features = ["AddEventListenerOptions", "CssStyleDeclaration", "Document", "DomRect", "Element", "HtmlButtonElement", "HtmlDialogElement", "HtmlElement", "HtmlInputElement", "HtmlSelectElement", "HtmlTextAreaElement", "KeyboardEvent", "MediaQueryList", "Navigator", "NodeList", "ScrollBehavior", "ScrollIntoViewOptions", "ScrollLogicalPosition", "ScrollToOptions", "Window"] }
 
@@ -62,7 +61,7 @@ rive = ["leptoskit_rive/native", "leptoskit_rive/web"]
 guest = ["serde", "dep:serde_json", "dep:futures", "leptoskit_plugin_linking?/guest"]
 serde = ["dep:serde", "dep:serde_json", "leptoskit_yoga/serde", "leptoskit_rive/serde", "leptoskit_animation/serde"]
 svg = ["dep:roxmltree"]
-web = ["dep:leptos", "dep:sha2", "dep:wasm-bindgen", "dep:web-sys", "leptoskit_log/web"]
+web = ["dep:leptos", "dep:wasm-bindgen", "dep:web-sys", "leptoskit_log/web"]
 
 [lints]
 workspace = true

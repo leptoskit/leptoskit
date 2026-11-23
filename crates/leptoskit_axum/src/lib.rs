@@ -238,7 +238,14 @@ mod spa_fallback {
 			let dir = self.dir.clone();
 			let client_route = is_client_route(&request);
 			let uri = request.uri().clone();
-			Box::pin(async move { Ok(spa_response(&dir, client_route, uri).await) })
+			let accept_encoding = request
+				.headers()
+				.get(header::ACCEPT_ENCODING)
+				.and_then(|value| value.to_str().ok())
+				.map(str::to_owned);
+			Box::pin(async move {
+				Ok(spa_response(&dir, client_route, uri, accept_encoding.as_deref()).await)
+			})
 		}
 	}
 
@@ -252,20 +259,80 @@ mod spa_fallback {
 		navigates && !last_segment.contains('.')
 	}
 
-	async fn spa_response(dir: &Path, client_route: bool, uri: Uri) -> Response {
+	/// Parses `Accept-Encoding` and reports whether `encoding` is accepted
+	/// (i.e. present and not explicitly rejected with `q=0`).
+	fn accepts_encoding(header_value: &str, encoding: &str) -> bool {
+		for item in header_value.split(',') {
+			let mut parts = item.split(';');
+			let token = parts.next().unwrap_or_default().trim();
+
+			if !token.eq_ignore_ascii_case(encoding) {
+				continue;
+			}
+
+			let rejected = parts.any(|param| {
+				let Some((key, value)) = param.split_once('=') else {
+					return false;
+				};
+				key.trim().eq_ignore_ascii_case("q")
+					&& value.trim().parse::<f32>().is_ok_and(|q| q <= 0.0)
+			});
+
+			return !rejected;
+		}
+
+		false
+	}
+
+	async fn spa_response(
+		dir: &Path,
+		client_route: bool,
+		uri: Uri,
+		accept_encoding: Option<&str>,
+	) -> Response {
 		let index = dir.join("index.html");
 
 		if !client_route || !index.is_file() {
 			return not_found(uri).await;
 		}
 
-		match tokio::fs::read(&index).await {
+		// Prefer precompressed brotli, then gzip, matching ServeDir's
+		// negotiation so SPA client routes pay the same small payload cost as
+		// direct hits on `/`.
+		let (path, encoding) = match accept_encoding {
+			Some(accept)
+				if accepts_encoding(accept, "br") && dir.join("index.html.br").is_file() =>
+			{
+				(
+					dir.join("index.html.br"),
+					Some(HeaderValue::from_static("br")),
+				)
+			}
+			Some(accept)
+				if accepts_encoding(accept, "gzip") && dir.join("index.html.gz").is_file() =>
+			{
+				(
+					dir.join("index.html.gz"),
+					Some(HeaderValue::from_static("gzip")),
+				)
+			}
+			_ => (index, None),
+		};
+
+		match tokio::fs::read(&path).await {
 			Ok(body) => {
 				let mut response = Response::new(Body::from(body));
 				response.headers_mut().insert(
 					header::CONTENT_TYPE,
 					HeaderValue::from_static("text/html; charset=utf-8"),
 				);
+
+				if let Some(encoding) = encoding {
+					response
+						.headers_mut()
+						.insert(header::CONTENT_ENCODING, encoding);
+				}
+
 				response
 			}
 			Err(_) => {
@@ -275,6 +342,42 @@ mod spa_fallback {
 				)
 					.into_response()
 			}
+		}
+	}
+
+	#[cfg(test)]
+	mod tests {
+		use super::*;
+
+		#[test]
+		fn accept_encoding_negotiation_respects_q_zero() {
+			assert!(accepts_encoding("gzip, deflate, br", "br"));
+			assert!(accepts_encoding("gzip, deflate, br", "gzip"));
+			assert!(accepts_encoding("BR;q=0.9, gzip;q=0.5", "br"));
+			assert!(!accepts_encoding("br;q=0, gzip", "br"));
+			assert!(accepts_encoding("br;q=0, gzip", "gzip"));
+			assert!(!accepts_encoding("gzip;q=0.000", "gzip"));
+		}
+
+		#[tokio::test]
+		async fn spa_fallback_serves_precompressed_variants_when_present() {
+			let dir =
+				std::env::temp_dir().join(format!("leptoskit-axum-spa-{}", std::process::id()));
+			let _ = std::fs::remove_dir_all(&dir);
+			std::fs::create_dir_all(&dir).unwrap();
+			std::fs::write(dir.join("index.html"), b"<html>raw</html>").unwrap();
+			std::fs::write(dir.join("index.html.gz"), b"gz-bytes").unwrap();
+			std::fs::write(dir.join("index.html.br"), b"br-bytes").unwrap();
+
+			let uri: Uri = "/settings/profile".parse().unwrap();
+			let br = spa_response(&dir, true, uri.clone(), Some("gzip, br")).await;
+			assert_eq!(br.headers().get(header::CONTENT_ENCODING).unwrap(), "br");
+			let gz = spa_response(&dir, true, uri.clone(), Some("gzip, br;q=0")).await;
+			assert_eq!(gz.headers().get(header::CONTENT_ENCODING).unwrap(), "gzip");
+			let raw = spa_response(&dir, true, uri, None).await;
+			assert!(raw.headers().get(header::CONTENT_ENCODING).is_none());
+
+			let _ = std::fs::remove_dir_all(&dir);
 		}
 	}
 }

@@ -11,9 +11,6 @@
 use std::fmt::Write;
 use std::time::Duration;
 
-use sha2::Digest;
-use sha2::Sha256;
-
 use crate::motion::Easing;
 use crate::motion::Motion;
 use crate::motion::MotionProps;
@@ -191,12 +188,8 @@ fn keyframes(motion: &Motion) -> Option<(String, String)> {
 		}
 	}
 
-	let digest = Sha256::digest(body.as_bytes());
-	let mut name = String::from("lk-m-");
-
-	for byte in &digest[..6] {
-		write!(name, "{byte:02x}").expect("write to String");
-	}
+	let digest = super::scope_hash(body.as_bytes());
+	let mut name = format!("lk-m-{:012x}", digest >> 16);
 
 	if let Some(key) = motion.replay_key() {
 		write!(name, "-{key}").expect("write to String");

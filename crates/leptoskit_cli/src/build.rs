@@ -25,6 +25,7 @@
 //! build produced is recorded for `leptoskit serve`.
 
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 use std::io::BufReader;
 use std::path::Path;
 use std::path::PathBuf;
@@ -335,6 +336,11 @@ fn run_with(
 	let mut sizes = BTreeMap::new();
 
 	if platform == Platform::Web {
+		inject_web_preloads(
+			out_dir.as_std_path(),
+			client.as_ref().map(|client| client.lib_name.as_str()),
+		)?;
+
 		if release && config.bundle.precompress {
 			let mut cache =
 				PrecompressCache::load(&metadata.target_directory, out_dir.as_std_path());
@@ -1387,5 +1393,134 @@ mod tests {
 
 		let no_hub = devtools::guest_with_hub(options, Some(&app), false, None);
 		assert_eq!(no_hub.features, [] as [String; 0]);
+	}
+}
+
+/// Injects `<link rel="modulepreload">` for the wasm-bindgen JS glue and
+/// `<link rel="preload" as="fetch" type="application/wasm">` for the Wasm
+/// binary into `out_dir/index.html` so browsers fetch both in parallel during
+/// HTML parsing instead of waiting for JS execution to discover the `.wasm`.
+fn inject_web_preloads(out_dir: &Path, lib_name: Option<&str>) -> Result<()> {
+	let Some(name) = lib_name else {
+		return Ok(());
+	};
+	let index = out_dir.join("index.html");
+
+	if !index.is_file() {
+		return Ok(());
+	}
+
+	let pkg = out_dir.join("pkg");
+	let has_js = pkg.join(format!("{name}.js")).is_file();
+	let has_wasm = pkg.join(format!("{name}_bg.wasm")).is_file();
+
+	if !has_js && !has_wasm {
+		return Ok(());
+	}
+
+	let html =
+		std::fs::read_to_string(&index).with_context(|| format!("read {}", index.display()))?;
+	let updated = inject_web_preloads_html(&html, name, has_js, has_wasm);
+
+	if updated != html {
+		std::fs::write(&index, updated).with_context(|| format!("write {}", index.display()))?;
+	}
+
+	Ok(())
+}
+
+/// Pure HTML rewrite for [`inject_web_preloads`]. Preserves `./pkg/` vs `/pkg/`
+/// prefix, skips resources already preloaded, and is idempotent.
+fn inject_web_preloads_html(html: &str, lib_name: &str, has_js: bool, has_wasm: bool) -> String {
+	let lower = html.to_ascii_lowercase();
+	let Some(head_end) = lower.find("</head>") else {
+		return html.to_owned();
+	};
+
+	let js_file = format!("pkg/{lib_name}.js");
+	let wasm_file = format!("pkg/{lib_name}_bg.wasm");
+	let prefix = if html.contains(&format!("./{js_file}")) {
+		"./"
+	} else {
+		"/"
+	};
+
+	let mut tags = String::new();
+
+	if has_js && !has_preload_link(&lower, &js_file.to_ascii_lowercase()) {
+		let _ = write!(
+			tags,
+			"<link rel=\"modulepreload\" href=\"{prefix}{js_file}\" />"
+		);
+	}
+
+	if has_wasm && !has_preload_link(&lower, &wasm_file.to_ascii_lowercase()) {
+		let _ = write!(
+			tags,
+			"<link rel=\"preload\" href=\"{prefix}{wasm_file}\" as=\"fetch\" \
+			 type=\"application/wasm\" crossorigin />"
+		);
+	}
+
+	if tags.is_empty() {
+		return html.to_owned();
+	}
+
+	let mut out = String::with_capacity(html.len() + tags.len() + 1);
+	out.push_str(&html[..head_end]);
+	out.push_str(&tags);
+	out.push('\n');
+	out.push_str(&html[head_end..]);
+	out
+}
+
+/// Reports whether `lower_html` already has a `<link ...>` preload hint for
+/// `needle` (both lowercased).
+fn has_preload_link(lower_html: &str, needle: &str) -> bool {
+	let mut rest = lower_html;
+
+	while let Some(pos) = rest.find("<link") {
+		rest = &rest[pos + 5..];
+		let Some(end) = rest.find('>') else {
+			break;
+		};
+		let tag = &rest[..end];
+
+		if tag.contains("preload") && tag.contains(needle) {
+			return true;
+		}
+
+		rest = &rest[end + 1..];
+	}
+
+	false
+}
+
+#[cfg(test)]
+mod preload_tests {
+	use super::*;
+
+	#[test]
+	fn injects_js_and_wasm_preloads_before_head_close_idempotently() {
+		let html = "<!doctype html><html><head><title>App</title></head><body><script \
+		            type=\"module\">import init from \"/pkg/app.js\";</script></body></html>";
+		let once = inject_web_preloads_html(html, "app", true, true);
+		assert!(once.contains("<link rel=\"modulepreload\" href=\"/pkg/app.js\" />"));
+		assert!(once.contains(
+			"<link rel=\"preload\" href=\"/pkg/app_bg.wasm\" as=\"fetch\" \
+			 type=\"application/wasm\" crossorigin />"
+		));
+		assert!(once.find("modulepreload").unwrap() < once.find("</head>").unwrap());
+		assert_eq!(inject_web_preloads_html(&once, "app", true, true), once);
+	}
+
+	#[test]
+	fn preserves_relative_pkg_prefix_and_existing_preloads() {
+		let html = "<html><head><link rel=\"modulepreload\" href=\"./pkg/app.js\" \
+		            /></head><body><script type=\"module\" \
+		            src=\"./pkg/app.js\"></script></body></html>";
+		let updated = inject_web_preloads_html(html, "app", true, true);
+		assert_eq!(updated.matches("modulepreload").count(), 1);
+		assert!(updated.contains("href=\"./pkg/app_bg.wasm\""));
 	}
 }
