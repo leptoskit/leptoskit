@@ -281,8 +281,8 @@ impl<B: NativeBackend> NativeSurface<B> {
 			);
 		}
 
-		for (offset, child) in source.children[old_len..new_len].iter().enumerate() {
-			let index = old_len + offset;
+		for (offset, child) in source.children[common..new_len].iter().enumerate() {
+			let index = common + offset;
 			let child_held = match held {
 				Some([first, rest @ ..]) if *first == index => Some(rest),
 				_ => None,
