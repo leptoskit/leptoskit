@@ -42,9 +42,30 @@ thread_local! {
 	/// not subscribe the screen: the refresh visits bindings on its own, and a
 	/// subscription here would rebuild the screen to change a label.
 	static GUEST_RENDER: Cell<u32> = const { Cell::new(0) };
+	/// How many render scopes that will immediately evaluate `For`/`Show`
+	/// regions themselves are on the stack, so `region_element` skips its
+	/// eager fallback evaluation and avoids building every row twice.
+	static DEFER_REGIONS: Cell<u32> = const { Cell::new(0) };
 }
 
-/// Runs `build` as a guest render, so binding reads stay untracked.
+/// Runs `build` while deferring eager `For`/`Show` region evaluation.
+///
+/// Renderers that evaluate `element.region` themselves (the native guest tree
+/// and the web renderer) wrap tree construction in this scope so each region
+/// builds its children once instead of twice.
+#[cfg_attr(
+	not(feature = "web"),
+	allow(dead_code, reason = "only the web renderer calls this directly")
+)]
+pub(crate) fn defer_regions_scope<T>(build: impl FnOnce() -> T) -> T {
+	DEFER_REGIONS.with(|depth| depth.set(depth.get().saturating_add(1)));
+	let value = build();
+	DEFER_REGIONS.with(|depth| depth.set(depth.get().saturating_sub(1)));
+	value
+}
+
+/// Runs `build` as a guest render, so binding reads stay untracked and regions
+/// defer evaluation until the guest tree subscribes them.
 ///
 /// Only the guest runtime calls it. A non-guest build has no guest modules, so
 /// the function looks unused there.
@@ -54,7 +75,9 @@ thread_local! {
 )]
 pub(crate) fn guest_render_scope<T>(build: impl FnOnce() -> T) -> T {
 	GUEST_RENDER.with(|depth| depth.set(depth.get().saturating_add(1)));
+	DEFER_REGIONS.with(|depth| depth.set(depth.get().saturating_add(1)));
 	let value = build();
+	DEFER_REGIONS.with(|depth| depth.set(depth.get().saturating_sub(1)));
 	GUEST_RENDER.with(|depth| depth.set(depth.get().saturating_sub(1)));
 	value
 }
@@ -158,18 +181,23 @@ impl Region {
 
 /// A stable identity for one child of [`For`].
 pub(crate) fn hash_key<K: Hash + ?Sized>(key: &K) -> u64 {
-	let mut hasher = std::collections::hash_map::DefaultHasher::new();
+	let mut hasher = crate::hash::FastHasher::default();
 	key.hash(&mut hasher);
 	hasher.finish()
 }
 
-/// An element whose children come from `render`, filled once up front so a
-/// renderer that never re-runs regions still shows the first value.
+/// An element whose children come from `render`, filled once up front when
+/// outside a deferring renderer so direct inspection still sees the first
+/// value.
 fn region_element(render: impl Fn() -> Vec<(u64, Element)> + Send + Sync + 'static) -> Element {
 	let region = Region::new(render);
 	let mut element = Element::view();
-	let initial = reactive_graph::graph::untrack(|| region.render());
-	element.children = initial.into_iter().map(|(_, child)| child).collect();
+
+	if DEFER_REGIONS.with(Cell::get) == 0 {
+		let initial = reactive_graph::graph::untrack(|| region.render());
+		element.children = initial.into_iter().map(|(_, child)| child).collect();
+	}
+
 	element.region = Some(region);
 	element
 }

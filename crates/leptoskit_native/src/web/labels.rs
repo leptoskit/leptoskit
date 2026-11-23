@@ -57,27 +57,6 @@ impl Labels {
 			pending.extend(&element.children);
 		}
 	}
-
-	/// These labels and the ones `elements` declare, when they declare any.
-	pub(super) fn with(&self, elements: &[Element]) -> Option<Self> {
-		let mut found = Self::default();
-		found.collect(elements);
-
-		if found.fields.is_empty() {
-			return None;
-		}
-
-		let mut all = self.clone();
-
-		for (label, field) in found.fields {
-			all.fields
-				.entry(label)
-				.and_modify(|target| *target = None)
-				.or_insert(field);
-		}
-
-		Some(all)
-	}
 }
 
 /// The label and field ids of a field that one element names: a field with

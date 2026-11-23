@@ -273,15 +273,52 @@ fn prop_keys() -> &'static [&'static str] {
 	keys
 }
 
-/// The guest's own encoding of a node, as `Tree` sends it.
+/// The guest's own binary encoding of a node, as `Tree` sends it.
 fn encode(props: &NativeProps, style: &leptoskit_yoga::Style, class: &str) -> Vec<u8> {
-	serde_json::to_vec(&super::WireNode {
+	let mut out = Vec::new();
+	wire::encode_binary_into(
+		&mut out,
+		props,
+		super::sent_style(style),
+		class,
+		false,
+		None,
+		#[cfg(feature = "devtools")]
+		Some("src/oath.rs:12:5"),
+		#[cfg(not(feature = "devtools"))]
+		None,
+		#[cfg(feature = "devtools")]
+		Some("Oath"),
+		#[cfg(not(feature = "devtools"))]
+		None,
+	);
+	out
+}
+
+/// JSON encoding of a node for host JSON compatibility tests.
+fn encode_json(props: &NativeProps, style: &leptoskit_yoga::Style, class: &str) -> Vec<u8> {
+	#[derive(serde::Serialize)]
+	struct JsonWire<'a> {
+		#[serde(flatten)]
+		props: &'a NativeProps,
+		#[serde(skip_serializing_if = "Option::is_none")]
+		style: Option<&'a leptoskit_yoga::Style>,
+		#[serde(skip_serializing_if = "str::is_empty")]
+		class: &'a str,
+		#[cfg(feature = "devtools")]
+		#[serde(rename = "source_location", skip_serializing_if = "Option::is_none")]
+		source: Option<&'static str>,
+		#[cfg(feature = "devtools")]
+		#[serde(skip_serializing_if = "Option::is_none")]
+		component: Option<&'static str>,
+	}
+
+	serde_json::to_vec(&JsonWire {
 		props,
 		style: super::sent_style(style),
 		class,
-		rive_inputs: None,
 		#[cfg(feature = "devtools")]
-		source: Some("src/oath.rs:12:5".into()),
+		source: Some("src/oath.rs:12:5"),
 		#[cfg(feature = "devtools")]
 		component: Some("Oath"),
 	})
@@ -305,29 +342,33 @@ fn every_prop_crosses_from_guest_to_host() {
 		flex_grow: 1.5,
 		..leptoskit_yoga::Style::default()
 	};
-	let bytes = encode(&props, &style, "p-2 rounded-lg");
-	let json = String::from_utf8_lossy(&bytes);
-	let node = WireNode::from_json(&bytes)
-		.unwrap_or_else(|error| panic!("the host can't read {json}: {error}"));
 
-	assert_eq!(node.props, props, "the props changed on the way: {json}");
-	assert_eq!(node.style, style);
-	assert_eq!(node.class, "p-2 rounded-lg");
-	#[cfg(feature = "devtools")]
-	{
-		assert_eq!(node.source.as_deref(), Some("src/oath.rs:12:5"));
-		assert_eq!(node.component.as_deref(), Some("Oath"));
+	for (label, bytes) in [
+		("binary", encode(&props, &style, "p-2 rounded-lg")),
+		("json", encode_json(&props, &style, "p-2 rounded-lg")),
+	] {
+		let node = WireNode::from_wire(&bytes)
+			.unwrap_or_else(|error| panic!("the host can't read {label}: {error}"));
+
+		assert_eq!(node.props, props, "the props changed on the way ({label})");
+		assert_eq!(node.style, style);
+		assert_eq!(node.class, "p-2 rounded-lg");
+		#[cfg(feature = "devtools")]
+		{
+			assert_eq!(node.source.as_deref(), Some("src/oath.rs:12:5"));
+			assert_eq!(node.component.as_deref(), Some("Oath"));
+		}
+		#[cfg(not(feature = "devtools"))]
+		assert_eq!(
+			node.source, None,
+			"an image source is never a DevTools location"
+		);
 	}
-	#[cfg(not(feature = "devtools"))]
-	assert_eq!(
-		node.source, None,
-		"an image source is never a DevTools location"
-	);
 }
 
 #[test]
 fn each_prop_crosses_alone() {
-	let bytes = encode(&every_prop(), &leptoskit_yoga::Style::default(), "");
+	let bytes = encode_json(&every_prop(), &leptoskit_yoga::Style::default(), "");
 	let serde_json::Value::Object(sent) = serde_json::from_slice(&bytes).expect("a JSON object")
 	else {
 		panic!("the guest sends an object");
@@ -410,15 +451,11 @@ fn every_kind_crosses_from_guest_to_host() {
 		}
 
 		let (code, bytes, props) = sent(common_props(kind));
-		let json = String::from_utf8_lossy(&bytes);
-		let node = WireNode::from_json(&bytes)
-			.unwrap_or_else(|error| panic!("{kind}: the host can't read {json}: {error}"));
+		let node = WireNode::from_wire(&bytes)
+			.unwrap_or_else(|error| panic!("{kind}: the host can't read wire bytes: {error}"));
 
 		assert_eq!(wire::kind(code), Some(kind), "{kind}'s code reads back");
-		assert_eq!(
-			node.props, props,
-			"{kind}: the props changed on the way: {json}"
-		);
+		assert_eq!(node.props, props, "{kind}: the props changed on the way");
 		assert_eq!(node.class, "p-2 rounded-lg", "{kind}'s classes");
 	}
 }

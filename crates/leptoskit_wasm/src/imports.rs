@@ -132,7 +132,7 @@ fn node_set_props(
 			.ok_or_else(|| host_trap(format!("props range {start}+{len} is out of bounds")))?
 	};
 
-	let mut wire = WireNode::from_json(bytes)
+	let mut wire = WireNode::from_wire(bytes)
 		.map_err(|error| props_error(id, caller.data().kinds.get(&id).copied(), bytes, &error))?;
 	let mut rive_bytes = if wire.props.rive.is_some() { len } else { 0 };
 	let mut retained_bytes = len;
