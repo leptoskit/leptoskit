@@ -621,7 +621,7 @@ mod tests {
 				style.padding.left = Dimension::Percent(0.5);
 				style.overflow = Overflow::Scroll;
 				style.aspect_ratio = Some(1.5);
-				style.grid = Some(GridStyle::default());
+				style.grid = Some(Box::default());
 			})
 			.background(Color::rgba(1, 2, 3, 255))
 			.corner_radius(8.0)

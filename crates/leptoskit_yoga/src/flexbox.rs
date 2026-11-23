@@ -8,6 +8,10 @@
 //! `Yoga::layout_flex` runs the steps of the spec's layout algorithm (§9) in
 //! order, each in its own function whose documentation names the step.
 
+use std::ops::Deref;
+use std::ops::DerefMut;
+use std::ops::Range;
+
 use crate::AvailableSpace;
 use crate::BoxMetrics;
 use crate::Direction;
@@ -15,15 +19,15 @@ use crate::Display;
 use crate::Edges;
 use crate::Layout;
 use crate::NodeId;
+use crate::PositionType;
 use crate::Rect;
 use crate::RunMode;
 use crate::Size;
 use crate::Style;
 use crate::Yoga;
-use crate::bounded_by_max;
-use crate::clamp_size;
+use crate::bounded_by_max_with_metrics;
 use crate::content_available;
-use crate::definite_border_box;
+use crate::definite_border_box_with_metrics;
 use crate::inner_definite;
 use crate::relative_offset;
 use crate::resolve_margins;
@@ -62,14 +66,56 @@ struct FlexItem {
 	violation: f32,
 }
 
-/// A wrapped line of items.
-#[derive(Default)]
+/// A wrapped line of contiguous items in `items[start..end]`.
+#[derive(Clone, Copy, Default)]
 struct FlexLine {
-	items: Vec<usize>,
+	start: usize,
+	end: usize,
 	/// The line's cross size once measured.
 	cross: f32,
 	/// The line's cross offset inside the container's content box.
 	cross_offset: f32,
+}
+
+impl FlexLine {
+	#[inline]
+	fn range(&self) -> Range<usize> {
+		self.start..self.end
+	}
+
+	#[inline]
+	fn len(&self) -> usize {
+		self.end - self.start
+	}
+}
+
+/// Inline storage for the common single-line (`NoWrap`) case, spilling to a
+/// `Vec` only when wrapping produces multiple lines.
+enum FlexLines {
+	Single([FlexLine; 1]),
+	Many(Vec<FlexLine>),
+}
+
+impl Deref for FlexLines {
+	type Target = [FlexLine];
+
+	#[inline]
+	fn deref(&self) -> &[FlexLine] {
+		match self {
+			Self::Single(line) => line,
+			Self::Many(lines) => lines,
+		}
+	}
+}
+
+impl DerefMut for FlexLines {
+	#[inline]
+	fn deref_mut(&mut self) -> &mut [FlexLine] {
+		match self {
+			Self::Single(line) => line,
+			Self::Many(lines) => lines,
+		}
+	}
 }
 
 /// How a flex container's main and cross axes map onto physical directions.
@@ -268,6 +314,7 @@ impl Yoga {
 		let pass = self.pass;
 		let entry = &mut self.nodes[node.0];
 		entry.layout_cache.insert(ctx, size, mode, pass);
+		entry.subtree_pass = pass;
 		entry.dirty = false;
 		size
 	}
@@ -282,14 +329,11 @@ impl Yoga {
 			return Size::new(0.0, 0.0);
 		}
 
-		let basis = ctx.percent_basis;
-		let metrics = BoxMetrics::new(&style, basis);
-		let border = metrics.border;
-		let inner_padding = metrics.inner_padding;
+		let metrics = BoxMetrics::new(&style, ctx.percent_basis);
 
 		match style.display {
-			Display::Grid => self.layout_grid(node, &style, ctx, inner_padding, border, mode),
-			_ => self.layout_flex(node, &style, ctx, inner_padding, border, mode),
+			Display::Grid => self.layout_grid(node, &style, ctx, &metrics, mode),
+			_ => self.layout_flex(node, &style, ctx, &metrics, mode),
 		}
 	}
 
@@ -322,36 +366,48 @@ impl Yoga {
 		node: NodeId,
 		style: &Style,
 		ctx: crate::SizingCtx,
-		inner_padding: Edges,
-		border: Edges,
+		metrics: &BoxMetrics,
 		mode: RunMode,
 	) -> Size<f32> {
-		let axes = FlexAxes::new(style);
-		let (flow, absolute) = self.layout_children(node);
+		let inner_padding = metrics.inner_padding;
+		let border = metrics.border;
 
 		// The container's own definite size, when it has one, bounds its
 		// content box; children resolve percentages against that content box
 		// and indefinite axes leave their percentages unresolved.
-		let definite_border = definite_border_box(style, &ctx);
+		let definite_border = definite_border_box_with_metrics(style, &ctx, metrics);
 		let child_basis = inner_definite(definite_border, inner_padding);
 		let inner_available = content_available(
 			child_basis,
-			bounded_by_max(style, ctx.available, ctx.percent_basis),
+			bounded_by_max_with_metrics(ctx.available, metrics),
 			inner_padding,
 		);
 
-		// Leaf nodes defer to their measurement function.
-		if self.nodes[node.0].measure.is_some() && flow.is_empty() && absolute.is_empty() {
-			return self.layout_measured_leaf(
-				node,
-				style,
-				ctx.percent_basis,
-				definite_border,
-				inner_padding,
-				inner_available,
-			);
+		// Fast path for leaf nodes: avoid allocating any child or line vectors.
+		if self.nodes[node.0].children.is_empty() {
+			if self.nodes[node.0].measure.is_some() {
+				return self.layout_measured_leaf(
+					node,
+					metrics,
+					definite_border,
+					inner_padding,
+					inner_available,
+				);
+			}
+
+			let size = metrics.clamp(Size::new(
+				definite_border.width.unwrap_or(inner_padding.horizontal()),
+				definite_border.height.unwrap_or(inner_padding.vertical()),
+			));
+			let layout = &mut self.nodes[node.0].layout;
+			layout.width = size.width;
+			layout.height = size.height;
+			layout.content_width = size.width;
+			layout.content_height = size.height;
+			return size;
 		}
 
+		let axes = FlexAxes::new(style);
 		// Percentage gaps resolve against the matching axis of the content box.
 		// Column gaps separate items horizontally and row gaps vertically.
 		let gaps = Size::new(
@@ -369,38 +425,70 @@ impl Yoga {
 			mode,
 		};
 
-		let mut items: Vec<FlexItem> = flow
-			.iter()
-			.map(|&child| self.flex_item(child, &container))
-			.collect();
+		// Fast path when every direct child is a normal in-flow box: build
+		// `FlexItem`s directly without allocating an intermediate `flow` Vec.
+		let all_in_flow = self.nodes[node.0].children.iter().all(|&child| {
+			let child_style = &self.nodes[child.0].style;
+			!matches!(child_style.display, Display::None | Display::Contents)
+				&& !matches!(
+					child_style.position,
+					PositionType::Absolute | PositionType::Fixed
+				)
+		});
+
+		let (mut items, absolute) = if all_in_flow {
+			let count = self.nodes[node.0].children.len();
+			let mut items = Vec::with_capacity(count);
+
+			for index in 0..count {
+				let child = self.nodes[node.0].children[index];
+				items.push(self.flex_item(child, &container));
+			}
+
+			(items, Vec::new())
+		} else {
+			let (flow, absolute) = self.layout_children(node);
+
+			// Measured leaves whose only children are `display: none`.
+			if self.nodes[node.0].measure.is_some() && flow.is_empty() && absolute.is_empty() {
+				return self.layout_measured_leaf(
+					node,
+					metrics,
+					definite_border,
+					inner_padding,
+					inner_available,
+				);
+			}
+
+			let items: Vec<FlexItem> = flow
+				.iter()
+				.map(|&child| self.flex_item(child, &container))
+				.collect();
+			(items, absolute)
+		};
+
 		let mut lines = collect_flex_lines(&items, &container);
 		// §9.7 resolves flexible lengths line by line, against a definite main
 		// size only.
 		if let Some(limit) = axes.main(inner_available).definite() {
-			for line in &lines {
-				let gaps = container.item_gap * line.items.len().saturating_sub(1) as f32;
+			for line in lines.iter() {
+				let gaps = container.item_gap * line.len().saturating_sub(1) as f32;
 				resolve_flexible_lengths(&mut items, line, limit - gaps, axes.is_row);
 			}
 		}
 
 		let definite_cross = axes.cross(definite_border).is_some();
 		self.measure_cross_sizes(&mut items, &mut lines, &container, definite_cross);
-		let placement = size_flex_container(
-			&items,
-			&lines,
-			&container,
-			definite_border,
-			ctx.percent_basis,
-		);
+		let placement = size_flex_container(&items, &lines, &container, definite_border, metrics);
 		align_flex_lines(&mut lines, &container, placement.inner_cross);
 
 		let mut content_max_width = 0.0f32;
 		let mut content_max_height = 0.0f32;
 
-		for line in &lines {
+		for line in lines.iter() {
 			let mut cursor = self.main_cursor(line, &items, &container, placement.inner_main);
 
-			for &index in &line.items {
+			for index in line.range() {
 				let corner = self.place_flex_item(
 					index,
 					&items[index],
@@ -441,22 +529,20 @@ impl Yoga {
 	fn layout_measured_leaf(
 		&mut self,
 		node: NodeId,
-		style: &Style,
-		percent_basis: Size<Option<f32>>,
+		metrics: &BoxMetrics,
 		definite_border: Size<Option<f32>>,
 		inner_padding: Edges,
 		inner_available: Size<AvailableSpace>,
 	) -> Size<f32> {
 		let measured = self.measure(node, inner_available);
-		let size = Size::new(
+		let size = metrics.clamp(Size::new(
 			definite_border
 				.width
 				.unwrap_or(measured.width + inner_padding.horizontal()),
 			definite_border
 				.height
 				.unwrap_or(measured.height + inner_padding.vertical()),
-		);
-		let size = clamp_size(style, size, percent_basis);
+		));
 		let layout = &mut self.nodes[node.0].layout;
 		layout.width = size.width;
 		layout.height = size.height;
@@ -592,7 +678,7 @@ impl Yoga {
 		for line in lines {
 			let mut line_cross = 0.0f32;
 
-			for &index in &line.items {
+			for index in line.range() {
 				if definite_cross
 					&& single_line
 					&& self.stretches_unmeasured(&items[index], container)
@@ -692,7 +778,7 @@ impl Yoga {
 
 		let mut auto_margins = 0usize;
 
-		for &index in &line.items {
+		for index in line.range() {
 			auto_margins += auto_margin_count(&self.style(items[index].node).margin, is_row);
 		}
 		let auto_margin = if auto_margins > 0 && free_main > 0.0 {
@@ -701,7 +787,7 @@ impl Yoga {
 			0.0
 		};
 
-		let count = line.items.len();
+		let count = line.len();
 		let justify = if auto_margins > 0 {
 			JustifyContent::FlexStart
 		} else {
@@ -900,21 +986,35 @@ impl Yoga {
 /// CSS Flexbox §9.3 step 5 ("collect flex items into flex lines"). Wrapping
 /// requires a definite main size, and an item wider than a fresh line stays on
 /// that line alone.
-fn collect_flex_lines(items: &[FlexItem], container: &FlexContainer) -> Vec<FlexLine> {
+fn collect_flex_lines(items: &[FlexItem], container: &FlexContainer) -> FlexLines {
 	let wraps = container.style.flex_wrap != FlexWrap::NoWrap;
 	let definite_inner_main = container.axes.main(container.inner_available).definite();
+
+	if !wraps || definite_inner_main.is_none() {
+		return FlexLines::Single([FlexLine {
+			start: 0,
+			end: items.len(),
+			cross: 0.0,
+			cross_offset: 0.0,
+		}]);
+	}
+
+	let limit = definite_inner_main.expect("checked above");
 	let mut lines = vec![FlexLine::default()];
 	let mut used_on_line = 0.0f32;
 	let mut count_on_line = 0usize;
 
 	for (index, item) in items.iter().enumerate() {
-		let fits = !wraps
-			|| count_on_line == 0
-			|| !matches!(definite_inner_main, Some(limit)
-				if used_on_line + container.item_gap + item.outer_base > limit + EPSILON);
+		let fits = count_on_line == 0
+			|| used_on_line + container.item_gap + item.outer_base <= limit + EPSILON;
 
 		if !fits {
-			lines.push(FlexLine::default());
+			lines.push(FlexLine {
+				start: index,
+				end: index,
+				cross: 0.0,
+				cross_offset: 0.0,
+			});
 			used_on_line = 0.0;
 			count_on_line = 0;
 		}
@@ -929,14 +1029,10 @@ fn collect_flex_lines(items: &[FlexItem], container: &FlexContainer) -> Vec<Flex
 
 		used_on_line += gap_before + item.outer_base;
 		count_on_line += 1;
-		lines
-			.last_mut()
-			.expect("a line always exists")
-			.items
-			.push(index);
+		lines.last_mut().expect("a line always exists").end = index + 1;
 	}
 
-	lines
+	FlexLines::Many(lines)
 }
 
 /// Sizes the container on each axis from its definite size or, on an
@@ -951,7 +1047,7 @@ fn size_flex_container(
 	lines: &[FlexLine],
 	container: &FlexContainer,
 	definite_border: Size<Option<f32>>,
-	percent_basis: Size<Option<f32>>,
+	metrics: &BoxMetrics,
 ) -> FlexPlacement {
 	let axes = container.axes;
 	let is_row = axes.is_row;
@@ -988,12 +1084,10 @@ fn size_flex_container(
 		)
 	};
 
-	let border_box = Size::new(
+	let border_box = metrics.clamp(Size::new(
 		definite_border.width.unwrap_or(content_width),
 		definite_border.height.unwrap_or(content_height),
-	);
-
-	let border_box = clamp_size(container.style, border_box, percent_basis);
+	));
 	let inner_main = (axes.main(border_box) - main_borders).max(0.0);
 	let inner_cross = (axes.cross(border_box) - cross_borders).max(0.0);
 	FlexPlacement {
@@ -1032,11 +1126,11 @@ fn align_flex_lines(lines: &mut [FlexLine], container: &FlexContainer, inner_cro
 
 /// The main-axis size of a line's items, margins and gaps included.
 fn line_outer_main(line: &FlexLine, items: &[FlexItem], item_gap: f32, is_row: bool) -> f32 {
-	line.items
+	items[line.range()]
 		.iter()
-		.map(|&index| items[index].inner_main + main_margins(&items[index].margins, is_row))
+		.map(|item| item.inner_main + main_margins(&item.margins, is_row))
 		.sum::<f32>()
-		+ item_gap * line.items.len().saturating_sub(1) as f32
+		+ item_gap * line.len().saturating_sub(1) as f32
 }
 
 /// Resolves CSS flexible lengths while preserving the original flex bases.
@@ -1045,11 +1139,7 @@ fn line_outer_main(line: &FlexLine, items: &[FlexItem], item_gap: f32, is_row: b
 /// Reusing partially grown sizes as bases would distort the remaining items'
 /// proportions, particularly when the sum of their flex factors is below one.
 fn resolve_flexible_lengths(items: &mut [FlexItem], line: &FlexLine, space: f32, is_row: bool) {
-	let hypothetical: f32 = line
-		.items
-		.iter()
-		.map(|&index| items[index].outer_base)
-		.sum();
+	let hypothetical: f32 = items[line.range()].iter().map(|item| item.outer_base).sum();
 	let mut flex = Flexing {
 		items,
 		line,
@@ -1062,7 +1152,7 @@ fn resolve_flexible_lengths(items: &mut [FlexItem], line: &FlexLine, space: f32,
 	flex.freeze_inflexible();
 	flex.initial_free = flex.remaining();
 
-	for _ in 0..flex.line.items.len() {
+	for _ in 0..flex.line.len() {
 		if flex.distribute() {
 			break;
 		}
@@ -1098,8 +1188,7 @@ impl Flexing<'_> {
 	/// Freezes the items that cannot flex, or whose base already sits past
 	/// their content size in the direction of the flex.
 	fn freeze_inflexible(&mut self) {
-		for &index in &self.line.items {
-			let item = &mut self.items[index];
+		for item in &mut self.items[self.line.range()] {
 			item.frozen = factor_of(item, self.growing) == 0.0
 				|| if self.growing {
 					item.flex_base > item.inner_main
@@ -1112,12 +1201,9 @@ impl Flexing<'_> {
 	/// The space the unfrozen items still have to share.
 	fn remaining(&self) -> f32 {
 		self.space
-			- self
-				.line
-				.items
+			- self.items[self.line.range()]
 				.iter()
-				.map(|&index| {
-					let item = &self.items[index];
+				.map(|item| {
 					(if item.frozen {
 						item.inner_main
 					} else {
@@ -1140,9 +1226,7 @@ impl Flexing<'_> {
 
 		let mut total_violation = 0.0;
 
-		for &index in &self.line.items {
-			let item = &mut self.items[index];
-
+		for item in &mut self.items[self.line.range()] {
 			if item.frozen {
 				continue;
 			}
@@ -1160,27 +1244,22 @@ impl Flexing<'_> {
 		}
 
 		self.freeze_violators(total_violation);
-		self.line
-			.items
-			.iter()
-			.all(|&index| self.items[index].frozen)
+		self.items[self.line.range()].iter().all(|item| item.frozen)
 	}
 
 	/// Sums one number over the unfrozen items.
 	fn total(&self, value: impl Fn(&FlexItem) -> f32) -> f32 {
-		self.line
-			.items
+		self.items[self.line.range()]
 			.iter()
-			.filter(|&&index| !self.items[index].frozen)
-			.map(|&index| value(&self.items[index]))
+			.filter(|item| !item.frozen)
+			.map(value)
 			.sum()
 	}
 
 	/// Freezes the items whose violation runs against the total, so the next
 	/// pass shares what is left among the rest.
 	fn freeze_violators(&mut self, total_violation: f32) {
-		for &index in &self.line.items {
-			let item = &mut self.items[index];
+		for item in &mut self.items[self.line.range()] {
 			item.frozen |= total_violation.abs() <= EPSILON
 				|| if total_violation > 0.0 {
 					item.violation > 0.0

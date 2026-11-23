@@ -85,6 +85,18 @@ impl HitBounds {
 	}
 }
 
+/// How a container's children are ordered spatially for O(log N) hit testing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ChildOrder {
+	Unordered,
+	/// Every child has non-empty subtree bounds and `child[i].bottom <=
+	/// child[i+1].top`.
+	MonotonicY,
+	/// Every child has non-empty subtree bounds and `child[i].right <=
+	/// child[i+1].left`.
+	MonotonicX,
+}
+
 /// What hit testing reads for a committed node, cached by each layout commit
 /// so a query touches neither yoga nor the node's props until its subtree
 /// bounds contain the point.
@@ -98,6 +110,8 @@ struct HitArea {
 	/// The subtree's bounds. Its edges are the same `left + width` sums the
 	/// walk tests against, so a point on an edge is never pruned by rounding.
 	subtree: HitBounds,
+	/// Whether direct children are sorted and non-overlapping along an axis.
+	child_order: ChildOrder,
 }
 
 impl HitArea {
@@ -107,6 +121,7 @@ impl HitArea {
 		width: 0.0,
 		height: 0.0,
 		subtree: HitBounds::EMPTY,
+		child_order: ChildOrder::Unordered,
 	};
 }
 
@@ -205,41 +220,40 @@ impl TextCell {
 	}
 }
 
-/// Whether `element` is a text control that keeps its native chrome.
+/// Whether `kind`/`props` is a text control that keeps its native chrome.
 ///
 /// Custom-drawn fields replace that chrome with their own border and
 /// padding, which Yoga already adds around the text.
-fn has_native_chrome(element: &Element) -> bool {
+fn has_native_chrome(kind: NativeKind, props: &NativeProps) -> bool {
 	matches!(
-		element.kind,
+		kind,
 		NativeKind::TextInput
 			| NativeKind::TextArea
 			| NativeKind::PasswordInput
 			| NativeKind::Button
-	) && !element.props.is_custom_drawn()
+	) && !props.is_custom_drawn()
 }
 
 /// Uses the string actually displayed by the widget for intrinsic sizing.
-fn measured_content(element: &Element) -> Option<&str> {
+fn measured_content(kind: NativeKind, props: &NativeProps) -> Option<&str> {
 	if matches!(
-		element.kind,
+		kind,
 		NativeKind::TextInput | NativeKind::TextArea | NativeKind::PasswordInput
 	) {
 		return Some(
-			element
-				.props
+			props
 				.value
 				.as_deref()
-				.or(element.props.text.as_deref())
+				.or(props.text.as_deref())
 				.filter(|value| !value.is_empty())
-				.or(element.props.placeholder.as_deref())
+				.or(props.placeholder.as_deref())
 				.unwrap_or_default(),
 		);
 	}
 
-	match element.kind {
-		NativeKind::Button => Some(element.props.text.as_deref().unwrap_or_default()),
-		NativeKind::Text | NativeKind::TextRun => element.props.text.as_deref(),
+	match kind {
+		NativeKind::Button => Some(props.text.as_deref().unwrap_or_default()),
+		NativeKind::Text | NativeKind::TextRun => props.text.as_deref(),
 		_ => None,
 	}
 }
@@ -315,6 +329,10 @@ fn millis(start: Instant) -> u64 {
 	u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
+#[expect(
+	clippy::struct_excessive_bools,
+	reason = "each boolean tracks an independent surface state or cached capability flag"
+)]
 pub struct NativeSurface<B: NativeBackend> {
 	#[cfg(all(feature = "rive", not(target_arch = "wasm32")))]
 	rive: rive::Players,
@@ -327,15 +345,25 @@ pub struct NativeSurface<B: NativeBackend> {
 	/// Per-node hit areas, rebuilt by every layout commit. Kept apart from
 	/// the shadow nodes so pruning reads a dense array.
 	hit_areas: Vec<HitArea>,
+	/// Whether a node or a descendant had structural, clip, inert, or overlay
+	/// changes since the last `collect_frames` walk.
+	meta_dirty: Vec<bool>,
+	/// Whether a node's subtree contained an open overlay on the last
+	/// `collect_frames` walk.
+	subtree_has_overlay: Vec<bool>,
 	/// The open overlays, in document order: the last one is on top.
 	overlays: Vec<NodeId>,
-	/// Scratch space for reconciliation: the children a commit walks, so the
-	/// steady state allocates nothing to snapshot them.
-	scratch_children: Vec<NodeId>,
 	source: Option<Element>,
 	/// Whether the last full resolution found accessibility relationships,
 	/// which resolve across the whole tree and so rule out patching.
 	relationships: bool,
+	/// Whether any element in the committed source depends on viewport size
+	/// (responsive breakpoints, `vw`/`vh`/theme length vars, or `Modal`).
+	uses_viewport: bool,
+	/// Whether any element in the committed source uses `*-safe` padding.
+	uses_safe_area: bool,
+	/// Whether any element in the committed source uses `dark:` utilities.
+	uses_dark: bool,
 	/// Whether `dark:` utilities apply: the app's choice resolved against
 	/// the device's setting.
 	dark: bool,
@@ -379,10 +407,14 @@ impl<B: NativeBackend> NativeSurface<B> {
 			viewport: Size::new(0.0, 0.0),
 			frames: Vec::new(),
 			hit_areas: Vec::new(),
+			meta_dirty: Vec::new(),
+			subtree_has_overlay: Vec::new(),
 			overlays: Vec::new(),
-			scratch_children: Vec::new(),
 			source: None,
 			relationships: false,
+			uses_viewport: false,
+			uses_safe_area: false,
+			uses_dark: false,
 			dark: false,
 			system_dark: false,
 			appearance: crate::Appearance::System,
@@ -425,7 +457,12 @@ impl<B: NativeBackend> NativeSurface<B> {
 
 		if changed {
 			self.viewport = Size::new(width, height);
-			self.commit_source();
+
+			if self.root.is_some() && !self.uses_viewport {
+				self.commit_layout();
+			} else {
+				self.commit_source();
+			}
 		}
 	}
 
@@ -435,7 +472,10 @@ impl<B: NativeBackend> NativeSurface<B> {
 	pub fn set_safe_area(&mut self, insets: Rect<f32>) {
 		if self.safe_area != insets {
 			self.safe_area = insets;
-			self.commit_source();
+
+			if self.root.is_none() || self.uses_safe_area {
+				self.commit_source();
+			}
 		}
 	}
 
@@ -484,7 +524,10 @@ impl<B: NativeBackend> NativeSurface<B> {
 
 		if self.dark != dark {
 			self.dark = dark;
-			self.commit_source();
+
+			if self.root.is_none() || self.uses_dark {
+				self.commit_source();
+			}
 		}
 	}
 

@@ -41,10 +41,10 @@ fn content_box_lengths_and_percentages_include_padding_and_border() {
 				display,
 				width: Dimension::Points(200.0),
 				height: Dimension::Points(100.0),
-				grid: Some(GridStyle {
+				grid: Some(Box::new(GridStyle {
 					template_columns: vec![TrackSizing::Fraction(1.0)],
 					..GridStyle::default()
-				}),
+				})),
 				..Style::default()
 			},
 		);
@@ -163,10 +163,10 @@ fn parent_forced_content_box_sizes_are_not_decorated_twice() {
 				display,
 				width: Dimension::Points(200.0),
 				height: Dimension::Points(100.0),
-				grid: Some(GridStyle {
+				grid: Some(Box::new(GridStyle {
 					template_columns: vec![TrackSizing::Fraction(1.0)],
 					..GridStyle::default()
-				}),
+				})),
 				..Style::default()
 			},
 		);
@@ -377,10 +377,10 @@ fn percentage_padding_uses_containing_width_for_both_axes() {
 				display,
 				width: Dimension::Points(200.0),
 				height: Dimension::Points(100.0),
-				grid: Some(GridStyle {
+				grid: Some(Box::new(GridStyle {
 					template_columns: vec![TrackSizing::Fraction(1.0)],
 					..GridStyle::default()
-				}),
+				})),
 				..Style::default()
 			},
 		);
@@ -417,10 +417,10 @@ fn signed_margins_move_flex_and_grid_items() {
 				display,
 				width: Dimension::Points(200.0),
 				height: Dimension::Points(100.0),
-				grid: Some(GridStyle {
+				grid: Some(Box::new(GridStyle {
 					template_columns: vec![TrackSizing::Fraction(1.0)],
 					..GridStyle::default()
-				}),
+				})),
 				..Style::default()
 			},
 		);
@@ -463,11 +463,11 @@ fn relative_insets_choose_the_leading_edge_without_moving_siblings() {
 					direction,
 					width: Dimension::Points(200.0),
 					height: Dimension::Points(100.0),
-					grid: Some(GridStyle {
+					grid: Some(Box::new(GridStyle {
 						template_columns: vec![TrackSizing::Points(200.0)],
 						template_rows: vec![TrackSizing::Points(20.0); 2],
 						..GridStyle::default()
-					}),
+					})),
 					..Style::default()
 				},
 			);
@@ -534,11 +534,11 @@ fn grid_relative_percentages_use_the_grid_area() {
 			display: Display::Grid,
 			width: Dimension::Points(200.0),
 			height: Dimension::Points(100.0),
-			grid: Some(GridStyle {
+			grid: Some(Box::new(GridStyle {
 				template_columns: vec![TrackSizing::Points(100.0); 2],
 				template_rows: vec![TrackSizing::Points(40.0)],
 				..GridStyle::default()
-			}),
+			})),
 			..Style::default()
 		},
 	);
@@ -899,10 +899,10 @@ fn minmax_fraction_tracks_share_space_independently_of_item_content() {
 				Dimension::Points(0.0),
 				Dimension::Points(10.0),
 			),
-			grid: Some(GridStyle {
+			grid: Some(Box::new(GridStyle {
 				template_columns: vec![fraction(1.0), fraction(2.0)],
 				..GridStyle::default()
-			}),
+			})),
 			..Style::default()
 		},
 	);
@@ -937,10 +937,10 @@ fn fractional_grid_minimums_freeze_before_remaining_space_is_shared() {
 		Style {
 			display: Display::Grid,
 			width: Dimension::Points(300.0),
-			grid: Some(GridStyle {
+			grid: Some(Box::new(GridStyle {
 				template_columns: vec![track(200.0), track(0.0)],
 				..GridStyle::default()
-			}),
+			})),
 			..Style::default()
 		},
 	);
@@ -964,10 +964,10 @@ fn grid_fraction_totals_below_one_leave_unclaimed_space() {
 		Style {
 			display: Display::Grid,
 			width: Dimension::Points(200.0),
-			grid: Some(GridStyle {
+			grid: Some(Box::new(GridStyle {
 				template_columns: vec![TrackSizing::Fraction(0.25), TrackSizing::Fraction(0.25)],
 				..GridStyle::default()
-			}),
+			})),
 			..Style::default()
 		},
 	);
@@ -1003,11 +1003,11 @@ fn fractional_grid_rows_include_gaps_and_minimums() {
 				Dimension::Points(0.0),
 				Dimension::Points(0.0),
 			),
-			grid: Some(GridStyle {
+			grid: Some(Box::new(GridStyle {
 				template_columns: vec![TrackSizing::Points(100.0)],
 				template_rows: vec![fraction(1.0), fraction(2.0)],
 				..GridStyle::default()
-			}),
+			})),
 			..Style::default()
 		},
 	);
@@ -1040,10 +1040,10 @@ fn max_content_fraction_tracks_keep_their_proportions() {
 		root,
 		Style {
 			display: Display::Grid,
-			grid: Some(GridStyle {
+			grid: Some(Box::new(GridStyle {
 				template_columns: vec![fraction(1.0), fraction(2.0)],
 				..GridStyle::default()
-			}),
+			})),
 			..Style::default()
 		},
 	);
@@ -1075,10 +1075,10 @@ fn repeated_spanning_contributions_do_not_grow_satisfied_tracks() {
 		root,
 		Style {
 			display: Display::Grid,
-			grid: Some(GridStyle {
+			grid: Some(Box::new(GridStyle {
 				template_columns: vec![TrackSizing::Auto; 2],
 				..GridStyle::default()
-			}),
+			})),
 			..Style::default()
 		},
 	);
@@ -1090,10 +1090,10 @@ fn repeated_spanning_contributions_do_not_grow_satisfied_tracks() {
 			Style {
 				width: Dimension::Points(100.0),
 				height: Dimension::Points(10.0),
-				grid: Some(GridStyle {
+				grid: Some(Box::new(GridStyle {
 					column: GridPlacement::span(2),
 					..GridStyle::default()
-				}),
+				})),
 				..Style::default()
 			},
 		);
@@ -1173,7 +1173,7 @@ fn intrinsic_fractional_spans_use_the_combined_fraction_factors() {
 			root,
 			Style {
 				display: Display::Grid,
-				grid: Some(if columns {
+				grid: Some(Box::new(if columns {
 					GridStyle {
 						template_columns: tracks,
 						..GridStyle::default()
@@ -1183,7 +1183,7 @@ fn intrinsic_fractional_spans_use_the_combined_fraction_factors() {
 						template_rows: tracks,
 						..GridStyle::default()
 					}
-				}),
+				})),
 				..Style::default()
 			},
 		);
@@ -1193,7 +1193,7 @@ fn intrinsic_fractional_spans_use_the_combined_fraction_factors() {
 			Style {
 				width: Dimension::Points(90.0),
 				height: Dimension::Points(90.0),
-				grid: Some(if columns {
+				grid: Some(Box::new(if columns {
 					GridStyle {
 						column: GridPlacement::span(2),
 						..GridStyle::default()
@@ -1203,7 +1203,7 @@ fn intrinsic_fractional_spans_use_the_combined_fraction_factors() {
 						row: GridPlacement::span(2),
 						..GridStyle::default()
 					}
-				}),
+				})),
 				..Style::default()
 			},
 		);
@@ -1275,7 +1275,7 @@ fn fractional_grid(columns: bool) -> (Yoga, NodeId, NodeId, NodeId) {
 			} else {
 				Dimension::Points(300.0)
 			},
-			grid: Some(if columns {
+			grid: Some(Box::new(if columns {
 				GridStyle {
 					template_columns: tracks,
 					..GridStyle::default()
@@ -1285,7 +1285,7 @@ fn fractional_grid(columns: bool) -> (Yoga, NodeId, NodeId, NodeId) {
 					template_rows: tracks,
 					..GridStyle::default()
 				}
-			}),
+			})),
 			..Style::default()
 		},
 	);
@@ -1294,7 +1294,7 @@ fn fractional_grid(columns: bool) -> (Yoga, NodeId, NodeId, NodeId) {
 		&mut tree,
 		root,
 		Style {
-			grid: Some(if columns {
+			grid: Some(Box::new(if columns {
 				GridStyle {
 					column: GridPlacement::line(2, 3),
 					..GridStyle::default()
@@ -1304,7 +1304,7 @@ fn fractional_grid(columns: bool) -> (Yoga, NodeId, NodeId, NodeId) {
 					row: GridPlacement::line(2, 3),
 					..GridStyle::default()
 				}
-			}),
+			})),
 			..Style::default()
 		},
 	);

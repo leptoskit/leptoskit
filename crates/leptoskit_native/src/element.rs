@@ -1,7 +1,7 @@
 //! The declarative element tree apps build each frame.
 
 use std::collections::BTreeMap;
-use std::collections::BTreeSet;
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use leptoskit_yoga::Style;
@@ -20,6 +20,7 @@ use crate::aria::Tristate;
 use crate::controls::Progress;
 use crate::controls::RadioGroup;
 use crate::controls::SliderState;
+use crate::hash::FastHash;
 use crate::props::Color;
 use crate::props::EventHandler;
 use crate::props::FontWeight;
@@ -65,7 +66,7 @@ where
 	fn into_background(self, mut element: Element) -> Element {
 		let binding = Binding::new(self);
 		element.props.background = Some(crate::reactive::read_binding(&binding));
-		element.bindings.background = Some(binding);
+		element.bindings.get_or_insert_default().background = Some(binding);
 		element
 	}
 }
@@ -100,10 +101,10 @@ pub struct Element {
 	applied: Tailwind,
 	classes: Tailwind,
 	handlers: Vec<HandlerEntry>,
-	gesture: Option<crate::gesture::Gesture>,
+	gesture: Option<Box<crate::gesture::Gesture>>,
 	/// Values that follow application state instead of being rebuilt with the
 	/// tree: see [`Element::text_from`] and [`Element::background_from`].
-	bindings: Bindings,
+	bindings: Option<Box<Bindings>>,
 	/// Children rebuilt on their own when the signals they read change.
 	/// [`For`](crate::reactive::For) and [`Show`](crate::reactive::Show) set
 	/// it.
@@ -137,8 +138,8 @@ impl std::fmt::Debug for Element {
 		// Bindings and a region are absent on almost every node. Leaving them
 		// out of the debug output when absent keeps the digest of an unchanged
 		// node stable.
-		if !self.bindings.is_empty() {
-			debug.field("bindings", &self.bindings);
+		if let Some(bindings) = self.bindings.as_deref().filter(|b| !b.is_empty()) {
+			debug.field("bindings", bindings);
 		}
 
 		if self.region.is_some() {
@@ -209,6 +210,48 @@ pub(crate) fn is_pressable(kind: NativeKind) -> bool {
 	matches!(kind, NativeKind::Button | NativeKind::Pressable)
 }
 
+/// The subset of a parent's resolved props inherited by its children.
+///
+/// Kept small and `Copy` (~40 bytes) so patching and streaming reconciliation
+/// never clone the parent's full `NativeProps`.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct InheritedProps {
+	pub(crate) color: Option<Color>,
+	pub(crate) font_size: Option<f32>,
+	pub(crate) font_weight: Option<FontWeight>,
+	pub(crate) line_height: Option<crate::props::LineHeight>,
+	pub(crate) italic: Option<bool>,
+	pub(crate) text_align: Option<TextAlign>,
+	pub(crate) disabled: bool,
+	pub(crate) aria_hidden: bool,
+	pub(crate) hidden: bool,
+}
+
+impl InheritedProps {
+	#[inline]
+	pub(crate) fn from_props(props: &NativeProps) -> Self {
+		Self {
+			color: props.color,
+			font_size: props.font_size,
+			font_weight: props.font_weight,
+			line_height: props.line_height,
+			italic: props.italic,
+			text_align: props.text_align,
+			disabled: props.enabled == Some(false),
+			aria_hidden: props.aria().hidden == Some(true),
+			hidden: props.hidden == Some(true),
+		}
+	}
+}
+
+/// The resolved fields of a single element without cloning its children,
+/// handlers, bindings, or region metadata.
+pub(crate) struct ResolvedOwn {
+	pub(crate) kind: NativeKind,
+	pub(crate) style: Style,
+	pub(crate) props: NativeProps,
+}
+
 impl Element {
 	/// Checks structural control and accessibility contracts before any
 	/// backend mutations occur.
@@ -218,8 +261,7 @@ impl Element {
 	/// unique within the tree, ARIA relationships reference ids that exist,
 	/// and pressables and text inputs carry an accessible name.
 	pub fn validate(&self) -> Result<(), crate::controls::ControlTreeError> {
-		let ids = self.collect_ids()?;
-		self.validate_under(None, &ids)
+		self.validate_under(None, true)
 	}
 
 	/// Validates this subtree where it sits inside a larger tree, below its
@@ -230,7 +272,7 @@ impl Element {
 		&self,
 		button_ancestor: Option<NativeKind>,
 	) -> Result<(), crate::controls::ControlTreeError> {
-		self.validate_under(button_ancestor, &BTreeSet::new())
+		self.validate_under(button_ancestor, false)
 	}
 
 	/// Whether nothing in this subtree depends on the rest of the tree for
@@ -240,7 +282,13 @@ impl Element {
 		let mut pending = vec![self];
 
 		while let Some(element) = pending.pop() {
-			if element.declares_relationships() || !element.props.aria().controls.is_empty() {
+			if element.declares_relationships()
+				|| element
+					.props
+					.aria
+					.as_deref()
+					.is_some_and(|aria| !aria.controls.is_empty())
+			{
 				return false;
 			}
 
@@ -253,13 +301,22 @@ impl Element {
 	fn validate_under(
 		&self,
 		button_ancestor: Option<NativeKind>,
-		ids: &BTreeSet<&str>,
+		collect_ids: bool,
 	) -> Result<(), crate::controls::ControlTreeError> {
 		let mut pending = vec![(self, button_ancestor)];
-		let mut selected_groups = BTreeSet::new();
+		let mut ids: HashSet<&str, FastHash> = HashSet::default();
+		let mut id_refs: Vec<(&'static str, &str)> = Vec::new();
+		let mut selected_groups: HashSet<&str, FastHash> = HashSet::default();
 
 		while let Some((element, button_ancestor)) = pending.pop() {
-			element.check(button_ancestor, ids, &mut selected_groups)?;
+			if collect_ids
+				&& let Some(id) = element.props.id.as_deref()
+				&& !ids.insert(id)
+			{
+				return Err(crate::controls::ControlTreeError::DuplicateId { id: id.to_owned() });
+			}
+
+			element.check(button_ancestor, &mut id_refs, &mut selected_groups)?;
 
 			let button_ancestor =
 				if matches!(element.kind, NativeKind::Button | NativeKind::Pressable) {
@@ -276,6 +333,15 @@ impl Element {
 			);
 		}
 
+		for (attribute, id) in id_refs {
+			if !ids.contains(id) {
+				return Err(crate::controls::ControlTreeError::UnknownIdReference {
+					attribute,
+					id: id.to_owned(),
+				});
+			}
+		}
+
 		Ok(())
 	}
 
@@ -284,8 +350,8 @@ impl Element {
 	fn check<'a>(
 		&'a self,
 		button_ancestor: Option<NativeKind>,
-		ids: &BTreeSet<&str>,
-		selected_groups: &mut BTreeSet<&'a str>,
+		id_refs: &mut Vec<(&'static str, &'a str)>,
+		selected_groups: &mut HashSet<&'a str, FastHash>,
 	) -> Result<(), crate::controls::ControlTreeError> {
 		use crate::controls::ControlTreeError;
 
@@ -446,7 +512,11 @@ impl Element {
 		}
 
 		if matches!(self.kind, NativeKind::TextInput | NativeKind::PasswordInput)
-			&& self.props.aria().multiline == Some(true)
+			&& self
+				.props
+				.aria
+				.as_deref()
+				.is_some_and(|a| a.multiline == Some(true))
 		{
 			return Err(ControlTreeError::MultilineTextInput { kind: self.kind });
 		}
@@ -459,7 +529,9 @@ impl Element {
 			return Err(ControlTreeError::InvalidScrollOffset);
 		}
 
-		self.validate_aria(ids)?;
+		if self.props.aria.is_some() || self.props.overlay.is_some() {
+			self.validate_aria(id_refs)?;
+		}
 
 		if self.kind == NativeKind::Radio {
 			let group = self
@@ -478,30 +550,27 @@ impl Element {
 		Ok(())
 	}
 
-	/// Every id in the tree, rejecting duplicates.
-	fn collect_ids(&self) -> Result<BTreeSet<&str>, crate::controls::ControlTreeError> {
-		let mut ids = BTreeSet::new();
-		let mut pending = vec![self];
-
-		while let Some(element) = pending.pop() {
-			if let Some(id) = element.props.id.as_deref()
-				&& !ids.insert(id)
-			{
-				return Err(crate::controls::ControlTreeError::DuplicateId { id: id.to_owned() });
-			}
-
-			pending.extend(&element.children);
-		}
-
-		Ok(ids)
-	}
-
 	/// Checks one element's ARIA properties against the spec rules that do not
 	/// depend on the platform.
-	fn validate_aria(&self, ids: &BTreeSet<&str>) -> Result<(), crate::controls::ControlTreeError> {
+	fn validate_aria<'a>(
+		&'a self,
+		id_refs: &mut Vec<(&'static str, &'a str)>,
+	) -> Result<(), crate::controls::ControlTreeError> {
 		use crate::controls::ControlTreeError;
 
-		let aria = self.props.aria();
+		if let Some(overlay) = &self.props.overlay {
+			if let Some(id) = overlay.anchor.as_deref() {
+				id_refs.push(("the popover's anchor", id));
+			}
+
+			if let Some(id) = overlay.initial_focus.as_deref() {
+				id_refs.push(("initial_focus", id));
+			}
+		}
+
+		let Some(aria) = self.props.aria.as_deref() else {
+			return Ok(());
+		};
 
 		if aria.role.is_some_and(Role::is_presentational) && self.props.names_itself() {
 			return Err(ControlTreeError::LabelOnPresentation);
@@ -511,30 +580,13 @@ impl Element {
 			return Err(ControlTreeError::InvalidAriaLevel);
 		}
 
-		if let Some(overlay) = &self.props.overlay {
-			for (attribute, id) in [
-				("the popover's anchor", &overlay.anchor),
-				("initial_focus", &overlay.initial_focus),
-			] {
-				if let Some(id) = id.as_ref().filter(|id| !ids.contains(id.as_str())) {
-					return Err(ControlTreeError::UnknownIdReference {
-						attribute,
-						id: id.clone(),
-					});
-				}
-			}
-		}
-
 		for (attribute, references) in [
 			("aria-labelledby", &aria.labelled_by),
 			("aria-describedby", &aria.described_by),
 			("aria-controls", &aria.controls),
 		] {
-			if let Some(id) = references.iter().find(|id| !ids.contains(id.as_str())) {
-				return Err(ControlTreeError::UnknownIdReference {
-					attribute,
-					id: id.clone(),
-				});
+			for id in references {
+				id_refs.push((attribute, id.as_str()));
 			}
 		}
 
@@ -550,7 +602,8 @@ impl Element {
 	}
 
 	/// Creates an element of the given kind with default style and props.
-	#[track_caller]
+	#[inline]
+	#[cfg_attr(feature = "devtools", track_caller)]
 	pub fn new(kind: NativeKind) -> Self {
 		Self {
 			kind,
@@ -566,7 +619,7 @@ impl Element {
 			classes: Tailwind::default(),
 			handlers: Vec::new(),
 			gesture: None,
-			bindings: Bindings::default(),
+			bindings: None,
 			region: None,
 		}
 	}
@@ -596,7 +649,8 @@ impl Element {
 	}
 
 	/// A `View` element.
-	#[track_caller]
+	#[inline]
+	#[cfg_attr(feature = "devtools", track_caller)]
 	pub fn view() -> Self {
 		Self::new(NativeKind::View)
 	}
@@ -612,13 +666,13 @@ impl Element {
 	/// Writing the signal — from an event, a timer, or a plugin reply —
 	/// rewrites this node. The guest does not rebuild the screen to do it.
 	/// See [`guest::flush`](crate::guest::flush).
-	#[track_caller]
+	#[cfg_attr(feature = "devtools", track_caller)]
 	#[must_use]
 	pub fn text_from(read: impl Fn() -> String + Send + Sync + 'static) -> Self {
 		let reactive = Binding::new(read);
 		let mut element = Self::new(NativeKind::Text);
 		element.props.text = Some(crate::reactive::read_binding(&reactive));
-		element.bindings.text = Some(reactive);
+		element.bindings.get_or_insert_default().text = Some(reactive);
 		element
 	}
 
@@ -627,23 +681,28 @@ impl Element {
 	/// The same rule as [`text_from`](Self::text_from): the renderer keeps the
 	/// node and rewrites its colour when the bound signal changes, instead of
 	/// rebuilding the tree around it.
-	#[track_caller]
+	#[cfg_attr(feature = "devtools", track_caller)]
 	#[must_use]
 	pub fn background_from(read: impl Fn() -> Color + Send + Sync + 'static) -> Self {
 		let reactive = Binding::new(read);
 		let mut element = Self::new(NativeKind::View);
 		element.props.background = Some(crate::reactive::read_binding(&reactive));
-		element.bindings.background = Some(reactive);
+		element.bindings.get_or_insert_default().background = Some(reactive);
 		element
 	}
 
 	/// The values this node reads from application state.
 	pub fn bindings(&self) -> &Bindings {
-		&self.bindings
+		static EMPTY: Bindings = Bindings {
+			text: None,
+			background: None,
+		};
+		self.bindings.as_deref().unwrap_or(&EMPTY)
 	}
 
 	/// A `Text` element with the given content.
-	#[track_caller]
+	#[inline]
+	#[cfg_attr(feature = "devtools", track_caller)]
 	pub fn text(content: impl Into<String>) -> Self {
 		let mut element = Self::new(NativeKind::Text);
 		element.props.text = Some(content.into());
@@ -651,7 +710,7 @@ impl Element {
 	}
 
 	/// An `Image` element with the given source.
-	#[track_caller]
+	#[cfg_attr(feature = "devtools", track_caller)]
 	pub fn image(source: impl Into<String>) -> Self {
 		let mut element = Self::new(NativeKind::Image);
 		element.props.source = Some(source.into());
@@ -660,7 +719,7 @@ impl Element {
 
 	/// A `Vector` element drawing paths in `view_box` coordinates, scaled to
 	/// fit its frame. Add paths with [`Self::path`].
-	#[track_caller]
+	#[cfg_attr(feature = "devtools", track_caller)]
 	pub fn vector(view_box: ViewBox) -> Self {
 		let mut element = Self::new(NativeKind::Vector);
 		element.props.drawing = Some(Drawing::new(view_box));
@@ -670,7 +729,7 @@ impl Element {
 	/// A Rive scene owned and animated by the native host. Give it an explicit
 	/// size and an accessible label, or mark it decorative with `aria_hidden`.
 	/// Playback is initially paused; use `running(true)` to request animation.
-	#[track_caller]
+	#[cfg_attr(feature = "devtools", track_caller)]
 	pub fn rive(playback: leptoskit_rive::Playback) -> Self {
 		let mut element = Self::new(NativeKind::Rive);
 		element.props.rive = Some(Box::new(playback));
@@ -681,7 +740,7 @@ impl Element {
 	/// explicit size and an accessible label, or mark it decorative with
 	/// `aria_hidden`. The guest changes the scene with ops (see
 	/// `leptoskit_3d::client::Scene`), never by re-rendering this element.
-	#[track_caller]
+	#[cfg_attr(feature = "devtools", track_caller)]
 	pub fn scene3d(scene: leptoskit_3d::SceneId) -> Self {
 		let mut element = Self::new(NativeKind::Scene3d);
 		element.props.scene3d = Some(scene.0);
@@ -699,7 +758,7 @@ impl Element {
 	/// and an accessible label, or mark it decorative with `aria_hidden`. The
 	/// guest changes the player through the `video` plugin, never by
 	/// re-rendering this element.
-	#[track_caller]
+	#[cfg_attr(feature = "devtools", track_caller)]
 	pub fn video(player: u32) -> Self {
 		let mut element = Self::new(NativeKind::Video);
 		element.props.video = Some(player);
@@ -717,7 +776,7 @@ impl Element {
 	/// and an accessible label, or mark it decorative with `aria_hidden`. The
 	/// guest changes the session through the `camera` plugin, never by
 	/// re-rendering this element.
-	#[track_caller]
+	#[cfg_attr(feature = "devtools", track_caller)]
 	pub fn camera(session: u32) -> Self {
 		let mut element = Self::new(NativeKind::Camera);
 		element.props.camera = Some(session);
@@ -735,7 +794,7 @@ impl Element {
 	/// and an accessible label, or mark it decorative with `aria_hidden`. The
 	/// guest changes the session through the `maps` plugin, never by
 	/// re-rendering this element.
-	#[track_caller]
+	#[cfg_attr(feature = "devtools", track_caller)]
 	pub fn map(session: u32) -> Self {
 		let mut element = Self::new(NativeKind::Map);
 		element.props.map = Some(session);
@@ -753,7 +812,7 @@ impl Element {
 	/// size and an accessible label, or mark it decorative with `aria_hidden`.
 	/// The guest changes the session through the `live-photo` plugin, never by
 	/// re-rendering this element.
-	#[track_caller]
+	#[cfg_attr(feature = "devtools", track_caller)]
 	pub fn live_photo(session: u32) -> Self {
 		let mut element = Self::new(NativeKind::LivePhoto);
 		element.props.live_photo = Some(session);
@@ -771,7 +830,7 @@ impl Element {
 	/// The document, its changes and its selection stay with the editor's
 	/// state handle and never pass through this element. Give it an accessible
 	/// label, a labelling reference, or a placeholder, as for any text field.
-	#[track_caller]
+	#[cfg_attr(feature = "devtools", track_caller)]
 	pub fn canvist_editor(editor: u32) -> Self {
 		let mut element = Self::new(NativeKind::CanvistEditor);
 		element.props.canvist_editor = Some(editor);
@@ -794,26 +853,26 @@ impl Element {
 	}
 
 	/// A `ScrollView` element; its children scroll when they overflow it.
-	#[track_caller]
+	#[cfg_attr(feature = "devtools", track_caller)]
 	pub fn scroll_view() -> Self {
 		Self::new(NativeKind::ScrollView)
 	}
 
 	/// A `TextInput` element.
-	#[track_caller]
+	#[cfg_attr(feature = "devtools", track_caller)]
 	pub fn text_input() -> Self {
 		Self::new(NativeKind::TextInput)
 	}
 
 	/// A `TextArea` element: a multi-line text field.
-	#[track_caller]
+	#[cfg_attr(feature = "devtools", track_caller)]
 	pub fn text_area() -> Self {
 		Self::new(NativeKind::TextArea)
 	}
 
 	/// A `Modal` element: content above the screen that blocks it while
 	/// `open`.
-	#[track_caller]
+	#[cfg_attr(feature = "devtools", track_caller)]
 	pub fn modal(open: bool) -> Self {
 		let mut element = Self::new(NativeKind::Modal);
 		// A modal fills the screen, and what it holds sits in the middle.
@@ -828,7 +887,7 @@ impl Element {
 
 	/// A `Popover` element: content above the screen while `open`, hanging
 	/// from the element whose `id` is `anchor`.
-	#[track_caller]
+	#[cfg_attr(feature = "devtools", track_caller)]
 	pub fn popover(anchor: impl Into<String>, open: bool) -> Self {
 		let mut element = Self::new(NativeKind::Popover);
 		element.props.overlay = Some(crate::Overlay {
@@ -840,7 +899,7 @@ impl Element {
 	}
 
 	/// A `Button` element with the given label.
-	#[track_caller]
+	#[cfg_attr(feature = "devtools", track_caller)]
 	pub fn button(label: impl Into<String>) -> Self {
 		let mut element = Self::new(NativeKind::Button);
 		element.style.justify_content = leptoskit_yoga::JustifyContent::Center;
@@ -940,7 +999,7 @@ impl Element {
 		held: Option<&[usize]>,
 	) -> (Self, bool) {
 		let (mut element, uses_aria) =
-			self.resolve_inherited(context, &NativeProps::default(), held);
+			self.resolve_inherited(context, InheritedProps::default(), held);
 		// Nothing resolves relationships, set positions, or live text in a
 		// tree that declares none, and the walk would dominate commits.
 		if uses_aria {
@@ -950,17 +1009,18 @@ impl Element {
 		(element, uses_aria)
 	}
 
-	/// Resolves this subtree under its parent's resolved props, without the
+	/// Resolves this subtree under its parent's inherited props, without the
 	/// tree-wide accessibility pass. Callers check
 	/// [`Self::declares_relationships`] first.
 	pub(crate) fn resolve_inherited(
 		&self,
 		context: &StyleContext,
-		parent: &NativeProps,
+		parent: InheritedProps,
 		held: Option<&[usize]>,
 	) -> (Self, bool) {
 		let mut element = self.resolve_own(context, parent, held);
 		let uses_aria = element.declares_relationships();
+		let child_parent = InheritedProps::from_props(&element.props);
 		let mut children_uses_aria = false;
 		element.children = self
 			.children
@@ -972,7 +1032,7 @@ impl Element {
 					_ => None,
 				};
 
-				let (child, uses) = child.resolve_inherited(context, &element.props, held);
+				let (child, uses) = child.resolve_inherited(context, child_parent, held);
 				children_uses_aria |= uses;
 				child
 			})
@@ -983,33 +1043,140 @@ impl Element {
 	/// Whether this element takes part in the tree-wide accessibility pass:
 	/// it has an id, references other ids, is a radio option, or announces
 	/// live changes.
+	#[inline]
 	pub(crate) fn declares_relationships(&self) -> bool {
 		self.props.id.is_some()
-			|| !self.props.aria().labelled_by.is_empty()
-			|| !self.props.aria().described_by.is_empty()
 			|| self.kind == NativeKind::Radio
-			|| self.props.aria().live.is_some()
-			|| self
-				.props
-				.aria()
-				.role
-				.is_some_and(|role| role.implicit_live().is_some())
+			|| self.props.aria.as_deref().is_some_and(|aria| {
+				!aria.labelled_by.is_empty()
+					|| !aria.described_by.is_empty()
+					|| aria.live.is_some()
+					|| aria.role.is_some_and(|role| role.implicit_live().is_some())
+			})
 	}
 
-	/// Resolves this element alone under its parent's resolved props. The
+	/// Whether any element in this subtree declares accessibility
+	/// relationships. Read-only scan that allocates nothing.
+	pub(crate) fn tree_declares_relationships(&self) -> bool {
+		if self.declares_relationships() {
+			return true;
+		}
+
+		self.children.iter().any(Self::tree_declares_relationships)
+	}
+
+	/// Resolves this element's own kind, layout style, and props without
+	/// constructing a full `Element` or cloning children/bindings/region.
+	pub(crate) fn resolve_own_into(
+		&self,
+		context: &StyleContext,
+		parent: InheritedProps,
+		held: Option<&[usize]>,
+	) -> ResolvedOwn {
+		let mut kind = self.kind;
+		let mut style = self.style.clone();
+		let mut props = self.props.clone();
+
+		props.color = props.color.or(parent.color);
+		props.font_size = props.font_size.or(parent.font_size);
+		props.font_weight = props.font_weight.or(parent.font_weight);
+		props.line_height = props.line_height.or(parent.line_height);
+		props.italic = props.italic.or(parent.italic);
+		props.text_align = props.text_align.or(parent.text_align);
+
+		if parent.disabled {
+			props.enabled = Some(false);
+		}
+
+		if parent.aria_hidden {
+			props.aria_mut().hidden = Some(true);
+		}
+
+		// Disabled controls cannot be pressed, even if a hold began before
+		// the application disabled them.
+		let pressed = is_pressable(self.kind)
+			&& props.enabled != Some(false)
+			&& (context.active || held.is_some_and(<[usize]>::is_empty));
+		self.classes.apply(
+			&mut style,
+			&mut props,
+			&StyleContext {
+				active: pressed,
+				..*context
+			},
+		);
+		props.direction = Some(style.direction);
+
+		// Native backends paint fixed colors; `currentColor` becomes the text
+		// color this element inherited or set, else CSS's initial black. The
+		// web keeps the keyword and lets CSS resolve it.
+		if let Some(drawing) = &mut props.drawing {
+			drawing.resolve_current_color(props.color.unwrap_or(Color::rgba(0, 0, 0, 255)));
+		}
+
+		if let Some(overlay) = &props.overlay {
+			if overlay.open {
+				style.position = leptoskit_yoga::PositionType::Absolute;
+
+				if kind == NativeKind::Modal {
+					style.width =
+						leptoskit_yoga::Dimension::Points(context.viewport.width.max(0.0));
+					style.height =
+						leptoskit_yoga::Dimension::Points(context.viewport.height.max(0.0));
+				}
+			} else {
+				style.display = leptoskit_yoga::Display::None;
+			}
+		}
+
+		if style.overflow == leptoskit_yoga::Overflow::Scroll && kind == NativeKind::View {
+			kind = NativeKind::ScrollView;
+		}
+
+		if kind == NativeKind::ScrollView
+			&& (style.overflow == leptoskit_yoga::Overflow::Hidden || props.clip == Some(false))
+		{
+			kind = NativeKind::View;
+		}
+
+		props.sanitize_motion();
+		props.hidden = (style.display == leptoskit_yoga::Display::None)
+			.then_some(true)
+			.or(props.hidden);
+
+		if parent.hidden {
+			props.hidden = Some(true);
+		}
+
+		props.clip = (style.overflow != leptoskit_yoga::Overflow::Visible
+			|| kind == NativeKind::ScrollView
+			|| props.corner_radius.is_some_and(|radius| radius > 0.0))
+		.then_some(true)
+		.or(props.clip);
+
+		if pressed
+			&& self.classes.active_class().is_none()
+			&& (self.kind == NativeKind::Pressable || props.is_custom_drawn())
+		{
+			props.opacity = Some(props.opacity.unwrap_or(1.0) * DEFAULT_PRESSED_OPACITY);
+		}
+
+		ResolvedOwn { kind, style, props }
+	}
+
+	/// Resolves this element alone under its parent's inherited props. The
 	/// result has no children.
 	pub(crate) fn resolve_own(
 		&self,
 		context: &StyleContext,
-		parent: &NativeProps,
+		parent: InheritedProps,
 		held: Option<&[usize]>,
 	) -> Self {
-		// Resolve each node once. Cloning its descendants here would repeat
-		// the entire subtree clone at every level of a nested component tree.
-		let mut element = Self {
-			kind: self.kind,
-			style: self.style.clone(),
-			props: self.props.clone(),
+		let resolved = self.resolve_own_into(context, parent, held);
+		Self {
+			kind: resolved.kind,
+			style: resolved.style,
+			props: resolved.props,
 			children: Vec::new(),
 			#[cfg(feature = "devtools")]
 			source: self.source,
@@ -1022,69 +1189,6 @@ impl Element {
 			gesture: self.gesture.clone(),
 			bindings: self.bindings.clone(),
 			region: self.region.clone(),
-		};
-		element.props.color = element.props.color.or(parent.color);
-		element.props.font_size = element.props.font_size.or(parent.font_size);
-		element.props.font_weight = element.props.font_weight.or(parent.font_weight);
-		element.props.line_height = element.props.line_height.or(parent.line_height);
-		element.props.italic = element.props.italic.or(parent.italic);
-		element.props.text_align = element.props.text_align.or(parent.text_align);
-
-		if parent.enabled == Some(false) {
-			element.props.enabled = Some(false);
-		}
-
-		if parent.aria().hidden == Some(true) {
-			element.props.aria_mut().hidden = Some(true);
-		}
-
-		// Disabled controls cannot be pressed, even if a hold began before
-		// the application disabled them.
-		let pressed = is_pressable(self.kind)
-			&& element.props.enabled != Some(false)
-			&& (context.active || held.is_some_and(<[usize]>::is_empty));
-		self.classes.apply(
-			&mut element.style,
-			&mut element.props,
-			&StyleContext {
-				active: pressed,
-				..*context
-			},
-		);
-		element.props.direction = Some(element.style.direction);
-
-		// Native backends paint fixed colors; `currentColor` becomes the text
-		// color this element inherited or set, else CSS's initial black. The
-		// web keeps the keyword and lets CSS resolve it.
-		if let Some(drawing) = &mut element.props.drawing {
-			drawing.resolve_current_color(element.props.color.unwrap_or(Color::rgba(0, 0, 0, 255)));
-		}
-
-		element.settle_overlay(context.viewport);
-
-		Self::settle(element, self, parent, pressed)
-	}
-
-	/// Takes an overlay out of its parent's layout. A closed one takes no
-	/// space and shows nothing. An open modal covers the viewport and an
-	/// open popover is as large as what it holds; the surface then places
-	/// both in viewport coordinates.
-	fn settle_overlay(&mut self, viewport: leptoskit_yoga::Size<f32>) {
-		let Some(overlay) = &self.props.overlay else {
-			return;
-		};
-
-		if !overlay.open {
-			self.style.display = leptoskit_yoga::Display::None;
-
-			return;
-		}
-
-		self.style.position = leptoskit_yoga::PositionType::Absolute;
-
-		if self.kind == NativeKind::Modal {
-			self.style.width = leptoskit_yoga::Dimension::Points(viewport.width.max(0.0));
-			self.style.height = leptoskit_yoga::Dimension::Points(viewport.height.max(0.0));
 		}
 	}
 
@@ -1106,49 +1210,6 @@ impl Element {
 	pub(crate) fn replace_own(&mut self, mut next: Self) {
 		next.children = std::mem::take(&mut self.children);
 		*self = next;
-	}
-
-	/// The kind, hidden, clip, and pressed opacity the element resolves to.
-	fn settle(mut element: Self, source: &Self, parent: &NativeProps, pressed: bool) -> Self {
-		if element.style.overflow == leptoskit_yoga::Overflow::Scroll
-			&& element.kind == NativeKind::View
-		{
-			element.kind = NativeKind::ScrollView;
-		}
-
-		if element.kind == NativeKind::ScrollView
-			&& (element.style.overflow == leptoskit_yoga::Overflow::Hidden
-				|| element.props.clip == Some(false))
-		{
-			element.kind = NativeKind::View;
-		}
-
-		element.props.sanitize_motion();
-		element.props.hidden = (element.style.display == leptoskit_yoga::Display::None)
-			.then_some(true)
-			.or(element.props.hidden);
-
-		if parent.hidden == Some(true) {
-			element.props.hidden = Some(true);
-		}
-
-		element.props.clip = (element.style.overflow != leptoskit_yoga::Overflow::Visible
-			|| element.kind == NativeKind::ScrollView
-			|| element
-				.props
-				.corner_radius
-				.is_some_and(|radius| radius > 0.0))
-		.then_some(true)
-		.or(element.props.clip);
-
-		if pressed
-			&& source.classes.active_class().is_none()
-			&& (source.kind == NativeKind::Pressable || element.props.is_custom_drawn())
-		{
-			element.props.opacity =
-				Some(element.props.opacity.unwrap_or(1.0) * DEFAULT_PRESSED_OPACITY);
-		}
-		element
 	}
 
 	/// Folds relationships, radio set positions, and live-region text into
@@ -2181,6 +2242,7 @@ impl Element {
 	}
 
 	/// Sets the font size and weight.
+	#[inline]
 	#[must_use]
 	pub fn font(mut self, size: f32, weight: FontWeight) -> Self {
 		self.props.font_size = Some(size);
@@ -2189,6 +2251,7 @@ impl Element {
 	}
 
 	/// Sets the height of each line of text, which descendants inherit.
+	#[inline]
 	#[must_use]
 	pub fn line_height(mut self, line_height: crate::LineHeight) -> Self {
 		self.props.line_height = Some(line_height);
@@ -2196,6 +2259,7 @@ impl Element {
 	}
 
 	/// Sets the horizontal text alignment.
+	#[inline]
 	#[must_use]
 	pub fn text_align(mut self, align: TextAlign) -> Self {
 		self.props.text_align = Some(align);
@@ -2207,6 +2271,7 @@ impl Element {
 	/// A `Text` or `Button` takes plain text children (unstyled `Text`
 	/// elements with no children or handlers) as more of its content, so
 	/// `Text("Count: ").child(Text("3"))` reads "Count: 3".
+	#[inline]
 	#[must_use]
 	pub fn child(mut self, child: Element) -> Self {
 		self.push_child(child);
@@ -2215,6 +2280,7 @@ impl Element {
 
 	/// Appends every child, joining plain text into a `Text` or `Button` as
 	/// [`Self::child`] does.
+	#[inline]
 	#[must_use]
 	pub fn children(mut self, children: impl IntoIterator<Item = Element>) -> Self {
 		let children = children.into_iter();
@@ -2230,8 +2296,19 @@ impl Element {
 		self
 	}
 
+	#[inline]
 	fn push_child(&mut self, child: Element) {
-		if matches!(self.kind, NativeKind::Text | NativeKind::Button) && child.is_plain_text() {
+		if matches!(self.kind, NativeKind::Text | NativeKind::Button) {
+			self.push_child_text_or_button(child);
+		} else {
+			self.children.push(child);
+		}
+	}
+
+	#[cold]
+	#[inline(never)]
+	fn push_child_text_or_button(&mut self, child: Element) {
+		if child.is_plain_text() {
 			let text = child.props.text.unwrap_or_default();
 			self.props.text.get_or_insert_default().push_str(&text);
 		} else {
@@ -2248,10 +2325,7 @@ impl Element {
 			&& self.gesture.is_none()
 			&& self.classes == Tailwind::default()
 			&& self.style == Style::default()
-			&& NativeProps {
-				text: None,
-				..self.props.clone()
-			} == NativeProps::default()
+			&& has_no_props_other_than_text(&self.props)
 	}
 
 	/// Registers a handler for one event slot.
@@ -2405,16 +2479,131 @@ impl Element {
 	/// existing press handling until they forward pointer samples.
 	#[must_use]
 	pub fn gesture(mut self, gesture: crate::gesture::Gesture) -> Self {
-		self.gesture = Some(match self.gesture.take() {
+		self.gesture = Some(Box::new(match self.gesture.take() {
 			Some(existing) => existing.simultaneous(gesture),
 			None => gesture,
-		});
+		}));
 		self
 	}
 
 	pub(crate) fn attached_gesture(&self) -> Option<&crate::gesture::Gesture> {
-		self.gesture.as_ref()
+		self.gesture.as_deref()
 	}
+}
+
+/// Returns `true` when every property in `props` other than `text` is unset,
+/// without cloning `NativeProps` or constructing `NativeProps::default()`.
+fn has_no_props_other_than_text(props: &NativeProps) -> bool {
+	let NativeProps {
+		rive,
+		scene3d,
+		video,
+		camera,
+		map,
+		live_photo,
+		canvist_editor,
+		text: _,
+		source,
+		placeholder,
+		autocomplete,
+		keyboard,
+		read_only,
+		max_length,
+		capitalize,
+		autocorrect,
+		submit_label,
+		value,
+		checked,
+		radio_group,
+		slider,
+		progress,
+		running,
+		drawing,
+		color,
+		background,
+		enabled,
+		accessibility_label,
+		aria,
+		id,
+		corner_radius,
+		border_width,
+		border_widths,
+		border_color,
+		opacity,
+		transform,
+		animation,
+		hidden,
+		clip,
+		font_size,
+		font_weight,
+		line_height,
+		italic,
+		spans,
+		text_align,
+		direction,
+		focused,
+		focus_request,
+		reveal,
+		scroll_offset,
+		overlay,
+		motion,
+		appearance,
+		extra,
+	} = props;
+
+	rive.is_none()
+		&& scene3d.is_none()
+		&& video.is_none()
+		&& camera.is_none()
+		&& map.is_none()
+		&& live_photo.is_none()
+		&& canvist_editor.is_none()
+		&& source.is_none()
+		&& placeholder.is_none()
+		&& autocomplete.is_none()
+		&& keyboard.is_none()
+		&& read_only.is_none()
+		&& max_length.is_none()
+		&& capitalize.is_none()
+		&& autocorrect.is_none()
+		&& submit_label.is_none()
+		&& value.is_none()
+		&& checked.is_none()
+		&& radio_group.is_none()
+		&& slider.is_none()
+		&& progress.is_none()
+		&& running.is_none()
+		&& drawing.is_none()
+		&& color.is_none()
+		&& background.is_none()
+		&& enabled.is_none()
+		&& accessibility_label.is_none()
+		&& aria.is_none()
+		&& id.is_none()
+		&& corner_radius.is_none()
+		&& border_width.is_none()
+		&& border_widths.is_none()
+		&& border_color.is_none()
+		&& opacity.is_none()
+		&& transform.is_none()
+		&& animation.is_none()
+		&& hidden.is_none()
+		&& clip.is_none()
+		&& font_size.is_none()
+		&& font_weight.is_none()
+		&& line_height.is_none()
+		&& italic.is_none()
+		&& spans.is_none()
+		&& text_align.is_none()
+		&& direction.is_none()
+		&& focused.is_none()
+		&& focus_request.is_none()
+		&& reveal.is_none()
+		&& scroll_offset.is_none()
+		&& overlay.is_none()
+		&& motion.is_none()
+		&& appearance.is_none()
+		&& extra.is_empty()
 }
 
 #[cfg(all(test, feature = "devtools"))]

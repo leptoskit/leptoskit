@@ -35,7 +35,7 @@ macro_rules! tag {
 
 		impl $name {
 			/// Starts this component's element for `view!`.
-			#[track_caller]
+			#[cfg_attr(feature = "devtools", track_caller)]
 			pub fn builder() -> crate::Element {
 				$start
 			}
@@ -92,7 +92,8 @@ pub use crate::vector::VectorScaling;
 pub use crate::vector::ViewBox;
 
 /// A container whose children use column layout by default.
-#[track_caller]
+#[inline]
+#[cfg_attr(feature = "devtools", track_caller)]
 pub fn View() -> Element {
 	Element::view()
 }
@@ -106,26 +107,26 @@ pub fn View() -> Element {
 /// same as a plain string when it does not.
 pub trait IntoText {
 	/// The label showing this content.
-	#[track_caller]
+	#[cfg_attr(feature = "devtools", track_caller)]
 	fn into_text(self) -> Element;
 }
 
 impl IntoText for &str {
-	#[track_caller]
+	#[cfg_attr(feature = "devtools", track_caller)]
 	fn into_text(self) -> Element {
 		Element::text(self)
 	}
 }
 
 impl IntoText for String {
-	#[track_caller]
+	#[cfg_attr(feature = "devtools", track_caller)]
 	fn into_text(self) -> Element {
 		Element::text(self)
 	}
 }
 
 impl IntoText for &String {
-	#[track_caller]
+	#[cfg_attr(feature = "devtools", track_caller)]
 	fn into_text(self) -> Element {
 		Element::text(self.clone())
 	}
@@ -135,7 +136,7 @@ impl<F> IntoText for F
 where
 	F: Fn() -> String + Send + Sync + 'static,
 {
-	#[track_caller]
+	#[cfg_attr(feature = "devtools", track_caller)]
 	fn into_text(self) -> Element {
 		Element::text_from(self)
 	}
@@ -147,7 +148,7 @@ where
 /// signal — `Text(move || format!("Count: {}", count.get()))` — and the label
 /// follows it, so writing the signal rewrites this node instead of rebuilding
 /// the screen.
-#[track_caller]
+#[cfg_attr(feature = "devtools", track_caller)]
 pub fn Text(content: impl IntoText) -> Element {
 	content.into_text()
 }
@@ -157,7 +158,7 @@ pub fn Text(content: impl IntoText) -> Element {
 ///
 /// The web renderer emits a real heading element (`<h1>` to `<h6>` within
 /// its range); native backends expose the heading trait, flag, or level.
-#[track_caller]
+#[cfg_attr(feature = "devtools", track_caller)]
 pub fn Heading(level: u8, content: impl IntoText) -> Element {
 	content
 		.into_text()
@@ -167,19 +168,19 @@ pub fn Heading(level: u8, content: impl IntoText) -> Element {
 
 /// A polite live region: screen readers announce changes to its text once
 /// they are idle. The usual home of status messages.
-#[track_caller]
+#[cfg_attr(feature = "devtools", track_caller)]
 pub fn Status(content: impl IntoText) -> Element {
 	View().role(Role::Status).child(Text(content))
 }
 
 /// An assertive live region for urgent messages, announced immediately.
-#[track_caller]
+#[cfg_attr(feature = "devtools", track_caller)]
 pub fn Alert(content: impl IntoText) -> Element {
 	View().role(Role::Alert).child(Text(content))
 }
 
 /// An accessible pressable control; register activation with `on_press`.
-#[track_caller]
+#[cfg_attr(feature = "devtools", track_caller)]
 pub fn Button(label: impl Into<String>) -> Element {
 	Element::button(label)
 }
@@ -191,7 +192,7 @@ pub fn Button(label: impl Into<String>) -> Element {
 /// `/assets/<path>`, and the native apps read the copy `leptoskit build`
 /// bundles with them (see [`crate::asset`]). A local `file://` URL also
 /// works on the native hosts.
-#[track_caller]
+#[cfg_attr(feature = "devtools", track_caller)]
 pub fn Image(source: impl Into<String>) -> Element {
 	Element::image(source)
 }
@@ -227,14 +228,14 @@ pub fn Image(source: impl Into<String>) -> Element {
 /// 	);
 /// # Ok::<(), leptoskit_native::VectorError>(())
 /// ```
-#[track_caller]
+#[cfg_attr(feature = "devtools", track_caller)]
 pub fn Vector(view_box: ViewBox) -> Element {
 	Element::vector(view_box)
 }
 
 /// A Rive scene rendered by the native host, initially paused. Set an explicit
 /// size, label or decorative state, and `running(true)` when it should animate.
-#[track_caller]
+#[cfg_attr(feature = "devtools", track_caller)]
 pub fn Rive(playback: leptoskit_rive::Playback) -> Element {
 	Element::rive(playback)
 }
@@ -249,7 +250,7 @@ tag!(Rive => Element::new(crate::NativeKind::Rive));
 /// feature), whose ops go straight to the host without re-rendering this
 /// element. Give it a size, such as `w-full h-96`, and an accessible label,
 /// or mark it decorative with `aria_hidden(true)`.
-#[track_caller]
+#[cfg_attr(feature = "devtools", track_caller)]
 pub fn Scene3d(scene: leptoskit_3d::SceneId) -> Element {
 	Element::scene3d(scene)
 }
@@ -262,7 +263,7 @@ tag!(Scene3d => Element::new(crate::NativeKind::Scene3d));
 /// with `leptoskit_plugin_video` (`guest::Video` from a Wasm guest). Give it a
 /// size, such as `w-full h-64`, and an accessible label, or mark it decorative
 /// with `aria_hidden(true)`.
-#[track_caller]
+#[cfg_attr(feature = "devtools", track_caller)]
 pub fn Video(player: u32) -> Element {
 	Element::video(player)
 }
@@ -275,7 +276,7 @@ tag!(Video => Element::new(crate::NativeKind::Video));
 /// session with `leptoskit_plugin_camera` (`guest::Camera` from a Wasm guest).
 /// Give it a size, such as `w-full h-64`, and an accessible label, or mark it
 /// decorative with `aria_hidden(true)`.
-#[track_caller]
+#[cfg_attr(feature = "devtools", track_caller)]
 pub fn Camera(session: u32) -> Element {
 	Element::camera(session)
 }
@@ -288,7 +289,7 @@ tag!(Camera => Element::new(crate::NativeKind::Camera));
 /// with `leptoskit_plugin_maps` (`guest::Maps` from a Wasm guest). Give it a
 /// size, such as `w-full h-64`, and an accessible label, or mark it decorative
 /// with `aria_hidden(true)`.
-#[track_caller]
+#[cfg_attr(feature = "devtools", track_caller)]
 pub fn Map(session: u32) -> Element {
 	Element::map(session)
 }
@@ -301,7 +302,7 @@ tag!(Map => Element::new(crate::NativeKind::Map));
 /// session with `leptoskit_plugin_live_photo` (`guest::LivePhoto` from a Wasm
 /// guest). Give it a size, such as `w-full h-64`, and an accessible label, or
 /// mark it decorative with `aria_hidden(true)`.
-#[track_caller]
+#[cfg_attr(feature = "devtools", track_caller)]
 pub fn LivePhoto(session: u32) -> Element {
 	Element::live_photo(session)
 }
@@ -318,7 +319,7 @@ tag!(LivePhoto => Element::new(crate::NativeKind::LivePhoto));
 ///
 /// The editor itself comes from `leptoskit_canvist`, on the web only for now.
 /// Everywhere else the element holds its place as an empty view.
-#[track_caller]
+#[cfg_attr(feature = "devtools", track_caller)]
 pub fn CanvistEditor(editor: u32) -> Element {
 	Element::canvist_editor(editor)
 }
@@ -326,7 +327,7 @@ pub fn CanvistEditor(editor: u32) -> Element {
 tag!(CanvistEditor => Element::new(crate::NativeKind::CanvistEditor));
 
 /// A container whose overflowing children can scroll.
-#[track_caller]
+#[cfg_attr(feature = "devtools", track_caller)]
 pub fn ScrollView() -> Element {
 	Element::scroll_view()
 }
@@ -338,7 +339,7 @@ pub fn ScrollView() -> Element {
 /// size is 28 tall. A background, border, or corner radius replaces that
 /// chrome, and the field is then as tall as its text plus its padding. A
 /// height class such as `h-10` replaces the measured height.
-#[track_caller]
+#[cfg_attr(feature = "devtools", track_caller)]
 pub fn TextInput() -> Element {
 	Element::text_input()
 }
@@ -356,7 +357,7 @@ pub fn TextInput() -> Element {
 /// so it grows as the person types. A height class such as `min-h-[120px]`
 /// keeps room for more lines; `h-*` fixes the height, and the field scrolls
 /// past it.
-#[track_caller]
+#[cfg_attr(feature = "devtools", track_caller)]
 pub fn TextArea() -> Element {
 	Element::text_area()
 }
@@ -394,7 +395,7 @@ tag!(TextArea => TextArea());
 /// it is announced as a modal dialog.
 ///
 /// Keep it in the tree while closed: it shows nothing and takes no space.
-#[track_caller]
+#[cfg_attr(feature = "devtools", track_caller)]
 pub fn Modal(open: bool) -> Element {
 	Element::modal(open)
 }
@@ -412,7 +413,7 @@ pub fn Modal(open: bool) -> Element {
 ///
 /// It is as large as its content. Keep it in the tree while closed: it
 /// shows nothing and takes no space.
-#[track_caller]
+#[cfg_attr(feature = "devtools", track_caller)]
 pub fn Popover(anchor: impl Into<String>, open: bool) -> Element {
 	Element::popover(anchor, open)
 }

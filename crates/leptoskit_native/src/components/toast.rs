@@ -989,7 +989,7 @@ pub fn toast_icon_paths(kind: ToastKind) -> &'static [&'static str] {
 }
 
 /// Draws the status icon as a [`Vector`].
-#[track_caller]
+#[cfg_attr(feature = "devtools", track_caller)]
 pub fn ToastIcon(kind: ToastKind) -> Element {
 	let accent = kind.accent();
 	let stroke = Stroke::new(accent, 2.2).expect("positive stroke").round();
@@ -1020,7 +1020,7 @@ pub fn ToastIcon(kind: ToastKind) -> Element {
 	reason = "pill layout is easier to follow in one builder; Arc callbacks are cloned into \
 	          handlers"
 )]
-#[track_caller]
+#[cfg_attr(feature = "devtools", track_caller)]
 pub fn Toast(
 	item: &ToastItem,
 	position: ToastPosition,
@@ -1232,7 +1232,7 @@ pub fn Toast(
 	clippy::needless_pass_by_value,
 	reason = "Arc callbacks are cloned per toast slot"
 )]
-#[track_caller]
+#[cfg_attr(feature = "devtools", track_caller)]
 pub fn ToastViewport(
 	state: &ToasterState,
 	on_dismiss: Arc<dyn Fn(String) + Send + Sync>,
@@ -1329,7 +1329,7 @@ pub fn ToastViewport(
 	clippy::needless_pass_by_value,
 	reason = "forwards Arc callbacks to ToastViewport"
 )]
-#[track_caller]
+#[cfg_attr(feature = "devtools", track_caller)]
 pub fn WithToasts(
 	child: Element,
 	state: &ToasterState,

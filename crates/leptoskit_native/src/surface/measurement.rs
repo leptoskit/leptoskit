@@ -14,8 +14,8 @@ use super::TextCell;
 use super::has_native_chrome;
 use super::measured_content;
 use crate::backend::NativeBackend;
-use crate::element::Element;
 use crate::props::NativeKind;
+use crate::props::NativeProps;
 
 impl<B: NativeBackend> NativeSurface<B> {
 	/// Replaces cached text metrics with the backend's current measurer and
@@ -93,12 +93,17 @@ impl<B: NativeBackend> NativeSurface<B> {
 	}
 
 	/// Refreshes cached text only when the existing measurement inputs change.
-	pub(super) fn update_text_measure(&mut self, id: NodeId, element: &Element) {
-		let style = measured_style(element);
+	pub(super) fn update_text_measure(
+		&mut self,
+		id: NodeId,
+		kind: NativeKind,
+		props: &NativeProps,
+	) {
+		let style = measured_style(kind, props);
 
-		let native_chrome = has_native_chrome(element);
+		let native_chrome = has_native_chrome(kind, props);
 		match (
-			measured_content(element),
+			measured_content(kind, props),
 			self.shadows[id.index()].text_cell.clone(),
 		) {
 			(Some(text), Some(cell)) => {
@@ -158,13 +163,10 @@ impl<B: NativeBackend> NativeSurface<B> {
 
 /// The style an element's text is measured in. Text fields keep their
 /// platform's single-line height, whatever line height they inherit.
-pub(super) fn measured_style(element: &Element) -> crate::props::TextStyle {
-	let mut style = element.props.text_style();
+pub(super) fn measured_style(kind: NativeKind, props: &NativeProps) -> crate::props::TextStyle {
+	let mut style = props.text_style();
 
-	if matches!(
-		element.kind,
-		NativeKind::TextInput | NativeKind::PasswordInput
-	) {
+	if matches!(kind, NativeKind::TextInput | NativeKind::PasswordInput) {
 		style.line_height = None;
 	}
 

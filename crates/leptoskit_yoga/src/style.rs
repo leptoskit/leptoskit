@@ -530,7 +530,7 @@ pub struct Style {
 	/// Borders, which take space but do not collapse.
 	pub border: Rect<f32>,
 	/// Grid properties, used when `display` is `Grid`.
-	pub grid: Option<GridStyle>,
+	pub grid: Option<Box<GridStyle>>,
 }
 
 impl Default for Style {

@@ -344,10 +344,10 @@ fn run_yoga(report: &mut Report, config: Config) {
 				root,
 				Style {
 					display: Display::Grid,
-					grid: Some(GridStyle {
+					grid: Some(Box::new(GridStyle {
 						template_columns: vec![TrackSizing::Fraction(1.0); 20],
 						..GridStyle::default()
-					}),
+					})),
 					..Style::default()
 				},
 			);

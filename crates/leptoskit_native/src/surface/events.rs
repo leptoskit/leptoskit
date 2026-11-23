@@ -4,6 +4,7 @@ use std::borrow::Cow;
 
 use leptoskit_yoga::NodeId;
 
+use super::ChildOrder;
 use super::HitArea;
 use super::NativeSurface;
 use crate::backend::NativeBackend;
@@ -173,9 +174,47 @@ impl<B: NativeBackend> NativeSurface<B> {
 			return;
 		}
 
-		for &child in &shadow.children {
-			if self.hit_areas[child.index()].subtree.contains(x, y) {
-				self.hit_test_walk(child, x, y, best);
+		let children = &shadow.children;
+
+		match self.hit_areas[id.index()].child_order {
+			ChildOrder::MonotonicY => {
+				let start = children
+					.partition_point(|&child| self.hit_areas[child.index()].subtree.bottom < y);
+
+				for &child in &children[start..] {
+					let bounds = self.hit_areas[child.index()].subtree;
+
+					if bounds.top > y {
+						break;
+					}
+
+					if bounds.contains(x, y) {
+						self.hit_test_walk(child, x, y, best);
+					}
+				}
+			}
+			ChildOrder::MonotonicX => {
+				let start = children
+					.partition_point(|&child| self.hit_areas[child.index()].subtree.right < x);
+
+				for &child in &children[start..] {
+					let bounds = self.hit_areas[child.index()].subtree;
+
+					if bounds.left > x {
+						break;
+					}
+
+					if bounds.contains(x, y) {
+						self.hit_test_walk(child, x, y, best);
+					}
+				}
+			}
+			ChildOrder::Unordered => {
+				for &child in children {
+					if self.hit_areas[child.index()].subtree.contains(x, y) {
+						self.hit_test_walk(child, x, y, best);
+					}
+				}
 			}
 		}
 	}

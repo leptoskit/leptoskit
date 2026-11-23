@@ -247,10 +247,10 @@ fn viewport_and_appearance_changes_reuse_the_parsed_rules() {
 #[test]
 fn grid_declarations_preserve_unrelated_base_fields_and_use_minmax_zero_fr() {
 	let mut style = Style {
-		grid: Some(GridStyle {
+		grid: Some(Box::new(GridStyle {
 			auto_rows: TrackSizing::Points(50.0),
 			..GridStyle::default()
-		}),
+		})),
 		..Style::default()
 	};
 	let mut props = NativeProps::default();

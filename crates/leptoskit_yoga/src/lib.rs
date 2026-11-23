@@ -180,6 +180,8 @@ pub(crate) struct Node {
 	pub(crate) measure: Option<MeasureFunc>,
 	pub(crate) measure_cache: MeasureCache,
 	pub(crate) layout_cache: LayoutCache,
+	/// The latest [`Yoga::pass`] in which this node or a descendant ran layout.
+	pub(crate) subtree_pass: u64,
 	pub(crate) dirty: bool,
 	/// Whether the node waits in [`Yoga::pending`] to be laid out on its own,
 	/// as a relayout boundary something inside it dirtied.
@@ -196,6 +198,7 @@ impl Node {
 			measure: None,
 			measure_cache: MeasureCache::default(),
 			layout_cache: LayoutCache::default(),
+			subtree_pass: 0,
 			dirty: true,
 			queued: false,
 		}
@@ -228,14 +231,21 @@ const RETAINED_CACHE_ENTRIES: usize = 8;
 /// A node's result depends only on its [`SizingCtx`] and on its own subtree,
 /// so entries stay valid until [`Yoga::mark_dirty`] clears them on this node
 /// or a descendant.
+///
+/// The committed entry and one additional entry live inline (without
+/// duplicating `committed`) so typical nodes (one measure run plus one commit
+/// run) never allocate a heap buffer while keeping `Node` compact.
 #[derive(Debug, Default)]
 pub(crate) struct LayoutCache {
-	/// Border-box sizes keyed by input constraints, with the pass that
-	/// recorded them.
-	sizes: Vec<CacheEntry>,
-	/// The constraints of the last run that wrote the positions currently
-	/// stored in this subtree, if no later run has overwritten them.
-	committed: Option<(SizingCtx, Size<f32>)>,
+	/// The constraints of the last `Commit` run that wrote the positions
+	/// currently stored in this subtree, if no later `Measure` run overwrote
+	/// them.
+	committed: Option<CacheEntry>,
+	/// One additional non-committed border-box size keyed by input constraints.
+	inline: Option<CacheEntry>,
+	/// Spillover entries when a deeply nested node sees more than two
+	/// distinct constraint sets.
+	overflow: Vec<CacheEntry>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -247,46 +257,108 @@ struct CacheEntry {
 
 impl LayoutCache {
 	/// The cached size for `ctx`, if the run can be skipped in `mode`.
+	#[inline]
 	pub(crate) fn get(&self, ctx: &SizingCtx, mode: RunMode) -> Option<Size<f32>> {
-		let committed = self
-			.committed
-			.filter(|(input, _)| input == ctx)
-			.map(|(_, size)| size);
+		if let Some(entry) = self.committed
+			&& entry.ctx == *ctx
+		{
+			return Some(entry.size);
+		}
 
 		match mode {
-			RunMode::Commit => committed,
+			RunMode::Commit => None,
 			RunMode::Measure => {
-				committed.or_else(|| {
-					self.sizes
-						.iter()
-						.rev()
-						.find(|entry| entry.ctx == *ctx)
-						.map(|entry| entry.size)
-				})
+				if let Some(entry) = self.inline
+					&& entry.ctx == *ctx
+				{
+					return Some(entry.size);
+				}
+
+				self.overflow
+					.iter()
+					.rev()
+					.find(|entry| entry.ctx == *ctx)
+					.map(|entry| entry.size)
 			}
 		}
 	}
 
 	/// Records an executed run, which rewrote every position in the subtree.
 	pub(crate) fn insert(&mut self, ctx: SizingCtx, size: Size<f32>, mode: RunMode, pass: u64) {
-		self.committed = (mode == RunMode::Commit).then_some((ctx, size));
+		let entry = CacheEntry { ctx, size, pass };
 
-		if let Some(entry) = self.sizes.iter_mut().find(|entry| entry.ctx == ctx) {
-			entry.pass = pass;
+		if mode == RunMode::Commit {
+			// Ensure `ctx` is not duplicated in `inline`/`overflow`.
+			if self.inline.is_some_and(|e| e.ctx == ctx) {
+				self.inline = None;
+			} else if let Some(pos) = self.overflow.iter().position(|e| e.ctx == ctx) {
+				self.overflow.swap_remove(pos);
+			}
+
+			if let Some(prev) = self.committed.replace(entry)
+				&& prev.ctx != ctx
+			{
+				self.insert_other(prev, pass);
+			}
+		} else {
+			if let Some(prev) = self.committed.take()
+				&& prev.ctx != ctx
+			{
+				self.insert_other(prev, pass);
+			}
+
+			self.insert_other(entry, pass);
+		}
+	}
+
+	fn insert_other(&mut self, new_entry: CacheEntry, pass: u64) {
+		if let Some(entry) = &mut self.inline
+			&& entry.ctx == new_entry.ctx
+		{
+			*entry = new_entry;
 
 			return;
 		}
 
-		if self.sizes.len() >= RETAINED_CACHE_ENTRIES {
-			self.sizes.retain(|entry| entry.pass == pass);
+		if let Some(entry) = self
+			.overflow
+			.iter_mut()
+			.find(|entry| entry.ctx == new_entry.ctx)
+		{
+			*entry = new_entry;
+
+			return;
 		}
 
-		self.sizes.push(CacheEntry { ctx, size, pass });
+		if self.inline.is_none() {
+			self.inline = Some(new_entry);
+
+			return;
+		}
+
+		let total = usize::from(self.committed.is_some()) + 1 + self.overflow.len();
+
+		if total >= RETAINED_CACHE_ENTRIES {
+			if self.inline.is_some_and(|entry| entry.pass != pass) {
+				self.inline = None;
+			}
+
+			self.overflow.retain(|entry| entry.pass == pass);
+
+			if self.inline.is_none() {
+				self.inline = Some(new_entry);
+
+				return;
+			}
+		}
+
+		self.overflow.push(new_entry);
 	}
 
 	fn clear(&mut self) {
-		self.sizes.clear();
 		self.committed = None;
+		self.inline = None;
+		self.overflow.clear();
 	}
 
 	/// The constraints of the last committed run, if they make this node a
@@ -294,11 +366,12 @@ impl LayoutCache {
 	/// no run under any other constraints is cached, so the parent never asked
 	/// for the size of its content. Its size, and so everything outside it,
 	/// is then independent of what it contains.
+	#[inline]
 	pub(crate) fn boundary(&self) -> Option<SizingCtx> {
-		let (ctx, _) = self.committed?;
-		let fixed = ctx.forced.width.is_some() && ctx.forced.height.is_some();
-		let only_committed = self.sizes.iter().all(|entry| entry.ctx == ctx);
-		(fixed && only_committed).then_some(ctx)
+		let entry = self.committed?;
+		let fixed = entry.ctx.forced.width.is_some() && entry.ctx.forced.height.is_some();
+		let only_committed = self.inline.is_none() && self.overflow.is_empty();
+		(fixed && only_committed).then_some(entry.ctx)
 	}
 }
 
@@ -388,6 +461,11 @@ impl Yoga {
 	/// Creates an empty arena.
 	pub fn new() -> Self {
 		Self::default()
+	}
+
+	/// Reserves arena capacity for at least `additional` more nodes.
+	pub fn reserve(&mut self, additional: usize) {
+		self.nodes.reserve(additional);
 	}
 
 	/// Allocates a node with default style.
@@ -625,6 +703,7 @@ impl Yoga {
 			percent_basis: available.map(AvailableSpace::definite),
 		};
 		self.pass += 1;
+		let pass = self.pass;
 		self.layout_node(root, ctx, RunMode::Commit);
 		// Boundaries dirtied from inside: their ancestors stayed clean, so the
 		// pass above did not reach them. One the pass did reach is clean now.
@@ -633,6 +712,18 @@ impl Yoga {
 
 			if self.nodes[node.0].dirty {
 				self.layout_node(node, ctx, RunMode::Commit);
+				// Mark ancestors so a frame walk starting at `root` knows a
+				// boundary inside them laid out during this pass.
+				let mut ancestor = self.nodes[node.0].parent;
+
+				while let Some(id) = ancestor {
+					if self.nodes[id.0].subtree_pass == pass {
+						break;
+					}
+
+					self.nodes[id.0].subtree_pass = pass;
+					ancestor = self.nodes[id.0].parent;
+				}
 			}
 		}
 
@@ -646,7 +737,20 @@ impl Yoga {
 		}
 	}
 
+	/// The pass counter of the most recent layout calculation.
+	#[inline]
+	pub fn current_pass(&self) -> u64 {
+		self.pass
+	}
+
+	/// Whether `node` or any descendant ran layout during `pass`.
+	#[inline]
+	pub fn subtree_changed_in(&self, node: NodeId, pass: u64) -> bool {
+		self.nodes[node.0].subtree_pass == pass
+	}
+
 	/// The computed layout of a node.
+	#[inline]
 	pub fn layout(&self, node: NodeId) -> &Layout {
 		&self.nodes[node.0].layout
 	}
@@ -675,6 +779,36 @@ impl Yoga {
 	/// items both do in CSS.
 	pub(crate) fn layout_children(&self, node: NodeId) -> (Vec<NodeId>, Vec<NodeId>) {
 		let children = self.children(node);
+
+		if children.is_empty() {
+			return (Vec::new(), Vec::new());
+		}
+
+		let has_contents = children
+			.iter()
+			.any(|&child| self.nodes[child.0].style.display == Display::Contents);
+
+		if !has_contents {
+			let mut flow = Vec::with_capacity(children.len());
+			let mut absolute = Vec::new();
+
+			for &child in children {
+				let style = &self.nodes[child.0].style;
+
+				if style.display == Display::None {
+					continue;
+				}
+
+				if matches!(style.position, PositionType::Absolute | PositionType::Fixed) {
+					absolute.push(child);
+				} else {
+					flow.push(child);
+				}
+			}
+
+			return (flow, absolute);
+		}
+
 		let mut flow = Vec::with_capacity(children.len());
 		let mut absolute = Vec::new();
 		let mut stack: Vec<NodeId> = children.iter().rev().copied().collect();
@@ -885,28 +1019,19 @@ impl BoxMetrics {
 	}
 }
 
-/// Clamps a size through the style's min and max constraints.
-pub(crate) fn clamp_size(style: &Style, size: Size<f32>, basis: Size<Option<f32>>) -> Size<f32> {
-	BoxMetrics::new(style, basis).clamp(size)
-}
-
-/// Clamps a width through `min_width` and `max_width`; the minimum wins.
-pub(crate) fn clamp_width(style: &Style, width: f32, basis: Size<Option<f32>>) -> f32 {
-	let metrics = BoxMetrics::new(style, basis);
-	width.clamp(metrics.min.width, metrics.max.width)
-}
-
-/// Clamps a height through `min_height` and `max_height`; the minimum wins.
-pub(crate) fn clamp_height(style: &Style, height: f32, basis: Size<Option<f32>>) -> f32 {
-	let metrics = BoxMetrics::new(style, basis);
-	height.clamp(metrics.min.height, metrics.max.height)
-}
-
 /// The node's border-box size on each axis where it is already definite:
 /// imposed by the parent algorithm, or a style length that resolves against
 /// the containing block. Content-sized axes are `None`.
 pub(crate) fn definite_border_box(style: &Style, ctx: &SizingCtx) -> Size<Option<f32>> {
 	let metrics = BoxMetrics::new(style, ctx.percent_basis);
+	definite_border_box_with_metrics(style, ctx, &metrics)
+}
+
+pub(crate) fn definite_border_box_with_metrics(
+	style: &Style,
+	ctx: &SizingCtx,
+	metrics: &BoxMetrics,
+) -> Size<Option<f32>> {
 	let mut size = Size::new(
 		ctx.forced
 			.width
@@ -940,10 +1065,9 @@ pub(crate) fn definite_border_box(style: &Style, ctx: &SizingCtx) -> Size<Option
 /// A box never exceeds its maximum, so content laid out inside it (text
 /// wrapping in a capped-width bubble, say) must see the cap, not the parent's
 /// space. An unbounded axis with a maximum becomes bounded by it.
-pub(crate) fn bounded_by_max(
-	style: &Style,
+pub(crate) fn bounded_by_max_with_metrics(
 	available: Size<AvailableSpace>,
-	basis: Size<Option<f32>>,
+	metrics: &BoxMetrics,
 ) -> Size<AvailableSpace> {
 	let axis = |space: AvailableSpace, max: Option<f32>| {
 		match (space, max) {
@@ -954,7 +1078,6 @@ pub(crate) fn bounded_by_max(
 			(space, _) => space,
 		}
 	};
-	let metrics = BoxMetrics::new(style, basis);
 
 	Size::new(
 		axis(

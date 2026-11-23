@@ -214,58 +214,30 @@ impl Writer {
 	}
 
 	fn props(&mut self, props: &NativeProps) -> io::Result<()> {
-		// Every property sent typed is cleared here; whatever remains set
-		// travels in the JSON form, so a property the typed fields do not
-		// name is never lost.
-		let mut rest = props.clone();
-		let text = rest.text.take();
-		let source = rest.source.take();
-		let placeholder = rest.placeholder.take();
-		let value = rest.value.take();
-		let accessibility_label = rest.accessibility_label.take();
-		let color = rest.color.take();
-		let background = rest.background.take();
-
-		let border_color = rest.border_color.take();
-		let enabled = rest.enabled.take();
-		let hidden = rest.hidden.take();
-		let clip = rest.clip.take();
-		let corner_radius = rest.corner_radius.take();
-		let border_width = rest.border_width.take();
-		let opacity = rest.opacity.take();
-		let font_size = rest.font_size.take();
-
-		let font_weight = rest.font_weight.take();
-		let text_align = rest.text_align.take();
-		let transform = rest.transform.take();
-		let animation = rest.animation.take();
-		let rest = (rest != NativeProps::default())
-			.then(|| serde_json::to_string(&rest))
-			.transpose()
-			.map_err(io::Error::other)?;
+		let rest = encode_rest(props)?;
 
 		let mut present = 0;
 		for (bit, set) in [
-			(TEXT, text.is_some()),
-			(SOURCE, source.is_some()),
-			(PLACEHOLDER, placeholder.is_some()),
-			(VALUE, value.is_some()),
-			(ACCESSIBILITY_LABEL, accessibility_label.is_some()),
-			(COLOR, color.is_some()),
-			(BACKGROUND, background.is_some()),
-			(BORDER_COLOR, border_color.is_some()),
-			(ENABLED, enabled.is_some()),
-			(HIDDEN, hidden.is_some()),
-			(CLIP, clip.is_some()),
-			(CORNER_RADIUS, corner_radius.is_some()),
-			(BORDER_WIDTH, border_width.is_some()),
-			(OPACITY, opacity.is_some()),
-			(FONT_SIZE, font_size.is_some()),
-			(FONT_WEIGHT, font_weight.is_some()),
-			(TEXT_ALIGN, text_align.is_some()),
-			(TRANSFORM, transform.is_some()),
-			(ANIMATION, animation.is_some()),
-			(REST, rest.is_some()),
+			(TEXT, props.text.is_some()),
+			(SOURCE, props.source.is_some()),
+			(PLACEHOLDER, props.placeholder.is_some()),
+			(VALUE, props.value.is_some()),
+			(ACCESSIBILITY_LABEL, props.accessibility_label.is_some()),
+			(COLOR, props.color.is_some()),
+			(BACKGROUND, props.background.is_some()),
+			(BORDER_COLOR, props.border_color.is_some()),
+			(ENABLED, props.enabled.is_some()),
+			(HIDDEN, props.hidden.is_some()),
+			(CLIP, props.clip.is_some()),
+			(CORNER_RADIUS, props.corner_radius.is_some()),
+			(BORDER_WIDTH, props.border_width.is_some()),
+			(OPACITY, props.opacity.is_some()),
+			(FONT_SIZE, props.font_size.is_some()),
+			(FONT_WEIGHT, props.font_weight.is_some()),
+			(TEXT_ALIGN, props.text_align.is_some()),
+			(TRANSFORM, props.transform.is_some()),
+			(ANIMATION, props.animation.is_some()),
+			(REST, rest.as_str().is_some()),
 		] {
 			if set {
 				present |= bit;
@@ -273,29 +245,46 @@ impl Writer {
 		}
 		self.u32(present)?;
 
-		for value in [&text, &source, &placeholder, &value, &accessibility_label]
-			.into_iter()
-			.flatten()
+		for value in [
+			&props.text,
+			&props.source,
+			&props.placeholder,
+			&props.value,
+			&props.accessibility_label,
+		]
+		.into_iter()
+		.flatten()
 		{
 			self.string(value)?;
 		}
 
-		for value in [color, background, border_color].into_iter().flatten() {
+		for value in [props.color, props.background, props.border_color]
+			.into_iter()
+			.flatten()
+		{
 			self.u32(value.0)?;
 		}
 
-		for value in [enabled, hidden, clip].into_iter().flatten() {
+		for value in [props.enabled, props.hidden, props.clip]
+			.into_iter()
+			.flatten()
+		{
 			self.put(&[u8::from(value)])?;
 		}
 
-		for value in [corner_radius, border_width, opacity, font_size]
-			.into_iter()
-			.flatten()
+		for value in [
+			props.corner_radius,
+			props.border_width,
+			props.opacity,
+			props.font_size,
+		]
+		.into_iter()
+		.flatten()
 		{
 			self.put(&value.to_le_bytes())?;
 		}
 
-		if let Some(weight) = font_weight {
+		if let Some(weight) = props.font_weight {
 			// The weights added later follow the first four, so a renderer
 			// built before them still reads those.
 			self.put(&[match weight {
@@ -311,7 +300,7 @@ impl Writer {
 			}])?;
 		}
 
-		if let Some(align) = text_align {
+		if let Some(align) = props.text_align {
 			self.put(&[match align {
 				TextAlign::Start => 0,
 				TextAlign::Center => 1,
@@ -319,16 +308,16 @@ impl Writer {
 			}])?;
 		}
 
-		if let Some(transform) = transform {
-			self.transform(&transform)?;
+		if let Some(transform) = &props.transform {
+			self.transform(transform)?;
 		}
 
-		if let Some(animation) = animation {
-			self.animation(&animation)?;
+		if let Some(animation) = props.animation.as_deref() {
+			self.animation(animation)?;
 		}
 
-		if let Some(rest) = rest {
-			self.string(&rest)?;
+		if let Some(rest) = rest.as_str() {
+			self.string(rest)?;
 		}
 
 		Ok(())
@@ -459,6 +448,153 @@ impl Writer {
 			}
 		}
 	}
+}
+
+enum RestProps {
+	None,
+	Static(&'static str),
+	Owned(String),
+}
+
+impl RestProps {
+	fn as_str(&self) -> Option<&str> {
+		match self {
+			Self::None => None,
+			Self::Static(s) => Some(s),
+			Self::Owned(s) => Some(s.as_str()),
+		}
+	}
+}
+
+/// Encodes any property outside the typed `LKB1` bitset as JSON, fast-pathing
+/// the overwhelmingly common cases (empty or `direction`-only) with zero
+/// cloning and zero JSON allocation.
+fn encode_rest(props: &NativeProps) -> io::Result<RestProps> {
+	let NativeProps {
+		// Typed fields sent directly in the binary record.
+		text: _,
+		source: _,
+		placeholder: _,
+		value: _,
+		accessibility_label: _,
+		color: _,
+		background: _,
+		border_color: _,
+		enabled: _,
+		hidden: _,
+		clip: _,
+		corner_radius: _,
+		border_width: _,
+		opacity: _,
+		font_size: _,
+		font_weight: _,
+		text_align: _,
+		transform: _,
+		animation: _,
+		// `motion` is `#[serde(skip)]`, so it never serializes.
+		motion: _,
+		// Non-typed fields that ride in the JSON `rest` payload.
+		rive,
+		scene3d,
+		video,
+		camera,
+		map,
+		live_photo,
+		canvist_editor,
+		autocomplete,
+		keyboard,
+		read_only,
+		max_length,
+		capitalize,
+		autocorrect,
+		submit_label,
+		checked,
+		radio_group,
+		slider,
+		progress,
+		running,
+		drawing,
+		aria,
+		id,
+		border_widths,
+		line_height,
+		italic,
+		spans,
+		direction,
+		focused,
+		focus_request,
+		reveal,
+		scroll_offset,
+		overlay,
+		appearance,
+		extra,
+	} = props;
+
+	let has_other_rest = rive.is_some()
+		|| scene3d.is_some()
+		|| video.is_some()
+		|| camera.is_some()
+		|| map.is_some()
+		|| live_photo.is_some()
+		|| canvist_editor.is_some()
+		|| autocomplete.is_some()
+		|| keyboard.is_some()
+		|| read_only.is_some()
+		|| max_length.is_some()
+		|| capitalize.is_some()
+		|| autocorrect.is_some()
+		|| submit_label.is_some()
+		|| checked.is_some()
+		|| radio_group.is_some()
+		|| slider.is_some()
+		|| progress.is_some()
+		|| running.is_some()
+		|| drawing.is_some()
+		|| aria.is_some()
+		|| id.is_some()
+		|| border_widths.is_some()
+		|| line_height.is_some()
+		|| italic.is_some()
+		|| spans.is_some()
+		|| focused.is_some()
+		|| focus_request.is_some()
+		|| reveal.is_some()
+		|| scroll_offset.is_some()
+		|| overlay.is_some()
+		|| appearance.is_some()
+		|| !extra.is_empty();
+
+	if !has_other_rest {
+		return Ok(match direction {
+			None => RestProps::None,
+			Some(leptoskit_yoga::Direction::Ltr) => RestProps::Static("{\"direction\":\"Ltr\"}"),
+			Some(leptoskit_yoga::Direction::Rtl) => RestProps::Static("{\"direction\":\"Rtl\"}"),
+		});
+	}
+
+	let mut rest = props.clone();
+	rest.text = None;
+	rest.source = None;
+	rest.placeholder = None;
+	rest.value = None;
+	rest.accessibility_label = None;
+	rest.color = None;
+	rest.background = None;
+	rest.border_color = None;
+	rest.enabled = None;
+	rest.hidden = None;
+	rest.clip = None;
+	rest.corner_radius = None;
+	rest.border_width = None;
+	rest.opacity = None;
+	rest.font_size = None;
+	rest.font_weight = None;
+	rest.text_align = None;
+	rest.transform = None;
+	rest.animation = None;
+	serde_json::to_string(&rest)
+		.map(RestProps::Owned)
+		.map_err(io::Error::other)
 }
 
 #[cfg(test)]

@@ -13,6 +13,7 @@ use crate::backend::MutationList;
 use crate::backend::NativeBackend;
 use crate::controls::ControlTreeError;
 use crate::element::Element;
+use crate::element::InheritedProps;
 use crate::props::NativeKind;
 use crate::tailwind::StyleContext;
 
@@ -155,6 +156,9 @@ impl<B: NativeBackend> NativeSurface<B> {
 
 	/// Resolves and reconciles each patched position of the updated source.
 	fn reconcile_patches<'a>(&mut self, patches: impl Iterator<Item = (&'a Vec<usize>, bool)>) {
+		let Some(root_source) = self.source.take() else {
+			return;
+		};
 		let context = StyleContext {
 			viewport: self.viewport,
 			dark: self.dark,
@@ -175,30 +179,33 @@ impl<B: NativeBackend> NativeSurface<B> {
 			let id = self.node_at(path);
 			let parent = self.shadows[id.index()]
 				.parent
-				.map(|parent| self.shadows[parent.index()].props.clone())
+				.map(|parent| InheritedProps::from_props(&self.shadows[parent.index()].props))
 				.unwrap_or_default();
-			let source = source_at(self.source.as_ref().expect("patched"), path);
-			let own = (!subtree).then(|| source.resolve_own(&context, &parent, None));
-			let own = own.filter(|own| {
-				self.keeps_identity(id, own)
+			let source = source_at(&root_source, path);
+
+			if !subtree {
+				self.record_element_context_flags(source);
+				let own = source.resolve_own_into(&context, parent, None);
+
+				if self.keeps_identity_parts(id, own.kind, &own.props)
 					&& !Element::inherited_differs(&self.shadows[id.index()].props, &own.props)
-			});
-
-			let Some(own) = own else {
-				let (element, _) = source.resolve_inherited(&context, &parent, None);
-				let replaced = self.update_node(id, &element, &mut mutations);
-
-				if self.root == Some(id) {
-					self.root = Some(replaced);
+				{
+					self.update_own_resolved(id, own, source, &mut mutations);
+					continue;
 				}
+			}
 
-				resolved_subtrees.push(path);
-				continue;
-			};
+			let replaced =
+				self.update_source_node(id, source, &context, parent, None, &mut mutations);
 
-			self.update_own(id, &own, &mut mutations);
+			if self.root == Some(id) {
+				self.root = Some(replaced);
+			}
+
+			resolved_subtrees.push(path);
 		}
 
+		self.source = Some(root_source);
 		self.apply_and_lay_out(mutations);
 	}
 

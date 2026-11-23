@@ -83,6 +83,13 @@ impl MutationList {
 		Self::default()
 	}
 
+	/// An empty list with pre-allocated capacity.
+	pub fn with_capacity(capacity: usize) -> Self {
+		Self {
+			mutations: Vec::with_capacity(capacity),
+		}
+	}
+
 	/// Appends a mutation.
 	pub fn push(&mut self, mutation: Mutation) {
 		self.mutations.push(mutation);
