@@ -12,6 +12,13 @@ on:
       - "Cargo.toml"
       - "Cargo.lock"
       - "rust-toolchain.toml"
+      - ".dockerignore"
+      - ".github/workflows/cloud-images.yml"
+  pull_request:
+    paths:
+      - "crates/leptoskit_cloud_app/Dockerfile"
+      - "crates/leptoskit_cloud_worker/Dockerfile"
+      - ".dockerignore"
       - ".github/workflows/cloud-images.yml"
   workflow_dispatch:
     inputs:
@@ -23,21 +30,23 @@ on:
 
 permissions:
   contents: read
-  packages: write
 
 concurrency:
   group: cloud-images-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   images:
-    name: Build and push ${{ matrix.name }}
-    runs-on: ubuntu-24.04
+    name: Build ${{ matrix.image.name }} (${{ matrix.platform.arch }})
+    runs-on: ${{ matrix.platform.runner }}
     timeout-minutes: 90
+    permissions:
+      contents: read
+      packages: write
     strategy:
       fail-fast: false
       matrix:
-        include:
+        image:
           - name: leptoskit-cloud-control
             dockerfile: crates/leptoskit_cloud_app/Dockerfile
             target: runtime
@@ -47,51 +56,144 @@ jobs:
           - name: leptoskit-cloud-builder
             dockerfile: crates/leptoskit_cloud_worker/Dockerfile
             target: builder
+        platform:
+          - arch: amd64
+            oci: linux/amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            oci: linux/arm64
+            runner: ubuntu-24.04-arm
     steps:
+      - name: free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+          df -h /
+
       - name: checkout repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
 
-      - name: build and push multi-arch OCI image
+      - name: build native OCI image
+        id: build
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IMAGE_NAME: ${{ matrix.image.name }}
+          DOCKERFILE: ${{ matrix.image.dockerfile }}
+          TARGET: ${{ matrix.image.target }}
+          ARCH: ${{ matrix.platform.arch }}
+          PLATFORM: ${{ matrix.platform.oci }}
+          PLATFORMS: ${{ inputs.platforms || 'linux/amd64,linux/arm64' }}
+        run: |
+          set -euo pipefail
+          case ",${PLATFORMS}," in
+            *",${PLATFORM},"*) ;;
+            *)
+              echo "Skipping ${PLATFORM} (not in requested platforms: ${PLATFORMS})"
+              echo "built=false" >> "$GITHUB_OUTPUT"
+              exit 0
+              ;;
+          esac
+
+          image="ghcr.io/${GITHUB_REPOSITORY,,}/${IMAGE_NAME}"
+          docker buildx create --name leptoskit-cloud --driver docker-container --use >/dev/null
+
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            docker buildx build \
+              --platform "${PLATFORM}" \
+              --file "${DOCKERFILE}" \
+              --target "${TARGET}" \
+              --cache-from "type=registry,ref=${image}:buildcache-${ARCH}" \
+              .
+            echo "built=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          printf '%s' "$REGISTRY_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          trap 'docker logout ghcr.io || true' EXIT
+
+          docker buildx build \
+            --platform "${PLATFORM}" \
+            --file "${DOCKERFILE}" \
+            --target "${TARGET}" \
+            --cache-from "type=registry,ref=${image}:buildcache-${ARCH}" \
+            --cache-to "type=registry,ref=${image}:buildcache-${ARCH},mode=max" \
+            --output "type=image,name=${image},push-by-digest=true,name-canonical=true,push=true" \
+            --metadata-file metadata.json \
+            .
+
+          digest="$(jq -r '."containerimage.digest"' metadata.json)"
+          grep -Eq '^sha256:[a-f0-9]{64}$' <<< "$digest"
+          printf '%s\n' "$digest" > "${IMAGE_NAME}-${ARCH}.digest"
+          echo "built=true" >> "$GITHUB_OUTPUT"
+
+      - name: upload arch digest
+        if: steps.build.outputs.built == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: digest-${{ matrix.image.name }}-${{ matrix.platform.arch }}
+          path: ${{ matrix.image.name }}-${{ matrix.platform.arch }}.digest
+          retention-days: 1
+
+  merge:
+    name: Publish multi-arch ${{ matrix.name }}
+    needs: images
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        name:
+          - leptoskit-cloud-control
+          - leptoskit-cloud-worker
+          - leptoskit-cloud-builder
+    steps:
+      - name: download arch digests
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: digest-${{ matrix.name }}-*
+          path: digests
+          merge-multiple: true
+
+      - name: create and push multi-arch manifest
         env:
           REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           IMAGE_NAME: ${{ matrix.name }}
-          DOCKERFILE: ${{ matrix.dockerfile }}
-          TARGET: ${{ matrix.target }}
-          PLATFORMS: ${{ inputs.platforms || 'linux/amd64,linux/arm64' }}
         run: |
           set -euo pipefail
           image="ghcr.io/${GITHUB_REPOSITORY,,}/${IMAGE_NAME}"
           printf '%s' "$REGISTRY_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
           trap 'docker logout ghcr.io || true' EXIT
 
-          docker run --privileged --rm tonistiigi/binfmt --install arm64 >/dev/null
-          docker buildx create --name leptoskit-cloud --driver docker-container --use >/dev/null
+          shopt -s nullglob
+          sources=()
+          for file in digests/*.digest; do
+            digest="$(tr -d '[:space:]' < "$file")"
+            sources+=("${image}@${digest}")
+          done
+          if [ "${#sources[@]}" -eq 0 ]; then
+            echo "No architecture digests found for ${IMAGE_NAME}" >&2
+            exit 1
+          fi
 
           tags=("--tag" "${image}:${GITHUB_SHA}")
           if [ "${GITHUB_REF_NAME:-}" = "main" ]; then
             tags+=("--tag" "${image}:main")
           fi
 
-          docker buildx build \
-            --platform "${PLATFORMS}" \
-            --file "${DOCKERFILE}" \
-            --target "${TARGET}" \
-            --cache-from "type=registry,ref=${image}:buildcache" \
-            --cache-to "type=registry,ref=${image}:buildcache,mode=max" \
-            --metadata-file metadata.json \
-            --push \
-            "${tags[@]}" \
-            .
-
-          digest="$(jq -r '."containerimage.digest"' metadata.json)"
+          docker buildx imagetools create "${tags[@]}" "${sources[@]}"
+          digest="$(docker buildx imagetools inspect "${image}:${GITHUB_SHA}" --format '{{json .Manifest.Digest}}' | jq -r .)"
           printf '%s@%s\n' "${image}" "${digest}" > "${IMAGE_NAME}.digest.txt"
           grep -Eq '@sha256:[a-f0-9]{64}$' "${IMAGE_NAME}.digest.txt"
           cat "${IMAGE_NAME}.digest.txt"
 
       - name: upload immutable digest pin
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ${{ matrix.name }}-digest
           path: ${{ matrix.name }}.digest.txt
