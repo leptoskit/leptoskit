@@ -5,7 +5,6 @@ use leptoskit_native::NativeKind;
 use wasmi::Caller;
 use wasmi::Linker;
 
-use super::HostNode;
 use super::HostState;
 use super::MAX_NODE_PROPERTY_BYTES;
 use super::MAX_RENDER_PROPERTY_BYTES;
@@ -66,15 +65,11 @@ fn node_create(mut caller: Caller<'_, HostState>, id: i64, kind: i32) -> Result<
 	state.budget.charge(256)?;
 	state.check_nodes(usize::from(!state.nodes.contains_key(&id)))?;
 	let kind = leptoskit_native::wire::kind(kind).unwrap_or(NativeKind::View);
-	state.ensure_node(id);
+	let node = state.ensure_node(id);
 
 	// A different widget kind replaces the node and everything below it.
-	if state
-		.kinds
-		.insert(id, kind)
-		.is_some_and(|previous| previous != kind)
-	{
-		state.dirty_structure.insert(id);
+	if node.kind.replace(kind).is_some_and(|previous| previous != kind) {
+		state.mark_dirty_structure(id);
 	}
 
 	Ok(())
@@ -112,8 +107,11 @@ fn node_set_props(
 	}
 
 	state.budget.charge(256 + len)?;
-	state.check_nodes(usize::from(!state.nodes.contains_key(&id)))?;
-	let old_bytes = state.nodes.get(&id).map_or(0, |node| node.property_bytes);
+	let (is_new, old_bytes) = match state.nodes.get(&id) {
+		Some(node) => (false, node.property_bytes),
+		None => (true, 0),
+	};
+	state.check_nodes(usize::from(is_new))?;
 	let property_bytes = state.budget.property_bytes - old_bytes + len;
 
 	if property_bytes > MAX_RENDER_PROPERTY_BYTES {
@@ -132,13 +130,21 @@ fn node_set_props(
 			.ok_or_else(|| host_trap(format!("props range {start}+{len} is out of bounds")))?
 	};
 
-	let mut wire = WireNode::from_wire(bytes)
-		.map_err(|error| props_error(id, caller.data().kinds.get(&id).copied(), bytes, &error))?;
+	let mut wire = WireNode::from_wire(bytes).map_err(|error| {
+		props_error(
+			id,
+			caller.data().nodes.get(&id).and_then(|node| node.kind),
+			bytes,
+			&error,
+		)
+	})?;
 	let mut rive_bytes = if wire.props.rive.is_some() { len } else { 0 };
 	let mut retained_bytes = len;
 
 	if let Some(inputs) = wire.rive_inputs.take() {
-		if wire.props.rive.is_some() || caller.data().kinds.get(&id) != Some(&NativeKind::Rive) {
+		let previous_kind = caller.data().nodes.get(&id).and_then(|node| node.kind);
+
+		if wire.props.rive.is_some() || previous_kind != Some(NativeKind::Rive) {
 			return Err(host_trap(
 				"rive_inputs requires an existing Rive node and no replacement asset",
 			));
@@ -173,25 +179,24 @@ fn node_set_props(
 	}
 
 	let state = caller.data_mut();
+	let node = state.ensure_node(id);
 	// A `DevTools` guest names where a node was created only when it renders
 	// the node in full; a bound value changing in place sends no source, so
 	// the node keeps the one it had.
-	if wire.source.is_none()
-		&& let Some(previous) = state.nodes.get(&id)
-	{
-		wire.source.clone_from(&previous.wire.source);
-		wire.component.clone_from(&previous.wire.component);
+	if wire.source.is_none() {
+		wire.source = node.wire.source.take();
+		wire.component = node.wire.component.take();
 	}
-	state.ensure_node(id);
-	state.nodes.insert(
-		id,
-		HostNode {
-			wire,
-			property_bytes: retained_bytes,
-			rive_bytes,
-		},
-	);
-	state.dirty_props.insert(id);
+
+	node.wire = wire;
+	node.property_bytes = retained_bytes;
+	node.rive_bytes = rive_bytes;
+
+	if !node.dirty_props {
+		node.dirty_props = true;
+		state.dirty_props.push(id);
+	}
+
 	state.budget.property_bytes = property_bytes + retained_bytes - len;
 	Ok(())
 }
@@ -204,9 +209,9 @@ fn node_insert(
 ) -> Result<(), wasmi::Error> {
 	let state = caller.data_mut();
 	let shifted = state
-		.children
+		.nodes
 		.get(&parent)
-		.map_or(0, Vec::len)
+		.map_or(0, |node| node.children.len())
 		.saturating_sub(index as u32 as usize);
 	state
 		.budget
@@ -231,7 +236,7 @@ fn node_insert(
 			)));
 		}
 
-		ancestor = state.parents.get(&id).copied();
+		ancestor = state.nodes.get(&id).and_then(|node| node.parent);
 	}
 
 	let additional = usize::from(!state.nodes.contains_key(&parent))
@@ -240,12 +245,18 @@ fn node_insert(
 	state.detach(child);
 	state.ensure_node(parent);
 	state.ensure_node(child);
-	let siblings = state.children.entry(parent).or_default();
-	let index = (index as u32 as usize).min(siblings.len());
-	siblings.insert(index, child);
-	state.parents.insert(child, parent);
+
+	let parent_node = state.nodes.get_mut(&parent).expect("ensured above");
+	let index = (index as u32 as usize).min(parent_node.children.len());
+	parent_node.children.insert(index, child);
+
+	if !parent_node.dirty_structure {
+		parent_node.dirty_structure = true;
+		state.dirty_structure.push(parent);
+	}
+
+	state.nodes.get_mut(&child).expect("ensured above").parent = Some(parent);
 	state.roots.remove(&child);
-	state.dirty_structure.insert(parent);
 	Ok(())
 }
 
@@ -257,7 +268,7 @@ fn node_remove(
 	let state = caller.data_mut();
 	state.budget.charge(256 + 8 * state.sibling_count(child))?;
 
-	if state.parents.get(&child) == Some(&parent) {
+	if state.nodes.get(&child).and_then(|node| node.parent) == Some(parent) {
 		state.detach(child);
 	}
 
@@ -266,25 +277,25 @@ fn node_remove(
 
 fn node_delete(mut caller: Caller<'_, HostState>, id: i64) -> Result<(), wasmi::Error> {
 	let state = caller.data_mut();
-	state.budget.charge(
-		256 + 8 * (state.sibling_count(id) + state.children.get(&id).map_or(0, Vec::len)),
-	)?;
+	let child_count = state.nodes.get(&id).map_or(0, |node| node.children.len());
+	state
+		.budget
+		.charge(256 + 8 * (state.sibling_count(id) + child_count))?;
 	state.detach(id);
-
-	for child in state.children.remove(&id).into_iter().flatten() {
-		state.parents.remove(&child);
-		state.roots.insert(child);
-	}
-
 	state.roots.remove(&id);
-	state.dirty_props.remove(&id);
-	state.dirty_structure.remove(&id);
 
 	if let Some(node) = state.nodes.remove(&id) {
 		state.budget.property_bytes -= node.property_bytes;
+
+		for child in node.children {
+			if let Some(child_node) = state.nodes.get_mut(&child) {
+				child_node.parent = None;
+			}
+
+			state.roots.insert(child);
+		}
 	}
 
-	state.kinds.remove(&id);
 	Ok(())
 }
 
@@ -294,9 +305,11 @@ fn commit(mut caller: Caller<'_, HostState>) -> Result<(), wasmi::Error> {
 
 	let root = match state.roots.len() {
 		0 => return Ok(()),
-		1 => *state.roots.first().expect("one root"),
+		1 => *state.roots.iter().next().expect("one root"),
 		_ => {
-			let many: Vec<i64> = state.roots.iter().take(9).copied().collect();
+			let mut many: Vec<i64> = state.roots.iter().copied().collect();
+			many.sort_unstable();
+			many.truncate(9);
 			return Err(excess_roots(&many, state.roots.len()));
 		}
 	};

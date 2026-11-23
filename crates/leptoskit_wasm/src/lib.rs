@@ -116,7 +116,8 @@
 	html_favicon_url = "https://raw.githubusercontent.com/leptoskit/leptoskit/main/docs/src/assets/mark.svg"
 )]
 
-use std::collections::BTreeMap;
+use std::collections::HashMap;
+use std::collections::HashSet;
 use std::collections::VecDeque;
 
 use leptoskit_native::Element;
@@ -158,6 +159,31 @@ pub use budget::MAX_RENDER_NODES;
 pub use budget::MAX_RENDER_PROPERTY_BYTES;
 pub use budget::MAX_RENDER_WORK;
 use resource_limits::ResourceLimits;
+
+/// Fast non-cryptographic hasher for internal wire-id maps.
+#[derive(Default)]
+pub(crate) struct FastHasher(u64);
+
+impl std::hash::Hasher for FastHasher {
+	#[inline]
+	fn write(&mut self, bytes: &[u8]) {
+		for &byte in bytes {
+			self.0 = (self.0.rotate_left(5) ^ u64::from(byte)).wrapping_mul(0x517cc1b727220a95);
+		}
+	}
+
+	#[inline]
+	fn write_i64(&mut self, value: i64) {
+		self.0 = (self.0.rotate_left(5) ^ (value as u64)).wrapping_mul(0x517cc1b727220a95);
+	}
+
+	#[inline]
+	fn finish(&self) -> u64 {
+		self.0
+	}
+}
+
+pub(crate) type FastHash = std::hash::BuildHasherDefault<FastHasher>;
 
 /// The ABI version this host speaks.
 pub const ABI_VERSION: u32 = 1;
@@ -269,32 +295,34 @@ enum PendingCommit {
 
 #[derive(Debug, Default)]
 struct HostNode {
+	kind: Option<NativeKind>,
 	wire: WireNode,
 	property_bytes: usize,
 	/// Original payload bound retained while compact updates reuse its scene.
 	rive_bytes: usize,
+	parent: Option<i64>,
+	children: Vec<i64>,
+	dirty_props: bool,
+	dirty_structure: bool,
 }
 
 /// What the host accumulates between `node_*` calls and a `commit`.
 ///
-/// `children` and `parents` always describe a forest: every node has at most
+/// `children` and `parent` always describe a forest: every node has at most
 /// one parent and no node is its own ancestor.
 #[derive(Debug, Default)]
 struct HostState {
 	limits: ResourceLimits,
 	plugins: leptoskit_bridge::Bridge,
 	memory: Option<Memory>,
-	nodes: BTreeMap<i64, HostNode>,
+	nodes: HashMap<i64, HostNode, FastHash>,
 	budget: budget::RenderBudget,
-	kinds: BTreeMap<i64, NativeKind>,
-	children: BTreeMap<i64, Vec<i64>>,
-	parents: BTreeMap<i64, i64>,
 	/// Every node without a parent; a commit renders the only one.
-	roots: std::collections::BTreeSet<i64>,
-	/// Nodes whose kind or props changed since the last commit.
-	dirty_props: std::collections::BTreeSet<i64>,
-	/// Nodes whose kind or child list changed since the last commit.
-	dirty_structure: std::collections::BTreeSet<i64>,
+	roots: HashSet<i64, FastHash>,
+	/// Nodes whose props changed since the last commit (deduped via `HostNode::dirty_props`).
+	dirty_props: Vec<i64>,
+	/// Nodes whose kind or child list changed since the last commit (deduped via `HostNode::dirty_structure`).
+	dirty_structure: Vec<i64>,
 	/// The tree the surface last committed.
 	committed: incremental::Committed,
 	/// Whether the committed tree declares accessibility relationships, so
@@ -308,29 +336,64 @@ struct HostState {
 	/// How many reporting shim calls [`shims`] has logged, so a guest calling
 	/// one in a loop cannot flood the device log.
 	reported_shims: u32,
-	/// Wire id by committed node, resynced after commits and environment
-	/// changes.
-	wire_by_node: BTreeMap<usize, i64>,
+	/// Dense wire id table indexed by committed `NodeId::index()`, resynced
+	/// after commits and environment changes.
+	wire_by_node: Vec<Option<i64>>,
 }
 
 impl HostState {
+	#[inline]
+	fn mark_dirty_structure(&mut self, id: i64) {
+		if let Some(node) = self.nodes.get_mut(&id)
+			&& !node.dirty_structure
+		{
+			node.dirty_structure = true;
+			self.dirty_structure.push(id);
+		}
+	}
+
+	#[inline]
+	fn set_wire_by_node(&mut self, index: usize, wire: i64) {
+		if self.wire_by_node.len() <= index {
+			self.wire_by_node.resize(index + 1, None);
+		}
+
+		self.wire_by_node[index] = Some(wire);
+	}
+
+	#[inline]
+	fn clear_wire_by_node(&mut self, index: usize) {
+		if let Some(slot) = self.wire_by_node.get_mut(index) {
+			*slot = None;
+		}
+	}
+
+	#[inline]
+	fn wire_for_node(&self, index: usize) -> Option<i64> {
+		self.wire_by_node.get(index).copied().flatten()
+	}
+
 	/// Detaches `child` from its parent, if it has one.
 	fn detach(&mut self, child: i64) {
-		let Some(parent) = self.parents.remove(&child) else {
+		let Some(parent) = self
+			.nodes
+			.get_mut(&child)
+			.and_then(|node| node.parent.take())
+		else {
 			return;
 		};
 		self.roots.insert(child);
-		self.dirty_structure.insert(parent);
+		self.mark_dirty_structure(parent);
 
-		if let Some(siblings) = self.children.get_mut(&parent) {
-			siblings.retain(|&existing| existing != child);
+		if let Some(parent_node) = self.nodes.get_mut(&parent) {
+			parent_node.children.retain(|&existing| existing != child);
 
 			// Moving a wide subtree between parents must not retain every
 			// parent's historical maximum child capacity.
-			if siblings.is_empty() {
-				self.children.remove(&parent);
-			} else if siblings.len() < siblings.capacity() / 2 {
-				siblings.shrink_to_fit();
+			if parent_node.children.is_empty() {
+				parent_node.children = Vec::new();
+			} else if parent_node.children.len() < parent_node.children.capacity() / 2 {
+				parent_node.children.shrink_to_fit();
 			}
 		}
 	}
@@ -346,10 +409,11 @@ impl HostState {
 	}
 
 	fn sibling_count(&self, child: i64) -> usize {
-		self.parents
+		self.nodes
 			.get(&child)
-			.and_then(|parent| self.children.get(parent))
-			.map_or(0, Vec::len)
+			.and_then(|node| node.parent)
+			.and_then(|parent| self.nodes.get(&parent))
+			.map_or(0, |parent| parent.children.len())
 	}
 
 	/// [`Self::assemble`] with the same budget a guest's `commit` pays.
@@ -480,9 +544,9 @@ pub struct WasmHost<B: NativeBackend> {
 	identity: HostIdentity,
 	surface: NativeSurface<B>,
 	store: Store<HostState>,
-	main_fn: wasmi::Func,
-	event_fn: wasmi::Func,
-	alloc_fn: Option<wasmi::Func>,
+	main_fn: Result<TypedFunc<(), ()>, wasmi::Func>,
+	event_fn: Result<TypedFunc<(i64, i32, i32, i32), i32>, wasmi::Func>,
+	alloc_fn: Option<Result<TypedFunc<i32, i32>, wasmi::Func>>,
 	// Keep signature errors until wake: non-plugin modules need not export
 	// callbacks, and optional poll errors must follow the readiness callback.
 	plugins_ready: Option<Result<TypedFunc<(), ()>, wasmi::Error>>,
@@ -551,9 +615,9 @@ impl WasmHost<HeadlessBackend> {
 /// One instantiated module and the entry points the host calls.
 struct Guest {
 	store: Store<HostState>,
-	main_fn: wasmi::Func,
-	event_fn: wasmi::Func,
-	alloc_fn: Option<wasmi::Func>,
+	main_fn: Result<TypedFunc<(), ()>, wasmi::Func>,
+	event_fn: Result<TypedFunc<(i64, i32, i32, i32), i32>, wasmi::Func>,
+	alloc_fn: Option<Result<TypedFunc<i32, i32>, wasmi::Func>>,
 	plugins_ready: Option<Result<TypedFunc<(), ()>, wasmi::Error>>,
 	plugins_poll: Option<Result<TypedFunc<(), ()>, wasmi::Error>>,
 	/// Settles bound values after a turn. Optional, so guests built before it
@@ -595,11 +659,14 @@ impl Guest {
 				}
 			})?;
 
-		let main_fn = export_func(instance, &store, "leptoskit_main")?;
-		let event_fn = export_func(instance, &store, "leptoskit_event")?;
+		let main_raw = export_func(instance, &store, "leptoskit_main")?;
+		let main_fn = main_raw.typed(&store).map_err(|_| main_raw);
+		let event_raw = export_func(instance, &store, "leptoskit_event")?;
+		let event_fn = event_raw.typed(&store).map_err(|_| event_raw);
 		let alloc_fn = instance
 			.get_export(&store, "leptoskit_alloc")
-			.and_then(Extern::into_func);
+			.and_then(Extern::into_func)
+			.map(|func| func.typed(&store).map_err(|_| func));
 		let plugins_ready = instance
 			.get_export(&store, "leptoskit_plugins_ready")
 			.and_then(Extern::into_func)
@@ -1268,8 +1335,8 @@ impl<B: NativeBackend> WasmHost<B> {
 	/// that has not committed yet.
 	pub fn wire_node(&self, node: NodeId) -> Option<&WireNode> {
 		let state = self.store.data();
-		let wire = state.wire_by_node.get(&node.index())?;
-		state.nodes.get(wire).map(|node| &node.wire)
+		let wire = state.wire_for_node(node.index())?;
+		state.nodes.get(&wire).map(|node| &node.wire)
 	}
 
 	/// The interpreter instructions the last entry-point call consumed.
@@ -1297,9 +1364,11 @@ impl<B: NativeBackend> WasmHost<B> {
 		}
 
 		self.refuel()?;
-		self.main_fn
-			.call(&mut self.store, &[], &mut [])
-			.map_err(|error| in_export("leptoskit_main", error))?;
+		match self.main_fn {
+			Ok(typed) => typed.call(&mut self.store, ()),
+			Err(func) => func.call(&mut self.store, &[], &mut []),
+		}
+		.map_err(|error| in_export("leptoskit_main", error))?;
 		self.drain_commit()?;
 		Ok(())
 	}
@@ -1343,7 +1412,7 @@ impl<B: NativeBackend> WasmHost<B> {
 			_ => {}
 		}
 
-		let Some(wire_id) = self.store.data().wire_by_node.get(&target.index()).copied() else {
+		let Some(wire_id) = self.store.data().wire_for_node(target.index()) else {
 			return Ok(EventOutcome::Unhandled);
 		};
 		let mut ancestor = Some(target);
@@ -1386,22 +1455,33 @@ impl<B: NativeBackend> WasmHost<B> {
 		};
 
 		self.refuel()?;
-		let mut results = [Val::I32(0)];
-		self.event_fn
-			.call(
-				&mut self.store,
-				&[
-					Val::I64(wire_id),
-					Val::I32(kind.code()),
-					Val::I32(ptr as i32),
-					Val::I32(len as i32),
-				],
-				&mut results,
-			)
-			.map_err(|error| in_export("leptoskit_event", error))?;
+		let result = match self.event_fn {
+			Ok(typed) => {
+				typed
+					.call(&mut self.store, (wire_id, kind.code(), ptr as i32, len as i32))
+					.map_err(|error| in_export("leptoskit_event", error))?
+			}
+			Err(func) => {
+				let mut results = [Val::I32(0)];
+				func.call(
+					&mut self.store,
+					&[
+						Val::I64(wire_id),
+						Val::I32(kind.code()),
+						Val::I32(ptr as i32),
+						Val::I32(len as i32),
+					],
+					&mut results,
+				)
+				.map_err(|error| in_export("leptoskit_event", error))?;
+				match results[0] {
+					Val::I32(value) => value,
+					_ => 0,
+				}
+			}
+		};
 		self.drain_commit()?;
-		let handled = matches!(results[0], Val::I32(1));
-		Ok(if handled {
+		Ok(if result == 1 {
 			EventOutcome::Handled
 		} else {
 			EventOutcome::Unhandled
@@ -1499,15 +1579,23 @@ impl<B: NativeBackend> WasmHost<B> {
 			.ok_or_else(|| WasmError::MissingExport("leptoskit_alloc".to_owned()))?;
 		let len = u32::try_from(bytes.len())
 			.map_err(|_| WasmError::Trap("event payload exceeds 4 GiB".to_owned()))?;
-		let mut pointer = [Val::I32(0)];
 		self.refuel()?;
-		alloc
-			.call(&mut self.store, &[Val::I32(len as i32)], &mut pointer)
-			.map_err(|error| in_export("leptoskit_alloc", error))?;
-		let Val::I32(ptr) = pointer[0] else {
-			return Err(WasmError::Trap("allocator returned no pointer".to_owned()));
+		let ptr = match alloc {
+			Ok(typed) => {
+				typed
+					.call(&mut self.store, len as i32)
+					.map_err(|error| in_export("leptoskit_alloc", error))? as u32
+			}
+			Err(func) => {
+				let mut pointer = [Val::I32(0)];
+				func.call(&mut self.store, &[Val::I32(len as i32)], &mut pointer)
+					.map_err(|error| in_export("leptoskit_alloc", error))?;
+				let Val::I32(ptr) = pointer[0] else {
+					return Err(WasmError::Trap("allocator returned no pointer".to_owned()));
+				};
+				ptr as u32
+			}
 		};
-		let ptr = ptr as u32;
 
 		if ptr == 0 {
 			return Err(WasmError::Trap("allocator refused the request".to_owned()));
@@ -1637,32 +1725,34 @@ impl<B: NativeBackend> WasmHost<B> {
 /// The surface mirrors the committed element tree exactly, so a pre-order
 /// walk of each lines up one to one.
 fn resync<B: NativeBackend>(surface: &NativeSurface<B>, state: &mut HostState) {
+	state.wire_by_node.fill(None);
+	state.committed.node_by_wire.clear();
+
 	// No committed root over a committed surface means a replacement guest
 	// has not committed yet, and the widgets it inherited target no guest.
 	let Some(root) = state.committed.root else {
-		state.wire_by_node = BTreeMap::new();
-		state.committed.node_by_wire = BTreeMap::new();
-
 		return;
 	};
 
-	let mut by_node = BTreeMap::new();
-	let mut by_wire = BTreeMap::new();
+	let allocated = surface.allocated_nodes();
+
+	if state.wire_by_node.len() < allocated {
+		state.wire_by_node.resize(allocated, None);
+	}
+
 	let order = state.committed.pre_order(root);
+	state.committed.node_by_wire.reserve(order.len());
 	let mut wire_ids = order.iter().copied();
 	let mut stack: Vec<NodeId> = surface.root().into_iter().collect();
 
 	while let Some(node) = stack.pop() {
 		let wire_id = wire_ids.next().expect("surface and wire tree diverged");
-		by_node.insert(node.index(), wire_id);
-		by_wire.insert(wire_id, node);
+		state.set_wire_by_node(node.index(), wire_id);
+		state.committed.node_by_wire.insert(wire_id, node);
 		stack.extend(surface.children(node).iter().rev());
 	}
 
 	debug_assert!(wire_ids.next().is_none(), "surface and wire tree diverged");
-
-	state.wire_by_node = by_node;
-	state.committed.node_by_wire = by_wire;
 }
 
 fn export_func(

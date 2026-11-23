@@ -11,7 +11,8 @@
 //! guest's mutable forest, so widgets pair with wire ids even while the guest
 //! holds uncommitted edits.
 
-use std::collections::BTreeMap;
+use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 
 use leptoskit_native::Element;
 use leptoskit_native::NativeBackend;
@@ -20,6 +21,8 @@ use leptoskit_native::NativeSurface;
 use leptoskit_native::SourcePatch;
 use leptoskit_yoga::NodeId;
 
+use super::FastHash;
+use super::HostNode;
 use super::HostState;
 use super::MAX_TREE_DEPTH;
 use super::host_trap;
@@ -31,10 +34,10 @@ pub(super) struct Committed {
 	/// patch is rejected, which forces the next commit to be complete.
 	pub root: Option<i64>,
 	/// Committed child lists. Leaves have no entry.
-	pub children: BTreeMap<i64, Vec<i64>>,
+	pub children: HashMap<i64, Vec<i64>, FastHash>,
 	/// The surface node built from each committed wire node, so its length
 	/// is the number of committed nodes.
-	pub node_by_wire: BTreeMap<i64, NodeId>,
+	pub node_by_wire: HashMap<i64, NodeId, FastHash>,
 }
 
 impl Committed {
@@ -58,10 +61,12 @@ impl Committed {
 	/// every node and its children.
 	pub fn reset(&mut self, root: i64, structure: Structure) {
 		self.root = Some(root);
-		self.children = structure
-			.into_iter()
-			.filter(|(_, children)| !children.is_empty())
-			.collect();
+		self.children.clear();
+		self.children.extend(
+			structure
+				.into_iter()
+				.filter(|(_, children)| !children.is_empty()),
+		);
 	}
 }
 
@@ -87,19 +92,28 @@ impl WirePatch {
 
 impl HostState {
 	/// Creates `id` if it is new, as a parentless root until it is inserted.
-	pub fn ensure_node(&mut self, id: i64) {
-		if let std::collections::btree_map::Entry::Vacant(entry) = self.nodes.entry(id) {
-			entry.insert(super::HostNode::default());
-
-			if !self.parents.contains_key(&id) {
+	pub fn ensure_node(&mut self, id: i64) -> &mut HostNode {
+		match self.nodes.entry(id) {
+			Entry::Occupied(entry) => entry.into_mut(),
+			Entry::Vacant(entry) => {
 				self.roots.insert(id);
+				entry.insert(HostNode::default())
 			}
 		}
 	}
 
 	pub fn clear_dirty(&mut self) {
-		self.dirty_props.clear();
-		self.dirty_structure.clear();
+		for id in self.dirty_props.drain(..) {
+			if let Some(node) = self.nodes.get_mut(&id) {
+				node.dirty_props = false;
+			}
+		}
+
+		for id in self.dirty_structure.drain(..) {
+			if let Some(node) = self.nodes.get_mut(&id) {
+				node.dirty_structure = false;
+			}
+		}
 	}
 
 	/// Plans the patches for a commit of `root`, or `None` when the commit
@@ -111,17 +125,23 @@ impl HostState {
 			return Ok(None);
 		}
 
-		let mut subtrees = Vec::new();
-		let mut nodes = Vec::new();
+		let mut subtrees = Vec::with_capacity(self.dirty_structure.len());
+		let mut nodes = Vec::with_capacity(self.dirty_props.len());
 
-		for id in self.dirty_structure.clone() {
+		for index in 0..self.dirty_structure.len() {
+			let id = self.dirty_structure[index];
+
 			if self.is_patchable(id, root)? {
 				subtrees.push(id);
 			}
 		}
 
-		for id in self.dirty_props.clone() {
-			if !self.dirty_structure.contains(&id) && self.is_patchable(id, root)? {
+		for index in 0..self.dirty_props.len() {
+			let id = self.dirty_props[index];
+
+			if !self.nodes.get(&id).is_some_and(|node| node.dirty_structure)
+				&& self.is_patchable(id, root)?
+			{
 				nodes.push(id);
 			}
 		}
@@ -134,7 +154,7 @@ impl HostState {
 			.map(|&id| (id, true))
 			.chain(nodes.iter().map(|&id| (id, false)))
 		{
-			if !self.has_ancestor_in(id, &self.dirty_structure) {
+			if !self.has_dirty_structure_ancestor(id) {
 				regions.push((id, subtree));
 			}
 		}
@@ -178,7 +198,7 @@ impl HostState {
 	/// `root`. Nodes outside either are covered by a changed ancestor's
 	/// child list, or are not shown at all.
 	fn is_patchable(&mut self, id: i64, root: i64) -> Result<bool, wasmi::Error> {
-		if !self.committed.node_by_wire.contains_key(&id) {
+		if !self.committed.node_by_wire.contains_key(&id) || !self.nodes.contains_key(&id) {
 			return Ok(false);
 		}
 
@@ -191,8 +211,8 @@ impl HostState {
 				return Ok(true);
 			}
 
-			match self.parents.get(&current) {
-				Some(&parent) => current = parent,
+			match self.nodes.get(&current).and_then(|node| node.parent) {
+				Some(parent) => current = parent,
 				None => return Ok(false),
 			}
 		}
@@ -202,30 +222,36 @@ impl HostState {
 
 	/// The nearest `Button` or `Pressable` above `id`.
 	fn button_ancestor(&self, id: i64) -> Option<NativeKind> {
-		let mut current = self.parents.get(&id).copied();
+		let mut current = self.nodes.get(&id).and_then(|node| node.parent);
 
 		while let Some(id) = current {
-			if let Some(kind @ (NativeKind::Button | NativeKind::Pressable)) =
-				self.kinds.get(&id).copied()
-			{
+			let Some(node) = self.nodes.get(&id) else {
+				break;
+			};
+
+			if let Some(kind @ (NativeKind::Button | NativeKind::Pressable)) = node.kind {
 				return Some(kind);
 			}
 
-			current = self.parents.get(&id).copied();
+			current = node.parent;
 		}
 
 		None
 	}
 
-	fn has_ancestor_in(&self, id: i64, set: &std::collections::BTreeSet<i64>) -> bool {
-		let mut current = self.parents.get(&id).copied();
+	fn has_dirty_structure_ancestor(&self, id: i64) -> bool {
+		let mut current = self.nodes.get(&id).and_then(|node| node.parent);
 
 		while let Some(id) = current {
-			if set.contains(&id) {
+			let Some(node) = self.nodes.get(&id) else {
+				break;
+			};
+
+			if node.dirty_structure {
 				return true;
 			}
 
-			current = self.parents.get(&id).copied();
+			current = node.parent;
 		}
 
 		false
@@ -238,17 +264,24 @@ impl HostState {
 
 	/// The element for one wire node, without children.
 	pub fn element_for(&self, id: i64) -> Result<Element, wasmi::Error> {
-		let wire = self
-			.nodes
-			.get(&id)
-			.map(|node| node.wire.clone())
-			.unwrap_or_default();
-		let mut element = Element::new(self.kinds.get(&id).copied().unwrap_or(NativeKind::View));
-		element.props = wire.props;
-		element.style = wire.style;
-		element
-			.try_class(&wire.class)
-			.map_err(|error| host_trap(format!("node {id}: {error}")))
+		let Some(node) = self.nodes.get(&id) else {
+			return Ok(Element::new(NativeKind::View));
+		};
+		Self::element_from_node(id, node)
+	}
+
+	fn element_from_node(id: i64, node: &HostNode) -> Result<Element, wasmi::Error> {
+		let mut element = Element::new(node.kind.unwrap_or(NativeKind::View));
+		element.props = node.wire.props.clone();
+		element.style = node.wire.style.clone();
+
+		if !node.wire.class.is_empty() {
+			element = element
+				.try_class(&node.wire.class)
+				.map_err(|error| host_trap(format!("node {id}: {error}")))?;
+		}
+
+		Ok(element)
 	}
 
 	/// Assembles the subtree under `root` with its structure in pre-order,
@@ -271,24 +304,37 @@ impl HostState {
 				)));
 			}
 
+			let (bytes, element, children) = match self.nodes.get(&id) {
+				Some(node) => {
+					(
+						node.property_bytes,
+						Self::element_from_node(id, node)?,
+						node.children.clone(),
+					)
+				}
+				None => (0, Element::new(NativeKind::View), Vec::new()),
+			};
+
 			if charge {
-				self.charge_node(id)?;
+				self.budget.charge(256 + bytes)?;
 			}
 
-			let element = self.element_for(id)?;
-			let children = self.children.get(&id).cloned().unwrap_or_default();
 			elements.push((element, children.len()));
 			stack.extend(children.iter().rev().map(|&child| (child, depth + 1)));
 			structure.push((id, children));
 		}
 
-		let mut assembled = Vec::new();
+		let mut assembled = Vec::with_capacity(elements.len());
 
 		for (mut element, child_count) in elements.into_iter().rev() {
-			for _ in 0..child_count {
-				element
-					.children
-					.push(assembled.pop().expect("children precede their parent"));
+			if child_count > 0 {
+				element.children.reserve(child_count);
+
+				for _ in 0..child_count {
+					element
+						.children
+						.push(assembled.pop().expect("children precede their parent"));
+				}
 			}
 
 			assembled.push(element);
@@ -378,7 +424,7 @@ pub(super) fn apply<B: NativeBackend>(
 
 fn unmap(state: &mut HostState, wire: i64) {
 	if let Some(node) = state.committed.node_by_wire.remove(&wire) {
-		state.wire_by_node.remove(&node.index());
+		state.clear_wire_by_node(node.index());
 	}
 }
 
@@ -394,7 +440,7 @@ fn map_subtree<B: NativeBackend>(
 
 	while let Some(node) = stack.pop() {
 		let wire = wires.next().expect("surface and wire tree diverged");
-		state.wire_by_node.insert(node.index(), wire);
+		state.set_wire_by_node(node.index(), wire);
 		state.committed.node_by_wire.insert(wire, node);
 		stack.extend(surface.children(node).iter().rev());
 	}
