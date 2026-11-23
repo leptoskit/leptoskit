@@ -303,6 +303,7 @@ impl Yoga {
 		node: NodeId,
 		ctx: crate::SizingCtx,
 		mode: RunMode,
+		external: &mut crate::ExternalMeasure<'_>,
 	) -> Size<f32> {
 		let ctx = ctx.normalized(&self.nodes[node.0].style);
 
@@ -310,7 +311,7 @@ impl Yoga {
 			return size;
 		}
 
-		let size = self.run_layout(node, ctx, mode);
+		let size = self.run_layout(node, ctx, mode, external);
 		let pass = self.pass;
 		let entry = &mut self.nodes[node.0];
 		entry.layout_cache.insert(ctx, size, mode, pass);
@@ -320,7 +321,13 @@ impl Yoga {
 	}
 
 	/// Runs the node's layout algorithm, bypassing the cache.
-	fn run_layout(&mut self, node: NodeId, ctx: crate::SizingCtx, mode: RunMode) -> Size<f32> {
+	fn run_layout(
+		&mut self,
+		node: NodeId,
+		ctx: crate::SizingCtx,
+		mode: RunMode,
+		external: &mut crate::ExternalMeasure<'_>,
+	) -> Size<f32> {
 		let style = self.shared_style(node);
 
 		if style.display == Display::None {
@@ -332,8 +339,8 @@ impl Yoga {
 		let metrics = BoxMetrics::new(&style, ctx.percent_basis);
 
 		match style.display {
-			Display::Grid => self.layout_grid(node, &style, ctx, &metrics, mode),
-			_ => self.layout_flex(node, &style, ctx, &metrics, mode),
+			Display::Grid => self.layout_grid(node, &style, ctx, &metrics, mode, external),
+			_ => self.layout_flex(node, &style, ctx, &metrics, mode, external),
 		}
 	}
 
@@ -346,13 +353,14 @@ impl Yoga {
 		node: NodeId,
 		available: Size<AvailableSpace>,
 		percent_basis: Size<Option<f32>>,
+		external: &mut crate::ExternalMeasure<'_>,
 	) -> Size<f32> {
 		let ctx = crate::SizingCtx {
 			available,
 			forced: Size::new(None, None),
 			percent_basis,
 		};
-		self.layout_node(node, ctx, RunMode::Measure)
+		self.layout_node(node, ctx, RunMode::Measure, external)
 	}
 
 	/// Lays out a flex container and its children and returns its border-box
@@ -368,6 +376,7 @@ impl Yoga {
 		ctx: crate::SizingCtx,
 		metrics: &BoxMetrics,
 		mode: RunMode,
+		external: &mut crate::ExternalMeasure<'_>,
 	) -> Size<f32> {
 		let inner_padding = metrics.inner_padding;
 		let border = metrics.border;
@@ -385,13 +394,14 @@ impl Yoga {
 
 		// Fast path for leaf nodes: avoid allocating any child or line vectors.
 		if self.nodes[node.0].children.is_empty() {
-			if self.nodes[node.0].measure.is_some() {
+			if self.nodes[node.0].is_measured() {
 				return self.layout_measured_leaf(
 					node,
 					metrics,
 					definite_border,
 					inner_padding,
 					inner_available,
+					external,
 				);
 			}
 
@@ -442,7 +452,7 @@ impl Yoga {
 
 			for index in 0..count {
 				let child = self.nodes[node.0].children[index];
-				items.push(self.flex_item(child, &container));
+				items.push(self.flex_item(child, &container, external));
 			}
 
 			(items, Vec::new())
@@ -450,19 +460,20 @@ impl Yoga {
 			let (flow, absolute) = self.layout_children(node);
 
 			// Measured leaves whose only children are `display: none`.
-			if self.nodes[node.0].measure.is_some() && flow.is_empty() && absolute.is_empty() {
+			if self.nodes[node.0].is_measured() && flow.is_empty() && absolute.is_empty() {
 				return self.layout_measured_leaf(
 					node,
 					metrics,
 					definite_border,
 					inner_padding,
 					inner_available,
+					external,
 				);
 			}
 
 			let items: Vec<FlexItem> = flow
 				.iter()
-				.map(|&child| self.flex_item(child, &container))
+				.map(|&child| self.flex_item(child, &container, external))
 				.collect();
 			(items, absolute)
 		};
@@ -478,7 +489,7 @@ impl Yoga {
 		}
 
 		let definite_cross = axes.cross(definite_border).is_some();
-		self.measure_cross_sizes(&mut items, &mut lines, &container, definite_cross);
+		self.measure_cross_sizes(&mut items, &mut lines, &container, definite_cross, external);
 		let placement = size_flex_container(&items, &lines, &container, definite_border, metrics);
 		align_flex_lines(&mut lines, &container, placement.inner_cross);
 
@@ -496,6 +507,7 @@ impl Yoga {
 					&mut cursor,
 					&container,
 					&placement,
+					external,
 				);
 				content_max_width = content_max_width.max(corner.width);
 				content_max_height = content_max_height.max(corner.height);
@@ -506,7 +518,7 @@ impl Yoga {
 		let border_box = placement.border_box;
 
 		for child in absolute {
-			self.layout_absolute(child, border_box, border, style.direction, mode);
+			self.layout_absolute(child, border_box, border, style.direction, mode, external);
 			let layout = self.nodes[child.0].layout;
 			content_max_width = content_max_width.max(layout.x + layout.width);
 			content_max_height = content_max_height.max(layout.y + layout.height);
@@ -533,8 +545,9 @@ impl Yoga {
 		definite_border: Size<Option<f32>>,
 		inner_padding: Edges,
 		inner_available: Size<AvailableSpace>,
+		external: &mut crate::ExternalMeasure<'_>,
 	) -> Size<f32> {
-		let measured = self.measure(node, inner_available);
+		let measured = self.measure(node, inner_available, external);
 		let size = metrics.clamp(Size::new(
 			definite_border
 				.width
@@ -557,7 +570,12 @@ impl Yoga {
 	/// main size of each item"): the base comes from `flex_basis`, else the
 	/// main size, else the item's content, and the hypothetical size clamps it
 	/// by the item's min and max main sizes.
-	fn flex_item(&mut self, child: NodeId, container: &FlexContainer) -> FlexItem {
+	fn flex_item(
+		&mut self,
+		child: NodeId,
+		container: &FlexContainer,
+		external: &mut crate::ExternalMeasure<'_>,
+	) -> FlexItem {
 		let axes = container.axes;
 		let is_row = axes.is_row;
 		let child_basis = container.child_basis;
@@ -574,7 +592,9 @@ impl Yoga {
 
 		let base = metrics
 			.flex_basis(flex_basis, axes.main(child_basis), is_row)
-			.unwrap_or_else(|| self.content_flex_base(child, &child_style, &margins, container));
+			.unwrap_or_else(|| {
+				self.content_flex_base(child, &child_style, &margins, container, external)
+			});
 		let (min_main, max_main) = (axes.main(metrics.min), axes.main(metrics.max));
 		let padding = if is_row {
 			metrics.inner_padding.horizontal()
@@ -612,6 +632,7 @@ impl Yoga {
 		child_style: &Style,
 		margins: &Edges,
 		container: &FlexContainer,
+		external: &mut crate::ExternalMeasure<'_>,
 	) -> f32 {
 		let axes = container.axes;
 		let is_row = axes.is_row;
@@ -650,6 +671,7 @@ impl Yoga {
 				percent_basis: container.child_basis,
 			},
 			RunMode::Measure,
+			external,
 		);
 		axes.main(measured)
 	}
@@ -672,6 +694,7 @@ impl Yoga {
 		lines: &mut [FlexLine],
 		container: &FlexContainer,
 		definite_cross: bool,
+		external: &mut crate::ExternalMeasure<'_>,
 	) {
 		let single_line = container.style.flex_wrap == FlexWrap::NoWrap;
 
@@ -688,7 +711,7 @@ impl Yoga {
 					continue;
 				}
 
-				let cross = self.hypothetical_cross_size(&items[index], container);
+				let cross = self.hypothetical_cross_size(&items[index], container, external);
 				items[index].inner_cross = cross;
 				let outer_cross =
 					cross + cross_margins(&items[index].margins, container.axes.is_row);
@@ -721,7 +744,12 @@ impl Yoga {
 	/// An item's cross size before stretching: its style size, else the size
 	/// its aspect ratio transfers from the resolved main size, else its
 	/// content size at that main size, clamped by its min and max cross sizes.
-	fn hypothetical_cross_size(&mut self, item: &FlexItem, container: &FlexContainer) -> f32 {
+	fn hypothetical_cross_size(
+		&mut self,
+		item: &FlexItem,
+		container: &FlexContainer,
+		external: &mut crate::ExternalMeasure<'_>,
+	) -> f32 {
 		let axes = container.axes;
 		let is_row = axes.is_row;
 		let child_basis = container.child_basis;
@@ -754,7 +782,7 @@ impl Yoga {
 				AvailableSpace::Definite(inner_main),
 				axes.cross(container.inner_available),
 			);
-			axes.cross(self.content_size(item.node, available, child_basis))
+			axes.cross(self.content_size(item.node, available, child_basis, external))
 		});
 
 		cross.clamp(axes.cross(metrics.min), axes.cross(metrics.max))
@@ -826,6 +854,7 @@ impl Yoga {
 	/// CSS Flexbox §9.4 step 11 ("determine the used cross size of each item")
 	/// stretches an auto-sized item to its line, and §9.6 step 14 ("align all
 	/// flex items along the cross-axis") positions the rest by `align_self`.
+	#[allow(clippy::too_many_arguments)]
 	fn place_flex_item(
 		&mut self,
 		index: usize,
@@ -834,6 +863,7 @@ impl Yoga {
 		cursor: &mut MainCursor,
 		container: &FlexContainer,
 		placement: &FlexPlacement,
+		external: &mut crate::ExternalMeasure<'_>,
 	) -> Size<f32> {
 		let axes = container.axes;
 		let FlexAxes {
@@ -860,7 +890,7 @@ impl Yoga {
 			forced: axes.size(Some(item.inner_main), cross.forced),
 			percent_basis: placement.content_basis,
 		};
-		let final_size = self.layout_node(item.node, child_ctx, container.mode);
+		let final_size = self.layout_node(item.node, child_ctx, container.mode, external);
 		let item_main = axes.main(final_size);
 
 		// Relative offsets (`top`/`left` on in-flow items) shift the item away
@@ -914,6 +944,7 @@ impl Yoga {
 		border: Edges,
 		direction: Direction,
 		mode: RunMode,
+		external: &mut crate::ExternalMeasure<'_>,
 	) {
 		let style = self.shared_style(child);
 		// The containing block is the padding box: the border box minus the
@@ -950,7 +981,7 @@ impl Yoga {
 			forced: Size::new(width, height),
 			percent_basis: Size::new(Some(padding_box.width), Some(padding_box.height)),
 		};
-		let size = self.layout_node(child, child_ctx, mode);
+		let size = self.layout_node(child, child_ctx, mode, external);
 
 		let x = if let Some(right) = right.filter(|_| direction == Direction::Rtl) {
 			parent_box.width - border.right - right - size.width - margins.right

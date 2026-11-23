@@ -898,12 +898,13 @@ fn a_region_splice_sends_only_its_own_subtree() {
 	assert_eq!(
 		log.0,
 		[
-			// Reordering keeps rows 3 and 1, deletes row 2's four nodes, and
+			// Reordering keeps rows 3 and 1, deletes row 2's four nodes
+			// leaves-first so the host detaches from the tail in O(1), and
 			// builds row 4.
-			"delete 8",
-			"delete 9",
-			"delete 10",
 			"delete 11",
+			"delete 10",
+			"delete 9",
+			"delete 8",
 			"create 17 0",
 			"props 17",
 			"create 18 1",
@@ -928,16 +929,17 @@ fn a_region_splice_sends_only_its_own_subtree() {
 			"delete 20",
 			"commit",
 			"--",
-			// Emptying the list deletes every row, parents first.
-			"delete 12",
-			"delete 13",
-			"delete 14",
-			"delete 4",
-			"delete 5",
-			"delete 6",
-			"delete 17",
-			"delete 18",
+			// Emptying the list deletes every row in reverse build order
+			// (leaves and trailing siblings first).
 			"delete 19",
+			"delete 18",
+			"delete 17",
+			"delete 6",
+			"delete 5",
+			"delete 4",
+			"delete 14",
+			"delete 13",
+			"delete 12",
 			"commit",
 		]
 	);

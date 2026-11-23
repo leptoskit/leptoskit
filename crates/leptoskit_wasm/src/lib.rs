@@ -168,13 +168,13 @@ impl std::hash::Hasher for FastHasher {
 	#[inline]
 	fn write(&mut self, bytes: &[u8]) {
 		for &byte in bytes {
-			self.0 = (self.0.rotate_left(5) ^ u64::from(byte)).wrapping_mul(0x517cc1b727220a95);
+			self.0 = (self.0.rotate_left(5) ^ u64::from(byte)).wrapping_mul(0x517c_c1b7_2722_0a95);
 		}
 	}
 
 	#[inline]
 	fn write_i64(&mut self, value: i64) {
-		self.0 = (self.0.rotate_left(5) ^ (value as u64)).wrapping_mul(0x517cc1b727220a95);
+		self.0 = (self.0.rotate_left(5) ^ (value as u64)).wrapping_mul(0x517c_c1b7_2722_0a95);
 	}
 
 	#[inline]
@@ -319,9 +319,11 @@ struct HostState {
 	budget: budget::RenderBudget,
 	/// Every node without a parent; a commit renders the only one.
 	roots: HashSet<i64, FastHash>,
-	/// Nodes whose props changed since the last commit (deduped via `HostNode::dirty_props`).
+	/// Nodes whose props changed since the last commit (deduped via
+	/// `HostNode::dirty_props`).
 	dirty_props: Vec<i64>,
-	/// Nodes whose kind or child list changed since the last commit (deduped via `HostNode::dirty_structure`).
+	/// Nodes whose kind or child list changed since the last commit (deduped
+	/// via `HostNode::dirty_structure`).
 	dirty_structure: Vec<i64>,
 	/// The tree the surface last committed.
 	committed: incremental::Committed,
@@ -386,13 +388,19 @@ impl HostState {
 		self.mark_dirty_structure(parent);
 
 		if let Some(parent_node) = self.nodes.get_mut(&parent) {
-			parent_node.children.retain(|&existing| existing != child);
+			if parent_node.children.last() == Some(&child) {
+				parent_node.children.pop();
+			} else if let Some(pos) = parent_node.children.iter().rposition(|&e| e == child) {
+				parent_node.children.remove(pos);
+			}
 
 			// Moving a wide subtree between parents must not retain every
 			// parent's historical maximum child capacity.
 			if parent_node.children.is_empty() {
 				parent_node.children = Vec::new();
-			} else if parent_node.children.len() < parent_node.children.capacity() / 2 {
+			} else if parent_node.children.capacity() >= 16
+				&& parent_node.children.len() <= parent_node.children.capacity() / 4
+			{
 				parent_node.children.shrink_to_fit();
 			}
 		}
@@ -539,13 +547,17 @@ fn in_export(export: &str, error: wasmi::Error) -> WasmError {
 	}
 }
 
+/// Cached typed export for `leptoskit_event`, falling back to untyped `Func`
+/// when a guest declares a mismatched signature.
+type EventExport = Result<TypedFunc<(i64, i32, i32, i32), i32>, wasmi::Func>;
+
 /// Runs one wasm app against a native backend.
 pub struct WasmHost<B: NativeBackend> {
 	identity: HostIdentity,
 	surface: NativeSurface<B>,
 	store: Store<HostState>,
 	main_fn: Result<TypedFunc<(), ()>, wasmi::Func>,
-	event_fn: Result<TypedFunc<(i64, i32, i32, i32), i32>, wasmi::Func>,
+	event_fn: EventExport,
 	alloc_fn: Option<Result<TypedFunc<i32, i32>, wasmi::Func>>,
 	// Keep signature errors until wake: non-plugin modules need not export
 	// callbacks, and optional poll errors must follow the readiness callback.
@@ -616,7 +628,7 @@ impl WasmHost<HeadlessBackend> {
 struct Guest {
 	store: Store<HostState>,
 	main_fn: Result<TypedFunc<(), ()>, wasmi::Func>,
-	event_fn: Result<TypedFunc<(i64, i32, i32, i32), i32>, wasmi::Func>,
+	event_fn: EventExport,
 	alloc_fn: Option<Result<TypedFunc<i32, i32>, wasmi::Func>>,
 	plugins_ready: Option<Result<TypedFunc<(), ()>, wasmi::Error>>,
 	plugins_poll: Option<Result<TypedFunc<(), ()>, wasmi::Error>>,
@@ -1458,7 +1470,10 @@ impl<B: NativeBackend> WasmHost<B> {
 		let result = match self.event_fn {
 			Ok(typed) => {
 				typed
-					.call(&mut self.store, (wire_id, kind.code(), ptr as i32, len as i32))
+					.call(
+						&mut self.store,
+						(wire_id, kind.code(), ptr as i32, len as i32),
+					)
 					.map_err(|error| in_export("leptoskit_event", error))?
 			}
 			Err(func) => {

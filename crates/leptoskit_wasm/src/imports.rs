@@ -68,7 +68,11 @@ fn node_create(mut caller: Caller<'_, HostState>, id: i64, kind: i32) -> Result<
 	let node = state.ensure_node(id);
 
 	// A different widget kind replaces the node and everything below it.
-	if node.kind.replace(kind).is_some_and(|previous| previous != kind) {
+	if node
+		.kind
+		.replace(kind)
+		.is_some_and(|previous| previous != kind)
+	{
 		state.mark_dirty_structure(id);
 	}
 

@@ -2,8 +2,6 @@
 //! commits mutations to the backend, and dispatches events.
 
 use std::cell::RefCell;
-use std::sync::Arc;
-use std::sync::RwLock;
 #[cfg(feature = "devtools")]
 use std::time::Instant;
 
@@ -19,6 +17,7 @@ use crate::element::Element;
 use crate::element::HandlerEntry;
 use crate::props::NativeKind;
 use crate::props::NativeProps;
+use crate::props::SharedTextMeasurer;
 use crate::props::TextStyle;
 
 #[cfg(feature = "devtools")]
@@ -133,9 +132,10 @@ struct ShadowNode {
 	gesture: Option<crate::gesture::Gesture>,
 	children: Vec<NodeId>,
 	parent: Option<NodeId>,
-	/// Live text content and font shared with the yoga measure function, so a
-	/// props update re-measures without rebuilding the node.
-	text_cell: Option<Arc<RwLock<TextCell>>>,
+	/// Cached text measurement inputs and recent width-keyed results.
+	/// Stored inline (no `Arc`, `RwLock`, or cloned text `String`); layout
+	/// reads the live text slice directly from `props`.
+	text_cache: Option<TextMeasureCache>,
 	/// Where the element that built this node was created.
 	#[cfg(feature = "devtools")]
 	source: Option<&'static std::panic::Location<'static>>,
@@ -177,19 +177,13 @@ impl ShadowNode {
 /// same as `PasswordInput`'s default, on every backend.
 const TEXT_FIELD_CHROME_HEIGHT: f32 = 12.0;
 
-/// Everything a text node's measurement depends on.
-#[derive(Debug, Clone, PartialEq)]
-struct MeasuredText {
-	content: String,
+/// A text node's measurement style and width-keyed size cache, stored inline
+/// on [`ShadowNode`] with zero heap allocations.
+#[derive(Debug, Clone, Copy)]
+struct TextMeasureCache {
 	style: TextStyle,
 	/// Whether the widget draws native chrome around the text.
 	native_chrome: bool,
-}
-
-/// A text node's measurement inputs and the sizes already measured from them.
-#[derive(Debug)]
-struct TextCell {
-	text: MeasuredText,
 	/// Sizes by the width they were measured at. Text measurement depends on
 	/// the offered width alone, while one layout pass offers each label
 	/// several heights; keyed by width, creating 1,000 cards measures each
@@ -197,24 +191,34 @@ struct TextCell {
 	sizes: [Option<(leptoskit_yoga::AvailableSpace, Size<f32>)>; 2],
 }
 
-impl TextCell {
-	fn new(text: MeasuredText) -> Self {
+impl TextMeasureCache {
+	#[inline]
+	fn new(style: TextStyle, native_chrome: bool) -> Self {
 		Self {
-			text,
+			style,
+			native_chrome,
 			sizes: [None; 2],
 		}
 	}
 
+	#[inline]
 	fn size(&self, width: leptoskit_yoga::AvailableSpace) -> Option<Size<f32>> {
-		self.sizes
-			.iter()
-			.flatten()
-			.find(|(measured, _)| *measured == width)
-			.map(|(_, size)| *size)
+		if let Some((measured, size)) = self.sizes[0]
+			&& measured == width
+		{
+			return Some(size);
+		}
+		if let Some((measured, size)) = self.sizes[1]
+			&& measured == width
+		{
+			return Some(size);
+		}
+		None
 	}
 
 	/// Keeps the newest two sizes: a label is offered its max-content width
 	/// and its final width.
+	#[inline]
 	fn remember(&mut self, width: leptoskit_yoga::AvailableSpace, size: Size<f32>) {
 		self.sizes = [Some((width, size)), self.sizes[0]];
 	}
@@ -339,6 +343,9 @@ pub struct NativeSurface<B: NativeBackend> {
 	yoga: Yoga,
 	shadows: Vec<ShadowNode>,
 	backend: B,
+	/// Cached backend text-metric snapshot, refreshed in
+	/// `refresh_text_measurer`.
+	measurer: SharedTextMeasurer,
 	root: Option<NodeId>,
 	viewport: Size<f32>,
 	frames: Vec<Option<Frame>>,
@@ -397,12 +404,14 @@ pub struct NativeSurface<B: NativeBackend> {
 impl<B: NativeBackend> NativeSurface<B> {
 	/// Creates a surface over a backend.
 	pub fn new(backend: B) -> Self {
+		let measurer = backend.text_measurer();
 		Self {
 			#[cfg(all(feature = "rive", not(target_arch = "wasm32")))]
 			rive: rive::Players::default(),
 			yoga: Yoga::new(),
 			shadows: Vec::new(),
 			backend,
+			measurer,
 			root: None,
 			viewport: Size::new(0.0, 0.0),
 			frames: Vec::new(),
