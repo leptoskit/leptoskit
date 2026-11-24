@@ -14,10 +14,13 @@ on:
     branches: [main]
     paths:
       - "docs/**"
+      - "crates/leptoskit/**"
       - "crates/leptoskit_app/**"
       - "crates/leptoskit_cli/**"
       - "crates/leptoskit_docs/**"
+      - "crates/leptoskit_native/**"
       - "crates/leptoskit_router/**"
+      - "crates/leptoskit_yoga/**"
       - "examples/file_routes/**"
       - "examples/gallery/**"
       - "examples/observatory/**"
