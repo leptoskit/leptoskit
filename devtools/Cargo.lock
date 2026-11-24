@@ -1556,7 +1556,6 @@ dependencies = [
  "leptoskit_yoga",
  "reactive_graph",
  "reactive_stores",
- "sha2",
  "wasm-bindgen",
  "web-sys",
 ]

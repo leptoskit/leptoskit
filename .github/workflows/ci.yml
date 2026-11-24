@@ -140,3 +140,32 @@ jobs:
       - name: check generated configuration schemas
         shell: bash
         run: cargo run --locked --package leptoskit_config --features schema --example schema -- --check
+
+      - name: check standalone lockfiles
+        shell: bash
+        run: |
+          set -euo pipefail
+          for manifest in \
+            benchmarks/arena/apps/leptoskit/Cargo.toml \
+            crates/leptoskit_cli/tests/fixtures/app-service/Cargo.toml \
+            devtools/Cargo.toml \
+            examples/commonplace/Cargo.toml \
+            examples/dev_client/Cargo.toml \
+            examples/file_routes/Cargo.toml \
+            examples/huddle/linux/Cargo.toml; do
+            cargo metadata --locked --format-version 1 --manifest-path "$manifest" > /dev/null
+          done
+
+      - name: check workspace examples and docs played web builds
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo check --locked --workspace --keep-going \
+            --exclude huddle_ios \
+            --exclude huddle_macos
+          for pkg in gallery observatory_example postcard_example; do
+            cargo check --locked --target wasm32-unknown-unknown \
+              --package "$pkg" --lib --features web
+          done
+          cargo check --locked --manifest-path examples/file_routes/Cargo.toml \
+            --target wasm32-unknown-unknown --lib --features web

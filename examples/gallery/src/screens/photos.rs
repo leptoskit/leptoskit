@@ -106,10 +106,10 @@ fn Month(
 			<View
 				class="grid grid-cols-3 gap-0.5"
 				with_style=|style| {
-					style.grid = Some(GridStyle {
+					style.grid = Some(Box::new(GridStyle {
 						auto_rows: TrackSizing::Points(cell_size()),
 						..GridStyle::default()
-					});
+					}));
 				}
 			>
 				<Tile state=state photo=first class="col-span-2 row-span-2" />

@@ -230,13 +230,13 @@ fn yoga_grid() -> Result<(), String> {
 		width: Dimension::Points(300.0),
 		..Style::default()
 	};
-	style.grid = Some(leptoskit_yoga::GridStyle {
+	style.grid = Some(Box::new(leptoskit_yoga::GridStyle {
 		template_columns: vec![
 			leptoskit_yoga::TrackSizing::Fraction(1.0),
 			leptoskit_yoga::TrackSizing::Fraction(2.0),
 		],
 		..leptoskit_yoga::GridStyle::default()
-	});
+	}));
 	tree.set_style(root, style);
 
 	for _ in 0..2 {
