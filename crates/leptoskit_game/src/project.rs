@@ -1,5 +1,7 @@
 //! Projects cubes into screen-space quads. The simulation never reads this.
 
+#![cfg_attr(target_arch = "wasm32", allow(dead_code))]
+
 use glam::Mat4;
 use glam::Vec3;
 use glam::Vec4;
@@ -99,9 +101,9 @@ fn quads(world: &World, camera: &Camera, width: u32, height: u32) -> Vec<Quad> {
 
 pub(crate) fn quads_in(world: &World, framed: &Projection) -> Vec<Quad> {
 	let mut quads = Vec::new();
-	for (transform, mesh) in world.bodies() {
+	world.for_each_body(|transform, mesh| {
 		push_body(&mut quads, transform, mesh, framed);
-	}
+	});
 	quads.sort_by(|left, right| right.depth.total_cmp(&left.depth));
 	quads
 }
