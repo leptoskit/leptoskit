@@ -301,7 +301,11 @@ internal fun encodeRecord(record: Record): ByteArray {
 
         is SkinTemperatureRecord -> {
             val baseline = record.baseline?.inCelsius ?: 0.0
-            val delta = record.deltas.lastOrNull()?.delta?.inCelsius ?: 0.0
+            val delta =
+                record.deltas
+                    .lastOrNull()
+                    ?.delta
+                    ?.inCelsius ?: 0.0
             writer.f64(baseline + delta)
         }
 
@@ -410,42 +414,71 @@ internal fun stageCode(stage: Int): Int =
 /** An exercise type constant as its common-activity code. */
 internal fun activityCode(type: Int): Int =
     when (type) {
-        ExerciseSessionRecord.EXERCISE_TYPE_WALKING -> ACTIVITY_WALKING
+        ExerciseSessionRecord.EXERCISE_TYPE_WALKING -> {
+            ACTIVITY_WALKING
+        }
 
         ExerciseSessionRecord.EXERCISE_TYPE_RUNNING,
         ExerciseSessionRecord.EXERCISE_TYPE_RUNNING_TREADMILL,
-        -> ACTIVITY_RUNNING
+        -> {
+            ACTIVITY_RUNNING
+        }
 
         ExerciseSessionRecord.EXERCISE_TYPE_BIKING,
         ExerciseSessionRecord.EXERCISE_TYPE_BIKING_STATIONARY,
-        -> ACTIVITY_CYCLING
+        -> {
+            ACTIVITY_CYCLING
+        }
 
-        ExerciseSessionRecord.EXERCISE_TYPE_SWIMMING_POOL -> ACTIVITY_SWIMMING
+        ExerciseSessionRecord.EXERCISE_TYPE_SWIMMING_POOL -> {
+            ACTIVITY_SWIMMING
+        }
 
-        ExerciseSessionRecord.EXERCISE_TYPE_HIKING -> ACTIVITY_HIKING
+        ExerciseSessionRecord.EXERCISE_TYPE_HIKING -> {
+            ACTIVITY_HIKING
+        }
 
         ExerciseSessionRecord.EXERCISE_TYPE_STRENGTH_TRAINING,
         ExerciseSessionRecord.EXERCISE_TYPE_WEIGHTLIFTING,
-        -> ACTIVITY_STRENGTH
+        -> {
+            ACTIVITY_STRENGTH
+        }
 
-        ExerciseSessionRecord.EXERCISE_TYPE_YOGA -> ACTIVITY_YOGA
+        ExerciseSessionRecord.EXERCISE_TYPE_YOGA -> {
+            ACTIVITY_YOGA
+        }
 
-        ExerciseSessionRecord.EXERCISE_TYPE_HIGH_INTENSITY_INTERVAL_TRAINING ->
+        ExerciseSessionRecord.EXERCISE_TYPE_HIGH_INTENSITY_INTERVAL_TRAINING -> {
             ACTIVITY_HIGH_INTENSITY_INTERVAL_TRAINING
+        }
 
         ExerciseSessionRecord.EXERCISE_TYPE_ROWING,
         ExerciseSessionRecord.EXERCISE_TYPE_ROWING_MACHINE,
-        -> ACTIVITY_ROWING
+        -> {
+            ACTIVITY_ROWING
+        }
 
-        ExerciseSessionRecord.EXERCISE_TYPE_ELLIPTICAL -> ACTIVITY_ELLIPTICAL
+        ExerciseSessionRecord.EXERCISE_TYPE_ELLIPTICAL -> {
+            ACTIVITY_ELLIPTICAL
+        }
 
-        ExerciseSessionRecord.EXERCISE_TYPE_STAIR_CLIMBING -> ACTIVITY_STAIR_CLIMBING
+        ExerciseSessionRecord.EXERCISE_TYPE_STAIR_CLIMBING -> {
+            ACTIVITY_STAIR_CLIMBING
+        }
 
-        ExerciseSessionRecord.EXERCISE_TYPE_DANCING -> ACTIVITY_DANCING
+        ExerciseSessionRecord.EXERCISE_TYPE_DANCING -> {
+            ACTIVITY_DANCING
+        }
 
-        ExerciseSessionRecord.EXERCISE_TYPE_PILATES -> ACTIVITY_PILATES
+        ExerciseSessionRecord.EXERCISE_TYPE_PILATES -> {
+            ACTIVITY_PILATES
+        }
 
-        ExerciseSessionRecord.EXERCISE_TYPE_MARTIAL_ARTS -> ACTIVITY_MARTIAL_ARTS
+        ExerciseSessionRecord.EXERCISE_TYPE_MARTIAL_ARTS -> {
+            ACTIVITY_MARTIAL_ARTS
+        }
 
-        else -> ACTIVITY_OTHER
+        else -> {
+            ACTIVITY_OTHER
+        }
     }

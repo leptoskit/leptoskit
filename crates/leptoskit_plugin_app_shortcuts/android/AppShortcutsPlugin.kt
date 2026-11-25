@@ -245,14 +245,18 @@ class AppShortcutsPlugin(
         validateText(readString(buffer, 128), max = 128, allowEmpty = false)
         if (buffer.remaining() < 4) throw PluginException(PluginException.INVALID_ARGUMENT)
         when (buffer.int) {
-            0 -> Unit
+            0 -> {}
+
             1 -> {
                 val url = readString(buffer, 2048)
                 if (!url.startsWith("https://") || url.any { Character.isISOControl(it) }) {
                     throw PluginException(PluginException.INVALID_ARGUMENT)
                 }
             }
-            else -> throw PluginException(PluginException.INVALID_ARGUMENT)
+
+            else -> {
+                throw PluginException(PluginException.INVALID_ARGUMENT)
+            }
         }
         if (buffer.remaining() < 4) throw PluginException(PluginException.INVALID_ARGUMENT)
         val flags = buffer.int
@@ -273,9 +277,17 @@ class AppShortcutsPlugin(
 
     private fun encodeOptionalShare(share: IncomingShareData?): ByteArray {
         val out = ByteArrayOutputStream()
+
         fun writeU32(value: Int) {
-            out.write(ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(value).array())
+            out.write(
+                ByteBuffer
+                    .allocate(4)
+                    .order(ByteOrder.LITTLE_ENDIAN)
+                    .putInt(value)
+                    .array(),
+            )
         }
+
         fun writeOptString(value: String?) {
             if (value == null) {
                 writeU32(0)

@@ -50,7 +50,9 @@ export class WatchSyncPlugin implements NativePlugin {
 		this.closed = true;
 	}
 
-	private encodeCurrentStatus(wearEngine: Record<string, unknown> | undefined): ArrayBuffer {
+	private encodeCurrentStatus(
+		wearEngine: Record<string, unknown> | undefined,
+	): ArrayBuffer {
 		const buf = new ArrayBuffer(12);
 		const view = new DataView(buf);
 		view.setUint32(0, wearEngine ? 3 : 0, true); // HuaweiWearEngine or None

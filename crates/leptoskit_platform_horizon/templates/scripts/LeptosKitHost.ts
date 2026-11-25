@@ -26,7 +26,9 @@ import {
 	type Widget,
 } from "./scene";
 
-export const LeptosKitPressEvent = new hz.LocalEvent<{ nodeId: number; player: hz.Player }>(
+export const LeptosKitPressEvent = new hz.LocalEvent<
+	{ nodeId: number; player: hz.Player }
+>(
 	"LeptosKitPressEvent",
 );
 
@@ -59,9 +61,13 @@ export class LeptosKitHost extends UIComponent<typeof LeptosKitHost> {
 	}
 
 	start(): void {
-		this.connectLocalEvent(this.entity, LeptosKitTransactionEvent, ({ json }) => {
-			this.applyTransactionJson(json);
-		});
+		this.connectLocalEvent(
+			this.entity,
+			LeptosKitTransactionEvent,
+			({ json }) => {
+				this.applyTransactionJson(json);
+			},
+		);
 		const initial = this.props.initialTransaction.trim();
 		if (initial.length > 0) {
 			this.applyTransactionJson(initial);
@@ -72,7 +78,7 @@ export class LeptosKitHost extends UIComponent<typeof LeptosKitHost> {
 		return UINode.if(
 			this.rootNode.derive((root) => root !== undefined),
 			this.rootNode.derive((root) =>
-				root === undefined ? View({}) : this.renderWidget(root),
+				root === undefined ? View({}) : this.renderWidget(root)
 			),
 		);
 	}
@@ -102,17 +108,16 @@ export class LeptosKitHost extends UIComponent<typeof LeptosKitHost> {
 							player,
 						});
 					},
-					children:
-						children.length > 0
-							? children
-							: node.props.text !== undefined
-								? [
-										Text({
-											text: node.props.text,
-											style: horizonTextStyle(node.props),
-										}),
-									]
-								: [],
+					children: children.length > 0
+						? children
+						: node.props.text !== undefined
+						? [
+							Text({
+								text: node.props.text,
+								style: horizonTextStyle(node.props),
+							}),
+						]
+						: [],
 				});
 
 			case "scroll_view":
@@ -127,7 +132,9 @@ export class LeptosKitHost extends UIComponent<typeof LeptosKitHost> {
 				});
 
 			case "image": {
-				const asset = node.props.source ? this.textureAssets.get(node.props.source) : undefined;
+				const asset = node.props.source
+					? this.textureAssets.get(node.props.source)
+					: undefined;
 				if (asset === undefined) {
 					return View({ style: viewStyle, children });
 				}

@@ -54,7 +54,10 @@ class BlePlugin(
     private var waiter: CompletableDeferred<ByteArray>? = null
     private var closed = false
 
-    override suspend fun invoke(method: Int, payload: ByteBuffer): ByteArray {
+    override suspend fun invoke(
+        method: Int,
+        payload: ByteBuffer,
+    ): ByteArray {
         if (closed) throw PluginException(PluginException.CANCELLED)
         return when (method) {
             0 -> encodeU32(availabilityCode())
@@ -130,7 +133,10 @@ class BlePlugin(
         val found = ConcurrentHashMap<String, ScanResult>()
         val callback =
             object : ScanCallback() {
-                override fun onScanResult(callbackType: Int, result: ScanResult) {
+                override fun onScanResult(
+                    callbackType: Int,
+                    result: ScanResult,
+                ) {
                     found[result.device.address] = result
                 }
             }
@@ -161,7 +167,11 @@ class BlePlugin(
                 context,
                 false,
                 object : BluetoothGattCallback() {
-                    override fun onConnectionStateChange(g: BluetoothGatt, status: Int, newState: Int) {
+                    override fun onConnectionStateChange(
+                        g: BluetoothGatt,
+                        status: Int,
+                        newState: Int,
+                    ) {
                         if (newState == BluetoothProfile.STATE_CONNECTED && status == BluetoothGatt.GATT_SUCCESS) {
                             g.discoverServices()
                         } else if (
@@ -170,7 +180,8 @@ class BlePlugin(
                         ) {
                             connections.remove(deviceId)
                             descriptorLocks.remove(deviceId)
-                            descriptorWaiters.remove(deviceId)
+                            descriptorWaiters
+                                .remove(deviceId)
                                 ?.completeExceptionally(PluginException(PluginException.NATIVE))
                             runCatching { g.close() }
                             pendingConnects.remove(deviceId, ready)
@@ -178,7 +189,10 @@ class BlePlugin(
                         }
                     }
 
-                    override fun onServicesDiscovered(g: BluetoothGatt, status: Int) {
+                    override fun onServicesDiscovered(
+                        g: BluetoothGatt,
+                        status: Int,
+                    ) {
                         pendingConnects.remove(deviceId, ready)
                         if (status == BluetoothGatt.GATT_SUCCESS) {
                             ready.complete(Unit)
@@ -204,7 +218,9 @@ class BlePlugin(
                     ) {
                         enqueueNotification(
                             deviceId,
-                            characteristic.service.uuid.toString().lowercase(),
+                            characteristic.service.uuid
+                                .toString()
+                                .lowercase(),
                             characteristic.uuid.toString().lowercase(),
                             value,
                         )
@@ -219,7 +235,9 @@ class BlePlugin(
                         val value = characteristic.value ?: return
                         enqueueNotification(
                             deviceId,
-                            characteristic.service.uuid.toString().lowercase(),
+                            characteristic.service.uuid
+                                .toString()
+                                .lowercase(),
                             characteristic.uuid.toString().lowercase(),
                             value,
                         )
@@ -245,7 +263,10 @@ class BlePlugin(
         return ByteArray(0)
     }
 
-    private suspend fun setNotify(payload: ByteBuffer, enable: Boolean): ByteArray {
+    private suspend fun setNotify(
+        payload: ByteBuffer,
+        enable: Boolean,
+    ): ByteArray {
         val reader = WireReader(payload)
         val deviceId = reader.string()
         val serviceUuid = parseBleUuid(reader.string())
@@ -263,12 +284,21 @@ class BlePlugin(
             val props = characteristic.properties
             val value =
                 when {
-                    !enable -> BluetoothGattDescriptor.DISABLE_NOTIFICATION_VALUE
-                    (props and BluetoothGattCharacteristic.PROPERTY_NOTIFY) != 0 ->
+                    !enable -> {
+                        BluetoothGattDescriptor.DISABLE_NOTIFICATION_VALUE
+                    }
+
+                    (props and BluetoothGattCharacteristic.PROPERTY_NOTIFY) != 0 -> {
                         BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
-                    (props and BluetoothGattCharacteristic.PROPERTY_INDICATE) != 0 ->
+                    }
+
+                    (props and BluetoothGattCharacteristic.PROPERTY_INDICATE) != 0 -> {
                         BluetoothGattDescriptor.ENABLE_INDICATION_VALUE
-                    else -> BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+                    }
+
+                    else -> {
+                        BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+                    }
                 }
             val written = CompletableDeferred<Int>()
             descriptorWaiters[deviceId] = written
@@ -305,7 +335,12 @@ class BlePlugin(
         return pending.await()
     }
 
-    private fun enqueueNotification(deviceId: String, service: String, charUuid: String, value: ByteArray) {
+    private fun enqueueNotification(
+        deviceId: String,
+        service: String,
+        charUuid: String,
+        value: ByteArray,
+    ) {
         val out = ByteArrayOutputStream()
         writeBytes(out, deviceId.toByteArray(Charsets.UTF_8))
         writeBytes(out, service.toByteArray(Charsets.UTF_8))
@@ -364,7 +399,9 @@ private fun parseBleUuid(raw: String): UUID {
         .getOrElse { throw PluginException(PluginException.INVALID_ARGUMENT) }
 }
 
-private class WireReader(payload: ByteBuffer) {
+private class WireReader(
+    payload: ByteBuffer,
+) {
     private val buf = payload.duplicate().order(ByteOrder.LITTLE_ENDIAN)
 
     fun u32(): Int {
@@ -400,28 +437,47 @@ private fun encodeDevices(results: List<ScanResult>): ByteArray {
         val uuids = r.scanRecord?.serviceUuids.orEmpty()
         writeU32(out, uuids.size)
         for (u in uuids) {
-            writeBytes(out, u.uuid.toString().lowercase().toByteArray(Charsets.UTF_8))
+            writeBytes(
+                out,
+                u.uuid
+                    .toString()
+                    .lowercase()
+                    .toByteArray(Charsets.UTF_8),
+            )
         }
     }
     return out.toByteArray()
 }
 
 private fun encodeU32(value: Int): ByteArray =
-    ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(value).array()
+    ByteBuffer
+        .allocate(4)
+        .order(ByteOrder.LITTLE_ENDIAN)
+        .putInt(value)
+        .array()
 
-private fun writeBytes(out: ByteArrayOutputStream, bytes: ByteArray) {
+private fun writeBytes(
+    out: ByteArrayOutputStream,
+    bytes: ByteArray,
+) {
     writeU32(out, bytes.size)
     out.write(bytes)
 }
 
-private fun writeU32(out: ByteArrayOutputStream, value: Int) {
+private fun writeU32(
+    out: ByteArrayOutputStream,
+    value: Int,
+) {
     out.write(value and 0xFF)
     out.write((value shr 8) and 0xFF)
     out.write((value shr 16) and 0xFF)
     out.write((value shr 24) and 0xFF)
 }
 
-private fun writeI64(out: ByteArrayOutputStream, value: Long) {
+private fun writeI64(
+    out: ByteArrayOutputStream,
+    value: Long,
+) {
     for (shift in 0 until 64 step 8) {
         out.write(((value shr shift) and 0xFF).toInt())
     }

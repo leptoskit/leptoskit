@@ -1,0 +1,5 @@
+<!-- {@snippet} -->
+
+Shared prose.
+
+<!-- {/snippet} -->

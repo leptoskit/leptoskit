@@ -103,14 +103,14 @@ See [Publishing to the stores](../guide/24-publishing.md#the-meta-horizon-store)
 
 ## What works and what doesn't
 
-| Works                                                                   | Doesn't work yet                                                                                               |
-| ----------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| Building an APK with the Quest manifest                                 | Running it on a headset hasn't been verified                                                                   |
-| Installing onto a connected headset with `leptoskit dev`                | Drawing the app's 2D interface inside an immersive session: immersive mode shows only what the app draws in 3D |
-| Every runtime plugin the Android build has                              | Submitting for Meta Horizon Store review from the CLI (Meta has no review-submission API; submit in Dashboard) |
-| A release APK signed with your upload key                               | Running the immersive switch and the return to the panel on a headset hasn't been verified                     |
+| Works                                                                             | Doesn't work yet                                                                                               |
+| --------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| Building an APK with the Quest manifest                                           | Running it on a headset hasn't been verified                                                                   |
+| Installing onto a connected headset with `leptoskit dev`                          | Drawing the app's 2D interface inside an immersive session: immersive mode shows only what the app draws in 3D |
+| Every runtime plugin the Android build has                                        | Submitting for Meta Horizon Store review from the CLI (Meta has no review-submission API; submit in Dashboard) |
+| A release APK signed with your upload key                                         | Running the immersive switch and the return to the panel on a headset hasn't been verified                     |
 | Uploading the signed APK to Horizon Store channels with `leptoskit publish quest` |                                                                                                                |
-| The `xr` plugin's headset sessions, controllers, hands, and passthrough |                                                                                                                |
-| Drawing a 3D scene into the headset, from a panel app too               |                                                                                                                |
+| The `xr` plugin's headset sessions, controllers, hands, and passthrough           |                                                                                                                |
+| Drawing a 3D scene into the headset, from a panel app too                         |                                                                                                                |
 
 In immersive mode the headset shows only what the app draws through OpenXR, so a Quest game draws its world, and its menus, with the 3D renderer. Set `immersive = false` for an app whose interface is its ordinary screens: it runs in a window in the player's space.

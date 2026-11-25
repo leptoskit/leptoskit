@@ -263,5 +263,4 @@ private fun readRequest(
         request.token,
     )
 
-private fun recordClassOf(type: Int): KClass<out Record> =
-    RECORD_TYPES[type] ?: throw PluginException(PluginException.INVALID_ARGUMENT)
+private fun recordClassOf(type: Int): KClass<out Record> = RECORD_TYPES[type] ?: throw PluginException(PluginException.INVALID_ARGUMENT)

@@ -41,6 +41,7 @@ class WatchSyncPlugin(
     private val pendingUris = ConcurrentHashMap<String, Uri>()
     private val assetExecutor = Executors.newSingleThreadExecutor()
     private var incomingWaiter: CompletableDeferred<ByteArray>? = null
+
     @Volatile
     private var localNodeId: String? = null
     private var closed = false
@@ -84,7 +85,10 @@ class WatchSyncPlugin(
         }
     }
 
-    override suspend fun invoke(method: Int, payload: ByteBuffer): ByteArray {
+    override suspend fun invoke(
+        method: Int,
+        payload: ByteBuffer,
+    ): ByteArray {
         if (closed) throw PluginException(PluginException.CANCELLED)
         return when (method) {
             0 -> status()
@@ -112,12 +116,21 @@ class WatchSyncPlugin(
 
     private suspend fun ensureLocalNodeId(): String? {
         localNodeId?.let { return it }
-        return runCatching { Wearable.getNodeClient(context).localNode.awaitResult().id }
-            .getOrNull()
+        return runCatching {
+            Wearable
+                .getNodeClient(context)
+                .localNode
+                .awaitResult()
+                .id
+        }.getOrNull()
             ?.also { localNodeId = it }
     }
 
-    private fun enqueueAsset(id: String, topic: String, asset: Asset) {
+    private fun enqueueAsset(
+        id: String,
+        topic: String,
+        asset: Asset,
+    ) {
         Wearable
             .getDataClient(context)
             .getFdForAsset(asset)
@@ -251,7 +264,9 @@ private suspend fun <T> Task<T>.awaitResult(): T =
 
 private const val ABSENT = -1
 
-private class WireReader(payload: ByteBuffer) {
+private class WireReader(
+    payload: ByteBuffer,
+) {
     private val buf = payload.duplicate().order(ByteOrder.LITTLE_ENDIAN)
 
     fun u32(): Int {
@@ -274,7 +289,11 @@ private class WireReader(payload: ByteBuffer) {
     }
 }
 
-private fun encodeStatus(transport: Int, flags: Int, peerName: String?): ByteArray {
+private fun encodeStatus(
+    transport: Int,
+    flags: Int,
+    peerName: String?,
+): ByteArray {
     val out = ByteArrayOutputStream()
     writeU32(out, transport)
     writeU32(out, flags)
@@ -288,7 +307,12 @@ private fun encodeStatus(transport: Int, flags: Int, peerName: String?): ByteArr
     return out.toByteArray()
 }
 
-private fun encodeEnvelope(id: String, topic: String, receivedMs: Long, payload: ByteArray): ByteArray {
+private fun encodeEnvelope(
+    id: String,
+    topic: String,
+    receivedMs: Long,
+    payload: ByteArray,
+): ByteArray {
     val out = ByteArrayOutputStream()
     writeBytes(out, id.toByteArray(Charsets.UTF_8))
     writeBytes(out, topic.toByteArray(Charsets.UTF_8))
@@ -297,19 +321,28 @@ private fun encodeEnvelope(id: String, topic: String, receivedMs: Long, payload:
     return out.toByteArray()
 }
 
-private fun writeBytes(out: ByteArrayOutputStream, bytes: ByteArray) {
+private fun writeBytes(
+    out: ByteArrayOutputStream,
+    bytes: ByteArray,
+) {
     writeU32(out, bytes.size)
     out.write(bytes)
 }
 
-private fun writeU32(out: ByteArrayOutputStream, value: Int) {
+private fun writeU32(
+    out: ByteArrayOutputStream,
+    value: Int,
+) {
     out.write(value and 0xFF)
     out.write((value shr 8) and 0xFF)
     out.write((value shr 16) and 0xFF)
     out.write((value shr 24) and 0xFF)
 }
 
-private fun writeI64(out: ByteArrayOutputStream, value: Long) {
+private fun writeI64(
+    out: ByteArrayOutputStream,
+    value: Long,
+) {
     for (shift in 0 until 64 step 8) {
         out.write(((value shr shift) and 0xFF).toInt())
     }

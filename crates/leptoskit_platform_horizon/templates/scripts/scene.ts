@@ -87,7 +87,18 @@ export interface HorizonViewStyle {
 export interface HorizonTextStyle {
 	color?: string;
 	fontSize?: number;
-	fontWeight?: "normal" | "bold" | "100" | "200" | "300" | "400" | "500" | "600" | "700" | "800" | "900";
+	fontWeight?:
+		| "normal"
+		| "bold"
+		| "100"
+		| "200"
+		| "300"
+		| "400"
+		| "500"
+		| "600"
+		| "700"
+		| "800"
+		| "900";
 }
 
 export class Widget {
@@ -122,7 +133,9 @@ export class Widget {
 }
 
 /** Formats a leptoskit RGBA color value (0..1 or 0..255) or CSS string into a `horizon/ui` color string. */
-export function formatColor(value: ColorValue | string | undefined): string | undefined {
+export function formatColor(
+	value: ColorValue | string | undefined,
+): string | undefined {
 	if (value === undefined) {
 		return undefined;
 	}
@@ -130,11 +143,15 @@ export function formatColor(value: ColorValue | string | undefined): string | un
 		return value;
 	}
 	const scale = (channel: number): number => {
-		const normalized = channel <= 1 ? Math.round(channel * 255) : Math.round(channel);
+		const normalized = channel <= 1
+			? Math.round(channel * 255)
+			: Math.round(channel);
 		return Math.max(0, Math.min(255, normalized));
 	};
 	const alpha = Math.max(0, Math.min(1, value.a));
-	return `rgba(${scale(value.r)}, ${scale(value.g)}, ${scale(value.b)}, ${alpha})`;
+	return `rgba(${scale(value.r)}, ${scale(value.g)}, ${
+		scale(value.b)
+	}, ${alpha})`;
 }
 
 /** Resolves a uniform border width from either `border_width` or per-edge `border_widths`. */
@@ -211,7 +228,9 @@ export function validateImageSource(source: string | undefined): void {
 		return;
 	}
 	if (source.startsWith("http://") || source.startsWith("https://")) {
-		throw new Error(`Horizon Worlds Image does not load remote URLs: ${source}`);
+		throw new Error(
+			`Horizon Worlds Image does not load remote URLs: ${source}`,
+		);
 	}
 }
 
@@ -248,7 +267,10 @@ export class Scene {
 					throw new Error(`Duplicate render node ${created.id}`);
 				}
 				validateImageSource(created.props.source);
-				this.nodes.set(created.id, new Widget(created.id, created.kind, created.props));
+				this.nodes.set(
+					created.id,
+					new Widget(created.id, created.kind, created.props),
+				);
 			} else if (change.UpdateProps !== undefined) {
 				validateImageSource(change.UpdateProps.props.source);
 				this.node(change.UpdateProps.id).props = change.UpdateProps.props;
@@ -258,12 +280,16 @@ export class Scene {
 				const edge = change.InsertChild;
 				const parent = this.node(edge.parent);
 				const child = this.node(edge.child);
-				parent.children = parent.children.filter((item) => item.id !== child.id);
+				parent.children = parent.children.filter((item) =>
+					item.id !== child.id
+				);
 				parent.children.splice(edge.index, 0, child);
 			} else if (change.RemoveChild !== undefined) {
 				const edge = change.RemoveChild;
 				const parent = this.node(edge.parent);
-				parent.children = parent.children.filter((item) => item.id !== edge.child);
+				parent.children = parent.children.filter((item) =>
+					item.id !== edge.child
+				);
 			} else if (change.Delete !== undefined) {
 				this.nodes.delete(change.Delete.id);
 			} else {

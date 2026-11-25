@@ -510,7 +510,7 @@ public final class AppShortcutsPlugin: NativePlugin {
     }
 
     private static func validateText(_ value: String, max: Int, allowEmpty: Bool) throws {
-        guard (allowEmpty || !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty),
+        guard allowEmpty || !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               value.utf8.count <= max
         else {
             throw PluginError.invalidArgument
