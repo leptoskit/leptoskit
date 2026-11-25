@@ -57,7 +57,7 @@
 | `Image`                                        | an `NSImageView` loading `source` as a file path or `file://` URL  |
 | `ScrollView`                                   | an `NSScrollView` over a flipped document view                     |
 
-Backgrounds, rounded corners (clipping their content), borders, and opacity are applied on each view's layer. Fonts come from the system font at the requested size and weight, and `AppKitTextMeasurer` measures text with the same metrics an `NSTextField` cell uses, so layout reserves exactly the space AppKit draws into.
+Backgrounds, rounded corners (clipping their content), borders, and opacity are applied on each view's layer. Fonts come from the system font at the requested size and weight, or from the app's own face once the host has [installed its fonts](https://leptoskit.dev/docs/guide/42-fonts.html#hosts-you-write-yourself) and `font-[var(--name)]` chooses one, and `AppKitTextMeasurer` measures text with the same metrics an `NSTextField` cell uses, so layout reserves exactly the space AppKit draws into.
 
 Switches, checkboxes, radios, sliders, and text fields remain controlled: a callback proposes a value, and the widget restores the latest application-owned value when the callback finishes. Callbacks can synchronously update or delete the firing widget. Radio arrow keys move focus and propose selection within the explicit group across layout wrappers, skipping hidden and disabled options. Slider arrows advance by the declared step, or one percent of the range for a continuous slider. Native progress animations stop when hidden, stopped, deleted, or when their backend is dropped.
 

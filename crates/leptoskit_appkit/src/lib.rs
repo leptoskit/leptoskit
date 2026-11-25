@@ -96,6 +96,8 @@ mod app;
 #[cfg(target_os = "macos")]
 mod backend;
 #[cfg(target_os = "macos")]
+mod fonts;
+#[cfg(target_os = "macos")]
 mod measure;
 #[cfg(target_os = "macos")]
 mod overlay;

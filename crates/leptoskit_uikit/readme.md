@@ -37,7 +37,7 @@ Render shared leptoskit primitives as real iOS UIKit views. `UIKitBackend` consu
 
 `UIKitHost` retains one `NativeSurface` through a native view controller. The controller keeps the Yoga root inside a stable container, forwards logical bounds and rotation, and reconciles shared events without replacing the host view. Application render functions return ordinary `Element` trees.
 
-The app bundle must include `UIApplicationSceneManifest`. The probe's [Info.plist](probe/Info.plist) provides a minimal example. iOS 15 is the supported minimum. Native UIKit values stay on the main thread; text measurement creates independent Core Text values and can run on any thread.
+The app bundle must include `UIApplicationSceneManifest`. The probe's [Info.plist](probe/Info.plist) provides a minimal example. iOS 15 is the supported minimum. Native UIKit values stay on the main thread; text measurement creates independent Core Text values and can run on any thread. Text draws and measures in the system font, or in the app's own face once the host has [installed its fonts](https://leptoskit.dev/docs/guide/42-fonts.html#hosts-you-write-yourself) and `font-[var(--name)]` chooses one.
 
 Controls propose typed changes and restore the latest committed value after callbacks, including rejected values and synchronous removal. UIKit has no checkbox/radio class, so those controls use selected `UIButton` instances with SF Symbols and accessibility selection/value traits. A `UISwitch` sits inside an exact Yoga frame and scales its native content to fit. `UISlider` coordinates normalize into the shared `f64` range instead of truncating that range to `f32`. Accessibility increments follow shared step sizes, including adjacent floats.
 

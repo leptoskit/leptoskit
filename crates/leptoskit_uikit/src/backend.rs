@@ -88,7 +88,7 @@ use crate::events::input_value;
 use crate::events::slider_coordinate;
 use crate::events::visible;
 use crate::measure::UIKitTextMeasurer;
-use crate::measure::font_weight;
+use crate::measure::font;
 use crate::overlay::Presented;
 use crate::overlay::controller_of;
 use crate::text::alignment;
@@ -852,10 +852,7 @@ fn apply_props(widget: &mut Widget, props: &NativeProps, mtm: MainThreadMarker) 
 		target.sync(props);
 	}
 
-	let font = UIFont::systemFontOfSize_weight(
-		f64::from(props.text_style().font_size),
-		font_weight(props.text_style().font_weight),
-	);
+	let font = font(props.text_style());
 
 	match &mut widget.control {
 		Control::Plain | Control::Overlay(_) => {
