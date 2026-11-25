@@ -34,6 +34,10 @@ Transforms, transitions, keyframes, and entering [animations](../guide/32-animat
 
 [3D scenes](../guide/33-3d-scenes.md) draw into a `<canvas>` with WebGPU, or WebGL2 where the browser has no WebGPU, sized to the canvas's CSS box at the display's pixel ratio and drawn with `requestAnimationFrame` only while the scene changes or animates. Models load from `/assets/`. The renderer starts with a scene's first ops; a page that sends none never starts it. Its code is in the app's Wasm only when the app uses `leptoskit`'s `3d` feature.
 
+## Fonts
+
+The build turns `[theme.fonts]` into `leptoskit-fonts.css` beside `index.html` and links it there: an `@font-face` rule for each face, loaded from `/assets/`, and a `:root` rule naming each family, so `font-[var(--hand)]` chooses it. A page that renders its own HTML shell, such as a server-rendered one without `index.html`, links `/leptoskit-fonts.css` itself. See [Fonts](../guide/42-fonts.md).
+
 ## Rive animations
 
 [Rive animations](../guide/20-rive.md) can run on a browser canvas through `leptoskit_rive`. It uses an app-supplied official runtime, suspends hidden and offscreen rendering, and releases resources when the player is dropped. Keep its meaningful content accessible in HTML beside the canvas.

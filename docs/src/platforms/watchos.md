@@ -10,12 +10,12 @@ On watchOS, leptoskit models pages, Smart Stack glances, and complications as fi
 
 ## What works and what doesn't
 
-| Works                                                                                               | Doesn't work yet                            |
-| --------------------------------------------------------------------------------------------------- | ------------------------------------------- |
-| `WatchApp` / `WearableApp` surfaces, budgets, and `WatchOsHost` tests                               | Automated watchOS simulator harness in CI   |
-| `.leptoskit/watchos` plugin registrant, `Info.plist`, entitlements, and `WatchHost.xcconfig`        | Code push updates on watchOS                |
-| Apple runtime plugins (`wearable`, `health`, `watch-sync`, `ble`, `location`, `battery`, `thermal`) | App Store Connect watchOS upload automation |
-| `leptoskit native build watchos` via `xcodebuild -sdk watchos` on macOS                             |                                             |
+| Works                                                                                               | Doesn't work yet                                                          |
+| --------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| `WatchApp` / `WearableApp` surfaces, budgets, and `WatchOsHost` tests                               | Automated watchOS simulator harness in CI                                 |
+| `.leptoskit/watchos` plugin registrant, `Info.plist`, entitlements, and `WatchHost.xcconfig`        | Code push updates on watchOS                                              |
+| Apple runtime plugins (`wearable`, `health`, `watch-sync`, `ble`, `location`, `battery`, `thermal`) | App Store Connect watchOS upload automation                               |
+| `leptoskit native build watchos` via `xcodebuild -sdk watchos` on macOS                             | An app's own [fonts](../guide/42-fonts.md): text draws in the system font |
 
 ## Build
 

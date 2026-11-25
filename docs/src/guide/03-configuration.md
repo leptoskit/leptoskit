@@ -135,6 +135,7 @@ pad = "16px"
 | --------- | ------- | ----------------------------------------------------------------------------------------- |
 | `colors`  | `{}`    | Color tokens as hex (`#rgb`, `#rrggbb`, `#rrggbbaa`), `black`, `white`, or `transparent`. |
 | `lengths` | `{}`    | Length tokens as `px`, `rem`, `%`, `vw`, or `vh`.                                         |
+| `fonts`   | `{}`    | Typefaces the app bundles, one table per family. See [Fonts](42-fonts.md).                |
 
 Install them once at app startup so native paint and the web `:root` sheet agree:
 
@@ -148,6 +149,19 @@ if let Some(theme) = &config.theme {
 ```
 
 `Theme::css()` emits the same names as a `:root` rule; the web adapter prepends it automatically when anything is set. See [CSS coverage](../reference/css-coverage.md).
+
+Fonts need no call. Declare each family's files, inside `assets/`, under `[theme.fonts]`, and the build checks them and loads them on the web, iOS, Android, and macOS before the first layout:
+
+```toml
+[theme.fonts.hand]
+family = "Skribble Noto Sketch"
+faces = [
+	{ file = "fonts/NotoSketch-Regular.ttf" },
+	{ file = "fonts/NotoSketch-Bold.ttf", weight = 700 },
+]
+```
+
+`font-[var(--hand)]` then chooses the family. [Fonts](42-fonts.md) has every key and what each platform does.
 
 ## `[native]`
 
