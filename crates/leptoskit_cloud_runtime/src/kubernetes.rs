@@ -32,6 +32,7 @@ use sha2::Sha256;
 
 use crate::spec::DatabaseAccess;
 use crate::spec::Egress;
+use crate::spec::PlatformService;
 use crate::spec::Policy;
 use crate::spec::Process;
 use crate::spec::ReleaseSpec;
@@ -918,6 +919,7 @@ pub fn manifests(
 	objects.extend(claim_objects(spec, &namespace, &labels));
 	objects.extend(deployment_objects(spec, cluster, &namespace, &labels)?);
 	objects.extend(service_objects(spec, &namespace, &labels));
+	objects.extend(platform_objects(spec, &namespace, &labels));
 	if spec.processes.iter().any(|process| process.scale.sleep)
 		&& let Some(addon) = &cluster.keda_http
 	{
@@ -1156,6 +1158,9 @@ fn network_policies(
 	}
 	if let Some(database) = &spec.policy.database {
 		policies.push(database_policy(database, namespace, labels));
+	}
+	for service in &spec.platform {
+		policies.push(platform_policy(service, namespace, labels));
 	}
 	policies
 }
@@ -1410,6 +1415,59 @@ fn database_policy(
 		None,
 		Some(to),
 	)
+}
+
+/// A platform service's namespace, on its port and nothing else: the
+/// processes call it there, as the app's server calls the notifications
+/// hub. The edge reaches it on its own.
+fn platform_policy(
+	service: &PlatformService,
+	namespace: &str,
+	labels: &BTreeMap<String, String>,
+) -> Object {
+	let to = vec![networking::NetworkPolicyEgressRule {
+		to: Some(vec![peer_from_namespace(&service.namespace)]),
+		ports: Some(vec![tcp_door(service.port)]),
+	}];
+	network_policy(
+		&format!("allow-platform-{}", service.name),
+		namespace,
+		labels,
+		&["Egress"],
+		None,
+		Some(to),
+	)
+}
+
+/// A bridge in the environment's namespace to each platform service the
+/// release reaches: an `ExternalName` Service, which an Ingress may name
+/// as a backend, as the KEDA HTTP add-on's interceptor is named. Traefik
+/// follows one only with `allowExternalNameServices` on.
+fn platform_objects(
+	spec: &ReleaseSpec,
+	namespace: &str,
+	labels: &BTreeMap<String, String>,
+) -> Vec<Object> {
+	spec.platform
+		.iter()
+		.map(|service| {
+			Object::Service(core::Service {
+				metadata: object_meta(Some(namespace), &service.name, labels),
+				spec: Some(core::ServiceSpec {
+					type_: Some("ExternalName".to_owned()),
+					external_name: Some(service.host.clone()),
+					ports: Some(vec![core::ServicePort {
+						name: Some("http".to_owned()),
+						port: i32::from(service.port),
+						protocol: Some("TCP".to_owned()),
+						..Default::default()
+					}]),
+					..Default::default()
+				}),
+				status: None,
+			})
+		})
+		.collect()
 }
 
 /// The one service account every pod runs as. No token is mounted: nothing
@@ -2036,6 +2094,27 @@ fn ingress(
 	let paths = routes
 		.iter()
 		.map(|route| {
+			if let Some(service) = spec
+				.platform
+				.iter()
+				.find(|service| service.name == route.process)
+			{
+				return networking::HTTPIngressPath {
+					path: Some(route.path_prefix.clone()),
+					path_type: "Prefix".to_owned(),
+					backend: networking::IngressBackend {
+						service: Some(networking::IngressServiceBackend {
+							name: service.name.clone(),
+							port: Some(networking::ServiceBackendPort {
+								number: Some(i32::from(service.port)),
+								name: None,
+							}),
+						}),
+						resource: None,
+					},
+				};
+			}
+
 			networking::HTTPIngressPath {
 				path: Some(route.path_prefix.clone()),
 				path_type: "Prefix".to_owned(),

@@ -16,6 +16,7 @@ use leptoskit_cloud_runtime::Image;
 use leptoskit_cloud_runtime::ManifestError;
 use leptoskit_cloud_runtime::NamedRef;
 use leptoskit_cloud_runtime::Object;
+use leptoskit_cloud_runtime::PlatformService;
 use leptoskit_cloud_runtime::Policy;
 use leptoskit_cloud_runtime::Probes;
 use leptoskit_cloud_runtime::Process;
@@ -133,6 +134,7 @@ fn cluster() -> ClusterProfile {
 /// certificate, KEDA's HTTP add-on on the cluster.
 fn minimal_sleeping_app() -> (ReleaseSpec, ClusterProfile, SecretValues) {
 	let spec = ReleaseSpec {
+		platform: Vec::new(),
 		environment: environment(),
 		deployment: 1,
 		processes: vec![Process {
@@ -183,6 +185,7 @@ fn minimal_sleeping_app() -> (ReleaseSpec, ClusterProfile, SecretValues) {
 /// volume. The app autoscales from two to five.
 fn app_with_services() -> (ReleaseSpec, ClusterProfile, SecretValues) {
 	let spec = ReleaseSpec {
+		platform: Vec::new(),
 		environment: environment(),
 		deployment: 2,
 		processes: vec![
@@ -396,7 +399,9 @@ fn an_app_with_services() {
 			.iter()
 			.filter(|o| o.kind() == "NetworkPolicy")
 			.count(),
-		7
+		// The seven every release has with a database and the internet, and
+		// the ACME solver's, for the custom domain's issued certificate.
+		8
 	);
 	assert_eq!(
 		objects.iter().filter(|o| o.kind() == "Deployment").count(),
@@ -954,6 +959,129 @@ fn tenant_placement_tmp_limit_and_profile_json_round_trip() {
 				.expression
 				.contains("app.kubernetes.io/managed-by")
 	);
+}
+
+/// The cluster's notifications hub, as a release that uses it names it.
+fn hub() -> PlatformService {
+	PlatformService {
+		name: "notifications".to_owned(),
+		namespace: "leptoskit-notifications".to_owned(),
+		host: "hub.leptoskit-notifications.svc.cluster.local".to_owned(),
+		port: 8080,
+	}
+}
+
+#[test]
+fn a_route_to_a_platform_service_crosses_one_bridge() {
+	let (mut spec, profile, secrets) = minimal_sleeping_app();
+	spec.platform.push(hub());
+	let hostname = spec.routes[0].hostname.clone();
+	spec.routes.push(Route {
+		hostname: hostname.clone(),
+		path_prefix: "/_leptoskit/services/notifications/".to_owned(),
+		process: "notifications".to_owned(),
+		tls: Tls::Wildcard,
+		strip_cookies: false,
+	});
+	let objects = build(&spec, &profile, &secrets);
+
+	// The bridge: an ExternalName Service in the environment's own
+	// namespace, on the hub's port.
+	let bridge = objects
+		.iter()
+		.find_map(|object| {
+			match object {
+				Object::Service(service)
+					if service.metadata.name.as_deref() == Some("notifications") =>
+				{
+					Some(service)
+				}
+				_ => None,
+			}
+		})
+		.expect("a bridge to the hub");
+	let bridge_spec = bridge.spec.as_ref().expect("a spec");
+	assert_eq!(bridge_spec.type_.as_deref(), Some("ExternalName"));
+	assert_eq!(
+		bridge_spec.external_name.as_deref(),
+		Some("hub.leptoskit-notifications.svc.cluster.local")
+	);
+	assert_eq!(bridge_spec.ports.as_ref().expect("a port")[0].port, 8080);
+	assert_eq!(
+		bridge.metadata.namespace.as_deref(),
+		Some(spec.environment.namespace().as_str())
+	);
+
+	// The door: egress to the hub's namespace on its port, and nothing else
+	// of it.
+	let door = objects
+		.iter()
+		.find_map(|object| {
+			match object {
+				Object::NetworkPolicy(policy)
+					if policy.metadata.name.as_deref() == Some("allow-platform-notifications") =>
+				{
+					Some(policy)
+				}
+				_ => None,
+			}
+		})
+		.expect("a door to the hub");
+	let door_spec = door.spec.as_ref().expect("a spec");
+	assert_eq!(
+		door_spec.policy_types.as_deref(),
+		Some(&["Egress".to_owned()][..])
+	);
+	let rule = &door_spec.egress.as_ref().expect("egress")[0];
+	let port = &rule.ports.as_ref().expect("ports")[0];
+	assert_eq!(
+		port.port,
+		Some(k8s_openapi::apimachinery::pkg::util::intstr::IntOrString::Int(8080))
+	);
+	let peer = &rule.to.as_ref().expect("a peer")[0];
+	assert!(
+		format!("{peer:?}").contains("leptoskit-notifications"),
+		"{peer:?}"
+	);
+
+	// The route: the app's hostname sends the service's prefix across the
+	// bridge, on the hub's port, and everything else to the app as before.
+	let ingress = objects
+		.iter()
+		.find_map(|object| {
+			match object {
+				Object::Ingress(ingress) if ingress.metadata.name.as_deref() == Some(&hostname) => {
+					Some(ingress)
+				}
+				_ => None,
+			}
+		})
+		.expect("the hostname's Ingress");
+	let paths = &ingress.spec.as_ref().unwrap().rules.as_ref().unwrap()[0]
+		.http
+		.as_ref()
+		.unwrap()
+		.paths;
+	let notifications = paths
+		.iter()
+		.find(|path| path.path.as_deref() == Some("/_leptoskit/services/notifications/"))
+		.expect("the notifications path");
+	let backend = notifications.backend.service.as_ref().unwrap();
+	assert_eq!(backend.name, "notifications");
+	assert_eq!(backend.port.as_ref().unwrap().number, Some(8080));
+	assert!(
+		paths.iter().any(|path| path.path.as_deref() == Some("/")),
+		"the app keeps its own route"
+	);
+}
+
+#[test]
+fn a_release_without_platform_services_reads_and_writes_as_before() {
+	let (spec, ..) = minimal_sleeping_app();
+	let json = serde_json::to_value(&spec).expect("a spec serializes");
+	assert!(json.get("platform").is_none(), "{json}");
+	let back: ReleaseSpec = serde_json::from_value(json).expect("an old spec reads");
+	assert_eq!(back.platform, Vec::new());
 }
 
 #[test]

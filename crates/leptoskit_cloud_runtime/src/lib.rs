@@ -60,6 +60,7 @@ pub use spec::Egress;
 pub use spec::EnvironmentRef;
 pub use spec::Image;
 pub use spec::NamedRef;
+pub use spec::PlatformService;
 pub use spec::Policy;
 pub use spec::Probes;
 pub use spec::Process;
