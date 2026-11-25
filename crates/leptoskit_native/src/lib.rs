@@ -41,6 +41,7 @@ pub mod devtools;
 pub mod element;
 pub mod flatten;
 pub mod focus;
+pub mod fonts;
 pub mod gesture;
 pub mod splash;
 
@@ -118,6 +119,7 @@ pub use props::BorderWidths;
 pub use props::Capitalize;
 pub use props::Color;
 pub use props::EventOutcome;
+pub use props::FontFamily;
 pub use props::FontWeight;
 pub use props::KeyPress;
 pub use props::Keyboard;

@@ -221,6 +221,7 @@ pub(crate) struct InheritedProps {
 	pub(crate) font_weight: Option<FontWeight>,
 	pub(crate) line_height: Option<crate::props::LineHeight>,
 	pub(crate) italic: Option<bool>,
+	pub(crate) font_family: Option<crate::FontFamily>,
 	pub(crate) text_align: Option<TextAlign>,
 	pub(crate) disabled: bool,
 	pub(crate) aria_hidden: bool,
@@ -236,6 +237,7 @@ impl InheritedProps {
 			font_weight: props.font_weight,
 			line_height: props.line_height,
 			italic: props.italic,
+			font_family: props.font_family,
 			text_align: props.text_align,
 			disabled: props.enabled == Some(false),
 			aria_hidden: props.aria().hidden == Some(true),
@@ -1082,6 +1084,7 @@ impl Element {
 		props.font_weight = props.font_weight.or(parent.font_weight);
 		props.line_height = props.line_height.or(parent.line_height);
 		props.italic = props.italic.or(parent.italic);
+		props.font_family = props.font_family.or(parent.font_family);
 		props.text_align = props.text_align.or(parent.text_align);
 
 		if parent.disabled {
@@ -1200,6 +1203,7 @@ impl Element {
 			|| previous.font_weight != next.font_weight
 			|| previous.line_height != next.line_height
 			|| previous.italic != next.italic
+			|| previous.font_family != next.font_family
 			|| previous.text_align != next.text_align
 			|| (previous.enabled == Some(false)) != (next.enabled == Some(false))
 			|| (previous.aria().hidden == Some(true)) != (next.aria().hidden == Some(true))
@@ -2538,6 +2542,7 @@ fn has_no_props_other_than_text(props: &NativeProps) -> bool {
 		font_weight,
 		line_height,
 		italic,
+		font_family,
 		spans,
 		text_align,
 		direction,
@@ -2593,6 +2598,7 @@ fn has_no_props_other_than_text(props: &NativeProps) -> bool {
 		&& font_weight.is_none()
 		&& line_height.is_none()
 		&& italic.is_none()
+		&& font_family.is_none()
 		&& spans.is_none()
 		&& text_align.is_none()
 		&& direction.is_none()

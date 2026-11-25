@@ -518,6 +518,11 @@ pub struct NativeProps {
 	/// Whether text draws in the font's italic style. Unset means upright.
 	#[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
 	pub italic: Option<bool>,
+	/// The family text draws in, set by the `font-*` family utilities and
+	/// inherited like the other font properties. Unset means the system
+	/// font.
+	#[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
+	pub font_family: Option<FontFamily>,
 	/// Styled runs of a `Text`, in reading order, set by
 	/// [`Element::spans`](crate::Element::spans).
 	///
@@ -757,15 +762,32 @@ impl NativeProps {
 	/// it, so the two always agree.
 	#[must_use]
 	pub fn text_style(&self) -> TextStyle {
+		let font_weight = self.font_weight.unwrap_or_default();
+		let italic = self.italic.unwrap_or(false);
+
 		TextStyle {
 			font_size: self.font_size.unwrap_or(TextStyle::DEFAULT_FONT_SIZE),
-			font_weight: self.font_weight.unwrap_or_default(),
+			font_weight,
 			text_align: self.text_align.unwrap_or_default(),
 			direction: self.direction.unwrap_or_default(),
 			line_height: self.line_height.and_then(|line_height| {
 				line_height.points(self.font_size.unwrap_or(TextStyle::DEFAULT_FONT_SIZE))
 			}),
+			italic,
+			face: self.font_face(font_weight.value(), italic),
 		}
+	}
+
+	/// The declared face that draws this node's text at `weight` and
+	/// `italic`: the one a styled run of that weight and style uses. `None`
+	/// when the node draws the system font, or no fonts are installed.
+	#[must_use]
+	pub fn font_face(&self, weight: u16, italic: bool) -> Option<crate::fonts::Face> {
+		let Some(FontFamily::Declared(family)) = self.font_family else {
+			return None;
+		};
+
+		crate::fonts::installed()?.select(family, weight, italic)
 	}
 
 	/// What a text field holds, read from the first
@@ -992,6 +1014,27 @@ impl<T: Into<String>> From<T> for TextSpan {
 	fn from(text: T) -> Self {
 		Self::new(text)
 	}
+}
+
+/// The family a node's text draws in.
+///
+/// `font-[var(--hand)]` chooses the family an app declares as
+/// `[theme.fonts.hand]` in `leptoskit.toml`, once the host has
+/// [installed](crate::fonts::install) the app's fonts. `font-sans`,
+/// `font-serif`, and `font-mono` choose [`System`](Self::System): the
+/// platform's own face, which is what natively draws all three.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(
+	feature = "serde",
+	derive(serde::Serialize, serde::Deserialize),
+	serde(rename_all = "snake_case")
+)]
+pub enum FontFamily {
+	/// The platform's system font.
+	System,
+	/// The declared family at this position in the installed
+	/// [`Fonts`](crate::fonts::Fonts).
+	Declared(u16),
 }
 
 /// The weight of a font, from the platform's system font family.
@@ -1243,6 +1286,12 @@ pub struct TextStyle {
 	/// The height of every line in layout units, resolved from
 	/// [`NativeProps::line_height`]; `None` keeps the font's own line height.
 	pub line_height: Option<f32>,
+	/// Whether the text is italic.
+	pub italic: bool,
+	/// The declared face the text draws with, chosen from
+	/// [`NativeProps::font_family`], the weight, and the style; `None` draws
+	/// the system font.
+	pub face: Option<crate::fonts::Face>,
 }
 
 impl TextStyle {
@@ -1258,6 +1307,8 @@ impl TextStyle {
 			text_align: TextAlign::Start,
 			direction: Direction::Ltr,
 			line_height: None,
+			italic: false,
+			face: None,
 		}
 	}
 

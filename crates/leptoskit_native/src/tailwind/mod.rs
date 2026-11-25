@@ -33,12 +33,18 @@
 //! accept the class and never apply it, so hover may only change colors,
 //! opacity, and the cursor: polish, never layout or meaning.
 //!
+//! `font-[var(--name)]` chooses a family the app declares as
+//! `[theme.fonts.name]` in `leptoskit.toml`, on every platform: the web
+//! through the generated `@font-face` sheet, native hosts through the
+//! [installed fonts](crate::fonts). A variable no installed font declares
+//! leaves the inherited family. `font-sans`, `font-serif`, and `font-mono`
+//! draw the system face natively, where they mean "no declared family".
+//!
 //! Some text utilities are web-only polish, accepted everywhere so one class
-//! string serves every platform: `font-sans`, `font-serif`, `font-mono`,
-//! and `font-[var(--name)]` (a family from a theme variable); `tabular-nums`
-//! and `normal-nums`; `truncate` (one line with an ellipsis); `tracking-*`;
-//! and `cursor-*`. Native text keeps the system face, proportional digits,
-//! wrapping, and normal spacing, and native hosts draw their own pointer.
+//! string serves every platform: `tabular-nums` and `normal-nums`; `truncate`
+//! (one line with an ellipsis); `tracking-*`; and `cursor-*`. Native text
+//! keeps proportional digits, wrapping, and normal spacing, and native hosts
+//! draw their own pointer.
 //!
 //! Classes have deterministic stylesheet precedence, independent of their
 //! input order: base rules precede conditional rules, larger minimum widths
