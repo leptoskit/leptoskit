@@ -27,11 +27,11 @@ use super::shipping::pair;
 use super::shipping::put;
 use super::shipping::register_cluster;
 
-/// Settings small enough for the scenarios here to reach their caps: 100
-/// bytes of log per build and 150 per organisation.
+/// Settings small enough for the scenarios here to reach their caps: 200
+/// bytes of log per build and 250 per organisation, counted as stored.
 pub fn settings(settings: &mut leptoskit_cloud::server::ShippingSettings) {
-	settings.build_log_cap = 100;
-	settings.organization_log_cap = 150;
+	settings.build_log_cap = 200;
+	settings.organization_log_cap = 250;
 }
 
 /// Finding 1. A digest's upload has one size: beginning it again with
@@ -169,7 +169,8 @@ pub async fn build_logs_are_capped(app: &App) {
 	shop.build.log(&build, 0, &[&sixty]).await.expect(200);
 	// Sent again, a chunk isn't counted again.
 	shop.build.log(&build, 0, &[&sixty]).await.expect(200);
-	// 120 bytes is past the build's 100.
+	// The caps count a line as stored, not as sent: two are more than 200
+	// bytes, past the build's 200.
 	shop.build
 		.log(&build, 1, &[&sixty])
 		.await
@@ -185,7 +186,8 @@ pub async fn build_logs_are_capped(app: &App) {
 	let release = shop.cluster.take().await;
 	shop.cluster.finish(&release, applied()).await.expect(200);
 
-	// The organisation keeps 99 of its 150: a second build can't add 60.
+	// The organisation keeps 181 bytes or more of its 250 as stored: a
+	// second build can't add a line.
 	let digest = shop.upload(b"another chatty build").await;
 	shop.deploy("production", &digest, json!({}))
 		.await

@@ -51,6 +51,7 @@ use crate::workers::DestroyOutcome;
 use crate::workers::Finished;
 use crate::workers::JobKind;
 use crate::workers::JobOutcome;
+use crate::workers::MAX_BUILD_LOG_CHUNKS;
 use crate::workers::MAX_LOG_BYTES;
 use crate::workers::MAX_LOG_LINES;
 use crate::workers::MAX_STATUS_LOG_LINES;
@@ -546,16 +547,8 @@ pub(crate) async fn append_log(
 	}
 
 	let digest = logs::chunk_digest(lines.iter().map(String::as_str));
-	let chunk = cx
-		.mutate(AppendChunk {
-			job,
-			attempt,
-			seq,
-			lines: u32::try_from(lines.len()).unwrap_or(u32::MAX),
-			bytes: u32::try_from(size).unwrap_or(u32::MAX),
-			digest,
-		})
-		.await?;
+	// What is kept is what is charged: the caps count a chunk as the store
+	// holds it.
 	let secrets = &services.shipping().redactions;
 	let now = leptoskit_db::now();
 	let cut: Vec<String> = lines.iter().map(|line| logs::cut(line)).collect();
@@ -573,6 +566,16 @@ pub(crate) async fn append_log(
 		.collect();
 	let bytes = serde_json::to_vec(&stored)
 		.map_err(|_| rpc::Error::server("couldn't write a log chunk"))?;
+	let chunk = cx
+		.mutate(AppendChunk {
+			job,
+			attempt,
+			seq,
+			lines: u32::try_from(lines.len()).unwrap_or(u32::MAX),
+			bytes: u32::try_from(bytes.len()).unwrap_or(u32::MAX),
+			digest,
+		})
+		.await?;
 	// Sent again, the chunk's row is there and its object may not be:
 	// writing the same lines again is harmless.
 	services
@@ -648,6 +651,19 @@ async fn append_chunk(cx: &rpc::MutationCx, args: AppendChunk) -> rpc::Result<St
 		return Err(rpc::Error::conflict(format!(
 			"log_out_of_order: the next chunk of attempt {} is {sent}, not {}",
 			args.attempt, args.seq
+		)));
+	}
+
+	// Every chunk is an index row and an object, whatever its bytes.
+	let chunks = LogChunk::query()
+		.filter(|chunk| chunk.job_id.eq(Some(job_id)))
+		.count(tx)
+		.await?;
+
+	if chunks >= MAX_BUILD_LOG_CHUNKS {
+		return Err(rpc::Error::conflict(format!(
+			"log_full: this job has sent {chunks} chunks of log, and may send at most \
+			 {MAX_BUILD_LOG_CHUNKS}"
 		)));
 	}
 
