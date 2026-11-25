@@ -1147,6 +1147,132 @@ fn cloud_env_token_only_goes_to_an_origin_named_outside_the_project() {
 	);
 }
 
+/// The tool call, in the child process the tests below start. It lives in
+/// `mcp::cloud`'s tests because `call` is that module's.
+const CLOUD_TOOL_CALL: &str = "mcp::cloud::tests::subprocess_helper";
+
+/// Runs one cloud tool call, as `leptoskit mcp` would, in a child process
+/// with exactly `environment`, in a directory holding `config`. The answer is
+/// the tool's. `LEPTOSKIT_CLOUD_TOKEN` is read from the environment of the
+/// whole process, which no test can set for itself.
+fn tool_call(environment: &[(&str, &str)], config: &str, params: &Value) -> Value {
+	let scratch = tempfile::tempdir().unwrap();
+	let project = scratch.path().join("project");
+	std::fs::create_dir(&project).unwrap();
+	std::fs::write(project.join("leptoskit.toml"), config).unwrap();
+	let written = scratch.path().join("answer.json");
+	let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+	command
+		.args([
+			"--exact",
+			CLOUD_TOOL_CALL,
+			"--nocapture",
+			"--test-threads=1",
+		])
+		.env_clear()
+		.env("LEPTOSKIT_TEST_TOOL_CALL", params.to_string())
+		.env("LEPTOSKIT_TEST_TOOL_ANSWER", &written)
+		// No stored session, whatever the person running the tests has.
+		.env("XDG_CONFIG_HOME", scratch.path())
+		.env("PATH", std::env::var_os("PATH").unwrap_or_default())
+		.current_dir(&project);
+
+	// Winsock loads its providers relative to SystemRoot on Windows.
+	if let Some(system_root) = std::env::var_os("SystemRoot") {
+		command.env("SystemRoot", system_root);
+	}
+	if let Some(profile) = std::env::var_os("LLVM_PROFILE_FILE") {
+		command.env("LLVM_PROFILE_FILE", profile);
+	}
+	for (name, value) in environment {
+		command.env(name, value);
+	}
+
+	let output = command.output().unwrap();
+	assert!(
+		output.status.success(),
+		"the tool call's process failed\nstdout:\n{}\nstderr:\n{}",
+		String::from_utf8_lossy(&output.stdout),
+		String::from_utf8_lossy(&output.stderr)
+	);
+	serde_json::from_str(&std::fs::read_to_string(written).unwrap()).unwrap()
+}
+
+#[test]
+fn cloud_tools_do_not_send_the_environment_token_to_a_url_argument() {
+	// `LEPTOSKIT_CLOUD_TOKEN` is set, `leptoskit.toml` names an origin, and
+	// the call's `url` repeats it. No person named that cloud, so nothing
+	// reaches it, and the refusal tells the model the one way to.
+	let received = Arc::new(Mutex::new(Vec::new()));
+	let seen = Arc::clone(&received);
+	let server = server(move |path, authorization, _| {
+		seen.lock()
+			.unwrap()
+			.push((path.to_owned(), authorization.to_owned()));
+		axum::http::StatusCode::UNAUTHORIZED.into_response()
+	});
+	let answer = tool_call(
+		&[("LEPTOSKIT_CLOUD_TOKEN", "known-api")],
+		&format!("[cloud]\nurl = \"{}\"\n", server.url),
+		&json!({"name": "cloud_status", "arguments": {"url": server.url, "org": "team", "project": "notes"}}),
+	);
+	assert_eq!(*received.lock().unwrap(), []);
+	assert_eq!(answer["isError"], true);
+	let text = answer["content"][0]["text"].as_str().unwrap();
+	assert!(text.contains("LEPTOSKIT_CLOUD_URL"), "{text}");
+	assert!(!text.contains("--url"), "{text}");
+}
+
+#[test]
+fn cloud_tools_send_the_environment_token_where_the_environment_names_a_cloud() {
+	// `LEPTOSKIT_CLOUD_URL` names one cloud and the call's `url` another. The
+	// token follows the variable, the call succeeds there, and the other
+	// origin is never asked for anything.
+	let status = json!({"environment": "production", "cluster": null, "hostname": null, "reported_at": null, "processes": []});
+	let named = Arc::new(Mutex::new(Vec::new()));
+	let called = Arc::new(Mutex::new(Vec::new()));
+	let answered = status.clone();
+	let chosen = {
+		let seen = Arc::clone(&named);
+		server(move |path, authorization, _| {
+			seen.lock()
+				.unwrap()
+				.push((path.to_owned(), authorization.to_owned()));
+			json_response(answered.clone())
+		})
+	};
+	let argument = {
+		let seen = Arc::clone(&called);
+		server(move |path, authorization, _| {
+			seen.lock()
+				.unwrap()
+				.push((path.to_owned(), authorization.to_owned()));
+			axum::http::StatusCode::UNAUTHORIZED.into_response()
+		})
+	};
+	let answer = tool_call(
+		&[
+			("LEPTOSKIT_CLOUD_TOKEN", "known-api"),
+			("LEPTOSKIT_CLOUD_URL", chosen.url.as_str()),
+		],
+		"[app]\nname = \"notes\"\n",
+		&json!({"name": "cloud_status", "arguments": {"url": argument.url, "org": "team", "project": "notes"}}),
+	);
+	assert_eq!(
+		*named.lock().unwrap(),
+		[(
+			"/rpc/environment_status".to_owned(),
+			"Bearer known-api".to_owned()
+		)]
+	);
+	assert_eq!(*called.lock().unwrap(), []);
+	assert_eq!(answer["isError"], false);
+	assert_eq!(
+		serde_json::from_str::<Value>(answer["content"][0]["text"].as_str().unwrap()).unwrap(),
+		status
+	);
+}
+
 #[test]
 fn cloud_publish_refuses_to_pack_a_home_directory() {
 	let home = tempfile::tempdir().unwrap();
