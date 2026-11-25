@@ -14,15 +14,16 @@ cargo run -p leptoskit_cloud_app --features server -- serve --dev
 
 ## Commands
 
-| Command                      | What it does                                                                                                                     |
-| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| `serve`                      | Serves the control plane. Refuses a database with pending migrations, or with migrations this build doesn't know.                |
-| `serve --dev`                | Development: see below. Development builds only.                                                                                 |
-| `migrate`                    | Applies pending migrations, SQLite or Postgres by the URL.                                                                       |
-| `operator bootstrap <email>` | Non-interactively ensures an account exists for `<email>` and grants it operator privileges (ideal for first-cluster bootstrap). |
-| `operator grant <email>`     | Makes the person who verified `<email>` an operator. They must have signed in once. Recorded in the audit log.                   |
-| `operator revoke <email>`    | Stops them being an operator.                                                                                                    |
-| `operator list`              | Lists operators by address.                                                                                                      |
+| Command                   | What it does                                                                                                      |
+| ------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `serve`                   | Serves the control plane. Refuses a database with pending migrations, or with migrations this build doesn't know. |
+| `serve --dev`             | Development: see below. Development builds only.                                                                  |
+| `migrate`                 | Applies pending migrations, SQLite or Postgres by the URL.                                                        |
+| `operator grant <email>`  | Makes the person who verified `<email>` an operator. They must have signed in once. Recorded in the audit log.    |
+| `operator revoke <email>` | Stops them being an operator. `LEPTOSKIT_CLOUD_BOOTSTRAP_OPERATOR_EMAIL` doesn't make them one again.             |
+| `operator list`           | Lists operators by address.                                                                                       |
+
+With `LEPTOSKIT_CLOUD_BOOTSTRAP_OPERATOR_EMAIL` set, `migrate` and `serve` make that address an operator once per database, while it has never had one: `operator revoke` stays final.
 
 `serve` prints one line, `listening on <address>`, once it is listening, and never prints a secret. It stops on Ctrl-C or `SIGTERM`: `/readyz` fails first, the live socket drains, and requests in flight get 20 seconds.
 

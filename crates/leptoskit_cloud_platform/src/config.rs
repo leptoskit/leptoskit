@@ -105,7 +105,8 @@ pub struct ControlPlaneConfig {
 	/// (`LEPTOSKIT_CLOUD_AUTH_KEYS`, `LEPTOSKIT_CLOUD_VAULT_KEYS`, etc.).
 	#[serde(default = "default_control_secret")]
 	pub secret_name: String,
-	/// Optional email address idempotently promoted to operator on first boot
+	/// Optional email address made an operator once per database, at the
+	/// first start, and never again after a revoke
 	/// (`LEPTOSKIT_CLOUD_BOOTSTRAP_OPERATOR_EMAIL`).
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub bootstrap_operator_email: Option<String>,

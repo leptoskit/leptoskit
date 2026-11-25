@@ -9,6 +9,7 @@ use leptoskit_db::Id;
 use super::identity::Caller;
 use crate::tables::ActorKind;
 use crate::tables::ApiToken;
+use crate::tables::AuditEvent;
 use crate::tables::NewAuditEvent;
 use crate::tables::Organization;
 use crate::tables::Project;
@@ -124,6 +125,22 @@ pub(crate) async fn record_system(
 	.map(|_| ())
 }
 
+/// Whether the log has ever recorded any of `actions`. The one question
+/// this module answers by reading: every write here is still an insert.
+///
+/// # Errors
+///
+/// When the database fails.
+pub(crate) async fn ever_recorded(
+	db: &impl leptoskit_db::Read,
+	actions: &[&str],
+) -> leptoskit_db::Result<bool> {
+	AuditEvent::query()
+		.filter(|event| event.action.in_list(actions.iter().copied()))
+		.exists(db)
+		.await
+}
+
 #[cfg(test)]
 mod tests {
 	use std::path::Path;
@@ -175,14 +192,8 @@ mod tests {
 						.split("#[cfg(test)]")
 						.next()
 						.expect("the module's code");
-					for forbidden in [
-						"update(",
-						"delete(",
-						"destroy(",
-						"save(",
-						"query(",
-						"Statement",
-					] {
+					// `query(` is allowed for the one read, `ever_recorded`.
+					for forbidden in ["update(", "delete(", "destroy(", "save(", "Statement"] {
 						assert!(
 							!code.contains(forbidden),
 							"server/audit.rs calls `{forbidden}`: the audit log is only inserted \

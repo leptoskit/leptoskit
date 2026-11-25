@@ -399,6 +399,20 @@ pub async fn bootstrap_operator(db: &Db, email: &str) -> Result<Id<Account>, Ope
 	Ok(account)
 }
 
+/// Whether the configured address still needs bootstrapping: until this
+/// database has made its first operator, and never again, so a revocation
+/// outlives every later start. The audit log is only ever appended to: a
+/// grant it already holds, from the command line or from a bootstrap, means
+/// the first operator has been.
+///
+/// # Errors
+///
+/// [`OperatorError::Db`] when the database fails.
+pub async fn bootstrap_needed(db: &Db) -> Result<bool, OperatorError> {
+	let db = db.system("cloud: bootstrap check");
+	Ok(!audit::ever_recorded(&db, &["operator.bootstrap", "operator.grant"]).await?)
+}
+
 /// Stops the person with the verified address `email` being an operator.
 ///
 /// # Errors

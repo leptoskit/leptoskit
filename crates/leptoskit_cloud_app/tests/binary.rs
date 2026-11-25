@@ -16,6 +16,8 @@ const BINARY: &str = env!("CARGO_BIN_EXE_leptoskit-cloud-control");
 const KEYS: &str = "k1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 const SMTP_PASSWORD: &str = "hunter2";
 const S3_SECRET: &str = "wJalrXUtnFEMI-hunter3";
+/// The address `LEPTOSKIT_CLOUD_BOOTSTRAP_OPERATOR_EMAIL` names.
+const BOOTSTRAP_OPERATOR: &str = "ops@example.com";
 
 /// The binary with only `vars` in its environment.
 fn control(vars: &[(&str, &str)], args: &[&str]) -> Command {
@@ -398,4 +400,62 @@ async fn operators_are_granted_on_the_command_line() {
 	let (ok, _, stderr) = finish(control(&vars, &["operator", "revoke", "ana@example.com"])).await;
 	assert!(ok, "{stderr}");
 	assert_eq!(whoami().await["operator"], false);
+}
+
+/// A database that has never had an operator still gets the configured one.
+#[tokio::test]
+async fn a_database_that_never_had_an_operator_gets_the_configured_one() {
+	let directory = tempfile::tempdir().expect("a directory");
+	let database = format!("sqlite://{}", directory.path().join("cloud.db").display());
+	let vars = [
+		("LEPTOSKIT_CLOUD_DATABASE_URL", database.as_str()),
+		(
+			"LEPTOSKIT_CLOUD_BOOTSTRAP_OPERATOR_EMAIL",
+			BOOTSTRAP_OPERATOR,
+		),
+	];
+
+	let (ok, stdout, stderr) = finish(control(&vars, &["migrate"])).await;
+	assert!(ok, "{stderr}");
+	assert!(
+		stdout.contains(&format!("bootstrapped operator {BOOTSTRAP_OPERATOR}")),
+		"{stdout}"
+	);
+	let (ok, stdout, stderr) = finish(control(&vars, &["operator", "list"])).await;
+	assert!(ok, "{stderr}");
+	assert_eq!(stdout.trim(), BOOTSTRAP_OPERATOR);
+}
+
+/// The configured address is made an operator once per database: a revoked
+/// one stays revoked at the next start, with the variable still set.
+#[tokio::test]
+async fn a_revoked_bootstrap_operator_is_not_promoted_again() {
+	let directory = tempfile::tempdir().expect("a directory");
+	let database = format!("sqlite://{}", directory.path().join("cloud.db").display());
+	let vars = [
+		("LEPTOSKIT_CLOUD_DATABASE_URL", database.as_str()),
+		(
+			"LEPTOSKIT_CLOUD_BOOTSTRAP_OPERATOR_EMAIL",
+			BOOTSTRAP_OPERATOR,
+		),
+	];
+
+	let (ok, _, stderr) = finish(control(&vars, &["migrate"])).await;
+	assert!(ok, "{stderr}");
+	let (ok, stdout, stderr) =
+		finish(control(&vars, &["operator", "revoke", BOOTSTRAP_OPERATOR])).await;
+	assert!(ok, "{stderr}");
+	assert!(stdout.contains("is no longer an operator"), "{stdout}");
+	assert!(stdout.contains("no operator remains"), "{stdout}");
+
+	// The next start.
+	let (ok, _, stderr) = finish(control(&vars, &["migrate"])).await;
+	assert!(ok, "{stderr}");
+	let (ok, stdout, stderr) = finish(control(&vars, &["operator", "list"])).await;
+	assert!(ok, "{stderr}");
+	assert_eq!(
+		stdout.trim(),
+		"",
+		"the revoked address is an operator again"
+	);
 }
