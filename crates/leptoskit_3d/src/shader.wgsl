@@ -1,6 +1,7 @@
 // The forward renderer's shaders: lit and unlit meshes (static or
-// skinned, with morph targets), the soft shadow under each model, and the
-// background (a clear colour or a camera image).
+// skinned, with morph targets), physically based or banded "toon" light,
+// the ink outline around them, and the soft shadow under each model. The
+// background (a clear colour or a camera image) is in background.wgsl.
 //
 // Per-frame data that varies per draw (joint matrices and morph weights)
 // lives in a float texture read with textureLoad, never a storage buffer,
@@ -11,6 +12,10 @@ const PI: f32 = 3.14159265;
 const NONE: u32 = 0xffffffffu;
 const DATA_WIDTH: u32 = 1024u;
 const MORPH_WIDTH: u32 = 2048u;
+// Cells of the line's wobble per unit of the model's own space.
+const WOBBLE_FREQUENCY: f32 = 10.0;
+// Hatching lines per unit of the model's own space.
+const HATCH_DENSITY: f32 = 60.0;
 
 struct Globals {
 	view_projection: mat4x4<f32>,
@@ -32,6 +37,17 @@ struct Globals {
 	occlusion_y: vec4<f32>,
 	// x: metres per occlusion unit; y: tolerance in metres.
 	occlusion_params: vec4<f32>,
+	// x: 1 for toon shading; y: its bands; z: their edges' softness; w: the
+	// hard highlight's strength.
+	style: vec4<f32>,
+	// rgb: the darkest band's tint; w: hatching strength.
+	shade: vec4<f32>,
+	// x: the outline's width in this view's pixels; y: the inner line's
+	// strength; z: extra weight in shade; w: wobble.
+	ink: vec4<f32>,
+	// xyz: where the wobble's noise is read, from the seed and the boil's
+	// step; w: the world size of one of this view's pixels at a clip w of 1.
+	ink_noise: vec4<f32>,
 }
 
 struct Material {
@@ -74,8 +90,11 @@ struct Instance {
 	// rgb: rim colour; w: rim strength.
 	@location(10) rim: vec4<f32>,
 	// x: joints' first texel; y: morph header's texel; z: rim power bits;
-	// w: 1 when the part adds its light to what is behind it.
+	// w: bit 0 set when the part adds its light to what is behind it, and
+	// in its high half the length of a unit of the mesh's space in metres.
 	@location(11) params: vec4<u32>,
+	// rgb: the part's ink; w: its line's weight, 0 for none.
+	@location(14) ink: vec4<f32>,
 }
 
 struct Vertex {
@@ -103,6 +122,10 @@ struct Varyings {
 	@location(7) @interpolate(flat) rim_power: f32,
 	@location(8) view_depth: f32,
 	@location(9) @interpolate(flat) additive: f32,
+	@location(10) @interpolate(flat) ink: vec4<f32>,
+	// The position in the model's own space before morphs and skinning, so
+	// ink drawn on the surface stays fixed to it.
+	@location(11) local: vec3<f32>,
 }
 
 fn data_texel(index: u32) -> vec4<f32> {
@@ -146,6 +169,13 @@ fn morph(header_at: u32, vertex: u32, position: ptr<function, vec3<f32>>, normal
 	}
 }
 
+// A position in the mesh's own space, measured in metres of the model's
+// rest pose, which ink on the surface reads.
+fn local_position(position: vec3<f32>, params: u32) -> vec3<f32> {
+	let units = unpack2x16float(params).y;
+	return position * select(1.0, units, units > 0.0);
+}
+
 fn finish(world: vec4<f32>, normal: vec3<f32>, vertex: Vertex, instance: Instance) -> Varyings {
 	var out: Varyings;
 	out.clip = globals.view_projection * world;
@@ -158,7 +188,9 @@ fn finish(world: vec4<f32>, normal: vec3<f32>, vertex: Vertex, instance: Instanc
 	out.rim = instance.rim;
 	out.rim_power = bitcast<f32>(instance.params.z);
 	out.view_depth = -(globals.view * world).z;
-	out.additive = f32(instance.params.w);
+	out.additive = f32(instance.params.w & 1u);
+	out.ink = instance.ink;
+	out.local = local_position(vertex.position, instance.params.w);
 	return out;
 }
 
@@ -271,6 +303,76 @@ fn perturb(normal: vec3<f32>, position: vec3<f32>, uv: vec2<f32>, sample_value: 
 	return normalize(frame * sample_value);
 }
 
+// A hash of a point, from 0 to 1, without sines (Hoskins).
+fn hash(point: vec3<f32>) -> f32 {
+	var q = fract(point * 0.1031);
+	q += dot(q, q.zyx + 31.32);
+	return fract((q.x + q.y) * q.z);
+}
+
+// Smooth value noise, from 0 to 1.
+fn noise(point: vec3<f32>) -> f32 {
+	let i = floor(point);
+	let f = fract(point);
+	let u = f * f * (3.0 - 2.0 * f);
+	let a = mix(hash(i), hash(i + vec3<f32>(1.0, 0.0, 0.0)), u.x);
+	let b = mix(hash(i + vec3<f32>(0.0, 1.0, 0.0)), hash(i + vec3<f32>(1.0, 1.0, 0.0)), u.x);
+	let c = mix(hash(i + vec3<f32>(0.0, 0.0, 1.0)), hash(i + vec3<f32>(1.0, 0.0, 1.0)), u.x);
+	let d = mix(hash(i + vec3<f32>(0.0, 1.0, 1.0)), hash(i + vec3<f32>(1.0, 1.0, 1.0)), u.x);
+	return mix(mix(a, b, u.y), mix(c, d, u.y), u.z);
+}
+
+// How much the line's width wanders at a point of the model's own space:
+// a factor around 1, fixed to the surface, drawn afresh at each boil step.
+fn wobble(local: vec3<f32>) -> f32 {
+	return 1.0 + globals.ink.w * (noise(local * WOBBLE_FREQUENCY + globals.ink_noise.xyz) * 2.0 - 1.0);
+}
+
+// Banded light: the colour, and in w how much of the darkest band the
+// point is in. The bands' edges are antialiased over about a pixel, more
+// with softness, and the darkest band takes the shade's tint, not black.
+// The ambient light is flat (the irradiance's constant term), so it never
+// smears the bands, and the highlight is a hard-edged spot.
+fn toon_light(base: vec3<f32>, metallic: f32, roughness: f32, n: vec3<f32>, v: vec3<f32>, ao: f32) -> vec4<f32> {
+	let l = globals.light_direction.xyz;
+	let bands = globals.style.y;
+	let n_dot_l = dot(n, l);
+	// Steps at whole values of y, so each band is centred on a half.
+	let y = (n_dot_l * 0.5 + 0.5) * bands + 0.5;
+	let edge = min(0.5 * fwidth(y) + 0.5 * globals.style.z, 0.5);
+	let level = clamp(floor(y) - 1.0 + smoothstep(0.5 - edge, 0.5 + edge, fract(y)), 0.0, bands - 1.0);
+	let tone = mix(globals.shade.rgb, vec3<f32>(1.0), level / (bands - 1.0)) * ao;
+	let light = globals.light_color.rgb * globals.light_direction.w / PI + globals.sh[0].rgb * globals.light_color.w;
+	var color = base * tone * light;
+	let n_dot_h = dot(n, normalize(l + v));
+	let spot = 1.0 - 0.15 * roughness * roughness;
+	let spot_edge = fwidth(n_dot_h);
+	let highlight = smoothstep(spot - spot_edge, spot + spot_edge, n_dot_h) * select(0.0, 1.0, n_dot_l > 0.0);
+	color += highlight * globals.style.w * (1.0 - 0.5 * roughness) * mix(vec3<f32>(0.08), base, metallic)
+		* globals.light_color.rgb * globals.light_direction.w;
+	return vec4<f32>(color, 1.0 - clamp(level, 0.0, 1.0));
+}
+
+// Hatching fixed to the model's own space: lines from 0 to 1, fading where
+// they would be finer than the pixels can show.
+fn hatching(local: vec3<f32>) -> f32 {
+	let s = dot(local, vec3<f32>(0.53, 0.75, 0.40)) * HATCH_DENSITY;
+	let width = fwidth(s);
+	let distance = abs(fract(s + 0.5) - 0.5);
+	let line = 1.0 - smoothstep(0.15 - width, 0.15 + width, distance);
+	return line * (1.0 - smoothstep(0.2, 0.45, width));
+}
+
+// The inner line where a surface turns away from the viewer, from 0 to 1.
+// n·v changes fastest there, so holding the line to a number of pixels of
+// its gradient keeps it about half the outline's width, and flat faces seen
+// edge on, where it hardly changes, stay clear.
+fn inner_line(n_dot_v: f32, local: vec3<f32>, weight: f32) -> f32 {
+	let gradient = fwidth(n_dot_v);
+	let reach = 0.5 * globals.ink.x * weight * wobble(local) * gradient;
+	return globals.ink.y * min(weight, 1.0) * (1.0 - smoothstep(reach, reach + gradient, n_dot_v));
+}
+
 fn occluded(position: vec4<f32>, view_depth: f32) -> bool {
 	if (globals.params.z < 0.5) {
 		return false;
@@ -320,6 +422,12 @@ fn fs_mesh(in: Varyings, @builtin(front_facing) front: bool) -> @location(0) vec
 	if (!front) {
 		n = -n;
 	}
+	// The surface's own facing, before a normal map, for the inner line:
+	// from the file's normal, whichever way the triangle is wound, since
+	// quantizing a mesh turns some of its tiniest triangles over.
+	let surface_n_dot_v = abs(dot(n, v));
+	let toon = globals.style.x > 0.5;
+	var hatch = 0.0;
 	if (material.flags.y != 0u) {
 		color = base.rgb + emissive;
 	} else {
@@ -339,36 +447,59 @@ fn fs_mesh(in: Varyings, @builtin(front_facing) front: bool) -> @location(0) vec
 			ao = 1.0 + material.surface.w * (textureSample(occlusion_texture, material_sampler, in.uv).r - 1.0);
 		}
 		roughness = clamp(roughness, 0.045, 1.0);
-		let alpha = roughness * roughness;
-		let diffuse_color = base.rgb * (1.0 - metallic);
-		let specular_color = mix(vec3<f32>(0.04), base.rgb, metallic);
-		let n_dot_v = clamp(dot(n, v), 1.0e-4, 1.0);
+		if (toon) {
+			let lit = toon_light(base.rgb, metallic, roughness, n, v, ao);
+			color = lit.rgb + emissive;
+			if (globals.shade.w > 0.0) {
+				hatch = globals.shade.w * lit.w * hatching(in.local) * min(in.ink.w, 1.0);
+			}
+		} else {
+			let alpha = roughness * roughness;
+			let diffuse_color = base.rgb * (1.0 - metallic);
+			let specular_color = mix(vec3<f32>(0.04), base.rgb, metallic);
+			let n_dot_v = clamp(dot(n, v), 1.0e-4, 1.0);
 
-		let l = globals.light_direction.xyz;
-		let h = normalize(l + v);
-		let n_dot_l = clamp(dot(n, l), 0.0, 1.0);
-		let n_dot_h = clamp(dot(n, h), 0.0, 1.0);
-		let v_dot_h = clamp(dot(v, h), 0.0, 1.0);
-		let fresnel = specular_color + (1.0 - specular_color) * pow(1.0 - v_dot_h, 5.0);
-		let specular = distribution(n_dot_h, alpha) * visibility(n_dot_v, n_dot_l, alpha) * fresnel;
-		let direct = (diffuse_color * (1.0 - fresnel) / PI + specular)
-			* globals.light_color.rgb * globals.light_direction.w * n_dot_l;
+			let l = globals.light_direction.xyz;
+			let h = normalize(l + v);
+			let n_dot_l = clamp(dot(n, l), 0.0, 1.0);
+			let n_dot_h = clamp(dot(n, h), 0.0, 1.0);
+			let v_dot_h = clamp(dot(v, h), 0.0, 1.0);
+			let fresnel = specular_color + (1.0 - specular_color) * pow(1.0 - v_dot_h, 5.0);
+			let specular = distribution(n_dot_h, alpha) * visibility(n_dot_v, n_dot_l, alpha) * fresnel;
+			let direct = (diffuse_color * (1.0 - fresnel) / PI + specular)
+				* globals.light_color.rgb * globals.light_direction.w * n_dot_l;
 
-		let strength = globals.light_color.w;
-		let r = reflect(-v, n);
-		let prefiltered = textureSampleLevel(environment, environment_sampler, r, roughness * globals.params.w).rgb;
-		let ambient = (diffuse_color * irradiance(n) + prefiltered * environment_brdf(specular_color, roughness, n_dot_v))
-			* strength * ao;
-		color = direct + ambient + emissive;
+			let strength = globals.light_color.w;
+			let r = reflect(-v, n);
+			let prefiltered = textureSampleLevel(environment, environment_sampler, r, roughness * globals.params.w).rgb;
+			let ambient = (diffuse_color * irradiance(n) + prefiltered * environment_brdf(specular_color, roughness, n_dot_v))
+				* strength * ao;
+			color = direct + ambient + emissive;
+		}
 	}
 
-	// The rim: a glow along the silhouette, over everything else.
+	// The rim: a glow along the silhouette, over everything else. Toon
+	// shading draws it hard-edged, where the soft rim would reach half its
+	// strength.
+	let facing = 1.0 - clamp(dot(n, v), 0.0, 1.0);
+	let facing_edge = fwidth(facing);
 	if (in.rim.w > 0.0) {
-		let facing = 1.0 - clamp(dot(n, v), 0.0, 1.0);
-		color += in.rim.rgb * in.rim.w * pow(facing, max(in.rim_power, 0.01));
+		var rim = pow(facing, max(in.rim_power, 0.01));
+		if (toon) {
+			let start = pow(0.5, 1.0 / max(in.rim_power, 0.01));
+			rim = smoothstep(start - facing_edge, start + facing_edge, facing);
+		}
+		color += in.rim.rgb * in.rim.w * rim;
 	}
 
 	color = tonemap(color * globals.params.x);
+	// Ink drawn on the surface, in the part's ink colour exactly: hatching in
+	// the darkest band and the inner line. Both conditions are uniform, so
+	// the inner line's derivatives are too.
+	if (globals.ink.y > 0.0 || globals.shade.w > 0.0) {
+		let inner = select(0.0, inner_line(surface_n_dot_v, in.local, in.ink.w), globals.ink.y > 0.0);
+		color = mix(color, in.ink.rgb, max(hatch, inner));
+	}
 	if (globals.params.y > 0.5) {
 		color = linear_to_srgb(color);
 	}
@@ -376,6 +507,107 @@ fn fs_mesh(in: Varyings, @builtin(front_facing) front: bool) -> @location(0) vec
 	// Premultiplied blending adds the colour and keeps what is behind it by
 	// one minus alpha, so an additive part writes no alpha at all.
 	return vec4<f32>(color * opacity, opacity * (1.0 - in.additive));
+}
+
+// The ink outline: the mesh again with its front faces culled, each vertex
+// pushed out along its outline normal (welded at load, so hard edges stay
+// closed) by the line's width in pixels, scaled by its depth so the width
+// holds on screen. Pushing along the normal rather than across the screen
+// also moves the hull behind the surface it outlines, so it never fights it
+// for depth.
+struct OutlineVertex {
+	@builtin(vertex_index) index: u32,
+	@location(0) position: vec3<f32>,
+	@location(1) normal: vec3<f32>,
+}
+
+struct OutlineInstance {
+	@location(4) model_0: vec4<f32>,
+	@location(5) model_1: vec4<f32>,
+	@location(6) model_2: vec4<f32>,
+	@location(7) model_3: vec4<f32>,
+	@location(11) params: vec4<u32>,
+	@location(14) ink: vec4<f32>,
+}
+
+struct OutlineVaryings {
+	@builtin(position) clip: vec4<f32>,
+	@location(0) @interpolate(flat) color: vec3<f32>,
+	@location(1) view_depth: f32,
+}
+
+// The outline normal with the morph targets' change of normal added, in
+// the space `transform`'s cofactors map to.
+fn outline_normal(transform: mat3x3<f32>, welded: vec3<f32>, normal: vec3<f32>, rest: vec3<f32>) -> vec3<f32> {
+	let cofactor = mat3x3<f32>(cross(transform[1], transform[2]), cross(transform[2], transform[0]), cross(transform[0], transform[1]));
+	let turned = cofactor * (welded + normal - rest);
+	let length_squared = dot(turned, turned);
+	// A quantized mesh's tiny scale makes the cofactors tiny too, so only an
+	// exact zero has no direction.
+	return select(vec3<f32>(0.0), turned * inverseSqrt(length_squared), length_squared > 0.0);
+}
+
+// `ink.w` is the instance's line weight and `vertex_weight` the model's own,
+// from 0 to 2. An instance without a line collapses outside the view.
+fn outline(world: vec4<f32>, normal: vec3<f32>, local: vec3<f32>, ink: vec4<f32>, vertex_weight: f32) -> OutlineVaryings {
+	var out: OutlineVaryings;
+	out.color = ink.rgb;
+	if (ink.w <= 0.0) {
+		out.clip = vec4<f32>(0.0, 0.0, -2.0, 1.0);
+		out.view_depth = 0.0;
+		return out;
+	}
+	let shade = 0.5 - 0.5 * dot(normal, globals.light_direction.xyz);
+	var width = globals.ink.x * ink.w * (1.0 + globals.ink.z * shade) * wobble(local);
+	// Never thinner than a pixel, but the model's own weight may taper it away.
+	width = max(width, 1.0) * vertex_weight;
+	let depth = (globals.view_projection * world).w;
+	let pushed = vec4<f32>(world.xyz + normal * (width * max(depth, 0.0) * globals.ink_noise.w), 1.0);
+	out.clip = globals.view_projection * pushed;
+	out.view_depth = -(globals.view * pushed).z;
+	return out;
+}
+
+@vertex
+fn vs_outline_static(vertex: OutlineVertex, instance: OutlineInstance, @location(15) ink_vertex: vec4<f32>) -> OutlineVaryings {
+	let model = mat4x4<f32>(instance.model_0, instance.model_1, instance.model_2, instance.model_3);
+	var position = vertex.position;
+	var normal = vertex.normal;
+	morph(instance.params.y, vertex.index, &position, &normal);
+	let m = mat3x3<f32>(model[0].xyz, model[1].xyz, model[2].xyz);
+	let world_normal = outline_normal(m, ink_vertex.xyz, normal, vertex.normal);
+	let local = local_position(vertex.position, instance.params.w);
+	return outline(model * vec4<f32>(position, 1.0), world_normal, local, instance.ink, ink_vertex.w + 1.0);
+}
+
+@vertex
+fn vs_outline_skinned(vertex: OutlineVertex, skin: Skin, instance: OutlineInstance, @location(15) ink_vertex: vec4<f32>) -> OutlineVaryings {
+	var position = vertex.position;
+	var normal = vertex.normal;
+	morph(instance.params.y, vertex.index, &position, &normal);
+	let first = instance.params.x;
+	let skinning = joint(first, skin.joints.x) * skin.weights.x
+		+ joint(first, skin.joints.y) * skin.weights.y
+		+ joint(first, skin.joints.z) * skin.weights.z
+		+ joint(first, skin.joints.w) * skin.weights.w;
+	let m = mat3x3<f32>(skinning[0].xyz, skinning[1].xyz, skinning[2].xyz);
+	let world_normal = outline_normal(m, ink_vertex.xyz, normal, vertex.normal);
+	let local = local_position(vertex.position, instance.params.w);
+	return outline(skinning * vec4<f32>(position, 1.0), world_normal, local, instance.ink, ink_vertex.w + 1.0);
+}
+
+// The line's colour, exactly as the style or the part set it: no exposure
+// or tonemapping, like a clear colour.
+@fragment
+fn fs_outline(in: OutlineVaryings) -> @location(0) vec4<f32> {
+	if (occluded(in.clip, in.view_depth)) {
+		discard;
+	}
+	var color = in.color;
+	if (globals.params.y > 0.5) {
+		color = linear_to_srgb(color);
+	}
+	return vec4<f32>(color, 1.0);
 }
 
 // The soft shadow under a model: a disc on the ground, darkest at its centre.

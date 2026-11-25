@@ -298,6 +298,22 @@ impl Scene {
 		});
 	}
 
+	/// Sets how the scene is drawn: [`Style::hand_drawn`] for banded light
+	/// and an ink line.
+	pub fn set_style(&self, style: Style) {
+		self.push(Op::SetStyle(style));
+	}
+
+	/// Sets the line on a part (or, with `None`, the whole instance): its
+	/// weight, 0 for none, and its colour.
+	pub fn set_ink(&self, node: NodeId, part: Option<&str>, ink: PartInk) {
+		self.push(Op::SetInk {
+			node,
+			part: part.map(str::to_owned),
+			ink,
+		});
+	}
+
 	/// Changes how a part (or, with `None`, the whole instance) draws.
 	pub fn set_material(&self, node: NodeId, part: Option<&str>, material: MaterialOverride) {
 		self.push(Op::SetMaterial {
@@ -411,5 +427,27 @@ mod tests {
 		);
 		assert_eq!(scene.pending(), 0);
 		assert_eq!(scene.id(), SceneId(3));
+	}
+
+	#[test]
+	fn styles_and_lines_queue_their_ops() {
+		let scene = Scene::new(SceneId(1));
+		let node = scene.spawn(scene.load("models/rig.glb"));
+		let heavy = PartInk {
+			weight: Some(2.0),
+			color: None,
+		};
+		scene.set_style(Style::hand_drawn());
+		scene.set_ink(node, Some("head"), heavy);
+		let ops = scene.take_ops();
+		assert_eq!(ops[2], Op::SetStyle(Style::hand_drawn()));
+		assert_eq!(
+			ops[3],
+			Op::SetInk {
+				node,
+				part: Some("head".into()),
+				ink: heavy,
+			}
+		);
 	}
 }

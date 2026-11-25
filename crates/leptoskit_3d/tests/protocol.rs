@@ -128,6 +128,48 @@ fn every_op() -> Vec<Op> {
 			y: 0.25,
 		},
 	]
+	.into_iter()
+	.chain(style_ops())
+	.collect()
+}
+
+/// The scene's style and its parts' lines.
+fn style_ops() -> Vec<Op> {
+	vec![
+		Op::SetStyle(Style::default()),
+		Op::SetStyle(Style::hand_drawn()),
+		Op::SetStyle(Style {
+			shading: Shading::Toon(Toon {
+				bands: 2,
+				softness: 0.25,
+				shade: [0.3, 0.2, 0.5],
+				specular: 2.0,
+				hatch: 0.6,
+			}),
+			ink: Some(Ink {
+				color: [0.9, 0.85, 0.7],
+				width: 3.5,
+				facing: 0.8,
+				shade_weight: 1.5,
+				wobble: 0.4,
+				boil: 8.0,
+				seed: 0xDEAD_BEEF,
+			}),
+		}),
+		Op::SetInk {
+			node: NodeId(3),
+			part: Some("robe".into()),
+			ink: PartInk {
+				weight: Some(0.0),
+				color: Some([0.8, 0.75, 0.6]),
+			},
+		},
+		Op::SetInk {
+			node: NodeId(3),
+			part: None,
+			ink: PartInk::default(),
+		},
+	]
 }
 
 fn every_event() -> Vec<Event> {
@@ -230,6 +272,11 @@ fn malformed_batches_are_rejected() {
 	let mut bytes = encode_ops(&[Op::Remove { node: NodeId(1) }]);
 	bytes[9] = 200;
 	assert_eq!(decode_ops(&bytes), Err(DecodeError("an unknown op")));
+
+	// An unknown shading.
+	let mut bytes = encode_ops(&[Op::SetStyle(Style::default())]);
+	bytes[10] = 2;
+	assert_eq!(decode_ops(&bytes), Err(DecodeError("an unknown shading")));
 
 	// A flag that is neither 0 nor 1.
 	let mut bytes = encode_ops(&[Op::SetVisible {
@@ -494,6 +541,91 @@ fn sanitizing_bounds_every_number() {
 		};
 		assert!((0.0..=MAX_EXPOSURE).contains(&exposure));
 	}
+}
+
+#[test]
+fn sanitizing_bounds_styles_and_lines() {
+	for value in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 1.0e30, -1.0e30] {
+		let Op::SetStyle(style) = Op::SetStyle(Style {
+			shading: Shading::Toon(Toon {
+				bands: if value > 0.0 { u8::MAX } else { 0 },
+				softness: value,
+				shade: [value; 3],
+				specular: value,
+				hatch: value,
+			}),
+			ink: Some(Ink {
+				color: [value; 3],
+				width: value,
+				facing: value,
+				shade_weight: value,
+				wobble: value,
+				boil: value,
+				seed: 7,
+			}),
+		})
+		.sanitized() else {
+			unreachable!()
+		};
+		let Shading::Toon(toon) = style.shading else {
+			unreachable!()
+		};
+		let ink = style.ink.unwrap();
+		let unit = |value: f32| (0.0..=1.0).contains(&value);
+		assert!(
+			(TOON_BANDS.0..=TOON_BANDS.1).contains(&toon.bands),
+			"{toon:?}"
+		);
+		assert!(unit(toon.softness) && unit(toon.hatch), "{toon:?}");
+		assert!(toon.shade.into_iter().all(unit), "{toon:?}");
+		assert!((0.0..=MAX_SPECULAR).contains(&toon.specular), "{toon:?}");
+		assert!(ink.color.into_iter().all(unit), "{ink:?}");
+		assert!((0.0..=MAX_INK_WIDTH).contains(&ink.width), "{ink:?}");
+		assert!(unit(ink.facing) && unit(ink.wobble), "{ink:?}");
+		assert!(
+			(0.0..=MAX_SHADE_WEIGHT).contains(&ink.shade_weight),
+			"{ink:?}"
+		);
+		assert!((0.0..=MAX_BOIL).contains(&ink.boil), "{ink:?}");
+		assert_eq!(ink.seed, 7);
+
+		let Op::SetInk { ink, part, .. } = (Op::SetInk {
+			node: NodeId(1),
+			part: Some("é".repeat(MAX_NAME_BYTES)),
+			ink: PartInk {
+				weight: Some(value),
+				color: Some([value; 3]),
+			},
+		})
+		.sanitized() else {
+			unreachable!()
+		};
+		assert!(part.unwrap().len() <= MAX_NAME_BYTES);
+		assert!(
+			(0.0..=MAX_INK_WEIGHT).contains(&ink.weight.unwrap()),
+			"{ink:?}"
+		);
+		assert!(ink.color.unwrap().into_iter().all(unit), "{ink:?}");
+	}
+}
+
+#[test]
+fn styles_and_lines_are_new_ops_that_leave_old_batches_alone() {
+	// Batches without the new ops encode exactly as before: only the new
+	// tags carry them.
+	let bytes = encode_ops(&[
+		Op::SetStyle(Style::default()),
+		Op::SetInk {
+			node: NodeId(9),
+			part: None,
+			ink: PartInk::default(),
+		},
+	]);
+	assert_eq!(&bytes[..9], b"LK3D\x01\x02\x00\x00\x00");
+	// SetStyle: tag 23, PBR, no ink.
+	assert_eq!(&bytes[9..12], &[23, 0, 0]);
+	// SetInk: tag 24, node 9, no part, no weight, no colour.
+	assert_eq!(&bytes[12..], &[24, 9, 0, 0, 0, 0, 0, 0]);
 }
 
 #[test]

@@ -5604,6 +5604,7 @@ dependencies = [
  "leptoskit_bridge",
  "leptoskit_log",
  "log",
+ "naga",
  "png 0.17.16",
  "pollster",
  "serde",

@@ -296,6 +296,59 @@ pub fn lit_cube() -> Vec<u8> {
 	builder.glb(&json)
 }
 
+/// A lit grey sphere of radius 0.5 at the origin, with smooth normals:
+/// `segments` around and half as many from pole to pole, its seam split as
+/// exporters split it. With `ink`, every vertex's `COLOR_1` red is `ink`,
+/// the per-vertex weight of its line.
+pub fn lit_sphere(segments: usize, ink: Option<f32>) -> Vec<u8> {
+	let mut builder = Builder::default();
+	let rings = segments / 2;
+	let mut positions = Vec::new();
+	let mut normals = Vec::new();
+	let mut indices = Vec::new();
+
+	for ring in 0..=rings {
+		let (sin_theta, cos_theta) = (ring as f32 / rings as f32 * std::f32::consts::PI).sin_cos();
+
+		for step in 0..=segments {
+			let (sin_phi, cos_phi) =
+				(step as f32 / segments as f32 * std::f32::consts::TAU).sin_cos();
+			let normal = [sin_theta * cos_phi, cos_theta, sin_theta * sin_phi];
+			positions.extend(normal.map(|value| value * 0.5));
+			normals.extend(normal);
+		}
+	}
+
+	for ring in 0..rings {
+		for step in 0..segments {
+			let a = (ring * (segments + 1) + step) as u16;
+			let b = a + 1;
+			let c = a + segments as u16 + 1;
+			let d = c + 1;
+			// Counter-clockwise seen from outside.
+			indices.extend_from_slice(&[a, b, c, b, d, c]);
+		}
+	}
+
+	let position = builder.floats(&positions, 3, true);
+	let normal = builder.floats(&normals, 3, false);
+	let index = builder.u16s(&indices, 1);
+	let color = ink.map_or(String::new(), |ink| {
+		let colors: Vec<f32> = (0..positions.len() / 3)
+			.flat_map(|_| [ink, 0.0, 0.0, 1.0])
+			.collect();
+		format!(r#","COLOR_1":{}"#, builder.floats(&colors, 4, false))
+	});
+	let json = format!(
+		r#""asset":{{"version":"2.0"}},
+"scenes":[{{"nodes":[0]}}],
+"nodes":[{{"name":"sphere","mesh":0}}],
+"meshes":[{{"primitives":[{{"attributes":{{"POSITION":{position},"NORMAL":{normal}{color}}},"indices":{index},"material":0}}]}}],
+"materials":[{{"name":"grey","pbrMetallicRoughness":{{"baseColorFactor":[0.5,0.5,0.5,1],"metallicFactor":0,"roughnessFactor":0.7}}}}]"#
+	);
+	builder.glb(&json)
+}
+
 /// A skinned character standing in for a game's: a tube 2 m tall of
 /// `joints` rings of 64 vertices (with `joints = 40`, 10 240 vertices and
 /// 20 000 triangles), each ring bound to a chain of joints, two morph

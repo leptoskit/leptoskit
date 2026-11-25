@@ -19,7 +19,7 @@ pub(crate) const MORPH_WIDTH: u32 = 2048;
 /// Texels per row of the per-frame data texture; the shader's `DATA_WIDTH`.
 pub(crate) const DATA_WIDTH: u32 = 1024;
 
-/// One draw's per-instance attributes: 128 bytes.
+/// One draw's per-instance attributes: 144 bytes.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 pub(crate) struct InstanceRecord {
@@ -28,6 +28,8 @@ pub(crate) struct InstanceRecord {
 	pub emissive: [f32; 4],
 	pub rim: [f32; 4],
 	pub params: [u32; 4],
+	/// The part's line: linear RGB, and its weight (0 for none).
+	pub ink: [f32; 4],
 }
 
 #[repr(C)]
@@ -46,6 +48,9 @@ pub(crate) struct GpuMaterial {
 
 pub(crate) struct GpuAsset {
 	pub vertices: wgpu::Buffer,
+	/// Each vertex's [`InkVertex`](crate::asset::InkVertex), read only by
+	/// the outline pipelines.
+	pub ink: wgpu::Buffer,
 	pub skin: Option<wgpu::Buffer>,
 	pub indices: wgpu::Buffer,
 	pub morphs: Option<wgpu::BindGroup>,
@@ -235,6 +240,11 @@ impl GpuAsset {
 			bytemuck::cast_slice(&asset.vertices),
 			wgpu::BufferUsages::VERTEX,
 		);
+		let ink = buffer(
+			"leptoskit_3d ink",
+			bytemuck::cast_slice(&asset.ink_vertices),
+			wgpu::BufferUsages::VERTEX,
+		);
 		let skin = (!asset.skin_vertices.is_empty()).then(|| {
 			buffer(
 				"leptoskit_3d skin",
@@ -368,6 +378,7 @@ impl GpuAsset {
 
 		Self {
 			vertices,
+			ink,
 			skin,
 			indices,
 			morphs,

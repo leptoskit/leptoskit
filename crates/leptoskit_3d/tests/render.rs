@@ -831,3 +831,693 @@ fn degenerate_targets_are_refused_or_skipped() {
 	};
 	assert!(matches!(renderer.render(&crowded), Err(Error::Target(_))));
 }
+
+/// Pure red ink, `pixels` wide on the test's 64-pixel view, with no wobble.
+fn red_ink(pixels: f32) -> Ink {
+	Ink {
+		color: [1.0, 0.0, 0.0],
+		width: pixels / SIZE as f32 * 1000.0,
+		wobble: 0.0,
+		..Ink::default()
+	}
+}
+
+fn style(shading: Shading, ink: Option<Ink>) -> Op {
+	Op::SetStyle(Style { shading, ink })
+}
+
+/// Whether a pixel is mostly red ink: covered at least half way, with red
+/// well above green and blue. The line's antialiased edges count.
+fn is_ink(pixel: [u8; 4]) -> bool {
+	pixel[3] >= 128
+		&& pixel[0] >= pixel[1].saturating_add(60)
+		&& pixel[0] >= pixel[2].saturating_add(60)
+}
+
+/// The runs of ink along row `y`, as their first column and length.
+fn ink_runs(image: &Image, y: u32) -> Vec<(u32, u32)> {
+	let mut runs: Vec<(u32, u32)> = Vec::new();
+
+	for x in 0..image.width {
+		if !is_ink(image.at(x, y)) {
+			continue;
+		}
+
+		match runs.last_mut() {
+			Some((start, length)) if *start + *length == x => *length += 1,
+			_ => runs.push((x, 1)),
+		}
+	}
+
+	runs
+}
+
+fn ink_count(image: &Image) -> usize {
+	image
+		.pixels
+		.as_chunks::<4>()
+		.0
+		.iter()
+		.filter(|pixel| is_ink(**pixel))
+		.count()
+}
+
+/// The lit sphere, twice its size, lit from +x (the right of the view)
+/// with no shadow under it.
+fn lit_sphere(gpu: &Gpu, ink: Option<f32>) -> Renderer {
+	let mut renderer = renderer(gpu);
+	spawn(&mut renderer, 1, 1, &fixture::lit_sphere(48, ink));
+	renderer.world_mut().apply([
+		Op::SetTransform {
+			node: NodeId(1),
+			transform: Transform::IDENTITY.with_scale(2.0),
+		},
+		Op::SetLight(Light {
+			direction: [-1.0, 0.0, 0.0],
+			shadow: 0.0,
+			..Light::default()
+		}),
+	]);
+	renderer
+}
+
+fn flat_toon(bands: u8) -> Toon {
+	Toon {
+		bands,
+		specular: 0.0,
+		..Toon::default()
+	}
+}
+
+#[test]
+fn the_default_style_draws_as_before() {
+	let Some(gpu) = gpu() else { return };
+
+	for bytes in [
+		fixture::lit_cube(),
+		fixture::rig(),
+		fixture::lit_sphere(48, Some(1.0)),
+	] {
+		let mut renderer = renderer(gpu);
+		spawn(&mut renderer, 1, 1, &bytes);
+		renderer.world_mut().apply([Op::SetCamera {
+			transform: Transform::from_translation(0.3, 1.0, 3.5),
+			fov_y: 0.8,
+			near: 0.1,
+			far: 50.0,
+		}]);
+		let before = draw(&mut renderer).pixels;
+		renderer.world_mut().apply([Op::SetStyle(Style::default())]);
+		assert_eq!(draw(&mut renderer).pixels, before);
+		assert_eq!(renderer.stats().outlines, 0);
+
+		// A style set and taken away leaves nothing behind.
+		renderer
+			.world_mut()
+			.apply([Op::SetStyle(Style::hand_drawn())]);
+		assert_ne!(draw(&mut renderer).pixels, before);
+		renderer.world_mut().apply([Op::SetStyle(Style::default())]);
+		assert_eq!(draw(&mut renderer).pixels, before);
+	}
+}
+
+#[test]
+fn toon_shading_bands_the_light() {
+	let Some(gpu) = gpu() else { return };
+	let mut renderer = lit_sphere(gpu, None);
+	let plateaus = |image: &Image| {
+		let row: Vec<[u8; 4]> = (0..SIZE)
+			.map(|x| image.at(x, 32))
+			.filter(|pixel| pixel[3] == 255)
+			.collect();
+		let mut levels: Vec<[u8; 4]> = Vec::new();
+		let mut steps = 0;
+
+		for pair in row.windows(2) {
+			if !near(pair[0], pair[1], 2) {
+				steps += 1;
+			}
+		}
+
+		for pixel in &row {
+			if !levels.iter().any(|level| near(*level, *pixel, 2)) {
+				levels.push(*pixel);
+			}
+		}
+
+		(levels.len(), steps, row.len())
+	};
+	let smooth = draw(&mut renderer);
+	let (levels, ..) = plateaus(&smooth);
+	assert!(
+		levels > 10,
+		"physically based light is a gradient: {levels}"
+	);
+
+	for bands in [2, 3, 4] {
+		renderer
+			.world_mut()
+			.apply([style(Shading::Toon(flat_toon(bands)), None)]);
+		let image = draw(&mut renderer);
+		let (levels, steps, width) = plateaus(&image);
+		assert!(width > 40, "{width}");
+		// One level a band, and between them edges a pixel or two wide.
+		assert!(
+			levels >= usize::from(bands)
+				&& levels <= usize::from(bands) + 2 * (usize::from(bands) - 1),
+			"{bands} bands: {levels} levels"
+		);
+		assert!(
+			steps <= 2 * (usize::from(bands) - 1),
+			"{bands} bands: {steps} steps"
+		);
+		// The lit side is the brighter.
+		assert!(image.at(52, 32)[0] > image.at(12, 32)[0] + 20);
+	}
+}
+
+#[test]
+fn toon_shadow_takes_the_shade_tint() {
+	let Some(gpu) = gpu() else { return };
+	let mut renderer = renderer(gpu);
+	spawn(&mut renderer, 1, 1, &fixture::lit_cube());
+	// The light comes from behind, so the face the camera sees is in shade.
+	renderer.world_mut().apply([Op::SetLight(Light {
+		direction: [0.0, 0.0, 1.0],
+		shadow: 0.0,
+		..Light::default()
+	})]);
+	let grey = draw(&mut renderer).at(32, 32);
+	assert!(
+		grey[0].abs_diff(grey[2]) <= 6,
+		"physically based shade is grey: {grey:?}"
+	);
+	renderer.world_mut().apply([style(
+		Shading::Toon(Toon {
+			shade: [0.2, 0.3, 0.9],
+			..flat_toon(3)
+		}),
+		None,
+	)]);
+	let tinted = draw(&mut renderer).at(32, 32);
+	assert!(tinted[2] > tinted[0] + 40, "{tinted:?}");
+	assert!(tinted[2] > tinted[1] + 20, "{tinted:?}");
+}
+
+#[test]
+fn outlines_ring_the_silhouette_in_ink() {
+	let Some(gpu) = gpu() else { return };
+	let mut renderer = lit_sphere(gpu, None);
+	renderer
+		.world_mut()
+		.apply([style(Shading::Pbr, Some(red_ink(3.0)))]);
+	let image = draw(&mut renderer);
+	assert!(!is_ink(image.at(32, 32)), "the middle is the sphere");
+	assert_eq!(image.at(1, 1), [0; 4], "outside the line is clear");
+	let runs = ink_runs(&image, 32);
+	assert_eq!(runs.len(), 2, "{runs:?}");
+
+	for (_, length) in &runs {
+		assert!((2..=4).contains(length), "a 3-pixel line: {runs:?}");
+	}
+
+	// The line is outside the sphere's own silhouette: the sphere, with
+	// no ink, ends where the line begins.
+	renderer.world_mut().apply([Op::SetStyle(Style::default())]);
+	let plain = draw(&mut renderer);
+	let (left, _) = runs[0];
+	let (right, length) = runs[1];
+	assert_eq!(plain.at(left, 32)[3], 0, "{runs:?}");
+	assert_eq!(plain.at(right + length - 1, 32)[3], 0, "{runs:?}");
+	let stats = renderer.stats();
+	assert_eq!(stats.outlines, 0);
+	renderer
+		.world_mut()
+		.apply([style(Shading::Pbr, Some(red_ink(3.0)))]);
+	draw(&mut renderer);
+	assert_eq!(renderer.stats().outlines, 1);
+	assert_eq!(
+		renderer.stats().draws,
+		1,
+		"the line is not a draw of its own"
+	);
+
+	// Ink of no width draws no outline.
+	renderer
+		.world_mut()
+		.apply([style(Shading::Pbr, Some(red_ink(0.0)))]);
+	assert_eq!(ink_count(&draw(&mut renderer)), 0);
+	assert_eq!(renderer.stats().outlines, 0);
+}
+
+#[test]
+fn outline_width_holds_in_screen_space() {
+	let Some(gpu) = gpu() else { return };
+	let mut renderer = lit_sphere(gpu, None);
+	renderer
+		.world_mut()
+		.apply([style(Shading::Pbr, Some(red_ink(3.0)))]);
+	let near_runs = ink_runs(&draw(&mut renderer), 32);
+	renderer.world_mut().apply([Op::SetTransform {
+		node: NodeId(1),
+		transform: Transform::from_translation(0.0, 0.0, -3.0).with_scale(2.0),
+	}]);
+	let far_runs = ink_runs(&draw(&mut renderer), 32);
+	assert_eq!(near_runs.len(), 2);
+	assert_eq!(far_runs.len(), 2);
+	assert!(
+		far_runs[0].0 > near_runs[0].0 + 5,
+		"the sphere is smaller: {far_runs:?}"
+	);
+
+	for (near_run, far_run) in near_runs.iter().zip(&far_runs) {
+		assert!(
+			near_run.1.abs_diff(far_run.1) <= 1,
+			"{near_runs:?} {far_runs:?}"
+		);
+	}
+}
+
+#[test]
+fn heavier_lines_fall_on_the_shadow_side() {
+	let Some(gpu) = gpu() else { return };
+	let mut renderer = lit_sphere(gpu, None);
+	renderer.world_mut().apply([style(
+		Shading::Pbr,
+		Some(Ink {
+			shade_weight: 2.0,
+			..red_ink(2.0)
+		}),
+	)]);
+	let runs = ink_runs(&draw(&mut renderer), 32);
+	let [(_, shaded), (_, lit)] = runs[..] else {
+		panic!("{runs:?}")
+	};
+	assert!(shaded >= lit + 2, "{runs:?}");
+}
+
+#[test]
+fn hard_edged_meshes_outline_without_gaps() {
+	let Some(gpu) = gpu() else { return };
+	let mut renderer = renderer(gpu);
+	spawn(&mut renderer, 1, 1, &fixture::unlit_cube([1.0; 4], false));
+	// Corner on: the (1, 1, 1) diagonal points at the camera.
+	let rotation = glam::Quat::from_rotation_arc(Vec3::ONE.normalize(), Vec3::Z);
+	renderer.world_mut().apply([
+		Op::SetTransform {
+			node: NodeId(1),
+			transform: Transform::IDENTITY.with_rotation(rotation.to_array()),
+		},
+		style(Shading::Pbr, Some(red_ink(3.0))),
+		Op::SetInk {
+			node: NodeId(1),
+			part: None,
+			ink: PartInk {
+				weight: Some(1.0),
+				color: None,
+			},
+		},
+	]);
+	let image = draw(&mut renderer);
+	let mut touching = Vec::new();
+
+	for y in 1..SIZE - 1 {
+		for x in 1..SIZE - 1 {
+			let pixel = image.at(x, y);
+
+			if pixel[3] != 255 || pixel[1] < 150 {
+				continue;
+			}
+
+			let clear = [(x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)]
+				.into_iter()
+				.any(|(x, y)| image.at(x, y)[3] < 128);
+
+			if clear {
+				touching.push((x, y));
+			}
+		}
+	}
+
+	assert!(
+		touching.is_empty(),
+		"the cube meets the background at {touching:?}"
+	);
+	assert!(ink_count(&image) > 100);
+}
+
+#[test]
+fn skinned_and_morphed_parts_carry_their_outline() {
+	let Some(gpu) = gpu() else { return };
+	let mut renderer = renderer(gpu);
+	spawn(&mut renderer, 1, 1, &fixture::character(4));
+	renderer.world_mut().apply([
+		Op::SetCamera {
+			transform: Transform::from_translation(0.0, 1.0, 3.0),
+			fov_y: 0.8,
+			near: 0.1,
+			far: 50.0,
+		},
+		style(Shading::Pbr, Some(red_ink(2.0))),
+	]);
+	let weigh = |renderer: &mut Renderer, weight: f32| {
+		renderer.world_mut().apply([Op::SetMorphWeight {
+			node: NodeId(1),
+			part: None,
+			target: "wide".into(),
+			weight,
+		}]);
+		ink_runs(&draw(renderer), 32)
+	};
+	let thin = weigh(&mut renderer, 0.0);
+	let wide = weigh(&mut renderer, 1.0);
+	assert_eq!(thin.len(), 2, "{thin:?}");
+	assert_eq!(wide.len(), 2, "{wide:?}");
+	assert!(wide[0].0 + 2 <= thin[0].0, "{thin:?} {wide:?}");
+	assert!(wide[1].0 >= thin[1].0 + 2, "{thin:?} {wide:?}");
+
+	for (thin, wide) in thin.iter().zip(&wide) {
+		assert!(thin.1.abs_diff(wide.1) <= 1, "the line keeps its width");
+	}
+
+	// Swaying, the line goes with the skin.
+	renderer.world_mut().apply([Op::Play {
+		node: NodeId(1),
+		play: Play::new("sway"),
+	}]);
+	renderer.advance(0.2);
+	let image = draw(&mut renderer);
+	assert!(ink_count(&image) > 50);
+	assert_eq!(renderer.stats().outlines, 1);
+}
+
+#[test]
+fn blended_additive_unlit_and_unweighted_parts_draw_no_line() {
+	let Some(gpu) = gpu() else { return };
+	let weight = |weight| {
+		Op::SetInk {
+			node: NodeId(1),
+			part: None,
+			ink: PartInk {
+				weight: Some(weight),
+				color: None,
+			},
+		}
+	};
+	let cases: [(Vec<u8>, Vec<Op>, bool); 7] = [
+		(fixture::lit_cube(), Vec::new(), true),
+		(fixture::lit_cube(), vec![weight(0.0)], false),
+		(fixture::unlit_cube([1.0; 4], false), Vec::new(), false),
+		(
+			fixture::unlit_cube([1.0; 4], false),
+			vec![weight(1.0)],
+			true,
+		),
+		(
+			fixture::unlit_cube([1.0, 1.0, 1.0, 0.5], true),
+			Vec::new(),
+			false,
+		),
+		(
+			fixture::lit_cube(),
+			vec![Op::SetMaterial {
+				node: NodeId(1),
+				part: None,
+				material: MaterialOverride {
+					opacity: Some(0.5),
+					..MaterialOverride::default()
+				},
+			}],
+			false,
+		),
+		(
+			fixture::lit_cube(),
+			vec![Op::SetBlend {
+				node: NodeId(1),
+				part: None,
+				blend: Blend::Additive,
+			}],
+			false,
+		),
+	];
+
+	for (index, (bytes, ops, lined)) in cases.into_iter().enumerate() {
+		let mut renderer = renderer(gpu);
+		spawn(&mut renderer, 1, 1, &bytes);
+		renderer
+			.world_mut()
+			.apply([style(Shading::Pbr, Some(red_ink(3.0)))]);
+		renderer.world_mut().apply(ops);
+		let image = draw(&mut renderer);
+		assert_eq!(ink_count(&image) > 0, lined, "case {index}");
+		assert_eq!(renderer.stats().outlines, u32::from(lined), "case {index}");
+	}
+}
+
+#[test]
+fn per_vertex_weights_taper_the_line() {
+	let Some(gpu) = gpu() else { return };
+	let mut widths = Vec::new();
+
+	for red in [0.0, 0.5, 1.0] {
+		let mut renderer = lit_sphere(gpu, Some(red));
+		renderer
+			.world_mut()
+			.apply([style(Shading::Pbr, Some(red_ink(2.0)))]);
+		let runs = ink_runs(&draw(&mut renderer), 32);
+		widths.push(runs.iter().map(|(_, length)| *length).sum::<u32>());
+	}
+
+	assert_eq!(widths[0], 0, "a red of 0 draws no line: {widths:?}");
+	assert!(
+		(4..=7).contains(&widths[1]),
+		"0.5 is the part's line: {widths:?}"
+	);
+	assert!(
+		widths[2] >= widths[1] + 3,
+		"1 is twice as heavy: {widths:?}"
+	);
+}
+
+#[test]
+fn parts_too_small_to_see_are_not_outlined() {
+	let Some(gpu) = gpu() else { return };
+	let mut renderer = renderer(gpu);
+	spawn(&mut renderer, 1, 1, &fixture::lit_cube());
+	renderer.world_mut().apply([
+		style(Shading::Pbr, Some(red_ink(2.0))),
+		Op::SetTransform {
+			node: NodeId(1),
+			transform: Transform::IDENTITY.with_scale(0.02),
+		},
+	]);
+	draw(&mut renderer);
+	let stats = renderer.stats();
+	assert_eq!((stats.draws, stats.outlines), (1, 0));
+	renderer.world_mut().apply([Op::SetTransform {
+		node: NodeId(1),
+		transform: Transform::IDENTITY.with_scale(0.5),
+	}]);
+	draw(&mut renderer);
+	assert_eq!(renderer.stats().outlines, 1);
+}
+
+#[test]
+fn real_world_depth_hides_lines_too() {
+	let Some(gpu) = gpu() else { return };
+	let mut renderer = renderer(gpu);
+	spawn(&mut renderer, 1, 1, &fixture::lit_cube());
+	renderer
+		.world_mut()
+		.apply([style(Shading::Pbr, Some(red_ink(3.0)))]);
+	let near_wall = solid_texture(gpu, wgpu::TextureFormat::R32Float, &1.0_f32.to_le_bytes());
+	let far_wall = solid_texture(gpu, wgpu::TextureFormat::R32Float, &10.0_f32.to_le_bytes());
+
+	for (depth, visible) in [(&near_wall, false), (&far_wall, true)] {
+		let occlusion = Occlusion {
+			depth,
+			transform: Mat3::IDENTITY,
+			scale: 1.0,
+			tolerance: 0.05,
+		};
+		let image = render_with(&mut renderer, &[], Background::Scene, Some(occlusion));
+		assert_eq!(ink_count(&image) > 0, visible);
+	}
+}
+
+#[test]
+fn the_boil_steps_and_holds() {
+	let Some(gpu) = gpu() else { return };
+	let boiling = style(
+		Shading::Pbr,
+		Some(Ink {
+			wobble: 1.0,
+			boil: 4.0,
+			seed: 3,
+			..red_ink(4.0)
+		}),
+	);
+	let mut renderer = lit_sphere(gpu, None);
+	renderer.world_mut().apply([boiling.clone()]);
+
+	for _ in 0..4 {
+		renderer.advance(0.25);
+	}
+
+	// One second in: step 4 of a boil at 4 a second.
+	let first = draw(&mut renderer).pixels;
+	assert_eq!(
+		draw(&mut renderer).pixels,
+		first,
+		"the same time, the same line"
+	);
+	assert!(!renderer.world().needs_frame(), "a boil asks for no frames");
+	renderer.advance(0.2);
+	assert_eq!(draw(&mut renderer).pixels, first, "held within a step");
+	renderer.advance(0.1);
+	let next = draw(&mut renderer).pixels;
+	assert_ne!(next, first, "drawn afresh at the next step");
+
+	// Another scene at the same time draws the same line.
+	let mut again = lit_sphere(gpu, None);
+	again.world_mut().apply([boiling]);
+
+	for _ in 0..4 {
+		again.advance(0.25);
+	}
+
+	assert_eq!(draw(&mut again).pixels, first);
+}
+
+#[test]
+fn wobble_varies_the_line_along_the_surface() {
+	let Some(gpu) = gpu() else { return };
+	let widths = |wobble: f32| {
+		let mut renderer = lit_sphere(gpu, None);
+		renderer.world_mut().apply([style(
+			Shading::Pbr,
+			Some(Ink {
+				wobble,
+				..red_ink(4.0)
+			}),
+		)]);
+		let image = draw(&mut renderer);
+		(8..56)
+			.filter_map(|y| ink_runs(&image, y).first().map(|(_, length)| *length))
+			.collect::<Vec<_>>()
+	};
+	let even = widths(0.0);
+	let wobbly = widths(1.0);
+	let spread = |widths: &[u32]| widths.iter().max().unwrap() - widths.iter().min().unwrap();
+	assert!(spread(&wobbly) > spread(&even), "{even:?} {wobbly:?}");
+}
+
+#[test]
+fn inner_lines_and_hatching_ink_the_surface() {
+	let Some(gpu) = gpu() else { return };
+	let mut renderer = lit_sphere(gpu, None);
+	let toon = Shading::Toon(flat_toon(3));
+	renderer
+		.world_mut()
+		.apply([style(toon, Some(red_ink(2.0)))]);
+	let plain = ink_count(&draw(&mut renderer));
+
+	// The facing line inks the sphere's rim inside its outline.
+	renderer.world_mut().apply([style(
+		toon,
+		Some(Ink {
+			facing: 1.0,
+			..red_ink(2.0)
+		}),
+	)]);
+	let image = draw(&mut renderer);
+	assert!(
+		ink_count(&image) > plain + 20,
+		"{plain} {}",
+		ink_count(&image)
+	);
+	assert!(!is_ink(image.at(32, 32)));
+
+	// Hatching inks the darkest band, on the left, and nothing on the
+	// right. Its lines are fixed to the surface, 60 to a metre of the
+	// model, and fade out where they would crowd closer than a few pixels:
+	// at 64 pixels the sphere is too small to hatch, so this draws it at
+	// 512.
+	let mut hatched = |hatch: f32| {
+		renderer.world_mut().apply([style(
+			Shading::Toon(Toon {
+				hatch,
+				..flat_toon(3)
+			}),
+			Some(red_ink(2.0)),
+		)]);
+		renderer.advance(0.0);
+		Image {
+			pixels: renderer.render_to_rgba(512, 512).unwrap(),
+			width: 512,
+		}
+	};
+	let count = |image: &Image, columns: std::ops::Range<u32>| {
+		columns
+			.flat_map(|x| (160..352).map(move |y| (x, y)))
+			.filter(|(x, y)| is_ink(image.at(*x, *y)))
+			.count()
+	};
+	let clean = hatched(0.0);
+	let image = hatched(1.0);
+	assert_eq!(count(&clean, 112..224), 0);
+	assert!(
+		count(&image, 112..224) > 1000,
+		"{}",
+		count(&image, 112..224)
+	);
+	assert_eq!(count(&image, 320..400), 0, "the lit side is clear");
+
+	// Lines come and go along a row in the shade: they are lines, not a
+	// tint.
+	let row: Vec<bool> = (112..224).map(|x| is_ink(image.at(x, 256))).collect();
+	let changes = row.windows(2).filter(|pair| pair[0] != pair[1]).count();
+	assert!(changes >= 8, "{changes}");
+}
+
+#[test]
+fn stereo_views_ink_each_eye() {
+	let Some(gpu) = gpu() else { return };
+	let mut renderer = lit_sphere(gpu, None);
+	renderer.world_mut().apply([
+		Op::SetTransform {
+			node: NodeId(1),
+			transform: Transform::IDENTITY.with_scale(0.8),
+		},
+		style(Shading::Pbr, Some(red_ink(3.0))),
+	]);
+	let projection = glam::camera::rh::proj::directx::perspective(0.8, 0.5, 0.1, 50.0);
+	let eye = |x: f32, viewport: [f32; 4]| {
+		ViewParams {
+			view: glam::camera::rh::view::look_to_mat4(
+				Vec3::new(x, 0.0, 3.0),
+				Vec3::NEG_Z,
+				Vec3::Y,
+			),
+			projection,
+			viewport,
+		}
+	};
+	let views = [
+		eye(-0.03, [0.0, 0.0, 32.0, 64.0]),
+		eye(0.03, [32.0, 0.0, 32.0, 64.0]),
+	];
+	let image = render_with(&mut renderer, &views, Background::Scene, None);
+	let runs = ink_runs(&image, 32);
+	assert_eq!(runs.len(), 4, "two edges in each eye: {runs:?}");
+
+	for (_, length) in &runs {
+		assert!((2..=4).contains(length), "{runs:?}");
+	}
+
+	assert_eq!(
+		renderer.stats().outlines,
+		1,
+		"one outline draw for both eyes"
+	);
+}

@@ -64,6 +64,18 @@ pub const FOV_RANGE: (f32, f32) = (0.001_745, 3.124);
 pub const MIN_NEAR: f32 = 1.0e-4;
 /// The farthest a camera's far plane may be, in metres.
 pub const MAX_FAR: f32 = 1.0e7;
+/// The fewest and most light bands of toon shading.
+pub const TOON_BANDS: (u8, u8) = (2, 4);
+/// The strongest toon highlight.
+pub const MAX_SPECULAR: f32 = 4.0;
+/// The widest ink line, in thousandths of the view's height.
+pub const MAX_INK_WIDTH: f32 = 32.0;
+/// The most a line may thicken on the side away from the light.
+pub const MAX_SHADE_WEIGHT: f32 = 2.0;
+/// The most times a second a line's wobble may be drawn afresh.
+pub const MAX_BOIL: f32 = 30.0;
+/// The heaviest weight a part's line may have.
+pub const MAX_INK_WEIGHT: f32 = 8.0;
 
 /// A finite value clamped to `[min, max]`; an infinity or NaN becomes the
 /// bound closest to zero.
@@ -198,6 +210,52 @@ impl Light {
 	}
 }
 
+impl Style {
+	/// Toon bands from 2 to 4, colours between 0 and 1, and every strength,
+	/// width, and rate within its limit.
+	#[must_use]
+	pub fn sanitized(self) -> Self {
+		Self {
+			shading: match self.shading {
+				Shading::Pbr => Shading::Pbr,
+				Shading::Toon(toon) => {
+					Shading::Toon(Toon {
+						bands: toon.bands.clamp(TOON_BANDS.0, TOON_BANDS.1),
+						softness: unit(toon.softness),
+						shade: color(toon.shade),
+						specular: bounded(toon.specular, 0.0, MAX_SPECULAR),
+						hatch: unit(toon.hatch),
+					})
+				}
+			},
+			ink: self.ink.map(|ink| {
+				Ink {
+					color: color(ink.color),
+					width: bounded(ink.width, 0.0, MAX_INK_WIDTH),
+					facing: unit(ink.facing),
+					shade_weight: bounded(ink.shade_weight, 0.0, MAX_SHADE_WEIGHT),
+					wobble: unit(ink.wobble),
+					boil: bounded(ink.boil, 0.0, MAX_BOIL),
+					seed: ink.seed,
+				}
+			}),
+		}
+	}
+}
+
+impl PartInk {
+	/// A weight from 0 to [`MAX_INK_WEIGHT`] and a colour between 0 and 1.
+	#[must_use]
+	pub fn sanitized(self) -> Self {
+		Self {
+			weight: self
+				.weight
+				.map(|weight| bounded(weight, 0.0, MAX_INK_WEIGHT)),
+			color: self.color.map(color),
+		}
+	}
+}
+
 impl Op {
 	/// The op with every number finite and bounded and every name within its
 	/// limit, so applying it cannot make the host allocate or loop without
@@ -288,6 +346,14 @@ impl Op {
 					node,
 					part: part.map(|part| name(part, MAX_NAME_BYTES)),
 					material: material.sanitized(),
+				}
+			}
+			Self::SetStyle(style) => Self::SetStyle(style.sanitized()),
+			Self::SetInk { node, part, ink } => {
+				Self::SetInk {
+					node,
+					part: part.map(|part| name(part, MAX_NAME_BYTES)),
+					ink: ink.sanitized(),
 				}
 			}
 			Self::Attach { node, target, bone } => {

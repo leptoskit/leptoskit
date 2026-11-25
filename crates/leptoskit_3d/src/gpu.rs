@@ -369,7 +369,56 @@ pub(crate) struct Pipelines {
 	pub meshes: HashMap<Variant, wgpu::RenderPipeline>,
 	pub shadow: wgpu::RenderPipeline,
 	pub background: wgpu::RenderPipeline,
+	format: wgpu::TextureFormat,
+	multisample: wgpu::MultisampleState,
+	/// The ink outline's, static and skinned, compiled when a scene first
+	/// draws a line, so scenes without ink never build them.
+	outlines: OnceLock<[wgpu::RenderPipeline; 2]>,
 }
+
+/// The attributes of [`InstanceRecord`](crate::upload::InstanceRecord) that
+/// the outline reads: its matrix, its joints and morphs, and its ink.
+const OUTLINE_INSTANCE: [wgpu::VertexAttribute; 6] = [
+	wgpu::VertexAttribute {
+		format: wgpu::VertexFormat::Float32x4,
+		offset: 0,
+		shader_location: 4,
+	},
+	wgpu::VertexAttribute {
+		format: wgpu::VertexFormat::Float32x4,
+		offset: 16,
+		shader_location: 5,
+	},
+	wgpu::VertexAttribute {
+		format: wgpu::VertexFormat::Float32x4,
+		offset: 32,
+		shader_location: 6,
+	},
+	wgpu::VertexAttribute {
+		format: wgpu::VertexFormat::Float32x4,
+		offset: 48,
+		shader_location: 7,
+	},
+	wgpu::VertexAttribute {
+		format: wgpu::VertexFormat::Uint32x4,
+		offset: 112,
+		shader_location: 11,
+	},
+	wgpu::VertexAttribute {
+		format: wgpu::VertexFormat::Float32x4,
+		offset: 128,
+		shader_location: 14,
+	},
+];
+
+// The offsets above are the record's own.
+const _: () = {
+	use std::mem::offset_of;
+
+	use crate::upload::InstanceRecord;
+	assert!(offset_of!(InstanceRecord, params) == 112);
+	assert!(offset_of!(InstanceRecord, ink) == 128);
+};
 
 /// What a device's renderers share.
 pub(crate) struct Shared {
@@ -735,6 +784,9 @@ impl Shared {
 		};
 
 		Pipelines {
+			format,
+			multisample,
+			outlines: OnceLock::new(),
 			meshes: Variant::all()
 				.map(|variant| {
 					(
@@ -760,6 +812,7 @@ impl Shared {
 		let instance = wgpu::vertex_attr_array![
 			4 => Float32x4, 5 => Float32x4, 6 => Float32x4, 7 => Float32x4,
 			8 => Float32x4, 9 => Float32x4, 10 => Float32x4, 11 => Uint32x4,
+			14 => Float32x4,
 		];
 		let skin = wgpu::vertex_attr_array![12 => Uint16x4, 13 => Unorm16x4];
 		let mut buffers = vec![
@@ -812,6 +865,88 @@ impl Shared {
 			fragment: Some(wgpu::FragmentState {
 				module: &self.mesh_shader,
 				entry_point: Some("fs_mesh"),
+				compilation_options: wgpu::PipelineCompilationOptions::default(),
+				targets: &targets,
+			}),
+			multiview_mask: None,
+			cache: None,
+		})
+	}
+
+	/// The outline pipelines for `pipelines`' format, `[static, skinned]`,
+	/// compiled on first use.
+	pub fn outline_pipelines<'p>(
+		&self,
+		device: &wgpu::Device,
+		pipelines: &'p Pipelines,
+	) -> &'p [wgpu::RenderPipeline; 2] {
+		pipelines.outlines.get_or_init(|| {
+			[false, true].map(|skinned| {
+				self.outline_pipeline(device, pipelines.format, pipelines.multisample, skinned)
+			})
+		})
+	}
+
+	/// The ink outline: the mesh's back faces, pushed out along the welded
+	/// outline normals, opaque and depth-tested like the meshes.
+	fn outline_pipeline(
+		&self,
+		device: &wgpu::Device,
+		format: wgpu::TextureFormat,
+		multisample: wgpu::MultisampleState,
+		skinned: bool,
+	) -> wgpu::RenderPipeline {
+		let vertex = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3];
+		let ink = wgpu::vertex_attr_array![15 => Snorm8x4];
+		let skin = wgpu::vertex_attr_array![12 => Uint16x4, 13 => Unorm16x4];
+		let mut buffers = vec![
+			Some(buffer_layout::<crate::asset::Vertex>(
+				wgpu::VertexStepMode::Vertex,
+				&vertex,
+			)),
+			Some(buffer_layout::<crate::upload::InstanceRecord>(
+				wgpu::VertexStepMode::Instance,
+				&OUTLINE_INSTANCE,
+			)),
+			Some(buffer_layout::<crate::asset::InkVertex>(
+				wgpu::VertexStepMode::Vertex,
+				&ink,
+			)),
+		];
+
+		if skinned {
+			buffers.push(Some(buffer_layout::<crate::asset::SkinVertex>(
+				wgpu::VertexStepMode::Vertex,
+				&skin,
+			)));
+		}
+
+		let targets = color_target(format, false);
+
+		device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+			label: Some("leptoskit_3d outline"),
+			layout: Some(&self.mesh_layout),
+			vertex: wgpu::VertexState {
+				module: &self.mesh_shader,
+				entry_point: Some(if skinned {
+					"vs_outline_skinned"
+				} else {
+					"vs_outline_static"
+				}),
+				compilation_options: wgpu::PipelineCompilationOptions::default(),
+				buffers: &buffers,
+			},
+			primitive: wgpu::PrimitiveState {
+				topology: wgpu::PrimitiveTopology::TriangleList,
+				front_face: wgpu::FrontFace::Ccw,
+				cull_mode: Some(wgpu::Face::Front),
+				..wgpu::PrimitiveState::default()
+			},
+			depth_stencil: Some(depth_state(true, wgpu::CompareFunction::LessEqual)),
+			multisample,
+			fragment: Some(wgpu::FragmentState {
+				module: &self.mesh_shader,
+				entry_point: Some("fs_outline"),
 				compilation_options: wgpu::PipelineCompilationOptions::default(),
 				targets: &targets,
 			}),

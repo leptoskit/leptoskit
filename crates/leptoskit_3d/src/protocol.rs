@@ -232,6 +232,135 @@ pub enum Blend {
 	Additive,
 }
 
+/// How a scene's lit surfaces take the light.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum Shading {
+	/// Physically based, as the model's materials describe them: smooth
+	/// gradients and the environment's reflections.
+	#[default]
+	Pbr,
+	/// Cartoon shading: the light falls in a few flat bands.
+	Toon(Toon),
+}
+
+/// Banded "toon" shading, the flat light and shade of a drawing.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Toon {
+	/// How many flat bands the light falls into, from 2 to 4.
+	pub bands: u8,
+	/// How soft the edge between two bands is, from 0 (as crisp as the pixels
+	/// allow) to 1 (blended across a whole band).
+	pub softness: f32,
+	/// Multiplies the base colour in the darkest band, linear RGB, each from
+	/// 0 to 1: a coloured shade, such as a cool violet, rather than black.
+	/// The bands between blend from it to full light.
+	pub shade: [f32; 3],
+	/// The strength of a hard-edged highlight, from 0 (none) to 4; 1 is
+	/// natural. Rough surfaces get a wider, fainter one.
+	pub specular: f32,
+	/// The strength of ink hatching in the darkest band, from 0 (none) to 1.
+	/// The lines are fixed to the model's surface, drawn in its ink, and fade
+	/// where they would be too fine to see; a part without a line has none.
+	pub hatch: f32,
+}
+
+impl Default for Toon {
+	/// Three bands, crisp edges, a cool violet shade, a natural highlight,
+	/// and no hatching.
+	fn default() -> Self {
+		Self {
+			bands: 3,
+			softness: 0.0,
+			shade: [0.42, 0.40, 0.58],
+			specular: 1.0,
+			hatch: 0.0,
+		}
+	}
+}
+
+/// A scene's ink: the line drawn around its models and, optionally, inside
+/// them.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Ink {
+	/// Linear RGB, each from 0 to 1. Lines draw in exactly this colour:
+	/// exposure and tonemapping leave it alone.
+	pub color: [f32; 3],
+	/// The outline's width, in thousandths of the view's height, so a line
+	/// looks the same on every screen density and at every distance: 2 is a
+	/// firm pen line, 2.4 pixels on a 1200-pixel view. 0 draws no outline.
+	pub width: f32,
+	/// The strength of an inner line where a surface turns away from the
+	/// viewer, from 0 (none) to 1.
+	pub facing: f32,
+	/// How much heavier the line is where the surface faces away from the
+	/// light, from 0 (even) to 2 (three times as heavy in full shade).
+	pub shade_weight: f32,
+	/// How much the line's width wanders along its length, from 0 (steady)
+	/// to 1. The wander is fixed to the surface, so it moves with the model
+	/// and never crawls.
+	pub wobble: f32,
+	/// How many times a second the wobble is drawn afresh, like animation
+	/// "on twos", up to 30; 0 holds it still. It moves on only when the scene
+	/// draws a frame anyway, and the same scene time draws the same line.
+	pub boil: f32,
+	/// Picks the wobble's pattern.
+	pub seed: u32,
+}
+
+impl Default for Ink {
+	/// A firm line in Skribble's ink, a deep violet black, with a slight
+	/// wobble that holds still.
+	fn default() -> Self {
+		Self {
+			color: [0.034, 0.021, 0.050],
+			width: 2.0,
+			facing: 0.0,
+			shade_weight: 0.0,
+			wobble: 0.25,
+			boil: 0.0,
+			seed: 0,
+		}
+	}
+}
+
+/// How a scene is drawn: its shading and its ink.
+///
+/// [`Style::default`] is physically based shading with no ink, which is how
+/// scenes draw until [`Op::SetStyle`] says otherwise.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Style {
+	/// How lit surfaces take the light.
+	pub shading: Shading,
+	/// The ink, or `None` for no lines.
+	pub ink: Option<Ink>,
+}
+
+impl Style {
+	/// A hand-drawn look: [`Toon::default`] shading and an [`Ink::default`]
+	/// line.
+	pub fn hand_drawn() -> Self {
+		Self {
+			shading: Shading::Toon(Toon::default()),
+			ink: Some(Ink::default()),
+		}
+	}
+}
+
+/// A part's line, set with [`Op::SetInk`]. A field left `None` takes what an
+/// enclosing part's setting gave it, or else its default.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct PartInk {
+	/// Multiplies the line's width, from 0 to 8: 0 draws no line (and no inner
+	/// line or hatching), 1 the scene's width. `None` is 1, except on unlit,
+	/// blended, faded, and additive parts, which have none unless one is set.
+	/// Blended, faded, and additive parts never draw the outline itself, only
+	/// the inner line and hatching: fade a part's line out with its weight
+	/// before fading the part.
+	pub weight: Option<f32>,
+	/// The line's colour, linear RGB, or `None` for the scene's ink colour.
+	pub color: Option<[f32; 3]>,
+}
+
 /// The directional light, standing in for the sun or a room's key light.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Light {
@@ -400,6 +529,22 @@ pub enum Op {
 		/// How it blends.
 		blend: Blend,
 	},
+	/// Sets how the scene is drawn: its shading and its ink line.
+	SetStyle(Style),
+	/// Sets the line on a model instance's parts: its weight and colour.
+	/// It replaces the line set before for the same part, and a later setting
+	/// wins where parts overlap, field by field: a field left `None` keeps
+	/// what a setting on an enclosing part gave it, so
+	/// [`PartInk::default`] returns a part to what encloses it.
+	SetInk {
+		/// The model instance.
+		node: NodeId,
+		/// The part to change, with everything under it, or `None` for the
+		/// whole instance.
+		part: Option<String>,
+		/// The line.
+		ink: PartInk,
+	},
 	/// Turns the soft shadow under a model instance on or off. Instances cast
 	/// one by default.
 	SetShadow {
@@ -555,6 +700,8 @@ const RAYCAST: u8 = 19;
 const RAYCAST_SCREEN: u8 = 20;
 const SET_PART_OFFSET: u8 = 21;
 const SET_BLEND: u8 = 22;
+const SET_STYLE: u8 = 23;
+const SET_INK: u8 = 24;
 
 // Event tags.
 const ASSET_LOADED: u8 = 1;
@@ -753,6 +900,68 @@ fn read_material(reader: &mut Reader<'_>) -> Result<MaterialOverride, DecodeErro
 	})
 }
 
+/// `shading:u8 (0 Pbr | 1 Toon bands:u8 softness:f32 shade:f32×3
+/// specular:f32 hatch:f32) ink:opt<color:f32×3 width:f32 facing:f32
+/// shade_weight:f32 wobble:f32 boil:f32 seed:u32>`
+fn write_style(writer: &mut Writer, style: &Style) {
+	match style.shading {
+		Shading::Pbr => writer.u8(0),
+		Shading::Toon(toon) => {
+			writer.u8(1);
+			writer.u8(toon.bands);
+			writer.f32(toon.softness);
+			writer.floats(&toon.shade);
+			writer.floats(&[toon.specular, toon.hatch]);
+		}
+	}
+
+	writer.option(style.ink, |writer, ink| {
+		writer.floats(&ink.color);
+		writer.floats(&[
+			ink.width,
+			ink.facing,
+			ink.shade_weight,
+			ink.wobble,
+			ink.boil,
+		]);
+		writer.u32(ink.seed);
+	});
+}
+
+fn read_style(reader: &mut Reader<'_>) -> Result<Style, DecodeError> {
+	let shading = match reader.u8()? {
+		0 => Shading::Pbr,
+		1 => {
+			let bands = reader.u8()?;
+			let softness = reader.f32()?;
+			let shade = reader.floats()?;
+			let [specular, hatch] = reader.floats()?;
+			Shading::Toon(Toon {
+				bands,
+				softness,
+				shade,
+				specular,
+				hatch,
+			})
+		}
+		_ => return Err(DecodeError("an unknown shading")),
+	};
+	let ink = reader.option(|reader| {
+		let color = reader.floats()?;
+		let [width, facing, shade_weight, wobble, boil] = reader.floats()?;
+		Ok(Ink {
+			color,
+			width,
+			facing,
+			shade_weight,
+			wobble,
+			boil,
+			seed: reader.u32()?,
+		})
+	})?;
+	Ok(Style { shading, ink })
+}
+
 impl Op {
 	#[allow(clippy::too_many_lines)]
 	fn write(&self, writer: &mut Writer) {
@@ -855,6 +1064,17 @@ impl Op {
 					Blend::Normal => 0,
 					Blend::Additive => 1,
 				});
+			}
+			Self::SetStyle(style) => {
+				writer.u8(SET_STYLE);
+				write_style(writer, style);
+			}
+			Self::SetInk { node, part, ink } => {
+				writer.u8(SET_INK);
+				writer.u32(node.0);
+				writer.option(part.as_deref(), Writer::str);
+				writer.option(ink.weight, Writer::f32);
+				writer.option(ink.color, |writer, color| writer.floats(&color));
 			}
 			Self::SetShadow { node, cast } => {
 				writer.u8(SET_SHADOW);
@@ -1024,6 +1244,17 @@ impl Op {
 						0 => Blend::Normal,
 						1 => Blend::Additive,
 						_ => return Err(DecodeError("an unknown blend")),
+					},
+				}
+			}
+			SET_STYLE => Self::SetStyle(read_style(reader)?),
+			SET_INK => {
+				Self::SetInk {
+					node: NodeId(reader.u32()?),
+					part: reader.option(|reader| reader.str(NAME))?,
+					ink: PartInk {
+						weight: reader.option(Reader::f32)?,
+						color: reader.option(Reader::floats)?,
 					},
 				}
 			}

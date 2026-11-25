@@ -53,6 +53,9 @@ pollster = { workspace = true, optional = true }
 
 [dev-dependencies]
 divan = { version = "0.1", default-features = false }
+# The version wgpu uses, to validate and translate the shaders for every
+# backend in `tests/shaders.rs`.
+naga = { version = "30.0.1", default-features = false, features = ["glsl-out", "hlsl-out", "msl-out", "spv-out", "wgsl-in"] }
 
 [features]
 default = ["renderer"]

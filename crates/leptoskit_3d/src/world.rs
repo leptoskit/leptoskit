@@ -27,6 +27,8 @@ pub(crate) struct Overrides {
 	pub opacity: f32,
 	pub rim: Rim,
 	pub blend: Blend,
+	/// The line, from the last `SetInk` that covers the part.
+	pub ink: PartInk,
 }
 
 impl Default for Overrides {
@@ -42,6 +44,7 @@ impl Default for Overrides {
 				power: 2.0,
 			},
 			blend: Blend::Normal,
+			ink: PartInk::default(),
 		}
 	}
 }
@@ -152,6 +155,7 @@ pub(crate) struct Instance {
 	parts_visible: BTreeMap<String, bool>,
 	materials: Vec<(Option<String>, MaterialOverride)>,
 	blends: Vec<(Option<String>, Blend)>,
+	inks: Vec<(Option<String>, PartInk)>,
 	morphs: BTreeMap<(Option<String>, String), f32>,
 	offsets: BTreeMap<String, PartOffset>,
 	pending_play: Option<Play>,
@@ -175,6 +179,7 @@ impl Instance {
 			parts_visible: BTreeMap::new(),
 			materials: Vec::new(),
 			blends: Vec::new(),
+			inks: Vec::new(),
 			morphs: BTreeMap::new(),
 			offsets: BTreeMap::new(),
 			pending_play: None,
@@ -258,6 +263,14 @@ impl Instance {
 				self.overrides[node].blend = *blend;
 			}
 		}
+
+		for (part, ink) in &self.inks {
+			for node in Self::subtree(asset, part.as_deref()) {
+				let line = &mut self.overrides[node].ink;
+				line.weight = ink.weight.or(line.weight);
+				line.color = ink.color.or(line.color);
+			}
+		}
 	}
 
 	/// Replaces the blend set for `part`, or adds it while there is room. A
@@ -267,6 +280,19 @@ impl Instance {
 
 		if self.blends.len() < MAX_SETTINGS {
 			self.blends.push((part, blend));
+		}
+
+		self.resolve_materials();
+	}
+
+	/// Replaces the line set for `part`, or adds it while there is room. A
+	/// later setting wins where parts overlap, field by field, so a field
+	/// left `None` keeps what a wider setting gave it.
+	fn set_ink(&mut self, part: Option<String>, ink: PartInk) {
+		self.inks.retain(|(existing, _)| *existing != part);
+
+		if self.inks.len() < MAX_SETTINGS {
+			self.inks.push((part, ink));
 		}
 
 		self.resolve_materials();
@@ -574,12 +600,13 @@ impl Camera {
 	}
 }
 
-/// Scene-wide settings: the light, what draws behind, and exposure.
+/// Scene-wide settings: the light, what draws behind, exposure, and style.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Settings {
 	pub light: Light,
 	pub backdrop: Backdrop,
 	pub exposure: f32,
+	pub style: Style,
 }
 
 impl Default for Settings {
@@ -588,6 +615,7 @@ impl Default for Settings {
 			light: Light::default(),
 			backdrop: Backdrop::Transparent,
 			exposure: 1.0,
+			style: Style::default(),
 		}
 	}
 }
@@ -617,6 +645,8 @@ pub struct World {
 	raycasts: usize,
 	changed: bool,
 	dropped_events: u64,
+	/// Seconds the scene has advanced, the clock of the ink's boil.
+	pub(crate) time: f64,
 }
 
 impl World {
@@ -910,6 +940,10 @@ impl World {
 			Op::SetBlend { node, part, blend } => {
 				self.with_instance(node, |instance| instance.set_blend(part, blend));
 			}
+			Op::SetStyle(style) => self.settings.style = style,
+			Op::SetInk { node, part, ink } => {
+				self.with_instance(node, |instance| instance.set_ink(part, ink));
+			}
 			Op::SetShadow { node, cast } => {
 				self.with_instance(node, |instance| instance.cast_shadow = cast);
 			}
@@ -1036,6 +1070,7 @@ impl World {
 		}
 
 		self.update_transforms();
+		self.time += f64::from(elapsed);
 		self.changed = false;
 	}
 
@@ -1087,5 +1122,99 @@ impl World {
 				stack.push((child, base.0, hidden || base.1));
 			}
 		}
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use crate::asset::AssetNode;
+
+	/// A model whose `root` holds `body` and `head`, with `hat` on the head.
+	fn figure() -> Arc<Asset> {
+		let node = |name: &str, parent: Option<usize>, children: Vec<usize>| {
+			AssetNode {
+				name: name.into(),
+				parent,
+				children,
+				translation: Vec3::ZERO,
+				rotation: Quat::IDENTITY,
+				scale: Vec3::ONE,
+				mesh: None,
+				skin: None,
+				weights: None,
+			}
+		};
+		let nodes = vec![
+			node("root", None, vec![1, 2]),
+			node("body", Some(0), Vec::new()),
+			node("head", Some(0), vec![3]),
+			node("hat", Some(2), Vec::new()),
+		];
+		let names = nodes
+			.iter()
+			.enumerate()
+			.map(|(index, node)| (node.name.clone(), index))
+			.collect();
+		Arc::new(Asset {
+			nodes,
+			roots: vec![0],
+			names,
+			..Asset::default()
+		})
+	}
+
+	fn lines(instance: &Instance) -> Vec<PartInk> {
+		instance.overrides.iter().map(|part| part.ink).collect()
+	}
+
+	#[test]
+	fn lines_resolve_per_subtree_field_by_field() {
+		let weight = |weight| {
+			PartInk {
+				weight: Some(weight),
+				color: None,
+			}
+		};
+		let red = [1.0, 0.0, 0.0];
+		let mut instance = Instance::new(AssetId(1));
+		// A line set before the asset loads applies once it has.
+		instance.set_ink(None, weight(2.0));
+		instance.bind(figure());
+		instance.set_ink(
+			Some("head".into()),
+			PartInk {
+				weight: None,
+				color: Some(red),
+			},
+		);
+		let red_line = |weight| {
+			PartInk {
+				weight: Some(weight),
+				color: Some(red),
+			}
+		};
+		// The head and the hat under it are red, and keep the whole
+		// model's weight.
+		assert_eq!(
+			lines(&instance),
+			[weight(2.0), weight(2.0), red_line(2.0), red_line(2.0)]
+		);
+
+		// A part set again moves to the end: the whole model's weight now
+		// wins over the hat's.
+		instance.set_ink(Some("hat".into()), weight(0.0));
+		assert_eq!(lines(&instance)[3], red_line(0.0));
+		instance.set_ink(None, weight(3.0));
+		assert_eq!(
+			lines(&instance),
+			[weight(3.0), weight(3.0), red_line(3.0), red_line(3.0)]
+		);
+
+		// Setting a part to nothing returns it to what encloses it, and a
+		// part the model lacks changes nothing.
+		instance.set_ink(Some("head".into()), PartInk::default());
+		instance.set_ink(Some("tail".into()), weight(5.0));
+		assert_eq!(lines(&instance), [weight(3.0); 4]);
 	}
 }
