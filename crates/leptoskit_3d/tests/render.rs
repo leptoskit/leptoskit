@@ -3429,3 +3429,223 @@ fn print_knockout_references_go_to_figures_in_view() {
 		 (paper_between={paper_between}, seen_green={seen_green}); row: {row:?}"
 	);
 }
+
+/// The paper knockout sits behind its figure: whatever stands in front of
+/// the figure keeps its colour across the paper ring.
+#[test]
+fn print_knockout_never_paints_over_what_stands_in_front() {
+	let Some(gpu) = gpu() else { return };
+	let blue = [0.10, 0.25, 0.85];
+	let green = [0.10, 0.75, 0.20];
+	let mut renderer = renderer(gpu);
+	load(&mut renderer, 1, &fixture::lit_sphere(32, None));
+	// A slab 2 m from the camera, over the sphere's right edge and the ring
+	// of paper beyond it.
+	load(
+		&mut renderer,
+		2,
+		&fixture::flat_quad([0.2, -0.12], [0.62, 0.12], 1.0, "slab"),
+	);
+	renderer.world_mut().apply(knockout_stage());
+	renderer.world_mut().apply([
+		Op::Spawn {
+			node: NodeId(1),
+			asset: Some(AssetId(1)),
+			parent: None,
+		},
+		Op::Spawn {
+			node: NodeId(2),
+			asset: Some(AssetId(2)),
+			parent: None,
+		},
+		flat_print(1, blue, None),
+		flat_print(2, green, Some(false)),
+		knockout_print(60.0),
+	]);
+
+	let image = render_size(&mut renderer, 128);
+	let left_ring = (0..64).filter(|&x| is_paper(image.at(x, 64))).count();
+	assert!(
+		left_ring >= 3,
+		"the ring shows where nothing stands in front"
+	);
+	let covered: Vec<[u8; 4]> = (82..104).map(|x| image.at(x, 64)).collect();
+	assert!(
+		covered
+			.iter()
+			.all(|&pixel| near(pixel, exact_srgb(green), 4)),
+		"the slab in front keeps its colour over the ring: {covered:?}"
+	);
+}
+
+/// A mirrored figure's paper knockout sits behind it, as an unmirrored
+/// figure's does: a slab standing between the figure's front and back keeps
+/// its colour beside the figure in both.
+#[test]
+fn print_mirrored_knockout_sits_behind_the_figure() {
+	let Some(gpu) = gpu() else { return };
+	let blue = [0.10, 0.25, 0.85];
+	let green = [0.10, 0.75, 0.20];
+	let render = |scale_x: f32| {
+		let mut renderer = renderer(gpu);
+		load(&mut renderer, 1, &fixture::lit_cube());
+		// Level with the cube's middle, reaching out from inside it.
+		load(
+			&mut renderer,
+			2,
+			&fixture::flat_quad([0.2, -0.1], [0.8, 0.1], 0.0, "slab"),
+		);
+		renderer.world_mut().apply(knockout_stage());
+		renderer.world_mut().apply([
+			Op::Spawn {
+				node: NodeId(1),
+				asset: Some(AssetId(1)),
+				parent: None,
+			},
+			Op::Spawn {
+				node: NodeId(2),
+				asset: Some(AssetId(2)),
+				parent: None,
+			},
+			Op::SetTransform {
+				node: NodeId(1),
+				transform: Transform {
+					scale: [0.6 * scale_x, 0.6, 0.6],
+					..Transform::IDENTITY
+				},
+			},
+			flat_print(1, blue, None),
+			flat_print(2, green, Some(false)),
+			knockout_print(60.0),
+		]);
+		render_size(&mut renderer, 128)
+	};
+	let slab_beside = |image: &Image| {
+		(60..68)
+			.flat_map(|y| (78..96).map(move |x| (x, y)))
+			.filter(|&(x, y)| near(image.at(x, y), exact_srgb(green), 4))
+			.count()
+	};
+
+	let plain = render(1.0);
+	let mirrored = render(-1.0);
+	assert!(
+		near(mirrored.at(64, 64), exact_srgb(blue), 4),
+		"the mirrored cube draws its front: {:?}",
+		mirrored.at(64, 64)
+	);
+	assert!(
+		slab_beside(&plain) > 0,
+		"the slab shows inside the unmirrored cube's ring"
+	);
+	assert_eq!(
+		slab_beside(&mirrored),
+		slab_beside(&plain),
+		"the mirrored cube's knockout covers the slab as the unmirrored one's does"
+	);
+}
+
+/// Cross-hatching draws only below `t_cross`: between `t_cross` and
+/// `t_deep` the deep band carries its primary strokes alone.
+#[test]
+fn print_cross_hatching_stays_below_t_cross() {
+	let Some(gpu) = gpu() else { return };
+	let mut renderer = lit_sphere(gpu, None);
+	renderer.world_mut().apply([style(
+		Shading::Print(Print {
+			t_lit: 0.30,
+			t_deep: 0.05,
+			t_cross: -0.60,
+			rim: 0.0,
+			hatch_per_m: 32.0,
+			hatch_gain: 0.40,
+			hatch_max: 0.55,
+			cross_duty: 0.35,
+			..print_no_knockout()
+		}),
+		Some(Ink {
+			color: [0.95, 0.05, 0.05],
+			width: 0.0,
+			..Ink::default()
+		}),
+	)]);
+	let mut render = |cross: bool| {
+		renderer.world_mut().apply([Op::SetPrint {
+			node: NodeId(1),
+			target: PrintTarget::All,
+			print: PrintOverride {
+				lit: Some([0.90, 0.90, 0.90]),
+				shade: Some([0.50, 0.50, 0.50]),
+				deep: Some([0.05, 0.05, 0.80]),
+				hatch_min: Some(0.25),
+				cross_hatch: Some(cross),
+				..PrintOverride::default()
+			},
+		}]);
+		render_size(&mut renderer, 256)
+	};
+	let primary = render(false);
+	let crossed = render(true);
+	let differing = |columns: std::ops::Range<u32>| {
+		columns
+			.flat_map(|x| (124..132).map(move |y| (x, y)))
+			.filter(|&(x, y)| !near(primary.at(x, y), crossed.at(x, y), 8))
+			.count()
+	};
+
+	// Lit from +x, so N·L is the normal's x: on the equator, t_cross falls
+	// near x = 45 and t_deep near x = 136.
+	assert_eq!(differing(60..118), 0, "no cross strokes above t_cross");
+	assert!(differing(24..40) > 20, "cross strokes below t_cross");
+}
+
+/// Primary hatching thickens deeper into shadow at `hatch_gain`.
+#[test]
+fn print_hatch_coverage_grows_with_hatch_gain() {
+	let Some(gpu) = gpu() else { return };
+	let mut renderer = lit_sphere(gpu, None);
+	renderer.world_mut().apply([Op::SetPrint {
+		node: NodeId(1),
+		target: PrintTarget::All,
+		print: PrintOverride {
+			lit: Some([0.90, 0.90, 0.90]),
+			shade: Some([0.50, 0.50, 0.50]),
+			deep: Some([0.05, 0.05, 0.80]),
+			hatch_min: Some(0.10),
+			cross_hatch: Some(false),
+			..PrintOverride::default()
+		},
+	}]);
+	let mut render = |gain: f32| {
+		renderer.world_mut().apply([style(
+			Shading::Print(Print {
+				t_lit: 0.30,
+				t_deep: 0.05,
+				rim: 0.0,
+				hatch_per_m: 32.0,
+				hatch_gain: gain,
+				hatch_max: 0.90,
+				..print_no_knockout()
+			}),
+			Some(Ink {
+				color: [0.95, 0.05, 0.05],
+				width: 0.0,
+				..Ink::default()
+			}),
+		)]);
+		let image = render_size(&mut renderer, 256);
+		(24..100)
+			.flat_map(|x| (120..136).map(move |y| (x, y)))
+			.filter(|&(x, y)| {
+				let pixel = image.at(x, y);
+				u16::from(pixel[0]) > u16::from(pixel[2]) + 40
+			})
+			.count()
+	};
+	let flat = render(0.0);
+	let steep = render(1.5);
+	assert!(
+		steep > flat + 200,
+		"deeper shadow carries heavier hatching: {steep} red pixels at gain 1.5, {flat} at gain 0"
+	);
+}

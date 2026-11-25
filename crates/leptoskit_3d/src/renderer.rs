@@ -2518,6 +2518,32 @@ mod tests {
 		assert!((camera - Vec3::X).length() < 1.0e-6, "{camera:?}");
 	}
 
+	/// A print target's `ink_weight` multiplies the part's own line weight
+	/// from [`Op::SetInk`](crate::protocol::Op::SetInk), so a part set to no
+	/// line keeps none.
+	#[test]
+	fn a_print_ink_weight_scales_the_parts_own_line() {
+		let ink = Ink::default();
+		let material = Material::default();
+		let resolved = PrintOverride {
+			ink_weight: Some(2.0),
+			..PrintOverride::default()
+		};
+		let weighted = |weight: Option<f32>| {
+			let part = Overrides {
+				ink: PartInk {
+					weight,
+					color: None,
+				},
+				..Overrides::default()
+			};
+			part_ink_print(&part, &material, &resolved, false, Some(&ink))[3]
+		};
+		assert_eq!(weighted(None), 2.0);
+		assert_eq!(weighted(Some(0.5)), 1.0);
+		assert_eq!(weighted(Some(0.0)), 0.0, "a part without a line keeps none");
+	}
+
 	/// Paper knockout keeps one depth-stencil attachment and one pipeline
 	/// set while figures walk in and out of view: what a frame draws with
 	/// follows the style, not what the frame happens to see.
