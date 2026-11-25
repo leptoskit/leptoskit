@@ -116,8 +116,9 @@ pub const S3_CHECKSUM_HEADERS: &str = "LEPTOSKIT_CLOUD_S3_CHECKSUM_HEADERS";
 /// value, and on Postgres the sweeper's advisory lock lets only one replica
 /// sweep at a time.
 pub const SWEEPER: &str = "LEPTOSKIT_CLOUD_SWEEPER";
-/// Optional email address to idempotently bootstrap as an operator during
-/// `migrate` or `serve` without requiring interactive email sign-in first.
+/// Optional email address made an operator by `migrate` or `serve` while the
+/// database has never had one, without requiring interactive email sign-in
+/// first.
 pub const BOOTSTRAP_OPERATOR_EMAIL: &str = "LEPTOSKIT_CLOUD_BOOTSTRAP_OPERATOR_EMAIL";
 /// Optional maximum bytes per database backup dump (defaults to 20 GiB).
 pub const BACKUP_CAP_BYTES: &str = "LEPTOSKIT_CLOUD_BACKUP_CAP_BYTES";
@@ -237,8 +238,8 @@ pub struct ServeConfig {
 	pub control: ControlConfig,
 	/// The console's client build: [`SITE`].
 	pub site: Option<std::path::PathBuf>,
-	/// Optional operator email to bootstrap on startup:
-	/// [`BOOTSTRAP_OPERATOR_EMAIL`].
+	/// Optional operator email, made an operator while the database has never
+	/// had one: [`BOOTSTRAP_OPERATOR_EMAIL`].
 	pub bootstrap_operator_email: Option<String>,
 	/// Whether the origin is the bind address, which `--dev` uses when
 	/// [`ORIGIN`] isn't set: then a bind to port 0 is reached at the port it
