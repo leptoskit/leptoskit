@@ -244,6 +244,8 @@ The service listens on port 3120 by default, has a database of its own, and is r
 
 The service ships the way [services](../32-services.md#deploying) do: `leptoskit build` builds its binary, and the deploy targets run it beside your app with its own database. Its `healthz` and `readyz` come from the service framework, and its migrations apply when it starts.
 
+On [LeptosKit Cloud](../41-leptoskit-cloud.md#notifications), the cloud runs it for you: your environment is a tenant of its cluster's shared notifications service, with a database of its own, and push credentials set as the environment's secrets. The cloud upgrades the shared service, and your database's migrations run when it next opens it.
+
 ### Upgrading a large database
 
 A new version of the service can change its tables, and it makes those changes when it starts, before it serves anything. On a small database that takes no time you would notice. On a large one a few of the changes take as long as copying or indexing the table, and the service is not serving while they run. Plan a quiet moment for these:

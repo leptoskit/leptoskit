@@ -628,6 +628,12 @@ fn environment_cases() -> Vec<(Vec<&'static str>, &'static str, Value, Value)> {
 			json!({"backup": id, "state": "pending", "failure": null, "requested_at": time, "updated_at": time}),
 		),
 		(
+			vec!["notifications"],
+			"notifications",
+			json!({"organization": "team", "project": "notes", "environment": "production"}),
+			json!({"tenant": id, "database": "ntf_00000000000000000000000000000001", "state": {"state": "serving"}, "reported_at": time, "providers": ["apns"], "settings": ["LEPTOSKIT_NOTIFICATIONS_APNS_KEY_P8"], "project_pushes_this_month": 12, "rotating": false, "created_at": time}),
+		),
+		(
 			vec!["publications", "list"],
 			"publications",
 			json!({"organization": "team", "project": "notes", "environment": "production", "limit": null}),
@@ -1289,4 +1295,45 @@ fn cloud_publish_refuses_to_pack_a_home_directory() {
 		.unwrap_err()
 		.to_string();
 	assert!(error.contains("home or system directory"), "{error}");
+}
+
+#[test]
+fn notifications_say_what_their_state_means() {
+	let none = ship::notifications_text(&Value::Null);
+	assert!(none.contains("[services.notifications]"), "{none}");
+
+	let failed = ship::notifications_text(&json!({
+		"tenant": "00000000-0000-0000-0000-000000000001",
+		"database": "ntf_00000000000000000000000000000001",
+		"state": {"state": "failed", "reason": "APNs needs a team ID\u{1b}[2J"},
+		"reported_at": "2026-11-25T12:00:00Z",
+		"providers": [],
+		"settings": [],
+		"project_pushes_this_month": 0,
+		"rotating": true,
+		"created_at": "2026-11-25T12:00:00Z"
+	}));
+	assert!(
+		failed.starts_with("Notifications: failed: APNs needs a team ID"),
+		"{failed}"
+	);
+	assert!(!failed.contains('\u{1b}'), "{failed}");
+	assert!(failed.contains("Push providers: none"), "{failed}");
+	assert!(failed.contains("Deploy to finish"), "{failed}");
+
+	let serving = ship::notifications_text(&json!({
+		"tenant": "00000000-0000-0000-0000-000000000001",
+		"database": "ntf_00000000000000000000000000000001",
+		"state": {"state": "serving"},
+		"reported_at": null,
+		"providers": ["apns", "web_push"],
+		"settings": [],
+		"project_pushes_this_month": 1234,
+		"created_at": "2026-11-25T12:00:00Z"
+	}));
+	assert_eq!(
+		serving,
+		"Notifications: serving\nPush providers: apns, web_push\nPushes this month (whole \
+		 project): 1234\nDatabase: ntf_00000000000000000000000000000001"
+	);
 }
