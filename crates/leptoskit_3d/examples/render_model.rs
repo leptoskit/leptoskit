@@ -100,13 +100,19 @@ mod native {
 		parts: BTreeMap<String, PaletteOverride>,
 	}
 
+	#[derive(Clone, Copy, PartialEq, Eq)]
+	enum ShadingMode {
+		Default,
+		Toon,
+		Print,
+	}
+
 	/// The command line: positional arguments, boolean flags, and `--name
 	/// value` options.
 	struct Arguments {
 		positional: Vec<String>,
 		options: HashMap<String, String>,
-		toon: bool,
-		print: bool,
+		shading: ShadingMode,
 		camera_light: bool,
 		no_shadow: bool,
 	}
@@ -117,16 +123,15 @@ mod native {
 			let mut parsed = Self {
 				positional: Vec::new(),
 				options: HashMap::new(),
-				toon: false,
-				print: false,
+				shading: ShadingMode::Default,
 				camera_light: false,
 				no_shadow: false,
 			};
 
 			while let Some(argument) = arguments.next() {
 				match argument.strip_prefix("--") {
-					Some("toon") => parsed.toon = true,
-					Some("print") => parsed.print = true,
+					Some("toon") => parsed.shading = ShadingMode::Toon,
+					Some("print") => parsed.shading = ShadingMode::Print,
 					Some("camera-light") => parsed.camera_light = true,
 					Some("no-shadow") => parsed.no_shadow = true,
 					Some(name) => {
@@ -191,7 +196,7 @@ mod native {
 
 		/// The style the options describe.
 		fn style(&self) -> Result<Style, Failure> {
-			let shading = if self.print {
+			let shading = if self.shading == ShadingMode::Print {
 				let mut print = Print::default();
 				print.t_lit = self.number("t-lit")?.unwrap_or(print.t_lit);
 				print.t_deep = self.number("t-deep")?.unwrap_or(print.t_deep);
@@ -212,7 +217,7 @@ mod native {
 					.number("wobble-frequency")?
 					.unwrap_or(print.wobble_frequency);
 				Shading::Print(print)
-			} else if self.toon || self.options.contains_key("bands") {
+			} else if self.shading == ShadingMode::Toon || self.options.contains_key("bands") {
 				let mut toon = Toon::default();
 
 				if let Some(bands) = self.number("bands")? {
@@ -273,6 +278,120 @@ mod native {
 		}
 	}
 
+	fn load_palette_ops(
+		path: Option<&String>,
+	) -> Result<Vec<(PrintTarget, PrintOverride)>, Failure> {
+		let Some(path) = path else {
+			return Ok(Vec::new());
+		};
+		let parsed: PaletteFile = serde_json::from_str(&std::fs::read_to_string(path)?)?;
+		let mut ops = Vec::new();
+		if let Some(all) = parsed.all {
+			ops.push((PrintTarget::All, all.into_print_override()?));
+		}
+		for (material, entry) in parsed.materials {
+			ops.push((
+				PrintTarget::Material(material),
+				entry.into_print_override()?,
+			));
+		}
+		for (part, entry) in parsed.parts {
+			ops.push((PrintTarget::Part(part), entry.into_print_override()?));
+		}
+		Ok(ops)
+	}
+
+	fn load_attachment(
+		world: &mut World,
+		arguments: &Arguments,
+		load_options: LoadOptions,
+		palette_ops: &[(PrintTarget, PrintOverride)],
+	) -> Result<(), Failure> {
+		let Some(attach_spec) = arguments.options.get("attach") else {
+			return Ok(());
+		};
+		let (attach_path, bone) = attach_spec
+			.rsplit_once(':')
+			.ok_or("--attach takes path.glb:bone")?;
+		let attached = Arc::new(Asset::from_slice_with_options(
+			&std::fs::read(attach_path)?,
+			load_options,
+		)?);
+		world.apply([
+			Op::LoadAsset {
+				asset: AssetId(2),
+				path: "attach.glb".into(),
+			},
+			Op::Spawn {
+				node: NodeId(2),
+				asset: Some(AssetId(2)),
+				parent: None,
+			},
+			Op::Attach {
+				node: NodeId(2),
+				target: NodeId(1),
+				bone: bone.into(),
+			},
+		]);
+		if arguments.no_shadow {
+			world.apply([Op::SetShadow {
+				node: NodeId(2),
+				cast: false,
+			}]);
+		}
+		world.take_loads();
+		world.asset_loaded(AssetId(2), Ok(attached));
+		apply_palette(world, NodeId(2), palette_ops);
+
+		for part in arguments
+			.options
+			.get("attach-hide")
+			.map(String::as_str)
+			.unwrap_or_default()
+			.split(',')
+			.filter(|part| !part.is_empty())
+		{
+			world.apply([Op::SetPartVisible {
+				node: NodeId(2),
+				part: part.into(),
+				visible: false,
+			}]);
+		}
+		Ok(())
+	}
+
+	fn camera_from_args(arguments: &Arguments, distance: f32) -> Result<(Transform, f32), Failure> {
+		let custom_camera = arguments.options.contains_key("aim-y")
+			|| arguments.options.contains_key("pitch")
+			|| arguments.options.contains_key("fov");
+		if custom_camera {
+			let aim_y = arguments.number("aim-y")?.unwrap_or(0.95);
+			let pitch = arguments.number("pitch")?.unwrap_or(6.88).to_radians();
+			let fov_y = arguments.number("fov")?.unwrap_or(42.97).to_radians();
+			let position =
+				glam::Vec3::new(0.0, aim_y + distance * pitch.sin(), distance * pitch.cos());
+			Ok((
+				Transform::from_translation(position.x, position.y, position.z)
+					.with_rotation(glam::Quat::from_rotation_x(-pitch).to_array()),
+				fov_y,
+			))
+		} else {
+			// Frame the model's bounds, found by casting rays would be
+			// overkill: a person-sized model sits in a 2.5 m box at
+			// the origin. Further cameras back away along the same
+			// line, and the default distance places the camera
+			// exactly where it always was.
+			let eye = glam::Vec3::new(0.0, 1.3, 3.6);
+			let aim = glam::Vec3::new(0.0, 1.3 - 3.6 * 0.12_f32.tan(), 0.0);
+			let position = eye + (eye - aim) * ((distance - 3.6) / 3.6);
+			Ok((
+				Transform::from_translation(position.x, position.y, position.z)
+					.with_rotation(glam::Quat::from_rotation_x(-0.12).to_array()),
+				0.75,
+			))
+		}
+	}
+
 	pub fn main() -> Result<(), Failure> {
 		let arguments = Arguments::parse();
 		let mut positional = arguments.positional.iter();
@@ -290,26 +409,7 @@ mod native {
 		let load_options = LoadOptions {
 			outline_smooth_rings: arguments.integer::<u8>("smooth-rings")?,
 		};
-		let palette_ops = match arguments.options.get("palette") {
-			Some(path) => {
-				let parsed: PaletteFile = serde_json::from_str(&std::fs::read_to_string(path)?)?;
-				let mut ops = Vec::new();
-				if let Some(all) = parsed.all {
-					ops.push((PrintTarget::All, all.into_print_override()?));
-				}
-				for (material, entry) in parsed.materials {
-					ops.push((
-						PrintTarget::Material(material),
-						entry.into_print_override()?,
-					));
-				}
-				for (part, entry) in parsed.parts {
-					ops.push((PrintTarget::Part(part), entry.into_print_override()?));
-				}
-				ops
-			}
-			None => Vec::new(),
-		};
+		let palette_ops = load_palette_ops(arguments.options.get("palette"))?;
 		let asset = Arc::new(Asset::from_slice_with_options(
 			&std::fs::read(input)?,
 			load_options,
@@ -366,88 +466,10 @@ mod native {
 		world.take_loads();
 		world.asset_loaded(AssetId(1), Ok(asset.clone()));
 		apply_palette(world, NodeId(1), &palette_ops);
-
-		if let Some(attach_spec) = arguments.options.get("attach") {
-			let (attach_path, bone) = attach_spec
-				.rsplit_once(':')
-				.ok_or("--attach takes path.glb:bone")?;
-			let attached = Arc::new(Asset::from_slice_with_options(
-				&std::fs::read(attach_path)?,
-				load_options,
-			)?);
-			world.apply([
-				Op::LoadAsset {
-					asset: AssetId(2),
-					path: "attach.glb".into(),
-				},
-				Op::Spawn {
-					node: NodeId(2),
-					asset: Some(AssetId(2)),
-					parent: None,
-				},
-				Op::Attach {
-					node: NodeId(2),
-					target: NodeId(1),
-					bone: bone.into(),
-				},
-			]);
-			if arguments.no_shadow {
-				world.apply([Op::SetShadow {
-					node: NodeId(2),
-					cast: false,
-				}]);
-			}
-			world.take_loads();
-			world.asset_loaded(AssetId(2), Ok(attached));
-			apply_palette(world, NodeId(2), &palette_ops);
-
-			for part in arguments
-				.options
-				.get("attach-hide")
-				.map(String::as_str)
-				.unwrap_or_default()
-				.split(',')
-				.filter(|part| !part.is_empty())
-			{
-				world.apply([Op::SetPartVisible {
-					node: NodeId(2),
-					part: part.into(),
-					visible: false,
-				}]);
-			}
-		}
-
+		load_attachment(world, &arguments, load_options, &palette_ops)?;
 		world.advance(0.0);
 
-		let custom_camera = arguments.options.contains_key("aim-y")
-			|| arguments.options.contains_key("pitch")
-			|| arguments.options.contains_key("fov");
-		let (cam_transform, fov_y) = if custom_camera {
-			let aim_y = arguments.number("aim-y")?.unwrap_or(0.95);
-			let pitch = arguments.number("pitch")?.unwrap_or(6.88).to_radians();
-			let fov_y = arguments.number("fov")?.unwrap_or(42.97).to_radians();
-			let position =
-				glam::Vec3::new(0.0, aim_y + distance * pitch.sin(), distance * pitch.cos());
-			(
-				Transform::from_translation(position.x, position.y, position.z)
-					.with_rotation(glam::Quat::from_rotation_x(-pitch).to_array()),
-				fov_y,
-			)
-		} else {
-			// Frame the model's bounds, found by casting rays would be
-			// overkill: a person-sized model sits in a 2.5 m box at
-			// the origin. Further cameras back away along the same
-			// line, and the default distance places the camera
-			// exactly where it always was.
-			let eye = glam::Vec3::new(0.0, 1.3, 3.6);
-			let aim = glam::Vec3::new(0.0, 1.3 - 3.6 * 0.12_f32.tan(), 0.0);
-			let position = eye + (eye - aim) * ((distance - 3.6) / 3.6);
-			(
-				Transform::from_translation(position.x, position.y, position.z)
-					.with_rotation(glam::Quat::from_rotation_x(-0.12).to_array()),
-				0.75,
-			)
-		};
+		let (cam_transform, fov_y) = camera_from_args(&arguments, distance)?;
 		world.apply([Op::SetCamera {
 			transform: cam_transform,
 			fov_y,

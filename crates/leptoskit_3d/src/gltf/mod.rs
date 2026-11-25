@@ -1410,6 +1410,55 @@ fn weld_mesh(asset: &mut Asset, first_vertex: usize) {
 	}
 }
 
+/// The inclusive-start, exclusive-end vertex range covered by `primitives`.
+fn mesh_vertex_range(primitives: &[Primitive], vertex_len: usize) -> Option<(usize, usize)> {
+	if primitives.is_empty() {
+		return None;
+	}
+	let first = primitives
+		.iter()
+		.map(|primitive| primitive.base_vertex as usize)
+		.min()?;
+	let end = primitives
+		.iter()
+		.map(|primitive| primitive.base_vertex as usize + primitive.vertex_count as usize)
+		.max()?;
+	(end > first && end <= vertex_len).then_some((first, end))
+}
+
+/// Bounding-box diagonal of `vertices` computed in `f64` so extreme finite
+/// `f32` spans never overflow to `Inf`.
+fn mesh_extent_diagonal(vertices: &[Vertex]) -> f64 {
+	let mut min = [f64::INFINITY; 3];
+	let mut max = [f64::NEG_INFINITY; 3];
+	for vertex in vertices {
+		for axis in 0..3 {
+			let value = f64::from(vertex.position[axis]);
+			if value.is_finite() {
+				min[axis] = min[axis].min(value);
+				max[axis] = max[axis].max(value);
+			}
+		}
+	}
+	let extent = [
+		(max[0] - min[0]).max(0.0),
+		(max[1] - min[1]).max(0.0),
+		(max[2] - min[2]).max(0.0),
+	];
+	(extent[0] * extent[0] + extent[1] * extent[1] + extent[2] * extent[2]).sqrt()
+}
+
+fn quantize_position(position: [f32; 3], cell: f64) -> [i64; 3] {
+	position.map(|value| {
+		let scaled = f64::from(value) / cell;
+		if scaled.is_finite() {
+			scaled.round() as i64
+		} else {
+			0
+		}
+	})
+}
+
 /// Optional vertex-adjacency Laplacian smoothing of welded outline normals.
 /// Runs only when `LoadOptions::outline_smooth_rings` or glTF
 /// `extras.outlineSmoothRings` resolves to `rings > 0`; at `0` (the default),
@@ -1421,7 +1470,7 @@ fn smooth_outline_normals(document: &Document<'_>, asset: &mut Asset, options: L
 		.as_ref()
 		.and_then(|extras| extras.outline_smooth_rings);
 
-	for (mesh_index, mesh) in asset.meshes.iter().enumerate() {
+	for mesh_index in 0..asset.meshes.len() {
 		let mesh_rings = document
 			.root
 			.meshes
@@ -1435,162 +1484,150 @@ fn smooth_outline_normals(document: &Document<'_>, asset: &mut Asset, options: L
 			.unwrap_or(0)
 			.min(MAX_OUTLINE_SMOOTH_RINGS);
 
-		if rings == 0 || mesh.primitives.is_empty() {
-			continue;
+		if rings > 0 {
+			smooth_mesh_outline_normals(asset, mesh_index, rings);
 		}
+	}
+}
 
-		let first_vertex = mesh
-			.primitives
-			.iter()
-			.map(|primitive| primitive.base_vertex as usize)
-			.min()
-			.unwrap_or(0);
-		let end_vertex = mesh
-			.primitives
-			.iter()
-			.map(|primitive| primitive.base_vertex as usize + primitive.vertex_count as usize)
-			.max()
-			.unwrap_or(first_vertex);
+fn smooth_mesh_outline_normals(asset: &mut Asset, mesh_index: usize, rings: u8) {
+	let Some((first_vertex, end_vertex)) =
+		mesh_vertex_range(&asset.meshes[mesh_index].primitives, asset.vertices.len())
+	else {
+		return;
+	};
+	let unit_scale = asset
+		.nodes
+		.iter()
+		.enumerate()
+		.find_map(|(node_idx, node)| {
+			(node.mesh == Some(mesh_index))
+				.then(|| asset.units.get(node_idx).copied().unwrap_or(1.0))
+		})
+		.unwrap_or(1.0);
+	let diag = mesh_extent_diagonal(&asset.vertices[first_vertex..end_vertex]);
+	let weld_m = 1.2e-3_f64 / f64::from(unit_scale).max(1.0e-4);
+	let cell = if diag.is_finite() && diag > 0.0 {
+		(diag * 1.0e-5).max(weld_m).min(diag * 0.01).max(1.0e-12)
+	} else {
+		1.0
+	};
 
-		if end_vertex <= first_vertex || end_vertex > asset.vertices.len() {
-			continue;
-		}
+	let local_count = end_vertex - first_vertex;
+	let mut order: Vec<([i64; 3], [i8; 3], usize)> = asset.vertices[first_vertex..end_vertex]
+		.iter()
+		.enumerate()
+		.map(|(offset, vertex)| {
+			(
+				quantize_position(vertex.position, cell),
+				snorm(Vec3::from(vertex.normal)),
+				offset,
+			)
+		})
+		.collect();
+	order.sort_unstable();
 
-		let unit_scale = asset
-			.nodes
-			.iter()
-			.enumerate()
-			.find_map(|(node_idx, node)| {
-				(node.mesh == Some(mesh_index))
-					.then(|| asset.units.get(node_idx).copied().unwrap_or(1.0))
+	let mut group_of = vec![0_usize; local_count];
+	let mut group_normals: Vec<Vec3> = Vec::new();
+	let mut group_valid: Vec<bool> = Vec::new();
+
+	for copies in order.chunk_by(|a, b| a.0 == b.0) {
+		let group = group_normals.len();
+		let sum: Vec3 = copies
+			.chunk_by(|a, b| a.1 == b.1)
+			.map(|same| {
+				Vec3::from(asset.vertices[first_vertex + same[0].2].normal).normalize_or_zero()
 			})
-			.unwrap_or(1.0);
+			.sum();
+		let valid = sum.length_squared() >= 0.01;
+		group_normals.push(if valid { sum.normalize() } else { Vec3::ZERO });
+		group_valid.push(valid);
+		for (.., offset) in copies {
+			group_of[*offset] = group;
+		}
+	}
 
-		let mut min = [f64::INFINITY; 3];
-		let mut max = [f64::NEG_INFINITY; 3];
-		for vertex in &asset.vertices[first_vertex..end_vertex] {
-			for axis in 0..3 {
-				let v = f64::from(vertex.position[axis]);
-				if v.is_finite() {
-					min[axis] = min[axis].min(v);
-					max[axis] = max[axis].max(v);
+	let group_count = group_normals.len();
+	let neighbors = build_group_neighbors(
+		&asset.meshes[mesh_index].primitives,
+		&asset.indices,
+		&group_of,
+		group_count,
+		first_vertex,
+		end_vertex,
+	);
+
+	let mut current = group_normals;
+	let mut next = vec![Vec3::ZERO; group_count];
+	for _ in 0..rings {
+		for g in 0..group_count {
+			if !group_valid[g] {
+				next[g] = Vec3::ZERO;
+				continue;
+			}
+			let mut sum = current[g];
+			let mut count = 1_u32;
+			for &nbr in &neighbors[g] {
+				if group_valid[nbr] {
+					sum += current[nbr];
+					count += 1;
 				}
 			}
+			next[g] = sum / count as f32;
 		}
-		let extent = [
-			(max[0] - min[0]).max(0.0),
-			(max[1] - min[1]).max(0.0),
-			(max[2] - min[2]).max(0.0),
-		];
-		let diag = (extent[0] * extent[0] + extent[1] * extent[1] + extent[2] * extent[2]).sqrt();
-		let weld_m = 1.2e-3_f64 / f64::from(unit_scale).max(1.0e-4);
-		let cell = if diag.is_finite() && diag > 0.0 {
-			(diag * 1.0e-5).max(weld_m).min(diag * 0.01).max(1.0e-12)
-		} else {
-			1.0
-		};
+		std::mem::swap(&mut current, &mut next);
+	}
 
-		let local_count = end_vertex - first_vertex;
-		let mut order: Vec<([i64; 3], [i8; 3], usize)> = asset.vertices[first_vertex..end_vertex]
-			.iter()
-			.enumerate()
-			.map(|(offset, vertex)| {
-				let key = vertex.position.map(|value| {
-					let scaled = f64::from(value) / cell;
-					if scaled.is_finite() {
-						scaled.round() as i64
-					} else {
-						0
-					}
-				});
-				(key, snorm(Vec3::from(vertex.normal)), offset)
-			})
-			.collect();
-		order.sort_unstable();
+	for offset in 0..local_count {
+		let g = group_of[offset];
+		if group_valid[g] && current[g].length_squared() > 1.0e-6 {
+			asset.ink_vertices[first_vertex + offset].normal = snorm(current[g].normalize());
+		}
+	}
+}
 
-		let mut group_of = vec![0_usize; local_count];
-		let mut group_normals: Vec<Vec3> = Vec::new();
-		let mut group_valid: Vec<bool> = Vec::new();
-
-		for copies in order.chunk_by(|a, b| a.0 == b.0) {
-			let group = group_normals.len();
-			let sum: Vec3 = copies
-				.chunk_by(|a, b| a.1 == b.1)
-				.map(|same| {
-					Vec3::from(asset.vertices[first_vertex + same[0].2].normal).normalize_or_zero()
-				})
-				.sum();
-			let valid = sum.length_squared() >= 0.01;
-			group_normals.push(if valid { sum.normalize() } else { Vec3::ZERO });
-			group_valid.push(valid);
-			for (.., offset) in copies {
-				group_of[*offset] = group;
+fn build_group_neighbors(
+	primitives: &[Primitive],
+	indices: &[u32],
+	group_of: &[usize],
+	group_count: usize,
+	first_vertex: usize,
+	end_vertex: usize,
+) -> Vec<Vec<usize>> {
+	let mut neighbors: Vec<Vec<usize>> = vec![Vec::new(); group_count];
+	for primitive in primitives {
+		let base = primitive.base_vertex as usize;
+		let start = primitive.first_index as usize;
+		let end = start + primitive.index_count as usize;
+		for &[i0, i1, i2] in indices[start..end].as_chunks::<3>().0 {
+			let va = base + i0 as usize;
+			let vb = base + i1 as usize;
+			let vc = base + i2 as usize;
+			if va < first_vertex
+				|| vb < first_vertex
+				|| vc < first_vertex
+				|| va >= end_vertex
+				|| vb >= end_vertex
+				|| vc >= end_vertex
+			{
+				continue;
 			}
-		}
-
-		let group_count = group_normals.len();
-		let mut neighbors: Vec<Vec<usize>> = vec![Vec::new(); group_count];
-		for primitive in &mesh.primitives {
-			let base = primitive.base_vertex as usize;
-			let start = primitive.first_index as usize;
-			let end = start + primitive.index_count as usize;
-			for tri in asset.indices[start..end].chunks_exact(3) {
-				let va = base + tri[0] as usize;
-				let vb = base + tri[1] as usize;
-				let vc = base + tri[2] as usize;
-				if va < first_vertex
-					|| vb < first_vertex
-					|| vc < first_vertex
-					|| va >= end_vertex
-					|| vb >= end_vertex
-					|| vc >= end_vertex
-				{
-					continue;
+			let ga = group_of[va - first_vertex];
+			let gb = group_of[vb - first_vertex];
+			let gc = group_of[vc - first_vertex];
+			for (u, v) in [(ga, gb), (gb, gc), (gc, ga)] {
+				if u != v {
+					neighbors[u].push(v);
+					neighbors[v].push(u);
 				}
-				let ga = group_of[va - first_vertex];
-				let gb = group_of[vb - first_vertex];
-				let gc = group_of[vc - first_vertex];
-				for (u, v) in [(ga, gb), (gb, gc), (gc, ga)] {
-					if u != v {
-						neighbors[u].push(v);
-						neighbors[v].push(u);
-					}
-				}
-			}
-		}
-		for list in &mut neighbors {
-			list.sort_unstable();
-			list.dedup();
-		}
-
-		let mut current = group_normals;
-		let mut next = vec![Vec3::ZERO; group_count];
-		for _ in 0..rings {
-			for g in 0..group_count {
-				if !group_valid[g] {
-					next[g] = Vec3::ZERO;
-					continue;
-				}
-				let mut sum = current[g];
-				let mut count = 1_u32;
-				for &nbr in &neighbors[g] {
-					if group_valid[nbr] {
-						sum += current[nbr];
-						count += 1;
-					}
-				}
-				next[g] = sum / count as f32;
-			}
-			std::mem::swap(&mut current, &mut next);
-		}
-
-		for offset in 0..local_count {
-			let g = group_of[offset];
-			if group_valid[g] && current[g].length_squared() > 1.0e-6 {
-				asset.ink_vertices[first_vertex + offset].normal = snorm(current[g].normalize());
 			}
 		}
 	}
+	for list in &mut neighbors {
+		list.sort_unstable();
+		list.dedup();
+	}
+	neighbors
 }
 
 /// Detects open boundary edges per mesh and builds `asset.knockout_vertices`
@@ -1598,192 +1635,196 @@ fn smooth_outline_normals(document: &Document<'_>, asset: &mut Asset, options: L
 /// sheet). Closed meshes leave `asset.knockout_vertices` empty and reuse
 /// `ink_vertices`.
 fn build_knockout_vertices(asset: &mut Asset) {
-	for mesh in &mut asset.meshes {
-		if mesh.primitives.is_empty() {
+	for mesh_index in 0..asset.meshes.len() {
+		build_mesh_knockout_vertices(asset, mesh_index);
+	}
+}
+
+fn build_mesh_knockout_vertices(asset: &mut Asset, mesh_index: usize) {
+	let Some((first_vertex, end_vertex)) =
+		mesh_vertex_range(&asset.meshes[mesh_index].primitives, asset.vertices.len())
+	else {
+		return;
+	};
+	let diag = mesh_extent_diagonal(&asset.vertices[first_vertex..end_vertex]);
+	let cell = if diag.is_finite() && diag > 0.0 {
+		(diag * 1.0e-5).max(1.0e-12)
+	} else {
+		1.0
+	};
+
+	let local_count = end_vertex - first_vertex;
+	let mut cells: HashMap<[i64; 3], usize> = HashMap::with_capacity(local_count);
+	let mut group_of = vec![0_usize; local_count];
+	let mut group_count = 0_usize;
+
+	for (offset, vertex) in asset.vertices[first_vertex..end_vertex].iter().enumerate() {
+		let key = quantize_position(vertex.position, cell);
+		let group = *cells.entry(key).or_insert_with(|| {
+			let id = group_count;
+			group_count += 1;
+			id
+		});
+		group_of[offset] = group;
+	}
+
+	let edge_counts = count_mesh_edges(
+		&asset.meshes[mesh_index].primitives,
+		&asset.indices,
+		&group_of,
+		first_vertex,
+		end_vertex,
+	);
+	if !edge_counts.values().any(|&count| count == 1) {
+		return;
+	}
+
+	let boundary_outward = collect_boundary_outward(
+		&mut asset.meshes[mesh_index].primitives,
+		&asset.vertices,
+		&asset.indices,
+		&group_of,
+		group_count,
+		first_vertex,
+		end_vertex,
+		&edge_counts,
+	);
+
+	if asset.knockout_vertices.is_empty() {
+		asset.knockout_vertices = asset.ink_vertices.clone();
+	}
+
+	for primitive in &asset.meshes[mesh_index].primitives {
+		if !primitive.has_open_edges {
 			continue;
 		}
-		let first_vertex = mesh
-			.primitives
-			.iter()
-			.map(|primitive| primitive.base_vertex as usize)
-			.min()
-			.unwrap_or(0);
-		let end_vertex = mesh
-			.primitives
-			.iter()
-			.map(|primitive| primitive.base_vertex as usize + primitive.vertex_count as usize)
-			.max()
-			.unwrap_or(first_vertex);
-
-		if end_vertex <= first_vertex || end_vertex > asset.vertices.len() {
-			continue;
-		}
-
-		// Compute extent in f64 so extreme f32 coordinates never overflow to
-		// Inf.
-		let mut min = [f64::INFINITY; 3];
-		let mut max = [f64::NEG_INFINITY; 3];
-		for vertex in &asset.vertices[first_vertex..end_vertex] {
-			for axis in 0..3 {
-				let v = f64::from(vertex.position[axis]);
-				if v.is_finite() {
-					min[axis] = min[axis].min(v);
-					max[axis] = max[axis].max(v);
-				}
-			}
-		}
-		let extent = [
-			(max[0] - min[0]).max(0.0),
-			(max[1] - min[1]).max(0.0),
-			(max[2] - min[2]).max(0.0),
-		];
-		let diag = (extent[0] * extent[0] + extent[1] * extent[1] + extent[2] * extent[2]).sqrt();
-		let cell = if diag.is_finite() && diag > 0.0 {
-			(diag * 1.0e-5).max(1.0e-12)
-		} else {
-			1.0
-		};
-
-		let local_count = end_vertex - first_vertex;
-		let mut cells: HashMap<[i64; 3], usize> = HashMap::with_capacity(local_count);
-		let mut group_of = vec![0_usize; local_count];
-		let mut group_count = 0_usize;
-
-		for (offset, vertex) in asset.vertices[first_vertex..end_vertex].iter().enumerate() {
-			let key = vertex.position.map(|value| {
-				let scaled = f64::from(value) / cell;
-				if scaled.is_finite() {
-					scaled.round() as i64
-				} else {
-					0
-				}
-			});
-			let group = *cells.entry(key).or_insert_with(|| {
-				let id = group_count;
-				group_count += 1;
-				id
-			});
-			group_of[offset] = group;
-		}
-
-		let mut edge_counts: HashMap<(usize, usize), u32> = HashMap::new();
-		for primitive in &mesh.primitives {
-			let base = primitive.base_vertex as usize;
-			let start = primitive.first_index as usize;
-			let end = start + primitive.index_count as usize;
-			for tri in asset.indices[start..end].chunks_exact(3) {
-				let va = base + tri[0] as usize;
-				let vb = base + tri[1] as usize;
-				let vc = base + tri[2] as usize;
-				if va < first_vertex
-					|| vb < first_vertex
-					|| vc < first_vertex
-					|| va >= end_vertex
-					|| vb >= end_vertex
-					|| vc >= end_vertex
-				{
-					continue;
-				}
-				let ga = group_of[va - first_vertex];
-				let gb = group_of[vb - first_vertex];
-				let gc = group_of[vc - first_vertex];
-				if ga == gb || gb == gc || gc == ga {
-					continue;
-				}
-				for (u, v) in [(ga, gb), (gb, gc), (gc, ga)] {
-					let edge = if u < v { (u, v) } else { (v, u) };
-					*edge_counts.entry(edge).or_insert(0) += 1;
-				}
-			}
-		}
-
-		if !edge_counts.values().any(|&count| count == 1) {
-			continue;
-		}
-
-		let mut boundary_outward = vec![Vec3::ZERO; group_count];
-		for primitive in &mut mesh.primitives {
-			let base = primitive.base_vertex as usize;
-			let start = primitive.first_index as usize;
-			let end = start + primitive.index_count as usize;
-			let mut prim_open = false;
-
-			for tri in asset.indices[start..end].chunks_exact(3) {
-				let va = base + tri[0] as usize;
-				let vb = base + tri[1] as usize;
-				let vc = base + tri[2] as usize;
-				if va < first_vertex
-					|| vb < first_vertex
-					|| vc < first_vertex
-					|| va >= end_vertex
-					|| vb >= end_vertex
-					|| vc >= end_vertex
-				{
-					continue;
-				}
-				let ga = group_of[va - first_vertex];
-				let gb = group_of[vb - first_vertex];
-				let gc = group_of[vc - first_vertex];
-				if ga == gb || gb == gc || gc == ga {
-					continue;
-				}
-				let verts = [(va, ga), (vb, gb), (vc, gc)];
-				for edge_idx in 0..3 {
-					let (v0, g0) = verts[edge_idx];
-					let (v1, g1) = verts[(edge_idx + 1) % 3];
-					let (v2, _) = verts[(edge_idx + 2) % 3];
-					let edge = if g0 < g1 { (g0, g1) } else { (g1, g0) };
-					if edge_counts.get(&edge).copied() != Some(1) {
-						continue;
-					}
-					prim_open = true;
-					let p0 = Vec3::from(asset.vertices[v0].position);
-					let p1 = Vec3::from(asset.vertices[v1].position);
-					let p2 = Vec3::from(asset.vertices[v2].position);
-					let e = p1 - p0;
-					let len2 = e.length_squared();
-					if len2 > 1.0e-20 {
-						let to_opp = p2 - p0;
-						let perp = to_opp - e * (to_opp.dot(e) / len2);
-						let outward = (-perp).normalize_or_zero();
-						boundary_outward[g0] += outward;
-						boundary_outward[g1] += outward;
-					}
-				}
-			}
-
-			primitive.has_open_edges = prim_open;
-		}
-
-		if asset.knockout_vertices.is_empty() {
-			asset.knockout_vertices = asset.ink_vertices.clone();
-		}
-
-		for primitive in &mesh.primitives {
-			if !primitive.has_open_edges {
+		let start = primitive.base_vertex as usize;
+		let end = start + primitive.vertex_count as usize;
+		for v in start..end {
+			let out_sum = boundary_outward[group_of[v - first_vertex]];
+			if out_sum.length_squared() <= 1.0e-6 {
 				continue;
 			}
-			let start = primitive.base_vertex as usize;
-			let end = start + primitive.vertex_count as usize;
-			for v in start..end {
-				let out_sum = boundary_outward[group_of[v - first_vertex]];
-				if out_sum.length_squared() <= 1.0e-6 {
-					continue;
-				}
-				let out_dir = out_sum.normalize();
-				let surf_n = Vec3::from(
-					asset.ink_vertices[v]
-						.normal
-						.map(|channel| f32::from(channel) / 127.0),
-				)
-				.normalize_or_zero();
-				let combined = (out_dir + surf_n * 0.20).normalize_or_zero();
-				if combined.length_squared() > 0.0 {
-					asset.knockout_vertices[v].normal = snorm(combined);
-				}
+			let out_dir = out_sum.normalize();
+			let surf_n = Vec3::from(
+				asset.ink_vertices[v]
+					.normal
+					.map(|channel| f32::from(channel) / 127.0),
+			)
+			.normalize_or_zero();
+			let combined = (out_dir + surf_n * 0.20).normalize_or_zero();
+			if combined.length_squared() > 0.0 {
+				asset.knockout_vertices[v].normal = snorm(combined);
 			}
 		}
 	}
+}
+
+fn count_mesh_edges(
+	primitives: &[Primitive],
+	indices: &[u32],
+	group_of: &[usize],
+	first_vertex: usize,
+	end_vertex: usize,
+) -> HashMap<(usize, usize), u32> {
+	let mut edge_counts: HashMap<(usize, usize), u32> = HashMap::new();
+	for primitive in primitives {
+		let base = primitive.base_vertex as usize;
+		let start = primitive.first_index as usize;
+		let end = start + primitive.index_count as usize;
+		for &[i0, i1, i2] in indices[start..end].as_chunks::<3>().0 {
+			let va = base + i0 as usize;
+			let vb = base + i1 as usize;
+			let vc = base + i2 as usize;
+			if va < first_vertex
+				|| vb < first_vertex
+				|| vc < first_vertex
+				|| va >= end_vertex
+				|| vb >= end_vertex
+				|| vc >= end_vertex
+			{
+				continue;
+			}
+			let ga = group_of[va - first_vertex];
+			let gb = group_of[vb - first_vertex];
+			let gc = group_of[vc - first_vertex];
+			if ga == gb || gb == gc || gc == ga {
+				continue;
+			}
+			for (u, v) in [(ga, gb), (gb, gc), (gc, ga)] {
+				let edge = if u < v { (u, v) } else { (v, u) };
+				*edge_counts.entry(edge).or_insert(0) += 1;
+			}
+		}
+	}
+	edge_counts
+}
+
+#[allow(clippy::too_many_arguments)]
+fn collect_boundary_outward(
+	primitives: &mut [Primitive],
+	vertices: &[Vertex],
+	indices: &[u32],
+	group_of: &[usize],
+	group_count: usize,
+	first_vertex: usize,
+	end_vertex: usize,
+	edge_counts: &HashMap<(usize, usize), u32>,
+) -> Vec<Vec3> {
+	let mut boundary_outward = vec![Vec3::ZERO; group_count];
+	for primitive in primitives {
+		let base = primitive.base_vertex as usize;
+		let start = primitive.first_index as usize;
+		let end = start + primitive.index_count as usize;
+		let mut prim_open = false;
+
+		for &[i0, i1, i2] in indices[start..end].as_chunks::<3>().0 {
+			let va = base + i0 as usize;
+			let vb = base + i1 as usize;
+			let vc = base + i2 as usize;
+			if va < first_vertex
+				|| vb < first_vertex
+				|| vc < first_vertex
+				|| va >= end_vertex
+				|| vb >= end_vertex
+				|| vc >= end_vertex
+			{
+				continue;
+			}
+			let ga = group_of[va - first_vertex];
+			let gb = group_of[vb - first_vertex];
+			let gc = group_of[vc - first_vertex];
+			if ga == gb || gb == gc || gc == ga {
+				continue;
+			}
+			let verts = [(va, ga), (vb, gb), (vc, gc)];
+			for edge_idx in 0..3 {
+				let (v0, g0) = verts[edge_idx];
+				let (v1, g1) = verts[(edge_idx + 1) % 3];
+				let (v2, _) = verts[(edge_idx + 2) % 3];
+				let edge = if g0 < g1 { (g0, g1) } else { (g1, g0) };
+				if edge_counts.get(&edge).copied() != Some(1) {
+					continue;
+				}
+				prim_open = true;
+				let p0 = Vec3::from(vertices[v0].position);
+				let p1 = Vec3::from(vertices[v1].position);
+				let p2 = Vec3::from(vertices[v2].position);
+				let e = p1 - p0;
+				let len2 = e.length_squared();
+				if len2 > 1.0e-20 {
+					let to_opp = p2 - p0;
+					let perp = to_opp - e * (to_opp.dot(e) / len2);
+					let outward = (-perp).normalize_or_zero();
+					boundary_outward[g0] += outward;
+					boundary_outward[g1] += outward;
+				}
+			}
+		}
+
+		primitive.has_open_edges = prim_open;
+	}
+	boundary_outward
 }
 
 /// Reads one primitive's vertices and indices into the asset's shared

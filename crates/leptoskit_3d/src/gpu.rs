@@ -1017,19 +1017,23 @@ impl Shared {
 			&pipelines.outlines_solid
 		};
 		slot.get_or_init(|| {
-			[(false, false), (true, false), (false, true), (true, true)].map(
-				|(skinned, mirrored)| {
-					self.outline_pipeline(
-						device,
-						pipelines.format,
-						pipelines.multisample,
-						pipelines.stencil,
-						skinned,
-						mirrored,
-						occluded,
-					)
-				},
-			)
+			[
+				(false, wgpu::FrontFace::Ccw),
+				(true, wgpu::FrontFace::Ccw),
+				(false, wgpu::FrontFace::Cw),
+				(true, wgpu::FrontFace::Cw),
+			]
+			.map(|(skinned, front_face)| {
+				self.outline_pipeline(
+					device,
+					pipelines.format,
+					pipelines.multisample,
+					pipelines.stencil,
+					skinned,
+					front_face,
+					occluded,
+				)
+			})
 		})
 	}
 
@@ -1043,7 +1047,7 @@ impl Shared {
 		multisample: wgpu::MultisampleState,
 		stencil: bool,
 		skinned: bool,
-		mirrored: bool,
+		front_face: wgpu::FrontFace,
 		occluded: bool,
 	) -> wgpu::RenderPipeline {
 		let vertex = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3];
@@ -1088,11 +1092,7 @@ impl Shared {
 			},
 			primitive: wgpu::PrimitiveState {
 				topology: wgpu::PrimitiveTopology::TriangleList,
-				front_face: if mirrored {
-					wgpu::FrontFace::Cw
-				} else {
-					wgpu::FrontFace::Ccw
-				},
+				front_face,
 				cull_mode: Some(wgpu::Face::Front),
 				..wgpu::PrimitiveState::default()
 			},

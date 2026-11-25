@@ -35,8 +35,8 @@ pub const EVENTS_MAGIC: &[u8; 4] = b"LK3E";
 /// [`Op::SetPrint`], `29`: [`Op::SetLight`] with `camera_space: true`) keep
 /// `VERSION = 1`: batches that avoid them encode byte for byte as before and
 /// remain compatible with older v1 hosts, while any batch containing tags
-/// `23..=29` requires a matching host/renderer version (an older v1 host rejects
-/// the whole batch with `DecodeError("an unknown op")`).
+/// `23..=29` requires a matching host/renderer version (an older v1 host
+/// rejects the whole batch with `DecodeError("an unknown op")`).
 pub const VERSION: u8 = 1;
 
 macro_rules! id {

@@ -929,111 +929,117 @@ fn eases_and_phases_are_new_ops_that_leave_old_plays_alone() {
 	assert_eq!(bytes.last(), Some(&1));
 }
 
+fn assert_print_sanitized(value: f32) {
+	let unit = |v: f32| (0.0..=1.0).contains(&v);
+	let Op::SetStyle(style) = Op::SetStyle(Style {
+		shading: Shading::Print(Print {
+			t_lit: value,
+			t_deep: -value,
+			t_cross: value,
+			rim: value,
+			paper: [value; 3],
+			knockout_width: value,
+			hatch_per_m: value,
+			hatch_gain: value,
+			hatch_max: value,
+			cross_duty: value,
+			fade_px: [value, -value],
+			side_heavy: value,
+			side_drop: value,
+			side_from: value,
+			side_to: -value,
+			wobble_frequency: value,
+		}),
+		ink: Some(Ink::default()),
+	})
+	.sanitized() else {
+		unreachable!()
+	};
+	let Shading::Print(print) = style.shading else {
+		unreachable!()
+	};
+	assert!((-1.0..=1.0).contains(&print.t_lit), "{print:?}");
+	assert!((-1.0..=print.t_lit).contains(&print.t_deep), "{print:?}");
+	assert!((-2.0..=print.t_deep).contains(&print.t_cross), "{print:?}");
+	assert!(unit(print.rim), "{print:?}");
+	assert!(print.paper.into_iter().all(unit), "{print:?}");
+	assert!(
+		(0.0..=MAX_INK_WIDTH).contains(&print.knockout_width),
+		"{print:?}"
+	);
+	assert!(
+		(0.0..=MAX_HATCH_PER_M).contains(&print.hatch_per_m),
+		"{print:?}"
+	);
+	assert!(
+		(0.0..=MAX_HATCH_GAIN).contains(&print.hatch_gain),
+		"{print:?}"
+	);
+	assert!(unit(print.hatch_max) && unit(print.cross_duty), "{print:?}");
+	assert!(
+		(MIN_FADE_PX..=MAX_FADE_PX).contains(&print.fade_px[0])
+			&& (print.fade_px[0]..=MAX_FADE_PX).contains(&print.fade_px[1]),
+		"{print:?}"
+	);
+	assert!(
+		(0.0..=MAX_SIDE_WEIGHT).contains(&print.side_heavy)
+			&& (0.0..=MAX_SIDE_WEIGHT).contains(&print.side_drop),
+		"{print:?}"
+	);
+	assert!(
+		(-1.0..=1.0).contains(&print.side_from) && (print.side_from..=1.0).contains(&print.side_to),
+		"{print:?}"
+	);
+	assert!(
+		(0.0..=MAX_WOBBLE_FREQUENCY).contains(&print.wobble_frequency),
+		"{print:?}"
+	);
+}
+
+fn assert_print_override_sanitized(value: f32) {
+	let unit = |v: f32| (0.0..=1.0).contains(&v);
+	let Op::SetPrint { target, print, .. } = (Op::SetPrint {
+		node: NodeId(1),
+		target: PrintTarget::Material("é".repeat(MAX_NAME_BYTES)),
+		print: PrintOverride {
+			lit: Some([value; 3]),
+			shade: Some([value; 3]),
+			deep: Some([value; 3]),
+			spot: Some([value; 3]),
+			mode: Some(PrintMode::Flat),
+			hatch_min: Some(value),
+			hatch_per_m: Some(value),
+			cross_hatch: Some(true),
+			specular: Some(value),
+			rim: Some(true),
+			ink_weight: Some(value),
+			knockout: Some(false),
+			boil_step: Some(254),
+		},
+	})
+	.sanitized() else {
+		unreachable!()
+	};
+	let PrintTarget::Material(material) = target else {
+		unreachable!()
+	};
+	assert!(material.len() <= MAX_NAME_BYTES);
+	assert!(print.lit.unwrap().into_iter().all(unit));
+	assert!(print.shade.unwrap().into_iter().all(unit));
+	assert!(print.deep.unwrap().into_iter().all(unit));
+	assert!(print.spot.unwrap().into_iter().all(unit));
+	assert!(unit(print.hatch_min.unwrap()));
+	assert!((0.0..=MAX_HATCH_PER_M).contains(&print.hatch_per_m.unwrap()));
+	assert!(unit(print.specular.unwrap()));
+	assert!((0.0..=MAX_INK_WEIGHT).contains(&print.ink_weight.unwrap()));
+	assert_eq!(print.boil_step, Some(2));
+}
+
 #[test]
 fn sanitizing_bounds_print_and_camera_light() {
-	let unit = |value: f32| (0.0..=1.0).contains(&value);
-
 	for value in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 1.0e30, -1.0e30] {
-		let Op::SetStyle(style) = Op::SetStyle(Style {
-			shading: Shading::Print(Print {
-				t_lit: value,
-				t_deep: -value,
-				t_cross: value,
-				rim: value,
-				paper: [value; 3],
-				knockout_width: value,
-				hatch_per_m: value,
-				hatch_gain: value,
-				hatch_max: value,
-				cross_duty: value,
-				fade_px: [value, -value],
-				side_heavy: value,
-				side_drop: value,
-				side_from: value,
-				side_to: -value,
-				wobble_frequency: value,
-			}),
-			ink: Some(Ink::default()),
-		})
-		.sanitized() else {
-			unreachable!()
-		};
-		let Shading::Print(print) = style.shading else {
-			unreachable!()
-		};
-		assert!((-1.0..=1.0).contains(&print.t_lit), "{print:?}");
-		assert!((-1.0..=print.t_lit).contains(&print.t_deep), "{print:?}");
-		assert!((-2.0..=print.t_deep).contains(&print.t_cross), "{print:?}");
-		assert!(unit(print.rim), "{print:?}");
-		assert!(print.paper.into_iter().all(unit), "{print:?}");
-		assert!(
-			(0.0..=MAX_INK_WIDTH).contains(&print.knockout_width),
-			"{print:?}"
-		);
-		assert!(
-			(0.0..=MAX_HATCH_PER_M).contains(&print.hatch_per_m),
-			"{print:?}"
-		);
-		assert!(
-			(0.0..=MAX_HATCH_GAIN).contains(&print.hatch_gain),
-			"{print:?}"
-		);
-		assert!(unit(print.hatch_max) && unit(print.cross_duty), "{print:?}");
-		assert!(
-			(MIN_FADE_PX..=MAX_FADE_PX).contains(&print.fade_px[0])
-				&& (print.fade_px[0]..=MAX_FADE_PX).contains(&print.fade_px[1]),
-			"{print:?}"
-		);
-		assert!(
-			(0.0..=MAX_SIDE_WEIGHT).contains(&print.side_heavy)
-				&& (0.0..=MAX_SIDE_WEIGHT).contains(&print.side_drop),
-			"{print:?}"
-		);
-		assert!(
-			(-1.0..=1.0).contains(&print.side_from)
-				&& (print.side_from..=1.0).contains(&print.side_to),
-			"{print:?}"
-		);
-		assert!(
-			(0.0..=MAX_WOBBLE_FREQUENCY).contains(&print.wobble_frequency),
-			"{print:?}"
-		);
-
-		let Op::SetPrint { target, print, .. } = (Op::SetPrint {
-			node: NodeId(1),
-			target: PrintTarget::Material("é".repeat(MAX_NAME_BYTES)),
-			print: PrintOverride {
-				lit: Some([value; 3]),
-				shade: Some([value; 3]),
-				deep: Some([value; 3]),
-				spot: Some([value; 3]),
-				mode: Some(PrintMode::Flat),
-				hatch_min: Some(value),
-				hatch_per_m: Some(value),
-				cross_hatch: Some(true),
-				specular: Some(value),
-				rim: Some(true),
-				ink_weight: Some(value),
-				knockout: Some(false),
-				boil_step: Some(254),
-			},
-		})
-		.sanitized() else {
-			unreachable!()
-		};
-		let PrintTarget::Material(material) = target else {
-			unreachable!()
-		};
-		assert!(material.len() <= MAX_NAME_BYTES);
-		assert!(print.lit.unwrap().into_iter().all(unit));
-		assert!(print.shade.unwrap().into_iter().all(unit));
-		assert!(print.deep.unwrap().into_iter().all(unit));
-		assert!(print.spot.unwrap().into_iter().all(unit));
-		assert!(unit(print.hatch_min.unwrap()));
-		assert!((0.0..=MAX_HATCH_PER_M).contains(&print.hatch_per_m.unwrap()));
-		assert!(unit(print.specular.unwrap()));
-		assert!((0.0..=MAX_INK_WEIGHT).contains(&print.ink_weight.unwrap()));
-		assert_eq!(print.boil_step, Some(2));
+		assert_print_sanitized(value);
+		assert_print_override_sanitized(value);
 
 		let Op::SetLight(light) = Op::SetLight(Light {
 			direction: [value; 3],

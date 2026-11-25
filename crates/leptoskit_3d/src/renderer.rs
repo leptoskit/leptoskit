@@ -452,6 +452,15 @@ fn linear_to_srgb(value: f32) -> f32 {
 }
 
 /// A mesh primitive ready to draw, before it is merged with others like it.
+/// Per-draw settings for the relief-print paper knockout hull.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct KnockoutDraw {
+	/// Whether the primitive has open boundary edges (double-sided knockout).
+	open_edges: bool,
+	/// Whether its material uses `AlphaMode::Mask`.
+	masked: bool,
+}
+
 struct Item {
 	variant: Variant,
 	asset: usize,
@@ -463,12 +472,8 @@ struct Item {
 	skin_offset: Option<u64>,
 	/// Whether it draws an ink outline.
 	outlined: bool,
-	/// Whether it draws a relief-print paper knockout hull.
-	knockout: bool,
-	/// Whether the primitive has open boundary edges (double-sided knockout).
-	open_edges: bool,
-	/// Whether its material uses `AlphaMode::Mask`.
-	masked: bool,
+	/// Relief-print paper knockout settings when this item draws one.
+	knockout: Option<KnockoutDraw>,
 	/// Per-figure stencil reference (`1..=255`) when knockout is active, `0`
 	/// otherwise.
 	stencil_ref: u8,
@@ -491,13 +496,28 @@ struct Draw {
 	/// Whether any of its instances draws an ink outline; the others have
 	/// no weight, so the outline shader drops them.
 	outlined: bool,
-	/// Whether any of its instances draws a paper knockout hull.
-	knockout: bool,
-	open_edges: bool,
-	masked: bool,
+	/// Relief-print paper knockout settings when any instance draws one.
+	knockout: Option<KnockoutDraw>,
 	stencil_ref: u8,
 	morphed: bool,
 	instances: std::ops::Range<u32>,
+}
+
+/// Shared resources and toggles passed into each render pass of one frame.
+struct FramePass<'a> {
+	views: &'a [ViewParams],
+	pipelines: &'a Pipelines,
+	outlines: Option<&'a [wgpu::RenderPipeline; 4]>,
+	knockout_solid: Option<&'a [wgpu::RenderPipeline; 6]>,
+	knockout_discard: Option<&'a [wgpu::RenderPipeline; 6]>,
+	globals: &'a wgpu::BindGroup,
+	background: Option<&'a wgpu::BindGroup>,
+	assets: &'a [Arc<GpuAsset>],
+	draws: &'a [Draw],
+	clear: wgpu::Color,
+	shadow_count: u32,
+	use_stencil: bool,
+	occluded: bool,
 }
 
 /// How large things look in one view: its view matrix, its focal length in
@@ -926,7 +946,7 @@ impl Renderer {
 			Shading::Print(print) if print.knockout_width > 0.0
 		) && draws
 			.iter()
-			.any(|draw| draw.knockout && !draw.variant.blend);
+			.any(|draw| draw.knockout.is_some() && !draw.variant.blend);
 		let samples = self.gpu.samples(target.format, use_stencil);
 		let pipelines =
 			self.shared
@@ -944,15 +964,15 @@ impl Renderer {
 			&& !occluded
 			&& draws
 				.iter()
-				.any(|draw| draw.knockout && !draw.variant.blend && !draw.masked))
+				.any(|draw| !draw.variant.blend && draw.knockout.is_some_and(|ko| !ko.masked)))
 		.then(|| {
 			self.shared
 				.knockout_pipelines(self.gpu.device(), &pipelines, false)
 		});
 		let knockout_discard = (use_stencil
-			&& draws
-				.iter()
-				.any(|draw| draw.knockout && !draw.variant.blend && (occluded || draw.masked)))
+			&& draws.iter().any(|draw| {
+				!draw.variant.blend && draw.knockout.is_some_and(|ko| occluded || ko.masked)
+			}))
 		.then(|| {
 			self.shared
 				.knockout_pipelines(self.gpu.device(), &pipelines, true)
@@ -980,95 +1000,24 @@ impl Renderer {
 			}
 		};
 
+		let frame = FramePass {
+			views: &views,
+			pipelines: &pipelines,
+			outlines,
+			knockout_solid,
+			knockout_discard,
+			globals: &globals,
+			background: background.as_ref(),
+			assets: &assets,
+			draws: &draws,
+			clear,
+			shadow_count,
+			use_stencil,
+			occluded,
+		};
+
 		for (view, range) in passes {
-			let attachments = self
-				.attachments
-				.as_ref()
-				.expect("attachments were prepared");
-
-			let (color_view, resolve) = match &attachments.color {
-				Some(msaa) => (msaa, Some(view)),
-				None => (view, None),
-			};
-
-			let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-				label: Some("leptoskit_3d"),
-				color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-					view: color_view,
-					depth_slice: None,
-					resolve_target: resolve,
-					ops: wgpu::Operations {
-						load: wgpu::LoadOp::Clear(clear),
-						store: if resolve.is_some() {
-							wgpu::StoreOp::Discard
-						} else {
-							wgpu::StoreOp::Store
-						},
-					},
-				})],
-				depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-					view: &attachments.depth,
-					depth_ops: Some(wgpu::Operations {
-						load: wgpu::LoadOp::Clear(1.0),
-						store: wgpu::StoreOp::Discard,
-					}),
-					stencil_ops: use_stencil.then_some(wgpu::Operations {
-						load: wgpu::LoadOp::Clear(0),
-						store: wgpu::StoreOp::Discard,
-					}),
-				}),
-				..wgpu::RenderPassDescriptor::default()
-			});
-
-			for index in range {
-				let [x, y, w, h] = views[index].viewport;
-				pass.set_viewport(x, y, w, h, 0.0, 1.0);
-
-				if let Some(background) = &background {
-					pass.set_pipeline(&pipelines.background);
-					pass.set_bind_group(0, background, &[]);
-					pass.draw(0..3, 0..1);
-				}
-
-				let offset = (index as u64 * GLOBALS_STRIDE) as u32;
-				pass.set_bind_group(0, &globals, &[offset]);
-				self.draw_meshes(
-					&mut pass,
-					&pipelines,
-					&assets,
-					&draws,
-					use_stencil,
-					|draw| !draw.variant.blend,
-				);
-
-				// After the opaque meshes, so most of the hull fails the depth
-				// test early, and before anything blended.
-				if let Some(outlines) = outlines {
-					self.draw_outlines(&mut pass, outlines, &assets, &draws, use_stencil);
-				}
-
-				if use_stencil {
-					self.draw_knockout(
-						&mut pass,
-						knockout_solid,
-						knockout_discard,
-						occluded,
-						&assets,
-						&draws,
-					);
-				}
-
-				if shadow_count > 0
-					&& let Some(buffer) = &self.shadows.buffer
-				{
-					pass.set_pipeline(&pipelines.shadow);
-					pass.set_vertex_buffer(0, buffer.slice(..));
-					pass.draw(0..4, 0..shadow_count);
-				}
-				self.draw_meshes(&mut pass, &pipelines, &assets, &draws, false, |draw| {
-					draw.variant.blend
-				});
-			}
+			self.record_pass(&mut encoder, view, range, &frame);
 		}
 
 		self.gpu.queue().submit([encoder.finish()]);
@@ -1086,6 +1035,113 @@ impl Renderer {
 			outlines: outline_count,
 		};
 		Ok(self.stats)
+	}
+
+	fn record_pass(
+		&self,
+		encoder: &mut wgpu::CommandEncoder,
+		view: &wgpu::TextureView,
+		range: std::ops::Range<usize>,
+		frame: &FramePass<'_>,
+	) {
+		let attachments = self
+			.attachments
+			.as_ref()
+			.expect("attachments were prepared");
+		let (color_view, resolve) = match &attachments.color {
+			Some(msaa) => (msaa, Some(view)),
+			None => (view, None),
+		};
+
+		let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+			label: Some("leptoskit_3d"),
+			color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+				view: color_view,
+				depth_slice: None,
+				resolve_target: resolve,
+				ops: wgpu::Operations {
+					load: wgpu::LoadOp::Clear(frame.clear),
+					store: if resolve.is_some() {
+						wgpu::StoreOp::Discard
+					} else {
+						wgpu::StoreOp::Store
+					},
+				},
+			})],
+			depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+				view: &attachments.depth,
+				depth_ops: Some(wgpu::Operations {
+					load: wgpu::LoadOp::Clear(1.0),
+					store: wgpu::StoreOp::Discard,
+				}),
+				stencil_ops: frame.use_stencil.then_some(wgpu::Operations {
+					load: wgpu::LoadOp::Clear(0),
+					store: wgpu::StoreOp::Discard,
+				}),
+			}),
+			..wgpu::RenderPassDescriptor::default()
+		});
+
+		for index in range {
+			let [x, y, w, h] = frame.views[index].viewport;
+			pass.set_viewport(x, y, w, h, 0.0, 1.0);
+
+			if let Some(background) = frame.background {
+				pass.set_pipeline(&frame.pipelines.background);
+				pass.set_bind_group(0, background, &[]);
+				pass.draw(0..3, 0..1);
+			}
+
+			let offset = (index as u64 * GLOBALS_STRIDE) as u32;
+			pass.set_bind_group(0, frame.globals, &[offset]);
+			self.draw_meshes(
+				&mut pass,
+				frame.pipelines,
+				frame.assets,
+				frame.draws,
+				frame.use_stencil,
+				|draw| !draw.variant.blend,
+			);
+
+			// After the opaque meshes, so most of the hull fails the depth
+			// test early, and before anything blended.
+			if let Some(outlines) = frame.outlines {
+				self.draw_outlines(
+					&mut pass,
+					outlines,
+					frame.assets,
+					frame.draws,
+					frame.use_stencil,
+				);
+			}
+
+			if frame.use_stencil {
+				self.draw_knockout(
+					&mut pass,
+					frame.knockout_solid,
+					frame.knockout_discard,
+					frame.occluded,
+					frame.assets,
+					frame.draws,
+				);
+			}
+
+			if frame.shadow_count > 0
+				&& let Some(buffer) = &self.shadows.buffer
+			{
+				pass.set_pipeline(&frame.pipelines.shadow);
+				pass.set_vertex_buffer(0, buffer.slice(..));
+				pass.draw(0..4, 0..frame.shadow_count);
+			}
+			self.draw_meshes(
+				&mut pass,
+				frame.pipelines,
+				frame.assets,
+				frame.draws,
+				false,
+				|draw| draw.variant.blend,
+			);
+		}
 	}
 
 	fn views(&self, target: &RenderTarget<'_>) -> Result<Vec<ViewParams>, Error> {
@@ -1358,10 +1414,10 @@ impl Renderer {
 			let noise = match sight.ink {
 				Some(ink) => {
 					let part_seed = model.asset.seeds.get(index).copied().unwrap_or(0) ^ ink.seed;
-					let step = resolved
-						.boil_step
-						.map(|step| u64::from(step % 3))
-						.unwrap_or_else(|| boil_step(self.world.time, ink.boil) % 3);
+					let step = resolved.boil_step.map_or_else(
+						|| boil_step(self.world.time, ink.boil) % 3,
+						|step| u64::from(step % 3),
+					);
 					noise_offset(part_seed, step)
 				}
 				None => [0.0; 3],
@@ -1450,9 +1506,10 @@ impl Renderer {
 			vertex_offset: u64::from(primitive.base_vertex) * vertex_size,
 			ink_offset: u64::from(primitive.base_vertex) * ink_size,
 			outlined,
-			knockout,
-			open_edges: primitive.has_open_edges,
-			masked,
+			knockout: knockout.then_some(KnockoutDraw {
+				open_edges: primitive.has_open_edges,
+				masked,
+			}),
 			stencil_ref: if blend { 0 } else { part.stencil_ref },
 			skin_offset: primitive
 				.skin_base
@@ -1503,7 +1560,7 @@ impl Renderer {
 			{
 				last.instances.end += 1;
 				last.outlined |= item.outlined;
-				last.knockout |= item.knockout;
+				last.knockout = last.knockout.or(item.knockout);
 				continue;
 			}
 			draws.push(Draw {
@@ -1516,8 +1573,6 @@ impl Renderer {
 				ink_offset: item.ink_offset,
 				outlined: item.outlined,
 				knockout: item.knockout,
-				open_edges: item.open_edges,
-				masked: item.masked,
 				stencil_ref: item.stencil_ref,
 				skin_offset: item.skin_offset,
 				morphed: item.morphed,
@@ -1939,17 +1994,15 @@ impl Renderer {
 		let mut current_pipeline: Option<(bool, usize)> = None;
 		let mut current_ref: Option<u8> = None;
 
-		for draw in draws
-			.iter()
-			.filter(|draw| draw.knockout && !draw.variant.blend)
-		{
-			let use_discard = occluded || draw.masked;
-			let cull_slot = if draw.open_edges {
+		for draw in draws.iter().filter(|draw| !draw.variant.blend) {
+			let Some(ko) = draw.knockout else {
+				continue;
+			};
+			let use_discard = occluded || ko.masked;
+			let cull_slot = if ko.open_edges {
 				2
-			} else if draw.variant.mirrored {
-				1
 			} else {
-				0
+				usize::from(draw.variant.mirrored)
 			};
 			let slot = cull_slot * 2 + usize::from(draw.variant.skinned);
 
@@ -1967,7 +2020,7 @@ impl Renderer {
 			}
 
 			let asset = &assets[draw.asset];
-			let normals = if draw.open_edges {
+			let normals = if ko.open_edges {
 				asset.knockout.as_ref().unwrap_or(&asset.ink)
 			} else {
 				&asset.ink
@@ -2351,6 +2404,7 @@ mod tests {
 			frustums: Vec::new(),
 			eye: v.view,
 			ink: Some(Ink::default()),
+			print: None,
 			scales,
 			views: 1,
 		};
