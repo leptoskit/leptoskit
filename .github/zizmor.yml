@@ -33,6 +33,7 @@ rules:
       - harmonyos.yml
       - docs.yml
       - hosted-pilot.yml
+      - notifications-native.yml
       - publish.yml
       - release.yml
 
