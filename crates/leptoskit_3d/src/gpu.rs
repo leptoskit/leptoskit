@@ -308,13 +308,15 @@ const AUTO_BACKENDS: wgpu::Backends = if cfg!(target_arch = "wasm32") {
 	wgpu::Backends::VULKAN
 };
 
-/// A render pipeline's variant: how the mesh is skinned and blended, and
-/// whether back faces are culled.
+/// A render pipeline's variant: how the mesh is skinned and blended,
+/// whether back faces are culled, and whether its transform mirrors
+/// triangle winding (negative determinant).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub(crate) struct Variant {
 	pub skinned: bool,
 	pub blend: bool,
 	pub double_sided: bool,
+	pub mirrored: bool,
 }
 
 impl Variant {
@@ -323,12 +325,15 @@ impl Variant {
 		let flags = [false, true];
 		flags.into_iter().flat_map(move |skinned| {
 			flags.into_iter().flat_map(move |blend| {
-				flags.map(move |double_sided| {
-					Self {
-						skinned,
-						blend,
-						double_sided,
-					}
+				flags.into_iter().flat_map(move |double_sided| {
+					flags.map(move |mirrored| {
+						Self {
+							skinned,
+							blend,
+							double_sided,
+							mirrored,
+						}
+					})
 				})
 			})
 		})
@@ -371,9 +376,10 @@ pub(crate) struct Pipelines {
 	pub background: wgpu::RenderPipeline,
 	format: wgpu::TextureFormat,
 	multisample: wgpu::MultisampleState,
-	/// The ink outline's, static and skinned, compiled when a scene first
-	/// draws a line, so scenes without ink never build them.
-	outlines: OnceLock<[wgpu::RenderPipeline; 2]>,
+	/// The ink outline's pipelines (`[static, skinned]` for unmirrored then
+	/// mirrored transforms), compiled when a scene first draws a line, so
+	/// scenes without ink never build them.
+	outlines: OnceLock<[wgpu::RenderPipeline; 4]>,
 }
 
 /// The attributes of [`InstanceRecord`](crate::upload::InstanceRecord) that
@@ -851,7 +857,11 @@ impl Shared {
 			},
 			primitive: wgpu::PrimitiveState {
 				topology: wgpu::PrimitiveTopology::TriangleList,
-				front_face: wgpu::FrontFace::Ccw,
+				front_face: if variant.mirrored {
+					wgpu::FrontFace::Cw
+				} else {
+					wgpu::FrontFace::Ccw
+				},
 				cull_mode: (!variant.double_sided).then_some(wgpu::Face::Back),
 				..wgpu::PrimitiveState::default()
 			},
@@ -873,17 +883,26 @@ impl Shared {
 		})
 	}
 
-	/// The outline pipelines for `pipelines`' format, `[static, skinned]`,
-	/// compiled on first use.
+	/// The outline pipelines for `pipelines`' format, indexed by
+	/// `usize::from(skinned) + usize::from(mirrored) * 2`, compiled on first
+	/// use.
 	pub fn outline_pipelines<'p>(
 		&self,
 		device: &wgpu::Device,
 		pipelines: &'p Pipelines,
-	) -> &'p [wgpu::RenderPipeline; 2] {
+	) -> &'p [wgpu::RenderPipeline; 4] {
 		pipelines.outlines.get_or_init(|| {
-			[false, true].map(|skinned| {
-				self.outline_pipeline(device, pipelines.format, pipelines.multisample, skinned)
-			})
+			[(false, false), (true, false), (false, true), (true, true)].map(
+				|(skinned, mirrored)| {
+					self.outline_pipeline(
+						device,
+						pipelines.format,
+						pipelines.multisample,
+						skinned,
+						mirrored,
+					)
+				},
+			)
 		})
 	}
 
@@ -895,6 +914,7 @@ impl Shared {
 		format: wgpu::TextureFormat,
 		multisample: wgpu::MultisampleState,
 		skinned: bool,
+		mirrored: bool,
 	) -> wgpu::RenderPipeline {
 		let vertex = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3];
 		let ink = wgpu::vertex_attr_array![15 => Snorm8x4];
@@ -938,7 +958,11 @@ impl Shared {
 			},
 			primitive: wgpu::PrimitiveState {
 				topology: wgpu::PrimitiveTopology::TriangleList,
-				front_face: wgpu::FrontFace::Ccw,
+				front_face: if mirrored {
+					wgpu::FrontFace::Cw
+				} else {
+					wgpu::FrontFace::Ccw
+				},
 				cull_mode: Some(wgpu::Face::Front),
 				..wgpu::PrimitiveState::default()
 			},

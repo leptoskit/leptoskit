@@ -1058,6 +1058,15 @@ impl Renderer {
 				0.0
 			},
 		);
+		let mirrored = match (&model.skins[index], skinned) {
+			(Some((matrices, _)), true) => {
+				matrices.first().map_or_else(
+					|| model.worlds[index].determinant() < 0.0,
+					|matrix| matrix.determinant() < 0.0,
+				)
+			}
+			_ => model.worlds[index].determinant() < 0.0,
+		};
 		let vertex_size = size_of::<crate::asset::Vertex>() as u64;
 		let ink_size = size_of::<crate::asset::InkVertex>() as u64;
 		let skin_size = size_of::<crate::asset::SkinVertex>() as u64;
@@ -1066,6 +1075,7 @@ impl Renderer {
 				skinned,
 				blend,
 				double_sided: material.double_sided,
+				mirrored,
 			},
 			asset: part.slot,
 			material: primitive.material,
@@ -1471,24 +1481,25 @@ impl Renderer {
 	fn draw_outlines(
 		&self,
 		pass: &mut wgpu::RenderPass<'_>,
-		pipelines: &[wgpu::RenderPipeline; 2],
+		pipelines: &[wgpu::RenderPipeline; 4],
 		assets: &[Arc<GpuAsset>],
 		draws: &[Draw],
 	) {
 		let Some(instances) = &self.instances.buffer else {
 			return;
 		};
-		let mut current: Option<bool> = None;
+		let mut current: Option<(bool, bool)> = None;
 
 		for draw in draws
 			.iter()
 			.filter(|draw| draw.outlined && !draw.variant.blend)
 		{
-			let skinned = draw.variant.skinned;
+			let key = (draw.variant.skinned, draw.variant.mirrored);
 
-			if current != Some(skinned) {
-				pass.set_pipeline(&pipelines[usize::from(skinned)]);
-				current = Some(skinned);
+			if current != Some(key) {
+				let slot = usize::from(key.0) + usize::from(key.1) * 2;
+				pass.set_pipeline(&pipelines[slot]);
+				current = Some(key);
 			}
 
 			let asset = &assets[draw.asset];

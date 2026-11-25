@@ -194,6 +194,15 @@ fn finish(world: vec4<f32>, normal: vec3<f32>, vertex: Vertex, instance: Instanc
 	return out;
 }
 
+// The inverse transpose of `m`, up to positive scale, by cofactors;
+// negated for mirrored transforms (negative determinant) so outward
+// normals stay outward.
+fn cofactor_matrix(m: mat3x3<f32>) -> mat3x3<f32> {
+	let c0 = cross(m[1], m[2]);
+	let sign = select(1.0, -1.0, dot(m[0], c0) < 0.0);
+	return mat3x3<f32>(c0 * sign, cross(m[2], m[0]) * sign, cross(m[0], m[1]) * sign);
+}
+
 @vertex
 fn vs_static(vertex: Vertex, instance: Instance) -> Varyings {
 	let model = mat4x4<f32>(instance.model_0, instance.model_1, instance.model_2, instance.model_3);
@@ -201,9 +210,8 @@ fn vs_static(vertex: Vertex, instance: Instance) -> Varyings {
 	var normal = vertex.normal;
 	morph(instance.params.y, vertex.index, &position, &normal);
 	let world = model * vec4<f32>(position, 1.0);
-	// The inverse transpose of the model's 3×3, up to scale, by cofactors.
 	let m = mat3x3<f32>(model[0].xyz, model[1].xyz, model[2].xyz);
-	let cofactor = mat3x3<f32>(cross(m[1], m[2]), cross(m[2], m[0]), cross(m[0], m[1]));
+	let cofactor = cofactor_matrix(m);
 	return finish(world, normalize(cofactor * normal), vertex, instance);
 }
 
@@ -219,7 +227,7 @@ fn vs_skinned(vertex: Vertex, skin: Skin, instance: Instance) -> Varyings {
 		+ joint(first, skin.joints.w) * skin.weights.w;
 	let world = skinning * vec4<f32>(position, 1.0);
 	let m = mat3x3<f32>(skinning[0].xyz, skinning[1].xyz, skinning[2].xyz);
-	let cofactor = mat3x3<f32>(cross(m[1], m[2]), cross(m[2], m[0]), cross(m[0], m[1]));
+	let cofactor = cofactor_matrix(m);
 	return finish(world, normalize(cofactor * normal), vertex, instance);
 }
 
@@ -539,7 +547,7 @@ struct OutlineVaryings {
 // The outline normal with the morph targets' change of normal added, in
 // the space `transform`'s cofactors map to.
 fn outline_normal(transform: mat3x3<f32>, welded: vec3<f32>, normal: vec3<f32>, rest: vec3<f32>) -> vec3<f32> {
-	let cofactor = mat3x3<f32>(cross(transform[1], transform[2]), cross(transform[2], transform[0]), cross(transform[0], transform[1]));
+	let cofactor = cofactor_matrix(transform);
 	let turned = cofactor * (welded + normal - rest);
 	let length_squared = dot(turned, turned);
 	// A quantized mesh's tiny scale makes the cofactors tiny too, so only an

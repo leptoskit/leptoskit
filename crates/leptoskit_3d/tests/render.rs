@@ -1598,3 +1598,28 @@ fn alpha_mask_cutout_is_not_filled_by_outline() {
 	);
 	assert_eq!(renderer.stats().outlines, 0);
 }
+
+#[test]
+fn mirrored_negative_scale_keeps_outline() {
+	let Some(gpu) = gpu() else { return };
+	let mut renderer = lit_sphere(gpu, None);
+	renderer.world_mut().apply([
+		Op::SetTransform {
+			node: NodeId(1),
+			transform: Transform {
+				scale: [-2.0, 2.0, 2.0],
+				..Transform::IDENTITY
+			},
+		},
+		style(Shading::Pbr, Some(red_ink(3.0))),
+	]);
+	let image = draw(&mut renderer);
+	let runs = ink_runs(&image, 32);
+	assert_eq!(
+		runs.len(),
+		2,
+		"mirrored sphere lost its outline: runs={runs:?}, total ink={}",
+		ink_count(&image)
+	);
+	assert!(!is_ink(image.at(32, 32)), "center must be the lit sphere");
+}
