@@ -494,16 +494,14 @@ fn collect_sync_signals() -> BrowserSignals {
 	use wasm_bindgen::JsValue;
 
 	let global = js_sys::global();
-	let has_browser_namespace = Reflect::get(&global, &JsValue::from_str("browser"))
-		.ok()
-		.is_some_and(|value| {
+	let has_browser_namespace =
+		Reflect::get(&global, &JsValue::from_str("browser")).is_ok_and(|value| {
 			value.is_object()
 				&& Reflect::get(&value, &JsValue::from_str("runtime"))
 					.is_ok_and(|runtime| runtime.is_object())
 		});
-	let has_chrome_namespace = Reflect::get(&global, &JsValue::from_str("chrome"))
-		.ok()
-		.is_some_and(|value| {
+	let has_chrome_namespace =
+		Reflect::get(&global, &JsValue::from_str("chrome")).is_ok_and(|value| {
 			value.is_object()
 				&& Reflect::get(&value, &JsValue::from_str("runtime"))
 					.is_ok_and(|runtime| runtime.is_object())
@@ -527,9 +525,7 @@ fn collect_sync_signals() -> BrowserSignals {
 			.as_string()
 	});
 	let has_brave = navigator.as_ref().is_some_and(|nav| {
-		Reflect::get(nav, &JsValue::from_str("brave"))
-			.ok()
-			.is_some_and(|value| value.is_object())
+		Reflect::get(nav, &JsValue::from_str("brave")).is_ok_and(|value| value.is_object())
 	});
 
 	let mut ua_brands = Vec::new();

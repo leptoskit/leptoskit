@@ -266,8 +266,10 @@ mod tests {
 		let n1 = yoga.create_node();
 		let mut styled = NativeProps::text("hello \"world\"");
 		styled.color = Some(Color(0x1122_33FF));
-		let mut motion_only = NativeProps::default();
-		motion_only.motion = Some(Box::default());
+		let motion_only = NativeProps {
+			motion: Some(Box::default()),
+			..NativeProps::default()
+		};
 
 		let cases = vec![
 			Mutation::Delete { id: n0 },

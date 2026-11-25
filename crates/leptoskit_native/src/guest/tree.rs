@@ -499,15 +499,14 @@ impl Tree {
 			self.evict_subtree(old_id);
 		}
 
-		let id = match reused {
-			Some(id) => id,
-			None => {
-				self.next_id = self
-					.next_id
-					.checked_add(1)
-					.expect("guest node ids exhausted");
-				self.next_id
-			}
+		let id = if let Some(id) = reused {
+			id
+		} else {
+			self.next_id = self
+				.next_id
+				.checked_add(1)
+				.expect("guest node ids exhausted");
+			self.next_id
 		};
 		self.order.push(id);
 		let op_index = self.build_ops.len();
@@ -627,15 +626,14 @@ impl Tree {
 			.and_then(|id| old.nodes.get(&id).map(|node| (id, node)))
 			.filter(|(_, node)| node.element.kind == element.kind);
 		let is_new = previous.is_none();
-		let id = match previous {
-			Some((id, _)) => id,
-			None => {
-				self.next_id = self
-					.next_id
-					.checked_add(1)
-					.expect("guest node ids exhausted");
-				self.next_id
-			}
+		let id = if let Some((id, _)) = previous {
+			id
+		} else {
+			self.next_id = self
+				.next_id
+				.checked_add(1)
+				.expect("guest node ids exhausted");
+			self.next_id
 		};
 		self.order.push(id);
 		let op_index = self.build_ops.len();
