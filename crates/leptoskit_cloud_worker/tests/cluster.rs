@@ -257,6 +257,7 @@ async fn a_release_outside_the_operators_bounds_is_refused() {
 		Bounds {
 			runtime_class: Some("kata".to_owned()),
 			database: None,
+			notifications: None,
 		},
 		&directory,
 	);
