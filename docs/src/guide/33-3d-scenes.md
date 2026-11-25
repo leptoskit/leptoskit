@@ -126,4 +126,6 @@ Native apps draw scenes in their own host, never in the app's Wasm code, so a bu
 
 A scene may hold 4,096 nodes and refer to 64 models; an app may hold 16 scenes. A model may be 128 MiB, 4 million vertices, and 16,384 nodes, with 64 morph targets per mesh, 256 joints per skin, and textures up to 4,096 pixels a side. Numbers in ops are bounded to finite, sensible ranges, and model paths must stay inside the app's assets.
 
+Wire format `VERSION = 1` keeps older batches byte-for-byte compatible, while `set_style`, `set_ink`, `ease_transform`, and `play` with `fade_easing` or `phase` use additive v1 op tags (`23..=26`) that require a matching host/renderer version (an older v1 host rejects any batch containing them).
+
 Not supported yet: ink lines along open edges and around alpha-masked or blended parts, shadows cast onto other models, more than one light, image-based lighting from the camera, textures other than PNG and JPEG, a different `KHR_texture_transform` for each texture of one material, texture coordinates beyond the first set, and stereo through multiview.

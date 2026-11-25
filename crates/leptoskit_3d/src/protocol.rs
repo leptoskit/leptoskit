@@ -28,6 +28,13 @@ pub const OPS_MAGIC: &[u8; 4] = b"LK3D";
 /// The first bytes of an encoded batch of events.
 pub const EVENTS_MAGIC: &[u8; 4] = b"LK3E";
 /// The version of the binary form this crate writes and reads.
+///
+/// Additive op tags (`23`: [`Op::SetStyle`], `24`: [`Op::SetInk`], `25`:
+/// [`Op::EaseTransform`], `26`: [`Op::Play`] with non-default `fade_easing` or
+/// `phase`) keep `VERSION = 1`: batches that avoid them encode byte for byte as
+/// before and remain compatible with older v1 hosts, while any batch containing
+/// tags `23..=26` requires a matching host/renderer version (an older v1 host
+/// rejects the whole batch with `DecodeError("an unknown op")`).
 pub const VERSION: u8 = 1;
 
 macro_rules! id {
