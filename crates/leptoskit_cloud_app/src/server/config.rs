@@ -110,8 +110,11 @@ pub const S3_PATH_STYLE: &str = "LEPTOSKIT_CLOUD_S3_PATH_STYLE";
 /// `false` to disable `x-amz-checksum-sha256` / `x-amz-checksum-mode` headers
 /// for S3-compatible gateways that reject checksum headers. Defaults to `true`.
 pub const S3_CHECKSUM_HEADERS: &str = "LEPTOSKIT_CLOUD_S3_CHECKSUM_HEADERS";
-/// `false` on secondary control-plane replicas so only one replica runs the
-/// background sweeper loop. Defaults to `true`.
+/// `false` on a control-plane replica that should never run the background
+/// sweeper loop, which takes expired leases back and deletes expired archives
+/// and logs. Defaults to `true`: every replica of a Deployment gets the same
+/// value, and on Postgres the sweeper's advisory lock lets only one replica
+/// sweep at a time.
 pub const SWEEPER: &str = "LEPTOSKIT_CLOUD_SWEEPER";
 /// Optional email address to idempotently bootstrap as an operator during
 /// `migrate` or `serve` without requiring interactive email sign-in first.

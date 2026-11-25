@@ -493,3 +493,46 @@ fn full_stack_emits_control_plane_workers_and_ordered_up_plan() {
 	assert!(pos("deployment/control") < pos("60-workers-"));
 	assert!(pos("60-workers-") < pos("deployment/cluster-worker"));
 }
+
+#[test]
+fn every_control_plane_replica_runs_the_sweeper() {
+	// A Deployment hands its pod template's environment to every replica, so
+	// the replica count can't choose which of them runs the sweeper. Each one
+	// is told to run it, and the sweeper's advisory lock lets one sweep at a
+	// time.
+	let rendered: Vec<(u64, Option<String>)> = [1_u16, 2, 3]
+		.into_iter()
+		.map(|replicas| {
+			let mut config =
+				PlatformConfig::parse(include_str!("../examples/full-stack.toml")).unwrap();
+			config.control_plane.as_mut().unwrap().replicas = replicas;
+			let docs: Vec<Value> = addons::generate(&config)
+				.unwrap()
+				.values()
+				.map(|content| serde_json::from_str(content).unwrap())
+				.collect();
+			let control = docs
+				.iter()
+				.find(|d| d["kind"] == "Deployment" && d["metadata"]["name"] == "control")
+				.expect("the control Deployment");
+			let env = control["spec"]["template"]["spec"]["containers"][0]["env"]
+				.as_array()
+				.unwrap();
+			(
+				control["spec"]["replicas"].as_u64().unwrap(),
+				env.iter()
+					.find(|entry| entry["name"] == "LEPTOSKIT_CLOUD_SWEEPER")
+					.and_then(|entry| entry["value"].as_str())
+					.map(str::to_owned),
+			)
+		})
+		.collect();
+	assert_eq!(
+		rendered,
+		[
+			(1, Some("true".to_owned())),
+			(2, Some("true".to_owned())),
+			(3, Some("true".to_owned())),
+		]
+	);
+}

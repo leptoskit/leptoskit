@@ -190,9 +190,10 @@ pub struct ShippingSettings {
 	/// The most bytes one backup's dump may be. A worker is told it, and a
 	/// dump a worker says is larger is a backup that failed.
 	pub backup_cap: u64,
-	/// Whether this replica runs the background sweeper loop. Set to `false` on
-	/// secondary replicas in multi-replica deployments to avoid redundant S3
-	/// deletes and Stripe polling.
+	/// Whether this replica runs the background sweeper loop. Leave it on for
+	/// every replica: on Postgres the sweeper's advisory lock lets only one
+	/// replica sweep at a time. `false` is for a replica that should never
+	/// sweep.
 	pub run_sweeper: bool,
 }
 
