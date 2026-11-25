@@ -1521,3 +1521,54 @@ fn stereo_views_ink_each_eye() {
 		"one outline draw for both eyes"
 	);
 }
+
+/// A single lit quad at z = 0 facing -z (back-facing to a camera at +z),
+/// double-sided, with optional `COLOR_1` red weight and alpha mode.
+fn back_facing_quad(color: [f32; 4], alpha_mode: &str, ink_red: Option<f32>) -> Vec<u8> {
+	let mut builder = fixture::Builder::default();
+	// Wound clockwise when viewed from +z (so outward normal is -z, front face
+	// away from camera).
+	let positions: Vec<f32> = vec![
+		-0.5, -0.5, 0.0, -0.5, 0.5, 0.0, 0.5, 0.5, 0.0, 0.5, -0.5, 0.0,
+	];
+	let normals: Vec<f32> = vec![
+		0.0, 0.0, -1.0, 0.0, 0.0, -1.0, 0.0, 0.0, -1.0, 0.0, 0.0, -1.0,
+	];
+	let indices: Vec<u16> = vec![0, 1, 2, 0, 2, 3];
+	let position = builder.floats(&positions, 3, true);
+	let normal = builder.floats(&normals, 3, false);
+	let index = builder.u16s(&indices, 1);
+	let color_1 = ink_red.map_or(String::new(), |red| {
+		let values: Vec<f32> = (0..4).flat_map(|_| [red, 0.0, 0.0, 1.0]).collect();
+		format!(r#","COLOR_1":{}"#, builder.floats(&values, 4, false))
+	});
+	let json = format!(
+		r#""asset":{{"version":"2.0"}},
+"scenes":[{{"nodes":[0]}}],
+"nodes":[{{"name":"quad","mesh":0}}],
+"meshes":[{{"primitives":[{{"attributes":{{"POSITION":{position},"NORMAL":{normal}{color_1}}},"indices":{index},"material":0}}]}}],
+"materials":[{{"name":"mat","pbrMetallicRoughness":{{"baseColorFactor":{color:?},"metallicFactor":0,"roughnessFactor":0.7}},"alphaMode":"{alpha_mode}","alphaCutoff":0.5,"doubleSided":true}}]"#
+	);
+	builder.glb(&json)
+}
+
+#[test]
+fn double_sided_zero_weight_does_not_paint_solid_ink() {
+	let Some(gpu) = gpu() else { return };
+	let mut renderer = renderer(gpu);
+	spawn(
+		&mut renderer,
+		1,
+		1,
+		&back_facing_quad([0.5, 0.5, 0.5, 1.0], "OPAQUE", Some(0.0)),
+	);
+	renderer
+		.world_mut()
+		.apply([style(Shading::Pbr, Some(red_ink(3.0)))]);
+	let image = draw(&mut renderer);
+	assert!(
+		!is_ink(image.at(32, 32)),
+		"center of zero-weight double-sided quad painted ink: {:?}",
+		image.at(32, 32)
+	);
+}

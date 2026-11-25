@@ -942,7 +942,18 @@ impl Shared {
 				cull_mode: Some(wgpu::Face::Front),
 				..wgpu::PrimitiveState::default()
 			},
-			depth_stencil: Some(depth_state(true, wgpu::CompareFunction::LessEqual)),
+			// Strict Less with a small positive depth bias guarantees zero-weight
+			// vertices (where pushed == world) never overwrite double-sided back
+			// faces already drawn by the mesh pass, and avoids z-fighting across
+			// differing vertex contraction on mobile GPUs.
+			depth_stencil: Some(wgpu::DepthStencilState {
+				bias: wgpu::DepthBiasState {
+					constant: 2,
+					slope_scale: 1.0,
+					clamp: 0.0,
+				},
+				..depth_state(true, wgpu::CompareFunction::Less)
+			}),
 			multisample,
 			fragment: Some(wgpu::FragmentState {
 				module: &self.mesh_shader,
