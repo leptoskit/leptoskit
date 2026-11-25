@@ -849,6 +849,51 @@ async fn every_token_is_allowed_what_its_maker_and_scope_both_are() {
 	run_all(tokens).await;
 }
 
+/// Store publishing is the `publish` scope's alone: a token made with only
+/// `deploy`, which ships an app, is refused before anything is queued, and
+/// one made with only `publish` queues it.
+#[tokio::test]
+async fn publishing_needs_the_publish_scope_by_name() {
+	let app = support::app().await;
+	let owner = app.sign_in("owner@example.com").await;
+	let organization = app.personal(As::Session(&owner)).await;
+	let arranging = Arranging {
+		app: &app,
+		owner: &owner,
+		organization: &organization,
+	};
+	arranging.projects().await;
+	let shipping = arranging.shipping().await;
+	let (publish_only, _) = app
+		.token(As::Session(&owner), &organization, &["publish"], None)
+		.await;
+	let (deploy_only, _) = app
+		.token(As::Session(&owner), &organization, &["deploy"], None)
+		.await;
+	let args = json!({
+		"organization": organization,
+		"project": "web",
+		"environment": "staging",
+		"archive": shipping.ready_digest,
+		"stores": ["chrome"],
+	});
+
+	let refused = app
+		.call("publish", args.clone(), As::Bearer(&deploy_only))
+		.await;
+	refused.refused(403, "insufficient_scope");
+
+	// Had the refused call queued a publish, this would answer
+	// `publish_in_flight`.
+	let queued = app
+		.call("publish", args, As::Bearer(&publish_only))
+		.await
+		.expect(200)
+		.json();
+	assert_eq!(queued["state"], "queued", "{queued}");
+	assert_eq!(queued["environment"], "staging", "{queued}");
+}
+
 #[tokio::test]
 async fn nobody_is_allowed_anything() {
 	let fixture = Fixture::new(Caller::Person(Role::Owner)).await;
