@@ -436,9 +436,9 @@ pub enum PrintTarget {
 ///
 /// Print colours a surface from its material's base colour factor times its
 /// part's colour ([`MaterialOverride::color`]) alone. It reads no texture
-/// but a cutout's alpha, no vertex colour (`COLOR_0`) but its alpha, and no
-/// emissive, so a textured model prints in its factor's colour until its
-/// palette is set here.
+/// but the alpha of a cutout or a blend, no vertex colour (`COLOR_0`) but
+/// its alpha, and no emissive, so a textured model prints in its factor's
+/// colour until its palette is set here.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct PrintOverride {
 	/// Lit band colour (or flat colour in [`PrintMode::Flat`]), linear RGB,

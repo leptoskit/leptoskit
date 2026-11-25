@@ -449,8 +449,8 @@ fn safe_normalize(v: vec3<f32>, fallback: vec3<f32>) -> vec3<f32> {
 
 // Relief-print shading: three un-tonemapped bands whose edges blend over
 // about a pixel, object-space hatching and cross-hatching, turning-edge
-// paper specular, and backlit spot rim. Skips all PBR textures (except Mask
-// cutout alpha), lighting intensity, and tonemapping.
+// paper specular, and backlit spot rim. Skips all PBR textures (except the
+// alpha of a Mask cutout or a Blend), lighting intensity, and tonemapping.
 fn print_shade(in: Varyings, front: bool) -> vec4<f32> {
 	let extra = data_texel(in.print_meta & 0x00ffffffu);
 	let hatch_per_m = extra.w;
@@ -477,6 +477,11 @@ fn print_shade(in: Varyings, front: bool) -> vec4<f32> {
 		}
 	} else if (material.flags.x == 2u) {
 		alpha *= material.base_color.a * in.color.a;
+		// The texture's alpha too, as PBR takes it, so the clear texels of
+		// glass, hair cards and decals stay clear.
+		if ((material.flags.z & 1u) != 0u) {
+			alpha *= textureSample(base_texture, material_sampler, in.uv).a;
+		}
 	}
 
 	let flags = in.print_meta >> 24u;

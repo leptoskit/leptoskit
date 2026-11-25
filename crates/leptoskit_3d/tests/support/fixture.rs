@@ -641,6 +641,112 @@ pub fn flat_quad(min: [f32; 2], max: [f32; 2], z: f32, name: &str) -> Vec<u8> {
 	))
 }
 
+/// The IEEE CRC-32 of `bytes`, as PNG chunks carry it.
+fn crc32(bytes: &[u8]) -> u32 {
+	let mut crc = 0xFFFF_FFFF_u32;
+
+	for &byte in bytes {
+		crc ^= u32::from(byte);
+
+		for _ in 0..8 {
+			crc = (crc >> 1) ^ (0xEDB8_8320 & (crc & 1).wrapping_neg());
+		}
+	}
+
+	!crc
+}
+
+/// An 8-bit RGBA PNG of `width × height` pixels, its image data in one
+/// stored (uncompressed) deflate block.
+pub fn png_rgba(width: u32, height: u32, rgba: &[u8]) -> Vec<u8> {
+	let mut raw = Vec::new();
+
+	for row in rgba.chunks((width * 4) as usize) {
+		raw.push(0);
+		raw.extend_from_slice(row);
+	}
+
+	let (mut a, mut b) = (1_u32, 0_u32);
+
+	for &byte in &raw {
+		a = (a + u32::from(byte)) % 65_521;
+		b = (b + a) % 65_521;
+	}
+
+	let length = u16::try_from(raw.len()).expect("one stored block holds the image");
+	let mut zlib = vec![0x78, 0x01, 0x01];
+	zlib.extend_from_slice(&length.to_le_bytes());
+	zlib.extend_from_slice(&(!length).to_le_bytes());
+	zlib.extend_from_slice(&raw);
+	zlib.extend_from_slice(&((b << 16) | a).to_be_bytes());
+	let mut header = Vec::new();
+	header.extend_from_slice(&width.to_be_bytes());
+	header.extend_from_slice(&height.to_be_bytes());
+	header.extend_from_slice(&[8, 6, 0, 0, 0]);
+	let mut png = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+
+	for (kind, data) in [(*b"IHDR", header), (*b"IDAT", zlib), (*b"IEND", Vec::new())] {
+		png.extend_from_slice(&(data.len() as u32).to_be_bytes());
+		let mut body = kind.to_vec();
+		body.extend_from_slice(&data);
+		png.extend_from_slice(&body);
+		png.extend_from_slice(&crc32(&body).to_be_bytes());
+	}
+
+	png
+}
+
+/// `bytes` in standard, padded base64.
+fn base64(bytes: &[u8]) -> String {
+	const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+	let mut out = String::new();
+
+	for chunk in bytes.chunks(3) {
+		let n = (u32::from(chunk[0]) << 16)
+			| (u32::from(chunk.get(1).copied().unwrap_or(0)) << 8)
+			| u32::from(chunk.get(2).copied().unwrap_or(0));
+
+		for i in 0..4 {
+			if i <= chunk.len() {
+				out.push(char::from(TABLE[((n >> (18 - 6 * i)) & 63) as usize]));
+			} else {
+				out.push('=');
+			}
+		}
+	}
+
+	out
+}
+
+/// A double-sided blended quad, 1 m by 0.7 m at the origin facing +z,
+/// whose white base-colour texture is opaque on its left half and fully
+/// transparent on its right half (two texels, sampled nearest).
+pub fn blended_textured_quad() -> Vec<u8> {
+	let mut builder = Builder::default();
+	let positions = vec![
+		-0.5, -0.35, 0.0, 0.5, -0.35, 0.0, 0.5, 0.35, 0.0, -0.5, 0.35, 0.0,
+	];
+	let normals = [0.0, 0.0, 1.0].repeat(4);
+	let uvs = vec![0.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0];
+	let indices: Vec<u16> = vec![0, 1, 2, 0, 2, 3];
+	let position = builder.floats(&positions, 3, true);
+	let normal = builder.floats(&normals, 3, false);
+	let uv = builder.floats(&uvs, 2, false);
+	let index = builder.u16s(&indices, 1);
+	let png = png_rgba(2, 1, &[255, 255, 255, 255, 255, 255, 255, 0]);
+	let uri = format!("data:image/png;base64,{}", base64(&png));
+	builder.glb(&format!(
+		r#""asset":{{"version":"2.0"}},
+"scenes":[{{"nodes":[0]}}],
+"nodes":[{{"name":"glass","mesh":0}}],
+"meshes":[{{"primitives":[{{"attributes":{{"POSITION":{position},"NORMAL":{normal},"TEXCOORD_0":{uv}}},"indices":{index},"material":0}}]}}],
+"samplers":[{{"magFilter":9728,"minFilter":9728}}],
+"images":[{{"uri":"{uri}"}}],
+"textures":[{{"source":0,"sampler":0}}],
+"materials":[{{"name":"glass","pbrMetallicRoughness":{{"baseColorFactor":[1,1,1,1],"baseColorTexture":{{"index":0}}}},"alphaMode":"BLEND","doubleSided":true}}]"#
+	))
+}
+
 /// Like [`lit_sphere`] with `doubleSided: true`, so mirrored negative-scale
 /// transforms stay visible in mesh rendering for knockout hull tests.
 pub fn double_sided_sphere(segments: usize) -> Vec<u8> {

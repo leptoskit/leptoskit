@@ -3792,3 +3792,56 @@ fn print_band_edges_are_antialiased() {
 		rows.len()
 	);
 }
+
+/// Print keeps a blended part's texture alpha, as PBR does: the transparent
+/// texels of glass, hair cards, and decals stay clear.
+#[test]
+fn print_keeps_the_transparent_texels_of_a_blended_texture_clear() {
+	let Some(gpu) = gpu() else { return };
+	let backdrop = [0.04, 0.04, 0.08];
+	let red = [0.9, 0.1, 0.1];
+	let mut samples = Vec::new();
+
+	for print in [false, true] {
+		let mut renderer = renderer(gpu);
+		spawn(&mut renderer, 1, 1, &fixture::blended_textured_quad());
+		renderer.world_mut().apply([
+			Op::SetBackdrop(Backdrop::Color([
+				backdrop[0],
+				backdrop[1],
+				backdrop[2],
+				1.0,
+			])),
+			flat_print(1, red, None),
+		]);
+
+		if print {
+			renderer
+				.world_mut()
+				.apply([style(Shading::Print(print_no_knockout()), None)]);
+		}
+
+		let image = render_size(&mut renderer, 256);
+		// The quad's left half samples the opaque texel, its right half the
+		// transparent one.
+		samples.push((image.at(103, 128), image.at(153, 128)));
+	}
+
+	let (pbr_left, pbr_right) = samples[0];
+	let (print_left, print_right) = samples[1];
+	let clear = exact_srgb(backdrop);
+	assert!(pbr_left[0] > 100, "PBR draws the opaque half: {pbr_left:?}");
+	assert!(
+		near(pbr_right, clear, 6),
+		"PBR keeps the transparent half clear: {pbr_right:?}"
+	);
+	assert!(
+		near(print_left, exact_srgb(red), 4),
+		"Print draws the opaque half: {print_left:?}"
+	);
+	assert!(
+		near(print_right, clear, 6),
+		"Print keeps the transparent half clear: {print_right:?} (PBR {pbr_right:?}, backdrop \
+		 {clear:?})"
+	);
+}
