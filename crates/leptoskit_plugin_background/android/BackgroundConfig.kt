@@ -103,8 +103,17 @@ internal fun canStartForegroundWithTypes(
 
 /** What `BackgroundService.onStartCommand` received from Android. */
 internal sealed interface StartIntent {
-    /** An intent explicitly carrying configuration extras. */
-    data class WithConfig(
+    /** An explicit `BackgroundPlugin.start` intent carrying configuration extras. */
+    data class FromPlugin(
+        val config: BackgroundConfig,
+    ) : StartIntent
+
+    /**
+     * A restart intent from `BackgroundWorker` or `BootReceiver` carrying
+     * configuration extras. Treated as stale if `stop()` cleared the persisted
+     * store before `onStartCommand` ran.
+     */
+    data class FromBackground(
         val config: BackgroundConfig,
     ) : StartIntent
 
@@ -123,6 +132,17 @@ internal sealed interface StartCommandDecision {
         val androidTypes: Int,
     ) : StartCommandDecision
 
+    /**
+     * Satisfy Android's `startForegroundService` promise with [config] and
+     * [androidTypes], then immediately leave the foreground and stop without
+     * rescheduling periodic work. Used when a background restart races with
+     * `stop()`.
+     */
+    data class StopAfterForeground(
+        val config: BackgroundConfig,
+        val androidTypes: Int,
+    ) : StartCommandDecision
+
     /** Stop the service (`stopSelf()`) and return `START_NOT_STICKY`. */
     data object Stop : StartCommandDecision
 }
@@ -130,33 +150,139 @@ internal sealed interface StartCommandDecision {
 /**
  * Decides how `BackgroundService.onStartCommand` handles [incoming].
  *
- * Uses the intent's configuration only when it explicitly carries one;
- * otherwise falls back to [persistedConfig]. Never permits `startForeground`
- * with a zero type mask on API 34+, and stops cleanly when nothing valid is
- * configured.
+ * - Explicit `BackgroundPlugin.start` intents (`FromPlugin`) use the intent's
+ *   configuration.
+ * - Background restart intents (`FromBackground`) honour `stop()`: if nothing
+ *   valid is persisted, they satisfy Android's foreground promise and stop
+ *   immediately without rescheduling work; otherwise they use the latest
+ *   persisted configuration.
+ * - Bare and null intents fall back to [persistedConfig], stopping cleanly when
+ *   nothing valid is persisted.
+ * - Never permits `startForeground` with a zero type mask on API 34+.
  */
 internal fun decideStartCommand(
     incoming: StartIntent,
     persistedConfig: BackgroundConfig?,
     sdkInt: Int,
+): StartCommandDecision =
+    when (incoming) {
+        is StartIntent.FromPlugin -> {
+            startForegroundOrStop(incoming.config, sdkInt)
+        }
+
+        is StartIntent.FromBackground -> {
+            val active = persistedConfig?.takeIf { it.isValid() }
+            if (active == null) {
+                StartCommandDecision.StopAfterForeground(
+                    config = incoming.config,
+                    androidTypes = foregroundTypesForPromise(incoming.config.types, sdkInt),
+                )
+            } else {
+                val androidTypes = mapForegroundServiceTypes(active.types, sdkInt)
+                if (sdkInt >= 34 && androidTypes == 0) {
+                    StartCommandDecision.StopAfterForeground(
+                        config = active,
+                        androidTypes = mapForegroundServiceTypes(CRATE_TYPE_DATA_SYNC, sdkInt),
+                    )
+                } else {
+                    StartCommandDecision.StartForeground(active, androidTypes)
+                }
+            }
+        }
+
+        StartIntent.Bare, StartIntent.Null -> {
+            val active = persistedConfig?.takeIf { it.isValid() }
+            if (active == null) {
+                StartCommandDecision.Stop
+            } else {
+                startForegroundOrStop(active, sdkInt)
+            }
+        }
+    }
+
+private fun startForegroundOrStop(
+    config: BackgroundConfig,
+    sdkInt: Int,
 ): StartCommandDecision {
-    val config =
-        when (incoming) {
-            is StartIntent.WithConfig -> incoming.config
-            StartIntent.Bare, StartIntent.Null -> persistedConfig
-        } ?: return StartCommandDecision.Stop
-
     if (!config.isValid()) return StartCommandDecision.Stop
-
     val androidTypes = mapForegroundServiceTypes(config.types, sdkInt)
     if (sdkInt >= 34 && androidTypes == 0) return StartCommandDecision.Stop
-
     return StartCommandDecision.StartForeground(config, androidTypes)
 }
 
+private fun foregroundTypesForPromise(
+    crateMask: Int,
+    sdkInt: Int,
+): Int {
+    val mapped = mapForegroundServiceTypes(crateMask, sdkInt)
+    return if (sdkInt >= 34 && mapped == 0) {
+        mapForegroundServiceTypes(CRATE_TYPE_DATA_SYNC, sdkInt)
+    } else {
+        mapped
+    }
+}
+
+/** Action to take after `startForeground` throws `SecurityException` or `IllegalStateException`. */
+internal sealed interface ForegroundStartFallback {
+    /** Retry `startForeground` once with `dataSync` alone. */
+    data class RetryWithDataSync(
+        val crateTypes: Int,
+        val androidTypes: Int,
+    ) : ForegroundStartFallback
+
+    /** Stop the service and cancel periodic work while keeping the saved configuration. */
+    data object StopAndCancelWork : ForegroundStartFallback
+}
+
+/**
+ * Decides whether a failed `startForeground` call should retry once with
+ * `dataSync` alone or abort. `dataSync` is always declared in the plugin's
+ * manifest metadata and has no runtime permission prerequisite; we only retry
+ * when `dataSync` alone was not what just failed.
+ */
+internal fun decideForegroundStartFallback(
+    attemptedAndroidTypes: Int,
+    sdkInt: Int,
+): ForegroundStartFallback {
+    if (sdkInt < 29) return ForegroundStartFallback.StopAndCancelWork
+    val dataSyncAndroidTypes = mapForegroundServiceTypes(CRATE_TYPE_DATA_SYNC, sdkInt)
+    return if (attemptedAndroidTypes == dataSyncAndroidTypes) {
+        ForegroundStartFallback.StopAndCancelWork
+    } else {
+        ForegroundStartFallback.RetryWithDataSync(
+            crateTypes = CRATE_TYPE_DATA_SYNC,
+            androidTypes = dataSyncAndroidTypes,
+        )
+    }
+}
+
+/** Action `BackgroundService.onTimeout(startId, fgsType)` should take on API 35+. */
+internal data class TimeoutDecision(
+    val stopForeground: Boolean,
+    val stopService: Boolean,
+    val clearPersistedConfig: Boolean,
+    val cancelPeriodicWork: Boolean,
+)
+
+/**
+ * Decides how `BackgroundService.onTimeout(startId, fgsType)` responds when
+ * Android expires a time-limited foreground service type (such as `dataSync`
+ * after ~6 hours on Android 15+): leave the foreground and stop cleanly while
+ * keeping the saved configuration and periodic work so the app stays woken.
+ */
+internal fun decideTimeout(
+    @Suppress("UNUSED_PARAMETER") fgsType: Int,
+): TimeoutDecision =
+    TimeoutDecision(
+        stopForeground = true,
+        stopService = true,
+        clearPersistedConfig = false,
+        cancelPeriodicWork = false,
+    )
+
 /** Action `BackgroundWorker.doWork` should take. */
 internal sealed interface WorkerDecision {
-    /** The service is already running; wake the app without starting the service again. */
+    /** Wake the app without starting the service. */
     data object WakeOnly : WorkerDecision
 
     /** Start the service with [config] extras. */
@@ -164,22 +290,26 @@ internal sealed interface WorkerDecision {
         val config: BackgroundConfig,
     ) : WorkerDecision
 
-    /** Nothing valid is persisted (or it cannot start on [sdkInt]); cancel the periodic work. */
-    data object CancelWork : WorkerDecision
+    /** Do nothing and keep the periodic work enqueued. */
+    data object DoNothing : WorkerDecision
 }
 
 /**
- * Decides what `BackgroundWorker.doWork` should do. Never requests starting the
- * service unless it will be able to call `startForeground` with a valid type.
+ * Decides what `BackgroundWorker.doWork` should do. Never cancels periodic work
+ * (only `stop()` or an unrecoverable `startForeground` failure does), and never
+ * calls `startForegroundService` unless a valid configuration is saved, its
+ * mapped type is valid on [sdkInt], and [hasRequiredPermissions] is true.
  */
 internal fun decideWorkerAction(
     serviceRunning: Boolean,
     persistedConfig: BackgroundConfig?,
+    hasRequiredPermissions: Boolean,
     sdkInt: Int,
 ): WorkerDecision {
     if (serviceRunning) return WorkerDecision.WakeOnly
-    val config = persistedConfig?.takeIf { it.isValid() } ?: return WorkerDecision.CancelWork
-    if (!canStartForegroundWithTypes(config.types, sdkInt)) return WorkerDecision.CancelWork
+    val config = persistedConfig?.takeIf { it.isValid() } ?: return WorkerDecision.DoNothing
+    if (!canStartForegroundWithTypes(config.types, sdkInt)) return WorkerDecision.WakeOnly
+    if (!hasRequiredPermissions) return WorkerDecision.WakeOnly
     return WorkerDecision.StartService(config)
 }
 
@@ -197,16 +327,19 @@ internal sealed interface BootDecision {
 /**
  * Decides what `BootReceiver.onReceive` should do. Never requests starting the
  * service unless boot restart is enabled, a valid configuration is persisted,
- * and `startForeground` can legally run on [sdkInt].
+ * `startForeground` can legally run on [sdkInt], and [hasRequiredPermissions]
+ * is true.
  */
 internal fun decideBootAction(
     bootRestartEnabled: Boolean,
     persistedConfig: BackgroundConfig?,
+    hasRequiredPermissions: Boolean,
     sdkInt: Int,
 ): BootDecision {
     if (!bootRestartEnabled) return BootDecision.DoNothing
     val config = persistedConfig?.takeIf { it.isValid() } ?: return BootDecision.DoNothing
     if (!canStartForegroundWithTypes(config.types, sdkInt)) return BootDecision.DoNothing
+    if (!hasRequiredPermissions) return BootDecision.DoNothing
     return BootDecision.StartService(config)
 }
 
