@@ -56,10 +56,8 @@
 		"**/fixtures",
 		// Migrations are generated, applied exactly as written, and
 		// checksummed, so formatting one would change history.
-		"**/migrations/*/migration.sql",
-		"**/migrations/*/schema.json",
-		"**/migrations-*/*/migration.sql",
-		"**/migrations-*/*/schema.json",
+		"**/migrations/*/{migration.sql,schema.json,down.sql,replaces.json}",
+		"**/migrations-*/*/{migration.sql,schema.json,down.sql,replaces.json}",
 		"**/snapshots",
 		"**/target",
 		"**/.build",
