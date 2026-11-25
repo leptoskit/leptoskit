@@ -1109,16 +1109,6 @@ fn snorm(vector: Vec3) -> [i8; 3] {
 		.map(|value| (value.clamp(-1.0, 1.0) * 127.0).round() as i8)
 }
 
-/// Outline normals for a mesh: at each position, the mean of the distinct
-/// normals its vertices carry there. Vertices split at a hard edge, at a
-/// seam, or between primitives share a position, so they get one normal and
-/// a line pushed out along it stays closed; a smooth vertex keeps its own.
-///
-/// The normals are the file's, made before the mesh was quantized. The
-/// faces' own are not to be trusted: quantizing tilts the smallest
-/// triangles every which way, and a line pushed along them splinters.
-/// Copies whose normals cancel, as the two sides of a thin sheet do, keep
-/// their own.
 fn find_root(parent: &mut [usize], mut index: usize) -> usize {
 	while parent[index] != index {
 		parent[index] = parent[parent[index]];
@@ -1187,6 +1177,10 @@ fn weld_boundary_neighbors(
 					continue;
 				};
 
+				if other.len() > MAX_WELD_CELL {
+					continue;
+				}
+
 				for &other_index in other {
 					if dist2_f64(point, f64_point(positions[other_index])) <= tol2 {
 						union_roots(parent, index, other_index);
@@ -1197,6 +1191,115 @@ fn weld_boundary_neighbors(
 	}
 }
 
+/// The most distinct points one weld cell compares pairwise. A cell is four
+/// weld tolerances across, so a real mesh holds a handful of points in one;
+/// a denser cell, which only a broken or hostile file makes, welds just its
+/// exact copies, keeping a load linear in its vertices rather than quadratic.
+const MAX_WELD_CELL: usize = 128;
+
+/// The diagonal of the finite points' bounds, measured in `f64` so extreme
+/// finite `f32` coordinates cannot overflow, or `None` when no point is
+/// finite or the diagonal is not.
+fn finite_span(positions: &[Vec3]) -> Option<f64> {
+	let mut min = [f64::INFINITY; 3];
+	let mut max = [f64::NEG_INFINITY; 3];
+
+	for point in positions.iter().filter(|point| point.is_finite()) {
+		let point = f64_point(*point);
+
+		for axis in 0..3 {
+			min[axis] = min[axis].min(point[axis]);
+			max[axis] = max[axis].max(point[axis]);
+		}
+	}
+
+	let span = dist2_f64(max, min).sqrt();
+	span.is_finite().then_some(span)
+}
+
+/// Groups the positions closer than `tol` to one another, transitively:
+/// each position's group, as the index of one position in it. Non-finite
+/// positions stay alone.
+///
+/// Exact copies are found by their bits, then the distinct points are hashed
+/// into cells four tolerances wide and compared within a cell, and with the
+/// neighbouring cell wherever a point lies within a tolerance of a cell's
+/// face, so copies straddling a cell boundary still weld.
+fn weld_groups(positions: &[Vec3], tol: f64) -> Vec<usize> {
+	let count = positions.len();
+	let mut parent: Vec<usize> = (0..count).collect();
+	let mut first_at: HashMap<[u32; 3], usize> = HashMap::with_capacity(count);
+	let mut distinct = Vec::with_capacity(count);
+	let mut min = [f64::INFINITY; 3];
+
+	for (index, point) in positions.iter().enumerate() {
+		if !point.is_finite() {
+			continue;
+		}
+
+		// Adding zero turns -0 into 0, which compares equal to it.
+		match first_at.entry((*point + Vec3::ZERO).to_array().map(f32::to_bits)) {
+			Entry::Occupied(first) => union_roots(&mut parent, *first.get(), index),
+			Entry::Vacant(slot) => {
+				slot.insert(index);
+				distinct.push(index);
+				let point = f64_point(*point);
+
+				for axis in 0..3 {
+					min[axis] = min[axis].min(point[axis]);
+				}
+			}
+		}
+	}
+
+	if distinct.len() > 1 && tol.is_finite() && tol > 0.0 {
+		let tol2 = tol * tol;
+		let cell = 4.0 * tol;
+		let mut cells: HashMap<[i64; 3], Vec<usize>> = HashMap::new();
+		let mut coords = vec![([0_i64; 3], [0.0_f64; 3]); count];
+
+		for &index in &distinct {
+			let point = f64_point(positions[index]);
+			let u = [0, 1, 2].map(|axis| (point[axis] - min[axis]) / cell);
+			let floor = u.map(f64::floor);
+			let key = floor.map(|value| value as i64);
+			coords[index] = (key, [0, 1, 2].map(|axis| u[axis] - floor[axis]));
+			cells.entry(key).or_default().push(index);
+		}
+
+		for reps in cells.values().filter(|reps| reps.len() <= MAX_WELD_CELL) {
+			for a in 0..reps.len() {
+				let pa = f64_point(positions[reps[a]]);
+
+				for b in (a + 1)..reps.len() {
+					if dist2_f64(pa, f64_point(positions[reps[b]])) <= tol2 {
+						union_roots(&mut parent, reps[a], reps[b]);
+					}
+				}
+			}
+
+			for &index in reps {
+				let (key, frac) = coords[index];
+				weld_boundary_neighbors(index, key, frac, positions, &cells, tol2, &mut parent);
+			}
+		}
+	}
+
+	(0..count)
+		.map(|index| find_root(&mut parent, index))
+		.collect()
+}
+
+/// Outline normals for a mesh: at each position, the mean of the distinct
+/// normals its vertices carry there. Vertices split at a hard edge, at a
+/// seam, or between primitives share a position, so they get one normal and
+/// a line pushed out along it stays closed; a smooth vertex keeps its own.
+///
+/// The normals are the file's, made before the mesh was quantized. The
+/// faces' own are not to be trusted: quantizing tilts the smallest
+/// triangles every which way, and a line pushed along them splinters.
+/// Copies whose normals cancel, as the two sides of a thin sheet do, keep
+/// their own.
 pub(crate) fn welded_normals(positions: &[Vec3], normals: &[Vec3]) -> Vec<Vec3> {
 	let count = positions.len().min(normals.len());
 	let mut welded = normals.to_vec();
@@ -1205,95 +1308,17 @@ pub(crate) fn welded_normals(positions: &[Vec3], normals: &[Vec3]) -> Vec<Vec3> 
 		return welded;
 	}
 
-	// Compute bounds in f64 so extreme finite f32 coordinates cannot overflow.
-	let mut min = [f64::INFINITY; 3];
-	let mut max = [f64::NEG_INFINITY; 3];
-	let mut any_finite = false;
-
-	for point in &positions[..count] {
-		if point.is_finite() {
-			let point = f64_point(*point);
-
-			for axis in 0..3 {
-				min[axis] = min[axis].min(point[axis]);
-				max[axis] = max[axis].max(point[axis]);
-			}
-
-			any_finite = true;
-		}
-	}
-
-	if !any_finite {
+	let Some(span) = finite_span(&positions[..count]) else {
 		return welded;
-	}
-
-	let span = dist2_f64(max, min).sqrt();
-
-	if !span.is_finite() {
-		return welded;
-	}
+	};
 
 	// Positions closer than a hundred-thousandth of the mesh's size weld.
-	// Hash into 4x wider cells and probe boundary-adjacent cells whenever a
-	// vertex sits within `tol` of a cell face so seams straddling a grid
-	// boundary still weld cleanly.
-	let tol = (span * 1.0e-5).max(1.0e-12);
-	let tol2 = tol * tol;
-	let cell = 4.0 * tol;
-	let mut parent: Vec<usize> = (0..count).collect();
-	let mut cells: HashMap<[i64; 3], Vec<usize>> = HashMap::new();
-	let mut coords: Vec<Option<([i64; 3], [f64; 3])>> = Vec::with_capacity(count);
-
-	for (index, point) in positions[..count].iter().enumerate() {
-		if !point.is_finite() {
-			coords.push(None);
-			continue;
-		}
-
-		let p = f64_point(*point);
-		let u = [
-			(p[0] - min[0]) / cell,
-			(p[1] - min[1]) / cell,
-			(p[2] - min[2]) / cell,
-		];
-		let floor = [u[0].floor(), u[1].floor(), u[2].floor()];
-		let key = [floor[0] as i64, floor[1] as i64, floor[2] as i64];
-		let frac = [u[0] - floor[0], u[1] - floor[1], u[2] - floor[2]];
-		coords.push(Some((key, frac)));
-		let reps = cells.entry(key).or_default();
-
-		if let Some(&rep) = reps.iter().find(|&&rep| positions[rep] == *point) {
-			union_roots(&mut parent, rep, index);
-		} else {
-			reps.push(index);
-		}
-	}
-
-	for reps in cells.values() {
-		for a in 0..reps.len() {
-			let pa = f64_point(positions[reps[a]]);
-
-			for b in (a + 1)..reps.len() {
-				if dist2_f64(pa, f64_point(positions[reps[b]])) <= tol2 {
-					union_roots(&mut parent, reps[a], reps[b]);
-				}
-			}
-		}
-
-		for &index in reps {
-			if let Some((key, frac)) = coords[index] {
-				weld_boundary_neighbors(index, key, frac, positions, &cells, tol2, &mut parent);
-			}
-		}
-	}
+	let groups = weld_groups(&positions[..count], (span * 1.0e-5).max(1.0e-12));
 
 	// Each vertex by its welded group, then by its normal in bytes, so the
 	// copies at a position sit together and each distinct normal counts once.
 	let mut order: Vec<(usize, [i8; 3], usize)> = (0..count)
-		.map(|index| {
-			let root = find_root(&mut parent, index);
-			(root, snorm(normals[index]), index)
-		})
+		.map(|index| (groups[index], snorm(normals[index]), index))
 		.collect();
 	order.sort_unstable();
 
@@ -2273,5 +2298,43 @@ mod tests {
 		let normals = [Vec3::X, Vec3::Y, Vec3::Z];
 		let welded = welded_normals(&points, &normals);
 		assert_eq!(welded[2], Vec3::Z, "distant vertex got welded: {welded:?}");
+	}
+
+	#[test]
+	fn welding_a_dense_cell_stays_near_linear() {
+		// Two far corners make the weld tolerance 1 cm, in cells 4 cm wide.
+		// A lattice of 46 656 distinct points 1 mm apart then fills one cell,
+		// each point twice, with a different normal on each copy. Comparing
+		// every pair in that cell took minutes.
+		let side = 36_usize;
+		let mut positions = vec![Vec3::ZERO, Vec3::splat(1000.0 / 3.0_f32.sqrt())];
+		let mut normals = vec![Vec3::Z, Vec3::Z];
+
+		for x in 0..side {
+			for y in 0..side {
+				for z in 0..side {
+					let point = Vec3::new(x as f32, y as f32, z as f32) * 1.0e-3 + 0.481;
+					positions.extend([point, point]);
+					normals.extend([Vec3::X, Vec3::Y]);
+				}
+			}
+		}
+
+		let started = std::time::Instant::now();
+		let welded = welded_normals(&positions, &normals);
+		let elapsed = started.elapsed();
+		let mean = (Vec3::X + Vec3::Y).normalize();
+		assert!(
+			welded[2..]
+				.iter()
+				.all(|normal| normal.abs_diff_eq(mean, 1.0e-5)),
+			"the copies of each point weld"
+		);
+		assert!(
+			elapsed < std::time::Duration::from_secs(10),
+			"welding {} vertices with {} distinct points in one cell took {elapsed:?}",
+			positions.len(),
+			side * side * side
+		);
 	}
 }
