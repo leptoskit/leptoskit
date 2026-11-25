@@ -161,9 +161,10 @@ pub enum Easing {
 
 impl Easing {
 	/// How far along the way something is, from 0 to 1, when `t` of its time
-	/// has passed, also from 0 to 1. Outside that, `t` is clamped.
+	/// has passed, also from 0 to 1. Outside that, `t` is clamped (and `NaN`
+	/// maps to 0).
 	pub fn apply(self, t: f32) -> f32 {
-		let t = t.clamp(0.0, 1.0);
+		let t = if t.is_nan() { 0.0 } else { t.clamp(0.0, 1.0) };
 
 		match self {
 			Self::Linear => t,
@@ -327,7 +328,9 @@ pub struct Toon {
 	pub specular: f32,
 	/// The strength of ink hatching in the darkest band, from 0 (none) to 1.
 	/// The lines are fixed to the model's surface, drawn in its ink, and fade
-	/// where they would be too fine to see; a part without a line has none.
+	/// where they would be too fine to see; a part without a line has none, and
+	/// [`Style::ink`] must be `Some(...)` (even with `width: 0.0`) for hatching
+	/// to draw.
 	pub hatch: f32,
 }
 
@@ -375,8 +378,7 @@ pub struct Ink {
 }
 
 impl Default for Ink {
-	/// A firm line in Skribble's ink, a deep violet black, with a slight
-	/// wobble that holds still.
+	/// A firm line in deep violet black, with a slight wobble that holds still.
 	fn default() -> Self {
 		Self {
 			color: [0.034, 0.021, 0.050],

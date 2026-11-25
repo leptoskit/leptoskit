@@ -422,8 +422,10 @@ const _: () = {
 	use std::mem::offset_of;
 
 	use crate::upload::InstanceRecord;
+	assert!(offset_of!(InstanceRecord, model) == 0);
 	assert!(offset_of!(InstanceRecord, params) == 112);
 	assert!(offset_of!(InstanceRecord, ink) == 128);
+	assert!(size_of::<InstanceRecord>() == 144);
 };
 
 /// What a device's renderers share.

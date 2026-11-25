@@ -913,3 +913,12 @@ fn short_ops_round_trip_in_repeated_batches() {
 	let backdrops = vec![Op::SetBackdrop(Backdrop::Transparent); 4];
 	assert_eq!(decode_ops(&encode_ops(&backdrops)), Ok(backdrops));
 }
+
+#[test]
+fn easing_apply_handles_nan_and_infinities() {
+	for easing in [Easing::Linear, Easing::Smooth, Easing::In, Easing::Out] {
+		assert_eq!(easing.apply(f32::NAN), 0.0, "{easing:?}.apply(NaN)");
+		assert_eq!(easing.apply(f32::NEG_INFINITY), 0.0, "{easing:?}(-inf)");
+		assert_eq!(easing.apply(f32::INFINITY), 1.0, "{easing:?}(+inf)");
+	}
+}

@@ -326,7 +326,7 @@ impl Instance {
 	fn set_ink(&mut self, part: Option<String>, ink: PartInk) {
 		self.inks.retain(|(existing, _)| *existing != part);
 
-		if self.inks.len() < MAX_SETTINGS {
+		if ink != PartInk::default() && self.inks.len() < MAX_SETTINGS {
 			self.inks.push((part, ink));
 		}
 
@@ -1288,9 +1288,12 @@ mod tests {
 			[weight(3.0), weight(3.0), red_line(3.0), red_line(3.0)]
 		);
 
-		// Setting a part to nothing returns it to what encloses it, and a
-		// part the model lacks changes nothing.
+		// Setting a part to nothing returns it to what encloses it without
+		// consuming a slot of `MAX_SETTINGS`, and a part the model lacks
+		// changes nothing.
+		let before = instance.inks.len();
 		instance.set_ink(Some("head".into()), PartInk::default());
+		assert_eq!(instance.inks.len(), before - 1);
 		instance.set_ink(Some("tail".into()), weight(5.0));
 		assert_eq!(lines(&instance), [weight(3.0); 4]);
 	}

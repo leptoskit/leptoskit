@@ -153,8 +153,8 @@ fn vertex_stages_fit_webgl2() {
 		}
 	}
 
-	// The mesh's (static, skinned, morphed, both), the outline's two, and
-	// the background's, shadow's and others: a stage renamed or dropped
+	// The mesh's two (static, skinned), the outline's two, and
+	// the background's and shadow's: a stage renamed or dropped
 	// should be noticed here.
 	assert!(vertex_stages >= 6, "{vertex_stages}");
 }
