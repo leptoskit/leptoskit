@@ -1145,6 +1145,16 @@ impl Renderer {
 				);
 			}
 
+			if frame.shadow_count > 0
+				&& let Some(buffer) = &self.shadows.buffer
+			{
+				pass.set_pipeline(&frame.pipelines.shadow);
+				pass.set_vertex_buffer(0, buffer.slice(..));
+				pass.draw(0..4, 0..frame.shadow_count);
+			}
+
+			// After the shadows, which it covers: the knockout writes no
+			// depth, so a shadow drawn later would darken the paper.
 			if frame.use_stencil {
 				self.draw_knockout(
 					&mut pass,
@@ -1154,14 +1164,6 @@ impl Renderer {
 					frame.assets,
 					frame.draws,
 				);
-			}
-
-			if frame.shadow_count > 0
-				&& let Some(buffer) = &self.shadows.buffer
-			{
-				pass.set_pipeline(&frame.pipelines.shadow);
-				pass.set_vertex_buffer(0, buffer.slice(..));
-				pass.draw(0..4, 0..frame.shadow_count);
 			}
 			self.draw_meshes(
 				&mut pass,

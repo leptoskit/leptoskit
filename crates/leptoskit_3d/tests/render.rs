@@ -3686,3 +3686,55 @@ fn print_draws_unlit_parts_flat_by_default() {
 		);
 	}
 }
+
+/// The ground shadow falls under the paper knockout, never over it: the
+/// paper around a figure's feet stays bare paper.
+#[test]
+fn print_shadows_stay_under_the_paper_knockout() {
+	let Some(gpu) = gpu() else { return };
+	let blue = [0.10, 0.25, 0.85];
+	let render = |shadow: f32| {
+		let mut renderer = renderer(gpu);
+		spawn(&mut renderer, 1, 1, &fixture::lit_sphere(32, None));
+		renderer.world_mut().apply([
+			Op::SetBackdrop(Backdrop::Color([0.04, 0.04, 0.08, 1.0])),
+			Op::SetLight(Light {
+				shadow,
+				..Light::default()
+			}),
+			// Above and in front, looking down at the shadow's disc.
+			Op::SetCamera {
+				transform: Transform::from_translation(0.0, 2.2, 2.2).with_rotation(
+					glam::Quat::from_rotation_x(-std::f32::consts::FRAC_PI_4).to_array(),
+				),
+				fov_y: 0.8,
+				near: 0.1,
+				far: 50.0,
+			},
+			flat_print(1, blue, None),
+			knockout_print(60.0),
+		]);
+		let image = render_size(&mut renderer, 128);
+		(image, renderer.stats().shadows)
+	};
+
+	let (bare, _) = render(0.0);
+	let (shadowed, shadows) = render(1.0);
+	assert_eq!(shadows, 1, "the figure casts its shadow");
+	let paper: Vec<(u32, u32)> = (0..128)
+		.flat_map(|y| (0..128).map(move |x| (x, y)))
+		.filter(|&(x, y)| is_paper(bare.at(x, y)))
+		.collect();
+	assert!(paper.len() > 100, "the figure has paper: {}", paper.len());
+	let darkened: Vec<_> = paper
+		.iter()
+		.filter(|&&(x, y)| !near(shadowed.at(x, y), bare.at(x, y), 1))
+		.map(|&(x, y)| (x, y, bare.at(x, y), shadowed.at(x, y)))
+		.collect();
+	assert!(
+		darkened.is_empty(),
+		"the shadow darkens {} paper pixels, such as {:?}",
+		darkened.len(),
+		darkened.first()
+	);
+}
