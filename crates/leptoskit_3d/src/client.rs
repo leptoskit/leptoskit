@@ -331,7 +331,8 @@ impl Scene {
 	}
 
 	/// Sets relief-print overrides on a model instance, a named part and its
-	/// subtree, or primitives sharing a glTF material base name.
+	/// subtree, or primitives with a glTF material name or base name (see
+	/// [`PrintTarget::Material`]).
 	pub fn set_print(&self, node: NodeId, target: PrintTarget, print: PrintOverride) {
 		self.push(Op::SetPrint {
 			node,

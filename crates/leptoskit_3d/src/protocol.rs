@@ -426,8 +426,10 @@ pub enum PrintTarget {
 	All,
 	/// A named glTF node and everything under it.
 	Part(String),
-	/// Primitives whose glTF material base name (before the first `.`)
-	/// matches.
+	/// Primitives whose glTF material is named this, or whose name before
+	/// its first `.` is: `Material("cloth")` matches `cloth`, `cloth.001`
+	/// and `cloth.002`, while `Material("cloth.001")` matches `cloth.001`
+	/// alone and wins over `Material("cloth")` there, field by field.
 	Material(String),
 }
 
@@ -819,9 +821,10 @@ pub enum Op {
 		ink: PartInk,
 	},
 	/// Sets relief-print overrides for a model instance, a named part and its
-	/// subtree, or primitives sharing a glTF material base name. Replaces any
-	/// earlier override for the same `target`, so [`PrintOverride::default`]
-	/// clears that target back to inheriting from broader targets.
+	/// subtree, or primitives with a glTF material name or base name (see
+	/// [`PrintTarget::Material`]). Replaces any earlier override for the same
+	/// `target`, so [`PrintOverride::default`] clears that target back to
+	/// inheriting from broader targets.
 	SetPrint {
 		/// The model instance.
 		node: NodeId,

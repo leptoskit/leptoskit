@@ -351,11 +351,15 @@ impl Instance {
 			.iter()
 			.map(|material| {
 				let mut resolved = self.print_all;
+				let base = material_base_name(&material.name);
+				let exact = (base != material.name).then_some(material.name.as_str());
 
-				if let Some(by_material) =
-					self.print_materials.get(material_base_name(&material.name))
-				{
-					resolved.overlay(by_material);
+				// The base name (`cloth` for `cloth.001`), then the exact
+				// name over it, field by field.
+				for name in std::iter::once(base).chain(exact) {
+					if let Some(by_material) = self.print_materials.get(name) {
+						resolved.overlay(by_material);
+					}
 				}
 
 				resolved
@@ -1496,6 +1500,44 @@ mod tests {
 		instance.set_print(PrintTarget::Part("head".into()), PrintOverride::default());
 		assert_eq!(resolve(&instance, 3, 0).lit, Some([0.5, 0.5, 0.5]));
 		assert_eq!(resolve(&instance, 3, 0).mode, None);
+	}
+
+	#[test]
+	fn print_material_targets_match_an_exact_name_over_its_base_name() {
+		let mut asset = (*figure()).clone();
+		asset.materials = ["cloth.001", "cloth.002", "cloth"]
+			.map(|name| {
+				crate::asset::Material {
+					name: name.into(),
+					..crate::asset::Material::default()
+				}
+			})
+			.to_vec();
+		let mut instance = Instance::new(AssetId(1));
+		instance.bind(Arc::new(asset));
+		let print = |lit, hatch_min| {
+			PrintOverride {
+				lit: Some(lit),
+				hatch_min,
+				..PrintOverride::default()
+			}
+		};
+		instance.set_print(
+			PrintTarget::Material("cloth".into()),
+			print([0.1; 3], Some(0.25)),
+		);
+		instance.set_print(
+			PrintTarget::Material("cloth.001".into()),
+			print([0.9; 3], None),
+		);
+
+		// The exact name wins where it is set, field by field, and the base
+		// name fills in the rest and covers its other copies.
+		let cloth_001 = instance.print_by_material[0];
+		assert_eq!(cloth_001.lit, Some([0.9; 3]));
+		assert_eq!(cloth_001.hatch_min, Some(0.25));
+		assert_eq!(instance.print_by_material[1], print([0.1; 3], Some(0.25)));
+		assert_eq!(instance.print_by_material[2], print([0.1; 3], Some(0.25)));
 	}
 
 	#[test]
