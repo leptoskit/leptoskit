@@ -28,11 +28,15 @@ use uuid::Uuid;
 
 use super::App;
 use super::As;
+use super::shipping::Shop;
 
 /// The secret the tests' provider signs its events with.
 pub const WEBHOOK_SECRET: &str = "whsec_made_up_for_the_tests";
 /// The provider's price for the tests' `pro` plan.
 pub const PRO_PRICE: &str = "price_pro";
+/// The provider's price for the tests' `team` plan, which only
+/// [`taking_payment_for_two_plans`] sells.
+pub const TEAM_PRICE: &str = "price_team";
 
 #[derive(Debug, Default)]
 struct Drawer {
@@ -213,6 +217,21 @@ pub fn taking_payment(till: &Till) -> impl FnOnce(&mut ControlConfig) + use<> {
 			prices: BTreeMap::from([("pro".to_owned(), PRO_PRICE.to_owned())]),
 			automatic_tax: false,
 		});
+	}
+}
+
+/// [`taking_payment`] for a cloud that sells `team` too, from
+/// `billing::catalogue_with_team`: a second paid plan, with a spend cap ten
+/// times `pro`'s.
+pub fn taking_payment_for_two_plans(till: &Till) -> impl FnOnce(&mut ControlConfig) + use<> {
+	let taking = taking_payment(till);
+	move |config| {
+		taking(config);
+		config.catalogue = Some(super::billing::catalogue_with_team());
+		let payments = config.payments.as_mut().expect("payment is taken");
+		payments
+			.prices
+			.insert("team".to_owned(), TEAM_PRICE.to_owned());
 	}
 }
 
@@ -794,4 +813,149 @@ pub async fn a_missed_event_is_caught_up_with(app: &App, till: &Till) {
 		(&agreed["plan"], &agreed["status"]),
 		(&json!("agreed"), &json!("canceled"))
 	);
+}
+
+/// `pro`'s own spend cap in `billing::catalogue_with_team`, in minor units.
+const PRO_CAP: u64 = 50;
+/// `team`'s own spend cap there: ten times `pro`'s.
+const TEAM_CAP: u64 = 500;
+/// The provider's customer for the first organisation to check out.
+const FIRST_CUSTOMER: &str = "cus_1";
+
+/// Fails unless `shop`'s organisation is on `plan`.
+async fn is_on(shop: &Shop<'_>, plan: &str) {
+	let summary = shop
+		.app
+		.call(
+			"subscription",
+			json!({ "organization": shop.org }),
+			shop.as_ana(),
+		)
+		.await
+		.expect(200)
+		.json();
+	assert_eq!(summary["plan"], plan, "{summary}");
+}
+
+/// Fails unless the cap in force for `shop`'s organisation is its own, and
+/// is `cap`.
+async fn own_cap_in_force(shop: &Shop<'_>, cap: u64) {
+	let cost = &super::billing::usage(shop).await["cost"];
+	assert_eq!(
+		(&cost["spend_cap"], &cost["own_spend_cap"]),
+		(&json!(cap), &json!(true)),
+		"{cost}"
+	);
+}
+
+/// Sends `event`, the provider's word about the subscription `id`, and
+/// fails unless it is dealt with.
+async fn sent(app: &App, event: &str, kind: &str, id: &str) {
+	assert_eq!(
+		send(app, event, kind, json!({ "id": id })).await,
+		200,
+		"the event about {id} is dealt with"
+	);
+}
+
+/// Has the provider say that the subscription `id` of [`FIRST_CUSTOMER`] is
+/// now active on `price`, and sends `event` about it, which makes the
+/// organisation that follows `id` change plan.
+async fn runs(app: &App, till: &Till, event: &str, id: &str, price: &str) {
+	till.subscribe(id, FIRST_CUSTOMER, SubscriptionStatus::Active, price);
+	sent(app, event, "customer.subscription.updated", id).await;
+}
+
+/// [`runs`] for a subscription that is now over: the organisation that
+/// follows it is back on the plan everyone starts on.
+async fn ends(app: &App, till: &Till, event: &str, id: &str, price: &str) {
+	till.subscribe(id, FIRST_CUSTOMER, SubscriptionStatus::Canceled, price);
+	sent(app, event, "customer.subscription.deleted", id).await;
+}
+
+/// An organisation's own spend cap is never above the cap of the plan it is
+/// on. `set_spend_cap` sees to that when one is set; when the provider moves
+/// the organisation to another plan, one past that plan's own cap comes down
+/// to it, and one that fits is left as it is.
+#[expect(
+	clippy::cognitive_complexity,
+	reason = "a scenario is one story, read top to bottom; its asserts are what count"
+)]
+pub async fn an_own_cap_is_held_to_the_plan_the_organisation_moves_to(app: &App, till: &Till) {
+	let shop = Shop::open(app).await;
+	let (org, ana) = (shop.org.as_str(), shop.as_ana());
+	let checkout = |to: &str| app.call("checkout", json!({ "organization": org, "plan": to }), ana);
+	let cap = |cap: u64| {
+		app.call(
+			"set_spend_cap",
+			json!({ "organization": org, "cap": cap }),
+			ana,
+		)
+	};
+	// An own cap that fits on both plans.
+	let fits = 40;
+
+	// On `pro`, whose own cap is 50, the owner sets the organisation's cap
+	// lower still.
+	checkout("pro").await.expect(200);
+	assert_eq!(till.customers(), [FIRST_CUSTOMER]);
+	runs(app, till, "evt_1", "sub_1", PRO_PRICE).await;
+	is_on(&shop, "pro").await;
+	assert_eq!(
+		cap(fits).await.expect(200).json(),
+		json!({ "cap": fits, "own": true })
+	);
+
+	// At the provider's portal the subscription changes to `team`'s price,
+	// whose own cap is 500. The organisation's cap goes with it: it isn't
+	// raised to the new plan's.
+	runs(app, till, "evt_2", "sub_1", TEAM_PRICE).await;
+	is_on(&shop, "team").await;
+	own_cap_in_force(&shop, fits).await;
+
+	// Back to `pro`'s price: a cap that already fits is left as it is. Three
+	// build minutes, ten past what `pro` includes, are under it, so a
+	// deployment is still made.
+	runs(app, till, "evt_3", "sub_1", PRO_PRICE).await;
+	is_on(&shop, "pro").await;
+	own_cap_in_force(&shop, fits).await;
+	super::billing::ship_after(&shop, b"three minutes", 180).await;
+	assert_eq!(super::billing::usage(&shop).await["cost"]["over"], 10);
+
+	// On `team` again, the owner sets the cap to the most `team` allows.
+	runs(app, till, "evt_4", "sub_1", TEAM_PRICE).await;
+	is_on(&shop, "team").await;
+	assert_eq!(
+		cap(TEAM_CAP).await.expect(200).json(),
+		json!({ "cap": TEAM_CAP, "own": true })
+	);
+
+	// The subscription ends, and the organisation subscribes to `pro`.
+	ends(app, till, "evt_5", "sub_1", TEAM_PRICE).await;
+	is_on(&shop, "hobby").await;
+	checkout("pro").await.expect(200);
+	runs(app, till, "evt_6", "sub_2", PRO_PRICE).await;
+	is_on(&shop, "pro").await;
+
+	// A cap of 500 can't be set on `pro`, so the one set on `team` doesn't
+	// stay in force: it is `pro`'s own now.
+	cap(TEAM_CAP).await.refused(403, "cap_above_plan");
+	own_cap_in_force(&shop, PRO_CAP).await;
+
+	// Eight build minutes in all, 60 past what `pro` includes: past a cap of
+	// 50, and not past one of 500. Another deployment is refused, and
+	// nothing is made.
+	super::billing::ship_after(&shop, b"five more minutes", 300).await;
+	let cost = &super::billing::usage(&shop).await["cost"];
+	assert_eq!(
+		(&cost["over"], &cost["cap_reached"]),
+		(&json!(60), &json!(true)),
+		"{cost}"
+	);
+
+	let digest = shop.upload(b"past the cap").await;
+	shop.deploy("production", &digest, json!({ "database": "sqlite" }))
+		.await
+		.refused(403, "spend_cap_reached");
+	shop.on("deployment", "production", 3).await.expect(404);
 }

@@ -657,6 +657,22 @@ mod subscriptions {
 		let app = support::app_with(db, subscriptions::taking_payment(&till)).await;
 		subscriptions::a_missed_event_is_caught_up_with(&app, &till).await;
 	}
+
+	#[tokio::test]
+	async fn an_own_cap_is_held_to_the_plan_the_organisation_moves_to() {
+		let Some(server) = postgres::Postgres::start() else {
+			return;
+		};
+		let db = leptoskit_db::Db::connect(&server.database())
+			.await
+			.expect("connect");
+		db.migrate(leptoskit_cloud::POSTGRES_MIGRATIONS)
+			.await
+			.expect("the Postgres migrations apply");
+		let till = subscriptions::Till::default();
+		let app = support::app_with(db, subscriptions::taking_payment_for_two_plans(&till)).await;
+		subscriptions::an_own_cap_is_held_to_the_plan_the_organisation_moves_to(&app, &till).await;
+	}
 }
 
 /// Publishing on Postgres.
