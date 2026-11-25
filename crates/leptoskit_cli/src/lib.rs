@@ -43,6 +43,7 @@ pub mod device;
 pub mod devtools;
 pub mod doctor;
 pub mod extension;
+mod fonts;
 pub mod game;
 pub mod generate;
 mod git;
