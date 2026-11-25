@@ -1117,8 +1117,9 @@ impl Attributes<'_, '_> {
 
 	/// Each vertex's ink weight, as [`InkVertex::weight`] stores it: twice
 	/// `COLOR_1`'s red channel, so 0.5 is the part's line, 0 none, and 1 a
-	/// line twice as heavy. A primitive without `COLOR_1` has the part's line
-	/// throughout.
+	/// line twice as heavy. `COLOR_1`'s green, blue, and alpha channels are
+	/// reserved for app-specific masks and ignored by the renderer. A
+	/// primitive without `COLOR_1` has the part's line throughout.
 	fn ink_weights(&self) -> Result<Vec<i8>, LoadError> {
 		let Some(index) = self.attribute("COLOR_1") else {
 			return Ok(vec![0; self.count]);
