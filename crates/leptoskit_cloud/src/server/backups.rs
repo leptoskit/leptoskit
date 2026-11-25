@@ -926,6 +926,7 @@ mod tests {
 			environment_id: Id::new(),
 			cluster_id: Id::new(),
 			hostname: "notes.example".to_owned(),
+			removing: false,
 			migrations: Json(migrations.iter().map(|name| migration(name)).collect()),
 			schema_uncertain: false,
 			created_at: now,

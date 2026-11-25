@@ -296,8 +296,9 @@ async fn choose_cluster(
 
 	for cluster in clusters {
 		let id = cluster.id;
+		// One being removed doesn't load its cluster.
 		let placed = Placement::query()
-			.filter(|placement| placement.cluster_id.eq(id))
+			.filter(|placement| placement.cluster_id.eq(id) & placement.removing.eq(false))
 			.count(db)
 			.await?;
 
@@ -377,6 +378,7 @@ async fn place(
 		environment_id,
 		cluster_id: cluster.id,
 		hostname,
+		removing: false,
 		migrations: Json(Vec::new()),
 		schema_uncertain: false,
 	}
@@ -2128,7 +2130,8 @@ pub(crate) async fn in_flight(
 /// queued or building deployment stops (its build's worker learns it on
 /// `renew`); one migrating or rolling out, or whose release is unknown,
 /// refuses the deletion; and when the environment was placed, a removal is
-/// queued for its cluster's worker.
+/// queued for its cluster's worker, its placement keeping its hostname
+/// until the cluster is known to be without the environment.
 ///
 /// # Errors
 ///
@@ -2185,7 +2188,7 @@ pub(crate) async fn before_removal(
 	super::backups::abandon_queued(tx, environment_id).await?;
 	super::publishing::abandon_queued(tx, environment_id).await?;
 
-	let Some(placement) = Placement::query()
+	let Some(mut placement) = Placement::query()
 		.filter(|placement| placement.environment_id.eq(environment_id))
 		.first(tx)
 		.await?
@@ -2193,8 +2196,11 @@ pub(crate) async fn before_removal(
 		super::domains::environment_removed(tx, environment_id, false).await?;
 		return Ok(None);
 	};
-	// The cluster may still answer on its domains until the removal is
-	// done: they keep their hostnames until then.
+	// The cluster may still answer at the environment's hostname and on
+	// its domains until the removal is done: the placement and they keep
+	// their hostnames until then.
+	placement.removing = true;
+	placement.save(tx).await?;
 	super::domains::environment_removed(tx, environment_id, true).await?;
 	// Its database goes with it: the row with the environment's, and the
 	// database itself when the cluster's worker removes the environment.
@@ -2222,6 +2228,28 @@ pub(crate) async fn before_removal(
 	)
 	.await?;
 	Ok(Some(job))
+}
+
+/// The cluster no longer has `environment`: its placement, and its hold on
+/// its hostname, go.
+///
+/// # Errors
+///
+/// When the database fails.
+pub(crate) async fn placement_destroyed(
+	tx: &impl leptoskit_db::Connection,
+	environment: Id<Environment>,
+) -> leptoskit_db::Result<()> {
+	let rows = Placement::query()
+		.filter(|placement| placement.environment_id.eq(environment))
+		.all(tx)
+		.await?;
+
+	for mut row in rows {
+		row.delete(tx).await?;
+	}
+
+	Ok(())
 }
 
 /// Records `event` on `job`'s deployment, while it exists.

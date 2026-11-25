@@ -304,12 +304,19 @@ pub struct Cluster {
 #[table(name = "environment_placements")]
 pub struct Placement {
 	pub id: Id<Self>,
-	#[db(unique, on_delete = cascade)]
+	/// Not a foreign key: a hostname the cluster may still route outlives
+	/// its environment's row, until the cluster's worker has removed it.
+	#[db(unique, no_foreign_key)]
 	pub environment_id: Id<Environment>,
 	pub cluster_id: Id<Cluster>,
 	/// Unique across the cloud.
 	#[db(unique, min_len = 3, max_len = 253)]
 	pub hostname: String,
+	/// Its environment is deleted while the cluster may still route its
+	/// hostname. The row, and its hold on the hostname, go when the removal
+	/// is reported destroyed.
+	#[db(default = false)]
+	pub removing: bool,
 	/// The migrations the last live deployment carried, which its server
 	/// applied as it started.
 	pub migrations: Json<Vec<MigrationFingerprint>>,
