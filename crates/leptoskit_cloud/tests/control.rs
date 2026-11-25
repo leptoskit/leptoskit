@@ -98,6 +98,11 @@ async fn replacing_an_invitation_needs_authority_over_it() {
 }
 
 #[tokio::test]
+async fn an_organisation_mails_an_address_a_few_times_an_hour() {
+	scenarios::an_organisation_mails_an_address_a_few_times_an_hour(&support::app().await).await;
+}
+
+#[tokio::test]
 async fn personal_organizations_cannot_be_squatted() {
 	scenarios::personal_organizations_cannot_be_squatted(&support::app().await).await;
 }

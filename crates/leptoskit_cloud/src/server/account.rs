@@ -1,5 +1,7 @@
 //! The bodies of [`crate::account`]'s operations.
 
+use std::time::Duration;
+
 use leptoskit_auth::Account;
 use leptoskit_auth::Mail;
 use leptoskit_auth::Mailer as _;
@@ -39,8 +41,16 @@ const INVITATION_LIFETIME: chrono::TimeDelta = chrono::TimeDelta::days(7);
 const MAX_NAME_LEN: usize = 100;
 
 /// The most pending invitations one organisation may have, so nobody can
-/// grow the table, or send mail, without bound.
+/// grow the table without bound. It doesn't bound the mail: inviting an
+/// address again replaces its invitation, which
+/// [`MAX_INVITATION_MAIL_PER_ADDRESS`] counts.
 const MAX_PENDING_INVITATIONS: u64 = 100;
+
+/// The most invitation mails one organisation may send one address in
+/// [`INVITATION_MAIL_WINDOW`], in the style of sign-in's limit on codes: an
+/// address anyone can invite shouldn't hear from the platform without end.
+const MAX_INVITATION_MAIL_PER_ADDRESS: u64 = 5;
+const INVITATION_MAIL_WINDOW: Duration = Duration::from_hours(1);
 
 pub(crate) async fn whoami(cx: &rpc::QueryCx) -> rpc::Result<WhoAmI> {
 	let caller = caller(cx.context())?;
@@ -278,6 +288,53 @@ fn normalize_email(email: &str) -> rpc::Result<String> {
 	Ok(normalized)
 }
 
+/// Refuses an invitation to `email` once `organization` has mailed it
+/// [`MAX_INVITATION_MAIL_PER_ADDRESS`] times in the last
+/// [`INVITATION_MAIL_WINDOW`], counted from the invitations it keeps.
+///
+/// # Errors
+///
+/// `TooMany` (`rate_limited`) once the window's invitations to the address
+/// reach the limit, saying how long until the oldest leaves the window;
+/// when the database fails.
+async fn check_invitation_mail(
+	tx: &impl leptoskit_db::Read,
+	organization: Id<Organization>,
+	email: &str,
+) -> rpc::Result<()> {
+	let now = leptoskit_db::now();
+	let window = super::delta(INVITATION_MAIL_WINDOW);
+	let mailed = Invitation::query()
+		.filter(|row| {
+			row.organization_id.eq(organization)
+				& row.email.eq(email)
+				& row.created_at.gt(now - window)
+		})
+		.order_by(|row| row.created_at.asc())
+		.limit(MAX_INVITATION_MAIL_PER_ADDRESS)
+		.all(tx)
+		.await?;
+	let sent = u64::try_from(mailed.len()).unwrap_or(u64::MAX);
+
+	// A full window: its oldest invitation is the first to leave it.
+	let Some(oldest) = mailed
+		.first()
+		.filter(|_| sent >= MAX_INVITATION_MAIL_PER_ADDRESS)
+	else {
+		return Ok(());
+	};
+
+	let wait = (oldest.created_at + window - now)
+		.to_std()
+		.unwrap_or_default();
+
+	Err(rpc::Error::too_many(format!(
+		"rate_limited: this organisation has sent {MAX_INVITATION_MAIL_PER_ADDRESS} invitations \
+		 to that address in the last hour; the next can go in {} seconds",
+		wait.as_secs().max(1)
+	)))
+}
+
 pub(crate) async fn invite_member(
 	cx: &rpc::MutationCx,
 	organization: &str,
@@ -322,6 +379,10 @@ pub(crate) async fn invite_member(
 			.run(cx.tx())
 			.await?;
 	}
+
+	// Inviting an address again mails it again, and replaces rather than
+	// adds, so the cap below never grows: the mail is bounded here.
+	check_invitation_mail(cx.tx(), organization_id, &email).await?;
 
 	let pending = Invitation::query()
 		.filter(|row| {

@@ -1468,6 +1468,116 @@ pub async fn replacing_an_invitation_needs_authority_over_it(app: &App) {
 	assert_eq!(accepted.expect(200).json()["role"], "developer");
 }
 
+/// Waits until the mailbox has stayed still for half a second: a mail goes
+/// once its invitation exists, which the answer doesn't wait for.
+async fn when_the_mail_has_gone(app: &App) {
+	let mut seen = usize::MAX;
+	let mut quiet = 0;
+
+	while quiet < 10 {
+		tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+		let now = app.mailbox.messages().len();
+
+		if now == seen {
+			quiet += 1;
+		} else {
+			seen = now;
+			quiet = 0;
+		}
+	}
+}
+
+/// How many messages have reached `address`.
+fn mailed_to(app: &App, address: &str) -> usize {
+	app.mailbox
+		.messages()
+		.iter()
+		.filter(|mail| mail.to == address)
+		.count()
+}
+
+/// Inviting an address again mails it again, and replaces its invitation
+/// rather than adding one, so the pending cap never grows. So an
+/// organisation may mail one address at most five times an hour
+/// (`MAX_INVITATION_MAIL_PER_ADDRESS`). Past that the call is refused and
+/// changes nothing; other addresses aren't held up; and once the hour's
+/// invitations are an hour old, another goes.
+pub async fn an_organisation_mails_an_address_a_few_times_an_hour(app: &App) {
+	// The limit, as `server::account` keeps it.
+	const LIMIT: usize = 5;
+
+	let victim = "victim@example.com";
+	let ana = app.sign_in("ana@example.com").await;
+	let org = app.personal(As::Session(&ana)).await;
+	let invite = |email: &str| {
+		app.call(
+			"invite_member",
+			json!({ "organization": org, "email": email, "role": "viewer" }),
+			As::Session(&ana),
+		)
+	};
+
+	// Invited again and again: the first five are mailed, and no more.
+	let mut answers = Vec::new();
+
+	for _ in 0..LIMIT + 3 {
+		answers.push(invite(victim).await);
+	}
+
+	when_the_mail_has_gone(app).await;
+	assert_eq!(mailed_to(app, victim), LIMIT, "{answers:?}");
+	assert!(
+		answers
+			.iter()
+			.take(LIMIT)
+			.all(|answer| answer.status == 200),
+		"{answers:?}"
+	);
+
+	for answer in answers.iter().skip(LIMIT) {
+		answer.refused(429, "rate_limited");
+	}
+
+	// A refused call changes nothing: the fifth invitation is still the one
+	// pending, where an accepted sixth would have replaced it.
+	let pending = app
+		.call(
+			"invitations",
+			json!({ "organization": org }),
+			As::Session(&ana),
+		)
+		.await;
+	let pending = pending.expect(200).json();
+	assert_eq!(pending.as_array().map(Vec::len), Some(1), "{pending}");
+	assert_eq!(pending[0]["id"], answers[LIMIT - 1].json()["id"]);
+
+	// Another address isn't held up.
+	invite("other@example.com").await.expect(200);
+	when_the_mail_has_gone(app).await;
+	assert_eq!(mailed_to(app, "other@example.com"), 1);
+
+	// Once the hour's invitations to the address are an hour old, another
+	// goes.
+	let organization = Organization::query()
+		.filter(|row| row.slug.eq(org.clone()))
+		.one(&app.system())
+		.await
+		.expect("the organisation");
+	let organization_id = organization.id;
+	Invitation::update()
+		.filter(|row| row.organization_id.eq(organization_id) & row.email.eq(victim))
+		.set(
+			|row| row.created_at,
+			leptoskit_db::now() - chrono::TimeDelta::hours(2),
+		)
+		.run(&app.system())
+		.await
+		.expect("age the invitations");
+	invite(victim).await.expect(200);
+	when_the_mail_has_gone(app).await;
+	assert_eq!(mailed_to(app, victim), LIMIT + 1);
+}
+
 /// Nobody can stop someone else's first sign-in by taking the slugs their
 /// personal organisation would get: after a few friendly names, it gets a
 /// random suffix nobody can take in advance.
