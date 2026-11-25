@@ -17,6 +17,7 @@
 //! | `delete_project`      | project      |   ✓   |   ✓   |           |         |        | `admin`          |
 //! | `delete_environment`  | project      |   ✓   |   ✓   |           |         |        | `admin`          |
 //! | `deploy`              | project      |   ✓   |   ✓   |     ✓     |         |        | `deploy`         |
+//! | `publish`             | project      |   ✓   |   ✓   |     ✓     |         |        | `publish`        |
 //! | `manage_config`       | project      |   ✓   |   ✓   |     ✓     |         |        | `manage`         |
 //! | `view_billing`        | organisation |   ✓   |   ✓   |           |    ✓    |        | `billing`        |
 //! | `manage_billing`      | organisation |   ✓   |       |           |    ✓    |        | never: a person  |
@@ -43,6 +44,10 @@
 //! Taking a backup of an environment's database is `deploy` too. Putting
 //! one back replaces everything written since, so it needs what deleting
 //! the environment does: `delete_environment`.
+//!
+//! Store publishing (`publish`) needs the `publish` scope by name in the
+//! same way, since a publish leases the stores' credentials to a worker.
+//! Reading a publish, its report and its log is `view_projects`.
 //!
 //! Billing: `view_billing` reads what an organisation has used and what it
 //! costs. `manage_billing` changes what it may spend, which is its owners'
@@ -109,6 +114,7 @@ impl Role {
 			Permission::CreateProject
 			| Permission::ManageEnvironments
 			| Permission::Deploy
+			| Permission::Publish
 			| Permission::ManageConfig => {
 				matches!(self, Self::Owner | Self::Admin | Self::Developer)
 			}
@@ -160,7 +166,7 @@ pub enum TokenScope {
 	Deploy,
 	/// Projects, environments, variables and secrets, and later domains.
 	Manage,
-	/// Store publishing, when it arrives. Reads, today.
+	/// Store publishing.
 	Publish,
 	/// Usage and the bill. The spend cap is a person's to set.
 	Billing,
@@ -210,6 +216,7 @@ impl TokenScope {
 				matches!(self, Self::Admin)
 			}
 			Permission::Deploy => matches!(self, Self::Deploy),
+			Permission::Publish => matches!(self, Self::Publish),
 			Permission::ViewBilling => matches!(self, Self::Billing),
 			Permission::ManageMembers
 			| Permission::ManageOwners
@@ -249,6 +256,8 @@ pub enum Permission {
 	DeleteEnvironment,
 	/// Ship an environment: upload archives, deploy, cancel, and roll back.
 	Deploy,
+	/// Publish a build to app and extension stores, with their credentials.
+	Publish,
 	/// Set and remove an environment's variables and secrets, and attach,
 	/// verify, and detach its domains.
 	ManageConfig,
@@ -261,7 +270,7 @@ pub enum Permission {
 
 impl Permission {
 	/// Every permission.
-	pub const ALL: [Self; 13] = [
+	pub const ALL: [Self; 14] = [
 		Self::ViewOrganization,
 		Self::ViewProjects,
 		Self::ManageMembers,
@@ -272,6 +281,7 @@ impl Permission {
 		Self::DeleteProject,
 		Self::DeleteEnvironment,
 		Self::Deploy,
+		Self::Publish,
 		Self::ManageConfig,
 		Self::ViewBilling,
 		Self::ManageBilling,
@@ -291,6 +301,7 @@ impl Permission {
 			Self::DeleteProject => "delete_project",
 			Self::DeleteEnvironment => "delete_environment",
 			Self::Deploy => "deploy",
+			Self::Publish => "publish",
 			Self::ManageConfig => "manage_config",
 			Self::ViewBilling => "view_billing",
 			Self::ManageBilling => "manage_billing",
@@ -324,6 +335,7 @@ impl Permission {
 				| Self::DeleteProject
 				| Self::DeleteEnvironment
 				| Self::Deploy
+				| Self::Publish
 				| Self::ManageConfig
 		)
 	}
@@ -450,7 +462,7 @@ pub const OPERATIONS: &[(&str, Requirement)] = &[
 	("begin_upload", Requirement::Project(Permission::Deploy)),
 	("complete_upload", Requirement::Project(Permission::Deploy)),
 	("deploy", Requirement::Project(Permission::Deploy)),
-	("publish", Requirement::Project(Permission::Deploy)),
+	("publish", Requirement::Project(Permission::Publish)),
 	(
 		"publication",
 		Requirement::Project(Permission::ViewProjects),
@@ -603,7 +615,7 @@ mod tests {
 
 	#[test]
 	fn the_table_is_the_module_docs() {
-		let expected: [(Permission, [bool; 5]); 11] = [
+		let expected: [(Permission, [bool; 5]); 12] = [
 			(Permission::ViewOrganization, [true, true, true, true, true]),
 			(Permission::ViewProjects, [true, true, true, true, true]),
 			(Permission::ManageMembers, [true, true, false, false, false]),
@@ -620,6 +632,7 @@ mod tests {
 				[true, true, false, false, false],
 			),
 			(Permission::Deploy, [true, true, true, false, false]),
+			(Permission::Publish, [true, true, true, false, false]),
 			(Permission::ManageConfig, [true, true, true, false, false]),
 		];
 
