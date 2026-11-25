@@ -3056,18 +3056,41 @@ impl<I: rpc::server::Identify> WithSettings<I> {
 	}
 }
 
+impl<I: rpc::server::Identify> WithSettings<I> {
+	fn settled(&self, mut identity: rpc::server::Identity) -> rpc::server::Identity {
+		identity.context = identity
+			.context
+			.with(self.push.clone())
+			.with(self.open_topics.clone());
+		identity
+	}
+}
+
+/// Every question but `identify` goes to the callers as asked, so a lease
+/// they set still expires a socket and a limit they set still holds there.
 impl<I: rpc::server::Identify> rpc::server::Identify for WithSettings<I> {
 	fn identify<'a>(
 		&'a self,
 		parts: &'a http::request::Parts,
 	) -> leptoskit_query::BoxFuture<'a, rpc::Result<rpc::server::Identity>> {
-		Box::pin(async move {
-			let mut identity = self.inner.identify(parts).await?;
-			identity.context = identity
-				.context
-				.with(self.push.clone())
-				.with(self.open_topics.clone());
-			Ok(identity)
-		})
+		Box::pin(async move { Ok(self.settled(self.inner.identify(parts).await?)) })
+	}
+
+	fn lease<'a>(
+		&'a self,
+		identity: &'a rpc::server::Identity,
+	) -> leptoskit_query::BoxFuture<'a, rpc::Result<rpc::server::IdentityLease>> {
+		self.inner.lease(identity)
+	}
+
+	fn identify_token<'a>(
+		&'a self,
+		token: &'a str,
+	) -> leptoskit_query::BoxFuture<'a, rpc::Result<rpc::server::Identity>> {
+		Box::pin(async move { Ok(self.settled(self.inner.identify_token(token).await?)) })
+	}
+
+	fn admit(&self, identity: &rpc::server::Identity) -> rpc::Result<()> {
+		self.inner.admit(identity)
 	}
 }

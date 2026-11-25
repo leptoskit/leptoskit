@@ -845,6 +845,30 @@ impl PushEndpoint {
 	}
 }
 
+/// How long the [`PushAcceptance`] ledger keeps a row, whatever the
+/// operator's retention: long enough for whoever meters pushes to have
+/// counted it many times over.
+pub const ACCEPTANCES_DAYS: u32 = 90;
+
+/// A push its provider accepted, one row per delivery, written in the same
+/// write that marks the delivery accepted: the ledger a host that meters
+/// pushes counts, by [`accepted_at`](Self::accepted_at). Unlike a
+/// [`PushDelivery`], it names no person, so forgetting one never removes
+/// it, and only [`ACCEPTANCES_DAYS`] does.
+#[table(name = "push_acceptances", unique(delivery), index(accepted_at))]
+pub struct PushAcceptance {
+	/// A UUID v7 made when it was accepted.
+	#[db(key)]
+	pub id: uuid::Uuid,
+	/// The delivery that was accepted.
+	pub delivery: uuid::Uuid,
+	/// The delivery's platform.
+	#[db(max_len = 16)]
+	pub platform: String,
+	/// When its provider accepted it.
+	pub accepted_at: leptoskit_db::Timestamp,
+}
+
 /// One attempt's record, per notification and endpoint: the durable
 /// delivery the push job works through, from enqueued to accepted,
 /// rejected, or skipped. Unique per pair, so a raced or repeated send

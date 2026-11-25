@@ -11,6 +11,9 @@
 //! - **Finished deliveries** go `deliveries_days` after they finished.
 //! - **Send records** go `sends_days` after the send was made, once no
 //!   notification or delivery of the send is left.
+//! - **Accepted pushes**, the ledger a metering host counts, go
+//!   [`ACCEPTANCES_DAYS`](crate::push::ACCEPTANCES_DAYS) after they were
+//!   accepted, whatever the retention.
 //! - **Ended recurrences** go `sends_days` after they ended
 //!   ([`recurrence::sweep`](super::recurrence::sweep)).
 //!
@@ -48,6 +51,7 @@ pub use super::config::Retention;
 use crate::AppSend;
 use crate::Notification;
 use crate::push::DeliveryState;
+use crate::push::PushAcceptance;
 use crate::push::PushDelivery;
 
 /// How many notifications or deliveries one write deletes at most.
@@ -77,6 +81,8 @@ pub struct Pruned {
 	pub deliveries: u64,
 	/// Send records.
 	pub sends: u64,
+	/// Accepted pushes in the ledger.
+	pub acceptances: u64,
 }
 
 impl Pruned {
@@ -84,6 +90,7 @@ impl Pruned {
 		self.notifications += other.notifications;
 		self.deliveries += other.deliveries;
 		self.sends += other.sends;
+		self.acceptances += other.acceptances;
 	}
 
 	fn is_empty(&self) -> bool {
@@ -99,6 +106,7 @@ pub(crate) enum Stage {
 	Notifications,
 	Deliveries,
 	Sends,
+	Acceptances,
 }
 
 impl Stage {
@@ -111,6 +119,7 @@ impl Stage {
 			Self::Notifications => "notifications",
 			Self::Deliveries => "deliveries",
 			Self::Sends => "sends",
+			Self::Acceptances => "acceptances",
 		}
 	}
 
@@ -120,6 +129,7 @@ impl Stage {
 			"notifications" => Some(Self::Notifications),
 			"deliveries" => Some(Self::Deliveries),
 			"sends" => Some(Self::Sends),
+			"acceptances" => Some(Self::Acceptances),
 			_ => None,
 		}
 	}
@@ -128,7 +138,8 @@ impl Stage {
 		match self {
 			Self::Notifications => Some(Self::Deliveries),
 			Self::Deliveries => Some(Self::Sends),
-			Self::Sends => None,
+			Self::Sends => Some(Self::Acceptances),
+			Self::Acceptances => None,
 		}
 	}
 }
@@ -245,8 +256,8 @@ async fn step_within(
 
 	if !pruned.is_empty() {
 		cx.progress(format!(
-			"pruned {} notifications, {} deliveries, {} send records",
-			pruned.notifications, pruned.deliveries, pruned.sends
+			"pruned {} notifications, {} deliveries, {} send records, {} accepted pushes",
+			pruned.notifications, pruned.deliveries, pruned.sends, pruned.acceptances
 		));
 	}
 
@@ -289,6 +300,10 @@ async fn batch(
 			(next.map(|next| next.to_string()), pruned)
 		}
 		Stage::Sends => sends(db, retention, now, after).await?,
+		Stage::Acceptances => {
+			let (next, pruned) = acceptances(db, now, id).await?;
+			(next.map(|next| next.to_string()), pruned)
+		}
 	})
 }
 
@@ -449,7 +464,7 @@ async fn notifications(
 		Pruned {
 			notifications,
 			deliveries,
-			sends: 0,
+			..Pruned::default()
 		},
 	))
 }
@@ -495,9 +510,54 @@ async fn deliveries(
 	Ok((
 		(rows.len() >= BATCH).then_some(last),
 		Pruned {
-			notifications: 0,
 			deliveries,
-			sends: 0,
+			..Pruned::default()
+		},
+	))
+}
+
+/// One batch of the accepted-push ledger: the next rows after `after` older
+/// than [`ACCEPTANCES_DAYS`](crate::push::ACCEPTANCES_DAYS), deleted in one
+/// write.
+async fn acceptances(
+	db: &Db,
+	now: Timestamp,
+	after: Option<Uuid>,
+) -> rpc::Result<(Option<Uuid>, Pruned)> {
+	let Some(cutoff) = cutoff(now, Some(crate::push::ACCEPTANCES_DAYS)) else {
+		return Ok((None, Pruned::default()));
+	};
+	let bound = id_before(cutoff);
+
+	let rows = PushAcceptance::query()
+		.filter(|row| {
+			let mut condition = row.id.lt(bound) & row.accepted_at.lte(cutoff);
+
+			if let Some(after) = after {
+				condition = condition & row.id.gt(after);
+			}
+
+			condition
+		})
+		.order_by(|row| row.id.asc())
+		.limit(u64::try_from(BATCH).unwrap_or(u64::MAX))
+		.all(db)
+		.await?;
+
+	let Some(last) = rows.last().map(|row| row.id) else {
+		return Ok((None, Pruned::default()));
+	};
+
+	let acceptances = PushAcceptance::query()
+		.filter(|row| row.id.in_list(rows.iter().map(|row| row.id)))
+		.delete(db)
+		.await?;
+
+	Ok((
+		(rows.len() >= BATCH).then_some(last),
+		Pruned {
+			acceptances,
+			..Pruned::default()
 		},
 	))
 }
@@ -570,9 +630,8 @@ async fn sends(
 	Ok((
 		next,
 		Pruned {
-			notifications: 0,
-			deliveries: 0,
 			sends,
+			..Pruned::default()
 		},
 	))
 }

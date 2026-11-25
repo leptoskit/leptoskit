@@ -549,6 +549,22 @@ The `deployments`, `workers` and `operator` operations are declared in `leptoski
 - The Solana dApp Store's release needs the publisher's wallet to sign; the wallet signing flow (`signing_request`, `submit_signature`) isn't built, so a cloud publish to `solana` needs the keypair as a credential, which the design says the cloud should never hold.
 - `lk cloud publish` is built (CLI 3); the console's stores page isn't (UI 3).
 
+### Security review of hosted notifications, slice 4
+
+An independent review of the hub ([hosted notifications](cloud-notifications.md), `crates/leptoskit_cloud_notifications`), reading the code without running it, found these sound: a request reaches one tenant's router only, by a path that must be 32 lower-case hex digits or by an exact hostname; each router refuses every token but its own app's; settings outside `LEPTOSKIT_NOTIFICATIONS_*` are dropped; a database error never repeats its address; and a usage cursor the hub didn't write stops counting rather than restarting it.
+
+| # | Finding                                                                                                                                                  | Severity   | Fixed                                                                                                                          |
+| - | -------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| 1 | Usage was counted from `push_deliveries`, which `forget_person` and retention delete: an app could forget its people before each round and pay for none. | Medium     | `push_acceptances`, written with each acceptance, names no person, and is pruned only after 90 days. The hub counts it.        |
+| 2 | `WithSettings` implemented only `identify`, so the callers' `lease`, `identify_token` and `admit` were lost; a dropped tenant's sockets stayed open.     | Medium     | All four pass through; a tenant dropped or replaced drains its live connections.                                               |
+| 3 | Each reopen made a new pool beside the old one.                                                                                                          | Low–medium | The pool is reused when the address is unchanged, and the old routes' sockets are closed.                                      |
+| 4 | The first tenant to claim a hostname kept it after the control plane moved it.                                                                           | Low        | Hosts are rebuilt from every tenant on each change; the most recently opened wins, and the conflict is logged.                 |
+| 5 | The one-minute lag assumes the writer's and counter's clocks agree.                                                                                      | Low        | Documented: the job workers and the counter are one process on one clock.                                                      |
+| 6 | One slow tenant held up every other tenant's round.                                                                                                      | Low        | Opening a tenant times out after two minutes and counts as failed.                                                             |
+| 7 | A failure's reason could quote a setting's value, logged and sent to the control plane.                                                                  | Low        | The token, the database address and password, and every setting value of four characters or more are replaced by `[redacted]`. |
+
+Also fixed: over HTTP/2, with no `Host` header, the hub routes by the URI's authority.
+
 ### Security review of hosted notifications, slice 3
 
 An independent review of the cluster worker's part of [hosted notifications](cloud-notifications.md), reading the code without running it, found these sound: the platform-service bound compares the operator's hub on every field, the notifications lease is taken out before the runtime is given anything and never appears in an error, `ours` and `STILL_OPEN` accept only `env_` or `ntf_` and 32 lower-case hex digits, and a removal checks both names before anything is removed.

@@ -12,3 +12,4 @@
 20261119T020942_endpoint_import
 20261119T022548_endpoint_apns_environment
 20261119T030232_recurring_sends
+20261125T195734_push_acceptances
