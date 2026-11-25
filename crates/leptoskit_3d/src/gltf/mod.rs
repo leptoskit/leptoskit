@@ -1448,6 +1448,23 @@ fn mesh_extent_diagonal(vertices: &[Vertex]) -> f64 {
 	(extent[0] * extent[0] + extent[1] * extent[1] + extent[2] * extent[2]).sqrt()
 }
 
+/// The weld group of each of `vertices`, named by one of its members:
+/// copies closer than a hundred-thousandth of the bounds' diagonal `diag`
+/// weld, as the outline normals' do, wherever they fall against a grid.
+fn weld_vertex_copies(vertices: &[Vertex], diag: f64) -> Vec<usize> {
+	let positions: Vec<Vec3> = vertices
+		.iter()
+		.map(|vertex| Vec3::from(vertex.position))
+		.collect();
+	let tol = if diag.is_finite() && diag > 0.0 {
+		(diag * 1.0e-5).max(1.0e-12)
+	} else {
+		0.0
+	};
+
+	weld_groups(&positions, tol)
+}
+
 fn quantize_position(position: [f32; 3], cell: f64) -> [i64; 3] {
 	position.map(|value| {
 		let scaled = f64::from(value) / cell;
@@ -1514,12 +1531,19 @@ fn smooth_mesh_outline_normals(asset: &mut Asset, mesh_index: usize, rings: u8) 
 	};
 
 	let local_count = end_vertex - first_vertex;
-	let mut order: Vec<([i64; 3], [i8; 3], usize)> = asset.vertices[first_vertex..end_vertex]
+	let vertices = &asset.vertices[first_vertex..end_vertex];
+	// Every copy of a corner snaps to the grid from one shared position, so
+	// copies a rounding apart on either side of a cell boundary still share
+	// a cell. Only copies weld across cells: the
+	// cell is far wider than a weld, and welding it transitively would chain
+	// a dense mesh's neighbouring vertices into one blob.
+	let welded = weld_vertex_copies(vertices, diag);
+	let mut order: Vec<([i64; 3], [i8; 3], usize)> = vertices
 		.iter()
 		.enumerate()
 		.map(|(offset, vertex)| {
 			(
-				quantize_position(vertex.position, cell),
+				quantize_position(vertices[welded[offset]].position, cell),
 				snorm(Vec3::from(vertex.normal)),
 				offset,
 			)
@@ -1646,27 +1670,11 @@ fn build_mesh_knockout_vertices(asset: &mut Asset, mesh_index: usize) {
 	else {
 		return;
 	};
-	let diag = mesh_extent_diagonal(&asset.vertices[first_vertex..end_vertex]);
-	let cell = if diag.is_finite() && diag > 0.0 {
-		(diag * 1.0e-5).max(1.0e-12)
-	} else {
-		1.0
-	};
-
-	let local_count = end_vertex - first_vertex;
-	let mut cells: HashMap<[i64; 3], usize> = HashMap::with_capacity(local_count);
-	let mut group_of = vec![0_usize; local_count];
-	let mut group_count = 0_usize;
-
-	for (offset, vertex) in asset.vertices[first_vertex..end_vertex].iter().enumerate() {
-		let key = quantize_position(vertex.position, cell);
-		let group = *cells.entry(key).or_insert_with(|| {
-			let id = group_count;
-			group_count += 1;
-			id
-		});
-		group_of[offset] = group;
-	}
+	let vertices = &asset.vertices[first_vertex..end_vertex];
+	// Each group is named by one of its vertices, so the vertices' count
+	// covers every name.
+	let group_of = weld_vertex_copies(vertices, mesh_extent_diagonal(vertices));
+	let group_count = group_of.len();
 
 	let edge_counts = count_mesh_edges(
 		&asset.meshes[mesh_index].primitives,
@@ -2988,5 +2996,112 @@ mod tests {
 		)
 		.unwrap();
 		assert_eq!(override_zero.ink_vertices, default_asset.ink_vertices);
+	}
+
+	/// A closed tetrahedron, one primitive with every face's corners copied,
+	/// whose apex copies sit at `apex_x` (one face) and `apex_x_again` (two).
+	fn closed_tetrahedron(apex_x: f32, apex_x_again: f32) -> Asset {
+		let a = [0.0_f32, 0.0, 0.0];
+		let b = [1.0, 0.0, 0.0];
+		let c = [0.0, 1.0, 0.0];
+		let apex = [apex_x, 0.3, 1.0];
+		let apex_again = [apex_x_again, 0.3, 1.0];
+		let faces = [
+			[a, c, b],
+			[a, b, apex],
+			[b, c, apex_again],
+			[c, a, apex_again],
+		];
+		let mut asset = Asset::default();
+
+		for position in faces.into_iter().flatten() {
+			asset.vertices.push(Vertex {
+				position,
+				normal: [0.0, 0.0, 1.0],
+				uv: [0.0, 0.0],
+				color: [255; 4],
+			});
+			asset.ink_vertices.push(InkVertex::default());
+		}
+
+		asset.indices = (0..12).collect();
+		asset.meshes.push(Mesh {
+			primitives: vec![Primitive {
+				base_vertex: 0,
+				vertex_count: 12,
+				first_index: 0,
+				index_count: 12,
+				material: 0,
+				bounds: Aabb::EMPTY,
+				skin_base: None,
+				morph: None,
+				has_open_edges: false,
+			}],
+			..Mesh::default()
+		});
+		asset
+	}
+
+	#[test]
+	fn knockout_keeps_a_closed_mesh_closed_at_a_cell_boundary() {
+		// The knockout welds within a hundred-thousandth of the bounds'
+		// diagonal, here the square root of 3, and once rounded to a grid
+		// that wide. Put the apex's copies one ulp apart, on either side of a
+		// half cell of that grid.
+		let cell = 3.0_f64.sqrt() * 1.0e-5;
+		let boundary = (20_000.0 + 0.5) * cell;
+		let nearest = boundary as f32;
+		let (low, high) = if f64::from(nearest) < boundary {
+			(nearest, f32::from_bits(nearest.to_bits() + 1))
+		} else {
+			(f32::from_bits(nearest.to_bits() - 1), nearest)
+		};
+
+		let mut same = closed_tetrahedron(high, high);
+		build_knockout_vertices(&mut same);
+		assert!(!same.meshes[0].primitives[0].has_open_edges);
+
+		let mut split = closed_tetrahedron(low, high);
+		build_knockout_vertices(&mut split);
+		assert!(
+			!split.meshes[0].primitives[0].has_open_edges,
+			"a closed tetrahedron whose apex copies are one ulp apart ({low:e} and {high:e}) has \
+			 open edges"
+		);
+		assert!(
+			split.knockout_vertices.is_empty(),
+			"a closed mesh needs no knockout normals"
+		);
+	}
+
+	#[test]
+	fn smoothing_keeps_a_corners_copies_together_at_a_cell_boundary() {
+		// Smoothing snaps to a grid 1.2 mm across here. Put the apex's copies
+		// one ulp apart, on either side of a half cell, with each face's own
+		// normal, so copies that fall apart smooth to different normals.
+		let boundary = (288.0 + 0.5) * 1.2e-3_f64;
+		let nearest = boundary as f32;
+		let (low, high) = if f64::from(nearest) < boundary {
+			(nearest, f32::from_bits(nearest.to_bits() + 1))
+		} else {
+			(f32::from_bits(nearest.to_bits() - 1), nearest)
+		};
+		let mut asset = closed_tetrahedron(low, high);
+
+		for face in asset.vertices.chunks_mut(3) {
+			let [a, b, c] = [0, 1, 2].map(|index| Vec3::from(face[index].position));
+			let normal = (b - a).cross(c - a).normalize().to_array();
+
+			for vertex in face {
+				vertex.normal = normal;
+			}
+		}
+
+		smooth_mesh_outline_normals(&mut asset, 0, 1);
+		let apex = [5, 8, 11].map(|index| asset.ink_vertices[index].normal);
+		assert!(
+			apex.iter().all(|normal| *normal == apex[0]),
+			"the apex's copies at {low:e} and {high:e} smooth apart: {apex:?}"
+		);
 	}
 }
