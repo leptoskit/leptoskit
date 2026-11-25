@@ -109,6 +109,13 @@ async fn replacing_an_invitation_needs_authority_over_it() {
 }
 
 #[tokio::test]
+async fn an_organisation_mails_an_address_a_few_times_an_hour() {
+	if let Some((_postgres, app)) = app().await {
+		scenarios::an_organisation_mails_an_address_a_few_times_an_hour(&app).await;
+	}
+}
+
+#[tokio::test]
 async fn personal_organizations_cannot_be_squatted() {
 	if let Some((_postgres, app)) = app().await {
 		scenarios::personal_organizations_cannot_be_squatted(&app).await;
