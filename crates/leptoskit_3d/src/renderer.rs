@@ -1033,9 +1033,12 @@ impl Renderer {
 			ink[3] = 0.0;
 		}
 
-		// A scene's ink of no width draws no outline, but still its inner
-		// lines and hatching.
-		let outlined = inked && sight.ink.is_some_and(|ink| ink.width > 0.0);
+		// A scene's ink of no width draws no outline, and alpha-masked cutouts
+		// skip the inverted hull so transparent cutout holes are never filled
+		// with ink, while keeping their inner lines and hatching.
+		let outlined = inked
+			&& material.alpha == AlphaMode::Opaque
+			&& sight.ink.is_some_and(|ink| ink.width > 0.0);
 
 		let record = instance_record(
 			overrides,

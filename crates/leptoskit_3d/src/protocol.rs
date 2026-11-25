@@ -413,9 +413,9 @@ pub struct PartInk {
 	/// Multiplies the line's width, from 0 to 8: 0 draws no line (and no inner
 	/// line or hatching), 1 the scene's width. `None` is 1, except on unlit,
 	/// blended, faded, and additive parts, which have none unless one is set.
-	/// Blended, faded, and additive parts never draw the outline itself, only
-	/// the inner line and hatching: fade a part's line out with its weight
-	/// before fading the part.
+	/// Alpha-masked (cutout), blended, faded, and additive parts never draw the
+	/// outline itself, only the inner line and hatching: fade a part's line out
+	/// with its weight before fading the part.
 	pub weight: Option<f32>,
 	/// The line's colour, linear RGB, or `None` for the scene's ink colour.
 	pub color: Option<[f32; 3]>,

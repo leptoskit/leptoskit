@@ -1572,3 +1572,29 @@ fn double_sided_zero_weight_does_not_paint_solid_ink() {
 		image.at(32, 32)
 	);
 }
+
+#[test]
+fn alpha_mask_cutout_is_not_filled_by_outline() {
+	let Some(gpu) = gpu() else { return };
+	let mut renderer = renderer(gpu);
+	// Fully cut-out masked quad (alpha = 0.0 < cutoff 0.5): fs_mesh discards
+	// all pixels, so nothing should be visible, including no ink hull.
+	spawn(
+		&mut renderer,
+		1,
+		1,
+		&back_facing_quad([0.5, 0.5, 0.5, 0.0], "MASK", None),
+	);
+	renderer
+		.world_mut()
+		.apply([style(Shading::Pbr, Some(red_ink(3.0)))]);
+	let image = draw(&mut renderer);
+	assert_eq!(
+		ink_count(&image),
+		0,
+		"cut-out MASK quad painted {} solid ink pixels; center={:?}",
+		ink_count(&image),
+		image.at(32, 32)
+	);
+	assert_eq!(renderer.stats().outlines, 0);
+}
