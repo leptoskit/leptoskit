@@ -177,7 +177,7 @@ pub(crate) async fn publish(
 		cx.context(),
 		&args.organization,
 		&args.project,
-		Permission::Deploy,
+		Permission::Publish,
 	)
 	.await?;
 	let stores = checked_stores(&args.stores)?;

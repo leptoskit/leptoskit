@@ -73,6 +73,8 @@ Every `lk cloud` subcommand accepts `--json`, `--org <slug>`, `--project <slug>`
 | `lk cloud usage [--period YYYY-MM]`                                                     | Shows monthly compute, build, database, and transfer usage                                             |
 | `lk cloud publish <store>... [--submit] [--detach]`                                     | Queues store publication on a configured build worker                                                  |
 
+An API token needs the `publish` scope to call `lk cloud publish`; the `deploy` scope alone doesn't publish to a store. The command uploads the source archive first, so the token needs `deploy` as well, as in `lk cloud token create ci --scope deploy --scope publish`.
+
 Like `cargo`, `lk cloud` also dispatches external subcommands: any executable named `leptoskit-cloud-<name>` installed beside `lk` or on `PATH` can be run as `lk cloud <name> [ARGS]...` (for example `lk cloud platform up ...`, `lk cloud worker run ...`, or `lk cloud control serve ...` for self-hosted cloud operators).
 
 <Callout kind="note" title="Secrets stay out of shell history">
