@@ -3106,3 +3106,130 @@ fn print_paper_knockout_handles_alpha_mask_and_mirrored_transform() {
 		"mirrored sphere must have outer paper ring (left={left_ring}, right={right_ring})"
 	);
 }
+
+#[test]
+fn outline_smooth_rings_loads_and_renders_closed_smoothed_hull() {
+	let Some(gpu) = gpu() else { return };
+	// Build a hard-edged 3-band faceted cube (3 rings along Y so middle rings
+	// sit 1 hop from the top/bottom 90 deg caps) and compare rings=0 vs
+	// rings=2.
+	let mut builder = fixture::Builder::default();
+	let (mut positions, mut normals, mut indices) = (Vec::new(), Vec::new(), Vec::new());
+	let bands: [(f32, f32, f32, f32); 3] = [
+		(-0.5, -0.2, 0.5, 0.5),
+		(-0.2, 0.2, 0.5, 0.5),
+		(0.2, 0.5, 0.5, 0.35),
+	];
+	let mut push_quad = |quad: [[f32; 3]; 4], normal: [f32; 3]| {
+		let base = (positions.len() / 3) as u16;
+		for p in quad {
+			positions.extend_from_slice(&p);
+			normals.extend_from_slice(&normal);
+		}
+		indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+	};
+	for &(y0, y1, r0, r1) in &bands {
+		let side_dirs: [([f32; 2], [f32; 2], [f32; 3]); 4] = [
+			([-1.0, 1.0], [1.0, 1.0], [0.0, 0.0, 1.0]),
+			([1.0, 1.0], [1.0, -1.0], [1.0, 0.0, 0.0]),
+			([1.0, -1.0], [-1.0, -1.0], [0.0, 0.0, -1.0]),
+			([-1.0, -1.0], [-1.0, 1.0], [-1.0, 0.0, 0.0]),
+		];
+		for (a, b, n) in side_dirs {
+			push_quad(
+				[
+					[a[0] * r0, y0, a[1] * r0],
+					[b[0] * r0, y0, b[1] * r0],
+					[b[0] * r1, y1, b[1] * r1],
+					[a[0] * r1, y1, a[1] * r1],
+				],
+				n,
+			);
+		}
+	}
+	// Top and bottom caps.
+	push_quad(
+		[
+			[-0.35, 0.5, 0.35],
+			[0.35, 0.5, 0.35],
+			[0.35, 0.5, -0.35],
+			[-0.35, 0.5, -0.35],
+		],
+		[0.0, 1.0, 0.0],
+	);
+	push_quad(
+		[
+			[-0.5, -0.5, -0.5],
+			[0.5, -0.5, -0.5],
+			[0.5, -0.5, 0.5],
+			[-0.5, -0.5, 0.5],
+		],
+		[0.0, -1.0, 0.0],
+	);
+	let p = builder.floats(&positions, 3, true);
+	let n = builder.floats(&normals, 3, false);
+	let i = builder.u16s(&indices, 1);
+	let glb = builder.glb(&format!(
+		r#""asset":{{"version":"2.0"}},"scenes":[{{"nodes":[0]}}],"nodes":[{{"name":"bevel","mesh":0}}],"meshes":[{{"primitives":[{{"attributes":{{"POSITION":{p},"NORMAL":{n}}},"indices":{i},"material":0}}]}}],"materials":[{{"name":"clay","pbrMetallicRoughness":{{"baseColorFactor":[0.5,0.5,0.5,1]}}}}]"#
+	));
+
+	let render_with_rings = |rings: Option<u8>| {
+		let asset = Arc::new(
+			Asset::from_slice_with_options(
+				&glb,
+				LoadOptions {
+					outline_smooth_rings: rings,
+				},
+			)
+			.unwrap(),
+		);
+		let mut r = renderer(gpu);
+		let world = r.world_mut();
+		world.apply([
+			Op::LoadAsset {
+				asset: AssetId(1),
+				path: "bevel.glb".into(),
+			},
+			Op::Spawn {
+				node: NodeId(1),
+				asset: Some(AssetId(1)),
+				parent: None,
+			},
+			Op::SetTransform {
+				node: NodeId(1),
+				transform: Transform::IDENTITY.with_yaw(0.45),
+			},
+			Op::SetBackdrop(Backdrop::Color([0.04, 0.04, 0.08, 1.0])),
+			Op::SetPrint {
+				node: NodeId(1),
+				target: PrintTarget::All,
+				print: PrintOverride {
+					lit: Some([0.1, 0.25, 0.85]),
+					mode: Some(PrintMode::Flat),
+					..PrintOverride::default()
+				},
+			},
+			style(
+				Shading::Print(print_no_knockout()),
+				Some(Ink {
+					wobble: 0.0,
+					..red_ink(30.0)
+				}),
+			),
+		]);
+		world.take_loads();
+		world.asset_loaded(AssetId(1), Ok(asset));
+		world.take_events();
+		render_size(&mut r, 128)
+	};
+
+	let plain = render_with_rings(None);
+	let zero = render_with_rings(Some(0));
+	let smooth = render_with_rings(Some(2));
+	assert_eq!(plain.pixels, zero.pixels, "None and Some(0) match exactly");
+	assert!(ink_count(&smooth) > 200, "smoothed hull draws full outline");
+	assert_ne!(
+		plain.pixels, smooth.pixels,
+		"2 smoothing rings visibly adjust faceted hull corners"
+	);
+}

@@ -62,6 +62,10 @@ pub use glam;
 #[cfg(feature = "renderer")]
 pub use gltf::LoadError;
 #[cfg(feature = "renderer")]
+pub use gltf::LoadOptions;
+#[cfg(feature = "renderer")]
+pub use gltf::MAX_OUTLINE_SMOOTH_RINGS;
+#[cfg(feature = "renderer")]
 pub use gpu::Backend;
 #[cfg(feature = "renderer")]
 pub use gpu::Error;
@@ -97,5 +101,23 @@ impl Asset {
 		mut resolve: impl FnMut(&str) -> Result<Vec<u8>, String>,
 	) -> Result<Self, LoadError> {
 		gltf::load(bytes, &mut resolve)
+	}
+
+	/// Loads a model from embedded `.glb` or `.gltf` bytes with explicit
+	/// [`LoadOptions`] (such as welded outline-normal smoothing rings).
+	pub fn from_slice_with_options(bytes: &[u8], options: LoadOptions) -> Result<Self, LoadError> {
+		gltf::load_with_options(bytes, options, &mut |path| {
+			Err(format!("{path} is not embedded in the model"))
+		})
+	}
+
+	/// Loads a model whose `.gltf` refers to files beside it, with explicit
+	/// [`LoadOptions`].
+	pub fn from_slice_with_resolver_and_options(
+		bytes: &[u8],
+		options: LoadOptions,
+		mut resolve: impl FnMut(&str) -> Result<Vec<u8>, String>,
+	) -> Result<Self, LoadError> {
+		gltf::load_with_options(bytes, options, &mut resolve)
 	}
 }

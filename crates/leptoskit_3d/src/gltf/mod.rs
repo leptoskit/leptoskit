@@ -17,6 +17,23 @@ use glam::Vec3;
 use crate::asset::*;
 use crate::sanitize::*;
 
+/// Maximum number of vertex-adjacency smoothing rings applied to welded
+/// outline normals via [`LoadOptions::outline_smooth_rings`] or glTF
+/// `extras.outlineSmoothRings`.
+pub const MAX_OUTLINE_SMOOTH_RINGS: u8 = 8;
+
+/// Options controlling how a glTF asset is prepared at load time.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct LoadOptions {
+	/// How many rings of vertex-adjacency Laplacian smoothing to apply to
+	/// welded outline normals (`0` leaves the default welded hull unchanged;
+	/// clamped to [`MAX_OUTLINE_SMOOTH_RINGS`]).
+	///
+	/// When `None`, the loader reads `extras.outlineSmoothRings` from each
+	/// mesh or from the document root, defaulting to `0` when absent.
+	pub outline_smooth_rings: Option<u8>,
+}
+
 /// Why a model could not load.
 #[derive(Debug, thiserror::Error)]
 pub enum LoadError {
@@ -556,12 +573,21 @@ impl<'a> Document<'a> {
 	}
 }
 
-/// Loads a model from the bytes of a `.glb` or `.gltf` file. `resolve` reads
-/// a file the model refers to by a relative path, such as a `.bin` buffer or
-/// a texture beside a `.gltf`; it is never asked for a path outside the
-/// model's folder.
+/// Loads a model from the bytes of a `.glb` or `.gltf` file with default
+/// [`LoadOptions`]. `resolve` reads a file the model refers to by a relative
+/// path, such as a `.bin` buffer or a texture beside a `.gltf`; it is never
+/// asked for a path outside the model's folder.
 pub(crate) fn load(
 	bytes: &[u8],
+	resolve: &mut dyn FnMut(&str) -> Result<Vec<u8>, String>,
+) -> Result<Asset, LoadError> {
+	load_with_options(bytes, LoadOptions::default(), resolve)
+}
+
+/// Loads a model from `.glb` or `.gltf` bytes with explicit [`LoadOptions`].
+pub(crate) fn load_with_options(
+	bytes: &[u8],
+	options: LoadOptions,
 	resolve: &mut dyn FnMut(&str) -> Result<Vec<u8>, String>,
 ) -> Result<Asset, LoadError> {
 	let document = Document::parse(bytes, resolve)?;
@@ -572,6 +598,7 @@ pub(crate) fn load(
 	load_skins(&document, &mut asset)?;
 	load_clips(&document, &mut asset)?;
 	asset.units = rest_units(&asset);
+	smooth_outline_normals(&document, &mut asset, options);
 	build_knockout_vertices(&mut asset);
 	Ok(asset)
 }
@@ -1379,6 +1406,189 @@ fn weld_mesh(asset: &mut Asset, first_vertex: usize) {
 		.zip(welded_normals(&positions, &normals))
 	{
 		ink.normal = snorm(normal);
+	}
+}
+
+/// Optional vertex-adjacency Laplacian smoothing of welded outline normals.
+/// Runs only when `LoadOptions::outline_smooth_rings` or glTF
+/// `extras.outlineSmoothRings` resolves to `rings > 0`; at `0` (the default),
+/// `asset.ink_vertices` stays byte-for-byte identical to [`weld_mesh`].
+fn smooth_outline_normals(document: &Document<'_>, asset: &mut Asset, options: LoadOptions) {
+	let root_rings = document
+		.root
+		.extras
+		.as_ref()
+		.and_then(|extras| extras.outline_smooth_rings);
+
+	for (mesh_index, mesh) in asset.meshes.iter().enumerate() {
+		let mesh_rings = document
+			.root
+			.meshes
+			.get(mesh_index)
+			.and_then(|mesh| mesh.extras.as_ref())
+			.and_then(|extras| extras.outline_smooth_rings);
+		let rings = options
+			.outline_smooth_rings
+			.or(mesh_rings)
+			.or(root_rings)
+			.unwrap_or(0)
+			.min(MAX_OUTLINE_SMOOTH_RINGS);
+
+		if rings == 0 || mesh.primitives.is_empty() {
+			continue;
+		}
+
+		let first_vertex = mesh
+			.primitives
+			.iter()
+			.map(|primitive| primitive.base_vertex as usize)
+			.min()
+			.unwrap_or(0);
+		let end_vertex = mesh
+			.primitives
+			.iter()
+			.map(|primitive| primitive.base_vertex as usize + primitive.vertex_count as usize)
+			.max()
+			.unwrap_or(first_vertex);
+
+		if end_vertex <= first_vertex || end_vertex > asset.vertices.len() {
+			continue;
+		}
+
+		let unit_scale = asset
+			.nodes
+			.iter()
+			.enumerate()
+			.find_map(|(node_idx, node)| {
+				(node.mesh == Some(mesh_index))
+					.then(|| asset.units.get(node_idx).copied().unwrap_or(1.0))
+			})
+			.unwrap_or(1.0);
+
+		let mut min = [f64::INFINITY; 3];
+		let mut max = [f64::NEG_INFINITY; 3];
+		for vertex in &asset.vertices[first_vertex..end_vertex] {
+			for axis in 0..3 {
+				let v = f64::from(vertex.position[axis]);
+				if v.is_finite() {
+					min[axis] = min[axis].min(v);
+					max[axis] = max[axis].max(v);
+				}
+			}
+		}
+		let extent = [
+			(max[0] - min[0]).max(0.0),
+			(max[1] - min[1]).max(0.0),
+			(max[2] - min[2]).max(0.0),
+		];
+		let diag = (extent[0] * extent[0] + extent[1] * extent[1] + extent[2] * extent[2]).sqrt();
+		let weld_m = 1.2e-3_f64 / f64::from(unit_scale).max(1.0e-4);
+		let cell = if diag.is_finite() && diag > 0.0 {
+			(diag * 1.0e-5).max(weld_m).min(diag * 0.01).max(1.0e-12)
+		} else {
+			1.0
+		};
+
+		let local_count = end_vertex - first_vertex;
+		let mut order: Vec<([i64; 3], [i8; 3], usize)> = asset.vertices[first_vertex..end_vertex]
+			.iter()
+			.enumerate()
+			.map(|(offset, vertex)| {
+				let key = vertex.position.map(|value| {
+					let scaled = f64::from(value) / cell;
+					if scaled.is_finite() {
+						scaled.round() as i64
+					} else {
+						0
+					}
+				});
+				(key, snorm(Vec3::from(vertex.normal)), offset)
+			})
+			.collect();
+		order.sort_unstable();
+
+		let mut group_of = vec![0_usize; local_count];
+		let mut group_normals: Vec<Vec3> = Vec::new();
+		let mut group_valid: Vec<bool> = Vec::new();
+
+		for copies in order.chunk_by(|a, b| a.0 == b.0) {
+			let group = group_normals.len();
+			let sum: Vec3 = copies
+				.chunk_by(|a, b| a.1 == b.1)
+				.map(|same| {
+					Vec3::from(asset.vertices[first_vertex + same[0].2].normal).normalize_or_zero()
+				})
+				.sum();
+			let valid = sum.length_squared() >= 0.01;
+			group_normals.push(if valid { sum.normalize() } else { Vec3::ZERO });
+			group_valid.push(valid);
+			for (.., offset) in copies {
+				group_of[*offset] = group;
+			}
+		}
+
+		let group_count = group_normals.len();
+		let mut neighbors: Vec<Vec<usize>> = vec![Vec::new(); group_count];
+		for primitive in &mesh.primitives {
+			let base = primitive.base_vertex as usize;
+			let start = primitive.first_index as usize;
+			let end = start + primitive.index_count as usize;
+			for tri in asset.indices[start..end].chunks_exact(3) {
+				let va = base + tri[0] as usize;
+				let vb = base + tri[1] as usize;
+				let vc = base + tri[2] as usize;
+				if va < first_vertex
+					|| vb < first_vertex
+					|| vc < first_vertex
+					|| va >= end_vertex
+					|| vb >= end_vertex
+					|| vc >= end_vertex
+				{
+					continue;
+				}
+				let ga = group_of[va - first_vertex];
+				let gb = group_of[vb - first_vertex];
+				let gc = group_of[vc - first_vertex];
+				for (u, v) in [(ga, gb), (gb, gc), (gc, ga)] {
+					if u != v {
+						neighbors[u].push(v);
+						neighbors[v].push(u);
+					}
+				}
+			}
+		}
+		for list in &mut neighbors {
+			list.sort_unstable();
+			list.dedup();
+		}
+
+		let mut current = group_normals;
+		let mut next = vec![Vec3::ZERO; group_count];
+		for _ in 0..rings {
+			for g in 0..group_count {
+				if !group_valid[g] {
+					next[g] = Vec3::ZERO;
+					continue;
+				}
+				let mut sum = current[g];
+				let mut count = 1_u32;
+				for &nbr in &neighbors[g] {
+					if group_valid[nbr] {
+						sum += current[nbr];
+						count += 1;
+					}
+				}
+				next[g] = sum / count as f32;
+			}
+			std::mem::swap(&mut current, &mut next);
+		}
+
+		for offset in 0..local_count {
+			let g = group_of[offset];
+			if group_valid[g] && current[g].length_squared() > 1.0e-6 {
+				asset.ink_vertices[first_vertex + offset].normal = snorm(current[g].normalize());
+			}
+		}
 	}
 }
 
@@ -2555,5 +2765,186 @@ mod tests {
 	fn node_seeds_match_ieee_crc32() {
 		assert_eq!(crc32(b"123456789"), 0xCBF4_3926);
 		assert_ne!(crc32(b"head_0"), crc32(b"robe_0"));
+	}
+
+	/// Builds a minimal faceted bent strip (two flat quads meeting at a 90°
+	/// corner, with a second strip along `+x` so vertices sit 1 and 2 rings
+	/// away from the corner) with optional root and mesh `outlineSmoothRings`
+	/// glTF extras.
+	fn bent_faceted_gltf(root_extra: Option<u8>, mesh_extra: Option<u8>) -> Vec<u8> {
+		// 3 flat quads along x=0..1..2 (normal +z) and 1 bent down at x=0 into
+		// z=0..-1 (normal -x). Vertex 2 at (1, 0, 0) is 1 ring from the 90 deg
+		// crease at x=0; vertex 4 at (2, 0, 0) is 2 rings away.
+		let positions: [[f32; 3]; 12] = [
+			// Quad A: x in [0, 1], z=0, normal +z
+			[0.0, 0.0, 0.0],
+			[1.0, 0.0, 0.0],
+			[1.0, 1.0, 0.0],
+			[0.0, 1.0, 0.0],
+			// Quad B: x in [1, 2], z=0, normal +z
+			[1.0, 0.0, 0.0],
+			[2.0, 0.0, 0.0],
+			[2.0, 1.0, 0.0],
+			[1.0, 1.0, 0.0],
+			// Quad C: x=0, z in [-1, 0], normal -x
+			[0.0, 0.0, -1.0],
+			[0.0, 0.0, 0.0],
+			[0.0, 1.0, 0.0],
+			[0.0, 1.0, -1.0],
+		];
+		let normals: [[f32; 3]; 12] = [
+			[0.0, 0.0, 1.0],
+			[0.0, 0.0, 1.0],
+			[0.0, 0.0, 1.0],
+			[0.0, 0.0, 1.0],
+			[0.0, 0.0, 1.0],
+			[0.0, 0.0, 1.0],
+			[0.0, 0.0, 1.0],
+			[0.0, 0.0, 1.0],
+			[-1.0, 0.0, 0.0],
+			[-1.0, 0.0, 0.0],
+			[-1.0, 0.0, 0.0],
+			[-1.0, 0.0, 0.0],
+		];
+		let indices: [u16; 18] = [0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7, 8, 9, 10, 8, 10, 11];
+
+		let mut bin = Vec::new();
+		let pos_off = bin.len();
+		for p in &positions {
+			for v in p {
+				bin.extend_from_slice(&v.to_le_bytes());
+			}
+		}
+		let pos_len = bin.len() - pos_off;
+		let norm_off = bin.len();
+		for n in &normals {
+			for v in n {
+				bin.extend_from_slice(&v.to_le_bytes());
+			}
+		}
+		let norm_len = bin.len() - norm_off;
+		let idx_off = bin.len();
+		for i in &indices {
+			bin.extend_from_slice(&i.to_le_bytes());
+		}
+		let idx_len = bin.len() - idx_off;
+		while bin.len() % 4 != 0 {
+			bin.push(0);
+		}
+
+		let root_ext = root_extra
+			.map(|rings| format!(r#","extras":{{"outlineSmoothRings":{rings}}}"#))
+			.unwrap_or_default();
+		let mesh_ext = mesh_extra
+			.map(|rings| format!(r#","extras":{{"outlineSmoothRings":{rings}}}"#))
+			.unwrap_or_default();
+		let json = format!(
+			r#"{{"asset":{{"version":"2.0"}},"scenes":[{{"nodes":[0]}}],"nodes":[{{"name":"strip","mesh":0}}],"meshes":[{{"primitives":[{{"attributes":{{"POSITION":0,"NORMAL":1}},"indices":2}}]{mesh_ext}}}],"buffers":[{{"byteLength":{}}}],"bufferViews":[{{"buffer":0,"byteOffset":{pos_off},"byteLength":{pos_len}}},{{"buffer":0,"byteOffset":{norm_off},"byteLength":{norm_len}}},{{"buffer":0,"byteOffset":{idx_off},"byteLength":{idx_len}}}],"accessors":[{{"bufferView":0,"componentType":5126,"count":12,"type":"VEC3","min":[0,0,-1],"max":[2,1,0]}},{{"bufferView":1,"componentType":5126,"count":12,"type":"VEC3"}},{{"bufferView":2,"componentType":5123,"count":18,"type":"SCALAR"}}]{root_ext}}}"#,
+			bin.len()
+		);
+		let mut json_bytes = json.into_bytes();
+		while json_bytes.len() % 4 != 0 {
+			json_bytes.push(b' ');
+		}
+		let total = 12 + 8 + json_bytes.len() + 8 + bin.len();
+		let mut glb = Vec::with_capacity(total);
+		glb.extend_from_slice(b"glTF");
+		glb.extend_from_slice(&2_u32.to_le_bytes());
+		glb.extend_from_slice(&(total as u32).to_le_bytes());
+		glb.extend_from_slice(&(json_bytes.len() as u32).to_le_bytes());
+		glb.extend_from_slice(&0x4E4F_534A_u32.to_le_bytes());
+		glb.extend_from_slice(&json_bytes);
+		glb.extend_from_slice(&(bin.len() as u32).to_le_bytes());
+		glb.extend_from_slice(&0x004E_4942_u32.to_le_bytes());
+		glb.extend_from_slice(&bin);
+		glb
+	}
+
+	#[test]
+	fn outline_smooth_rings_defaults_to_unchanged_and_propagates_across_rings() {
+		let bytes = bent_faceted_gltf(None, None);
+		let default_asset = Asset::from_slice(&bytes).unwrap();
+		let zero_asset = Asset::from_slice_with_options(
+			&bytes,
+			LoadOptions {
+				outline_smooth_rings: Some(0),
+			},
+		)
+		.unwrap();
+		assert_eq!(
+			default_asset.ink_vertices, zero_asset.ink_vertices,
+			"default and 0 rings keep today's hull byte-for-byte unchanged"
+		);
+		// Vertex 1 (at x=1, 1 ring from crease) is pure +z without smoothing.
+		assert_eq!(default_asset.ink_vertices[1].normal, [0, 0, 127]);
+		// Vertex 5 (at x=2, 2 rings from crease) is pure +z without smoothing.
+		assert_eq!(default_asset.ink_vertices[5].normal, [0, 0, 127]);
+
+		// 1 ring tilts vertex 1 (1 hop from crease) toward -x, while vertex 5
+		// (2 hops) stays pure +z.
+		let ring1 = Asset::from_slice_with_options(
+			&bytes,
+			LoadOptions {
+				outline_smooth_rings: Some(1),
+			},
+		)
+		.unwrap();
+		assert!(
+			ring1.ink_vertices[1].normal[0] < -10,
+			"1 ring spreads crease to 1-hop neighbor: {:?}",
+			ring1.ink_vertices[1].normal
+		);
+		assert_eq!(
+			ring1.ink_vertices[5].normal,
+			[0, 0, 127],
+			"1 ring does not reach 2-hop vertex"
+		);
+
+		// 2 rings reaches vertex 5 (2 hops away) as well.
+		let ring2 = Asset::from_slice_with_options(
+			&bytes,
+			LoadOptions {
+				outline_smooth_rings: Some(2),
+			},
+		)
+		.unwrap();
+		assert!(
+			ring2.ink_vertices[5].normal[0] < -5,
+			"2 rings reaches 2-hop vertex: {:?}",
+			ring2.ink_vertices[5].normal
+		);
+
+		// Clamping at MAX_OUTLINE_SMOOTH_RINGS.
+		let capped = Asset::from_slice_with_options(
+			&bytes,
+			LoadOptions {
+				outline_smooth_rings: Some(99),
+			},
+		)
+		.unwrap();
+		let max_rings = Asset::from_slice_with_options(
+			&bytes,
+			LoadOptions {
+				outline_smooth_rings: Some(MAX_OUTLINE_SMOOTH_RINGS),
+			},
+		)
+		.unwrap();
+		assert_eq!(capped.ink_vertices, max_rings.ink_vertices);
+
+		// glTF extras: mesh beats root, explicit LoadOptions beats both.
+		let with_root = Asset::from_slice(&bent_faceted_gltf(Some(2), None)).unwrap();
+		assert_eq!(with_root.ink_vertices, ring2.ink_vertices);
+
+		let with_mesh = Asset::from_slice(&bent_faceted_gltf(Some(2), Some(1))).unwrap();
+		assert_eq!(with_mesh.ink_vertices, ring1.ink_vertices);
+
+		let override_zero = Asset::from_slice_with_options(
+			&bent_faceted_gltf(Some(2), Some(2)),
+			LoadOptions {
+				outline_smooth_rings: Some(0),
+			},
+		)
+		.unwrap();
+		assert_eq!(override_zero.ink_vertices, default_asset.ink_vertices);
 	}
 }
