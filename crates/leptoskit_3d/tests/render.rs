@@ -3649,3 +3649,40 @@ fn print_hatch_coverage_grows_with_hatch_gain() {
 		"deeper shadow carries heavier hatching: {steep} red pixels at gain 1.5, {flat} at gain 0"
 	);
 }
+
+/// Unlit parts (glows, eyes, screens) print flat by default, as they shade
+/// nowhere else: no bands and no hatching across them.
+#[test]
+fn print_draws_unlit_parts_flat_by_default() {
+	let Some(gpu) = gpu() else { return };
+	let color = [0.9, 0.6, 0.1];
+	let mut renderer = renderer(gpu);
+	spawn(
+		&mut renderer,
+		1,
+		1,
+		&fixture::unlit_cube([color[0], color[1], color[2], 1.0], false),
+	);
+	renderer.world_mut().apply([
+		Op::SetTransform {
+			node: NodeId(1),
+			transform: Transform::IDENTITY.with_yaw(0.6),
+		},
+		Op::SetLight(Light {
+			direction: [-1.0, 0.0, 0.0],
+			shadow: 0.0,
+			..Light::default()
+		}),
+		style(Shading::Print(print_no_knockout()), None),
+	]);
+
+	let image = render_size(&mut renderer, 128);
+	for x in [44, 52, 72, 80] {
+		assert!(
+			near(image.at(x, 64), exact_srgb(color), 2),
+			"x={x}: {:?} vs {:?}",
+			image.at(x, 64),
+			exact_srgb(color)
+		);
+	}
+}

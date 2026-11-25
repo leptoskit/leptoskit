@@ -758,7 +758,14 @@ fn print_instance_record(
 	let deep = resolved.deep.unwrap_or(lit.map(|channel| channel * 0.35));
 	let specular = resolved.specular.unwrap_or(0.0);
 	let hatch_min = resolved.hatch_min.unwrap_or(0.0);
-	let flags = u32::from(resolved.mode == Some(PrintMode::Flat))
+	// Unlit parts (glows, eyes, screens) take no light anywhere else, so
+	// they print flat unless a target asks for bands.
+	let mode = resolved.mode.unwrap_or(if material.unlit {
+		PrintMode::Flat
+	} else {
+		PrintMode::Banded
+	});
+	let flags = u32::from(mode == PrintMode::Flat)
 		| (u32::from(resolved.cross_hatch.unwrap_or(false)) << 1)
 		| (u32::from(resolved.rim.unwrap_or(false)) << 2)
 		| (u32::from(knockout) << 3);

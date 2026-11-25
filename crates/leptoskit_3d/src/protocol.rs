@@ -432,18 +432,29 @@ pub enum PrintTarget {
 
 /// Per-node, per-part, or per-material overrides for [`Shading::Print`].
 /// A field left `None` inherits from broader targets or its default.
+///
+/// Print colours a surface from its material's base colour factor times its
+/// part's colour ([`MaterialOverride::color`]) alone. It reads no texture
+/// but a cutout's alpha, no vertex colour (`COLOR_0`) but its alpha, and no
+/// emissive, so a textured model prints in its factor's colour until its
+/// palette is set here.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct PrintOverride {
 	/// Lit band colour (or flat colour in [`PrintMode::Flat`]), linear RGB,
-	/// output without exposure or tonemapping.
+	/// output without exposure or tonemapping. Defaults to the base colour
+	/// factor times the part's colour.
 	pub lit: Option<[f32; 3]>,
 	/// Shade band colour, linear RGB, output without exposure or tonemapping.
+	/// Defaults to `lit` × 0.65.
 	pub shade: Option<[f32; 3]>,
 	/// Deep band colour, linear RGB, output without exposure or tonemapping.
+	/// Defaults to `lit` × 0.35.
 	pub deep: Option<[f32; 3]>,
 	/// Spot colour for the backlit rim, linear RGB.
 	pub spot: Option<[f32; 3]>,
-	/// Banded or flat shading.
+	/// Banded or flat shading. Defaults to [`PrintMode::Flat`] on unlit
+	/// materials (`KHR_materials_unlit`) and [`PrintMode::Banded`] on the
+	/// rest.
 	pub mode: Option<PrintMode>,
 	/// Minimum primary hatch duty, from 0 (no hatch) to 1.
 	pub hatch_min: Option<f32>,
