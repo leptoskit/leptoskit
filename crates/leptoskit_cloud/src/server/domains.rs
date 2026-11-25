@@ -418,6 +418,8 @@ async fn verify(cx: &rpc::MutationCx, args: Verify) -> rpc::Result<DomainSummary
 			error.into()
 		}
 	})?;
+	// The hub answers on it too, from now on.
+	super::notifications::changed(cx.tx(), environment_id).await?;
 	audit::record(
 		cx.tx(),
 		&Actor::from(&access.caller),
@@ -511,6 +513,8 @@ pub(crate) async fn detach_domain(
 		row.delete(cx.tx()).await?;
 	}
 
+	// The hub stops answering on it.
+	super::notifications::changed(cx.tx(), environment_id).await?;
 	audit::record(
 		cx.tx(),
 		&Actor::from(&access.caller),

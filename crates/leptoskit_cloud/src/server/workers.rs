@@ -296,7 +296,7 @@ impl rpc::Operation for ClaimJob {
 }
 
 /// The worker's row as it is now, or `Unauthorized` once it is revoked.
-async fn live_worker(db: &impl leptoskit_db::Read, caller: &WorkerCaller) -> rpc::Result<Worker> {
+pub(crate) async fn live_worker(db: &impl leptoskit_db::Read, caller: &WorkerCaller) -> rpc::Result<Worker> {
 	let id = caller.id;
 	Worker::query()
 		.filter(|worker| worker.id.eq(id) & worker.revoked_at.is_null())
@@ -324,6 +324,13 @@ async fn claim_job(cx: &rpc::MutationCx) -> rpc::Result<Option<Assignment>> {
 	}
 
 	let kinds: Vec<JobKind> = match row.role {
+		// It serves its cluster's tenants, which it asks for itself.
+		WorkerRole::Notifications => {
+			return Err(rpc::Error::forbidden(
+				"notifications_worker_takes_no_jobs: a notifications worker asks for its \
+				 tenants with `notification_tenants`",
+			));
+		}
 		WorkerRole::Build => vec![JobKind::BuildServer, JobKind::Publish],
 		WorkerRole::Cluster => {
 			vec![
@@ -1387,7 +1394,13 @@ async fn environment_secrets(
 		.all(db)
 		.await?;
 
-	if rows.is_empty() {
+	// A hosted notifications tenant's token and password are in its
+	// processes' environment too, without being its secrets.
+	let hosted = super::notifications::for_environment(db, environment_id)
+		.await?
+		.is_some();
+
+	if rows.is_empty() && !hosted {
 		return Ok(Vec::new());
 	}
 
@@ -1407,7 +1420,8 @@ async fn environment_secrets(
 		.await?
 		.ok_or_else(super::vault::unavailable)?;
 
-	rows.iter()
+	let mut values = rows
+		.iter()
 		.map(|row| {
 			key.open(
 				&Place {
@@ -1421,7 +1435,9 @@ async fn environment_secrets(
 				&row.sealed,
 			)
 		})
-		.collect()
+		.collect::<rpc::Result<Vec<String>>>()?;
+	values.extend(super::notifications::printable(db, &key, environment.id).await?);
+	Ok(values)
 }
 
 pub(crate) async fn cluster_environments(

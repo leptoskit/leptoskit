@@ -549,6 +549,35 @@ The `deployments`, `workers` and `operator` operations are declared in `leptoski
 - The Solana dApp Store's release needs the publisher's wallet to sign; the wallet signing flow (`signing_request`, `submit_signature`) isn't built, so a cloud publish to `solana` needs the keypair as a credential, which the design says the cloud should never hold.
 - `lk cloud publish` is built (CLI 3); the console's stores page isn't (UI 3).
 
+### Security review of hosted notifications, slice 2
+
+An independent review of the control plane's part of [hosted notifications](cloud-notifications.md), reading the code without running it, found these sound:
+
+- Only a live worker of the `notifications` role reaches a tenant's values, and only for its own cluster's tenants. A person, a token, a build or cluster worker, and a revoked worker are all refused.
+- `config` checks the placement's cluster and the project's organisation. `credentials` checks organisation, cluster and removal.
+- The tenant's values are sealed under their own purpose and label, and open as nothing else.
+- Lease rows are written in the transaction that answers, before any value leaves. Neither worker operation keeps a receipt.
+- No setting reaches an app's process, including through a rollback of an older spec.
+- A rollback or rescale points at where the hub is now, and a release built before the hub moved is refused when it is claimed.
+- Usage is counted once under concurrent hubs, is attributed from the tenant's own row, and is bounded.
+
+It found nothing critical or high. What it found, and what was done:
+
+| Finding                                                                                                                                                                                            | Fix                                                                                                                                                                                                                 |
+| -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1. (Medium) The hub's reason for failing a tenant was kept and shown to anyone who can view the project as written. The service's own words can quote a push key or the database's address.        | Before it is kept, the tenant's password, token and secret settings, and the configured redactions, are hidden in it, and control characters are written out. When they can't be opened to look, no reason is kept. |
+| 2. (Low) `LEPTOSKIT_NOTIFICATIONS_WEB_PUSH_EXTRA_HOSTS` is an operator's allowlist of hosts the service sends to. As a tenant's setting, any tenant could point the shared hub at any public host. | It isn't one of `SETTINGS`, so it stays reserved. On the hub it will be the operator's configuration.                                                                                                               |
+| 3. (Low) The private-key settings could be kept as variables, which anyone viewing the project reads.                                                                                              | `SECRET_SETTINGS` (APNs key, FCM service account, VAPID private key) are refused as variables.                                                                                                                      |
+| 4. (Low) A tenant whose new values couldn't be opened was left out of the answer, so a hub holding an older version kept serving it, hostnames and all.                                            | A hub holding it is told to drop it.                                                                                                                                                                                |
+| 6. (Low) A process that prints its environment printed the tenant's token into runtime logs unhidden.                                                                                              | `report_status` hides the tenant's token and password with the environment's secrets.                                                                                                                               |
+| 9. (Info) Failing tenants didn't count toward the 50 an answer opens, so each ask re-opened every one of them.                                                                                     | They count.                                                                                                                                                                                                         |
+
+Known and not fixed, for the slices that follow:
+
+- finding 5: nothing rotates a tenant's token or password. Revoking a notifications worker should raise every one of its cluster's tenants' credential versions and tell their owners to rotate push credentials. This comes with the hub (slice 4).
+- finding 7: values leased to a release are hidden only in a publish's report, as for every release secret today. The cluster's worker must drop `LEPTOSKIT_NOTIFICATIONS_DATABASE_URL` from what it gives the runtime once the database step is done (slice 3).
+- finding 8: a cluster worker from before slice 3 ignores `ReleaseInput.notifications` and reports the release applied, which marks the tenant ready with no database. No cluster may have a `notifications` fact until its worker is from slice 3. That slice must also revoke `CONNECT` on each `ntf_` database from `PUBLIC`, so that an app's own role on the same server can't connect to it.
+
 ### Security review of Worker 3
 
 An independent review of store publishing, reading the code without running it, found these sound: every read and write goes through organisation, project and environment, and the permissions match `access.rs`; a publish's log and a deployment's never mix; names, never values, reach the job's row, its summary, the audit entry, and the worker's saved files; the allowlist is checked when the job is queued, when it is claimed, and on the worker; every value opens before any lease row is written, in the claim's transaction; a publish never runs twice, on every path a job can end; the output file is read as a build's is; and the `Launch` refactor keeps every safeguard of a build. What it found, and what was done:

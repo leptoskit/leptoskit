@@ -693,6 +693,80 @@ pub struct Database {
 	pub updated_at: Timestamp,
 }
 
+/// An environment's hosted notifications: its tenant on its cluster's
+/// shared hub. The cluster's worker makes its database; this row is what
+/// the control plane decided, the role's password and the token the app
+/// and the hub share, both sealed with the organisation's data key and
+/// bound to this row. No operation returns either.
+#[table(name = "notification_tenants", index(cluster_id))]
+pub struct NotificationTenant {
+	pub id: Id<Self>,
+	#[db(unique, on_delete = cascade)]
+	pub environment_id: Id<Environment>,
+	#[db(no_foreign_key)]
+	pub organization_id: Id<Organization>,
+	#[db(no_foreign_key)]
+	pub project_id: Id<Project>,
+	#[db(no_foreign_key)]
+	pub cluster_id: Id<Cluster>,
+	/// The database's name and its role's, from the environment's ID:
+	/// never another environment's, and never used again.
+	#[db(unique, min_len = 8, max_len = 63)]
+	pub database: String,
+	/// Counts the passwords the role has had, and the tokens, from 1.
+	pub credential_version: i64,
+	#[db(secret)]
+	pub sealed_password: Vec<u8>,
+	#[db(secret)]
+	pub sealed_token: Vec<u8>,
+	/// Whether a release that uses it has been applied, so its database
+	/// exists.
+	pub ready: bool,
+	/// Whether the live release uses it: the hub serves it only then.
+	pub serving: bool,
+	/// Its environment is being deleted: the hub drops it, and the removal
+	/// drops its database.
+	pub removing: bool,
+	/// Goes up whenever anything the hub is given for it changes.
+	pub version: i64,
+	/// What the hub last said: `serving` or `failed`, for `reported_version`.
+	#[db(max_len = 16)]
+	pub hub_state: Option<String>,
+	#[db(max_len = 500)]
+	pub hub_reason: Option<String>,
+	pub reported_version: Option<i64>,
+	pub reported_at: Option<Timestamp>,
+	/// Where the next usage report must start.
+	#[db(max_len = 128)]
+	pub usage_cursor: Option<String>,
+	#[db(created_at)]
+	pub created_at: Timestamp,
+	#[db(updated_at)]
+	pub updated_at: Timestamp,
+}
+
+/// That a hub was given a tenant's values: which version, which names,
+/// written in the transaction that answers it, before the values leave.
+/// Kept after the tenant is gone, as the record of where a value went.
+#[table(name = "notification_leases", index(tenant_id), index(environment_id))]
+pub struct NotificationLease {
+	pub id: Id<Self>,
+	#[db(no_foreign_key)]
+	pub tenant_id: Id<NotificationTenant>,
+	#[db(no_foreign_key)]
+	pub worker_id: Id<Worker>,
+	#[db(no_foreign_key)]
+	pub organization_id: Id<Organization>,
+	#[db(no_foreign_key)]
+	pub environment_id: Id<Environment>,
+	pub version: i64,
+	/// The values' names: the database's address, the token, and each
+	/// setting.
+	pub names: Json<Vec<String>>,
+	#[db(created_at)]
+	pub created_at: Timestamp,
+}
+
 /// How much of one meter an organisation's project used in one calendar
 /// month (UTC). Not a foreign key to anything: usage outlives the project
 /// it was for.

@@ -27,6 +27,7 @@ use crate::tables::DataKey;
 use crate::tables::Database;
 use crate::tables::Environment;
 use crate::tables::NewDataKey;
+use crate::tables::NotificationTenant;
 use crate::tables::Organization;
 use crate::tables::Project;
 use crate::tables::Secret;
@@ -39,6 +40,10 @@ const VALUE_PURPOSE: &[u8] = b"leptoskit-cloud vault secret v1";
 
 /// What a database role's sealed password is bound to, before its place.
 const PASSWORD_PURPOSE: &[u8] = b"leptoskit-cloud vault database password v1";
+
+/// What a hosted notifications tenant's sealed values are bound to, before
+/// which value and its place.
+const TENANT_PURPOSE: &[u8] = b"leptoskit-cloud vault notifications tenant v1";
 
 /// The ID a data key is given inside the [`Keys`] that seals with it. Only
 /// one key is ever in it, so the ID says nothing.
@@ -79,6 +84,32 @@ pub(crate) struct DatabasePlace {
 	pub(crate) environment: Id<Environment>,
 	pub(crate) database: Id<Database>,
 	pub(crate) version: i64,
+}
+
+/// Where a hosted notifications tenant's values live: what its role's
+/// password and its token are sealed to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct TenantPlace {
+	pub(crate) organization: Id<Organization>,
+	pub(crate) environment: Id<Environment>,
+	pub(crate) tenant: Id<NotificationTenant>,
+	pub(crate) version: i64,
+}
+
+/// Which of a tenant's values: neither opens as the other.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TenantValue {
+	Password,
+	Token,
+}
+
+impl TenantValue {
+	const fn label(self) -> &'static [u8] {
+		match self {
+			Self::Password => b"password",
+			Self::Token => b"token",
+		}
+	}
 }
 
 /// An organisation's data key, unwrapped, for one operation. Dropped when
@@ -303,9 +334,124 @@ impl Unwrapped {
 	}
 }
 
+impl Unwrapped {
+	fn tenant_context(place: &TenantPlace, value: TenantValue) -> [Vec<u8>; 6] {
+		[
+			TENANT_PURPOSE.to_vec(),
+			value.label().to_vec(),
+			uuid_bytes(place.organization.uuid()).to_vec(),
+			uuid_bytes(place.environment.uuid()).to_vec(),
+			uuid_bytes(place.tenant.uuid()).to_vec(),
+			place.version.to_be_bytes().to_vec(),
+		]
+	}
+
+	/// One of a tenant's values, sealed to `place`.
+	///
+	/// # Errors
+	///
+	/// `Server` (`vault_unavailable`) for a place in another organisation,
+	/// or when there is no randomness.
+	pub(crate) fn seal_tenant(
+		&self,
+		place: &TenantPlace,
+		which: TenantValue,
+		value: &str,
+	) -> rpc::Result<Vec<u8>> {
+		if place.organization != self.organization {
+			return Err(unavailable());
+		}
+
+		let context = Self::tenant_context(place, which);
+		let parts: Vec<&[u8]> = context.iter().map(Vec::as_slice).collect();
+		self.key
+			.seal(&parts, value.as_bytes())
+			.map_err(|_| unavailable())
+	}
+
+	/// The tenant's value `sealed` holds, when it was sealed to `place` as
+	/// `which`.
+	///
+	/// # Errors
+	///
+	/// `Server` (`vault_unavailable`) when it wasn't, or was changed.
+	pub(crate) fn open_tenant(
+		&self,
+		place: &TenantPlace,
+		which: TenantValue,
+		sealed: &[u8],
+	) -> rpc::Result<String> {
+		if place.organization != self.organization {
+			return Err(unavailable());
+		}
+
+		let context = Self::tenant_context(place, which);
+		let parts: Vec<&[u8]> = context.iter().map(Vec::as_slice).collect();
+		let opened = self.key.open(&parts, sealed).map_err(|_| unavailable())?;
+		String::from_utf8(opened).map_err(|_| unavailable())
+	}
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[test]
+	fn a_tenants_values_open_only_as_themselves() {
+		let organization = Id::from_uuid(Uuid::from_u128(1));
+		let key = unwrapped(organization, 7);
+		let home = TenantPlace {
+			organization,
+			environment: Id::from_uuid(Uuid::from_u128(3)),
+			tenant: Id::from_uuid(Uuid::from_u128(4)),
+			version: 1,
+		};
+		let sealed = key
+			.seal_tenant(&home, TenantValue::Token, "c0ffee")
+			.expect("sealed");
+		assert_eq!(
+			key.open_tenant(&home, TenantValue::Token, &sealed)
+				.expect("opens"),
+			"c0ffee"
+		);
+		assert!(
+			key.open_tenant(&home, TenantValue::Password, &sealed)
+				.is_err()
+		);
+
+		let elsewhere = [
+			TenantPlace {
+				environment: Id::from_uuid(Uuid::from_u128(9)),
+				..home
+			},
+			TenantPlace {
+				tenant: Id::from_uuid(Uuid::from_u128(9)),
+				..home
+			},
+			TenantPlace { version: 2, ..home },
+			TenantPlace {
+				organization: Id::from_uuid(Uuid::from_u128(8)),
+				..home
+			},
+		];
+
+		for other in elsewhere {
+			assert!(
+				key.open_tenant(&other, TenantValue::Token, &sealed)
+					.is_err(),
+				"{other:?}"
+			);
+		}
+
+		// Not a database's password at the same IDs.
+		let as_database = DatabasePlace {
+			organization,
+			environment: home.environment,
+			database: Id::from_uuid(home.tenant.uuid()),
+			version: 1,
+		};
+		assert!(key.open_password(&as_database, &sealed).is_err());
+	}
 
 	fn unwrapped(organization: Id<Organization>, byte: u8) -> Unwrapped {
 		Unwrapped {

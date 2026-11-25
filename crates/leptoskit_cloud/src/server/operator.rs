@@ -123,6 +123,31 @@ fn check_facts(facts: &ClusterFacts) -> rpc::Result<()> {
 		));
 	}
 
+	if let Some(hub) = &facts.notifications {
+		if !crate::release::is_dns_label(&hub.namespace) {
+			return Err(rpc::Error::invalid(
+				"invalid_facts: the notifications hub's namespace is a DNS label, such as \
+				 `leptoskit-notifications`",
+			));
+		}
+
+		// The host goes into every release's bridge and into the app's
+		// `LEPTOSKIT_SERVICE_NOTIFICATIONS_URL` as it is, and a bridge
+		// wants a name of two labels or more.
+		if !is_host(&hub.host) || !hub.host.contains('.') {
+			return Err(rpc::Error::invalid(
+				"invalid_facts: the notifications hub's host is a DNS name in lower case, such as \
+				 `hub.leptoskit-notifications.svc.cluster.local`",
+			));
+		}
+
+		if hub.port == 0 {
+			return Err(rpc::Error::invalid(
+				"invalid_facts: the notifications hub's port is 1 to 65535",
+			));
+		}
+	}
+
 	let Some(postgres) = &facts.postgres else {
 		return Ok(());
 	};
@@ -136,20 +161,7 @@ fn check_facts(facts: &ClusterFacts) -> rpc::Result<()> {
 
 	// The host goes into every `DATABASE_URL` as it is: a DNS name and
 	// nothing a URL reads as anything else.
-	let host = &postgres.host;
-	let named = !host.is_empty()
-		&& host.len() <= MAX_HOST_LEN
-		&& host.split('.').all(|label| {
-			!label.is_empty()
-				&& label.len() <= crate::release::MAX_LABEL_LEN
-				&& !label.starts_with('-')
-				&& !label.ends_with('-')
-				&& label.chars().all(|character| {
-					character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-'
-				})
-		});
-
-	if !named {
+	if !is_host(&postgres.host) {
 		return Err(rpc::Error::invalid(
 			"invalid_facts: the Postgres server's host is a DNS name in lower case, such as \
 			 `postgres-rw.leptoskit-postgres.svc`",
@@ -163,6 +175,22 @@ fn check_facts(facts: &ClusterFacts) -> rpc::Result<()> {
 	}
 
 	Ok(())
+}
+
+/// Whether `host` is a DNS name in lower case, and nothing a URL reads as
+/// anything else.
+fn is_host(host: &str) -> bool {
+	!host.is_empty()
+		&& host.len() <= MAX_HOST_LEN
+		&& host.split('.').all(|label| {
+			!label.is_empty()
+				&& label.len() <= crate::release::MAX_LABEL_LEN
+				&& !label.starts_with('-')
+				&& !label.ends_with('-')
+				&& label.chars().all(|character| {
+					character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-'
+				})
+		})
 }
 
 /// A cluster's facts in a line, for the audit log.
@@ -179,8 +207,12 @@ fn described(facts: &ClusterFacts) -> String {
 			)
 		},
 	);
+	let notifications = facts.notifications.as_ref().map_or_else(
+		|| "none".to_owned(),
+		|hub| format!("{}:{} in {}", hub.host, hub.port, hub.namespace),
+	);
 	format!(
-		"runtime class {}, {}, postgres {postgres}",
+		"runtime class {}, {}, postgres {postgres}, notifications {notifications}",
 		facts.runtime_class.as_deref().unwrap_or("none"),
 		if facts.wakes_sleeping {
 			"wakes sleeping"
@@ -212,6 +244,21 @@ pub(crate) async fn set_cluster_facts(
 		return Err(rpc::Error::conflict(format!(
 			"cluster_has_databases: environments keep a database on `{name}`'s Postgres server, \
 			 so its facts must say where it is"
+		)));
+	}
+
+	if facts.notifications.is_none() && super::notifications::on_cluster(cx.tx(), cluster.id).await?
+	{
+		return Err(rpc::Error::conflict(format!(
+			"cluster_has_notifications: environments on `{name}` are served by its notifications \
+			 service, so its facts must say where it is"
+		)));
+	}
+
+	if facts.postgres.is_none() && super::notifications::on_cluster(cx.tx(), cluster.id).await? {
+		return Err(rpc::Error::conflict(format!(
+			"cluster_has_databases: environments keep a notifications database on `{name}`'s \
+			 Postgres server, so its facts must say where it is"
 		)));
 	}
 
@@ -369,7 +416,8 @@ async fn issue(cx: &rpc::MutationCx, args: IssuePairing) -> rpc::Result<IssuedPa
 	let account = operator(cx.tx(), cx.context()).await?;
 
 	match (args.role, &args.organization, &args.cluster) {
-		(WorkerRole::Build, _, None) | (WorkerRole::Cluster, None, Some(_)) => {}
+		(WorkerRole::Build, _, None)
+		| (WorkerRole::Cluster | WorkerRole::Notifications, None, Some(_)) => {}
 		(WorkerRole::Build, _, Some(_)) => {
 			return Err(rpc::Error::invalid(
 				"invalid_pairing: a build worker serves a pool, not a cluster",
@@ -383,6 +431,16 @@ async fn issue(cx: &rpc::MutationCx, args: IssuePairing) -> rpc::Result<IssuedPa
 		(WorkerRole::Cluster, Some(_), Some(_)) => {
 			return Err(rpc::Error::invalid(
 				"invalid_pairing: a cluster worker serves every organisation on its cluster",
+			));
+		}
+		(WorkerRole::Notifications, _, None) => {
+			return Err(rpc::Error::invalid(
+				"invalid_pairing: a notifications worker needs its `cluster`",
+			));
+		}
+		(WorkerRole::Notifications, Some(_), Some(_)) => {
+			return Err(rpc::Error::invalid(
+				"invalid_pairing: a notifications worker serves every organisation on its cluster",
 			));
 		}
 	}

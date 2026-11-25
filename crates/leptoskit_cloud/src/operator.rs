@@ -40,6 +40,24 @@ pub struct ClusterFacts {
 	/// has a Postgres `[db]` get a database and a role of their own on it.
 	/// Without it, such an app can't be deployed here.
 	pub postgres: Option<ClusterPostgres>,
+	/// Its shared notifications hub, when it runs one: environments whose
+	/// app declares `[services.notifications]` are served by it. Without it,
+	/// such an app can't be deployed here.
+	pub notifications: Option<ClusterNotifications>,
+}
+
+/// A cluster's shared notifications hub, as the edge and processes reach
+/// it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ClusterNotifications {
+	/// The namespace it runs in: a release that uses it opens its
+	/// processes' network to that namespace on `port`, and to nothing else
+	/// there.
+	pub namespace: String,
+	/// The name its Service answers on, such as
+	/// `hub.leptoskit-notifications.svc.cluster.local`.
+	pub host: String,
+	pub port: u16,
 }
 
 /// A cluster's shared Postgres server, as its processes reach it.

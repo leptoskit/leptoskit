@@ -58,6 +58,7 @@ pub mod databases;
 pub mod deployment;
 pub mod deployments;
 pub mod domains;
+pub mod notifications;
 pub mod operator;
 pub mod pricing;
 pub mod projects;

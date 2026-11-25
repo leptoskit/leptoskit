@@ -33,6 +33,7 @@ mod jobs;
 mod lifecycle;
 pub(crate) mod logs;
 pub(crate) mod metering;
+pub(crate) mod notifications;
 pub(crate) mod operator;
 mod payments;
 mod personal;

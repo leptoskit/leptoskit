@@ -168,6 +168,10 @@ pub enum WorkerRole {
 	/// Applies releases to one cluster and reports what it runs.
 	#[db(rename = "cluster")]
 	Cluster,
+	/// Serves the hosted notifications of every environment on one
+	/// cluster: see [`crate::notifications`]. It takes no jobs.
+	#[db(rename = "notifications")]
+	Notifications,
 }
 
 /// The kinds of job.
@@ -750,6 +754,14 @@ pub struct ReleaseInput {
 	/// the spec is applied.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub database: Option<DatabaseStep>,
+	/// The environment's hosted notifications database, on the same server,
+	/// to make sure of before the spec is applied, with the same contract
+	/// as [`database`](Self::database). Its role's password is in the
+	/// claim's secrets as
+	/// [`DATABASE_URL_LEASE`](crate::notifications::DATABASE_URL_LEASE),
+	/// which the worker uses for this and puts in no Kubernetes object.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub notifications: Option<DatabaseStep>,
 }
 
 /// How a release ended.
@@ -775,6 +787,10 @@ pub struct DestroyEnvironmentInput {
 	/// may never have been made.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub database: Option<String>,
+	/// The environment's hosted notifications database, by its name and
+	/// its role's: dropped with the environment, if it exists.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub notifications: Option<String>,
 }
 
 /// How removing an environment ended.
