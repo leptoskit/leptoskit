@@ -678,6 +678,14 @@ async fn a_missed_event_is_caught_up_with() {
 }
 
 #[tokio::test]
+async fn an_own_cap_is_held_to_the_plan_the_organisation_moves_to() {
+	let till = subscriptions::Till::default();
+	let db = leptoskit_db::testing::sqlite_migrated(leptoskit_cloud::MIGRATIONS).await;
+	let app = support::app_with(db, subscriptions::taking_payment_for_two_plans(&till)).await;
+	subscriptions::an_own_cap_is_held_to_the_plan_the_organisation_moves_to(&app, &till).await;
+}
+
+#[tokio::test]
 async fn an_estimate_prices_a_table() {
 	let db = leptoskit_db::testing::sqlite_migrated(leptoskit_cloud::MIGRATIONS).await;
 	let app = support::app_with(db, |config| config.catalogue = Some(billing::catalogue())).await;
