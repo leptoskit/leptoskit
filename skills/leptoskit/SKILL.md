@@ -173,7 +173,7 @@ When something looks wrong in an app running under `leptoskit dev`, read the app
 
 6. `db_check` validates migrations and database configuration before shipping.
 7. `cloud_estimate` previews the resolved release plan and monthly cost without deploying.
-8. `cloud_deploy` packs, uploads, and deploys the current project (supports `environment`, `detach`, `org`, `project`, `url`).
+8. `cloud_deploy` packs, uploads, and deploys the current project (supports `environment`, `detach`, `org`, `project`).
 9. `cloud_status` reads an environment's live HTTPS hostname and process readiness.
 10. `cloud_logs` reads recent runtime logs (`process`, `since_minutes`, `contains`, `limit`).
 11. `cloud_secrets_list` returns configured secret names and version metadata only — never secret values.

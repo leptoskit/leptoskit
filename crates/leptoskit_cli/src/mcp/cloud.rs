@@ -36,7 +36,6 @@ pub(super) fn tools() -> Vec<Value> {
 					"environment": {"type": "string", "description": "Environment name (defaults to production)."},
 					"org": {"type": "string"},
 					"project": {"type": "string"},
-					"url": {"type": "string"},
 				},
 				"additionalProperties": false,
 			},
@@ -53,7 +52,6 @@ pub(super) fn tools() -> Vec<Value> {
 					"detach": {"type": "boolean", "description": "Return once queued without waiting for rollout."},
 					"org": {"type": "string"},
 					"project": {"type": "string"},
-					"url": {"type": "string"},
 				},
 				"additionalProperties": false,
 			},
@@ -68,7 +66,6 @@ pub(super) fn tools() -> Vec<Value> {
 					"environment": {"type": "string", "description": "Environment name (defaults to production)."},
 					"org": {"type": "string"},
 					"project": {"type": "string"},
-					"url": {"type": "string"},
 				},
 				"additionalProperties": false,
 			},
@@ -86,7 +83,6 @@ pub(super) fn tools() -> Vec<Value> {
 					"limit": {"type": "integer", "minimum": 1, "maximum": 1000},
 					"org": {"type": "string"},
 					"project": {"type": "string"},
-					"url": {"type": "string"},
 				},
 				"additionalProperties": false,
 			},
@@ -101,7 +97,6 @@ pub(super) fn tools() -> Vec<Value> {
 					"environment": {"type": "string"},
 					"org": {"type": "string"},
 					"project": {"type": "string"},
-					"url": {"type": "string"},
 				},
 				"additionalProperties": false,
 			},
@@ -137,9 +132,14 @@ fn u32_arg(arguments: &Value, key: &str) -> Option<u32> {
 		.and_then(|v| u32::try_from(v).ok())
 }
 
+/// The arguments of one cloud command for a tool call. There is no `url`: an
+/// argument comes from the model or the client, and `Context::load` treats
+/// `CloudArgs.url` as a cloud the person named, which `LEPTOSKIT_CLOUD_TOKEN`
+/// is then sent to. A person names a cloud with `--url` or
+/// `LEPTOSKIT_CLOUD_URL`.
 fn cloud_args(arguments: &Value, command: CloudCommand) -> CloudArgs {
 	CloudArgs {
-		url: str_arg(arguments, "url"),
+		url: None,
 		json: true,
 		org: str_arg(arguments, "org"),
 		project: str_arg(arguments, "project"),
@@ -163,6 +163,16 @@ fn err_text(message: &str) -> Value {
 	})
 }
 
+/// An error as the model reads it. The guard on `LEPTOSKIT_CLOUD_TOKEN` tells
+/// a person to pass `--url` or set `LEPTOSKIT_CLOUD_URL`; a tool call has no
+/// `--url`, so only the variable is named.
+fn tool_error(error: &anyhow::Error) -> String {
+	error.to_string().replace(
+		"Pass --url or set LEPTOSKIT_CLOUD_URL",
+		"Set LEPTOSKIT_CLOUD_URL",
+	)
+}
+
 /// Executes one cloud or database MCP tool call.
 pub(super) fn call(name: &str, arguments: &Value) -> Value {
 	match name {
@@ -170,7 +180,7 @@ pub(super) fn call(name: &str, arguments: &Value) -> Value {
 			let args = cloud_args(arguments, CloudCommand::Estimate);
 			match crate::cloud::execute_json(&args) {
 				Ok(value) => ok_json(&value),
-				Err(error) => err_text(&error.to_string()),
+				Err(error) => err_text(&tool_error(&error)),
 			}
 		}
 		"cloud_deploy" => {
@@ -181,14 +191,14 @@ pub(super) fn call(name: &str, arguments: &Value) -> Value {
 			let args = cloud_args(arguments, CloudCommand::Deploy { detach });
 			match crate::cloud::execute_json(&args) {
 				Ok(value) => ok_json(&value),
-				Err(error) => err_text(&error.to_string()),
+				Err(error) => err_text(&tool_error(&error)),
 			}
 		}
 		"cloud_status" => {
 			let args = cloud_args(arguments, CloudCommand::Status);
 			match crate::cloud::execute_json(&args) {
 				Ok(value) => ok_json(&value),
-				Err(error) => err_text(&error.to_string()),
+				Err(error) => err_text(&tool_error(&error)),
 			}
 		}
 		"cloud_logs" => {
@@ -204,7 +214,7 @@ pub(super) fn call(name: &str, arguments: &Value) -> Value {
 			);
 			match crate::cloud::execute_json(&args) {
 				Ok(value) => ok_json(&value),
-				Err(error) => err_text(&error.to_string()),
+				Err(error) => err_text(&tool_error(&error)),
 			}
 		}
 		"cloud_secrets_list" => {
@@ -216,7 +226,7 @@ pub(super) fn call(name: &str, arguments: &Value) -> Value {
 			);
 			match crate::cloud::execute_json(&args) {
 				Ok(value) => ok_json(&value),
-				Err(error) => err_text(&error.to_string()),
+				Err(error) => err_text(&tool_error(&error)),
 			}
 		}
 		"db_check" => {
@@ -259,5 +269,34 @@ mod tests {
 				.unwrap()
 				.contains("Never returns secret values")
 		);
+	}
+
+	#[test]
+	fn cloud_tools_offer_no_url_argument() {
+		for tool in tools() {
+			let name = tool["name"].as_str().unwrap();
+			if name != "db_check" {
+				assert!(
+					tool["inputSchema"]["properties"].get("url").is_none(),
+					"{name}"
+				);
+			}
+		}
+	}
+
+	/// The tool call itself, in the child process `cloud::tests` starts for
+	/// its `cloud_tools_…` tests: `call` is this module's, and
+	/// `LEPTOSKIT_CLOUD_TOKEN` belongs to the environment of a whole process.
+	#[test]
+	fn subprocess_helper() {
+		let (Ok(request), Ok(written)) = (
+			std::env::var("LEPTOSKIT_TEST_TOOL_CALL"),
+			std::env::var("LEPTOSKIT_TEST_TOOL_ANSWER"),
+		) else {
+			return;
+		};
+		let request: Value = serde_json::from_str(&request).unwrap();
+		let answer = call(request["name"].as_str().unwrap(), &request["arguments"]);
+		std::fs::write(written, answer.to_string()).unwrap();
 	}
 }
