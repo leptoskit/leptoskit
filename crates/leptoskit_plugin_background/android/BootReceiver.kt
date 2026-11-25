@@ -3,6 +3,7 @@ package dev.leptoskit.plugins.background
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.os.Build
 
 /**
  * Opt-in: restarts the foreground service after a reboot. The manifest declares
@@ -15,14 +16,37 @@ class BootReceiver : BroadcastReceiver() {
         intent: Intent,
     ) {
         if (intent.action != Intent.ACTION_BOOT_COMPLETED) return
-        if (!BackgroundState.bootRestart) return
 
-        val service = Intent(context, BackgroundService::class.java)
+        val decision =
+            decideBootAction(
+                bootRestartEnabled = BackgroundState.bootRestart,
+                persistedConfig = BackgroundConfigStore.load(context),
+                sdkInt = Build.VERSION.SDK_INT,
+            )
 
-        if (android.os.Build.VERSION.SDK_INT >= 26) {
-            context.startForegroundService(service)
-        } else {
-            context.startService(service)
+        val config =
+            when (decision) {
+                is BootDecision.StartService -> decision.config
+                BootDecision.DoNothing -> return
+            }
+
+        val service = BackgroundService.startIntent(context, config)
+
+        try {
+            if (Build.VERSION.SDK_INT >= 26) {
+                context.startForegroundService(service)
+            } else {
+                context.startService(service)
+            }
+        } catch (_: Exception) {
+            // Android 14+ and 15+ restrict starting several foreground service
+            // types from BOOT_COMPLETED; schedule the periodic worker instead
+            // of crashing the app at boot.
+            try {
+                BackgroundWorker.schedule(context)
+            } catch (_: Exception) {
+                // Leave the app running without crashing if WorkManager cannot be scheduled.
+            }
         }
     }
 }
