@@ -1270,6 +1270,7 @@ pub(crate) async fn rollback(
 	rollback_target(&target, placement.as_ref())?;
 	refuse_in_flight(cx.tx(), &environment).await?;
 	super::backups::refuse_restoring(cx.tx(), &environment).await?;
+	super::billing::refuse_over_cap(cx.tx(), services.shipping(), &access.organization).await?;
 	let (Some(placement), Some(build), Some(spec)) =
 		(placement, target.build.0.clone(), target.spec.0.clone())
 	else {

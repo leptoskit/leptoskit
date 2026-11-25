@@ -566,6 +566,87 @@ async fn usage_is_counted_priced_and_capped() {
 	billing::usage_is_counted_priced_and_capped(&app).await;
 }
 
+/// Past its spend cap, an organisation's `rollback` is refused as its `deploy`
+/// is and makes nothing; under the cap, a rollback still goes out.
+#[tokio::test]
+async fn rollback_is_refused_once_the_spend_cap_is_reached() {
+	let db = leptoskit_db::testing::sqlite_migrated(leptoskit_cloud::MIGRATIONS).await;
+	let app = support::app_with(db, |config| config.catalogue = Some(billing::catalogue())).await;
+	let shop = Shop::open(&app).await;
+	let cap_reached = || {
+		async {
+			app.call("usage", json!({ "organization": shop.org }), shop.as_ana())
+				.await
+				.expect(200)
+				.json()["cost"]["cap_reached"]
+				.clone()
+		}
+	};
+	let rollback = |caller| {
+		app.call(
+			"rollback",
+			json!({
+				"organization": shop.org,
+				"project": "notes",
+				"environment": "production",
+				"to": 1,
+			}),
+			caller,
+		)
+	};
+
+	// Hobby includes two build minutes, and a build counts as at least one.
+	// Two spent: the cap isn't reached, and a rollback goes out.
+	shop.ship("production", b"first", &[]).await;
+	shop.ship("production", b"second", &[]).await;
+	assert_eq!(cap_reached().await, false);
+	let rolled = rollback(shop.as_ana()).await;
+	let rolled = rolled.expect(200).json();
+	assert_eq!(rolled["number"], 3);
+	assert_eq!(rolled["rollback_of"], 1);
+	let release = shop.cluster.take().await;
+	assert_eq!(release["input"]["previous"], 2);
+	shop.cluster
+		.finish(&release, shipping::applied())
+		.await
+		.expect(200);
+	assert_eq!(
+		shop.state("production", 3).await,
+		json!({ "state": "live" })
+	);
+
+	// The third minute is past a cap of zero. `deploy` is refused, and
+	// `rollback` answers exactly as it does: for the owner, a developer and
+	// a deploy token alike.
+	shop.ship("production", b"third", &[]).await;
+	assert_eq!(cap_reached().await, true);
+	let digest = shop.upload(b"fourth").await;
+	let deployed = shop
+		.deploy("production", &digest, json!({ "database": "sqlite" }))
+		.await;
+	deployed.refused(403, "spend_cap_reached");
+	let dev = app
+		.join(shop.as_ana(), &shop.org, "dev@example.com", "developer")
+		.await;
+	let (token, _) = app.token(shop.as_ana(), &shop.org, &["deploy"], None).await;
+	for caller in [
+		shop.as_ana(),
+		support::As::Session(&dev),
+		support::As::Bearer(&token),
+	] {
+		let rolled = rollback(caller).await;
+		rolled.refused(403, "spend_cap_reached");
+		assert_eq!(rolled.text, deployed.text, "the refusal `deploy` gives");
+	}
+	// Nothing was made, and nothing that runs was touched.
+	shop.on("deployment", "production", 5).await.expect(404);
+	assert!(shop.cluster.claim().await.is_none(), "nothing was queued");
+	assert_eq!(
+		shop.state("production", 4).await,
+		json!({ "state": "live" })
+	);
+}
+
 #[tokio::test]
 async fn a_plans_limits_are_counted() {
 	let db = leptoskit_db::testing::sqlite_migrated(leptoskit_cloud::MIGRATIONS).await;
