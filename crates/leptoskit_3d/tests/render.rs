@@ -1623,3 +1623,30 @@ fn mirrored_negative_scale_keeps_outline() {
 	);
 	assert!(!is_ink(image.at(32, 32)), "center must be the lit sphere");
 }
+
+#[test]
+fn fading_part_ink_weight_does_not_clamp_to_one_pixel() {
+	let Some(gpu) = gpu() else { return };
+	let mut renderer = lit_sphere(gpu, None);
+	renderer.world_mut().apply([
+		style(Shading::Pbr, Some(red_ink(3.0))),
+		Op::SetInk {
+			node: NodeId(1),
+			part: None,
+			ink: PartInk {
+				weight: Some(0.001),
+				color: None,
+			},
+		},
+	]);
+	let image = draw(&mut renderer);
+	// Requested width is 3.0 * 0.001 = 0.003 px: weights below 1 taper the
+	// floor smoothly to 0 rather than clamping to a full 1 px ring.
+	assert_eq!(
+		ink_count(&image),
+		0,
+		"weight=0.001 (0.003 px) still drew {} ink pixels; row 32 runs={:?}",
+		ink_count(&image),
+		ink_runs(&image, 32)
+	);
+}

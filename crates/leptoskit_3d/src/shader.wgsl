@@ -568,8 +568,10 @@ fn outline(world: vec4<f32>, normal: vec3<f32>, local: vec3<f32>, ink: vec4<f32>
 	}
 	let shade = 0.5 - 0.5 * dot(normal, globals.light_direction.xyz);
 	var width = globals.ink.x * ink.w * (1.0 + globals.ink.z * shade) * wobble(local);
-	// Never thinner than a pixel, but the model's own weight may taper it away.
-	width = max(width, 1.0) * vertex_weight;
+	// Hold a 1-pixel floor at full weight (>= 1), tapering the floor down to 0
+	// as `ink.w` fades below 1 so fading a part's line out vanishes smoothly;
+	// the model's own per-vertex weight may also taper it away.
+	width = max(width, min(ink.w, 1.0)) * vertex_weight;
 	let depth = (globals.view_projection * world).w;
 	let pushed = vec4<f32>(world.xyz + normal * (width * max(depth, 0.0) * globals.ink_noise.w), 1.0);
 	out.clip = globals.view_projection * pushed;
