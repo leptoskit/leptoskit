@@ -549,6 +549,19 @@ The `deployments`, `workers` and `operator` operations are declared in `leptoski
 - The Solana dApp Store's release needs the publisher's wallet to sign; the wallet signing flow (`signing_request`, `submit_signature`) isn't built, so a cloud publish to `solana` needs the keypair as a credential, which the design says the cloud should never hold.
 - `lk cloud publish` is built (CLI 3); the console's stores page isn't (UI 3).
 
+### Security review of hosted notifications, slice 3
+
+An independent review of the cluster worker's part of [hosted notifications](cloud-notifications.md), reading the code without running it, found these sound: the platform-service bound compares the operator's hub on every field, the notifications lease is taken out before the runtime is given anything and never appears in an error, `ours` and `STILL_OPEN` accept only `env_` or `ntf_` and 32 lower-case hex digits, and a removal checks both names before anything is removed.
+
+| # | Finding                                                                                                      | Severity | Fixed                                                                                                        |
+| - | ------------------------------------------------------------------------------------------------------------ | -------- | ------------------------------------------------------------------------------------------------------------ |
+| 1 | A removal stopped at the first database it couldn't drop, leaving the notifications one and its login role.  | Low      | Each is tried; the outcome names every failure.                                                              |
+| 2 | Nothing checked that the notifications password wasn't also leased to the app.                               | Low      | `private_lease`: the lease must log in as `ntf_<hex>`, and its password be in none of the processes' values. |
+| 3 | A new database was open to `PUBLIC` between `CREATE` and `REVOKE`, and stayed open if the step failed there. | Low      | Made with `ALLOW_CONNECTIONS false`, opened after the revoke is checked.                                     |
+| 4 | The hub's options weren't checked at startup.                                                                | Info     | The namespace must be a DNS label and the host a host name.                                                  |
+
+Unchanged, and documented in the worker's readme: the worker trusts which environment a job names, so a compromised control plane can name another environment's databases, though never anything but an environment's.
+
 ### Security review of hosted notifications, slice 2
 
 An independent review of the control plane's part of [hosted notifications](cloud-notifications.md), reading the code without running it, found these sound:

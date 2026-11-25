@@ -270,3 +270,47 @@ async fn a_database_someone_else_owns_is_never_adopted() {
 		Err("its role isn't named as its database is".to_owned())
 	);
 }
+
+#[tokio::test]
+async fn a_hosted_notifications_database_is_made_closed_and_dropped() {
+	let Some(server) = server::Postgres::start() else {
+		return;
+	};
+	let (address, admin) = administrator(&server).await;
+	let postgres = Postgres::new(&address).expect("an address");
+	let name = "ntf_0123456789abcdef0123456789abcdef";
+
+	assert_eq!(postgres.ensure(&step(name), "password").await, Ok(()));
+
+	// Its role may connect, now that `PUBLIC` is shut out, and no one else.
+	let (allowed, public): (bool, bool) = admin
+		.query_one(
+			"SELECT datallowconn, EXISTS (SELECT 1 FROM aclexplode(datacl) AS acl WHERE \
+			 acl.grantee = 0) FROM pg_database WHERE datname = $1",
+			&[&name],
+		)
+		.await
+		.map(|row| (row.get(0), row.get(1)))
+		.expect("asks");
+	assert!(allowed);
+	assert!(!public);
+
+	let mut own = url::Url::parse(&address).expect("an address");
+	own.set_username(name).expect("a user");
+	own.set_password(Some("password")).expect("a password");
+	own.set_path(&format!("/{name}"));
+	let connected = tokio_postgres::connect(own.as_str(), tokio_postgres::NoTls).await;
+	assert!(connected.is_ok(), "{:?}", connected.err());
+	drop(connected);
+
+	assert_eq!(postgres.remove(name).await, Ok(()));
+	let left = admin
+		.query_opt(
+			"SELECT 1 FROM pg_database WHERE datname = $1 UNION SELECT 1 FROM pg_roles WHERE \
+			 rolname = $1",
+			&[&name],
+		)
+		.await
+		.expect("asks");
+	assert!(left.is_none());
+}

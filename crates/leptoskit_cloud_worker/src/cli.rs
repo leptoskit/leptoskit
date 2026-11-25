@@ -189,6 +189,20 @@ pub struct Run {
 		default_value_t = false
 	)]
 	pub postgres_allow_unowned_system_dbs: bool,
+	/// For a cluster's worker: the namespace the cluster's notifications
+	/// hub runs in. With `--notifications-host` and `--notifications-port`,
+	/// a release may be bridged to that hub and to no other platform
+	/// service; without them, a release that names one is refused.
+	#[arg(long, env = "LEPTOSKIT_CLOUD_WORKER_NOTIFICATIONS_NAMESPACE")]
+	pub notifications_namespace: Option<String>,
+	/// For a cluster's worker: the name the notifications hub's Service
+	/// answers on, such as `hub.leptoskit-notifications.svc.cluster.local`,
+	/// exactly as the cluster's `notifications` facts give it.
+	#[arg(long, env = "LEPTOSKIT_CLOUD_WORKER_NOTIFICATIONS_HOST")]
+	pub notifications_host: Option<String>,
+	/// For a cluster's worker: the port the notifications hub serves on.
+	#[arg(long, env = "LEPTOSKIT_CLOUD_WORKER_NOTIFICATIONS_PORT")]
+	pub notifications_port: Option<u16>,
 	/// For a cluster's worker: the `RuntimeClass` every release must run
 	/// under, such as a sandboxed one. Without it a release may keep the
 	/// cluster's default.
@@ -268,6 +282,43 @@ pub enum CommandError {
 	Run(#[from] crate::run::RunError),
 	#[error("{0}")]
 	Usage(String),
+}
+
+/// The cluster's notifications hub, from `--notifications-namespace`,
+/// `--notifications-host` and `--notifications-port`: all three, or none.
+///
+/// # Errors
+///
+/// [`CommandError::Usage`] when only some are given, the namespace isn't a
+/// namespace's name or the host a host name, or the port is zero.
+pub fn notifications_hub(
+	namespace: Option<String>,
+	host: Option<String>,
+	port: Option<u16>,
+) -> Result<Option<leptoskit_cloud_runtime::PlatformService>, CommandError> {
+	match (namespace, host, port) {
+		(None, None, None) => Ok(None),
+		(Some(namespace), Some(host), Some(port))
+			if port != 0
+				&& leptoskit_cloud::release::is_dns_label(&namespace)
+				&& host.len() <= 253
+				&& host.split('.').all(leptoskit_cloud::release::is_dns_label) =>
+		{
+			Ok(Some(leptoskit_cloud_runtime::PlatformService {
+				name: leptoskit_cloud::notifications::PLATFORM_SERVICE.to_owned(),
+				namespace,
+				host,
+				port,
+			}))
+		}
+		_ => {
+			Err(CommandError::Usage(
+				"the notifications hub needs --notifications-namespace (a namespace's name), \
+				 --notifications-host (a host name) and a non-zero --notifications-port together"
+					.to_owned(),
+			))
+		}
+	}
 }
 
 /// Loads `ClusterProfile` from `--profile-json` when provided (falling back to
@@ -513,6 +564,11 @@ async fn run(arguments: Run, shutdown: watch::Receiver<bool>) -> Result<(), Comm
 			let mut bounds = Bounds {
 				runtime_class: arguments.runtime_class,
 				database: None,
+				notifications: notifications_hub(
+					arguments.notifications_namespace,
+					arguments.notifications_host,
+					arguments.notifications_port,
+				)?,
 			};
 			let mut databases = None;
 
@@ -609,6 +665,32 @@ mod tests {
 	use clap::Parser as _;
 
 	use super::*;
+
+	#[test]
+	fn a_notifications_hub_is_named_whole_or_not_at_all() {
+		assert!(matches!(notifications_hub(None, None, None), Ok(None)));
+		let hub = notifications_hub(
+			Some("leptoskit-notifications".to_owned()),
+			Some("hub.leptoskit-notifications.svc.cluster.local".to_owned()),
+			Some(8080),
+		)
+		.expect("a hub")
+		.expect("some hub");
+		assert_eq!(hub.name, "notifications");
+		assert_eq!(hub.port, 8080);
+
+		assert!(notifications_hub(Some("ns".to_owned()), None, None).is_err());
+		assert!(notifications_hub(None, Some("hub".to_owned()), Some(8080)).is_err());
+		assert!(
+			notifications_hub(Some("ns".to_owned()), Some("hub".to_owned()), Some(0)).is_err()
+		);
+		assert!(
+			notifications_hub(Some("Bad NS".to_owned()), Some("hub".to_owned()), Some(80)).is_err()
+		);
+		assert!(
+			notifications_hub(Some("ns".to_owned()), Some("hub..svc".to_owned()), Some(80)).is_err()
+		);
+	}
 
 	#[test]
 	fn loads_cluster_profile_from_json_and_applies_overrides() {

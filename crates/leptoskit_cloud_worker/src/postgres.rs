@@ -30,12 +30,13 @@ pub const CONNECTION_LIMIT: u32 = 20;
 /// How long one statement, or connecting, may take.
 const TIMEOUT: Duration = Duration::from_secs(30);
 
-/// The databases, other than the environments', that are still open to
+/// The databases, other than the environments' own and hosted
+/// notifications ones, that are still open to
 /// every role: ones that take connections and that `PUBLIC` may connect
 /// to or make temporary tables in. A database with no ACL at all has the
 /// defaults, which let `PUBLIC` do both.
 const STILL_OPEN: &str = "SELECT datname FROM pg_database AS d WHERE datallowconn AND datname !~ \
-                          '^env_[0-9a-f]{32}$' AND (datacl IS NULL OR EXISTS (SELECT 1 FROM \
+                          '^(env|ntf)_[0-9a-f]{32}$' AND (datacl IS NULL OR EXISTS (SELECT 1 FROM \
                           aclexplode(d.datacl) AS acl WHERE acl.grantee = 0 AND \
                           acl.privilege_type IN ('CONNECT', 'TEMPORARY'))) ORDER BY datname";
 
@@ -51,7 +52,7 @@ pub struct Postgres {
 	/// Whether to tolerate system databases (`postgres`, `template1`, etc.)
 	/// that the administrator role does not own (for example on external
 	/// managed Postgres providers without superuser access). Tenant
-	/// databases (`env_*`) are still strictly locked down.
+	/// databases (`env_*` and `ntf_*`) are still strictly locked down.
 	allow_unowned_system_databases: bool,
 	/// Whether the server's other databases are closed to everyone yet:
 	/// once per worker is enough, and doing it again is harmless.
@@ -324,7 +325,8 @@ impl Postgres {
 			None => {
 				client
 					.batch_execute(&format!(
-						"CREATE DATABASE {database} OWNER {role} TEMPLATE template0"
+						"CREATE DATABASE {database} OWNER {role} TEMPLATE template0 \
+						 ALLOW_CONNECTIONS false"
 					))
 					.await
 					.map_err(|error| said(&error))?;
@@ -359,6 +361,15 @@ impl Postgres {
 		if open {
 			return Err("its database is still open to every role".to_owned());
 		}
+
+		// Made closed to connections, so no role reached it before `PUBLIC`
+		// was shut out; a step that failed before this leaves it closed.
+		client
+			.batch_execute(&format!(
+				"ALTER DATABASE {database} WITH ALLOW_CONNECTIONS true"
+			))
+			.await
+			.map_err(|error| said(&error))?;
 
 		Ok(())
 	}
@@ -496,12 +507,16 @@ fn all_hosts_loopback(config: &tokio_postgres::Config) -> bool {
 	})
 }
 
-/// Refuses a name that isn't an environment's, `env_` and 32 lower-case
-/// hex digits: whatever the control plane says, the worker never alters,
-/// or drops, the administrator or anything else on the server that isn't
-/// an environment's.
+/// Refuses a name that isn't an environment's, `env_` or, for its hosted
+/// notifications, `ntf_`, and 32 lower-case hex digits: whatever the
+/// control plane says, the worker never alters, or drops, the
+/// administrator or anything else on the server that isn't an
+/// environment's.
 fn ours(name: &str) -> Result<(), String> {
-	let hex = name.strip_prefix("env_").unwrap_or_default();
+	let hex = name
+		.strip_prefix("env_")
+		.or_else(|| name.strip_prefix("ntf_"))
+		.unwrap_or_default();
 
 	if hex.len() == 32
 		&& hex
@@ -675,6 +690,25 @@ mod tests {
 
 		let postgres = postgres.connection_limit(9_999);
 		assert_eq!(postgres.connection_limit, 1_000);
+	}
+
+	#[test]
+	fn only_an_environments_databases_are_its_own() {
+		let hex = "0193a5b07c1d7e2f8a9b0c1d2e3f4a5b";
+		assert_eq!(ours(&format!("env_{hex}")), Ok(()));
+		assert_eq!(ours(&format!("ntf_{hex}")), Ok(()));
+
+		for name in [
+			"postgres".to_owned(),
+			"template1".to_owned(),
+			format!("ntf_{}", hex.to_uppercase()),
+			format!("ntf_{hex}0"),
+			format!("abc_{hex}"),
+			format!("ntf{hex}"),
+			"ntf_".to_owned(),
+		] {
+			assert!(ours(&name).is_err(), "{name}");
+		}
 	}
 
 	#[test]

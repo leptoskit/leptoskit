@@ -11,8 +11,17 @@
 //! The worker trusts the control plane only so far. A database it is told
 //! to make or drop must be the one named for the job's own environment,
 //! and a release's policy must keep within the [`Bounds`] its operator set:
-//! the runtime class pods run under, and the one database server they may
-//! reach.
+//! the runtime class pods run under, the one database server they may
+//! reach, and the platform services, such as the cluster's notifications
+//! hub, they may be bridged to.
+//!
+//! An environment whose notifications the cluster's hub serves has a second
+//! database on the same server, named [`notifications_database_name`]. The
+//! worker makes sure of it with each release, from the password leased as
+//! [`DATABASE_URL_LEASE`](leptoskit_cloud::notifications::DATABASE_URL_LEASE),
+//! and drops it with the environment. That lease is for the worker alone:
+//! it is taken out of what the release's runtime is given, so no process
+//! and no Kubernetes object ever holds it.
 //!
 //! Backups and restores aren't taken yet: a worker given one answers that
 //! it failed, which leaves the database as it was.
@@ -23,6 +32,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
+use leptoskit_cloud::notifications::DATABASE_URL_LEASE;
 use leptoskit_cloud::release::DATABASE_URL;
 use leptoskit_cloud::workers::Assignment;
 use leptoskit_cloud::workers::BackupOutcome;
@@ -37,6 +47,7 @@ use leptoskit_cloud::workers::RestoreOutcome;
 use leptoskit_cloud_runtime::ClusterProfile;
 use leptoskit_cloud_runtime::DatabaseAccess;
 use leptoskit_cloud_runtime::EnvironmentRef;
+use leptoskit_cloud_runtime::PlatformService;
 use leptoskit_cloud_runtime::Policy;
 use leptoskit_cloud_runtime::Runtime;
 use leptoskit_cloud_runtime::RuntimeError;
@@ -154,6 +165,10 @@ pub struct Bounds {
 	/// The one database server a release may open its network to. None
 	/// refuses every release that asks for one.
 	pub database: Option<DatabaseAccess>,
+	/// The cluster's notifications hub, the one platform service a release
+	/// may be bridged to, exactly as it is here. None refuses every release
+	/// that names a platform service.
+	pub notifications: Option<PlatformService>,
 }
 
 impl Bounds {
@@ -181,6 +196,27 @@ impl Bounds {
 			_ => Ok(()),
 		}
 	}
+
+	/// Whether every service in `platform` is one of these bounds', and if
+	/// not, why.
+	///
+	/// # Errors
+	///
+	/// Why, in words for the deployment's sheet.
+	pub fn reaches(&self, platform: &[PlatformService]) -> Result<(), String> {
+		match platform
+			.iter()
+			.find(|service| self.notifications.as_ref() != Some(*service))
+		{
+			Some(service) => {
+				Err(format!(
+					"it reaches a platform service, `{}`, that isn't this cluster's",
+					service.name
+				))
+			}
+			None => Ok(()),
+		}
+	}
 }
 
 /// The name of `environment`'s managed database, and of its role, as the
@@ -188,6 +224,39 @@ impl Bounds {
 #[must_use]
 pub fn database_name(environment: &EnvironmentRef) -> String {
 	format!("env_{}", environment.environment.id.simple())
+}
+
+/// The name of `environment`'s hosted notifications database, and of its
+/// role, as the control plane makes it: `ntf_` and the environment's ID in
+/// hex.
+#[must_use]
+pub fn notifications_database_name(environment: &EnvironmentRef) -> String {
+	format!("ntf_{}", environment.environment.id.simple())
+}
+
+/// Whether `address`, the notifications database's leased URL, logs in as
+/// `name`, and its password is in none of `secrets`, the values the
+/// release's processes may be given: a control plane that leased it to the
+/// app too would hand the tenant the hub's own database.
+fn private_lease(
+	address: Option<&str>,
+	name: &str,
+	secrets: &BTreeMap<String, String>,
+) -> Result<(), String> {
+	let address = address
+		.and_then(|address| url::Url::parse(address).ok())
+		.ok_or_else(|| "its address wasn't leased with the release".to_owned())?;
+	let password = address.password().unwrap_or_default();
+
+	if address.username() != name || password.is_empty() {
+		return Err("its address isn't its role's".to_owned());
+	}
+
+	if secrets.values().any(|value| value.contains(password)) {
+		return Err("its password is among what the app is given".to_owned());
+	}
+
+	Ok(())
 }
 
 /// What a cluster worker does with each kind of job.
@@ -514,9 +583,12 @@ impl ClusterRole {
 	async fn release(
 		&self,
 		input: &ReleaseInput,
-		secrets: BTreeMap<String, String>,
+		mut secrets: BTreeMap<String, String>,
 		log: &LogSink,
 	) -> ReleaseOutcome {
+		// The notifications database's password is the worker's alone:
+		// whatever the spec says, no process or object is given it.
+		let notifications_url = secrets.remove(DATABASE_URL_LEASE);
 		let spec = &input.spec.0;
 		// A failure before any process is touched is the app's to show.
 		let first = spec
@@ -530,17 +602,49 @@ impl ClusterRole {
 			}
 		};
 
-		if let Err(reason) = self.bounds.check(&spec.policy) {
+		if let Err(reason) = self
+			.bounds
+			.check(&spec.policy)
+			.and_then(|()| self.bounds.reaches(&spec.platform))
+		{
 			log.line(format!("worker: the release is refused: {reason}"));
 			return not_ready(format!("the release is refused: {reason}"));
+		}
+
+		// Checked before either database is touched: the hub's password must
+		// be its role's, and in nothing the release's processes are given.
+		if input.notifications.is_some()
+			&& let Err(reason) = private_lease(
+				notifications_url.as_deref(),
+				&notifications_database_name(&spec.environment),
+				&secrets,
+			) {
+			log.line(format!("worker: the notifications database: {reason}"));
+			return not_ready(format!("its notifications database: {reason}"));
 		}
 
 		if let Some(step) = &input.database {
 			log.line("worker: making sure of the environment's database");
 
-			if let Err(reason) = self.database(step, &spec.environment, &secrets).await {
+			let name = database_name(&spec.environment);
+			let password = secrets.get(DATABASE_URL).map(String::as_str);
+
+			if let Err(reason) = self.database(step, &name, password).await {
 				log.line(format!("worker: the database: {reason}"));
 				return not_ready(format!("its database: {reason}"));
+			}
+		}
+
+		if let Some(step) = &input.notifications {
+			log.line("worker: making sure of the environment's notifications database");
+			let name = notifications_database_name(&spec.environment);
+
+			if let Err(reason) = self
+				.database(step, &name, notifications_url.as_deref())
+				.await
+			{
+				log.line(format!("worker: the notifications database: {reason}"));
+				return not_ready(format!("its notifications database: {reason}"));
 			}
 		}
 
@@ -574,16 +678,14 @@ impl ClusterRole {
 		}
 	}
 
-	/// Makes sure of `step`'s database, which must be `environment`'s, with
-	/// the password in the leased `DATABASE_URL`.
+	/// Makes sure of `step`'s database, which must be the one called `name`,
+	/// with the password in `address`, the URL leased for it.
 	async fn database(
 		&self,
 		step: &DatabaseStep,
-		environment: &EnvironmentRef,
-		secrets: &BTreeMap<String, String>,
+		name: &str,
+		address: Option<&str>,
 	) -> Result<(), String> {
-		let name = database_name(environment);
-
 		if step.name != name || step.role != name {
 			return Err("it isn't this environment's".to_owned());
 		}
@@ -598,8 +700,7 @@ impl ClusterRole {
 		let Some(databases) = &self.databases else {
 			return Err("this cluster's worker has no database server".to_owned());
 		};
-		let password = secrets
-			.get(DATABASE_URL)
+		let password = address
 			.and_then(|address| url::Url::parse(address).ok())
 			.and_then(|address| address.password().map(str::to_owned))
 			.ok_or_else(|| "its address wasn't leased with the release".to_owned())?;
@@ -612,24 +713,40 @@ impl ClusterRole {
 
 		// Checked before anything is removed, so a destroy that can't
 		// finish doesn't start.
-		let databases = match &input.database {
-			None => None,
-			Some(name) if *name != database_name(environment) => {
-				log.line("worker: the database named isn't this environment's");
+		let named = [
+			(
+				input.database.as_deref(),
+				database_name(environment),
+				"database",
+			),
+			(
+				input.notifications.as_deref(),
+				notifications_database_name(environment),
+				"notifications database",
+			),
+		];
+		let mut dropping = Vec::new();
+
+		for (name, expected, what) in &named {
+			let Some(name) = name else {
+				continue;
+			};
+
+			if name != expected {
+				log.line(format!("worker: the {what} named isn't this environment's"));
 				return DestroyOutcome::Failed {
-					reason: "its database isn't this environment's".to_owned(),
+					reason: format!("its {what} isn't this environment's"),
 				};
 			}
-			Some(name) => {
-				let Some(databases) = &self.databases else {
-					log.line("worker: this worker has no database server");
-					return DestroyOutcome::Failed {
-						reason: "this cluster's worker has no database server".to_owned(),
-					};
+
+			let Some(databases) = &self.databases else {
+				log.line("worker: this worker has no database server");
+				return DestroyOutcome::Failed {
+					reason: "this cluster's worker has no database server".to_owned(),
 				};
-				Some((databases, name))
-			}
-		};
+			};
+			dropping.push((databases, *name, *what));
+		}
 
 		log.line("worker: removing the environment's processes");
 		let removed = match self.place.runtime(SecretValues::default()).await {
@@ -644,15 +761,23 @@ impl ClusterRole {
 			};
 		}
 
-		if let Some((databases, name)) = databases {
-			log.line("worker: dropping the environment's database");
+		// Each is dropped even when another couldn't be, so one failure
+		// leaves no other behind; dropping again is harmless.
+		let mut failed = Vec::new();
+
+		for (databases, name, what) in dropping {
+			log.line(format!("worker: dropping the environment's {what}"));
 
 			if let Err(reason) = databases.remove(name).await {
-				log.line(format!("worker: the database: {reason}"));
-				return DestroyOutcome::Failed {
-					reason: format!("its database: {reason}"),
-				};
+				log.line(format!("worker: the {what}: {reason}"));
+				failed.push(format!("its {what}: {reason}"));
 			}
+		}
+
+		if !failed.is_empty() {
+			return DestroyOutcome::Failed {
+				reason: failed.join("; "),
+			};
 		}
 
 		self.untrack(environment.environment.id);
@@ -697,6 +822,7 @@ mod tests {
 				namespace: "postgres".to_owned(),
 				port: 5432,
 			}),
+			notifications: None,
 		};
 		assert_eq!(bounds.check(&policy(Some("gvisor"), None)), Ok(()));
 		assert_eq!(
@@ -722,6 +848,42 @@ mod tests {
 		assert!(none.check(&policy(None, Some(("postgres", 5432)))).is_err());
 	}
 
+	fn hub() -> PlatformService {
+		PlatformService {
+			name: "notifications".to_owned(),
+			namespace: "leptoskit-notifications".to_owned(),
+			host: "hub.leptoskit-notifications.svc.cluster.local".to_owned(),
+			port: 8080,
+		}
+	}
+
+	#[test]
+	fn a_release_reaches_only_the_clusters_hub() {
+		let bounds = Bounds {
+			notifications: Some(hub()),
+			..Bounds::default()
+		};
+		assert_eq!(bounds.reaches(&[]), Ok(()));
+		assert_eq!(bounds.reaches(&[hub()]), Ok(()));
+
+		let elsewhere = PlatformService {
+			namespace: "kube-system".to_owned(),
+			..hub()
+		};
+		let other_port = PlatformService { port: 6443, ..hub() };
+		let other_name = PlatformService {
+			name: "mailer".to_owned(),
+			..hub()
+		};
+
+		for service in [elsewhere, other_port, other_name] {
+			assert!(bounds.reaches(&[hub(), service.clone()]).is_err(), "{service:?}");
+		}
+
+		// Without a hub, no release may reach a platform service.
+		assert!(Bounds::default().reaches(&[hub()]).is_err());
+	}
+
 	#[test]
 	fn a_database_is_named_for_its_environment() {
 		let id = Uuid::parse_str("0193a5b0-7c1d-7e2f-8a9b-0c1d2e3f4a5b").expect("an ID");
@@ -740,6 +902,389 @@ mod tests {
 			database_name(&environment),
 			"env_0193a5b07c1d7e2f8a9b0c1d2e3f4a5b"
 		);
+		assert_eq!(
+			notifications_database_name(&environment),
+			"ntf_0193a5b07c1d7e2f8a9b0c1d2e3f4a5b"
+		);
+	}
+
+	/// What the fakes below were asked to do.
+	#[derive(Clone, Debug, PartialEq, Eq)]
+	enum Asked {
+		Ensure { name: String, password: String },
+		Remove { name: String },
+		/// A runtime, and whether it held the app's and the notifications
+		/// database's addresses.
+		Runtime { database_url: bool, notifications: bool },
+	}
+
+	#[derive(Clone, Default)]
+	struct Recording {
+		asked: Arc<std::sync::Mutex<Vec<Asked>>>,
+		fake: Arc<leptoskit_cloud_runtime::testing::Fake>,
+	}
+
+	impl Recording {
+		fn asked(&self) -> Vec<Asked> {
+			self.asked.lock().expect("not poisoned").clone()
+		}
+
+		fn push(&self, asked: Asked) {
+			self.asked.lock().expect("not poisoned").push(asked);
+		}
+	}
+
+	impl Databases for Recording {
+		fn ensure<'a>(
+			&'a self,
+			step: &'a DatabaseStep,
+			password: &'a str,
+		) -> Pending<'a, Result<(), String>> {
+			self.push(Asked::Ensure {
+				name: step.name.clone(),
+				password: password.to_owned(),
+			});
+			Box::pin(async { Ok(()) })
+		}
+
+		fn remove<'a>(&'a self, name: &'a str) -> Pending<'a, Result<(), String>> {
+			self.push(Asked::Remove {
+				name: name.to_owned(),
+			});
+			Box::pin(async { Ok(()) })
+		}
+	}
+
+	impl Place for Recording {
+		fn runtime(
+			&self,
+			secrets: SecretValues,
+		) -> Pending<'_, Result<Box<dyn Runtime>, RuntimeError>> {
+			self.push(Asked::Runtime {
+				database_url: secrets.get(DATABASE_URL).is_some(),
+				notifications: secrets.get(DATABASE_URL_LEASE).is_some(),
+			});
+			let fake = Arc::clone(&self.fake);
+			Box::pin(async move { Ok(Box::new(ArcRuntime(fake)) as Box<dyn Runtime>) })
+		}
+	}
+
+	/// A shared fake, as a boxed runtime.
+	struct ArcRuntime(Arc<leptoskit_cloud_runtime::testing::Fake>);
+
+	impl Runtime for ArcRuntime {
+		fn apply(
+			&self,
+			spec: &leptoskit_cloud_runtime::ReleaseSpec,
+		) -> leptoskit_cloud_runtime::RuntimeFuture<
+			'_,
+			Result<leptoskit_cloud_runtime::Applied, RuntimeError>,
+		> {
+			self.0.apply(spec)
+		}
+
+		fn status(
+			&self,
+			environment: &EnvironmentRef,
+		) -> leptoskit_cloud_runtime::RuntimeFuture<
+			'_,
+			Result<leptoskit_cloud_runtime::Observed, RuntimeError>,
+		> {
+			self.0.status(environment)
+		}
+
+		fn logs(
+			&self,
+			environment: &EnvironmentRef,
+			query: &leptoskit_cloud_runtime::LogQuery,
+		) -> leptoskit_cloud_runtime::RuntimeFuture<
+			'_,
+			Result<Vec<leptoskit_cloud_runtime::LogLine>, RuntimeError>,
+		> {
+			self.0.logs(environment, query)
+		}
+
+		fn destroy(
+			&self,
+			environment: &EnvironmentRef,
+		) -> leptoskit_cloud_runtime::RuntimeFuture<'_, Result<(), RuntimeError>> {
+			self.0.destroy(environment)
+		}
+	}
+
+	fn environment() -> EnvironmentRef {
+		let named = |slug: &str, id| {
+			NamedRef {
+				slug: slug.to_owned(),
+				id: Uuid::from_u128(id),
+			}
+		};
+		EnvironmentRef {
+			organization: named("acme", 1),
+			project: named("notes", 2),
+			environment: named("production", 3),
+		}
+	}
+
+	fn step(name: String) -> DatabaseStep {
+		DatabaseStep {
+			role: name.clone(),
+			name,
+			size: leptoskit_cloud::size::DatabaseSize::Shared,
+			backups: leptoskit_cloud::size::Backups::Daily,
+		}
+	}
+
+	/// A release of one process, reaching `platform`, with the app's and
+	/// the notifications hub's databases.
+	fn release(platform: Vec<PlatformService>) -> ReleaseInput {
+		let environment = environment();
+		let spec = leptoskit_cloud_runtime::ReleaseSpec {
+			platform,
+			deployment: 7,
+			processes: vec![leptoskit_cloud_runtime::Process {
+				name: "app".to_owned(),
+				kind: leptoskit_cloud_runtime::ProcessKind::App,
+				image: leptoskit_cloud_runtime::Image {
+					repository: "registry.example/acme/notes".to_owned(),
+					digest: format!("sha256:{}", "a".repeat(64)),
+				},
+				command: Vec::new(),
+				args: Vec::new(),
+				port: 8080,
+				probes: leptoskit_cloud_runtime::Probes {
+					ready: "/readyz".to_owned(),
+					live: "/healthz".to_owned(),
+				},
+				env: BTreeMap::new(),
+				secret_env: BTreeMap::from([(DATABASE_URL.to_owned(), DATABASE_URL.to_owned())]),
+				resources: leptoskit_cloud_runtime::Resources {
+					cpu_request_millis: 100,
+					cpu_limit_millis: 500,
+					memory_mib: 128,
+				},
+				scale: leptoskit_cloud_runtime::Scale {
+					min: 1,
+					max: 1,
+					sleep: false,
+				},
+				volumes: Vec::new(),
+			}],
+			routes: Vec::new(),
+			policy: policy(None, Some(("postgres", 5432))),
+			environment: environment.clone(),
+		};
+		ReleaseInput {
+			deployment: leptoskit_cloud::workers::DeploymentRef {
+				organization: "acme".to_owned(),
+				project: "notes".to_owned(),
+				environment: "production".to_owned(),
+				number: 7,
+			},
+			spec: leptoskit_cloud::workers::RuntimeValue(spec),
+			migration: leptoskit_cloud::workers::MigrationStep::None {
+				reason: "none".to_owned(),
+			},
+			previous: None,
+			database: Some(step(database_name(&environment))),
+			notifications: Some(step(notifications_database_name(&environment))),
+		}
+	}
+
+	fn leased() -> BTreeMap<String, String> {
+		let hex = environment().environment.id.simple().to_string();
+		BTreeMap::from([
+			(
+				DATABASE_URL.to_owned(),
+				format!("postgres://env_{hex}:app-password@db/env_{hex}"),
+			),
+			(
+				DATABASE_URL_LEASE.to_owned(),
+				format!("postgres://ntf_{hex}:hub-password@db/ntf_{hex}"),
+			),
+		])
+	}
+
+	fn role(recording: &Recording, notifications: Option<PlatformService>) -> ClusterRole {
+		ClusterRole::new(Arc::new(recording.clone()))
+			.bounds(Bounds {
+				runtime_class: None,
+				database: Some(DatabaseAccess {
+					namespace: "postgres".to_owned(),
+					port: 5432,
+				}),
+				notifications,
+			})
+			.databases(Arc::new(recording.clone()))
+	}
+
+	#[tokio::test]
+	async fn a_release_makes_its_notifications_database_and_keeps_its_password() {
+		let recording = Recording::default();
+		let (log, _lines) = LogSink::collecting();
+		let outcome = role(&recording, Some(hub()))
+			.release(&release(vec![hub()]), leased(), &log)
+			.await;
+
+		assert_eq!(outcome, ReleaseOutcome::Applied);
+		let hex = environment().environment.id.simple().to_string();
+		assert_eq!(
+			recording.asked(),
+			vec![
+				Asked::Ensure {
+					name: format!("env_{hex}"),
+					password: "app-password".to_owned(),
+				},
+				Asked::Ensure {
+					name: format!("ntf_{hex}"),
+					password: "hub-password".to_owned(),
+				},
+				// The app's address goes to the runtime, the hub's never.
+				Asked::Runtime {
+					database_url: true,
+					notifications: false,
+				},
+			]
+		);
+	}
+
+	#[tokio::test]
+	async fn a_release_names_only_its_own_notifications_database() {
+		let recording = Recording::default();
+		let (log, _lines) = LogSink::collecting();
+		let mut input = release(vec![hub()]);
+		input.notifications = Some(step(format!("ntf_{}", Uuid::from_u128(9).simple())));
+		let outcome = role(&recording, Some(hub()))
+			.release(&input, leased(), &log)
+			.await;
+
+		assert_eq!(
+			outcome,
+			ReleaseOutcome::NotReady {
+				process: "app".to_owned(),
+				reason: "its notifications database: it isn't this environment's".to_owned(),
+			}
+		);
+		assert!(
+			!recording
+				.asked()
+				.iter()
+				.any(|asked| matches!(asked, Asked::Runtime { .. }))
+		);
+
+		// Nor when its password is the app's too, or its role another's.
+		for secrets in [
+			{
+				let mut secrets = leased();
+				let hub = secrets[DATABASE_URL_LEASE].clone();
+				secrets.insert("SHARED".to_owned(), hub);
+				secrets
+			},
+			{
+				let mut secrets = leased();
+				secrets.insert(
+					DATABASE_URL_LEASE.to_owned(),
+					"postgres://admin:hub-password@db/postgres".to_owned(),
+				);
+				secrets
+			},
+		] {
+			let recording = Recording::default();
+			let outcome = role(&recording, Some(hub()))
+				.release(&release(vec![hub()]), secrets, &log)
+				.await;
+			assert!(
+				matches!(&outcome, ReleaseOutcome::NotReady { reason, .. } if reason.starts_with("its notifications database: its")),
+				"{outcome:?}"
+			);
+			assert_eq!(recording.asked(), Vec::new());
+		}
+
+		// Nor is it made without its password.
+		let recording = Recording::default();
+		let mut secrets = leased();
+		secrets.remove(DATABASE_URL_LEASE);
+		let outcome = role(&recording, Some(hub()))
+			.release(&release(vec![hub()]), secrets, &log)
+			.await;
+		assert_eq!(
+			outcome,
+			ReleaseOutcome::NotReady {
+				process: "app".to_owned(),
+				reason: "its notifications database: its address wasn't leased with the release"
+					.to_owned(),
+			}
+		);
+	}
+
+	#[tokio::test]
+	async fn a_release_bridged_to_another_hub_is_refused() {
+		let recording = Recording::default();
+		let (log, _lines) = LogSink::collecting();
+		let elsewhere = PlatformService {
+			host: "kubernetes.default.svc".to_owned(),
+			..hub()
+		};
+		let outcome = role(&recording, Some(hub()))
+			.release(&release(vec![elsewhere]), leased(), &log)
+			.await;
+
+		assert_eq!(
+			outcome,
+			ReleaseOutcome::NotReady {
+				process: "app".to_owned(),
+				reason: "the release is refused: it reaches a platform service, `notifications`, \
+				         that isn't this cluster's"
+					.to_owned(),
+			}
+		);
+		assert_eq!(recording.asked(), Vec::new());
+	}
+
+	#[tokio::test]
+	async fn a_destroy_drops_both_databases() {
+		let recording = Recording::default();
+		let (log, _lines) = LogSink::collecting();
+		let environment = environment();
+		let input = DestroyEnvironmentInput {
+			environment: leptoskit_cloud::workers::RuntimeValue(environment.clone()),
+			database: Some(database_name(&environment)),
+			notifications: Some(notifications_database_name(&environment)),
+		};
+		let outcome = role(&recording, None).destroy(&input, &log).await;
+
+		assert_eq!(outcome, DestroyOutcome::Destroyed);
+		let removed: Vec<Asked> = recording
+			.asked()
+			.into_iter()
+			.filter(|asked| matches!(asked, Asked::Remove { .. }))
+			.collect();
+		assert_eq!(
+			removed,
+			vec![
+				Asked::Remove {
+					name: database_name(&environment),
+				},
+				Asked::Remove {
+					name: notifications_database_name(&environment),
+				},
+			]
+		);
+
+		// Another environment's is never dropped, and nothing is removed.
+		let recording = Recording::default();
+		let input = DestroyEnvironmentInput {
+			notifications: Some(format!("ntf_{}", Uuid::from_u128(9).simple())),
+			..input
+		};
+		let outcome = role(&recording, None).destroy(&input, &log).await;
+		assert_eq!(
+			outcome,
+			DestroyOutcome::Failed {
+				reason: "its notifications database isn't this environment's".to_owned(),
+			}
+		);
+		assert_eq!(recording.asked(), Vec::new());
 	}
 
 	#[test]
