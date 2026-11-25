@@ -382,8 +382,10 @@ pub(crate) struct Pipelines {
 	multisample: wgpu::MultisampleState,
 	/// The ink outline's pipelines (`[static, skinned]` for unmirrored then
 	/// mirrored transforms), compiled when a scene first draws a line, so
-	/// scenes without ink never build them.
+	/// scenes without ink never build them. `outlines_solid` omits the AR
+	/// occlusion `discard` so the GPU keeps Early-Z and Early-Stencil active.
 	outlines: OnceLock<[wgpu::RenderPipeline; 4]>,
+	outlines_solid: OnceLock<[wgpu::RenderPipeline; 4]>,
 }
 
 /// The attributes of [`InstanceRecord`](crate::upload::InstanceRecord) that
@@ -799,6 +801,7 @@ impl Shared {
 			format,
 			multisample,
 			outlines: OnceLock::new(),
+			outlines_solid: OnceLock::new(),
 			meshes: Variant::all()
 				.map(|variant| {
 					(
@@ -891,13 +894,20 @@ impl Shared {
 
 	/// The outline pipelines for `pipelines`' format, indexed by
 	/// `usize::from(skinned) + usize::from(mirrored) * 2`, compiled on first
-	/// use.
+	/// use. When `occluded` is `false`, the fragment entry has no `discard`
+	/// so the GPU keeps Early-Z and Early-Stencil active.
 	pub fn outline_pipelines<'p>(
 		&self,
 		device: &wgpu::Device,
 		pipelines: &'p Pipelines,
+		occluded: bool,
 	) -> &'p [wgpu::RenderPipeline; 4] {
-		pipelines.outlines.get_or_init(|| {
+		let slot = if occluded {
+			&pipelines.outlines
+		} else {
+			&pipelines.outlines_solid
+		};
+		slot.get_or_init(|| {
 			[(false, false), (true, false), (false, true), (true, true)].map(
 				|(skinned, mirrored)| {
 					self.outline_pipeline(
@@ -906,6 +916,7 @@ impl Shared {
 						pipelines.multisample,
 						skinned,
 						mirrored,
+						occluded,
 					)
 				},
 			)
@@ -921,6 +932,7 @@ impl Shared {
 		multisample: wgpu::MultisampleState,
 		skinned: bool,
 		mirrored: bool,
+		occluded: bool,
 	) -> wgpu::RenderPipeline {
 		let vertex = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3];
 		let ink = wgpu::vertex_attr_array![15 => Snorm8x4];
@@ -972,10 +984,11 @@ impl Shared {
 				cull_mode: Some(wgpu::Face::Front),
 				..wgpu::PrimitiveState::default()
 			},
-			// Strict Less with a small positive depth bias guarantees zero-weight
-			// vertices (where pushed == world) never overwrite double-sided back
-			// faces already drawn by the mesh pass, and avoids z-fighting across
-			// differing vertex contraction on mobile GPUs.
+			// Strict Less with a small positive depth bias (`clamp: 0.0`, safe
+			// on WebGL2) guarantees zero-weight vertices (where pushed == world)
+			// never overwrite double-sided back faces already drawn by the mesh
+			// pass, and avoids z-fighting across differing vertex contraction
+			// on mobile GPUs.
 			depth_stencil: Some(wgpu::DepthStencilState {
 				bias: wgpu::DepthBiasState {
 					constant: 2,
@@ -987,7 +1000,11 @@ impl Shared {
 			multisample,
 			fragment: Some(wgpu::FragmentState {
 				module: &self.mesh_shader,
-				entry_point: Some("fs_outline"),
+				entry_point: Some(if occluded {
+					"fs_outline"
+				} else {
+					"fs_outline_solid"
+				}),
 				compilation_options: wgpu::PipelineCompilationOptions::default(),
 				targets: &targets,
 			}),

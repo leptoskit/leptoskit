@@ -674,9 +674,16 @@ fn outline_normal(transform: mat3x3<f32>, welded: vec3<f32>, normal: vec3<f32>, 
 	return select(vec3<f32>(0.0), turned * inverseSqrt(length_squared), length_squared > 0.0);
 }
 
+// Relief-print wobble: reads per-part noise offset and frequency from the
+// frame's data texture so each part has its own seed and boil slot.
+fn print_wobble(local: vec3<f32>, extra_idx: u32) -> f32 {
+	let noise_freq = data_texel(extra_idx + 1u);
+	return 1.0 + globals.ink.w * (noise(local * noise_freq.w + noise_freq.xyz) * 2.0 - 1.0);
+}
+
 // `ink.w` is the instance's line weight and `vertex_weight` the model's own,
 // from 0 to 2. An instance without a line collapses outside the view.
-fn outline(world: vec4<f32>, normal: vec3<f32>, local: vec3<f32>, ink: vec4<f32>, vertex_weight: f32) -> OutlineVaryings {
+fn outline(world: vec4<f32>, normal: vec3<f32>, local: vec3<f32>, ink: vec4<f32>, vertex_weight: f32, params_z: u32) -> OutlineVaryings {
 	var out: OutlineVaryings;
 	out.color = ink.rgb;
 	if (ink.w <= 0.0) {
@@ -684,12 +691,26 @@ fn outline(world: vec4<f32>, normal: vec3<f32>, local: vec3<f32>, ink: vec4<f32>
 		out.view_depth = 0.0;
 		return out;
 	}
-	let shade = 0.5 - 0.5 * dot(normal, globals.light_direction.xyz);
-	var width = globals.ink.x * ink.w * (1.0 + globals.ink.z * shade) * wobble(local);
-	// Hold a 1-pixel floor at full weight (>= 1), tapering the floor down to 0
-	// as `ink.w` fades below 1 so fading a part's line out vanishes smoothly;
-	// the model's own per-vertex weight may also taper it away.
-	width = max(width, min(ink.w, 1.0)) * vertex_weight;
+	var width: f32;
+	if (globals.style.x > 1.5) {
+		let extra_idx = params_z & 0x00ffffffu;
+		let side_span = max(globals.shade.x - globals.style.w, 1.0e-4);
+		let side_to = globals.style.w + side_span;
+		let side = globals.style.y - globals.style.z * smoothstep(globals.style.w, side_to, dot(normal, globals.light_direction.xyz));
+		width = globals.ink.x * ink.w * max(side, 0.0) * print_wobble(local, extra_idx);
+		// Hold a 1-pixel floor at full weight (>= 1) while positive, tapering
+		// the floor down to 0 as `ink.w` fades below 1; zero side weight or the
+		// model's own per-vertex weight may also taper it away.
+		let floor_px = min(ink.w, 1.0);
+		width = select(0.0, max(width, floor_px) * vertex_weight, width > 0.0);
+	} else {
+		let shade = 0.5 - 0.5 * dot(normal, globals.light_direction.xyz);
+		width = globals.ink.x * ink.w * (1.0 + globals.ink.z * shade) * wobble(local);
+		// Hold a 1-pixel floor at full weight (>= 1), tapering the floor down to 0
+		// as `ink.w` fades below 1 so fading a part's line out vanishes smoothly;
+		// the model's own per-vertex weight may also taper it away.
+		width = max(width, min(ink.w, 1.0)) * vertex_weight;
+	}
 	let depth = (globals.view_projection * world).w;
 	let pushed = vec4<f32>(world.xyz + normal * (width * max(depth, 0.0) * globals.ink_noise.w), 1.0);
 	out.clip = globals.view_projection * pushed;
@@ -706,7 +727,7 @@ fn vs_outline_static(vertex: OutlineVertex, instance: OutlineInstance, @location
 	let m = mat3x3<f32>(model[0].xyz, model[1].xyz, model[2].xyz);
 	let world_normal = outline_normal(m, ink_vertex.xyz, normal, vertex.normal);
 	let local = local_position(vertex.position, instance.params.w);
-	return outline(model * vec4<f32>(position, 1.0), world_normal, local, instance.ink, ink_vertex.w + 1.0);
+	return outline(model * vec4<f32>(position, 1.0), world_normal, local, instance.ink, ink_vertex.w + 1.0, instance.params.z);
 }
 
 @vertex
@@ -722,7 +743,7 @@ fn vs_outline_skinned(vertex: OutlineVertex, skin: Skin, instance: OutlineInstan
 	let m = mat3x3<f32>(skinning[0].xyz, skinning[1].xyz, skinning[2].xyz);
 	let world_normal = outline_normal(m, ink_vertex.xyz, normal, vertex.normal);
 	let local = local_position(vertex.position, instance.params.w);
-	return outline(skinning * vec4<f32>(position, 1.0), world_normal, local, instance.ink, ink_vertex.w + 1.0);
+	return outline(skinning * vec4<f32>(position, 1.0), world_normal, local, instance.ink, ink_vertex.w + 1.0, instance.params.z);
 }
 
 // The line's colour, exactly as the style or the part set it: no exposure
@@ -732,6 +753,17 @@ fn fs_outline(in: OutlineVaryings) -> @location(0) vec4<f32> {
 	if (occluded(in.clip, in.view_depth)) {
 		discard;
 	}
+	var color = in.color;
+	if (globals.params.y > 0.5) {
+		color = linear_to_srgb(color);
+	}
+	return vec4<f32>(color, 1.0);
+}
+
+// Same as `fs_outline` without `discard`, enabling hardware Early-Z and
+// Early-Stencil rejection when real-world occlusion is inactive.
+@fragment
+fn fs_outline_solid(in: OutlineVaryings) -> @location(0) vec4<f32> {
 	var color = in.color;
 	if (globals.params.y > 0.5) {
 		color = linear_to_srgb(color);

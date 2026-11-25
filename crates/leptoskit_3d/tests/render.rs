@@ -2310,3 +2310,224 @@ fn camera_space_light_follows_the_camera() {
 		world.at(48, 32)
 	);
 }
+
+#[test]
+fn print_outline_thins_on_lit_side_and_thickens_on_shadow_side() {
+	let Some(gpu) = gpu() else { return };
+	let mut renderer = lit_sphere(gpu, None);
+	let render_128 = |renderer: &mut Renderer| {
+		renderer.advance(0.0);
+		Image {
+			pixels: renderer.render_to_rgba(128, 128).unwrap(),
+			width: 128,
+		}
+	};
+
+	renderer.world_mut().apply([
+		Op::SetLight(Light {
+			// Light shines from the right (-X travel, toward +X).
+			direction: [-1.0, 0.0, 0.0],
+			shadow: 0.0,
+			..Light::default()
+		}),
+		Op::SetPrint {
+			node: NodeId(1),
+			target: PrintTarget::All,
+			print: PrintOverride {
+				lit: Some([0.2, 0.3, 0.8]),
+				shade: Some([0.1, 0.2, 0.6]),
+				deep: Some([0.05, 0.1, 0.4]),
+				..PrintOverride::default()
+			},
+		},
+		style(
+			Shading::Print(Print {
+				side_heavy: 1.40,
+				side_drop: 0.90,
+				side_from: -0.35,
+				side_to: 0.75,
+				..print_no_knockout()
+			}),
+			Some(Ink {
+				wobble: 0.0,
+				..red_ink(55.0)
+			}),
+		),
+	]);
+
+	let image = render_128(&mut renderer);
+	let runs = ink_runs(&image, 64);
+	assert_eq!(runs.len(), 2, "two silhouette edges at equator: {runs:?}");
+	let shadow_width = runs[0].1;
+	let lit_width = runs[1].1;
+	assert!(
+		shadow_width > lit_width + 3,
+		"shadow edge ({shadow_width}px) must be noticeably thicker than lit edge ({lit_width}px): \
+		 {runs:?}"
+	);
+
+	// Zero side_drop restores symmetric edges.
+	renderer.world_mut().apply([style(
+		Shading::Print(Print {
+			side_heavy: 1.0,
+			side_drop: 0.0,
+			..print_no_knockout()
+		}),
+		Some(Ink {
+			wobble: 0.0,
+			..red_ink(55.0)
+		}),
+	)]);
+	let symmetric = render_128(&mut renderer);
+	let sym_runs = ink_runs(&symmetric, 64);
+	assert_eq!(sym_runs.len(), 2, "{sym_runs:?}");
+	assert!(
+		sym_runs[0].1.abs_diff(sym_runs[1].1) <= 1,
+		"zero side_drop yields symmetric edges: {sym_runs:?}"
+	);
+}
+
+#[test]
+fn print_outline_wobble_frequency_and_per_figure_three_slot_boil() {
+	let Some(gpu) = gpu() else { return };
+	let mut renderer = renderer(gpu);
+	let sphere = fixture::lit_sphere(32, None);
+	spawn(&mut renderer, 1, 1, &sphere);
+	renderer.world_mut().apply([
+		Op::SetBackdrop(Backdrop::Color([0.05, 0.05, 0.10, 1.0])),
+		Op::SetLight(Light {
+			direction: [0.0, 0.0, -1.0],
+			shadow: 0.0,
+			..Light::default()
+		}),
+		Op::SetTransform {
+			node: NodeId(1),
+			transform: Transform::from_translation(-0.65, 0.0, 0.0).with_scale(0.45),
+		},
+		Op::Spawn {
+			node: NodeId(2),
+			asset: Some(AssetId(1)),
+			parent: None,
+		},
+		Op::SetTransform {
+			node: NodeId(2),
+			transform: Transform::from_translation(0.65, 0.0, 0.0).with_scale(0.45),
+		},
+		style(
+			Shading::Print(Print {
+				wobble_frequency: 5.0,
+				..print_no_knockout()
+			}),
+			Some(Ink {
+				wobble: 0.45,
+				boil: 0.0,
+				..red_ink(55.0)
+			}),
+		),
+	]);
+
+	let half = |image: &Image, cols: std::ops::Range<u32>| -> Vec<[u8; 4]> {
+		(0..128)
+			.flat_map(|y| cols.clone().map(move |x| image.at(x, y)))
+			.collect()
+	};
+
+	let mut frames = Vec::new();
+	for slot in 0..=3_u8 {
+		renderer.world_mut().apply([Op::SetPrint {
+			node: NodeId(1),
+			target: PrintTarget::All,
+			print: PrintOverride {
+				lit: Some([0.1, 0.3, 0.8]),
+				shade: Some([0.1, 0.2, 0.6]),
+				deep: Some([0.05, 0.1, 0.4]),
+				boil_step: Some(slot),
+				..PrintOverride::default()
+			},
+		}]);
+		renderer.advance(0.0);
+		frames.push(Image {
+			pixels: renderer.render_to_rgba(128, 128).unwrap(),
+			width: 128,
+		});
+	}
+
+	// Boiling figure (left half) differs across slots 0, 1, 2 and wraps back at
+	// 3 == 0.
+	let left: Vec<_> = frames.iter().map(|img| half(img, 0..64)).collect();
+	assert_ne!(left[0], left[1], "slot 0 and 1 must differ");
+	assert_ne!(left[1], left[2], "slot 1 and 2 must differ");
+	assert_ne!(left[0], left[2], "slot 0 and 2 must differ");
+	assert_eq!(left[0], left[3], "slot 3 wraps back to slot 0");
+
+	// Static sibling (right half) is byte-for-byte identical across all frames.
+	let right: Vec<_> = frames.iter().map(|img| half(img, 64..128)).collect();
+	assert_eq!(right[0], right[1], "static sibling must not boil");
+	assert_eq!(right[0], right[2], "static sibling must not boil");
+	assert_eq!(right[0], right[3], "static sibling must not boil");
+
+	// Changing wobble_frequency alters the wobbled outline profile.
+	renderer.world_mut().apply([style(
+		Shading::Print(Print {
+			wobble_frequency: 1.0,
+			..print_no_knockout()
+		}),
+		Some(Ink {
+			wobble: 0.45,
+			boil: 0.0,
+			..red_ink(55.0)
+		}),
+	)]);
+	renderer.advance(0.0);
+	let low_freq = Image {
+		pixels: renderer.render_to_rgba(128, 128).unwrap(),
+		width: 128,
+	};
+	assert_ne!(
+		half(&low_freq, 0..64),
+		left[0],
+		"wobble_frequency must affect outline wobble"
+	);
+}
+
+#[test]
+fn print_mode_keeps_outlining_small_parts_above_half_pixel() {
+	let Some(gpu) = gpu() else { return };
+	let mut renderer = lit_sphere(gpu, None);
+	// Scale 0.06 at z = 3 projects to ~1.5 px radius (< 4 px Toon cull, >= 0.5
+	// px Print floor).
+	renderer.world_mut().apply([Op::SetTransform {
+		node: NodeId(1),
+		transform: Transform::IDENTITY.with_scale(0.06),
+	}]);
+
+	renderer
+		.world_mut()
+		.apply([style(Shading::Toon(flat_toon(3)), Some(red_ink(3.0)))]);
+	let _ = draw(&mut renderer);
+	assert_eq!(
+		renderer.stats().outlines,
+		0,
+		"Toon culls small parts under MIN_OUTLINED_RADIUS"
+	);
+
+	renderer.world_mut().apply([style(
+		Shading::Print(print_no_knockout()),
+		Some(red_ink(3.0)),
+	)]);
+	let print_small = draw(&mut renderer);
+	assert_eq!(
+		renderer.stats().outlines,
+		1,
+		"Print keeps outlining small parts above 0.5 px"
+	);
+	assert!(ink_count(&print_small) > 0, "small part has visible ink");
+
+	// Sub-pixel speck (~0.12 px radius) is still dropped.
+	renderer.world_mut().apply([Op::SetTransform {
+		node: NodeId(1),
+		transform: Transform::IDENTITY.with_scale(0.005),
+	}]);
+	let _ = draw(&mut renderer);
+	assert_eq!(renderer.stats().outlines, 0, "sub-pixel speck is dropped");
+}

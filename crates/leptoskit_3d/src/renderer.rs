@@ -532,6 +532,22 @@ impl Sight {
 			}
 		})
 	}
+
+	/// Whether some view sees `bounds` at least half a pixel across:
+	/// relief-print mode keeps outlining fine parts and only drops
+	/// sub-pixel specks.
+	fn visible_for_print_outline(&self, bounds: &Aabb) -> bool {
+		if bounds.is_empty() {
+			return false;
+		}
+		let radius = (bounds.max - bounds.min).length() * 0.5;
+		let center = bounds.center().extend(1.0);
+
+		self.scales[..self.views].iter().any(|scale| {
+			let depth = -(scale.view * center).z;
+			depth <= radius || radius * scale.focal / depth >= 0.5
+		})
+	}
 }
 
 /// One model instance's state for a frame, copied out of the world.
@@ -868,8 +884,13 @@ impl Renderer {
 			.iter()
 			.filter(|draw| draw.outlined && !draw.variant.blend)
 			.count() as u32;
-		let outlines = (outline_count > 0)
-			.then(|| self.shared.outline_pipelines(self.gpu.device(), &pipelines));
+		let outlines = (outline_count > 0).then(|| {
+			self.shared.outline_pipelines(
+				self.gpu.device(),
+				&pipelines,
+				target.occlusion.is_some(),
+			)
+		});
 		self.prepare_attachments(width, height, target.format, samples);
 		let globals = self.globals_bind_group(target.occlusion.as_ref());
 		let background = self.background_bind_group(target);
@@ -1221,7 +1242,7 @@ impl Renderer {
 			let mut resolved = model.print_by_material[primitive.material];
 			resolved.overlay(&model.print_by_node[index]);
 			let mut ink = part_ink_print(overrides, material, &resolved, blend, sight.ink.as_ref());
-			let inked = !blend && ink[3] > 0.0 && sight.worth_outlining(&bounds, ink[3]);
+			let inked = !blend && ink[3] > 0.0 && sight.visible_for_print_outline(&bounds);
 
 			if !blend && !inked {
 				ink[3] = 0.0;
@@ -1237,7 +1258,14 @@ impl Renderer {
 			let spot = resolved.spot.unwrap_or(print.paper);
 			let hatch_per_m = resolved.hatch_per_m.unwrap_or(print.hatch_per_m);
 			let noise = match sight.ink {
-				Some(ink) => noise_offset(ink.seed, boil_step(self.world.time, ink.boil)),
+				Some(ink) => {
+					let part_seed = model.asset.seeds.get(index).copied().unwrap_or(0) ^ ink.seed;
+					let step = resolved
+						.boil_step
+						.map(|step| u64::from(step % 3))
+						.unwrap_or_else(|| boil_step(self.world.time, ink.boil) % 3);
+					noise_offset(part_seed, step)
+				}
 				None => [0.0; 3],
 			};
 			let extra = self.push_print_extra(

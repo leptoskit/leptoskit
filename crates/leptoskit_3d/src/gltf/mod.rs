@@ -618,6 +618,23 @@ fn rest_units(asset: &Asset) -> Vec<f32> {
 		.collect()
 }
 
+/// Standard IEEE CRC-32, used to derive deterministic per-part seeds from
+/// node names without adding a crate dependency.
+pub(crate) fn crc32(bytes: &[u8]) -> u32 {
+	let mut crc = 0xFFFF_FFFF_u32;
+
+	for &byte in bytes {
+		crc ^= u32::from(byte);
+
+		for _ in 0..8 {
+			let mask = (crc & 1).wrapping_neg();
+			crc = (crc >> 1) ^ (0xEDB8_8320 & mask);
+		}
+	}
+
+	!crc
+}
+
 fn load_nodes(document: &Document<'_>, asset: &mut Asset) -> Result<(), LoadError> {
 	let root = &document.root;
 	let mut parents = vec![None; root.nodes.len()];
@@ -659,6 +676,7 @@ fn load_nodes(document: &Document<'_>, asset: &mut Asset) -> Result<(), LoadErro
 		};
 
 		let name = node.name.clone().unwrap_or_else(|| format!("node{index}"));
+		asset.seeds.push(crc32(name.as_bytes()));
 		asset.names.entry(name.clone()).or_insert(index);
 		asset.nodes.push(AssetNode {
 			name,
@@ -2336,5 +2354,11 @@ mod tests {
 			positions.len(),
 			side * side * side
 		);
+	}
+
+	#[test]
+	fn node_seeds_match_ieee_crc32() {
+		assert_eq!(crc32(b"123456789"), 0xCBF4_3926);
+		assert_ne!(crc32(b"head_0"), crc32(b"robe_0"));
 	}
 }

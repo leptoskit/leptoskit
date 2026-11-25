@@ -277,6 +277,9 @@ pub struct Asset {
 	/// Per node, how long a unit of its mesh's space is in the rest pose, in
 	/// the model's metres.
 	pub(crate) units: Vec<f32>,
+	/// Per node, IEEE CRC-32 of its name, for deterministic per-part line
+	/// wobble seeds.
+	pub(crate) seeds: Vec<u32>,
 }
 
 impl Asset {
