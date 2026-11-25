@@ -31,6 +31,10 @@ struct WidgetProps: Decodable {
     let opacity: CGFloat?
     let fontSize: CGFloat?
     let fontWeight: String?
+    /// Whether text draws in its font's italic style.
+    let italic: Bool?
+    /// The family the app declared that text draws in; nil or `.system` draws the system font.
+    let fontFamily: WidgetFontFamily?
     let lineHeight: WidgetLineHeight?
     let textAlign: String?
     let drawing: VectorDrawing?
@@ -151,6 +155,28 @@ struct WidgetSlider: Decodable {
         let index = Swift.max(0, Swift.min(last, ((value - min) / step).rounded()))
 
         return Swift.max(min, Swift.min(max, min + index * step))
+    }
+}
+
+/// Rust's externally tagged `FontFamily` enum: "system" or {"declared": 0}.
+enum WidgetFontFamily: Decodable, Equatable {
+    case system
+    case declared(UInt32)
+
+    private enum CodingKeys: String, CodingKey { case declared }
+
+    init(from decoder: Decoder) throws {
+        if let text = try? decoder.singleValueContainer().decode(String.self), text == "system" {
+            self = .system
+        } else {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            self = .declared(try container.decode(UInt32.self, forKey: .declared))
+        }
+    }
+
+    /// The declared family's position in `fonts.json`, or nil for the system font.
+    var declared: UInt32? {
+        if case let .declared(family) = self { family } else { nil }
     }
 }
 

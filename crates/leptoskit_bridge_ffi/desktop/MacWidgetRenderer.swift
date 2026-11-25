@@ -572,7 +572,17 @@ enum MacWidgetStyle {
         #endif
     }
 
+    /// The font every text view draws in: the declared face its family,
+    /// weight, and style choose, as layout measured it, else the system font.
     private static func font(_ props: WidgetProps) -> NSFont {
+        let size = props.fontSize ?? defaultFontSize
+
+        if let declared = NativeFonts.font(
+            family: props.fontFamily?.declared, weight: props.fontWeight, italic: props.italic ?? false, size: size
+        ) {
+            return declared as NSFont
+        }
+
         let weight: NSFont.Weight = switch props.fontWeight {
         case "thin": .ultraLight
         case "extra_light": .thin
@@ -585,7 +595,7 @@ enum MacWidgetStyle {
         default: .regular
         }
 
-        return NSFont.systemFont(ofSize: props.fontSize ?? defaultFontSize, weight: weight)
+        return NSFont.systemFont(ofSize: size, weight: weight)
     }
 
     private static func alignment(_ value: String?) -> NSTextAlignment {

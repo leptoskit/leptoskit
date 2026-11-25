@@ -20,9 +20,9 @@ class NativeTextMeasurerTest {
     @Test
     fun aSentenceWiderThanItsBoxWraps() {
         val measurer = NativeTextMeasurer(context().resources.displayMetrics)
-        val line = measurer.measure(SENTENCE.toByteArray(), SIZE, REGULAR, UNBOUNDED, false)
+        val line = measurer.measure(SENTENCE.toByteArray(), SIZE, REGULAR, SYSTEM_FACE, UNBOUNDED, false)
         val box = line[0] / 3
-        val wrapped = measurer.measure(SENTENCE.toByteArray(), SIZE, REGULAR, box, false)
+        val wrapped = measurer.measure(SENTENCE.toByteArray(), SIZE, REGULAR, SYSTEM_FACE, box, false)
 
         // Text layout rounds glyph advances per device density; a sub-pixel
         // overshoot is rounding, not a wrap failure, so allow one pixel.
@@ -39,12 +39,12 @@ class NativeTextMeasurerTest {
     @Test
     fun theNarrowestBoxIsTheWidestWord() {
         val measurer = NativeTextMeasurer(context().resources.displayMetrics)
-        val line = measurer.measure(SENTENCE.toByteArray(), SIZE, REGULAR, UNBOUNDED, false)
+        val line = measurer.measure(SENTENCE.toByteArray(), SIZE, REGULAR, SYSTEM_FACE, UNBOUNDED, false)
         val widest =
             SENTENCE.split(' ').maxOf { word ->
-                measurer.measure(word.toByteArray(), SIZE, REGULAR, UNBOUNDED, false)[0]
+                measurer.measure(word.toByteArray(), SIZE, REGULAR, SYSTEM_FACE, UNBOUNDED, false)[0]
             }
-        val narrowest = measurer.measure(SENTENCE.toByteArray(), SIZE, REGULAR, WIDEST_WORD, false)
+        val narrowest = measurer.measure(SENTENCE.toByteArray(), SIZE, REGULAR, SYSTEM_FACE, WIDEST_WORD, false)
 
         assertEquals(widest, narrowest[0], 1f)
         assertTrue("one word to a line: ${narrowest[1]} <= ${line[1]}", narrowest[1] > line[1])
@@ -60,7 +60,7 @@ class NativeTextMeasurerTest {
                 val view = text(weight)
 
                 for (box in listOf(UNBOUNDED, 120f, 200f, 319f)) {
-                    val size = measurer.measure(SENTENCE.toByteArray(), SIZE, cssWeight, box, false)
+                    val size = measurer.measure(SENTENCE.toByteArray(), SIZE, cssWeight, SYSTEM_FACE, box, false)
                     // The renderer snaps each frame outward to whole pixels.
                     val width = ceil(size[0] * density).toInt()
                     val height = ceil(size[1] * density).toInt()
@@ -107,5 +107,6 @@ class NativeTextMeasurerTest {
         const val BOLD = 700
         const val UNBOUNDED = -1f
         const val WIDEST_WORD = -2f
+        const val SYSTEM_FACE = -1
     }
 }

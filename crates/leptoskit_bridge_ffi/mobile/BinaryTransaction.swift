@@ -55,6 +55,8 @@ private struct WidgetExtras: Decodable {
     let camera: UInt32?
     let map: UInt32?
     let livePhoto: UInt32?
+    let italic: Bool?
+    let fontFamily: WidgetFontFamily?
     let lineHeight: WidgetLineHeight?
     let keyboard: String?
     let readOnly: Bool?
@@ -177,7 +179,8 @@ private struct BinaryReader {
             accessibilityLabel: accessibilityLabel, color: color, background: background,
             enabled: enabled, hidden: hidden, clip: clip, cornerRadius: cornerRadius,
             borderWidth: borderWidth, borderColor: borderColor, opacity: opacity,
-            fontSize: fontSize, fontWeight: fontWeight, lineHeight: extras?.lineHeight, textAlign: textAlign,
+            fontSize: fontSize, fontWeight: fontWeight, italic: extras?.italic, fontFamily: extras?.fontFamily,
+            lineHeight: extras?.lineHeight, textAlign: textAlign,
             drawing: extras?.drawing, aria: extras?.aria, scrollOffset: extras?.scrollOffset,
             transform: transform, animation: animation, scene3d: extras?.scene3d, video: extras?.video,
             camera: extras?.camera, map: extras?.map, livePhoto: extras?.livePhoto,

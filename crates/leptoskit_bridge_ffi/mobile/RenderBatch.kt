@@ -74,6 +74,19 @@ internal class WidgetProps(
      */
     val focusRequest: Long? = rest?.takeUnless { it.isNull("focus_request") }?.getLong("focus_request")
 
+    /**
+     * The declared family text draws in, or null for the system font; it
+     * travels in [rest] as `{"declared": n}`.
+     */
+    val fontFamily: Int? =
+        rest
+            ?.optJSONObject("font_family")
+            ?.takeIf { it.has("declared") }
+            ?.getInt("declared")
+
+    /** Whether text draws italic; it travels in [rest]. */
+    val italic: Boolean = rest?.optBoolean("italic") ?: false
+
     /** The `id` the app gave the element; it travels in [rest]. */
     val name: String? = rest?.takeUnless { it.isNull("id") }?.getString("id")
 

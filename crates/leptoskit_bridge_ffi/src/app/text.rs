@@ -15,26 +15,31 @@ use leptoskit_yoga::Size;
 
 use crate::app::App;
 
+/// The host's measuring function: context, text, length, font size, weight,
+/// face, width, right-to-left, and the two floats it writes.
+type Measure =
+	unsafe extern "C" fn(*mut c_void, *const u8, usize, f32, u32, i32, f32, bool, *mut f32) -> bool;
+
 /// A host text measurer and its owned context.
 ///
 /// `measure` lays out `len` bytes of UTF-8 `text` at `font_size` logical
-/// points, CSS `font_weight` (100 to 900), and `rtl` direction within `width`
-/// logical points (`-1` unbounded, `-2` the widest word), writes the logical
-/// width and height to `out[0]` and `out[1]`, and returns `true`. It may run on
-/// any thread. `release` runs once, after the last measurement.
+/// points in `face`, the position of a declared face in the installed
+/// [`fonts`](leptoskit_native::fonts) (`-1` for the system font), at weight
+/// `font_weight` (1 to 1000: the CSS weight for the system font, the weight to
+/// draw a declared face at), in `rtl` direction within `width` logical points
+/// (`-1` unbounded, `-2` the widest word), writes the logical width and height
+/// to `out[0]` and `out[1]`, and returns `true`. It may run on any thread.
+/// `release` runs once, after the last measurement.
 #[repr(C)]
 pub struct NativeTextMeasurer {
 	pub context: *mut c_void,
-	pub measure: Option<
-		unsafe extern "C" fn(*mut c_void, *const u8, usize, f32, u32, f32, bool, *mut f32) -> bool,
-	>,
+	pub measure: Option<Measure>,
 	pub release: Option<unsafe extern "C" fn(*mut c_void)>,
 }
 
 struct HostMeasurer {
 	context: usize,
-	measure:
-		unsafe extern "C" fn(*mut c_void, *const u8, usize, f32, u32, f32, bool, *mut f32) -> bool,
+	measure: Measure,
 	release: unsafe extern "C" fn(*mut c_void),
 }
 
@@ -69,7 +74,10 @@ impl HostMeasurer {
 	/// The host's size for `text` at the font's own line height, or `None`
 	/// when the host could not measure it.
 	fn natural(&self, text: &str, style: TextStyle, width: f32) -> Option<Size<f32>> {
-		let weight = u32::from(style.font_weight.value());
+		let (face, weight) = match style.face {
+			Some(face) => (i32::from(face.index), u32::from(face.weight)),
+			None => (-1, u32::from(style.font_weight.value())),
+		};
 		let mut size = [0.0_f32; 2];
 		// SAFETY: The context is owned until release, the text borrow outlives
 		// the call, and `size` holds the two floats the contract writes.
@@ -80,6 +88,7 @@ impl HostMeasurer {
 				text.len(),
 				style.font_size,
 				weight,
+				face,
 				width,
 				style.direction == Direction::Rtl,
 				size.as_mut_ptr(),
@@ -151,6 +160,7 @@ mod tests {
 	#[derive(Default)]
 	struct Host {
 		calls: Mutex<Vec<Call>>,
+		faces: Mutex<Vec<i32>>,
 		released: AtomicUsize,
 	}
 
@@ -177,6 +187,7 @@ mod tests {
 		len: usize,
 		font_size: f32,
 		weight: u32,
+		face: i32,
 		width: f32,
 		rtl: bool,
 		out: *mut f32,
@@ -193,6 +204,7 @@ mod tests {
 			.lock()
 			.unwrap()
 			.push((text.to_owned(), font_size, weight, width, rtl));
+		host.faces.lock().unwrap().push(face);
 
 		if text == "fail" || (text == " " && (font_size - 13.0).abs() < f32::EPSILON) {
 			return false;
@@ -274,6 +286,36 @@ mod tests {
 		assert_eq!(
 			host.calls(),
 			[go(400, 80.0), go(500, 0.0), go(600, -2.0), go(700, -1.0)]
+		);
+	}
+
+	#[test]
+	fn host_receives_the_declared_face_and_the_weight_to_draw_it_at() {
+		let host = Host::default();
+		let measurer = HostMeasurer {
+			context: host.context() as usize,
+			measure,
+			release,
+		};
+		let unbounded = Size::new(AvailableSpace::MaxContent, AvailableSpace::MaxContent);
+		let declared = TextStyle {
+			face: Some(leptoskit_native::fonts::Face {
+				index: 2,
+				weight: 650,
+			}),
+			..TextStyle::new(16.0, FontWeight::Semibold)
+		};
+
+		measurer.measure("Go", declared, unbounded);
+		measurer.measure("Go", TextStyle::new(16.0, FontWeight::Semibold), unbounded);
+
+		assert_eq!(*host.faces.lock().unwrap(), [2, -1]);
+		assert_eq!(
+			host.calls()
+				.into_iter()
+				.map(|call| call.2)
+				.collect::<Vec<_>>(),
+			[650, 600]
 		);
 	}
 

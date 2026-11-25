@@ -102,16 +102,29 @@ int32_t lk_app_poll_service(lk_app *app);
 /* 0 is an ordinary app entry; 1 is a platform background tick. */
 int32_t lk_app_set_service_wake_reason(lk_app *app, int32_t reason);
 /* Host text measurement. measure lays out len UTF-8 bytes at font_size logical
- * points, CSS font_weight (100-900), and rtl direction within width logical
- * points (-1 unbounded, -2 the widest word), writes the logical width and
- * height to out[0] and out[1], and returns true. It may run on any thread.
- * release runs once, after the last measurement. */
+ * points in face (a declared face's position in fonts.json, -1 for the system
+ * font) at font_weight (1-1000: the CSS weight for the system font, the weight
+ * to draw a declared face at) in rtl direction within width logical points
+ * (-1 unbounded, -2 the widest word), writes the logical width and height to
+ * out[0] and out[1], and returns true. It may run on any thread. release runs
+ * once, after the last measurement. */
 typedef struct lk_text_measurer {
     void *context;
     bool (*measure)(void *context, const uint8_t *text, size_t len, float font_size,
-                    uint32_t font_weight, float width, bool rtl, float *out);
+                    uint32_t font_weight, int32_t face, float width, bool rtl, float *out);
     void (*release)(void *context);
 } lk_text_measurer;
+/* The app's declared fonts. Before creating the first app, the host registers
+ * every file fonts.json lists with its platform and installs the manifest:
+ * len bytes of fonts.json and root_len UTF-8 bytes naming the bundled assets
+ * folder its files are relative to. 0, or a negative error; installing the
+ * same fonts again succeeds. */
+int32_t lk_fonts_install(const uint8_t *manifest, size_t len, const uint8_t *root,
+                         size_t root_len);
+/* The face of declared family (from a widget's font_family) that draws weight
+ * (1-1000) and italic: 1 and out[0] its position in fonts.json, out[1] the
+ * weight to draw it at; 0 when the text draws in the system font. */
+int32_t lk_fonts_select(uint32_t family, uint32_t weight, bool italic, uint32_t *out);
 /* Measure text with the host's fonts and lay the tree out again. Null
  * callbacks retain caller ownership; a null app releases the context. */
 int32_t lk_app_set_text_measurer(lk_app *app, lk_text_measurer measurer);

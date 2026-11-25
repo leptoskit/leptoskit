@@ -22,6 +22,24 @@ object NativeApp {
         callbacks: NativeServiceOwner,
     ): Int
 
+    /**
+     * Installs the app's declared fonts for this process from the build's
+     * `fonts.json`, whose files sit under the APK's `assets/` folder: 0, or a
+     * negative error. Installing the same fonts again succeeds.
+     */
+    @JvmStatic external fun installFonts(manifest: ByteArray): Int
+
+    /**
+     * The face of declared [family] that draws [weight] and [italic], as
+     * `(face shl 16) or drawnWeight`, or -1 when the text draws in the system
+     * font.
+     */
+    @JvmStatic external fun selectFont(
+        family: Int,
+        weight: Int,
+        italic: Boolean,
+    ): Int
+
     /** [measurer] is a [NativeTextMeasurer], typed loosely so this file stays free of Android classes. */
     @JvmStatic external fun setTextMeasurer(
         app: Long,

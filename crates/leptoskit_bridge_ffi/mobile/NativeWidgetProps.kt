@@ -196,6 +196,9 @@ internal class NativeWidgetProps(
         val color: Int,
         /** The CSS weight, from 100 to 900. */
         val weight: Int,
+        /** The declared family, or null for the system font. */
+        val family: Int?,
+        val italic: Boolean,
         /** Every line's height in pixels, or null for the font's own. */
         val lineHeight: Float?,
         val gravity: Int,
@@ -326,6 +329,8 @@ internal class NativeWidgetProps(
                 size = (props.fontSize ?: DEFAULT_FONT_SIZE).toFloat(),
                 color = props.color?.let(NativeWidgetColor::argb) ?: android.graphics.Color.BLACK,
                 weight = weight,
+                family = props.fontFamily,
+                italic = props.italic,
                 lineHeight = lineHeight,
                 gravity =
                     when (props.textAlign) {
@@ -340,7 +345,7 @@ internal class NativeWidgetProps(
         textStyles[widget] = style
         widget.textSize = style.size
         widget.setTextColor(style.color)
-        widget.typeface = nativeTypeface(style.weight)
+        widget.typeface = NativeFonts.typeface(style.family, style.weight, style.italic)
         widget.gravity = style.gravity
     }
 
