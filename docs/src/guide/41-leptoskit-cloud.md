@@ -79,7 +79,7 @@ Like `cargo`, `lk cloud` also dispatches external subcommands: any executable na
 
 <Callout kind="note" title="Secrets stay out of shell history">
 
-`lk cloud secret set` never takes a secret value as a positional argument. Pipe the value over standard input (`printf '%s' "$VALUE" | lk cloud secret set STRIPE_KEY`) or pass `--from-env STRIPE_KEY`. Secret values are never printed back in JSON or logs.
+`lk cloud secret set` never takes a secret value as a positional argument. Pipe the value over standard input (`printf '%s' "$VALUE" | lk cloud secret set STRIPE_KEY`) or pass `--from-env STRIPE_KEY`. Secret values are never printed back in JSON or logs. Secret values of eight bytes or more are hidden from runtime logs when a process prints one. A value you replace or remove after a process has started is not hidden in that process's logs until it runs the new release.
 
 </Callout>
 

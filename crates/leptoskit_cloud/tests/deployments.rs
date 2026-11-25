@@ -54,6 +54,16 @@ async fn the_cluster_reports_what_it_runs() {
 }
 
 #[tokio::test]
+async fn a_printed_secret_is_hidden_from_the_runtime_logs() {
+	shipping::a_printed_secret_is_hidden_from_the_runtime_logs(&support::app().await).await;
+}
+
+#[tokio::test]
+async fn a_report_from_another_cluster_opens_no_secret() {
+	shipping::a_report_from_another_cluster_opens_no_secret(&support::app().await).await;
+}
+
+#[tokio::test]
 async fn a_lapsed_build_is_retried_then_abandoned() {
 	shipping::a_lapsed_build_is_retried_then_abandoned(&support::app().await).await;
 }
