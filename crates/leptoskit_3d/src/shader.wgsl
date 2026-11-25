@@ -514,7 +514,10 @@ fn fs_mesh(in: Varyings, @builtin(front_facing) front: bool) -> @location(0) vec
 	// the darkest band and the inner line. Both conditions are uniform, so
 	// the inner line's derivatives are too.
 	if (globals.ink.y > 0.0 || globals.shade.w > 0.0) {
-		let inner = select(0.0, inner_line(surface_n_dot_v, in.local, in.ink.w), globals.ink.y > 0.0);
+		var inner = 0.0;
+		if (globals.ink.y > 0.0) {
+			inner = inner_line(surface_n_dot_v, in.local, in.ink.w);
+		}
 		color = mix(color, in.ink.rgb, max(hatch, inner));
 	}
 	if (globals.params.y > 0.5) {

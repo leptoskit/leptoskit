@@ -6,6 +6,7 @@
 //! with no GPU.
 #![cfg(all(feature = "renderer", not(target_arch = "wasm32")))]
 
+use naga::BinaryOperator;
 use naga::Binding;
 use naga::Block;
 use naga::Expression;
@@ -313,4 +314,93 @@ fn toon_light_guards_backlit_half_vector_and_specular() {
 		block_has_if(&toon_light.body),
 		"toon_light must guard specular highlight evaluation on globals.style.w > 0.0"
 	);
+}
+
+/// Finds the condition of the innermost `if` enclosing a call to `target`,
+/// along with the call's result expression handle.
+fn innermost_if_around_call(
+	block: &Block,
+	target: Handle<Function>,
+	enclosing: Option<Handle<Expression>>,
+) -> Option<(Option<Handle<Expression>>, Option<Handle<Expression>>)> {
+	for statement in block {
+		match statement {
+			Statement::Call {
+				function, result, ..
+			} if *function == target => return Some((enclosing, *result)),
+			Statement::If {
+				condition,
+				accept,
+				reject,
+			} => {
+				if let Some(found) = innermost_if_around_call(accept, target, Some(*condition)) {
+					return Some(found);
+				}
+				if let Some(found) = innermost_if_around_call(reject, target, Some(*condition)) {
+					return Some(found);
+				}
+			}
+			Statement::Block(inner) => {
+				if let Some(found) = innermost_if_around_call(inner, target, enclosing) {
+					return Some(found);
+				}
+			}
+			Statement::Loop {
+				body, continuing, ..
+			} => {
+				if let Some(found) = innermost_if_around_call(body, target, enclosing) {
+					return Some(found);
+				}
+				if let Some(found) = innermost_if_around_call(continuing, target, enclosing) {
+					return Some(found);
+				}
+			}
+			_ => {}
+		}
+	}
+
+	None
+}
+
+#[test]
+fn inner_line_is_only_called_when_facing_is_enabled() {
+	let (module, _) = parse("shader.wgsl", SHADERS[0].1);
+	let (inner_line, _) = module
+		.functions
+		.iter()
+		.find(|(_, func)| func.name.as_deref() == Some("inner_line"))
+		.expect("shader.wgsl defines inner_line");
+	let fs_mesh = module
+		.entry_points
+		.iter()
+		.find(|entry| entry.name == "fs_mesh")
+		.expect("shader.wgsl defines fs_mesh");
+
+	let (condition, result) = innermost_if_around_call(&fs_mesh.function.body, inner_line, None)
+		.expect("fs_mesh calls inner_line");
+	let condition = condition.expect("inner_line call must be guarded by an if");
+
+	assert!(
+		matches!(
+			fs_mesh.function.expressions[condition],
+			Expression::Binary {
+				op: BinaryOperator::Greater,
+				..
+			}
+		),
+		"inner_line must sit directly inside `if (globals.ink.y > 0.0)`, not an outer `||` guard"
+	);
+	if let Some(result) = result {
+		let discarded_by_select = fs_mesh.function.expressions.iter().any(|(_, expr)| {
+			matches!(
+				*expr,
+				Expression::Select { accept, reject, .. } if accept == result || reject == result
+			)
+		});
+		assert!(
+			!discarded_by_select,
+			"inner_line result is fed into eager select(), wasting 3D noise and fwidth when \
+			 facing == 0"
+		);
+	}
 }
