@@ -435,3 +435,88 @@ pub(super) fn db(command: &DbCommand, args: &CloudArgs, context: &Context) -> Re
 		}
 	}
 }
+
+pub(super) fn notifications(args: &CloudArgs, context: &Context) -> Result<Value> {
+	let Target {
+		organization,
+		project,
+		environment,
+	} = Target::of(args, context)?;
+	value(
+		context
+			.client
+			.notifications(leptoskit_cloud::notifications::Notifications {
+				organization,
+				project,
+				environment,
+			})?,
+	)
+}
+
+/// `lk cloud notifications` for a person: what the state means, and what
+/// to do about it, rather than the summary's fields.
+pub(super) fn notifications_text(summary: &Value) -> String {
+	if summary.is_null() {
+		return "This environment has no hosted notifications. Add [services.notifications] with \
+		        crate = \"leptoskit_notifications\" to leptoskit.toml and deploy, and the \
+		        cloud's shared notifications service serves them."
+			.to_owned();
+	}
+
+	let text = |field: &str| super::printable(summary[field].as_str().unwrap_or_default());
+	let state = match summary["state"]["state"].as_str().unwrap_or_default() {
+		"pending" => "pending: no deployment that uses them has been applied yet".to_owned(),
+		"unused" => {
+			"unused: the live deployment doesn't declare them; their inbox is kept".to_owned()
+		}
+		"waiting" => "starting: the shared service picks them up within a minute".to_owned(),
+		"serving" => "serving".to_owned(),
+		"failed" => {
+			format!(
+				"failed: {}",
+				super::printable(summary["state"]["reason"].as_str().unwrap_or_default())
+			)
+		}
+		"removing" => "removing: the environment is being deleted".to_owned(),
+		other => super::printable(other),
+	};
+	let providers = summary["providers"]
+		.as_array()
+		.map(|providers| {
+			providers
+				.iter()
+				.filter_map(Value::as_str)
+				.map(super::printable)
+				.collect::<Vec<_>>()
+		})
+		.unwrap_or_default();
+	let providers = if providers.is_empty() {
+		"none (set LEPTOSKIT_NOTIFICATIONS_* with `lk cloud secret set`)".to_owned()
+	} else {
+		providers.join(", ")
+	};
+
+	let mut lines = vec![
+		format!("Notifications: {state}"),
+		format!("Push providers: {providers}"),
+		format!(
+			"Pushes this month (whole project): {}",
+			summary["project_pushes_this_month"]
+				.as_u64()
+				.unwrap_or_default()
+		),
+		format!("Database: {}", text("database")),
+	];
+	if let Some(reported) = summary["reported_at"].as_str() {
+		lines.push(format!("Last report: {}", super::printable(reported)));
+	}
+	if summary["rotating"] == true {
+		lines.push(
+			"Its credentials are being replaced because a worker that held them was revoked. \
+			 Deploy to finish. The shared service held your push provider keys too: rotate them \
+			 with each provider if the audit log says the notifications hub was revoked."
+				.to_owned(),
+		);
+	}
+	lines.join("\n")
+}

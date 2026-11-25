@@ -143,6 +143,12 @@ pub struct WorkersConfig {
 	/// Seconds between cluster worker `report_status` scrapes (default 30).
 	#[serde(default = "default_status_interval")]
 	pub status_interval_seconds: u64,
+	/// Optional pinned image reference for the cluster's notifications hub
+	/// (`leptoskit-cloud-notifications`). When set, each cluster gets the
+	/// `leptoskit-notifications` namespace with `Deployment/hub` and
+	/// `Service/hub`, and its cluster worker is told where the hub is.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub notifications_image: Option<String>,
 }
 
 const fn default_one() -> u16 {
@@ -765,6 +771,13 @@ impl PlatformConfig {
 				require(
 					!build_image.trim().is_empty() && !build_image.ends_with(":latest"),
 					"workers.build_image must be a pinned image reference (not :latest)",
+				)?;
+			}
+			if let Some(notifications_image) = &workers.notifications_image {
+				require(
+					!notifications_image.trim().is_empty()
+						&& !notifications_image.ends_with(":latest"),
+					"workers.notifications_image must be a pinned image reference (not :latest)",
 				)?;
 			}
 		}

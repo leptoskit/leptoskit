@@ -495,6 +495,149 @@ fn full_stack_emits_control_plane_workers_and_ordered_up_plan() {
 }
 
 #[test]
+fn a_notifications_image_runs_the_clusters_hub_and_tells_its_worker() {
+	let config = PlatformConfig::parse(include_str!("../examples/full-stack.toml")).unwrap();
+	let docs: Vec<Value> = addons::generate(&config)
+		.unwrap()
+		.values()
+		.map(|content| serde_json::from_str(content).unwrap())
+		.collect();
+	let find = |kind: &str, name: &str, namespace: &str| {
+		docs.iter()
+			.find(|d| {
+				d["kind"] == kind
+					&& d["metadata"]["name"] == name
+					&& d["metadata"]["namespace"] == namespace
+			})
+			.unwrap_or_else(|| panic!("{kind}/{name} in {namespace}"))
+	};
+
+	let namespace = docs
+		.iter()
+		.find(|d| d["kind"] == "Namespace" && d["metadata"]["name"] == "leptoskit-notifications")
+		.expect("the hub's namespace");
+	assert_eq!(
+		namespace["metadata"]["labels"]["pod-security.kubernetes.io/enforce"],
+		"restricted"
+	);
+
+	let hub = find("Deployment", "hub", "leptoskit-notifications");
+	assert_eq!(hub["spec"]["replicas"], 1);
+	let pod = &hub["spec"]["template"]["spec"];
+	assert_eq!(pod["automountServiceAccountToken"], false);
+	let container = &pod["containers"][0];
+	assert_eq!(
+		container["image"],
+		"ghcr.io/leptoskit/leptoskit/leptoskit-cloud-notifications@sha256:\
+		 4444444444444444444444444444444444444444444444444444444444444444"
+	);
+	assert_eq!(container["securityContext"]["readOnlyRootFilesystem"], true);
+	let env = container["env"].as_array().unwrap();
+	let value = |name: &str| {
+		env.iter()
+			.find(|e| e["name"] == name)
+			.unwrap_or_else(|| panic!("{name}"))
+			.clone()
+	};
+	assert_eq!(
+		value("LEPTOSKIT_CLOUD_NOTIFICATIONS_URL")["value"],
+		config.control_origin.as_str()
+	);
+	assert!(
+		value("LEPTOSKIT_CLOUD_NOTIFICATIONS_NAME")["value"]
+			.as_str()
+			.unwrap()
+			.ends_with("-notifications")
+	);
+	// The code is optional: a paired hub starts without it.
+	let code = value("LEPTOSKIT_CLOUD_NOTIFICATIONS_PAIRING_CODE");
+	assert_eq!(code["valueFrom"]["secretKeyRef"]["name"], "hub-pairing");
+	assert_eq!(code["valueFrom"]["secretKeyRef"]["optional"], true);
+
+	let service = find("Service", "hub", "leptoskit-notifications");
+	assert_eq!(service["spec"]["ports"][0]["port"], 8080);
+	assert_eq!(service["spec"]["ports"][0]["targetPort"], 8080);
+
+	// The cluster worker bounds every release's bridge to exactly this hub.
+	let worker = find("Deployment", "cluster-worker", "kube-system");
+	let args: Vec<&str> = worker["spec"]["template"]["spec"]["containers"][0]["args"]
+		.as_array()
+		.unwrap()
+		.iter()
+		.map(|a| a.as_str().unwrap())
+		.collect();
+	for pair in [
+		["--notifications-namespace", "leptoskit-notifications"],
+		[
+			"--notifications-host",
+			"hub.leptoskit-notifications.svc.cluster.local",
+		],
+		["--notifications-port", "8080"],
+	] {
+		assert!(args.windows(2).any(|w| w == pair), "{pair:?} in {args:?}");
+	}
+
+	// Only Traefik and the apps reach the hub, on its port.
+	let policy = find("NetworkPolicy", "hub-ingress", "leptoskit-notifications");
+	let port = serde_json::json!([{"protocol": "TCP", "port": 8080}]);
+	let ingress = policy["spec"]["ingress"].as_array().unwrap();
+	assert_eq!(ingress.len(), 2);
+	assert!(ingress.iter().all(|rule| rule["ports"] == port));
+	assert_eq!(
+		ingress[0]["from"][0]["podSelector"]["matchLabels"]["app.kubernetes.io/name"],
+		"traefik"
+	);
+	assert_eq!(
+		ingress[1]["from"][0]["namespaceSelector"]["matchLabels"]["app.kubernetes.io/managed-by"],
+		"leptoskit-cloud"
+	);
+
+	// The hub isn't a platform namespace: the others don't admit it, but
+	// the shared Postgres does on 5432, and the cluster's DNS on 53.
+	for policy in docs
+		.iter()
+		.filter(|d| d["kind"] == "NetworkPolicy" && d["metadata"]["name"] == "platform-ingress")
+	{
+		assert_ne!(policy["metadata"]["namespace"], "leptoskit-notifications");
+		assert!(
+			!policy.to_string().contains("leptoskit-notifications"),
+			"{policy}"
+		);
+	}
+	let postgres = find("NetworkPolicy", "notifications-hub", "database");
+	assert_eq!(
+		postgres["spec"]["ingress"][0]["ports"],
+		serde_json::json!([{"protocol": "TCP", "port": 5432}])
+	);
+	let dns = find("NetworkPolicy", "notifications-dns", "kube-system");
+	assert_eq!(
+		dns["spec"]["ingress"][0]["from"][0]["namespaceSelector"]["matchLabels"]
+			["kubernetes.io/metadata.name"],
+		"leptoskit-notifications"
+	);
+
+	let required = find("ConfigMap", "required-secrets", "kube-system");
+	let required: Value =
+		serde_json::from_str(required["data"]["requirements.json"].as_str().unwrap()).unwrap();
+	assert!(required.as_array().unwrap().iter().any(|entry| {
+		entry["namespace"] == "leptoskit-notifications" && entry["name"] == "hub-pairing"
+	}));
+}
+
+#[test]
+fn without_a_notifications_image_there_is_no_hub() {
+	let mut config = PlatformConfig::parse(include_str!("../examples/full-stack.toml")).unwrap();
+	config.workers.as_mut().unwrap().notifications_image = None;
+	for content in addons::generate(&config).unwrap().values() {
+		assert!(!content.contains("leptoskit-notifications"), "{content}");
+	}
+
+	config.workers.as_mut().unwrap().notifications_image =
+		Some("ghcr.io/leptoskit/leptoskit/leptoskit-cloud-notifications:latest".to_owned());
+	assert!(addons::generate(&config).is_err());
+}
+
+#[test]
 fn every_control_plane_replica_runs_the_sweeper() {
 	// A Deployment hands its pod template's environment to every replica, so
 	// the replica count can't choose which of them runs the sweeper. Each one

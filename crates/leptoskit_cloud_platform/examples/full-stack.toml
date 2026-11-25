@@ -79,3 +79,4 @@ cluster_image = "ghcr.io/leptoskit/leptoskit/leptoskit-cloud-worker@sha256:22222
 build_image = "ghcr.io/leptoskit/leptoskit/leptoskit-cloud-builder@sha256:3333333333333333333333333333333333333333333333333333333333333333"
 build_cache_size = "40Gi"
 allow_build_on_shared_node = true
+notifications_image = "ghcr.io/leptoskit/leptoskit/leptoskit-cloud-notifications@sha256:4444444444444444444444444444444444444444444444444444444444444444"

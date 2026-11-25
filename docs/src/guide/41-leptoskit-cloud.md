@@ -69,6 +69,7 @@ Every `lk cloud` subcommand accepts `--json`, `--org <slug>`, `--project <slug>`
 | `lk cloud env list \| create <name> \| update <name> \| delete <name> --confirm <name>` | Creates staging/preview environments and adjusts live size, replicas, or sleep behavior                |
 | `lk cloud deployments` / `lk cloud rollback <number>`                                   | Lists release history and rolls back to an earlier live image                                          |
 | `lk cloud db show \| backups \| backup \| restore <id> --confirm <project>/<env>`       | Inspects the managed Postgres instance and backup history                                              |
+| `lk cloud notifications`                                                                | Shows whether the shared notifications service serves the environment, and its push providers          |
 | `lk cloud token list \| create <name> --scope ... \| revoke <id> --confirm <id>`        | Creates scoped CI tokens (`LEPTOSKIT_CLOUD_TOKEN`)                                                     |
 | `lk cloud usage [--period YYYY-MM]`                                                     | Shows monthly compute, build, database, and transfer usage                                             |
 | `lk cloud publish <store>... [--submit] [--detach]`                                     | Queues store publication on a configured build worker                                                  |
@@ -82,6 +83,42 @@ Like `cargo`, `lk cloud` also dispatches external subcommands: any executable na
 `lk cloud secret set` never takes a secret value as a positional argument. Pipe the value over standard input (`printf '%s' "$VALUE" | lk cloud secret set STRIPE_KEY`) or pass `--from-env STRIPE_KEY`. Secret values are never printed back in JSON or logs. Secret values of eight bytes or more are hidden from runtime logs when a process prints one. A value you replace or remove after a process has started is not hidden in that process's logs until it runs the new release.
 
 </Callout>
+
+## Notifications
+
+An app that declares [the notifications service](notifications/readme.md) gets it hosted, with no process of its own to pay for or keep awake:
+
+```toml
+[services.notifications]
+crate = "leptoskit_notifications"
+version = "0.3"
+trust = "first-party"
+```
+
+`lk cloud deploy` sees the registry crate `leptoskit_notifications` and builds no process for it. The environment becomes a tenant of its cluster's shared notifications service instead, which runs the same code with a database of the environment's own. Your app's code doesn't change: the same operations answer at `/_leptoskit/services/notifications/` on the environment's hostname and its verified domains, and the server's own calls reach the service the way they do under `lk dev`. Scheduled sends, retries and pruning keep running while a sleeping app is asleep.
+
+Push credentials are environment secrets, under the names the service reads (the [push setup](notifications/push-setup.md) page says what each holds). The private keys can only be secrets:
+
+```sh
+lk cloud secret set LEPTOSKIT_NOTIFICATIONS_APNS_KEY_P8 < AuthKey_ABC123.p8
+lk cloud var set LEPTOSKIT_NOTIFICATIONS_APNS_KEY_ID ABC123
+lk cloud var set LEPTOSKIT_NOTIFICATIONS_APNS_TEAM_ID DEF456
+lk cloud var set LEPTOSKIT_NOTIFICATIONS_APNS_TOPIC com.example.notes
+lk cloud secret set LEPTOSKIT_NOTIFICATIONS_FCM_SERVICE_ACCOUNT < service-account.json
+```
+
+These settings go only to the notifications service, never to your app's processes, and a change needs no deployment: the service picks it up within a minute. The `secrets` list in `[services.notifications]` isn't needed in the cloud. `LEPTOSKIT_NOTIFICATIONS_WEB_PUSH_EXTRA_HOSTS` can't be set there, because the shared service decides which push hosts it sends to.
+
+`lk cloud notifications` says how it is going:
+
+```text
+Notifications: serving
+Push providers: apns, fcm
+Pushes this month (whole project): 1834
+Database: ntf_0a1b2c3d4e5f60718293a4b5c6d7e8f9
+```
+
+A provider that is only half set up, such as an APNs key without its team ID, shows as `failed` with the service's own message, and the service serves nothing for the environment until it is fixed, inbox included. Each push a provider accepts counts toward the `notification_pushes` line of `lk cloud usage`. Its database isn't backed up on a schedule yet, and Hobby's push allowance isn't enforced yet.
 
 ## Configuring `[cloud]` in `leptoskit.toml`
 

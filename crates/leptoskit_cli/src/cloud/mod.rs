@@ -182,6 +182,10 @@ pub enum CloudCommand {
 		#[command(subcommand)]
 		command: ship::DbCommand,
 	},
+	/// Shows an environment's hosted notifications: whether the cluster's
+	/// shared service serves them, which push providers are set up, and
+	/// the project's pushes this month.
+	Notifications,
 	/// Builds the project on a build worker and uploads it to stores, as
 	/// `lk publish` does, with the environment's secrets as credentials.
 	Publish {
@@ -533,6 +537,8 @@ pub fn run(args: &CloudArgs) -> Result<()> {
 				"The cloud could not revoke this session. It may still be live on the server.",
 			);
 		}
+	} else if matches!(args.command, CloudCommand::Notifications) {
+		anstream::println!("{}", ship::notifications_text(&result));
 	} else {
 		anstream::println!("{}", human(&result));
 	}
@@ -640,6 +646,7 @@ fn execute(args: &CloudArgs, context: &Context) -> Result<Value> {
 		CloudCommand::Deployments { limit } => ship::deployments(args, context, *limit),
 		CloudCommand::Rollback { to } => ship::rollback(args, context, *to),
 		CloudCommand::Db { command } => ship::db(command, args, context),
+		CloudCommand::Notifications => ship::notifications(args, context),
 		CloudCommand::Publish {
 			stores,
 			submit,

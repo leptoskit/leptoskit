@@ -6,9 +6,14 @@ on:
     paths:
       - "crates/leptoskit_cloud/**"
       - "crates/leptoskit_cloud_app/**"
+      - "crates/leptoskit_cloud_notifications/**"
       - "crates/leptoskit_cloud_runtime/**"
       - "crates/leptoskit_cloud_worker/**"
       - "crates/leptoskit_config/**"
+      - "crates/leptoskit_notifications/**"
+      - "crates/leptoskit_axum/**"
+      - "crates/leptoskit_db/**"
+      - "crates/leptoskit_rpc/**"
       - "Cargo.toml"
       - "Cargo.lock"
       - "rust-toolchain.toml"
@@ -56,6 +61,9 @@ jobs:
           - name: leptoskit-cloud-builder
             dockerfile: crates/leptoskit_cloud_worker/Dockerfile
             target: builder
+          - name: leptoskit-cloud-notifications
+            dockerfile: crates/leptoskit_cloud_worker/Dockerfile
+            target: notifications
         platform:
           - arch: amd64
             oci: linux/amd64
@@ -152,6 +160,7 @@ jobs:
           - leptoskit-cloud-control
           - leptoskit-cloud-worker
           - leptoskit-cloud-builder
+          - leptoskit-cloud-notifications
     steps:
       - name: download arch digests
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0

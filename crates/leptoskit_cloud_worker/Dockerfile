@@ -26,6 +26,13 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 		-p leptoskit_cli --bin lk \
 	&& cp /src/target/release/lk /usr/local/bin/lk
 
+FROM worker-builder AS notifications-builder
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+	--mount=type=cache,target=/src/target \
+	CARGO_BUILD_JOBS=4 cargo build --release --locked \
+		-p leptoskit_cloud_notifications --bin leptoskit-cloud-notifications \
+	&& cp /src/target/release/leptoskit-cloud-notifications /usr/local/bin/leptoskit-cloud-notifications
+
 # Minimal image for the Kubernetes cluster worker role (no build tooling).
 FROM debian:trixie-slim AS cluster
 RUN apt-get update \
@@ -38,6 +45,22 @@ COPY --from=worker-builder /usr/local/bin/leptoskit-cloud-worker /usr/local/bin/
 USER 65532:65532
 ENTRYPOINT ["/usr/local/bin/leptoskit-cloud-worker"]
 CMD ["run"]
+
+# A cluster's notifications hub. It pairs itself from
+# `LEPTOSKIT_CLOUD_NOTIFICATIONS_PAIRING_CODE`; the worker binary is here
+# for an operator who pairs it by hand.
+FROM debian:trixie-slim AS notifications
+RUN apt-get update \
+	&& apt-get install -y --no-install-recommends ca-certificates \
+	&& rm -rf /var/lib/apt/lists/* \
+	&& useradd --uid 65532 --user-group --create-home --shell /usr/sbin/nologin leptoskit
+
+COPY --from=worker-builder /usr/local/bin/leptoskit-cloud-worker /usr/local/bin/leptoskit-cloud-worker
+COPY --from=notifications-builder /usr/local/bin/leptoskit-cloud-notifications /usr/local/bin/leptoskit-cloud-notifications
+
+USER 65532:65532
+EXPOSE 8080
+ENTRYPOINT ["/usr/local/bin/leptoskit-cloud-notifications"]
 
 # Full image for the build worker role (includes `lk` CLI and rootless BuildKit).
 FROM debian:trixie-slim AS builder

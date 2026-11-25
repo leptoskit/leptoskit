@@ -16,6 +16,7 @@ use leptoskit_cloud::config;
 use leptoskit_cloud::databases;
 use leptoskit_cloud::deployments;
 use leptoskit_cloud::domains;
+use leptoskit_cloud::notifications;
 use leptoskit_cloud::projects;
 use leptoskit_cloud::publishing;
 use leptoskit_cloud::tokens;
@@ -445,6 +446,7 @@ operations! {
 	database_backups: databases::DatabaseBackups => databases::BackupList,
 	create_backup: databases::CreateBackup => databases::BackupSummary,
 	restore_backup: databases::RestoreBackup => databases::RestoreSummary,
+	notifications: notifications::Notifications => Option<notifications::NotificationsSummary>,
 	publish: publishing::Publish => publishing::PublicationSummary,
 	publication: publishing::Publication => publishing::PublicationSummary,
 	publications: publishing::Publications => Vec<publishing::PublicationSummary>,

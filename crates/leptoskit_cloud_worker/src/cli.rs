@@ -67,6 +67,10 @@ pub struct Pair {
 	/// Where the worker keeps its key and its job's state.
 	#[arg(long, env = "LEPTOSKIT_CLOUD_WORKER_STATE")]
 	pub state: PathBuf,
+	/// The role the code must be for, when a program pairs itself: a key
+	/// for any other role is never kept.
+	#[arg(skip)]
+	pub role: Option<WorkerRole>,
 }
 
 #[derive(Debug, clap::Args)]
@@ -404,7 +408,13 @@ fn effective_build_env(explicit: Vec<String>, using_builtin: bool) -> Vec<String
 	passed
 }
 
-async fn pair(arguments: Pair) -> Result<(), CommandError> {
+/// Pairs the state directory with a control plane, as `pair` does.
+///
+/// # Errors
+///
+/// [`CommandError`] when the state is already paired, or the control plane
+/// refuses the code.
+pub async fn pair(arguments: Pair) -> Result<(), CommandError> {
 	let state = State::open(&arguments.state)?;
 	// Before the code is spent: it works once.
 	state.ensure_unpaired()?;
@@ -417,6 +427,15 @@ async fn pair(arguments: Pair) -> Result<(), CommandError> {
 		)
 		.await
 		.map_err(CommandError::Pair)?;
+	if let Some(role) = arguments.role
+		&& paired.worker.role != role
+	{
+		return Err(CommandError::Usage(format!(
+			"the pairing code was for a {:?} worker, not {role:?}, so its key wasn't kept; revoke \
+			 the worker {} it made and issue a code for the right role",
+			paired.worker.role, paired.worker.name
+		)));
+	}
 	state.pair(&Identity {
 		origin: crate::client::origin(&arguments.url)?,
 		rpc: arguments.rpc,

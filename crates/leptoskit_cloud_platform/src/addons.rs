@@ -465,8 +465,13 @@ pub fn generate(config: &PlatformConfig) -> Result<Generated, PlatformError> {
 				}
 			}
 			if let Some(workers) = &config.workers {
-				let (worker_docs, worker_secrets) =
-					workloads::worker_documents(config, cluster, &platform, workers)?;
+				let (worker_docs, worker_secrets) = workloads::worker_documents(
+					config,
+					cluster,
+					&platform,
+					workers,
+					&format!("{region}-{name}-notifications"),
+				)?;
 				documents.extend(worker_docs);
 				required.extend(worker_secrets);
 			}
