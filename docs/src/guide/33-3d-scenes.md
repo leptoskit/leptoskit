@@ -62,6 +62,8 @@ Everything that changes a scene is an op, sent with the next `flush`:
 | turn a head or swing a leg yourself     | `set_part_offset(node, "head", Transform::IDENTITY.with_yaw(0.4), 0.1)`, by the part's name |
 | tint, light up, fade, or outline a part | `set_material(node, Some("robe"), MaterialOverride { … })` (colour, emissive, opacity, rim) |
 | make a part glow like light             | `set_blend(node, Some("flash"), Blend::Additive)`                                           |
+| draw the scene by hand, in ink          | `set_style(Style::hand_drawn())`                                                            |
+| weigh, colour, or drop a part's line    | `set_ink(node, Some("cape"), PartInk { weight: Some(0.0), color: None })`                   |
 | put a sword in a hand                   | `attach(sword, character, "socket_weapon")`                                                 |
 | ask what is under a tap                 | `raycast_screen(x, y)`, answered by an `Event::RaycastHits`                                 |
 | remove a model                          | `remove(node)`                                                                              |
@@ -71,6 +73,24 @@ Ops that name a part, a clip, or a morph target apply even when they arrive befo
 `set_part_offset` moves one named part of a model, a bone or any node, from where its rest pose or the playing clip puts it: the offset turns the part about its own origin and moves it along its own axes, and everything attached below it follows. Use it for what your app decides as it runs, such as a creature turning its head towards the camera while its walk clip plays, or a drum turning one chamber on each shot. The last argument is how many seconds the part takes to get there, in a straight line from where it is now, on the host's own clock. An app that works out a pose on every tick of its own clock and sends it with the tick's length is drawn smoothly between ticks, at the display's rate. Zero moves it at once; `Transform::IDENTITY` puts it back.
 
 `Blend::Additive` adds a part's colour to whatever is behind it instead of covering it, scaled by its opacity: a muzzle flash, a spark, or a halo stays bright over a camera picture of a dark room, and black adds nothing, so a soft round glow needs no cut-out. Light added to something already bright barely shows, so for a glow that must read over a white wall, put a darker, normally blended halo behind it. Additive parts draw with the transparent parts and hide nothing behind them.
+
+## A hand-drawn look
+
+`set_style(Style::hand_drawn())` draws the whole scene like an inked drawing: the light falls in a few flat bands instead of a smooth gradient, and every model gets an ink line around it. `Style::default()` is the physically based look, and a scene that never sets a style draws exactly as it did before styles existed.
+
+```rust
+scene.set_style(Style {
+	shading: Shading::Toon(Toon { bands: 3, shade: [0.42, 0.40, 0.58], ..Toon::default() }),
+	ink: Some(Ink { width: 2.0, facing: 0.6, shade_weight: 0.8, ..Ink::default() }),
+});
+```
+
+- **`Toon`** shades in 2 to 4 `bands`, with antialiased edges a pixel wide that `softness` (0 to 1) widens. The darkest band takes the `shade` tint rather than going black, the ambient light is flat, the highlight is a hard spot (`specular`, 0 for none), and a part's rim (`MaterialOverride::rim`) gets a hard edge. `hatch` (0 to 1, off by default) draws ink hatching in the darkest band, fixed to the surface at 60 lines to a metre of the model, fading out where the lines would crowd closer than a few pixels.
+- **`Ink`** draws its line in `color`, exactly, `width` thousandths of the view's height wide (2 is a firm pen line), so it looks the same on every screen and in each eye of a headset, and does not thin as a model walks away. `wobble` (0 to 1) makes the width wander like a pen's; the wander is fixed to the model's surface, so it never crawls. `boil` draws the wander afresh that many times a second, in steps, and only on frames the scene draws anyway; `seed` picks its pattern, and the same scene time always draws the same line. `shade_weight` makes the line heavier on the side away from the light, and `facing` adds a line inside a model where its surface turns away from you.
+- **`set_ink`** changes one part's line, with everything under it: `weight` multiplies the width (0 for none, up to 8) and `color` replaces the ink's. A field left `None` keeps what a setting on an enclosing part gave it, so `PartInk::default()` returns a part to what encloses it. Unlit parts have no line unless one is set; parts too small on screen for a line to read get none.
+- **A model can weigh its own line**, per vertex, in the red channel of its `COLOR_1` attribute: 0.5 is the part's line, 0 none, and 1 twice as heavy. A model without `COLOR_1` has the part's line everywhere. gltfpack keeps `COLOR_1` as written.
+
+The line is a slightly larger copy of each model drawn behind it, so it follows skins, morph targets, and animation, and real-world depth hides it like the model. It outlines closed shapes: an open sheet, such as a robe's hem with no thickness, gets no line along its open edge, so give such edges a little thickness (Blender's Solidify modifier) to ink them. Blended, faded, and additive parts never draw the outline, even with a weight set; to fade a model out, fade its line out with `set_ink` first.
 
 `next_events` waits for what the host has to say: a model loaded (with its clips' names) or failed to, a clip played once has finished, or what a raycast hit, nearest first, with the part's name, the distance, and the point.
 
@@ -82,7 +102,7 @@ A model loaded by several scenes, or spawned many times, is read and uploaded to
 
 ## How it draws
 
-Each frame lights the scene with one directional light and a soft studio environment, puts a soft shadow under each model, and tonemaps the result so bright highlights roll off rather than clip. Edges are smoothed with 4× multisampling. Where the view is transparent, what is behind it shows through.
+Each frame lights the scene with one directional light and a soft studio environment, puts a soft shadow under each model, and tonemaps the result so bright highlights roll off rather than clip. Ink lines draw in their own colour, untouched by exposure and tonemapping, in the same pass as the models. Edges are smoothed with 4× multisampling. Where the view is transparent, what is behind it shows through.
 
 `Op::SetBackdrop` chooses what is behind the models: nothing (`Backdrop::Transparent`, the default), a colour, or `Backdrop::Camera`. On iOS and Android the camera backdrop is the live camera picture while an [`xr` session](34-augmented-reality.md#draw-over-the-camera) runs, drawn from the session's viewpoint; without one it is transparent.
 
@@ -104,4 +124,4 @@ Native apps draw scenes in their own host, never in the app's Wasm code, so a bu
 
 A scene may hold 4,096 nodes and refer to 64 models; an app may hold 16 scenes. A model may be 128 MiB, 4 million vertices, and 16,384 nodes, with 64 morph targets per mesh, 256 joints per skin, and textures up to 4,096 pixels a side. Numbers in ops are bounded to finite, sensible ranges, and model paths must stay inside the app's assets.
 
-Not supported yet: shadows cast onto other models, more than one light, image-based lighting from the camera, textures other than PNG and JPEG, a different `KHR_texture_transform` for each texture of one material, texture coordinates beyond the first set, and stereo through multiview.
+Not supported yet: ink lines along open edges and around blended parts, shadows cast onto other models, more than one light, image-based lighting from the camera, textures other than PNG and JPEG, a different `KHR_texture_transform` for each texture of one material, texture coordinates beyond the first set, and stereo through multiview.

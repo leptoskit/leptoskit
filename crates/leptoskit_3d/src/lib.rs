@@ -1,7 +1,8 @@
 //! <!-- {=scene3dSummary|trim|linePrefix:"//! ":true} -->
 //!
 //! It draws 3D scenes the host owns: glTF models with skins, morph targets, and
-//! animation, lit and shaded on the GPU with wgpu, in a `Scene3d` view. A guest
+//! animation, lit and shaded on the GPU with wgpu, physically based or in a
+//! hand-drawn style of banded light and ink lines, in a `Scene3d` view. A guest
 //! describes a scene with compact ops and hears back through events; the host
 //! animates and draws it on the display link, never in the guest's frame loop.
 //!
