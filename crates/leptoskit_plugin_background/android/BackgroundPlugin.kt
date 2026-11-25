@@ -56,6 +56,32 @@ internal object BackgroundState {
     }
 }
 
+/** App-private `SharedPreferences` store for the active foreground-service configuration. */
+internal object BackgroundConfigStore {
+    private const val PREFS_NAME = "leptoskit.background"
+
+    fun save(
+        context: Context,
+        config: BackgroundConfig,
+    ) {
+        prefs(context)
+            .edit()
+            .putString(BackgroundConfigCodec.KEY_TITLE, config.title)
+            .putString(BackgroundConfigCodec.KEY_TEXT, config.text)
+            .putInt(BackgroundConfigCodec.KEY_TYPES, config.types)
+            .putInt(BackgroundConfigCodec.KEY_INTERVAL, config.intervalSecs)
+            .apply()
+    }
+
+    fun load(context: Context): BackgroundConfig? = BackgroundConfigCodec.decode(prefs(context).all)
+
+    fun clear(context: Context) {
+        prefs(context).edit().clear().apply()
+    }
+
+    private fun prefs(context: Context) = (context.applicationContext ?: context).getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+}
+
 /**
  * Keeps the app's process alive with a foreground service and wakes its Rust
  * `AppService` on a configurable schedule. Android 14 restricts which service
@@ -77,8 +103,6 @@ class BackgroundPlugin(
         const val MAX_TEXT = 1024
     }
 
-    private val manager =
-        context.getSystemService(android.app.NotificationManager::class.java)
     private var closed = false
 
     override suspend fun invoke(
@@ -107,16 +131,15 @@ class BackgroundPlugin(
         val interval = input.number()
         input.finish()
 
-        if (interval !in 1..86_400) throw PluginException(PluginException.INVALID_ARGUMENT)
-        configureChannel(title)
+        val config = BackgroundConfig(title, text, types, interval)
+        if (!config.isValid() || !canStartForegroundWithTypes(config.types, Build.VERSION.SDK_INT)) {
+            throw PluginException(PluginException.INVALID_ARGUMENT)
+        }
 
-        val intent =
-            Intent(context, BackgroundService::class.java).apply {
-                putExtra(BackgroundState.EXTRA_TITLE, title)
-                putExtra(BackgroundState.EXTRA_TEXT, text)
-                putExtra(BackgroundState.EXTRA_TYPES, types)
-                putExtra(BackgroundState.EXTRA_INTERVAL, interval)
-            }
+        BackgroundService.ensureNotificationChannel(context, config.title)
+        BackgroundConfigStore.save(context, config)
+
+        val intent = BackgroundService.startIntent(context, config)
 
         if (Build.VERSION.SDK_INT >= 26) {
             context.startForegroundService(intent)
@@ -129,6 +152,8 @@ class BackgroundPlugin(
 
     private fun stop(payload: ByteBuffer): ByteArray {
         empty(payload)
+        BackgroundConfigStore.clear(context)
+        BackgroundWorker.cancel(context)
         context.stopService(Intent(context, BackgroundService::class.java))
 
         return byteArrayOf()
@@ -179,24 +204,6 @@ class BackgroundPlugin(
 
     override fun close() {
         closed = true
-    }
-
-    private fun configureChannel(title: String) {
-        val manager = manager ?: return
-
-        if (Build.VERSION.SDK_INT >= 26) {
-            val channel =
-                android.app
-                    .NotificationChannel(
-                        BackgroundState.CHANNEL_ID,
-                        title,
-                        android.app.NotificationManager.IMPORTANCE_LOW,
-                    ).apply {
-                        description = "Background work"
-                        setShowBadge(false)
-                    }
-            manager.createNotificationChannel(channel)
-        }
     }
 
     private fun battery(): Int {

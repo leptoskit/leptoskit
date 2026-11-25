@@ -40,6 +40,8 @@ Enable the `guest` feature in Wasm guest code, add `leptoskit_plugin_background`
 
 Android requests `POST_NOTIFICATIONS`, `FOREGROUND_SERVICE` and the matching `FOREGROUND_SERVICE_*` permissions, plus `RECEIVE_BOOT_COMPLETED` and `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`, in the generated manifest, and declares the service's `foregroundServiceType`. Declaring a permission does not grant it; the app must still request `POST_NOTIFICATIONS` at run time through the notifications plugin or its own flow. The boot receiver is opt-in: an app that does not need to survive a reboot leaves it out of its own manifest.
 
+On Android, `start` saves the notification and foreground-service configuration in app-private `SharedPreferences` so the service keeps its foreground service type if restarted by the `WorkManager` fallback, a reboot, or Android's sticky restart. `stop` clears that saved configuration, cancels the `WorkManager` periodic fallback, and stops the foreground service.
+
 ## Binary protocol
 
 All integers are little-endian `u32`. Strings are `u32` byte lengths followed by strict UTF-8. Every decoder rejects trailing bytes, truncated fields, invalid UTF-8 and out-of-domain values before calling a platform API.

@@ -1,7 +1,7 @@
 package dev.leptoskit.plugins.background
 
 import android.content.Context
-import android.content.Intent
+import android.os.Build
 import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
@@ -19,18 +19,37 @@ class BackgroundWorker(
     params: WorkerParameters,
 ) : Worker(context, params) {
     override fun doWork(): Result {
-        val service = Intent(applicationContext, BackgroundService::class.java)
+        val decision =
+            decideWorkerAction(
+                serviceRunning = BackgroundState.running,
+                persistedConfig = BackgroundConfigStore.load(applicationContext),
+                sdkInt = Build.VERSION.SDK_INT,
+            )
 
-        try {
-            if (android.os.Build.VERSION.SDK_INT >= 26) {
-                applicationContext.startForegroundService(service)
-            } else {
-                applicationContext.startService(service)
+        when (decision) {
+            WorkerDecision.WakeOnly -> {
+                BackgroundState.wake()
             }
-        } catch (_: Exception) {
-            // The app may be under a background-start restriction; wake what is
-            // already running instead of failing the work.
-            BackgroundState.wake()
+
+            is WorkerDecision.StartService -> {
+                val service = BackgroundService.startIntent(applicationContext, decision.config)
+
+                try {
+                    if (Build.VERSION.SDK_INT >= 26) {
+                        applicationContext.startForegroundService(service)
+                    } else {
+                        applicationContext.startService(service)
+                    }
+                } catch (_: Exception) {
+                    // The app may be under a background-start restriction; wake what is
+                    // already running instead of failing the work.
+                    BackgroundState.wake()
+                }
+            }
+
+            WorkerDecision.CancelWork -> {
+                cancel(applicationContext)
+            }
         }
 
         return Result.success()
@@ -48,6 +67,10 @@ class BackgroundWorker(
                     ExistingPeriodicWorkPolicy.KEEP,
                     request,
                 )
+        }
+
+        fun cancel(context: Context) {
+            WorkManager.getInstance(context).cancelUniqueWork(BackgroundState.WORK_NAME)
         }
     }
 }
