@@ -21,6 +21,18 @@ use crate::config::WorkersConfig;
 /// Postgres database.
 pub const CONTROL_NAMESPACE: &str = "leptoskit-cloud-control";
 
+/// Namespace running a cluster's notifications hub, when
+/// `workers.notifications_image` is set.
+pub const NOTIFICATIONS_NAMESPACE: &str = "leptoskit-notifications";
+
+/// The name the hub's Service answers on, as the cluster's `notifications`
+/// facts and its worker's `--notifications-host` must give it.
+pub const NOTIFICATIONS_HOST: &str = "hub.leptoskit-notifications.svc.cluster.local";
+
+/// The port the hub serves on, and its Service's port: the edge's bridge,
+/// the apps' calls and the hub's own `NetworkPolicy` all use this one.
+pub const NOTIFICATIONS_PORT: u16 = 8080;
+
 /// Control-plane documents (`50-control-plane`) and their secret-inventory
 /// entries. Emitted only on the edge cluster when `[control_plane]` is
 /// configured.
@@ -300,6 +312,7 @@ pub(super) fn worker_documents(
 	cluster: &Cluster,
 	platform: &Value,
 	workers: &WorkersConfig,
+	worker_name: &str,
 ) -> Result<(Documents, Vec<Value>), PlatformError> {
 	let mut documents = Vec::new();
 	let mut required = Vec::new();
@@ -365,19 +378,38 @@ pub(super) fn worker_documents(
 		{"name": "postgres-ca", "secret": {"secretName": "cluster-worker-postgres-ca"}},
 		{"name": "tmp", "emptyDir": {"sizeLimit": "128Mi"}}
 	]);
+	let mut cluster_args = vec![
+		"run".to_owned(),
+		"--state".to_owned(),
+		"/var/lib/leptoskit-worker".to_owned(),
+		"--profile-json".to_owned(),
+		"/etc/leptoskit/profile.json".to_owned(),
+		"--reconcile-on-start".to_owned(),
+		"--runtime-class".to_owned(),
+		config.isolation.runtime_class.clone(),
+		"--postgres-namespace".to_owned(),
+		"database".to_owned(),
+		"--postgres-ca".to_owned(),
+		"/etc/leptoskit/postgres-ca/ca.crt".to_owned(),
+		"--status-interval-seconds".to_owned(),
+		workers.status_interval_seconds.to_string(),
+	];
+	if workers.notifications_image.is_some() {
+		// The worker refuses a release that bridges to anything but this
+		// hub, and makes each tenant's database in a release.
+		cluster_args.extend([
+			"--notifications-namespace".to_owned(),
+			NOTIFICATIONS_NAMESPACE.to_owned(),
+			"--notifications-host".to_owned(),
+			NOTIFICATIONS_HOST.to_owned(),
+			"--notifications-port".to_owned(),
+			NOTIFICATIONS_PORT.to_string(),
+		]);
+	}
 	cluster_pod["containers"] = json!([{
 		"name": "cluster-worker",
 		"image": workers.cluster_image,
-		"args": [
-			"run",
-			"--state", "/var/lib/leptoskit-worker",
-			"--profile-json", "/etc/leptoskit/profile.json",
-			"--reconcile-on-start",
-			"--runtime-class", config.isolation.runtime_class,
-			"--postgres-namespace", "database",
-			"--postgres-ca", "/etc/leptoskit/postgres-ca/ca.crt",
-			"--status-interval-seconds", workers.status_interval_seconds.to_string()
-		],
+		"args": cluster_args,
 		"env": [
 			{"name": "LEPTOSKIT_CLOUD_WORKER_POSTGRES_URL", "valueFrom": {"secretKeyRef": {"name": "cluster-worker-postgres", "key": "uri"}}}
 		],
@@ -434,6 +466,12 @@ pub(super) fn worker_documents(
 		"source": "copied from database/shared-ca secret",
 		"createdBy": "operator"
 	}));
+
+	if let Some(image) = &workers.notifications_image {
+		let (hub_docs, hub_secrets) = notifications_documents(config, platform, image, worker_name);
+		documents.extend(hub_docs);
+		required.extend(hub_secrets);
+	}
 
 	let has_build_pool = cluster.nodes.values().any(|n| n.pool() == Pool::Build);
 	if let Some(build_image) = &workers.build_image
@@ -532,4 +570,126 @@ pub(super) fn worker_documents(
 	}
 
 	Ok((documents, required))
+}
+
+/// The cluster's notifications hub (`60-workers`): its state, `Deployment/hub`
+/// and `Service/hub` in [`NOTIFICATIONS_NAMESPACE`], and the one Secret it
+/// reads, the pairing code that pairs it on its first start.
+fn notifications_documents(
+	config: &PlatformConfig,
+	platform: &Value,
+	image: &str,
+	worker_name: &str,
+) -> (Documents, Vec<Value>) {
+	let mut documents = Vec::new();
+
+	documents.push((
+		"60-workers",
+		object(
+			"v1",
+			"PersistentVolumeClaim",
+			"hub-state",
+			Some(NOTIFICATIONS_NAMESPACE),
+			json!({
+				"spec": {
+					"accessModes": ["ReadWriteOnce"],
+					"storageClassName": config.postgres.storage_class,
+					"resources": {"requests": {"storage": "1Gi"}}
+				}
+			}),
+		),
+	));
+
+	// The hub runs no tenant code and needs no Kubernetes API: it holds
+	// every tenant's values on the cluster in memory, so its pod gets no
+	// service-account token.
+	let mut pod = platform.clone();
+	pod["automountServiceAccountToken"] = json!(false);
+	pod["securityContext"] = json!({
+		"runAsNonRoot": true,
+		"runAsUser": 65532,
+		"runAsGroup": 65532,
+		"fsGroup": 65532,
+		"seccompProfile": {"type": "RuntimeDefault"}
+	});
+	pod["volumes"] = json!([
+		{"name": "state", "persistentVolumeClaim": {"claimName": "hub-state"}},
+		{"name": "tmp", "emptyDir": {"sizeLimit": "64Mi"}}
+	]);
+	pod["containers"] = json!([{
+		"name": "hub",
+		"image": image,
+		"args": ["--state", "/var/lib/leptoskit-notifications"],
+		"ports": [{"name": "http", "containerPort": NOTIFICATIONS_PORT}],
+		"env": [
+			{"name": "LEPTOSKIT_CLOUD_NOTIFICATIONS_LISTEN", "value": format!("0.0.0.0:{NOTIFICATIONS_PORT}")},
+			{"name": "LEPTOSKIT_CLOUD_NOTIFICATIONS_URL", "value": config.control_origin},
+			{"name": "LEPTOSKIT_CLOUD_NOTIFICATIONS_NAME", "value": worker_name},
+			{"name": "LEPTOSKIT_CLOUD_NOTIFICATIONS_PAIRING_CODE", "valueFrom": {"secretKeyRef": {"name": "hub-pairing", "key": "code", "optional": true}}}
+		],
+		"readinessProbe": {"httpGet": {"path": "/readyz", "port": NOTIFICATIONS_PORT}, "initialDelaySeconds": 5, "periodSeconds": 10},
+		"livenessProbe": {"httpGet": {"path": "/healthz", "port": NOTIFICATIONS_PORT}, "initialDelaySeconds": 15, "periodSeconds": 20},
+		"volumeMounts": [
+			{"name": "state", "mountPath": "/var/lib/leptoskit-notifications"},
+			{"name": "tmp", "mountPath": "/tmp"}
+		],
+		"resources": {
+			"requests": {"cpu": "100m", "memory": "256Mi"},
+			"limits": {"cpu": "2000m", "memory": "2Gi"}
+		},
+		"securityContext": {
+			"allowPrivilegeEscalation": false,
+			"readOnlyRootFilesystem": true,
+			"capabilities": {"drop": ["ALL"]}
+		}
+	}]);
+	// One replica: its state volume is `ReadWriteOnce`, and the paired key
+	// is locked by the process that holds it.
+	documents.push((
+		"60-workers",
+		object(
+			"apps/v1",
+			"Deployment",
+			"hub",
+			Some(NOTIFICATIONS_NAMESPACE),
+			json!({
+				"spec": {
+					"replicas": 1,
+					"strategy": {"type": "Recreate"},
+					"selector": {"matchLabels": {"app": "leptoskit-cloud-notifications"}},
+					"template": {
+						"metadata": {"labels": {"app": "leptoskit-cloud-notifications"}},
+						"spec": pod
+					}
+				}
+			}),
+		),
+	));
+
+	documents.push((
+		"60-workers",
+		object(
+			"v1",
+			"Service",
+			"hub",
+			Some(NOTIFICATIONS_NAMESPACE),
+			json!({
+				"spec": {
+					"selector": {"app": "leptoskit-cloud-notifications"},
+					"ports": [{"name": "http", "port": NOTIFICATIONS_PORT, "targetPort": NOTIFICATIONS_PORT}]
+				}
+			}),
+		),
+	));
+
+	let required = vec![json!({
+		"namespace": NOTIFICATIONS_NAMESPACE,
+		"name": "hub-pairing",
+		"keys": ["code"],
+		"purpose": "One-time pairing code for the notifications hub, read only while its state is unpaired; delete it once the hub has paired",
+		"source": "issue_pairing for the notifications role and this cluster",
+		"createdBy": "operator"
+	})];
+
+	(documents, required)
 }

@@ -116,7 +116,7 @@ jobs:
         # every `[[bin]]` each published CLI crate declares from its release archive. A binary
         # added to any of these crates without a matching upload step would make `cargo binstall`
         # fail against a release that looks complete, so every declared binary target across the
-        # four CLI crates is checked against the `bin:` inputs in this workflow before building.
+        # five CLI crates is checked against the `bin:` inputs in this workflow before building.
         run: |
           set -euo pipefail
 
@@ -125,6 +125,7 @@ jobs:
               | select(.name == "leptoskit_cli"
                 or .name == "leptoskit_cloud_platform"
                 or .name == "leptoskit_cloud_worker"
+                or .name == "leptoskit_cloud_notifications"
                 or .name == "leptoskit_cloud_app")
               | .targets[] | select(.kind | index("bin")) | .name' \
             | sort)
@@ -450,6 +451,22 @@ jobs:
           locked: true
           ref: ${{ format('refs/tags/{0}', env.RELEASE_TAG) }}
           archive: leptoskit-cloud-worker-$target-${{ env.RELEASE_TAG }}
+          target: ${{ matrix.target }}
+          tar: all
+          zip: windows
+          dry-run: ${{ inputs.dry_run == true }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          checksum: sha256,sha512
+
+      - name: upload leptoskit-cloud-notifications binary
+        uses: taiki-e/upload-rust-binary-action@f0d45ae91ee7b8ee928de7a9d04d893a08bcbec6 # v1.30.2
+        with:
+          bin: leptoskit-cloud-notifications
+          manifest-path: crates/leptoskit_cloud_notifications/Cargo.toml
+          profile: dist
+          locked: true
+          ref: ${{ format('refs/tags/{0}', env.RELEASE_TAG) }}
+          archive: leptoskit-cloud-notifications-$target-${{ env.RELEASE_TAG }}
           target: ${{ matrix.target }}
           tar: all
           zip: windows

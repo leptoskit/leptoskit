@@ -15,6 +15,15 @@ LEPTOSKIT_CLOUD_WORKER_PAIRING_CODE=lkp_… leptoskit-cloud-worker pair \
 	--state /var/lib/leptoskit-cloud-notifications
 ```
 
+Or give the hub the code, and it pairs itself on its first start, while its state isn't paired yet. A paired state leaves the code unused, so it can stay set:
+
+```sh
+LEPTOSKIT_CLOUD_NOTIFICATIONS_PAIRING_CODE=lkp_… leptoskit-cloud-notifications \
+	--url https://cloud.example.com \
+	--name eu-one-notifications \
+	--state /var/lib/leptoskit-cloud-notifications
+```
+
 ## Running
 
 ```sh
@@ -27,6 +36,9 @@ leptoskit-cloud-notifications --state /var/lib/leptoskit-cloud-notifications
 | `--listen`        | `LEPTOSKIT_CLOUD_NOTIFICATIONS_LISTEN`        | The address it serves on. `0.0.0.0:8080` when not set. The cluster's `notifications` facts and the cluster worker's `--notifications-port` name the Service in front of it. |
 | `--every-seconds` | `LEPTOSKIT_CLOUD_NOTIFICATIONS_EVERY_SECONDS` | How often it asks what changed and reports. 30 when not set.                                                                                                                |
 | `--connections`   | `LEPTOSKIT_CLOUD_NOTIFICATIONS_CONNECTIONS`   | The most connections it holds to each tenant's database, 1 to 20. 4 when not set.                                                                                           |
+| `--pairing-code`  | `LEPTOSKIT_CLOUD_NOTIFICATIONS_PAIRING_CODE`  | A pairing code for the cluster's `notifications` role, used only while the state isn't paired. Give it in the environment.                                                  |
+| `--url`           | `LEPTOSKIT_CLOUD_NOTIFICATIONS_URL`           | The control plane's address, used only to pair.                                                                                                                             |
+| `--name`          | `LEPTOSKIT_CLOUD_NOTIFICATIONS_NAME`          | What operators call the hub, used only to pair.                                                                                                                             |
 
 Every round, the hub asks the control plane's `notification_tenants` what changed among its cluster's tenants, sending the tenants it holds and their versions. For each tenant it is given, it reads that tenant's settings, opens and migrates its database, and starts the service's routes and job workers with the tenant's token. A newer version replaces the one before it, reusing its database pool when the address is the same, and the old version's live connections are told to reconnect. A tenant it is told to drop stops being served, and its connections are closed. Then it tells `report_notifications` how each tenant is doing, and how many pushes each one's providers accepted.
 
@@ -46,6 +58,16 @@ A tenant's routes take its own app's token, or a person its app forwarded with a
 ## Usage
 
 A push counts when its provider accepts it. The service writes each accepted push to its `push_acceptances` ledger in the same transaction, naming no person, so forgetting a person or pruning deliveries never removes it; the ledger keeps a row for 90 days. The hub counts each tenant's ledger rows from the cursor the control plane holds up to a minute ago. A delivery still being written is therefore counted in the next round. The control plane counts a range only once, whichever hub reports it.
+
+## On a platform cluster
+
+`leptoskit-cloud-platform` runs the hub when `[workers]` names its image, `notifications_image`. The image is `ghcr.io/leptoskit/leptoskit/leptoskit-cloud-notifications`, built from the `notifications` target of the worker's Dockerfile; pin it by digest. Each cluster then gets:
+
+- The `leptoskit-notifications` namespace, with `Deployment/hub` (one replica, no service-account token, a read-only root), its state on `PersistentVolumeClaim/hub-state`, and `Service/hub` on port 8080.
+- A `NetworkPolicy` that admits the platform's namespaces, the edge among them, and the apps' namespaces on port 8080 only.
+- The cluster worker run with `--notifications-namespace leptoskit-notifications`, `--notifications-host hub.leptoskit-notifications.svc.cluster.local` and `--notifications-port 8080`.
+
+The hub pairs itself from the Secret `hub-pairing` (key `code`) in its namespace. Issue a code for the `notifications` role and the cluster, create the Secret within ten minutes, and delete it once the hub's log says it serves. Until the Secret exists, an unpaired hub stops and Kubernetes restarts it. Then set the cluster's `notifications` facts with `set_cluster_facts` to the same namespace, host and port. The cluster worker must be running with its `--notifications-*` options first: an older worker would mark tenants ready with no database.
 
 ## Limits
 

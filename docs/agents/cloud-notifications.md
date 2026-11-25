@@ -218,3 +218,19 @@ Not yet:
 - A tenant being removed isn't rotated; its database is dropped with the removal.
 - Revoking a cluster's worker doesn't replace the Postgres administrator's own credential, which that worker held and with which it could set any role's password. The operator must replace it.
 - An app's own database credentials have the same gap when a cluster worker is revoked: they aren't rotated.
+
+### Packaging as built (slice 5a)
+
+**The image and the binary.** The worker's Dockerfile has a `notifications` target: `leptoskit-cloud-notifications` as the entry point, with `leptoskit-cloud-worker` beside it for pairing by hand, on `debian:trixie-slim` as user 65532. `cloud-images.yml` builds and publishes it as `leptoskit-cloud-notifications` for amd64 and arm64, and rebuilds when the hub or `leptoskit_notifications` changes. `publish.yml` uploads the `leptoskit-cloud-notifications` binary with each release, and its check that every CLI binary ships counts the hub's crate.
+
+**Pairing itself.** The hub takes `--pairing-code` (`LEPTOSKIT_CLOUD_NOTIFICATIONS_PAIRING_CODE`), `--url` and `--name`. When its state isn't paired and a code is given, it pairs with `leptoskit_cloud_worker::cli::pair`, now public, before it opens the state; a paired state leaves the code unused, so a Secret that still holds a spent code does no harm. A code without `--url` and `--name` is refused before anything is spent. The role is still checked after pairing: a code for another role pairs the state, and the hub then refuses to run as it.
+
+**The platform's manifests.** `[workers] notifications_image` makes `leptoskit-cloud-platform` add, on each cluster, the `leptoskit-notifications` namespace (a platform namespace, so it reaches the shared Postgres as the others do), `PersistentVolumeClaim/hub-state`, `Deployment/hub` and `Service/hub` on 8080, with an entry for `hub-pairing` in `required-secrets`. The hub's pod has no service-account token, a read-only root, every capability dropped, and the platform pool's placement. Its namespace's `platform-ingress` policy admits the platform's namespaces (the edge's Traefik is in `kube-system`) and the apps' namespaces on TCP 8080 only. The cluster worker is run with the three `--notifications-*` options naming exactly that Service, so a release bridging anywhere else is refused.
+
+**Tests.** `tests/addons.rs` `a_notifications_image_runs_the_clusters_hub_and_tells_its_worker` checks the namespace, the Deployment's hardening and environment (the pairing code optional), the Service's port, the worker's options, the policy and the Secret's entry; `without_a_notifications_image_there_is_no_hub` that nothing names the namespace without the image, and that `:latest` is refused. The hub's `a_pairing_code_is_used_only_while_the_state_is_unpaired` covers no code, a code without an address, and a paired state ignoring the code without asking any control plane.
+
+Not yet:
+
+- `up` doesn't wait for the hub, since it restarts until its pairing Secret exists, and doesn't set the cluster's `notifications` facts. The operator does both, in that order.
+- One replica per cluster: its state is a `ReadWriteOnce` volume, and a restart is an outage of every tenant's notifications for its length.
+- The hub's egress isn't limited: it must reach the control plane, the shared Postgres and every push provider, and the platform's namespaces have no egress policy.

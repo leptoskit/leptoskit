@@ -404,7 +404,13 @@ fn effective_build_env(explicit: Vec<String>, using_builtin: bool) -> Vec<String
 	passed
 }
 
-async fn pair(arguments: Pair) -> Result<(), CommandError> {
+/// Pairs the state directory with a control plane, as `pair` does.
+///
+/// # Errors
+///
+/// [`CommandError`] when the state is already paired, or the control plane
+/// refuses the code.
+pub async fn pair(arguments: Pair) -> Result<(), CommandError> {
 	let state = State::open(&arguments.state)?;
 	// Before the code is spent: it works once.
 	state.ensure_unpaired()?;
