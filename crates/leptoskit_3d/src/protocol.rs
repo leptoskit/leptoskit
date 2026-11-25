@@ -1566,9 +1566,9 @@ pub fn decode_ops(bytes: &[u8]) -> Result<Vec<Op>, DecodeError> {
 
 	let mut reader = Reader { bytes };
 	let count = reader.header(*OPS_MAGIC)?;
-	// Every op takes at least five bytes, so a count the bytes cannot hold
-	// fails before allocating for it.
-	if count > reader.bytes.len() / 5 + 1 {
+	// The shortest op (`SetBackdrop(Transparent)`) takes two bytes, so a count
+	// the remaining bytes cannot hold fails before allocating for it.
+	if count > reader.bytes.len() / 2 {
 		return Err(DecodeError("it ends early"));
 	}
 

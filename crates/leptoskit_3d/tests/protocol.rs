@@ -904,3 +904,12 @@ fn asset_paths_must_stay_inside_the_assets_folder() {
 	}
 	assert!(!is_safe_asset_path(&"a".repeat(MAX_PATH_BYTES + 1)));
 }
+
+#[test]
+fn short_ops_round_trip_in_repeated_batches() {
+	let styles = vec![Op::SetStyle(Style::default()); 3];
+	assert_eq!(decode_ops(&encode_ops(&styles)), Ok(styles));
+
+	let backdrops = vec![Op::SetBackdrop(Backdrop::Transparent); 4];
+	assert_eq!(decode_ops(&encode_ops(&backdrops)), Ok(backdrops));
+}
