@@ -1119,32 +1119,170 @@ fn snorm(vector: Vec3) -> [i8; 3] {
 /// triangles every which way, and a line pushed along them splinters.
 /// Copies whose normals cancel, as the two sides of a thin sheet do, keep
 /// their own.
-pub(crate) fn welded_normals(positions: &[Vec3], normals: &[Vec3]) -> Vec<Vec3> {
-	let mut bounds = Aabb::EMPTY;
+fn find_root(parent: &mut [usize], mut index: usize) -> usize {
+	while parent[index] != index {
+		parent[index] = parent[parent[index]];
+		index = parent[index];
+	}
+	index
+}
 
-	for point in positions {
-		bounds.grow(*point);
+fn union_roots(parent: &mut [usize], a: usize, b: usize) {
+	let root_a = find_root(parent, a);
+	let root_b = find_root(parent, b);
+	if root_a != root_b {
+		parent[root_b] = root_a;
+	}
+}
+
+fn f64_point(point: Vec3) -> [f64; 3] {
+	[f64::from(point.x), f64::from(point.y), f64::from(point.z)]
+}
+
+fn dist2_f64(a: [f64; 3], b: [f64; 3]) -> f64 {
+	let dx = a[0] - b[0];
+	let dy = a[1] - b[1];
+	let dz = a[2] - b[2];
+	dx * dx + dy * dy + dz * dz
+}
+
+pub(crate) fn welded_normals(positions: &[Vec3], normals: &[Vec3]) -> Vec<Vec3> {
+	let count = positions.len().min(normals.len());
+	let mut welded = normals.to_vec();
+
+	if count < 2 {
+		return welded;
+	}
+
+	// Compute bounds in f64 so extreme finite f32 coordinates cannot overflow.
+	let mut min = [f64::INFINITY; 3];
+	let mut max = [f64::NEG_INFINITY; 3];
+	let mut any_finite = false;
+
+	for point in &positions[..count] {
+		if point.is_finite() {
+			let point = f64_point(*point);
+
+			for axis in 0..3 {
+				min[axis] = min[axis].min(point[axis]);
+				max[axis] = max[axis].max(point[axis]);
+			}
+
+			any_finite = true;
+		}
+	}
+
+	if !any_finite {
+		return welded;
+	}
+
+	let span = dist2_f64(max, min).sqrt();
+
+	if !span.is_finite() {
+		return welded;
 	}
 
 	// Positions closer than a hundred-thousandth of the mesh's size weld.
-	let cell = if bounds.is_empty() {
-		1.0
-	} else {
-		((bounds.max - bounds.min).length() * 1.0e-5).max(1.0e-12)
-	};
-	// Each vertex by its position's cell, then by its normal in bytes, so the
+	// Hash into 4x wider cells and probe boundary-adjacent cells whenever a
+	// vertex sits within `tol` of a cell face so seams straddling a grid
+	// boundary still weld cleanly.
+	let tol = (span * 1.0e-5).max(1.0e-12);
+	let tol2 = tol * tol;
+	let cell = 4.0 * tol;
+	let mut parent: Vec<usize> = (0..count).collect();
+	let mut cells: HashMap<[i64; 3], Vec<usize>> = HashMap::new();
+	let mut coords: Vec<Option<([i64; 3], [f64; 3])>> = Vec::with_capacity(count);
+
+	for (index, point) in positions[..count].iter().enumerate() {
+		if !point.is_finite() {
+			coords.push(None);
+			continue;
+		}
+
+		let p = f64_point(*point);
+		let u = [
+			(p[0] - min[0]) / cell,
+			(p[1] - min[1]) / cell,
+			(p[2] - min[2]) / cell,
+		];
+		let floor = [u[0].floor(), u[1].floor(), u[2].floor()];
+		let key = [floor[0] as i64, floor[1] as i64, floor[2] as i64];
+		let frac = [u[0] - floor[0], u[1] - floor[1], u[2] - floor[2]];
+		coords.push(Some((key, frac)));
+		let reps = cells.entry(key).or_default();
+
+		if let Some(&rep) = reps.iter().find(|&&rep| positions[rep] == *point) {
+			union_roots(&mut parent, rep, index);
+		} else {
+			reps.push(index);
+		}
+	}
+
+	for reps in cells.values() {
+		for a in 0..reps.len() {
+			let pa = f64_point(positions[reps[a]]);
+
+			for b in (a + 1)..reps.len() {
+				if dist2_f64(pa, f64_point(positions[reps[b]])) <= tol2 {
+					union_roots(&mut parent, reps[a], reps[b]);
+				}
+			}
+		}
+
+		for &index in reps {
+			let Some((key, frac)) = coords[index] else {
+				continue;
+			};
+			let axis_offsets = |f: f64| -> &[i64] {
+				if f < 0.26 {
+					&[0, -1]
+				} else if f > 0.74 {
+					&[0, 1]
+				} else {
+					&[0]
+				}
+			};
+			let dx = axis_offsets(frac[0]);
+			let dy = axis_offsets(frac[1]);
+			let dz = axis_offsets(frac[2]);
+
+			if dx.len() == 1 && dy.len() == 1 && dz.len() == 1 {
+				continue;
+			}
+
+			let point = f64_point(positions[index]);
+
+			for &ox in dx {
+				for &oy in dy {
+					for &oz in dz {
+						if ox == 0 && oy == 0 && oz == 0 {
+							continue;
+						}
+
+						let neighbor = [key[0] + ox, key[1] + oy, key[2] + oz];
+
+						if let Some(other) = cells.get(&neighbor) {
+							for &other_index in other {
+								if dist2_f64(point, f64_point(positions[other_index])) <= tol2 {
+									union_roots(&mut parent, index, other_index);
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// Each vertex by its welded group, then by its normal in bytes, so the
 	// copies at a position sit together and each distinct normal counts once.
-	let mut order: Vec<([i64; 3], [i8; 3], usize)> = positions
-		.iter()
-		.zip(normals)
-		.enumerate()
-		.map(|(index, (point, normal))| {
-			let key = (*point / cell).round().to_array().map(|value| value as i64);
-			(key, snorm(*normal), index)
+	let mut order: Vec<(usize, [i8; 3], usize)> = (0..count)
+		.map(|index| {
+			let root = find_root(&mut parent, index);
+			(root, snorm(normals[index]), index)
 		})
 		.collect();
 	order.sort_unstable();
-	let mut welded = normals.to_vec();
 
 	for copies in order.chunk_by(|a, b| a.0 == b.0) {
 		let sum: Vec3 = copies
@@ -2089,5 +2227,38 @@ mod tests {
 			assert!((unit - expected).abs() < 1.0e-5, "{units:?}");
 		}
 		assert_eq!(units.len(), 5);
+	}
+
+	#[test]
+	fn welded_normals_weld_across_cell_boundaries() {
+		// Mesh spans [0, 1] -> length = 1.0, tolerance = 1e-5.
+		// Test seam copies 2e-8 apart straddling both 0.5e-5 and 4.0e-5 cell
+		// boundaries.
+		for boundary in [0.5e-5_f32, 4.0e-5_f32] {
+			let a = Vec3::new(boundary - 1.0e-8, 0.0, 0.0);
+			let b = Vec3::new(boundary + 1.0e-8, 0.0, 0.0);
+			let far = Vec3::new(1.0, 0.0, 0.0);
+			let welded = welded_normals(&[a, b, far], &[Vec3::X, Vec3::Y, Vec3::Z]);
+			assert!(
+				welded[0].abs_diff_eq(welded[1], 1.0e-5),
+				"vertices 2e-8 apart failed to weld across boundary {boundary:e}: {:?} vs {:?}",
+				welded[0],
+				welded[1]
+			);
+			assert!(welded[2].abs_diff_eq(Vec3::Z, 1.0e-5));
+		}
+	}
+
+	#[test]
+	fn welded_normals_do_not_overflow_on_extreme_bounds() {
+		// Valid finite f32 positions whose difference overflows f32 to +inf.
+		let points = [
+			Vec3::new(-1.0e38, 0.0, 0.0),
+			Vec3::new(1.0e38, 0.0, 0.0),
+			Vec3::new(0.0, 1.0, 0.0),
+		];
+		let normals = [Vec3::X, Vec3::Y, Vec3::Z];
+		let welded = welded_normals(&points, &normals);
+		assert_eq!(welded[2], Vec3::Z, "distant vertex got welded: {welded:?}");
 	}
 }
