@@ -355,6 +355,8 @@ fn website(assets: &Path, docs: &Path) {
 		"guide/01-installation.html",
 		"guide/29-hosted-deployments.html",
 		"schema.json",
+		"llms.txt",
+		"llms-full.txt",
 		"_leptoskit/theme.js",
 		"_leptoskit/site.js",
 		"_leptoskit/site.css",
