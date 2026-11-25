@@ -33,6 +33,7 @@ use leptoskit_auth::Mailbox;
 use leptoskit_rpc::server::Jobs;
 use leptoskit_rpc::server::JobsHandle;
 use leptoskit_rpc::server::Live;
+use leptoskit_rpc::server::RateLimit;
 use leptoskit_rpc::server::Relay;
 use leptoskit_rpc::server::RelayPublisher;
 use leptoskit_rpc::server::Roles;
@@ -45,6 +46,10 @@ pub struct Options {
 	/// socket refuses pages from anywhere else; native apps, which send no
 	/// `Origin`, sign in with a token instead.
 	pub origin: Option<String>,
+	/// The header the proxy in front of Huddle puts the client's address in,
+	/// the one sign-in reads it from, so the API's limits count each caller
+	/// by their own address. `None` counts them by their connection.
+	pub client_ip_header: Option<String>,
 	/// Where the web client was built: `dist/`, unless `LEPTOS_SITE_ROOT`
 	/// says otherwise. `None` serves no files, as the tests do.
 	pub site_root: Option<PathBuf>,
@@ -67,6 +72,7 @@ impl Options {
 	pub fn new(db: &Db) -> Self {
 		Self {
 			origin: None,
+			client_ip_header: None,
 			site_root: None,
 			settlement: Settlement::default(),
 			mail_delay: Duration::from_millis(1_500),
@@ -83,6 +89,7 @@ impl std::fmt::Debug for Options {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		f.debug_struct("Options")
 			.field("origin", &self.origin)
+			.field("client_ip_header", &self.client_ip_header)
 			.field("site_root", &self.site_root)
 			.field("settlement", &self.settlement)
 			.field("mail_delay", &self.mail_delay)
@@ -127,9 +134,15 @@ impl std::fmt::Debug for Huddle {
 /// readiness reflects it.
 ///
 /// Every email, the sign-in codes and the invitations alike, goes to an
-/// in-app [`Mailbox`] shown at `/_leptoskit/mail`. That's the development
-/// mailbox, and what the public demo uses so anyone can sign in; a real
-/// deployment gives `huddle_api`'s services a mailer that sends.
+/// in-app [`Mailbox`] shown at `/_leptoskit/mail`, which keeps the newest
+/// [`Mailbox::CAP`]. That's the development mailbox, and what the public
+/// demo uses so anyone can sign in; a real deployment gives `huddle_api`'s
+/// services a mailer that sends.
+///
+/// Every call is counted as [`RateLimit::new`] says, over HTTP and the live
+/// socket alike, with each operation's own limit on top. Behind a proxy,
+/// [`Options::client_ip_header`] names where a caller's address is read
+/// from.
 ///
 /// # Errors
 ///
@@ -151,7 +164,16 @@ pub fn start(db: &Db, auth: AuthBuilder, options: Options) -> Result<Huddle, Aut
 	});
 
 	let roles = options.roles;
-	let rpc = leptoskit_rpc::server::Server::new(db.clone()).identify(auth.clone());
+	let rpc = leptoskit_rpc::server::Server::new(db.clone())
+		.identify(auth.clone())
+		.rate_limit(RateLimit::new());
+
+	// Behind a proxy, a caller is counted by the address the proxy writes,
+	// as sign-in counts them.
+	let rpc = match &options.client_ip_header {
+		Some(header) => rpc.client_ip_header(header),
+		None => rpc,
+	};
 
 	let live = match &options.origin {
 		Some(origin) => rpc.live().origin(origin),
@@ -229,7 +251,7 @@ impl Huddle {
 	}
 }
 
-/// Every email so far, newest first, as a page.
+/// The emails the mailbox keeps, newest first, as a page.
 fn mail_page(mailbox: &Mailbox) -> String {
 	let mut page = String::from(
 		"<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Huddle \

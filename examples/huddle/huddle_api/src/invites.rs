@@ -47,7 +47,11 @@ pub async fn invites(cx: &rpc::QueryCx, channel: Id<Channel>) -> rpc::Result<Vec
 }
 
 /// Invites `email` to a channel. Returns at once; the email follows.
-#[rpc::mutation]
+///
+/// A caller may send ten invitations an hour, and the next is answered
+/// `429` until one is free: each leaves a row, a job, and an email in the
+/// mailbox, so one account can't pile them up without end.
+#[rpc::mutation(rate_limit = 10 / 1h)]
 pub async fn invite(
 	cx: &rpc::MutationCx,
 	channel: Id<Channel>,

@@ -649,6 +649,48 @@ async fn invitations_check_the_address_reach_the_mailbox_and_sign_people_up() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_caller_may_send_ten_invitations_an_hour() {
+	let _serial = SERIAL.lock().await;
+	let server = Server::start(None).await;
+	let ada = server.sign_in("ada@huddle.test").await;
+	let grace = server.sign_in("grace.hopper@huddle.test").await;
+	let general = general(&ada).await;
+	let invite =
+		|index: u8| json!({ "channel": general, "email": format!("guest.{index}@huddle.test") });
+
+	// Ten go through, each leaving an invitation to send.
+	for index in 0..10 {
+		ada.ok("invite", invite(index)).await;
+	}
+
+	// The eleventh in the hour is refused as too many, with how long to
+	// wait, and so is the twelfth.
+	let (status, body) = ada
+		.call("invite", invite(10))
+		.await
+		.expect_err("the eleventh invitation in an hour was answered");
+	assert_eq!(status, 429, "{body}");
+	assert!(body.contains("rate_limited"), "{body}");
+	assert_eq!(
+		ada.call("invite", invite(11)).await.unwrap_err().0,
+		429,
+		"and so is the twelfth"
+	);
+
+	// Only that caller's invitations wait. Everything else is answered:
+	// the ten they already sent, their other calls, and another person's
+	// invitation.
+	let sent = ada.ok("invites", json!({ "channel": general })).await;
+	assert_eq!(sent.as_array().unwrap().len(), 10, "{sent}");
+	ada.ok("channels", json!({})).await;
+	grace.ok("invite", invite(12)).await;
+	let sent = grace.ok("invites", json!({ "channel": general })).await;
+	assert_eq!(sent.as_array().unwrap().len(), 11, "{sent}");
+
+	server.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn tips_settle_and_only_a_real_attempt_may_be_retried() {
 	let _serial = SERIAL.lock().await;
 	let server = Server::start(None).await;
