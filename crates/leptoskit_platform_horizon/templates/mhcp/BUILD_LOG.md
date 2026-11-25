@@ -1,4 +1,4 @@
-# Build Log — __APP_NAME__
+# Build Log — **APP_NAME**
 
 - **Package ID:** `__PACKAGE_ID__`
 - **Version:** `__VERSION__`

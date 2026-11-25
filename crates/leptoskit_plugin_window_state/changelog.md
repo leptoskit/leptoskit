@@ -4,6 +4,17 @@ All notable changes to this project are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1](https://github.com/leptoskit/leptoskit/releases/tag/v0.3.1) (2026-11-25)
+
+### Features
+
+#### Add desktop window overlays and background modes
+
+_Owner:_ Ifiok Jr. · _Introduced in:_ [9714421](https://github.com/leptoskit/leptoskit/commit/9714421722143255a82869b80b11b2b7be40f7ed)
+
+- `leptoskit_plugin_window_state::desktop` adds Electron-class desktop windowing and lifecycle types: `WindowOptions` (with `floating_overlay` preset), `WindowLevel` (`Normal`, `Floating`, `AlwaysOnTop`, `Status`, `PopUpMenu`, `ScreenSaver`), `WindowChrome` (`Standard`, `Frameless`, `HiddenTitleBar`), `VibrancyMaterial` (macOS vibrancy and Windows Mica/Acrylic), `CloseBehavior` (`Quit`, `HideToTray`, `KeepRunningInBackground`, `Minimize`), `ActivationPolicy` (`Regular`, `Accessory`, `BackgroundOnly`), `TaskbarProgress`, `DockAttention`, `WindowController`, and `MemoryWindowController`.
+- `leptoskit_config` adds `NativeMode::Background`, allows `menu-bar` and `background` startup modes across desktop platforms (`macos`, `windows`, `linux`), and adds the `[native.window]` configuration table (`DesktopWindowConfig`).
+
 ## [0.3.0](https://github.com/leptoskit/leptoskit/releases/tag/v0.3.0) (2026-11-06)
 
 ### Breaking changes

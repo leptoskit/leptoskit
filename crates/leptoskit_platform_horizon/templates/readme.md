@@ -1,17 +1,17 @@
 # Meta Horizon host (experimental)
 
-This folder was scaffolded by `leptoskit native platform scaffold horizon` for **__APP_NAME__** (`__PACKAGE_ID__`).
+This folder was scaffolded by `leptoskit native platform scaffold horizon` for ****APP_NAME**** (`__PACKAGE_ID__`).
 
 ## What is in this folder
 
-| Path | Purpose |
-| --- | --- |
-| `scripts/scene.ts` | Applies leptoskit `version: 1` render transactions and converts layout/props to `horizon/ui` styles |
+| Path                       | Purpose                                                                                                              |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `scripts/scene.ts`         | Applies leptoskit `version: 1` render transactions and converts layout/props to `horizon/ui` styles                  |
 | `scripts/LeptosKitHost.ts` | Meta Horizon Worlds `UIComponent` (`horizon/core` + `horizon/ui`) that renders the scene tree and emits press events |
-| `scripts/scene_test.ts` | Unit tests for the scene graph and `horizon/ui` style mapping (run with `node --test` or `deno test`) |
-| `mhcp/index.html` | Portrait-oriented, offline-first HTML5 shell template for MHCP hackathon submissions |
-| `mhcp/BUILD_LOG.md` | Build log template for MHCP Devpost submissions |
-| `guest.rs` | Guest platform constants and integration notes |
+| `scripts/scene_test.ts`    | Unit tests for the scene graph and `horizon/ui` style mapping (run with `node --test` or `deno test`)                |
+| `mhcp/index.html`          | Portrait-oriented, offline-first HTML5 shell template for MHCP hackathon submissions                                 |
+| `mhcp/BUILD_LOG.md`        | Build log template for MHCP Devpost submissions                                                                      |
+| `guest.rs`                 | Guest platform constants and integration notes                                                                       |
 
 ## 1. Packaging an MHCP hackathon `.zip` submission
 

@@ -26,7 +26,10 @@ export class WearablePlugin implements NativePlugin {
 	private buffer: Uint8Array[] = [];
 	private dropped = 0;
 	private waiter:
-		| { resolve: (data: ArrayBuffer) => void; reject: (err: PluginError) => void }
+		| {
+			resolve: (data: ArrayBuffer) => void;
+			reject: (err: PluginError) => void;
+		}
 		| undefined = undefined;
 	private passiveStops: (() => void)[] = [];
 	private liveStops: (() => void)[] = [];
@@ -56,11 +59,15 @@ export class WearablePlugin implements NativePlugin {
 				this.stopGroup(this.passiveStops);
 				return new ArrayBuffer(0);
 			case 5: {
-				if (call.payload.byteLength !== 12) throw new PluginError(INVALID_ARGUMENT);
+				if (call.payload.byteLength !== 12) {
+					throw new PluginError(INVALID_ARGUMENT);
+				}
 				const view = new DataView(call.payload);
 				const mask = view.getUint32(0, true);
 				const intervalMs = view.getUint32(4, true);
-				if (mask === 0 || intervalMs < 200) throw new PluginError(INVALID_ARGUMENT);
+				if (mask === 0 || intervalMs < 200) {
+					throw new PluginError(INVALID_ARGUMENT);
+				}
 				this.stopGroup(this.liveStops);
 				this.startSensors(mask, intervalMs, this.liveStops);
 				return new ArrayBuffer(0);
@@ -96,7 +103,11 @@ export class WearablePlugin implements NativePlugin {
 		return buf;
 	}
 
-	private startSensors(mask: number, intervalMs: number, group: (() => void)[]): void {
+	private startSensors(
+		mask: number,
+		intervalMs: number,
+		group: (() => void)[],
+	): void {
 		const intervalNs = intervalMs * 1_000_000;
 		if ((mask & (1 << 0)) !== 0) {
 			const hrCb = (data: sensor.HeartRateResponse): void => {
@@ -115,8 +126,13 @@ export class WearablePlugin implements NativePlugin {
 			const pedCb = (data: sensor.PedometerResponse): void => {
 				const now = Date.now();
 				const total = Math.max(0, Math.round(data.steps));
-				if (this.lastSteps !== undefined && this.lastStepsTime !== undefined && total > this.lastSteps) {
-					this.enqueue(encodeSteps(this.lastStepsTime, now, total - this.lastSteps));
+				if (
+					this.lastSteps !== undefined && this.lastStepsTime !== undefined &&
+					total > this.lastSteps
+				) {
+					this.enqueue(
+						encodeSteps(this.lastStepsTime, now, total - this.lastSteps),
+					);
 				}
 				this.lastSteps = total;
 				this.lastStepsTime = now;
@@ -133,7 +149,9 @@ export class WearablePlugin implements NativePlugin {
 				this.enqueue(encodeWearState(Date.now(), data.value === 1));
 			};
 			try {
-				sensor.on(sensor.SensorId.WEAR_DETECTION, wearCb, { interval: intervalNs });
+				sensor.on(sensor.SensorId.WEAR_DETECTION, wearCb, {
+					interval: intervalNs,
+				});
 				group.push(() => sensor.off(sensor.SensorId.WEAR_DETECTION, wearCb));
 			} catch {
 				// Wear detection not present.
@@ -209,7 +227,11 @@ function encodeU32(value: number): ArrayBuffer {
 	return buf;
 }
 
-function encodeHeartRate(timeMs: number, bpm: number, accuracy: number): Uint8Array {
+function encodeHeartRate(
+	timeMs: number,
+	bpm: number,
+	accuracy: number,
+): Uint8Array {
 	const buf = new ArrayBuffer(24);
 	const view = new DataView(buf);
 	view.setUint32(0, KIND_HR, true);
@@ -219,7 +241,11 @@ function encodeHeartRate(timeMs: number, bpm: number, accuracy: number): Uint8Ar
 	return new Uint8Array(buf);
 }
 
-function encodeSteps(startMs: number, endMs: number, count: number): Uint8Array {
+function encodeSteps(
+	startMs: number,
+	endMs: number,
+	count: number,
+): Uint8Array {
 	const buf = new ArrayBuffer(28);
 	const view = new DataView(buf);
 	view.setUint32(0, KIND_STEPS, true);
