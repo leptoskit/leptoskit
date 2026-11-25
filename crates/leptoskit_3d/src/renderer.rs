@@ -474,8 +474,11 @@ struct Item {
 	outlined: bool,
 	/// Relief-print paper knockout settings when this item draws one.
 	knockout: Option<KnockoutDraw>,
-	/// Per-figure stencil reference (`1..=255`) when knockout is active, `0`
-	/// otherwise.
+	/// Its figure among [`Renderer::figures`], or [`NONE`] without a
+	/// knockout style.
+	figure: u32,
+	/// Its figure's stencil reference (`1..=255`) when that figure draws a
+	/// knockout this frame, `0` otherwise.
 	stencil_ref: u8,
 	morphed: bool,
 	/// Whether it can share an instanced draw with identical items.
@@ -640,12 +643,20 @@ impl ModelState {
 }
 
 /// A mesh node of a model: which one, its asset's slot, its joints, and its
-/// figure's stencil reference.
+/// figure.
 struct Part<'a> {
 	model: &'a ModelState,
 	index: usize,
 	slot: usize,
 	joints: u32,
+	figure: u32,
+}
+
+/// A figure met this frame: whether any of its opaque parts in view draws a
+/// paper knockout, and the stencil reference it takes if one does.
+#[derive(Clone, Copy, Debug, Default)]
+struct Figure {
+	knockout: bool,
 	stencil_ref: u8,
 }
 
@@ -842,7 +853,10 @@ pub struct Renderer {
 	items: Vec<Item>,
 	texels: Vec<[f32; 4]>,
 	print_extras: HashMap<[u32; 8], u32>,
-	figure_refs: HashMap<crate::protocol::NodeId, u8>,
+	/// This frame's figures under a knockout style, in the order met, and
+	/// each figure's index by its root node.
+	figures: Vec<Figure>,
+	figure_index: HashMap<crate::protocol::NodeId, u32>,
 	shadow_records: Vec<ShadowRecord>,
 	/// The uploaded assets this frame draws, which [`Item::asset`] indexes.
 	assets: Vec<Arc<GpuAsset>>,
@@ -877,7 +891,8 @@ impl Renderer {
 			items: Vec::new(),
 			texels: Vec::new(),
 			print_extras: HashMap::new(),
-			figure_refs: HashMap::new(),
+			figures: Vec::new(),
+			figure_index: HashMap::new(),
 			shadow_records: Vec::new(),
 			assets: Vec::new(),
 			asset_index: HashMap::new(),
@@ -1260,7 +1275,8 @@ impl Renderer {
 		self.items.clear();
 		self.texels.clear();
 		self.print_extras.clear();
-		self.figure_refs.clear();
+		self.figures.clear();
+		self.figure_index.clear();
 		self.shadow_records.clear();
 		self.assets.clear();
 		self.asset_index.clear();
@@ -1303,14 +1319,22 @@ impl Renderer {
 			let Some(model) = ModelState::of(&self.world, id) else {
 				continue;
 			};
-			let stencil_ref = if print_knockout {
-				let root = figure_root(&self.world, id);
-				let next = ((self.figure_refs.len() % 255) + 1) as u8;
-				*self.figure_refs.entry(root).or_insert(next)
+			let figure = if print_knockout {
+				let next = self.figures.len() as u32;
+				let figure = *self
+					.figure_index
+					.entry(figure_root(&self.world, id))
+					.or_insert(next);
+
+				if figure == next {
+					self.figures.push(Figure::default());
+				}
+
+				figure
 			} else {
-				0
+				NONE
 			};
-			let bounds = self.build_model(&model, &sight, stencil_ref);
+			let bounds = self.build_model(&model, &sight, figure);
 
 			if model.cast_shadow
 				&& let Some(record) = shadow_record(bounds, model.ground, shadow, &sight)
@@ -1318,10 +1342,36 @@ impl Renderer {
 				self.shadow_records.push(record);
 			}
 		}
+
+		self.assign_stencil_refs();
+	}
+
+	/// Gives each figure whose knockout draws this frame a stencil reference,
+	/// in the order the figures were met, and every opaque item of that figure
+	/// its reference. Figures out of view, or without a knockout, take none.
+	/// There are 255 references, so past 255 knockout figures in one frame
+	/// they repeat, and two figures sharing one draw no paper between them.
+	fn assign_stencil_refs(&mut self) {
+		let mut drawn = 0_usize;
+
+		for figure in &mut self.figures {
+			if figure.knockout {
+				figure.stencil_ref = ((drawn % 255) + 1) as u8;
+				drawn += 1;
+			}
+		}
+
+		for item in &mut self.items {
+			if let Some(figure) = self.figures.get(item.figure as usize)
+				&& !item.variant.blend
+			{
+				item.stencil_ref = figure.stencil_ref;
+			}
+		}
 	}
 
 	/// Adds a model's visible parts, returning its bounds in this pose.
-	fn build_model(&mut self, model: &ModelState, sight: &Sight, stencil_ref: u8) -> Aabb {
+	fn build_model(&mut self, model: &ModelState, sight: &Sight, figure: u32) -> Aabb {
 		let slot = self.asset_slot(&model.asset);
 		let mut bounds = Aabb::EMPTY;
 
@@ -1346,7 +1396,7 @@ impl Renderer {
 					index,
 					slot,
 					joints,
-					stencil_ref,
+					figure,
 				};
 				bounds = bounds.union(self.build_primitive(&part, primitive, sight));
 			}
@@ -1500,6 +1550,11 @@ impl Renderer {
 		let vertex_size = size_of::<crate::asset::Vertex>() as u64;
 		let ink_size = size_of::<crate::asset::InkVertex>() as u64;
 		let skin_size = size_of::<crate::asset::SkinVertex>() as u64;
+
+		if knockout && let Some(figure) = self.figures.get_mut(part.figure as usize) {
+			figure.knockout = true;
+		}
+
 		self.items.push(Item {
 			variant: Variant {
 				skinned,
@@ -1518,7 +1573,9 @@ impl Renderer {
 				open_edges: primitive.has_open_edges,
 				masked,
 			}),
-			stencil_ref: if blend { 0 } else { part.stencil_ref },
+			figure: part.figure,
+			// Set once every figure in view is known.
+			stencil_ref: 0,
 			skin_offset: primitive
 				.skin_base
 				.filter(|_| skinned)

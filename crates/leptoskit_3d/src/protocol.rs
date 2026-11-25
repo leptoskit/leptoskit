@@ -340,7 +340,9 @@ pub struct Print {
 	pub paper: [f32; 3],
 	/// Outer paper knockout width around each figure's silhouette, in
 	/// thousandths of the view's height outside the key line, from 0 (off)
-	/// to [`MAX_INK_WIDTH`](crate::MAX_INK_WIDTH).
+	/// to [`MAX_INK_WIDTH`](crate::MAX_INK_WIDTH). Up to 255 figures in view
+	/// separate from one another; past that, some share a stencil reference
+	/// and draw no paper between them.
 	pub knockout_width: f32,
 	/// Default object-space hatch lines per metre, from 0 (off) to
 	/// [`MAX_HATCH_PER_M`](crate::MAX_HATCH_PER_M). Overridable per figure

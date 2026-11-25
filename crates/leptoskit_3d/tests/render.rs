@@ -3358,3 +3358,74 @@ fn print_a_figure_spawned_under_a_model_keeps_its_knockout() {
 		paper[0], paper[1]
 	);
 }
+
+/// Only figures drawn with a knockout this frame take a stencil reference,
+/// so figures out of view never use one up: the 256th model in a scene
+/// still separates from the first.
+#[test]
+fn print_knockout_references_go_to_figures_in_view() {
+	let Some(gpu) = gpu() else { return };
+	let blue = [0.10, 0.25, 0.85];
+	let green = [0.10, 0.75, 0.20];
+	let mut renderer = renderer(gpu);
+	load(&mut renderer, 1, &fixture::lit_sphere(32, None));
+	let mut ops = knockout_stage().to_vec();
+
+	for node in 1..=256_u32 {
+		ops.push(Op::Spawn {
+			node: NodeId(node),
+			asset: Some(AssetId(1)),
+			parent: None,
+		});
+		let transform = match node {
+			1 => Transform::from_translation(-0.22, 0.0, 0.45).with_scale(0.55),
+			256 => Transform::from_translation(0.25, 0.0, -0.75).with_scale(1.05),
+			// Everyone else stands behind the camera.
+			_ => Transform::from_translation(0.0, 0.0, 40.0),
+		};
+		ops.push(Op::SetTransform {
+			node: NodeId(node),
+			transform,
+		});
+	}
+
+	ops.push(flat_print(1, blue, None));
+	ops.push(flat_print(256, green, None));
+	ops.push(style(
+		Shading::Print(Print {
+			paper: PAPER_COLOR,
+			knockout_width: 30.0,
+			..Print::default()
+		}),
+		Some(Ink {
+			wobble: 0.0,
+			..red_ink(25.0)
+		}),
+	));
+	renderer.world_mut().apply(ops);
+
+	let image = render_size(&mut renderer, 128);
+	let mut seen_blue = false;
+	let mut seen_green = false;
+	let mut paper_between = 0_usize;
+	let mut row = Vec::new();
+
+	for x in 20..115 {
+		let pixel = image.at(x, 64);
+		row.push(pixel);
+
+		if near(pixel, exact_srgb(blue), 12) {
+			seen_blue = true;
+		} else if seen_blue && !seen_green && near(pixel, exact_srgb(green), 12) {
+			seen_green = true;
+		} else if seen_blue && !seen_green && is_paper(pixel) {
+			paper_between += 1;
+		}
+	}
+
+	assert!(
+		seen_blue && seen_green && paper_between >= 3,
+		"figure 1 and figure 256 overlap with no paper between them \
+		 (paper_between={paper_between}, seen_green={seen_green}); row: {row:?}"
+	);
+}
