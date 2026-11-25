@@ -339,14 +339,14 @@ fn toon_light(base: vec3<f32>, metallic: f32, roughness: f32, n: vec3<f32>, v: v
 	let n_dot_l = dot(n, l);
 	// Steps at whole values of y, so each band is centred on a half.
 	let y = (n_dot_l * 0.5 + 0.5) * bands + 0.5;
-	let edge = min(0.5 * fwidth(y) + 0.5 * globals.style.z, 0.5);
+	let edge = clamp(0.5 * fwidth(y) + 0.5 * globals.style.z, 1.0e-5, 0.5);
 	let level = clamp(floor(y) - 1.0 + smoothstep(0.5 - edge, 0.5 + edge, fract(y)), 0.0, bands - 1.0);
 	let tone = mix(globals.shade.rgb, vec3<f32>(1.0), level / (bands - 1.0)) * ao;
 	let light = globals.light_color.rgb * globals.light_direction.w / PI + globals.sh[0].rgb * globals.light_color.w;
 	var color = base * tone * light;
 	let n_dot_h = dot(n, normalize(l + v));
 	let spot = 1.0 - 0.15 * roughness * roughness;
-	let spot_edge = fwidth(n_dot_h);
+	let spot_edge = max(fwidth(n_dot_h), 1.0e-5);
 	let highlight = smoothstep(spot - spot_edge, spot + spot_edge, n_dot_h) * select(0.0, 1.0, n_dot_l > 0.0);
 	color += highlight * globals.style.w * (1.0 - 0.5 * roughness) * mix(vec3<f32>(0.08), base, metallic)
 		* globals.light_color.rgb * globals.light_direction.w;
@@ -357,7 +357,7 @@ fn toon_light(base: vec3<f32>, metallic: f32, roughness: f32, n: vec3<f32>, v: v
 // they would be finer than the pixels can show.
 fn hatching(local: vec3<f32>) -> f32 {
 	let s = dot(local, vec3<f32>(0.53, 0.75, 0.40)) * HATCH_DENSITY;
-	let width = fwidth(s);
+	let width = max(fwidth(s), 1.0e-5);
 	let distance = abs(fract(s + 0.5) - 0.5);
 	let line = 1.0 - smoothstep(0.15 - width, 0.15 + width, distance);
 	return line * (1.0 - smoothstep(0.2, 0.45, width));
@@ -370,7 +370,7 @@ fn hatching(local: vec3<f32>) -> f32 {
 fn inner_line(n_dot_v: f32, local: vec3<f32>, weight: f32) -> f32 {
 	let gradient = fwidth(n_dot_v);
 	let reach = 0.5 * globals.ink.x * weight * wobble(local) * gradient;
-	return globals.ink.y * min(weight, 1.0) * (1.0 - smoothstep(reach, reach + gradient, n_dot_v));
+	return globals.ink.y * min(weight, 1.0) * (1.0 - smoothstep(reach, reach + max(gradient, 1.0e-5), n_dot_v));
 }
 
 fn occluded(position: vec4<f32>, view_depth: f32) -> bool {
@@ -482,7 +482,7 @@ fn fs_mesh(in: Varyings, @builtin(front_facing) front: bool) -> @location(0) vec
 	// shading draws it hard-edged, where the soft rim would reach half its
 	// strength.
 	let facing = 1.0 - clamp(dot(n, v), 0.0, 1.0);
-	let facing_edge = fwidth(facing);
+	let facing_edge = max(fwidth(facing), 1.0e-5);
 	if (in.rim.w > 0.0) {
 		var rim = pow(facing, max(in.rim_power, 0.01));
 		if (toon) {

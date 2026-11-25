@@ -7,6 +7,11 @@
 #![cfg(all(feature = "renderer", not(target_arch = "wasm32")))]
 
 use naga::Binding;
+use naga::Expression;
+use naga::Function;
+use naga::Handle;
+use naga::Literal;
+use naga::MathFunction;
 use naga::ShaderStage;
 use naga::TypeInner;
 use naga::back::glsl;
@@ -43,11 +48,7 @@ fn parse(name: &str, source: &str) -> (naga::Module, ModuleInfo) {
 }
 
 /// The user locations a binding or a struct of bindings takes.
-fn locations(
-	module: &naga::Module,
-	ty: naga::Handle<naga::Type>,
-	binding: Option<&Binding>,
-) -> Vec<u32> {
+fn locations(module: &naga::Module, ty: Handle<naga::Type>, binding: Option<&Binding>) -> Vec<u32> {
 	match (binding, &module.types[ty].inner) {
 		(Some(Binding::Location { location, .. }), _) => vec![*location],
 		(None, TypeInner::Struct { members, .. }) => {
@@ -153,4 +154,105 @@ fn vertex_stages_fit_webgl2() {
 	// the background's, shadow's and others: a stage renamed or dropped
 	// should be noticed here.
 	assert!(vertex_stages >= 6, "{vertex_stages}");
+}
+
+fn positive_literal(
+	module: &naga::Module,
+	expr: Handle<Expression>,
+	func: &Function,
+) -> Option<f32> {
+	match func.expressions[expr] {
+		Expression::Literal(Literal::F32(value)) if value > 0.0 => Some(value),
+		Expression::Constant(handle) => {
+			match module.global_expressions[module.constants[handle].init] {
+				Expression::Literal(Literal::F32(value)) if value > 0.0 => Some(value),
+				_ => None,
+			}
+		}
+		_ => None,
+	}
+}
+
+fn literal_f32(module: &naga::Module, expr: Handle<Expression>, func: &Function) -> Option<f32> {
+	match func.expressions[expr] {
+		Expression::Literal(Literal::F32(value)) => Some(value),
+		Expression::Constant(handle) => {
+			match module.global_expressions[module.constants[handle].init] {
+				Expression::Literal(Literal::F32(value)) => Some(value),
+				_ => None,
+			}
+		}
+		_ => None,
+	}
+}
+
+/// Whether `expr` (or an expression it depends on) floors a width with a
+/// positive `max(..., eps)` or `clamp(..., eps, ...)` so `smoothstep(a, b, x)`
+/// always has `a < b` even when `fwidth(...) == 0.0`.
+fn has_positive_floor(module: &naga::Module, func: &Function, expr: Handle<Expression>) -> bool {
+	match func.expressions[expr] {
+		Expression::Math {
+			fun: MathFunction::Max,
+			arg,
+			arg1: Some(arg1),
+			..
+		} => {
+			positive_literal(module, arg, func).is_some()
+				|| positive_literal(module, arg1, func).is_some()
+		}
+		Expression::Math {
+			fun: MathFunction::Clamp,
+			arg1: Some(low),
+			..
+		} => positive_literal(module, low, func).is_some(),
+		Expression::Binary { left, right, .. } => {
+			has_positive_floor(module, func, left) || has_positive_floor(module, func, right)
+		}
+		Expression::Unary { expr, .. } | Expression::Swizzle { vector: expr, .. } => {
+			has_positive_floor(module, func, expr)
+		}
+		_ => false,
+	}
+}
+
+#[test]
+fn smoothstep_bounds_are_strictly_ordered_on_flat_faces() {
+	let (module, _) = parse("shader.wgsl", SHADERS[0].1);
+	let functions = module
+		.functions
+		.iter()
+		.map(|(_, func)| func)
+		.chain(module.entry_points.iter().map(|entry| &entry.function));
+	let mut checked = 0;
+
+	for func in functions {
+		for (_, expr) in func.expressions.iter() {
+			let Expression::Math {
+				fun: MathFunction::SmoothStep,
+				arg: low,
+				arg1: Some(high),
+				..
+			} = *expr
+			else {
+				continue;
+			};
+			checked += 1;
+			let ordered_constants = literal_f32(&module, low, func)
+				.zip(literal_f32(&module, high, func))
+				.is_some_and(|(a, b)| a < b);
+			assert!(
+				ordered_constants
+					|| has_positive_floor(&module, func, low)
+					|| has_positive_floor(&module, func, high),
+				"smoothstep in {:?} has no positive floor on its bounds (undefined when fwidth == \
+				 0)",
+				func.name
+			);
+		}
+	}
+
+	assert!(
+		checked >= 7,
+		"expected all shader smoothsteps, saw {checked}"
+	);
 }
