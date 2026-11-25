@@ -4,6 +4,7 @@
 //! build and cluster workers do.
 
 use leptoskit_cloud::server::DEFAULT_REGION;
+use leptoskit_cloud::tables::DataKey;
 use leptoskit_cloud::tables::Job;
 use leptoskit_cloud::tables::LogChunk;
 use leptoskit_cloud::tables::SourceArchive;
@@ -811,6 +812,252 @@ pub async fn the_cluster_reports_what_it_runs(app: &App) {
 		)
 		.await
 		.refused(404, "environment_not_found");
+}
+
+/// A secret an environment's process printed, in no shape the redactor
+/// looks for.
+const PRINTED: &str = "q7Zz44statusLeakValue";
+
+/// A secret too short to hide anything by: under eight bytes.
+const SHORT: &str = "pw-42";
+
+/// The owner stores `value` as production's secret `name`.
+async fn store_secret(shop: &Shop<'_>, name: &str, value: &str) -> Answer {
+	shop.app
+		.call(
+			"set_secret",
+			json!({
+				"organization": shop.org,
+				"project": "notes",
+				"environment": "production",
+				"name": name,
+				"value": value,
+			}),
+			shop.as_ana(),
+		)
+		.await
+}
+
+/// Production as its cluster's worker is told it is placed: its reference,
+/// and its ID.
+async fn placed(shop: &Shop<'_>) -> (Value, String) {
+	let listed = shop
+		.cluster
+		.call("cluster_environments", json!({}))
+		.await
+		.expect(200)
+		.json();
+	let reference = &listed[0]["environment"];
+	(
+		reference.clone(),
+		reference["environment"]["id"]
+			.as_str()
+			.expect("an ID")
+			.to_owned(),
+	)
+}
+
+/// A report of production from its cluster: its process `app` failed by
+/// `reason`, and its pod wrote `lines`.
+fn report(environment: &Value, id: &str, reason: &str, lines: [String; 2]) -> Value {
+	let now = chrono::Utc::now().timestamp_millis();
+	let [first, second] = lines;
+
+	json!({
+		"environment": id,
+		"observed": {
+			"environment": environment,
+			"processes": [{
+				"name": "app",
+				"ready_replicas": 0,
+				"desired_replicas": 1,
+				"image": "registry.example.test/app@sha256:aa",
+				"state": { "Failed": { "reason": reason } },
+			}],
+		},
+		"logs": [
+			{ "process": "app", "pod": "app-1", "at_millis": now, "message": first },
+			{ "process": "app", "pod": "app-1", "at_millis": now + 1, "message": second },
+		],
+	})
+}
+
+/// `runtime_logs` of production for `caller`.
+async fn runtime_logs(shop: &Shop<'_>, caller: As<'_>) -> Answer {
+	shop.app
+		.call(
+			"runtime_logs",
+			json!({
+				"organization": shop.org,
+				"project": "notes",
+				"environment": "production",
+			}),
+			caller,
+		)
+		.await
+}
+
+/// A secret an environment's process prints is hidden from what its
+/// cluster's worker reports, as the control plane's own secrets are: the
+/// line and a failed process's reason are read back without the value, by
+/// anyone who may view the project. A value too short to hide anything by
+/// is read as printed.
+pub async fn a_printed_secret_is_hidden_from_the_runtime_logs(app: &App) {
+	let shop = Shop::open(app).await;
+	shop.ship("production", b"a talkative app", &[]).await;
+
+	// The owner stores two secrets; no answer carries either value.
+	for (name, value) in [("PAYMENT_KEY", PRINTED), ("MODE", SHORT)] {
+		let stored = store_secret(&shop, name, value).await;
+		let stored = stored.expect(200);
+		assert!(!stored.text.contains(value), "{}", stored.text);
+	}
+
+	// A process printed both, and failed saying one. The report is kept.
+	let (environment, id) = placed(&shop).await;
+	let reported = shop
+		.cluster
+		.call(
+			"report_status",
+			report(
+				&environment,
+				&id,
+				&format!("it exited after reading {PRINTED}"),
+				[format!("key {PRINTED} ok"), format!("mode {SHORT} ok")],
+			),
+		)
+		.await;
+	let reported = reported.expect(200);
+	assert_eq!(reported.json()["log_lines"], 2, "{}", reported.text);
+
+	// A viewer, a read-scoped token, and the owner all read the same lines:
+	// the value hidden, the short one as printed, and each line otherwise
+	// whole.
+	let viewer = app
+		.join(shop.as_ana(), &shop.org, "viewer@example.com", "viewer")
+		.await;
+	let (read, _) = app.token(shop.as_ana(), &shop.org, &["read"], None).await;
+
+	for caller in [As::Session(&viewer), As::Bearer(&read), shop.as_ana()] {
+		let logs = runtime_logs(&shop, caller).await;
+		let logs = logs.expect(200);
+		let lines = &logs.json()["lines"];
+		assert_eq!(lines.as_array().map(Vec::len), Some(2), "{}", logs.text);
+		assert_eq!(
+			lines[0]["text"], "key [redacted] ok",
+			"the value is read: {}",
+			logs.text
+		);
+		assert_eq!(lines[0]["pod"], "app-1", "{}", logs.text);
+		assert_eq!(
+			lines[1]["text"],
+			format!("mode {SHORT} ok"),
+			"{}",
+			logs.text
+		);
+
+		let status = shop
+			.app
+			.call(
+				"environment_status",
+				json!({
+					"organization": shop.org,
+					"project": "notes",
+					"environment": "production",
+				}),
+				caller,
+			)
+			.await;
+		let status = status.expect(200);
+		assert_eq!(
+			status.json()["processes"][0]["state"]["reason"],
+			"it exited after reading [redacted]",
+			"the value is read: {}",
+			status.text
+		);
+	}
+}
+
+/// A cluster the environment isn't placed on is refused its report as
+/// before, and no secret is opened for it. The organisation's data key is
+/// spoiled first, so that opening one would fail the report another way:
+/// the environment's own cluster's report then is, and nothing of it is
+/// kept, rather than kept with the value as printed.
+pub async fn a_report_from_another_cluster_opens_no_secret(app: &App) {
+	let shop = Shop::open(app).await;
+	shop.ship("production", b"a quiet app", &[]).await;
+	store_secret(&shop, "PAYMENT_KEY", PRINTED)
+		.await
+		.expect(200);
+	let (environment, id) = placed(&shop).await;
+
+	// The organisation's key no longer opens, as after its master key is
+	// lost: a secret of its environments can't be opened.
+	let system = app.system();
+	let key = DataKey::query()
+		.one(&system)
+		.await
+		.expect("the organisation's data key");
+	let mut wrapped = key.wrapped.clone();
+	*wrapped.last_mut().expect("a wrapped key") ^= 0xff;
+	DataKey::update()
+		.filter(|row| row.id.eq(key.id))
+		.set(|row| row.wrapped, wrapped)
+		.run(&system)
+		.await
+		.expect("spoil the data key");
+
+	// Another cluster's worker is refused as before, and would have been
+	// refused another way had a secret been opened for its report.
+	let lines = || [format!("key {PRINTED} ok"), "nothing else".to_owned()];
+	register_cluster(app, &shop.ops, "eu-two").await;
+	let other = pair(
+		app,
+		&shop.ops,
+		json!({ "role": "cluster", "cluster": "eu-two" }),
+		"eu-two-worker",
+	)
+	.await;
+	other
+		.call(
+			"report_status",
+			report(&environment, &id, "it crashed", lines()),
+		)
+		.await
+		.refused(404, "environment_not_found");
+
+	// The environment's own cluster's report is where the secrets are
+	// opened: it is refused rather than kept as printed.
+	shop.cluster
+		.call(
+			"report_status",
+			report(&environment, &id, "it crashed", lines()),
+		)
+		.await
+		.refused(500, "vault_unavailable");
+
+	// Nothing of either report was kept.
+	let status = app
+		.call(
+			"environment_status",
+			json!({
+				"organization": shop.org,
+				"project": "notes",
+				"environment": "production",
+			}),
+			shop.as_ana(),
+		)
+		.await;
+	let status = status.expect(200);
+	assert!(status.json()["reported_at"].is_null(), "{}", status.text);
+	let logs = runtime_logs(&shop, shop.as_ana()).await;
+	let logs = logs.expect(200);
+	assert_eq!(
+		logs.json()["lines"].as_array().map(Vec::len),
+		Some(0),
+		"{}",
+		logs.text
+	);
 }
 
 /// A build whose worker stops renewing is offered again, and after its

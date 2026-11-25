@@ -12,9 +12,11 @@
 //! API tokens, pairing codes, presigned addresses' signatures, bearer
 //! tokens, the password in an address such as `postgres://user:…@host`, and
 //! the values the control plane was configured with as secrets. An
-//! environment's own secrets are not known here: one an app prints in
-//! another shape is kept as printed. A chunk expires with the log's retention,
-//! and the sweeper deletes its row and its object.
+//! environment's own secrets are opened by `report_status` for the lines it
+//! keeps here, so a value an app prints is hidden when it is
+//! [`MIN_SECRET`] bytes or more; one the environment has since replaced or
+//! removed is no longer known, and is kept as printed. A chunk expires with
+//! the log's retention, and the sweeper deletes its row and its object.
 
 use leptoskit_db::Id;
 use leptoskit_db::Timestamp;

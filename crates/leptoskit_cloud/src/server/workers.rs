@@ -10,6 +10,7 @@ use std::time::Duration;
 
 use leptoskit_cloud_runtime::LogLine;
 use leptoskit_cloud_runtime::Observed;
+use leptoskit_cloud_runtime::ProcessState;
 use leptoskit_db::Id;
 use leptoskit_db::Json;
 use leptoskit_db::Tx;
@@ -30,6 +31,7 @@ use super::secret;
 use super::services;
 use super::storage::Bucket;
 use super::storage::log_key;
+use super::vault::Place;
 use crate::operator::JobState;
 use crate::tables::Job;
 use crate::tables::LogChunk;
@@ -1031,7 +1033,7 @@ pub(crate) async fn finish(
 pub(crate) async fn report_status(
 	cx: &rpc::ActionCx,
 	environment: Uuid,
-	observed: RuntimeValue<Observed>,
+	mut observed: RuntimeValue<Observed>,
 	logs: Vec<RuntimeValue<LogLine>>,
 ) -> rpc::Result<StatusReceived> {
 	let caller = worker(cx.context())?;
@@ -1055,12 +1057,16 @@ pub(crate) async fn report_status(
 	}
 
 	let services = services(cx.context())?.clone();
+	// A process may print a secret, so the environment's own values are
+	// hidden in its lines too, as the configured ones are.
+	let mut secrets = services.shipping().redactions.to_vec();
+	secrets.extend(cx.query(EnvironmentSecrets { environment }).await?);
 	let messages: Vec<String> = logs
 		.iter()
 		.map(|RuntimeValue(line)| logs::cut(&line.message))
 		.collect();
 	let messages: Vec<&str> = messages.iter().map(String::as_str).collect();
-	let texts = logs::redact_lines(&messages, &services.shipping().redactions);
+	let texts = logs::redact_lines(&messages, &secrets);
 	let lines: Vec<StoredLine> = logs
 		.into_iter()
 		.zip(texts)
@@ -1075,6 +1081,15 @@ pub(crate) async fn report_status(
 			}
 		})
 		.collect();
+
+	// Why a process failed is the worker's text too, with the same values
+	// hidden.
+	for process in &mut observed.0.processes {
+		if let ProcessState::Failed { reason } = &mut process.state {
+			*reason = logs::redact_lines(&[reason.as_str()], &secrets).remove(0);
+		}
+	}
+
 	let groups = status_chunks(&lines)?;
 	let received = cx
 		.mutate(ReportStatus {
@@ -1183,18 +1198,7 @@ async fn report(cx: &rpc::MutationCx, args: ReportStatus) -> rpc::Result<Reporte
 	let tx = cx.tx();
 	live_worker(tx, caller).await?;
 	let environment_id = Id::from_uuid(args.environment);
-	let not_found = || {
-		rpc::Error::not_found(format!(
-			"environment_not_found: environment {} isn't placed on this worker's cluster",
-			args.environment
-		))
-	};
-	let placement = Placement::query()
-		.filter(|placement| placement.environment_id.eq(environment_id))
-		.first(tx)
-		.await?
-		.filter(|placement| Some(placement.cluster_id) == caller.cluster)
-		.ok_or_else(not_found)?;
+	let placement = placed(tx, caller, args.environment).await?;
 	let environment = crate::tables::Environment::query()
 		.filter(|row| row.id.eq(environment_id))
 		.one(tx)
@@ -1320,6 +1324,104 @@ async fn report(cx: &rpc::MutationCx, args: ReportStatus) -> rpc::Result<Reporte
 		},
 		chunks,
 	})
+}
+
+/// The environment's placement, when it is on the calling cluster worker's
+/// cluster; `NotFound` otherwise.
+async fn placed(
+	db: &impl leptoskit_db::Read,
+	caller: &WorkerCaller,
+	environment: Uuid,
+) -> rpc::Result<Placement> {
+	let environment_id = Id::from_uuid(environment);
+
+	Placement::query()
+		.filter(|placement| placement.environment_id.eq(environment_id))
+		.first(db)
+		.await?
+		.filter(|placement| Some(placement.cluster_id) == caller.cluster)
+		.ok_or_else(|| {
+			rpc::Error::not_found(format!(
+				"environment_not_found: environment {environment} isn't placed on this worker's \
+				 cluster"
+			))
+		})
+}
+
+/// What [`report_status`] reads before it keeps anything: the environment's
+/// secrets, opened. Never registered.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct EnvironmentSecrets {
+	environment: Uuid,
+}
+
+impl rpc::Operation for EnvironmentSecrets {
+	type Context = rpc::QueryCx;
+	type Output = Vec<String>;
+
+	const KIND: rpc::Kind = rpc::Kind::Query;
+	const NAME: &'static str = "report_status";
+
+	fn run(self, cx: &rpc::QueryCx) -> impl Future<Output = rpc::Result<Vec<String>>> + Send {
+		environment_secrets(cx, self)
+	}
+}
+
+/// The values of `environment`'s secrets, for hiding them in what its
+/// cluster's worker reports: a process may print one. Nothing is opened
+/// until the environment is known to be on the calling cluster's, and a
+/// value the vault can't open fails the lookup, so no report is kept with
+/// its secrets as printed. The values go to the caller, and nowhere else.
+async fn environment_secrets(
+	cx: &rpc::QueryCx,
+	args: EnvironmentSecrets,
+) -> rpc::Result<Vec<String>> {
+	let caller = worker(cx.context())?;
+	let services = services(cx.context())?;
+	let db = cx.db();
+	placed(db, caller, args.environment).await?;
+
+	let environment_id = Id::from_uuid(args.environment);
+	let rows = crate::tables::Secret::query()
+		.filter(|row| row.environment_id.eq(environment_id))
+		.all(db)
+		.await?;
+
+	if rows.is_empty() {
+		return Ok(Vec::new());
+	}
+
+	let environment = crate::tables::Environment::query()
+		.filter(|row| row.id.eq(environment_id))
+		.one(db)
+		.await?;
+	let project_id = environment.project_id;
+	let project = crate::tables::Project::query()
+		.filter(|row| row.id.eq(project_id))
+		.one(db)
+		.await?;
+	let key = services
+		.shipping()
+		.vault
+		.data_key(db, project.organization_id)
+		.await?
+		.ok_or_else(super::vault::unavailable)?;
+
+	rows.iter()
+		.map(|row| {
+			key.open(
+				&Place {
+					organization: project.organization_id,
+					project: project.id,
+					environment: environment.id,
+					secret: row.id,
+					name: &row.name,
+					version: row.version,
+				},
+				&row.sealed,
+			)
+		})
+		.collect()
 }
 
 pub(crate) async fn cluster_environments(

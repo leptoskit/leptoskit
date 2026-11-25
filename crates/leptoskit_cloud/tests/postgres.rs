@@ -164,6 +164,20 @@ mod shipping {
 	}
 
 	#[tokio::test]
+	async fn a_printed_secret_is_hidden_from_the_runtime_logs() {
+		if let Some((_postgres, app)) = app().await {
+			shipping::a_printed_secret_is_hidden_from_the_runtime_logs(&app).await;
+		}
+	}
+
+	#[tokio::test]
+	async fn a_report_from_another_cluster_opens_no_secret() {
+		if let Some((_postgres, app)) = app().await {
+			shipping::a_report_from_another_cluster_opens_no_secret(&app).await;
+		}
+	}
+
+	#[tokio::test]
 	async fn a_lapsed_build_is_retried_then_abandoned() {
 		if let Some((_postgres, app)) = app().await {
 			shipping::a_lapsed_build_is_retried_then_abandoned(&app).await;
