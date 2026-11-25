@@ -353,12 +353,20 @@ fn toon_light(base: vec3<f32>, metallic: f32, roughness: f32, n: vec3<f32>, v: v
 	let tone = mix(globals.shade.rgb, vec3<f32>(1.0), level / (bands - 1.0)) * ao;
 	let light = globals.light_color.rgb * globals.light_direction.w / PI + globals.sh[0].rgb * globals.light_color.w;
 	var color = base * tone * light;
-	let n_dot_h = dot(n, normalize(l + v));
-	let spot = 1.0 - 0.15 * roughness * roughness;
-	let spot_edge = max(fwidth(n_dot_h), 1.0e-5);
-	let highlight = smoothstep(spot - spot_edge, spot + spot_edge, n_dot_h) * select(0.0, 1.0, n_dot_l > 0.0);
-	color += highlight * globals.style.w * (1.0 - 0.5 * roughness) * mix(vec3<f32>(0.08), base, metallic)
-		* globals.light_color.rgb * globals.light_direction.w;
+	// Guard on uniform specular strength (keeping fwidth in uniform control
+	// flow) and avoid normalize(vec3(0.0)) when directly backlit (l == -v).
+	if (globals.style.w > 0.0) {
+		let half_vec = l + v;
+		let h_len2 = dot(half_vec, half_vec);
+		let h = select(vec3<f32>(0.0), half_vec * inverseSqrt(max(h_len2, 1.0e-8)), h_len2 > 1.0e-8);
+		let n_dot_h = dot(n, h);
+		let spot = 1.0 - 0.15 * roughness * roughness;
+		let spot_edge = max(fwidth(n_dot_h), 1.0e-5);
+		let highlight = smoothstep(spot - spot_edge, spot + spot_edge, n_dot_h)
+			* select(0.0, 1.0, n_dot_l > 0.0 && h_len2 > 1.0e-8);
+		color += highlight * globals.style.w * (1.0 - 0.5 * roughness) * mix(vec3<f32>(0.08), base, metallic)
+			* globals.light_color.rgb * globals.light_direction.w;
+	}
 	return vec4<f32>(color, 1.0 - clamp(level, 0.0, 1.0));
 }
 

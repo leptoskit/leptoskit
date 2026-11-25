@@ -7,12 +7,14 @@
 #![cfg(all(feature = "renderer", not(target_arch = "wasm32")))]
 
 use naga::Binding;
+use naga::Block;
 use naga::Expression;
 use naga::Function;
 use naga::Handle;
 use naga::Literal;
 use naga::MathFunction;
 use naga::ShaderStage;
+use naga::Statement;
 use naga::TypeInner;
 use naga::back::glsl;
 use naga::back::hlsl;
@@ -254,5 +256,61 @@ fn smoothstep_bounds_are_strictly_ordered_on_flat_faces() {
 	assert!(
 		checked >= 7,
 		"expected all shader smoothsteps, saw {checked}"
+	);
+}
+
+fn block_has_if(block: &Block) -> bool {
+	block.iter().any(|statement| {
+		match statement {
+			Statement::If { .. } => true,
+			Statement::Block(inner) => block_has_if(inner),
+			Statement::Loop {
+				body, continuing, ..
+			} => block_has_if(body) || block_has_if(continuing),
+			_ => false,
+		}
+	})
+}
+
+#[test]
+fn toon_light_guards_backlit_half_vector_and_specular() {
+	let (module, _) = parse("shader.wgsl", SHADERS[0].1);
+	let (_, toon_light) = module
+		.functions
+		.iter()
+		.find(|(_, func)| func.name.as_deref() == Some("toon_light"))
+		.expect("shader.wgsl defines toon_light");
+
+	let has_raw_normalize = toon_light.expressions.iter().any(|(_, expr)| {
+		matches!(
+			expr,
+			Expression::Math {
+				fun: MathFunction::Normalize,
+				..
+			}
+		)
+	});
+	assert!(
+		!has_raw_normalize,
+		"toon_light calls normalize(l + v), which is NaN when directly backlit (l == -v)"
+	);
+
+	let has_floored_inv_sqrt = toon_light.expressions.iter().any(|(_, expr)| {
+		matches!(
+			*expr,
+			Expression::Math {
+				fun: MathFunction::InverseSqrt,
+				arg,
+				..
+			} if has_positive_floor(&module, toon_light, arg)
+		)
+	});
+	assert!(
+		has_floored_inv_sqrt,
+		"toon_light must normalize l + v via inverseSqrt(max(dot(h, h), eps))"
+	);
+	assert!(
+		block_has_if(&toon_light.body),
+		"toon_light must guard specular highlight evaluation on globals.style.w > 0.0"
 	);
 }
