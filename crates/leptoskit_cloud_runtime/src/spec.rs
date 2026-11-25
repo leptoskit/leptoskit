@@ -262,6 +262,26 @@ pub struct DatabaseAccess {
 	pub port: u16,
 }
 
+/// A service the platform runs outside the environment, such as its
+/// cluster's shared notifications hub, that the release's routes and
+/// processes reach. The environment's namespace gets a bridge to it, named
+/// [`name`](Self::name), and its network opens to `namespace` on `port` and
+/// to nothing else there.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PlatformService {
+	/// A lower-case DNS label, unique among the release's processes and
+	/// platform services: what a route names, and the bridge's name.
+	pub name: String,
+	/// The namespace it runs in.
+	pub namespace: String,
+	/// The name its own Service answers on in the cluster, such as
+	/// `hub.leptoskit-notifications.svc.cluster.local`.
+	pub host: String,
+	/// The port it serves on, never zero.
+	pub port: u16,
+}
+
 /// The policy every process of the release lives under.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -287,18 +307,75 @@ pub struct ReleaseSpec {
 	pub processes: Vec<Process>,
 	pub routes: Vec<Route>,
 	pub policy: Policy,
+	/// The platform's services the release reaches. A spec written before
+	/// they existed has none.
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub platform: Vec<PlatformService>,
 }
 
 impl ReleaseSpec {
 	/// Refuses a spec no runtime could honor, naming the first reason in a
-	/// fixed order: processes, then quota, then routes.
+	/// fixed order: processes, then quota, then platform services, then
+	/// routes.
 	///
 	/// # Errors
 	/// A [`SpecError`] naming the rule the spec breaks.
 	pub fn validate(&self) -> Result<(), SpecError> {
 		self.validate_processes()?;
 		self.validate_quota()?;
+		self.validate_platform()?;
 		self.validate_routes()?;
+		Ok(())
+	}
+
+	/// Whether a route may name `name`: a process, or a platform service.
+	fn is_route_target(&self, name: &str) -> bool {
+		self.processes.iter().any(|process| process.name == name)
+			|| self.platform.iter().any(|service| service.name == name)
+	}
+
+	fn validate_platform(&self) -> Result<(), SpecError> {
+		for (index, service) in self.platform.iter().enumerate() {
+			if !is_dns_label(&service.name) || service.name == INTERCEPTOR {
+				return Err(SpecError::PlatformName {
+					name: service.name.clone(),
+				});
+			}
+
+			if self
+				.processes
+				.iter()
+				.any(|process| process.name == service.name)
+				|| self.platform[..index]
+					.iter()
+					.any(|other| other.name == service.name)
+			{
+				return Err(SpecError::DuplicateProcess {
+					name: service.name.clone(),
+				});
+			}
+
+			if !is_dns_label(&service.namespace) {
+				return Err(SpecError::PlatformNamespace {
+					name: service.name.clone(),
+					namespace: service.namespace.clone(),
+				});
+			}
+
+			if !is_hostname(&service.host) {
+				return Err(SpecError::PlatformHost {
+					name: service.name.clone(),
+					host: service.host.clone(),
+				});
+			}
+
+			if service.port == 0 {
+				return Err(SpecError::InvalidPort {
+					process: service.name.clone(),
+				});
+			}
+		}
+
 		Ok(())
 	}
 
@@ -460,7 +537,7 @@ impl ReleaseSpec {
 					prefix: route.path_prefix.clone(),
 				});
 			}
-			if !self.processes.iter().any(|p| p.name == route.process) {
+			if !self.is_route_target(&route.process) {
 				return Err(SpecError::UnknownRouteProcess {
 					process: route.process.clone(),
 				});
@@ -537,9 +614,25 @@ pub enum SpecError {
 	Hostname { hostname: String },
 	#[error("the route to {process:?} has the path prefix {prefix:?}: it must start with `/`")]
 	PathPrefix { process: String, prefix: String },
-	#[error("a route names the process {process:?}, but no process with that name exists")]
+	#[error(
+		"a route names the process {process:?}, but no process or platform service with that name \
+		 exists"
+	)]
 	UnknownRouteProcess { process: String },
+	#[error(
+		"platform service names follow the same rules as process names, and `http-interceptor` is \
+		 the cluster's own: not {name:?}"
+	)]
+	PlatformName { name: String },
+	#[error("platform service {name:?} runs in {namespace:?}, which isn't a namespace's name")]
+	PlatformNamespace { name: String, namespace: String },
+	#[error("platform service {name:?} answers on {host:?}, which isn't a host name")]
+	PlatformHost { name: String, host: String },
 }
+
+/// The bridge to the KEDA HTTP add-on's interceptor that a release with a
+/// sleeping process gets: no platform service may take its name.
+pub(crate) const INTERCEPTOR: &str = "http-interceptor";
 
 /// An RFC 1035 label, the shape every name this crate builds needs: a
 /// lower-case letter first, then letters, digits and hyphens, ending in a
@@ -632,6 +725,7 @@ mod tests {
 
 	fn base_spec() -> ReleaseSpec {
 		ReleaseSpec {
+			platform: Vec::new(),
 			environment: environment(),
 			deployment: 1,
 			processes: vec![Process {
@@ -1124,5 +1218,101 @@ mod tests {
 		assert!(!is_hostname("localhost"));
 		assert!(!is_hostname("notes.example.com-"));
 		assert!(!is_hostname(&format!("{}.com", "a".repeat(253))));
+	}
+	fn hub() -> PlatformService {
+		PlatformService {
+			name: "notifications".to_owned(),
+			namespace: "leptoskit-notifications".to_owned(),
+			host: "hub.leptoskit-notifications.svc.cluster.local".to_owned(),
+			port: 8080,
+		}
+	}
+
+	#[test]
+	fn a_route_may_name_a_platform_service() {
+		let mut spec = base_spec();
+		spec.routes.push(Route {
+			hostname: "notes-acme.leptoskit.app".to_owned(),
+			path_prefix: "/_leptoskit/services/notifications/".to_owned(),
+			process: "notifications".to_owned(),
+			strip_cookies: false,
+			tls: Tls::Wildcard,
+		});
+		assert_eq!(
+			spec.validate(),
+			Err(SpecError::UnknownRouteProcess {
+				process: "notifications".to_owned()
+			})
+		);
+
+		spec.platform.push(hub());
+		assert_eq!(spec.validate(), Ok(()));
+	}
+
+	#[test]
+	fn a_platform_service_is_refused_by_name() {
+		let mut spec = base_spec();
+		let process = spec.processes[0].name.clone();
+
+		for (change, error) in [
+			(
+				Box::new(|service: &mut PlatformService| "Hub".clone_into(&mut service.name))
+					as Box<dyn Fn(&mut PlatformService)>,
+				SpecError::PlatformName {
+					name: "Hub".to_owned(),
+				},
+			),
+			(
+				Box::new(|service: &mut PlatformService| {
+					"http-interceptor".clone_into(&mut service.name);
+				}),
+				SpecError::PlatformName {
+					name: "http-interceptor".to_owned(),
+				},
+			),
+			(
+				Box::new(move |service: &mut PlatformService| {
+					process.clone_into(&mut service.name)
+				}),
+				SpecError::DuplicateProcess {
+					name: "app".to_owned(),
+				},
+			),
+			(
+				Box::new(|service: &mut PlatformService| {
+					"Not A Namespace".clone_into(&mut service.namespace);
+				}),
+				SpecError::PlatformNamespace {
+					name: "notifications".to_owned(),
+					namespace: "Not A Namespace".to_owned(),
+				},
+			),
+			(
+				Box::new(|service: &mut PlatformService| "hub".clone_into(&mut service.host)),
+				SpecError::PlatformHost {
+					name: "notifications".to_owned(),
+					host: "hub".to_owned(),
+				},
+			),
+			(
+				Box::new(|service: &mut PlatformService| service.port = 0),
+				SpecError::InvalidPort {
+					process: "notifications".to_owned(),
+				},
+			),
+		] {
+			let mut service = hub();
+			change(&mut service);
+			spec.platform = vec![service];
+			assert_eq!(spec.validate(), Err(error));
+		}
+
+		spec.platform = vec![hub(), hub()];
+		assert_eq!(
+			spec.validate(),
+			Err(SpecError::DuplicateProcess {
+				name: "notifications".to_owned()
+			})
+		);
 	}
 }

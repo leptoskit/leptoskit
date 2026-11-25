@@ -296,6 +296,7 @@ mod tests {
 			},
 		};
 		ReleaseSpec {
+			platform: Vec::new(),
 			environment,
 			deployment: 7,
 			processes: vec![Process {

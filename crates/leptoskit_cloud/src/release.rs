@@ -766,6 +766,7 @@ pub fn spec(
 	};
 	let quota = Quota::for_processes(&processes);
 	let spec = ReleaseSpec {
+		platform: Vec::new(),
 		environment: target.environment.clone(),
 		deployment: target.deployment,
 		processes,
