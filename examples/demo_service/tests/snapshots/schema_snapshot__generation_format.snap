@@ -3,7 +3,7 @@ source: examples/demo_service/tests/schema_snapshot.rs
 expression: snapshot
 ---
 {
-  "admin_schema_json": "4f82c86efaa15f31677a50e225cdacfbf4d3a1dbc9212a8940c1e6807cf9eade",
+  "admin_schema_json": "d17c237a94d6e7f917aed9f6a770e8059eea56e287a3f36792b9213ba4e2c1b9",
   "admin_sqlite_master": {
     "names": [
       "admin_people_account_id_key",
@@ -284,7 +284,7 @@ expression: snapshot
       "live_wakes_update"
     ],
     "objects": 276,
-    "sql_sha256": "f7e307cec0d315386e0e34d6748c3d9624de00de9fe1a9a91f984568055d887b"
+    "sql_sha256": "6958bee8277026223c4117811a09fa1ea327e2429eb38bb64ebf196b6d53cf7a"
   },
   "analytics_sqlite_master": {
     "names": [
@@ -365,7 +365,7 @@ expression: snapshot
     "objects": 11,
     "sql_sha256": "bbf053fc26946fc27ad5b928e6112e5c3ba51165d2d6fbd77854eb87823ff70f"
   },
-  "fingerprint": "d21954a32f43e709b447c150bb35083071ad0626c00216f00402dae02fbeb45a",
+  "fingerprint": "b1e103ecfb0918cdc76e0f4a34ed56717ad0cd2225d8955fa85b4d76b3fd63a8",
   "format": 3,
   "site_sqlite_master": {
     "names": [
@@ -647,6 +647,6 @@ expression: snapshot
       "live_wakes_update"
     ],
     "objects": 276,
-    "sql_sha256": "f7e307cec0d315386e0e34d6748c3d9624de00de9fe1a9a91f984568055d887b"
+    "sql_sha256": "6958bee8277026223c4117811a09fa1ea327e2429eb38bb64ebf196b6d53cf7a"
   }
 }

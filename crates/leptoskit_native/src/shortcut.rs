@@ -225,9 +225,15 @@ mod tests {
 		assert!(!typing.matches(&KeyPress::new("w"), true));
 		assert!(w.matches(&KeyPress::new("w"), true), "only when asked");
 
-		// Off the web and off Apple platforms, the primary modifier is ctrl.
+		// The primary modifier is control off Apple platforms and ⌘ on them.
 		let search = Shortcut::primary("k");
-		assert!(search.matches(&KeyPress::new("k").ctrl(), false));
+		let (primary, other) = if cfg!(target_vendor = "apple") {
+			(KeyPress::new("k").meta(), KeyPress::new("k").ctrl())
+		} else {
+			(KeyPress::new("k").ctrl(), KeyPress::new("k").meta())
+		};
+		assert!(search.matches(&primary, false));
+		assert!(!search.matches(&other, false));
 		assert!(!search.matches(&KeyPress::new("k"), false));
 		assert!(!search.matches(&KeyPress::new("k").ctrl().meta(), false));
 	}

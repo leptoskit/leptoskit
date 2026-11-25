@@ -394,8 +394,12 @@ mod tests {
 
 	#[test]
 	fn generates_watchos_host_artifacts() {
-		let root =
-			std::env::temp_dir().join(format!("leptoskit-watchos-gen-{}", std::process::id()));
+		// The generator refuses to write through a symlink, and macOS keeps
+		// its temporary directory behind one (`/var`).
+		let root = std::env::temp_dir()
+			.canonicalize()
+			.unwrap()
+			.join(format!("leptoskit-watchos-gen-{}", std::process::id()));
 		let _ = std::fs::remove_dir_all(&root);
 		std::fs::create_dir_all(&root).unwrap();
 		let config = LeptoskitConfig {
