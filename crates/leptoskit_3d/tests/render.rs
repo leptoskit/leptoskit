@@ -1861,3 +1861,452 @@ fn quantized_scale_mesh_hatches_at_rest_pose_density() {
 	let changes = row.windows(2).filter(|pair| pair[0] != pair[1]).count();
 	assert!(changes >= 8, "expected distinct hatch lines, got {changes}");
 }
+
+/// Exact sRGB encoding of a linear colour without exposure or tonemapping, as
+/// relief-print surfaces and ink lines output on an `Rgba8Unorm` target.
+fn exact_srgb(color: [f32; 3]) -> [u8; 4] {
+	let encode = |value: f32| {
+		let value = value.clamp(0.0, 1.0);
+		let srgb = if value <= 0.003_130_8 {
+			value * 12.92
+		} else {
+			1.055 * value.powf(1.0 / 2.4) - 0.055
+		};
+		(srgb * 255.0).round() as u8
+	};
+	[encode(color[0]), encode(color[1]), encode(color[2]), 255]
+}
+
+fn print_no_knockout() -> Print {
+	Print {
+		knockout_width: 0.0,
+		..Print::default()
+	}
+}
+
+#[test]
+fn print_bands_output_exact_un_tonemapped_colours_and_flat_mode() {
+	let Some(gpu) = gpu() else { return };
+	let lit = [0.85, 0.70, 0.15];
+	let shade = [0.15, 0.55, 0.20];
+	let deep = [0.12, 0.10, 0.60];
+	let mut renderer = lit_sphere(gpu, None);
+	renderer.world_mut().apply([
+		Op::SetExposure(4.0),
+		Op::SetLight(Light {
+			direction: [-1.0, 0.0, 0.0],
+			intensity: 10.0,
+			shadow: 0.0,
+			..Light::default()
+		}),
+		style(
+			Shading::Print(Print {
+				t_lit: 0.30,
+				t_deep: -0.10,
+				rim: 0.0,
+				..print_no_knockout()
+			}),
+			None,
+		),
+		Op::SetPrint {
+			node: NodeId(1),
+			target: PrintTarget::All,
+			print: PrintOverride {
+				lit: Some(lit),
+				shade: Some(shade),
+				deep: Some(deep),
+				..PrintOverride::default()
+			},
+		},
+	]);
+
+	let image = draw(&mut renderer);
+	assert!(
+		near(image.at(48, 32), exact_srgb(lit), 2),
+		"lit band: {:?} vs {:?}",
+		image.at(48, 32),
+		exact_srgb(lit)
+	);
+	assert!(
+		near(image.at(32, 32), exact_srgb(shade), 2),
+		"shade band: {:?} vs {:?}",
+		image.at(32, 32),
+		exact_srgb(shade)
+	);
+	assert!(
+		near(image.at(16, 32), exact_srgb(deep), 2),
+		"deep band: {:?} vs {:?}",
+		image.at(16, 32),
+		exact_srgb(deep)
+	);
+
+	// Flat mode outputs exact `lit` everywhere regardless of N·L.
+	renderer.world_mut().apply([Op::SetPrint {
+		node: NodeId(1),
+		target: PrintTarget::All,
+		print: PrintOverride {
+			lit: Some(lit),
+			shade: Some(shade),
+			deep: Some(deep),
+			mode: Some(PrintMode::Flat),
+			..PrintOverride::default()
+		},
+	}]);
+	let flat = draw(&mut renderer);
+	for x in [16, 32, 48] {
+		assert!(
+			near(flat.at(x, 32), exact_srgb(lit), 2),
+			"flat at x={x}: {:?} vs {:?}",
+			flat.at(x, 32),
+			exact_srgb(lit)
+		);
+	}
+}
+
+#[test]
+fn print_hatching_cross_hatching_and_fade_to_mean_tone() {
+	let Some(gpu) = gpu() else { return };
+	let lit = [0.90, 0.90, 0.90];
+	let shade = [0.50, 0.50, 0.50];
+	let deep = [0.05, 0.05, 0.80];
+	let ink_color = [0.95, 0.05, 0.05];
+	let mut renderer = lit_sphere(gpu, None);
+	let render_at = |renderer: &mut Renderer, size: u32| {
+		renderer.advance(0.0);
+		Image {
+			pixels: renderer.render_to_rgba(size, size).unwrap(),
+			width: size,
+		}
+	};
+
+	renderer.world_mut().apply([
+		style(
+			Shading::Print(Print {
+				t_lit: 0.30,
+				t_deep: 0.05,
+				t_cross: -0.40,
+				rim: 0.0,
+				hatch_per_m: 32.0,
+				hatch_gain: 0.40,
+				hatch_max: 0.55,
+				cross_duty: 0.35,
+				fade_px: [2.5, 4.0],
+				..print_no_knockout()
+			}),
+			Some(Ink {
+				color: ink_color,
+				width: 0.0,
+				..Ink::default()
+			}),
+		),
+		Op::SetPrint {
+			node: NodeId(1),
+			target: PrintTarget::All,
+			print: PrintOverride {
+				lit: Some(lit),
+				shade: Some(shade),
+				deep: Some(deep),
+				hatch_min: Some(0.25),
+				cross_hatch: Some(false),
+				..PrintOverride::default()
+			},
+		},
+	]);
+
+	let primary = render_at(&mut renderer, 256);
+	let red_count = |image: &Image, cols: std::ops::Range<u32>, rows: std::ops::Range<u32>| {
+		cols.flat_map(|x| rows.clone().map(move |y| (x, y)))
+			.filter(|(x, y)| {
+				let p = image.at(*x, *y);
+				u16::from(p[0]) > u16::from(p[2]) + 40
+			})
+			.count()
+	};
+	// Lit side (right) stays clear of hatching.
+	assert_eq!(red_count(&primary, 165..210, 96..160), 0);
+	// Deep side (left) has crisp alternating hatch stripes.
+	let primary_deep_red = red_count(&primary, 48..116, 96..160);
+	assert!(primary_deep_red > 500, "{primary_deep_red}");
+	let row: Vec<bool> = (52..116)
+		.map(|x| {
+			let p = primary.at(x, 128);
+			p[0] > p[2]
+		})
+		.collect();
+	let transitions = row.windows(2).filter(|pair| pair[0] != pair[1]).count();
+	assert!(transitions >= 6, "expected discrete stripes: {transitions}");
+
+	// Enabling cross-hatch adds secondary strokes in the deepest shadow (N·L <
+	// t_cross).
+	renderer.world_mut().apply([Op::SetPrint {
+		node: NodeId(1),
+		target: PrintTarget::All,
+		print: PrintOverride {
+			lit: Some(lit),
+			shade: Some(shade),
+			deep: Some(deep),
+			hatch_min: Some(0.25),
+			cross_hatch: Some(true),
+			..PrintOverride::default()
+		},
+	}]);
+	let crossed = render_at(&mut renderer, 256);
+	let crossed_deep_red = red_count(&crossed, 48..92, 96..160);
+	let primary_deepest_red = red_count(&primary, 48..92, 96..160);
+	assert!(
+		crossed_deep_red > primary_deepest_red + 100,
+		"cross-hatch adds ink in deepest band: {crossed_deep_red} vs {primary_deepest_red}"
+	);
+
+	// Very fine pitch (< fade_lo px) fades cleanly to the mean tone instead of
+	// moiré or 0.
+	renderer.world_mut().apply([Op::SetPrint {
+		node: NodeId(1),
+		target: PrintTarget::All,
+		print: PrintOverride {
+			lit: Some(lit),
+			shade: Some(shade),
+			deep: Some(deep),
+			hatch_min: Some(0.50),
+			hatch_per_m: Some(1000.0),
+			cross_hatch: Some(false),
+			..PrintOverride::default()
+		},
+	}]);
+	let faded = draw(&mut renderer);
+	let samples: Vec<[u8; 4]> = (14..22).map(|x| faded.at(x, 32)).collect();
+	let min_r = samples.iter().map(|p| p[0]).min().unwrap();
+	let max_r = samples.iter().map(|p| p[0]).max().unwrap();
+	// Uniform mean blend of red ink into blue deep (noticeably redder than pure
+	// deep [62,62,231]).
+	let pure_deep = exact_srgb(deep);
+	assert!(
+		min_r > pure_deep[0] + 60,
+		"faded hatch keeps mean ink tone instead of vanishing: {samples:?} vs pure {pure_deep:?}"
+	);
+	assert!(
+		max_r - min_r <= 20,
+		"faded hatch stays smooth without moiré stripes: {samples:?}"
+	);
+}
+
+#[test]
+fn print_paper_specular_and_backlit_spot_rim() {
+	let Some(gpu) = gpu() else { return };
+	let lit = [0.20, 0.25, 0.30];
+	let shade = [0.10, 0.12, 0.15];
+	let deep = [0.05, 0.05, 0.08];
+	let paper = [0.95, 0.90, 0.65];
+	let spot = [0.95, 0.15, 0.85];
+	let mut renderer = lit_sphere(gpu, None);
+	renderer.world_mut().apply([
+		Op::SetLight(Light {
+			// Side-key light (matching cel.toml's grazing key angle) so the right turning flank
+			// has N·V < 0.5 and N·H > 0.90, while the left silhouette has N·V < rim and N·L < 0.05.
+			direction: [-0.95, 0.0, 0.30],
+			shadow: 0.0,
+			..Light::default()
+		}),
+		style(
+			Shading::Print(Print {
+				t_lit: 0.30,
+				t_deep: -0.10,
+				rim: 0.45,
+				paper,
+				..print_no_knockout()
+			}),
+			None,
+		),
+		Op::SetPrint {
+			node: NodeId(1),
+			target: PrintTarget::All,
+			print: PrintOverride {
+				lit: Some(lit),
+				shade: Some(shade),
+				deep: Some(deep),
+				spot: Some(spot),
+				specular: Some(0.90),
+				rim: Some(true),
+				..PrintOverride::default()
+			},
+		},
+	]);
+
+	let image = draw(&mut renderer);
+	let expected_paper = exact_srgb(paper);
+	let expected_spot = exact_srgb(spot);
+	let expected_deep = exact_srgb(deep);
+
+	// Center faces camera (N·V ~ 1.0 >= 0.5): must NOT get turning-edge paper
+	// specular or rim.
+	assert!(
+		near(image.at(32, 32), expected_deep, 2),
+		"center should be deep (not paper or spot): {:?} vs {expected_deep:?}",
+		image.at(32, 32)
+	);
+
+	// Scan equator row for paper specular on right turning flank and spot rim
+	// on left shadow flank.
+	let right_paper = (33..60)
+		.filter(|&x| near(image.at(x, 32), expected_paper, 4))
+		.count();
+	let left_spot = (4..31)
+		.filter(|&x| near(image.at(x, 32), expected_spot, 4))
+		.count();
+	assert!(
+		right_paper >= 2,
+		"expected paper specular on turning edge, got {right_paper}"
+	);
+	assert!(
+		left_spot >= 2,
+		"expected spot rim on shadow silhouette, got {left_spot}"
+	);
+}
+
+#[test]
+fn print_overrides_part_beats_material_beats_all_on_screen() {
+	let Some(gpu) = gpu() else { return };
+	let mut renderer = renderer(gpu);
+	spawn(&mut renderer, 1, 1, &fixture::multi_material_parts());
+	let blue = [0.05, 0.15, 0.85];
+	let green = [0.10, 0.80, 0.15];
+	let red = [0.85, 0.10, 0.10];
+
+	renderer.world_mut().apply([
+		Op::SetLight(Light {
+			direction: [0.0, 0.0, -1.0],
+			shadow: 0.0,
+			..Light::default()
+		}),
+		style(Shading::Print(print_no_knockout()), None),
+		Op::SetPrint {
+			node: NodeId(1),
+			target: PrintTarget::All,
+			print: PrintOverride {
+				lit: Some(blue),
+				mode: Some(PrintMode::Flat),
+				..PrintOverride::default()
+			},
+		},
+		Op::SetPrint {
+			node: NodeId(1),
+			target: PrintTarget::Material("cloth".into()),
+			print: PrintOverride {
+				lit: Some(green),
+				..PrintOverride::default()
+			},
+		},
+		Op::SetPrint {
+			node: NodeId(1),
+			target: PrintTarget::Part("right".into()),
+			print: PrintOverride {
+				lit: Some(red),
+				..PrintOverride::default()
+			},
+		},
+	]);
+
+	let image = draw(&mut renderer);
+	// Left-top is `left` with `cloth.001` -> Material("cloth") beats All ->
+	// green.
+	assert!(
+		near(image.at(20, 24), exact_srgb(green), 2),
+		"left/cloth.001: {:?} vs {:?}",
+		image.at(20, 24),
+		exact_srgb(green)
+	);
+	// Left-bottom is `left` with `gold` -> falls back to All -> blue.
+	assert!(
+		near(image.at(20, 42), exact_srgb(blue), 2),
+		"left/gold: {:?} vs {:?}",
+		image.at(20, 42),
+		exact_srgb(blue)
+	);
+	// Right is `right` with `cloth.002` -> Part("right") beats
+	// Material("cloth") -> red.
+	assert!(
+		near(image.at(44, 32), exact_srgb(red), 2),
+		"right/cloth.002: {:?} vs {:?}",
+		image.at(44, 32),
+		exact_srgb(red)
+	);
+}
+
+#[test]
+fn camera_space_light_follows_the_camera() {
+	let Some(gpu) = gpu() else { return };
+	let lit = [0.90, 0.85, 0.20];
+	let deep = [0.10, 0.10, 0.50];
+	let mut renderer = lit_sphere(gpu, None);
+	renderer.world_mut().apply([
+		style(
+			Shading::Print(Print {
+				t_lit: 0.25,
+				t_deep: -0.25,
+				rim: 0.0,
+				..print_no_knockout()
+			}),
+			None,
+		),
+		Op::SetPrint {
+			node: NodeId(1),
+			target: PrintTarget::All,
+			print: PrintOverride {
+				lit: Some(lit),
+				shade: Some([0.4, 0.4, 0.4]),
+				deep: Some(deep),
+				..PrintOverride::default()
+			},
+		},
+		// Light travels -X in camera space (from camera's right).
+		Op::SetLight(Light {
+			direction: [-1.0, 0.0, 0.0],
+			shadow: 0.0,
+			camera_space: true,
+			..Light::default()
+		}),
+	]);
+
+	let front = draw(&mut renderer);
+	assert!(near(front.at(48, 32), exact_srgb(lit), 2));
+	assert!(near(front.at(16, 32), exact_srgb(deep), 2));
+
+	// Orbit camera 180 deg to the opposite side: camera-space light stays on
+	// screen right.
+	renderer.world_mut().apply([Op::SetCamera {
+		transform: Transform::from_translation(0.0, 0.0, -3.0).with_yaw(std::f32::consts::PI),
+		fov_y: 0.8,
+		near: 0.1,
+		far: 50.0,
+	}]);
+	let back = draw(&mut renderer);
+	assert!(
+		near(back.at(48, 32), exact_srgb(lit), 2),
+		"camera-space light stayed on right: {:?}",
+		back.at(48, 32)
+	);
+	assert!(
+		near(back.at(16, 32), exact_srgb(deep), 2),
+		"camera-space shadow stayed on left: {:?}",
+		back.at(16, 32)
+	);
+
+	// Flip to world-space light: now screen right and left swap.
+	renderer.world_mut().apply([Op::SetLight(Light {
+		direction: [-1.0, 0.0, 0.0],
+		shadow: 0.0,
+		camera_space: false,
+		..Light::default()
+	})]);
+	let world = draw(&mut renderer);
+	assert!(
+		near(world.at(16, 32), exact_srgb(lit), 2),
+		"world-space light moved to screen left: {:?}",
+		world.at(16, 32)
+	);
+	assert!(
+		near(world.at(48, 32), exact_srgb(deep), 2),
+		"world-space shadow moved to screen right: {:?}",
+		world.at(48, 32)
+	);
+}

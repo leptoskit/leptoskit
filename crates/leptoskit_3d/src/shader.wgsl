@@ -14,8 +14,12 @@ const DATA_WIDTH: u32 = 1024u;
 const MORPH_WIDTH: u32 = 2048u;
 // Cells of the line's wobble per unit of the model's own space.
 const WOBBLE_FREQUENCY: f32 = 10.0;
-// Hatching lines per unit of the model's own space.
+// Hatching lines per unit of the model's own space (Toon mode).
 const HATCH_DENSITY: f32 = 60.0;
+// Relief-print hatch directions in glTF Y-up rest-pose space:
+// normalize(vec3(0.70, -0.70, -0.30)) and normalize(vec3(0.55, 0.80, 0.20)).
+const PRINT_HATCH_DIR: vec3<f32> = vec3<f32>(0.67671553, -0.67671553, -0.29002094);
+const PRINT_CROSS_DIR: vec3<f32> = vec3<f32>(0.55487660, 0.80709323, 0.20177331);
 
 struct Globals {
 	view_projection: mat4x4<f32>,
@@ -37,17 +41,21 @@ struct Globals {
 	occlusion_y: vec4<f32>,
 	// x: metres per occlusion unit; y: tolerance in metres.
 	occlusion_params: vec4<f32>,
-	// x: 1 for toon shading; y: its bands; z: their edges' softness; w: the
-	// hard highlight's strength.
+	// x: 0 PBR, 1 Toon, 2 Print.
+	// Toon: [1, bands, softness, specular]; Print: [2, side_heavy, side_drop, side_from].
 	style: vec4<f32>,
-	// rgb: the darkest band's tint; w: hatching strength.
+	// Toon: [shade.rgb, hatch]; Print: [side_to, hatch_gain, hatch_max, cross_duty].
 	shade: vec4<f32>,
-	// x: the outline's width in this view's pixels; y: the inner line's
-	// strength; z: extra weight in shade; w: wobble.
+	// Toon/PBR: [line_px, facing, shade_weight, wobble].
+	// Print: [line_px, fade_lo_px, fade_hi_px, wobble].
 	ink: vec4<f32>,
 	// xyz: where the wobble's noise is read, from the seed and the boil's
 	// step; w: the world size of one of this view's pixels at a clip w of 1.
 	ink_noise: vec4<f32>,
+	// Print: [t_lit, t_deep, t_cross, rim]. Zero in PBR and Toon.
+	print_bands: vec4<f32>,
+	// Print: [paper.rgb, knockout_px]. Zero in PBR and Toon.
+	print_paper: vec4<f32>,
 }
 
 struct Material {
@@ -127,6 +135,9 @@ struct Varyings {
 	// The position in the model's own space before morphs and skinning, so
 	// ink drawn on the surface stays fixed to it.
 	@location(11) local: vec3<f32>,
+	// Print mode: high 8 bits are flags (bit 0 flat, bit 1 cross-hatch,
+	// bit 2 rim, bit 3 knockout); low 24 bits index the per-part data texel.
+	@location(12) @interpolate(flat) print_meta: u32,
 }
 
 fn data_texel(index: u32) -> vec4<f32> {
@@ -187,11 +198,13 @@ fn finish(world: vec4<f32>, normal: vec3<f32>, vertex: Vertex, instance: Instanc
 	out.tint = instance.tint;
 	out.emissive = instance.emissive;
 	out.rim = instance.rim;
-	out.rim_power = bitcast<f32>(instance.params.z);
+	let is_print = globals.style.x > 1.5;
+	out.rim_power = select(bitcast<f32>(instance.params.z), 0.0, is_print);
 	out.view_depth = -(globals.view * world).z;
 	out.additive = f32(instance.params.w & 1u);
 	out.ink = instance.ink;
 	out.local = local_position(vertex.position, instance.params.w);
+	out.print_meta = select(0u, instance.params.z, is_print);
 	return out;
 }
 
@@ -406,10 +419,104 @@ fn occluded(position: vec4<f32>, view_depth: f32) -> bool {
 	return real > 0.0 && view_depth > real + globals.occlusion_params.y;
 }
 
+// Relief-print hatching: symmetric two-edge antialiasing that fades smoothly
+// to its exact mean tone as its device-pixel pitch shrinks below fade_px.
+fn print_hatch(under: vec3<f32>, ink: vec3<f32>, u: f32, fw: f32, duty: f32) -> vec3<f32> {
+	if (duty <= 0.0) {
+		return under;
+	}
+	let centered = fract(u - 0.5 * duty + 0.5) - 0.5;
+	let inside = 0.5 * duty - abs(centered);
+	let cover = clamp(inside / fw + 0.5, 0.0, 1.0);
+	let drawn = mix(under, ink, cover);
+	let mean = mix(under, ink, duty);
+	let fade_lo = globals.ink.y;
+	let fade_hi = max(globals.ink.z, fade_lo + 1.0e-4);
+	let fade = smoothstep(fade_lo, fade_hi, 1.0 / fw);
+	return mix(mean, drawn, fade);
+}
+
+// Relief-print shading: three hard un-tonemapped bands, object-space hatching
+// and cross-hatching, turning-edge paper specular, and backlit spot rim.
+// Skips all PBR textures (except Mask cutout alpha), lighting intensity, and
+// tonemapping.
+fn print_shade(in: Varyings, front: bool) -> vec4<f32> {
+	var alpha = in.tint.a;
+	if (material.flags.x == 1u) {
+		var mask_alpha = material.base_color.a * in.color.a * in.tint.a;
+		if ((material.flags.z & 1u) != 0u) {
+			mask_alpha *= textureSample(base_texture, material_sampler, in.uv).a;
+		}
+		if (mask_alpha < bitcast<f32>(material.flags.w)) {
+			discard;
+		}
+	} else if (material.flags.x == 2u) {
+		alpha *= material.base_color.a * in.color.a;
+	}
+
+	let extra = data_texel(in.print_meta & 0x00ffffffu);
+	let hatch_per_m = extra.w;
+	// Derivatives stay in uniform control flow across the print branch.
+	let u1 = dot(in.local, PRINT_HATCH_DIR) * hatch_per_m;
+	let fw1 = max(fwidth(u1), 1.0e-5);
+	let u2 = dot(in.local, PRINT_CROSS_DIR) * hatch_per_m * 1.1;
+	let fw2 = max(fwidth(u2), 1.0e-5);
+
+	let flags = in.print_meta >> 24u;
+	let flat_mode = (flags & 1u) != 0u;
+	let cross_enabled = (flags & 2u) != 0u;
+	let rim_enabled = (flags & 4u) != 0u;
+
+	var color = in.tint.rgb;
+	if (!flat_mode) {
+		var n = normalize(in.normal);
+		if (!front) {
+			n = -n;
+		}
+		let v = normalize(globals.camera.xyz - in.world);
+		let l = globals.light_direction.xyz;
+		let n_dot_l = dot(n, l);
+		let n_dot_v = max(dot(n, v), 0.0);
+
+		color = select(in.tint.rgb, in.emissive.rgb, n_dot_l < globals.print_bands.x);
+		color = select(color, in.rim.rgb, n_dot_l < globals.print_bands.y);
+
+		if (n_dot_l < globals.print_bands.y && in.rim.w > 0.0 && hatch_per_m > 0.0) {
+			let duty = min(globals.shade.z, in.rim.w + globals.shade.y * (globals.print_bands.y - n_dot_l));
+			color = print_hatch(color, in.ink.rgb, u1, fw1, duty);
+			if (cross_enabled && n_dot_l < globals.print_bands.z && globals.shade.w > 0.0) {
+				color = print_hatch(color, in.ink.rgb, u2, fw2, globals.shade.w);
+			}
+		}
+
+		let half_vec = l + v;
+		let half_len_sq = dot(half_vec, half_vec);
+		if (in.emissive.w > 0.0 && n_dot_v < 0.5 && half_len_sq > 1.0e-8) {
+			let n_dot_h = dot(n, half_vec * inverseSqrt(half_len_sq));
+			if (n_dot_h > in.emissive.w) {
+				color = globals.print_paper.rgb;
+			}
+		}
+
+		if (rim_enabled && globals.print_bands.w > 0.0 && n_dot_v < globals.print_bands.w && n_dot_l < 0.05) {
+			color = extra.rgb;
+		}
+	}
+
+	if (globals.params.y > 0.5) {
+		color = linear_to_srgb(color);
+	}
+	let opacity = clamp(alpha, 0.0, 1.0);
+	return vec4<f32>(color * opacity, opacity * (1.0 - in.additive));
+}
+
 @fragment
 fn fs_mesh(in: Varyings, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
 	if (occluded(in.clip, in.view_depth)) {
 		discard;
+	}
+	if (globals.style.x > 1.5) {
+		return print_shade(in, front);
 	}
 	let mask = material.flags.z;
 	var base = material.base_color * in.color * in.tint;

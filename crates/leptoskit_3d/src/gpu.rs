@@ -606,7 +606,7 @@ impl Shared {
 				uniform_entry(0, S::VERTEX | S::FRAGMENT, true),
 				texture_entry(1, S::FRAGMENT, filtered, D::Cube),
 				sampler_entry(2),
-				texture_entry(3, S::VERTEX, unfiltered, D::D2),
+				texture_entry(3, S::VERTEX | S::FRAGMENT, unfiltered, D::D2),
 				texture_entry(4, S::FRAGMENT, unfiltered, D::D2),
 			],
 		});

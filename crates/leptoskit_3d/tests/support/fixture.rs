@@ -518,3 +518,51 @@ pub fn character(joints: usize) -> Vec<u8> {
 	);
 	builder.glb(&json)
 }
+
+/// Two side-by-side cuboids (`left` and `right`) sharing a multi-material
+/// layout: `left` carries `cloth.001` (upper half) and `gold` (lower half);
+/// `right` carries `cloth.002`. Used to test `Part > Material > All`
+/// precedence on screen.
+pub fn multi_material_parts() -> Vec<u8> {
+	let mut builder = Builder::default();
+	let (top_p, top_n, top_i) = cuboid([-0.8, 0.05, -0.2], [-0.1, 0.65, 0.2]);
+	let (bot_p, bot_n, bot_i) = cuboid([-0.8, -0.65, -0.2], [-0.1, -0.05, 0.2]);
+	let (right_p, right_n, right_i) = cuboid([0.1, -0.65, -0.2], [0.8, 0.65, 0.2]);
+
+	let tp = builder.floats(&top_p, 3, true);
+	let tn = builder.floats(&top_n, 3, false);
+	let ti = builder.u16s(&top_i, 1);
+
+	let bp = builder.floats(&bot_p, 3, true);
+	let bn = builder.floats(&bot_n, 3, false);
+	let bi = builder.u16s(&bot_i, 1);
+
+	let rp = builder.floats(&right_p, 3, true);
+	let rn = builder.floats(&right_n, 3, false);
+	let ri = builder.u16s(&right_i, 1);
+
+	let json = format!(
+		r#""asset":{{"version":"2.0"}},
+"scenes":[{{"nodes":[0]}}],
+"nodes":[
+ {{"name":"root","children":[1,2]}},
+ {{"name":"left","mesh":0}},
+ {{"name":"right","mesh":1}}
+],
+"meshes":[
+ {{"name":"left","primitives":[
+   {{"attributes":{{"POSITION":{tp},"NORMAL":{tn}}},"indices":{ti},"material":0}},
+   {{"attributes":{{"POSITION":{bp},"NORMAL":{bn}}},"indices":{bi},"material":1}}
+ ]}},
+ {{"name":"right","primitives":[
+   {{"attributes":{{"POSITION":{rp},"NORMAL":{rn}}},"indices":{ri},"material":2}}
+ ]}}
+],
+"materials":[
+ {{"name":"cloth.001","pbrMetallicRoughness":{{"baseColorFactor":[1,1,1,1]}}}},
+ {{"name":"gold","pbrMetallicRoughness":{{"baseColorFactor":[1,1,1,1]}}}},
+ {{"name":"cloth.002","pbrMetallicRoughness":{{"baseColorFactor":[1,1,1,1]}}}}
+]"#
+	);
+	builder.glb(&json)
+}
