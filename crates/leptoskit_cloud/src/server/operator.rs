@@ -247,7 +247,8 @@ pub(crate) async fn set_cluster_facts(
 		)));
 	}
 
-	if facts.notifications.is_none() && super::notifications::on_cluster(cx.tx(), cluster.id).await?
+	if facts.notifications.is_none()
+		&& super::notifications::on_cluster(cx.tx(), cluster.id).await?
 	{
 		return Err(rpc::Error::conflict(format!(
 			"cluster_has_notifications: environments on `{name}` are served by its notifications \

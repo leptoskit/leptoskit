@@ -870,14 +870,20 @@ mod tests {
 			namespace: "kube-system".to_owned(),
 			..hub()
 		};
-		let other_port = PlatformService { port: 6443, ..hub() };
+		let other_port = PlatformService {
+			port: 6443,
+			..hub()
+		};
 		let other_name = PlatformService {
 			name: "mailer".to_owned(),
 			..hub()
 		};
 
 		for service in [elsewhere, other_port, other_name] {
-			assert!(bounds.reaches(&[hub(), service.clone()]).is_err(), "{service:?}");
+			assert!(
+				bounds.reaches(&[hub(), service.clone()]).is_err(),
+				"{service:?}"
+			);
 		}
 
 		// Without a hub, no release may reach a platform service.
@@ -911,11 +917,19 @@ mod tests {
 	/// What the fakes below were asked to do.
 	#[derive(Clone, Debug, PartialEq, Eq)]
 	enum Asked {
-		Ensure { name: String, password: String },
-		Remove { name: String },
+		Ensure {
+			name: String,
+			password: String,
+		},
+		Remove {
+			name: String,
+		},
 		/// A runtime, and whether it held the app's and the notifications
 		/// database's addresses.
-		Runtime { database_url: bool, notifications: bool },
+		Runtime {
+			database_url: bool,
+			notifications: bool,
+		},
 	}
 
 	#[derive(Clone, Default)]

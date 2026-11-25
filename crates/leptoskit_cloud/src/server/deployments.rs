@@ -1013,7 +1013,14 @@ pub(crate) async fn deploy(
 	// After the deployment's row, so of two first deployments at once the
 	// second is told one is in flight.
 	let place = (&organization, &project, &environment, cluster.id);
-	ensure_databases(cx.tx(), shipping, place, planned_database, planned_notifications).await?;
+	ensure_databases(
+		cx.tx(),
+		shipping,
+		place,
+		planned_database,
+		planned_notifications,
+	)
+	.await?;
 
 	// The archive stays while this deployment needs it, and a while after.
 	let mut archive = archive;
@@ -1318,8 +1325,13 @@ async fn rollback_notifications(
 	target: &Deployment,
 	environment: &Environment,
 	cluster: Id<Cluster>,
-) -> rpc::Result<Option<(crate::workers::DatabaseStep, crate::operator::ClusterNotifications, Uuid)>>
-{
+) -> rpc::Result<
+	Option<(
+		crate::workers::DatabaseStep,
+		crate::operator::ClusterNotifications,
+		Uuid,
+	)>,
+> {
 	if target.plan.0.notifications.is_none() {
 		return Ok(None);
 	}
@@ -1333,7 +1345,11 @@ async fn rollback_notifications(
 /// the release's step for its database.
 fn repoint(
 	spec: &mut leptoskit_cloud_runtime::ReleaseSpec,
-	hosted: Option<(crate::workers::DatabaseStep, crate::operator::ClusterNotifications, Uuid)>,
+	hosted: Option<(
+		crate::workers::DatabaseStep,
+		crate::operator::ClusterNotifications,
+		Uuid,
+	)>,
 ) -> Option<crate::workers::DatabaseStep> {
 	let (step, hub, tenant) = hosted?;
 	super::notifications::point(spec, &hub, tenant);
@@ -1394,7 +1410,8 @@ pub(crate) async fn rollback(
 	// each must still exist; a database's address and a tenant's token, from
 	// their own rows, which must still be there.
 	let database = rollback_database(cx.tx(), &target, &environment, placement.cluster_id).await?;
-	let hosted = rollback_notifications(cx.tx(), &target, &environment, placement.cluster_id).await?;
+	let hosted =
+		rollback_notifications(cx.tx(), &target, &environment, placement.cluster_id).await?;
 	let missing = missing_secrets(
 		cx.tx(),
 		environment_id,
@@ -2519,7 +2536,8 @@ async fn built(tx: &Tx, mut changing: Changing, output: &BuildServerOutput) -> r
 			pending,
 		}
 	};
-	let (database, notifications) = database_steps(tx, &changing.row.plan.0, environment_id).await?;
+	let (database, notifications) =
+		database_steps(tx, &changing.row.plan.0, environment_id).await?;
 	changing.advance(DeploymentState::RollingOut)?;
 	let previous = live_number(tx, environment_id).await?;
 	let deployment_number = number(changing.row.number);

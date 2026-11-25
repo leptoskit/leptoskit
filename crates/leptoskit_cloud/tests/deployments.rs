@@ -556,7 +556,8 @@ async fn an_app_with_notifications_is_served_by_the_hub() {
 
 #[tokio::test]
 async fn a_tenant_lives_with_its_releases_and_its_environment() {
-	notifications::a_tenant_lives_with_its_releases_and_its_environment(&support::app().await).await;
+	notifications::a_tenant_lives_with_its_releases_and_its_environment(&support::app().await)
+		.await;
 }
 
 #[tokio::test]

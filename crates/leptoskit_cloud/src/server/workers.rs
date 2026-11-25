@@ -296,7 +296,10 @@ impl rpc::Operation for ClaimJob {
 }
 
 /// The worker's row as it is now, or `Unauthorized` once it is revoked.
-pub(crate) async fn live_worker(db: &impl leptoskit_db::Read, caller: &WorkerCaller) -> rpc::Result<Worker> {
+pub(crate) async fn live_worker(
+	db: &impl leptoskit_db::Read,
+	caller: &WorkerCaller,
+) -> rpc::Result<Worker> {
 	let id = caller.id;
 	Worker::query()
 		.filter(|worker| worker.id.eq(id) & worker.revoked_at.is_null())
@@ -327,8 +330,8 @@ async fn claim_job(cx: &rpc::MutationCx) -> rpc::Result<Option<Assignment>> {
 		// It serves its cluster's tenants, which it asks for itself.
 		WorkerRole::Notifications => {
 			return Err(rpc::Error::forbidden(
-				"notifications_worker_takes_no_jobs: a notifications worker asks for its \
-				 tenants with `notification_tenants`",
+				"notifications_worker_takes_no_jobs: a notifications worker asks for its tenants \
+				 with `notification_tenants`",
 			));
 		}
 		WorkerRole::Build => vec![JobKind::BuildServer, JobKind::Publish],

@@ -681,14 +681,13 @@ mod tests {
 
 		assert!(notifications_hub(Some("ns".to_owned()), None, None).is_err());
 		assert!(notifications_hub(None, Some("hub".to_owned()), Some(8080)).is_err());
-		assert!(
-			notifications_hub(Some("ns".to_owned()), Some("hub".to_owned()), Some(0)).is_err()
-		);
+		assert!(notifications_hub(Some("ns".to_owned()), Some("hub".to_owned()), Some(0)).is_err());
 		assert!(
 			notifications_hub(Some("Bad NS".to_owned()), Some("hub".to_owned()), Some(80)).is_err()
 		);
 		assert!(
-			notifications_hub(Some("ns".to_owned()), Some("hub..svc".to_owned()), Some(80)).is_err()
+			notifications_hub(Some("ns".to_owned()), Some("hub..svc".to_owned()), Some(80))
+				.is_err()
 		);
 	}
 

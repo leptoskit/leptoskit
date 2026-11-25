@@ -209,17 +209,18 @@ pub async fn an_app_with_notifications_is_served_by_the_hub(app: &App) {
 		}])
 	);
 	assert!(
-		spec["routes"].as_array().expect("routes").iter().any(|route| {
-			route["process"] == "notifications"
-				&& route["path_prefix"] == "/_leptoskit/services/notifications/"
-		}),
+		spec["routes"]
+			.as_array()
+			.expect("routes")
+			.iter()
+			.any(|route| {
+				route["process"] == "notifications"
+					&& route["path_prefix"] == "/_leptoskit/services/notifications/"
+			}),
 		"{spec}"
 	);
 	let process = &spec["processes"][0];
-	let url = format!(
-		"http://{HUB_HOST}:8080/t/{}",
-		tenant.replace('-', "")
-	);
+	let url = format!("http://{HUB_HOST}:8080/t/{}", tenant.replace('-', ""));
 	assert_eq!(
 		process["env"]["LEPTOSKIT_SERVICE_NOTIFICATIONS_URL"],
 		url.as_str()
@@ -470,7 +471,13 @@ pub async fn a_tenant_lives_with_its_releases_and_its_environment(app: &App) {
 	let known = json!([{ "tenant": tenant, "version": given["changed"][0]["version"] }]);
 
 	// Without the service, the hub stops; the inbox is kept.
-	let without = ship(&shop, "staging", b"without", json!({ "database": "sqlite" })).await;
+	let without = ship(
+		&shop,
+		"staging",
+		b"without",
+		json!({ "database": "sqlite" }),
+	)
+	.await;
 	assert_eq!(without["input"].get("notifications"), None);
 	assert_eq!(without["input"]["spec"].get("platform"), None);
 	assert_eq!(
