@@ -305,6 +305,13 @@ impl Postgres {
 				.await
 				.map_err(|error| format!("its role couldn't be updated: {}", said(&error)))?;
 			reset_role(&client, &step.role).await?;
+
+			// A hosted notifications tenant's password changes when a worker
+			// that saw it is revoked; a session opened with the old one would
+			// outlive it. The hub reconnects with the password it is given.
+			if step.role.starts_with("ntf_") {
+				end_sessions(&client, &step.role).await?;
+			}
 		} else {
 			client
 				.batch_execute(&format!("CREATE ROLE {role} WITH {attributes}"))
@@ -607,6 +614,25 @@ fn tls(
 	.with_no_client_auth();
 
 	Ok(tokio_postgres_rustls::MakeRustlsConnect::new(config))
+}
+
+/// Ends every session `role` has open but this one's.
+async fn end_sessions(client: &tokio_postgres::Client, role: &str) -> Result<(), String> {
+	client
+		.execute(
+			"SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE usename = $1 AND pid <> \
+			 pg_backend_pid()",
+			&[&role],
+		)
+		.await
+		.map(drop)
+		.map_err(|error| {
+			format!(
+				"its role's open sessions couldn't be ended (the administrator needs superuser \
+				 access or the pg_signal_backend role): {}",
+				said(&error)
+			)
+		})
 }
 
 #[cfg(test)]

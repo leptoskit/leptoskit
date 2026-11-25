@@ -719,6 +719,14 @@ pub struct NotificationTenant {
 	pub sealed_password: Vec<u8>,
 	#[db(secret)]
 	pub sealed_token: Vec<u8>,
+	/// The credential version the values below are sealed to, while they
+	/// replace the ones above: from when a worker that was given the old
+	/// ones is revoked, until a release that leased these is applied.
+	pub next_version: Option<i64>,
+	#[db(secret)]
+	pub next_sealed_password: Option<Vec<u8>>,
+	#[db(secret)]
+	pub next_sealed_token: Option<Vec<u8>>,
 	/// Whether a release that uses it has been applied, so its database
 	/// exists.
 	pub ready: bool,

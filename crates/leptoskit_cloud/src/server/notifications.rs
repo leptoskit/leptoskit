@@ -52,6 +52,7 @@ use crate::notifications::MAX_PUSHES_PER_REPORT;
 use crate::notifications::MAX_REASON_LEN;
 use crate::notifications::MAX_REPORTS;
 use crate::notifications::MAX_TENANTS_PER_ANSWER;
+use crate::notifications::NextSecrets;
 use crate::notifications::NotificationsReported;
 use crate::notifications::NotificationsSummary;
 use crate::notifications::PLATFORM_SERVICE;
@@ -224,6 +225,7 @@ pub(crate) async fn summary(
 		providers: providers(settings.iter().map(String::as_str)),
 		settings,
 		project_pushes_this_month: pushes,
+		rotating: row.next_version.is_some(),
 		created_at: row.created_at,
 	}))
 }
@@ -272,6 +274,9 @@ pub(crate) async fn ensure(
 		credential_version: 1,
 		sealed_password: Vec::new(),
 		sealed_token: Vec::new(),
+		next_version: None,
+		next_sealed_password: None,
+		next_sealed_token: None,
 		ready: false,
 		serving: false,
 		removing: false,
@@ -292,12 +297,122 @@ pub(crate) async fn ensure(
 }
 
 fn place(row: &NotificationTenant) -> TenantPlace {
+	place_at(row, row.credential_version)
+}
+
+fn place_at(row: &NotificationTenant, version: i64) -> TenantPlace {
 	TenantPlace {
 		organization: row.organization_id,
 		environment: row.environment_id,
 		tenant: row.id,
-		version: row.credential_version,
+		version,
 	}
+}
+
+/// A tenant's sealed password and token at one credential version: its
+/// current ones, or those replacing them.
+struct Sealed<'a> {
+	version: i64,
+	password: &'a [u8],
+	token: &'a [u8],
+}
+
+fn current(row: &NotificationTenant) -> Sealed<'_> {
+	Sealed {
+		version: row.credential_version,
+		password: &row.sealed_password,
+		token: &row.sealed_token,
+	}
+}
+
+/// The values replacing `row`'s, while they are replaced.
+fn next(row: &NotificationTenant) -> Option<Sealed<'_>> {
+	match (
+		row.next_version,
+		&row.next_sealed_password,
+		&row.next_sealed_token,
+	) {
+		(Some(version), Some(password), Some(token)) => {
+			Some(Sealed {
+				version,
+				password,
+				token,
+			})
+		}
+		_ => None,
+	}
+}
+
+/// One tenant [`rotate`] reached.
+pub(crate) struct Rotated {
+	pub(crate) organization: Id<Organization>,
+	pub(crate) project: Id<Project>,
+	pub(crate) tenant: Uuid,
+	/// Whether it has new values: `false` when its organisation's data key
+	/// couldn't be had, which is said, and leaves it on its old ones.
+	pub(crate) done: bool,
+}
+
+/// A worker that was given tenants' values was revoked: every tenant on
+/// `cluster` gets a new password and token to move to, replacing any it
+/// was already moving to, as the revoked worker may have had those too.
+/// The hub takes both until a release that leased the new ones is
+/// applied (see [`released`]). A tenant whose organisation's data key
+/// can't be had is skipped, so one organisation's vault never keeps a
+/// worker from being revoked.
+///
+/// # Errors
+///
+/// When the database fails.
+pub(crate) async fn rotate(
+	tx: &impl leptoskit_db::Connection,
+	vault: &Vault,
+	cluster: Id<Cluster>,
+) -> rpc::Result<Vec<Rotated>> {
+	let rows = NotificationTenant::query()
+		.filter(|row| row.cluster_id.eq(cluster) & row.removing.eq(false))
+		.order_by(|row| row.id.asc())
+		.all(tx)
+		.await?;
+	let mut rotated = Vec::with_capacity(rows.len());
+
+	for mut row in rows {
+		// Never a version anything was sealed to before.
+		let version = row
+			.next_version
+			.unwrap_or(row.credential_version)
+			.max(row.credential_version)
+			.saturating_add(1);
+		let place = place_at(&row, version);
+		let sealed = async {
+			let key = vault.data_key_for_writing(tx, row.organization_id).await?;
+			let password = secret::random_hex(PASSWORD_BYTES).map_err(|_| vault::unavailable())?;
+			let token = secret::random_hex(TOKEN_BYTES).map_err(|_| vault::unavailable())?;
+			Ok::<_, rpc::Error>((
+				key.seal_tenant(&place, TenantValue::Password, &password)?,
+				key.seal_tenant(&place, TenantValue::Token, &token)?,
+			))
+		}
+		.await;
+		let done = if let Ok((password, token)) = sealed {
+			row.next_sealed_password = Some(password);
+			row.next_sealed_token = Some(token);
+			row.next_version = Some(version);
+			row.version = row.version.saturating_add(1);
+			row.save(tx).await?;
+			true
+		} else {
+			false
+		};
+		rotated.push(Rotated {
+			organization: row.organization_id,
+			project: row.project_id,
+			tenant: row.id.uuid(),
+			done,
+		});
+	}
+
+	Ok(rotated)
 }
 
 /// What a release tells its cluster's worker about `environment`'s
@@ -323,23 +438,104 @@ pub(crate) async fn step(
 /// # Errors
 ///
 /// When the database fails.
+///
+/// When `job`, the release's, leased the values the tenant is moving to,
+/// the app and its database now have them: they become the tenant's, and
+/// the old ones are given to no one again.
 pub(crate) async fn released(
 	tx: &impl leptoskit_db::Connection,
 	environment: Id<Environment>,
 	uses: bool,
+	job: &crate::tables::Job,
 ) -> leptoskit_db::Result<()> {
 	let Some(mut row) = for_environment(tx, environment).await? else {
 		return Ok(());
 	};
 	let ready = row.ready || uses;
+	let mut changed = row.ready != ready || row.serving != uses;
+	row.ready = ready;
+	row.serving = uses;
 
-	if row.ready != ready || row.serving != uses {
-		row.ready = ready;
-		row.serving = uses;
+	if let Some(version) = row.next_version
+		&& uses
+		&& leased_at(tx, job, &row, version).await?
+		&& let (Some(password), Some(token)) = (
+			row.next_sealed_password.take(),
+			row.next_sealed_token.take(),
+		) {
+		row.credential_version = version;
+		row.sealed_password = password;
+		row.sealed_token = token;
+		row.next_version = None;
+		row.version = row.version.saturating_add(1);
+		changed = true;
+	}
+
+	if changed {
 		row.save(tx).await?;
 	}
 
 	Ok(())
+}
+
+/// A release `job` ended, however it did. When it leased a tenant's new
+/// values, its database may now take only the new password: the hub is
+/// told to open it again, which tries both.
+///
+/// # Errors
+///
+/// When the database fails.
+pub(crate) async fn release_ended(
+	tx: &impl leptoskit_db::Connection,
+	job: &crate::tables::Job,
+) -> leptoskit_db::Result<()> {
+	let job_id = job.id;
+	let attempt = job.attempt;
+	let leases = crate::tables::SecretLease::query()
+		.filter(|lease| {
+			lease.job_id.eq(job_id) & lease.attempt.eq(attempt) & lease.name.eq(TOKEN_ENV)
+		})
+		.all(tx)
+		.await?;
+
+	for lease in leases {
+		let tenant: Id<NotificationTenant> = Id::from_uuid(lease.secret_id.uuid());
+
+		if let Some(mut row) = NotificationTenant::query()
+			.filter(|row| row.id.eq(tenant))
+			.first(tx)
+			.await?
+			&& row.next_version == Some(lease.version)
+		{
+			row.version = row.version.saturating_add(1);
+			row.save(tx).await?;
+		}
+	}
+
+	Ok(())
+}
+
+/// Whether `job`'s current attempt leased `row`'s token at `version`.
+async fn leased_at(
+	db: &impl leptoskit_db::Read,
+	job: &crate::tables::Job,
+	row: &NotificationTenant,
+	version: i64,
+) -> leptoskit_db::Result<bool> {
+	let job_id = job.id;
+	let attempt = job.attempt;
+	let tenant = Id::from_uuid(row.id.uuid());
+	Ok(crate::tables::SecretLease::query()
+		.filter(|lease| {
+			lease.job_id.eq(job_id)
+				& lease.attempt.eq(attempt)
+				& lease.secret_id.eq(tenant)
+				& lease.name.eq(TOKEN_ENV)
+				& lease.version.eq(version)
+		})
+		.first(db)
+		.await?
+		.is_some())
 }
 
 /// Something the hub is given for `environment`'s tenant changed: a
@@ -457,6 +653,9 @@ pub(crate) async fn for_rollback(
 /// A tenant's values for a release, opened and not yet recorded as leased.
 pub(crate) struct Credentials {
 	row: NotificationTenant,
+	/// The credential version they are: the tenant's, or the one it is
+	/// moving to.
+	version: i64,
 	url: String,
 	token: String,
 }
@@ -466,6 +665,7 @@ impl std::fmt::Debug for Credentials {
 		formatter
 			.debug_struct("Credentials")
 			.field("database", &self.row.database)
+			.field("version", &self.version)
 			.field("url", &"[redacted]")
 			.field("token", &"[redacted]")
 			.finish()
@@ -476,11 +676,13 @@ impl std::fmt::Debug for Credentials {
 /// or the hub's report. Never holds a value.
 type Unopened = String;
 
-/// The tenant's database address and token, opened with `key`.
+/// The tenant's database address and token, `sealed` (its current ones or
+/// those replacing them), opened with `key`.
 async fn open(
 	db: &impl leptoskit_db::Read,
 	key: &Unwrapped,
 	row: &NotificationTenant,
+	sealed: &Sealed<'_>,
 	cluster: Id<Cluster>,
 ) -> rpc::Result<Result<(String, String), Unopened>> {
 	let server = Cluster::query()
@@ -500,13 +702,13 @@ async fn open(
 		 keys"
 			.to_owned()
 	};
-	let place = place(row);
-	let password = match key.open_tenant(&place, TenantValue::Password, &row.sealed_password) {
+	let place = place_at(row, sealed.version);
+	let password = match key.open_tenant(&place, TenantValue::Password, sealed.password) {
 		Ok(password) => password,
 		Err(error) if vault::is_unavailable(&error) => return Ok(Err(unreadable())),
 		Err(error) => return Err(error),
 	};
-	let token = match key.open_tenant(&place, TenantValue::Token, &row.sealed_token) {
+	let token = match key.open_tenant(&place, TenantValue::Token, sealed.token) {
 		Ok(token) => token,
 		Err(error) if vault::is_unavailable(&error) => return Ok(Err(unreadable())),
 		Err(error) => return Err(error),
@@ -600,8 +802,20 @@ pub(crate) async fn credentials(
 		Err(why) => return Ok(Err(why)),
 	};
 
-	Ok(match open(db, &key, &row, cluster).await? {
-		Ok((url, token)) => Ok(Credentials { row, url, token }),
+	// A release takes the values the tenant is moving to, when it is: once
+	// applied, the app and its database have them, and the old ones go.
+	let sealed = next(&row).unwrap_or_else(|| current(&row));
+	let version = sealed.version;
+	let opened = open(db, &key, &row, &sealed, cluster).await?;
+	Ok(match opened {
+		Ok((url, token)) => {
+			Ok(Credentials {
+				row,
+				version,
+				url,
+				token,
+			})
+		}
 		Err(why) => Err(why),
 	})
 }
@@ -618,7 +832,12 @@ pub(crate) async fn leased(
 	lessee: &Lessee<'_>,
 	credentials: Credentials,
 ) -> leptoskit_db::Result<BTreeMap<String, String>> {
-	let Credentials { row, url, token } = credentials;
+	let Credentials {
+		row,
+		version,
+		url,
+		token,
+	} = credentials;
 
 	for name in [TOKEN_ENV, DATABASE_URL_LEASE] {
 		NewSecretLease {
@@ -630,7 +849,7 @@ pub(crate) async fn leased(
 			// The lease table's one ID column: the tenant's row.
 			secret_id: Id::from_uuid(row.id.uuid()),
 			name: name.to_owned(),
-			version: row.credential_version,
+			version,
 		}
 		.insert(tx)
 		.await?;
@@ -660,19 +879,26 @@ pub(crate) async fn leased_value(
 		_ => return Ok(None),
 	};
 	let tenant: Id<NotificationTenant> = Id::from_uuid(lease.secret_id.uuid());
-	let version = lease.version;
 	let Some(row) = NotificationTenant::query()
-		.filter(|row| row.id.eq(tenant) & row.credential_version.eq(version))
+		.filter(|row| row.id.eq(tenant))
 		.first(db)
 		.await?
 	else {
 		return Ok(None);
 	};
-	let sealed = match which {
-		TenantValue::Token => &row.sealed_token,
-		TenantValue::Password => &row.sealed_password,
+	let Some(sealed) = std::iter::once(current(&row))
+		.chain(next(&row))
+		.find(|sealed| sealed.version == lease.version)
+	else {
+		return Ok(None);
 	};
-	Ok(key.open_tenant(&place(&row), which, sealed).ok())
+	let value = match which {
+		TenantValue::Token => sealed.token,
+		TenantValue::Password => sealed.password,
+	};
+	Ok(key
+		.open_tenant(&place_at(&row, sealed.version), which, value)
+		.ok())
 }
 
 /// The calling worker, when it is a notifications worker that is still
@@ -871,9 +1097,23 @@ async fn config(
 		Ok(key) => key,
 		Err(why) => return Ok(Err(why)),
 	};
-	let (database_url, token) = match open(tx, &key, row, cluster).await? {
+	let (database_url, token) = match open(tx, &key, row, &current(row), cluster).await? {
 		Ok(opened) => opened,
 		Err(why) => return Ok(Err(why)),
+	};
+	let next = match next(row) {
+		Some(sealed) => {
+			match open(tx, &key, row, &sealed, cluster).await? {
+				Ok((database_url, token)) => {
+					Some(NextSecrets {
+						database_url,
+						token,
+					})
+				}
+				Err(why) => return Ok(Err(why)),
+			}
+		}
+		None => None,
 	};
 	let mut settings: BTreeMap<String, String> = Variable::query()
 		.filter(|variable| variable.environment_id.eq(environment_id))
@@ -923,6 +1163,14 @@ async fn config(
 		.then(|| format!("https://{}", placement.hostname));
 	let hostnames: Vec<String> = std::iter::once(placement.hostname).chain(domains).collect();
 	let mut names = vec![DATABASE_URL_LEASE.to_owned(), TOKEN_ENV.to_owned()];
+
+	if next.is_some() {
+		names.extend([
+			format!("{DATABASE_URL_LEASE} (next)"),
+			format!("{TOKEN_ENV} (next)"),
+		]);
+	}
+
 	names.extend(settings.keys().cloned());
 	Ok(Ok((
 		TenantConfig {
@@ -940,6 +1188,7 @@ async fn config(
 				database_url,
 				token,
 				settings,
+				next,
 			},
 		},
 		names,

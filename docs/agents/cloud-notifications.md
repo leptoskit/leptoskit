@@ -100,7 +100,7 @@ A forged `Host` or a forged path reaches another tenant's router and nothing mor
 1. This note, and platform services in the runtime (`leptoskit_cloud_runtime`).
 2. The control plane: detection, tenants, the release wiring, settings, the worker operations, the meter, `notifications`.
 3. The cluster worker: the tenant's database in a release and a removal.
-4. The hub: `crates/leptoskit_cloud_notifications`.
+4. The hub: `crates/leptoskit_cloud_notifications`. 4b. New values for a cluster's tenants when a worker that saw them is revoked.
 5. `lk cloud notifications`, the console's section, the platform's manifests for the hub, and the guide.
 
 ## 8. Decisions for the owner
@@ -189,6 +189,32 @@ The service's `WithSettings` wrapper, which adds the tenant's push settings to e
 
 Not yet:
 
-- Rotation. Revoking a notifications worker doesn't yet give its cluster's tenants new tokens and passwords (slice 4b).
 - A hub says it holds at most `MAX_KNOWN_TENANTS` (10,000) tenants in one ask; past that, the control plane sends the rest again each round.
 - Packaging. The hub's image, release binary and Kubernetes manifests come with slice 5.
+
+### Rotation as built (slice 4b)
+
+**When.** `revoke_worker` of a `cluster` or `notifications` worker calls `notifications::rotate` for its cluster. The cluster's worker leased every tenant's password and token to releases, and the hub was given them, so either may hold them. Each tenant on the cluster that isn't being removed gets a new password and token, sealed to a credential version it has never had (`next_version`, beside `next_sealed_password` and `next_sealed_token`), and its `version` goes up so the hub reloads it. A second revoke before the first rotation finishes replaces the values it was moving to, as the revoked worker may have had those too. Revoking a build worker rotates nothing. A tenant whose organisation's data key can't be had is skipped rather than holding up the revoke. Each tenant's owners get an audit event, `notifications.rotate`, or `notifications.rotate_failed` when it was skipped.
+
+**Moving.** While a tenant is moving:
+
+- Every release leases the new values (`credentials` and `leased` record the new version in `secret_leases`), so the cluster's worker sets the new password on the role, and the app is given the new token.
+- The hub is given both (`TenantSecrets.next`, recorded in `notification_leases` as `… (next)`). It takes either token, both as the app and for forwarded identities: `ServiceCallers::forwarded_identity` may now be called more than once, and a token is checked against the key whose signature it carries. It opens the database with the current password, then the new one, and checks each with `SELECT 1`, because a pool connects only when first used. It doesn't reuse its pool, whose connections may have been made with a password the database no longer takes.
+- Whenever the cluster's worker sets an `ntf_` role's password, it ends that role's other sessions (`pg_terminate_backend`), so a revoked hub's open connections don't outlive the password they were made with. This needs an administrator with superuser access or `pg_signal_backend`; without it, the release fails and says so.
+- Any release that leased the new values and ends, however it ends, bumps the tenant's `version` (`release_ended`), so the hub opens the database again, since it may now take only the new password.
+- `leased_value` opens either version, so a worker's report hides both.
+- The `notifications` summary says `rotating: true`.
+
+**Done.** When a release whose job and attempt leased the token at `next_version` is applied, `released` makes the new values the tenant's: `credential_version` becomes `next_version`, the sealed values move over, the `next_*` columns are cleared, and `version` goes up. From then on the hub and every release are given only the new values, and the old token is refused.
+
+**Tests.** `tests/support/notifications.rs` `revoking_a_worker_gives_its_tenants_new_values`, on SQLite and Postgres, covers these: a build worker's revoke changes nothing; revoking the hub tells the owners and gives the new hub both sets of values; a release given the new values fails and the hub is told to reopen; an applied one finishes the move, and later releases keep the new values; and revoking the cluster's own worker starts another move. The hub's `a_tenant_being_given_new_values_takes_the_old_and_the_new` takes both tokens, falls back to the new password when the old one is refused, and refuses the old token once the move is done. Its Postgres scenario checks that setting a new password ends the role's other sessions, and that the hub then opens the tenant with the new values. `leptoskit_rpc`'s `while_a_token_is_replaced_both_forward_people` checks both keys, a stranger's, and that an expired token is refused by its own key's rule.
+
+Not yet:
+
+- Until a release is applied, the old values still work, so a revoked worker's copies work too. The owner is asked to deploy (`rotating`), and nothing deploys for them yet.
+- Push provider keys are the owner's secrets, which the hub was given. Rotating them with the provider is the owner's job, and the summary doesn't say so yet.
+- A release that ends without `release_finished` (its worker lost, or reconciled as not applied) doesn't bump the tenant, so the hub reopens only on the next change.
+- A second revoke while a release that leased the first rotation's values is in flight replaces those values. If that release then sets the role's password, the database and app hold values the hub isn't given, and notifications are down until the next deployment, which leases the newest values and finishes the move.
+- A tenant being removed isn't rotated; its database is dropped with the removal.
+- Revoking a cluster's worker doesn't replace the Postgres administrator's own credential, which that worker held and with which it could set any role's password. The operator must replace it.
+- An app's own database credentials have the same gap when a cluster worker is revoked: they aren't rotated.

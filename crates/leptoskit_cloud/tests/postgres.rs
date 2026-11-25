@@ -493,6 +493,13 @@ mod notifications {
 	}
 
 	#[tokio::test]
+	async fn revoking_a_worker_gives_its_tenants_new_values() {
+		if let Some((_postgres, app)) = app().await {
+			notifications::revoking_a_worker_gives_its_tenants_new_values(&app).await;
+		}
+	}
+
+	#[tokio::test]
 	async fn a_hub_serves_only_its_own_cluster() {
 		if let Some((_postgres, app)) = app().await {
 			notifications::a_hub_serves_only_its_own_cluster(&app).await;

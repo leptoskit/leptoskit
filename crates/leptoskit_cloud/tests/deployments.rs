@@ -561,6 +561,11 @@ async fn a_tenant_lives_with_its_releases_and_its_environment() {
 }
 
 #[tokio::test]
+async fn revoking_a_worker_gives_its_tenants_new_values() {
+	notifications::revoking_a_worker_gives_its_tenants_new_values(&support::app().await).await;
+}
+
+#[tokio::test]
 async fn a_hub_serves_only_its_own_cluster() {
 	notifications::a_hub_serves_only_its_own_cluster(&support::app().await).await;
 }

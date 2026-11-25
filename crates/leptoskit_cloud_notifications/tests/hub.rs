@@ -16,6 +16,7 @@ use std::sync::atomic::Ordering;
 
 use leptoskit_cloud::notifications::HubState;
 use leptoskit_cloud::notifications::KnownTenant;
+use leptoskit_cloud::notifications::NextSecrets;
 use leptoskit_cloud::notifications::NotificationsReported;
 use leptoskit_cloud::notifications::TenantChanges;
 use leptoskit_cloud::notifications::TenantConfig;
@@ -121,9 +122,10 @@ impl Plane for Scripted {
 }
 
 /// Each tenant's database in memory, by its address, kept across reopening,
-/// and how many times one was asked for.
+/// how many times one was asked for, and the addresses it refuses, as a
+/// server refuses a password it no longer has.
 #[derive(Default)]
-struct Memory(Mutex<HashMap<String, Db>>, AtomicUsize);
+struct Memory(Mutex<HashMap<String, Db>>, AtomicUsize, Mutex<Vec<String>>);
 
 impl Memory {
 	fn db(&self, address: &str) -> Db {
@@ -139,7 +141,17 @@ impl Memory {
 impl Open for Memory {
 	fn open<'a>(&'a self, address: &'a str) -> Pending<'a, Result<Db, String>> {
 		self.1.fetch_add(1, Ordering::Relaxed);
+		let refused = self
+			.2
+			.lock()
+			.expect("not poisoned")
+			.iter()
+			.any(|refused| refused == address);
 		Box::pin(async move {
+			if refused {
+				return Err("its database couldn't be reached".to_owned());
+			}
+
 			if let Some(db) = self.0.lock().expect("not poisoned").get(address) {
 				return Ok(db.clone());
 			}
@@ -189,6 +201,7 @@ fn tenant(tenant: Uuid, version: i64, host: &str, settings: &[(&str, &str)]) -> 
 				.iter()
 				.map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
 				.collect(),
+			next: None,
 		},
 	}
 }
@@ -490,12 +503,89 @@ async fn a_hub_serves_each_tenant_apart_and_counts_its_pushes_once() {
 #[path = "../../leptoskit_cloud/tests/support/postgres.rs"]
 mod server;
 
+/// A tenant moving to a new password and token, as after a worker that saw
+/// them is revoked: the hub takes either token, and reaches the database
+/// with whichever password it takes.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_tenant_being_given_new_values_takes_the_old_and_the_new() {
+	let plane = Scripted::default();
+	let memory = Arc::new(Memory::default());
+	let hub = Hub::new(Arc::clone(&memory) as Arc<dyn Open>);
+	let base = serve(&hub).await;
+	let by_path = format!("{base}/t/{}{PREFIX}/rpc/send_status", A.simple());
+	let next_address = format!("{}-next", address(A));
+	// The same database, under the password it moves to.
+	let db = Db::connect("sqlite::memory:").await.expect("a database");
+	for address in [address(A), next_address.clone()] {
+		memory
+			.0
+			.lock()
+			.expect("not poisoned")
+			.insert(address, db.clone());
+	}
+	let rotating = |version| {
+		let mut config = tenant(A, version, "a.apps.example.test", &[]);
+		config.secrets.next = Some(NextSecrets {
+			database_url: next_address.clone(),
+			token: "next-token".to_owned(),
+		});
+		config
+	};
+
+	// While the old password still holds, both tokens are the app's.
+	plane.answer(TenantChanges {
+		changed: vec![rotating(2)],
+		removed: Vec::new(),
+		more: false,
+	});
+	let round = hub.round(&plane, leptoskit_db::now()).await;
+	assert_eq!(round.opened, vec![A], "{round:?}");
+	assert_eq!(status(&by_path, None, &token(A)).await.0, 404);
+	assert_eq!(status(&by_path, None, "next-token").await.0, 404);
+	assert_eq!(status(&by_path, None, "some-other-token").await.0, 403);
+
+	// A release set the new password and failed: the database refuses the
+	// old one, and the hub reaches it with the new.
+	memory.2.lock().expect("not poisoned").push(address(A));
+	let opens = memory.1.load(Ordering::Relaxed);
+	plane.answer(TenantChanges {
+		changed: vec![rotating(3)],
+		removed: Vec::new(),
+		more: false,
+	});
+	let round = hub.round(&plane, leptoskit_db::now()).await;
+	assert_eq!(round.opened, vec![A], "{round:?}");
+	assert_eq!(
+		memory.1.load(Ordering::Relaxed),
+		opens + 2,
+		"the old password, refused, then the new"
+	);
+	assert_eq!(status(&by_path, None, "next-token").await.0, 404);
+
+	// Once the new values are the tenant's, the old token is refused.
+	let mut moved = tenant(A, 4, "a.apps.example.test", &[]);
+	moved.secrets.database_url = next_address.clone();
+	moved.secrets.token = "next-token".to_owned();
+	plane.answer(TenantChanges {
+		changed: vec![moved],
+		removed: Vec::new(),
+		more: false,
+	});
+	let round = hub.round(&plane, leptoskit_db::now()).await;
+	assert_eq!(round.opened, vec![A], "{round:?}");
+	assert_eq!(status(&by_path, None, "next-token").await.0, 404);
+	assert_eq!(status(&by_path, None, &token(A)).await.0, 403);
+}
+
 /// On a real Postgres server, a tenant's database as the cluster's worker
 /// makes it, a login role that is nothing more, is migrated and served by
-/// the hub, and its pushes are counted there.
+/// the hub, and its pushes are counted there. When a release gives the role
+/// a new password, the old one's sessions end, and the hub reaches the
+/// database with the new one.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_tenant_is_served_from_the_database_the_cluster_worker_made() {
 	use leptoskit_cloud_worker::cluster::Databases as _;
+	use leptoskit_db::Read as _;
 
 	let Some(server) = server::Postgres::start() else {
 		return;
@@ -551,4 +641,63 @@ async fn a_tenant_is_served_from_the_database_the_cluster_worker_made() {
 	accepted(&db, now - chrono::TimeDelta::minutes(2)).await;
 	let round = hub.round(&plane, now).await;
 	assert_eq!(round.pushes, BTreeMap::from([(A, 1)]));
+
+	// A release sets the password the tenant moves to, and fails: the old
+	// password's sessions end (this server trusts every password, so the
+	// sessions are what can be seen), and the hub opens the database with
+	// the new one.
+	let session = |sql: &str| {
+		leptoskit_db::Statement {
+			sql: sql.into(),
+			args: Vec::new(),
+		}
+	};
+	let pid = match &db
+		.fetch(session("SELECT pg_backend_pid()"))
+		.await
+		.expect("a session")[0][0]
+	{
+		leptoskit_db::Value::Int(pid) => *pid,
+		other => panic!("a pid: {other:?}"),
+	};
+	let step = leptoskit_cloud::workers::DatabaseStep {
+		name: name.clone(),
+		role: name.clone(),
+		size: leptoskit_cloud::size::DatabaseSize::Shared,
+		backups: leptoskit_cloud::size::Backups::Daily,
+	};
+	leptoskit_cloud_worker::Postgres::new(admin.as_str())
+		.expect("an administrator")
+		.ensure(&step, "tenant-password-2")
+		.await
+		.expect("the worker sets it");
+	let watching = Db::connect(admin.as_str()).await.expect("connects");
+	let open = watching
+		.fetch(session(&format!(
+			"SELECT count(*) FROM pg_stat_activity WHERE pid = {pid}"
+		)))
+		.await
+		.expect("sessions");
+	assert!(
+		matches!(open[0][0], leptoskit_db::Value::Int(0)),
+		"the old password's sessions end with it: {open:?}"
+	);
+	let mut next = own.clone();
+	next.set_password(Some("tenant-password-2"))
+		.expect("a password");
+	let mut config = tenant(A, 2, "a.apps.example.test", &[]);
+	config.secrets.database_url = own.to_string();
+	config.secrets.next = Some(NextSecrets {
+		database_url: next.to_string(),
+		token: "next-token".to_owned(),
+	});
+	plane.answer(TenantChanges {
+		changed: vec![config],
+		removed: Vec::new(),
+		more: false,
+	});
+	let round = hub.round(&plane, now).await;
+	assert_eq!(round.failed, Vec::new());
+	assert_eq!(round.opened, vec![A]);
+	assert_eq!(status(&path, None, "next-token").await.0, 404);
 }

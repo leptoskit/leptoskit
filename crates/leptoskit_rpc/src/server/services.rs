@@ -141,8 +141,9 @@ pub struct ServiceCallers<I> {
 	inner: I,
 	/// Each token's SHA-256 and its caller name.
 	callers: Vec<([u8; 32], String)>,
-	/// The key of this service's forwarded identities, when it accepts them.
-	identity: Option<IdentityKey>,
+	/// The keys of this service's forwarded identities, when it accepts
+	/// them: more than one only while its token is being replaced.
+	identity: Vec<IdentityKey>,
 }
 
 impl<I: Identify> ServiceCallers<I> {
@@ -151,7 +152,7 @@ impl<I: Identify> ServiceCallers<I> {
 		Self {
 			inner,
 			callers: Vec::new(),
-			identity: None,
+			identity: Vec::new(),
 		}
 	}
 
@@ -187,9 +188,16 @@ impl<I: Identify> ServiceCallers<I> {
 	/// [module](self)). Only the app mints these, and only for a service
 	/// whose table turns `forward_identity` on, so accepting them lets in
 	/// nobody the app didn't vouch for. An empty token is ignored.
+	///
+	/// Called again, it knows the people forwarded with either token: as
+	/// while a service's token is being replaced, and an app holding the
+	/// old one and an app holding the new one both call it.
 	#[must_use]
 	pub fn forwarded_identity(mut self, service: &str, token: impl AsRef<str>) -> Self {
-		self.identity = IdentityKey::new(service, token.as_ref()).or(self.identity);
+		if let Some(key) = IdentityKey::new(service, token.as_ref()) {
+			self.identity.push(key);
+		}
+
 		self
 	}
 
@@ -260,8 +268,13 @@ impl<I: Identify> ServiceCallers<I> {
 	/// Who `token` names, when this layer knows it: a forwarded person or a
 	/// known caller. `None` leaves it to `inner`.
 	fn own(&self, token: &str) -> Option<Result<Identity, Error>> {
-		if let Some(key) = &self.identity
-			&& token.starts_with(TOKEN_PREFIX)
+		if token.starts_with(TOKEN_PREFIX)
+			// The key that signed it, else any: it is refused either way.
+			&& let Some(key) = self
+				.identity
+				.iter()
+				.find(|key| key.signs(token))
+				.or_else(|| self.identity.first())
 		{
 			return Some(
 				key.verify(token, SystemTime::now())
@@ -323,7 +336,7 @@ impl<I: Identify> Identify for ServiceCallers<I> {
 	/// `inner` says.
 	fn lease<'a>(&'a self, identity: &'a Identity) -> BoxFuture<'a, Result<IdentityLease, Error>> {
 		match identity.context.get::<ForwardedIdentity>() {
-			Some(forwarded) if self.identity.is_some() => {
+			Some(forwarded) if !self.identity.is_empty() => {
 				Box::pin(std::future::ready(Ok(forwarded.lease())))
 			}
 			_ => self.inner.lease(identity),
@@ -348,7 +361,11 @@ impl<I> std::fmt::Debug for ServiceCallers<I> {
 			)
 			.field(
 				"forwarded_identity",
-				&self.identity.as_ref().map(IdentityKey::service),
+				&self
+					.identity
+					.iter()
+					.map(IdentityKey::service)
+					.collect::<Vec<_>>(),
 			)
 			.finish_non_exhaustive()
 	}
@@ -426,6 +443,21 @@ struct Claims {
 }
 
 impl IdentityKey {
+	/// Whether `token` carries this key's signature, whatever it claims.
+	fn signs(&self, token: &str) -> bool {
+		let Some((claims, signature)) = token
+			.strip_prefix(TOKEN_PREFIX)
+			.and_then(|rest| rest.split_once('.'))
+		else {
+			return false;
+		};
+		let Ok(signature) = URL_SAFE_NO_PAD.decode(signature) else {
+			return false;
+		};
+		// `verify_slice` compares in constant time.
+		self.sign(claims).verify_slice(&signature).is_ok()
+	}
+
 	/// The key for the service `service`, whose token is `token`; `None`
 	/// when the token is empty.
 	#[must_use]
@@ -911,6 +943,42 @@ mod tests {
 		// Without a key, such a token is nobody special.
 		let app = ServiceCallers::new(Anonymous);
 		assert_eq!(caller(&app, Some(&format!("Bearer {token}"))).await, None);
+	}
+
+	#[tokio::test]
+	async fn while_a_token_is_replaced_both_forward_people() {
+		let callers = ServiceCallers::new(Anonymous)
+			.caller("s3cret", APP_CALLER)
+			.caller("n3xt", APP_CALLER)
+			.forwarded_identity("echo", "s3cret")
+			.forwarded_identity("echo", "n3xt");
+		let next = IdentityKey::new("echo", "n3xt").expect("a key");
+		let elsewhere = IdentityKey::new("echo", "other").expect("a key");
+
+		for (minted, accepted) in [(key(), true), (next.clone(), true), (elsewhere, false)] {
+			let token = minted.mint(PERSON, SystemTime::now(), IDENTITY_LIFETIME);
+			let identity = callers
+				.identify(&request(Some(&format!("Bearer {token}"))))
+				.await;
+			assert_eq!(identity.is_ok(), accepted, "{identity:?}");
+		}
+
+		// An expired token is refused as expired, by the key that signed it.
+		let expired = next.mint(PERSON, at(1_000), IDENTITY_LIFETIME);
+		let refused = callers
+			.identify(&request(Some(&format!("Bearer {expired}"))))
+			.await
+			.expect_err("refused");
+		assert_eq!(
+			refused.to_string(),
+			next.verify(&expired, SystemTime::now())
+				.expect_err("expired")
+				.to_string()
+		);
+		assert_eq!(
+			caller(&callers, Some("Bearer n3xt")).await.as_deref(),
+			Some("app")
+		);
 	}
 
 	/// An inner `Identify` that names every caller what the request's

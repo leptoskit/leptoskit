@@ -188,6 +188,11 @@ pub struct NotificationsSummary {
 	/// Pushes the providers accepted this calendar month (UTC) for the
 	/// whole project: usage is counted per project.
 	pub project_pushes_this_month: u64,
+	/// Its token and its database's password are being replaced, because a
+	/// worker that was given them was revoked: the next deployment
+	/// finishes it.
+	#[serde(default)]
+	pub rotating: bool,
 	pub created_at: Timestamp,
 }
 
@@ -227,6 +232,11 @@ pub struct TenantSecrets {
 	/// The environment's [`SETTINGS`], from its variables and secrets, by
 	/// name.
 	pub settings: BTreeMap<String, String>,
+	/// The values replacing these, while they are replaced: the app holds
+	/// either until a release with the new ones is applied, so the hub
+	/// takes either token and reaches the database with either password.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub next: Option<NextSecrets>,
 }
 
 impl std::fmt::Debug for TenantSecrets {
@@ -236,6 +246,25 @@ impl std::fmt::Debug for TenantSecrets {
 			.field("database_url", &"[redacted]")
 			.field("token", &"[redacted]")
 			.field("settings", &self.settings.keys().collect::<Vec<_>>())
+			.field("next", &self.next)
+			.finish()
+	}
+}
+
+/// A tenant's database address and token that replace its current ones.
+/// `Debug` prints neither.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct NextSecrets {
+	pub database_url: String,
+	pub token: String,
+}
+
+impl std::fmt::Debug for NextSecrets {
+	fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		formatter
+			.debug_struct("NextSecrets")
+			.field("database_url", &"[redacted]")
+			.field("token", &"[redacted]")
 			.finish()
 	}
 }
@@ -389,10 +418,16 @@ mod tests {
 				"LEPTOSKIT_NOTIFICATIONS_APNS_KEY_P8".to_owned(),
 				"-----BEGIN PRIVATE KEY-----".to_owned(),
 			)]),
+			next: Some(NextSecrets {
+				database_url: "postgres://ntf_a:d00d1e@db/ntf_a".to_owned(),
+				token: "swordfish".to_owned(),
+			}),
 		};
 		let printed = format!("{secrets:?}");
 		assert!(!printed.contains("c0ffee"), "{printed}");
 		assert!(!printed.contains("hunter2"), "{printed}");
+		assert!(!printed.contains("d00d1e"), "{printed}");
+		assert!(!printed.contains("swordfish"), "{printed}");
 		assert!(!printed.contains("BEGIN"), "{printed}");
 		assert!(printed.contains("APNS_KEY_P8"), "{printed}");
 	}
