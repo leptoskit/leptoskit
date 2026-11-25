@@ -165,10 +165,11 @@ pub(super) fn control_plane_documents(
 		),
 	));
 
-	// Serving Deployment.
+	// Serving Deployment. Every replica runs the sweeper: a Deployment gives
+	// its environment to all of them, and the sweeper's advisory lock lets
+	// only one sweep at a time, whatever `replicas` is.
 	let mut serve_env = env;
-	serve_env
-		.push(json!({"name": "LEPTOSKIT_CLOUD_SWEEPER", "value": (cp.replicas == 1).to_string()}));
+	serve_env.push(json!({"name": "LEPTOSKIT_CLOUD_SWEEPER", "value": "true"}));
 	let mut serve_pod = platform.clone();
 	serve_pod["automountServiceAccountToken"] = json!(false);
 	serve_pod["securityContext"] = pod_security;
