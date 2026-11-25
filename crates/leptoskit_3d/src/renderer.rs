@@ -593,8 +593,8 @@ struct ModelState {
 	asset: Arc<crate::asset::Asset>,
 	weights: Vec<Vec<f32>>,
 	overrides: Vec<crate::world::Overrides>,
-	print_by_material: Vec<PrintOverride>,
-	print_by_node: Vec<PrintOverride>,
+	print_by_material: Arc<[PrintOverride]>,
+	print_by_node: Arc<[PrintOverride]>,
 	hidden: Vec<bool>,
 	worlds: Vec<Mat4>,
 	/// Per node: a skinned part's joint matrices and posed bounds.
@@ -617,21 +617,13 @@ impl ModelState {
 					.zip(raycast::skinned_bounds(&asset, instance, index))
 			})
 			.collect();
-		let print_active = matches!(world.settings.style.shading, Shading::Print(_));
 
 		Some(Self {
 			weights: pose.weights.clone(),
 			overrides: instance.overrides.clone(),
-			print_by_material: if print_active {
-				instance.print_by_material.clone()
-			} else {
-				Vec::new()
-			},
-			print_by_node: if print_active {
-				instance.print_by_node.clone()
-			} else {
-				Vec::new()
-			},
+			// Shared, not copied: a frame only reads them.
+			print_by_material: Arc::clone(&instance.print_by_material),
+			print_by_node: Arc::clone(&instance.print_by_node),
 			hidden: instance.hidden.clone(),
 			worlds: instance.world.clone(),
 			skins,

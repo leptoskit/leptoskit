@@ -231,10 +231,11 @@ pub(crate) struct Instance {
 	pub hidden: Vec<bool>,
 	pub overrides: Vec<Overrides>,
 	/// Pre-resolved relief-print overrides (`All` overlaid by `Material`) per
-	/// asset material.
-	pub print_by_material: Vec<PrintOverride>,
-	/// Pre-resolved relief-print overrides (`Part` subtrees) per asset node.
-	pub print_by_node: Vec<PrintOverride>,
+	/// asset material, shared with each frame that draws the instance.
+	pub print_by_material: Arc<[PrintOverride]>,
+	/// Pre-resolved relief-print overrides (`Part` subtrees) per asset node,
+	/// shared with each frame that draws the instance.
+	pub print_by_node: Arc<[PrintOverride]>,
 	manual_weights: Vec<Vec<Option<f32>>>,
 	touched: Vec<usize>,
 }
@@ -261,8 +262,8 @@ impl Instance {
 			world: Vec::new(),
 			hidden: Vec::new(),
 			overrides: Vec::new(),
-			print_by_material: Vec::new(),
-			print_by_node: Vec::new(),
+			print_by_material: Arc::from([]),
+			print_by_node: Arc::from([]),
 			manual_weights: Vec::new(),
 			touched: Vec::new(),
 		}
@@ -366,13 +367,15 @@ impl Instance {
 			})
 			.collect();
 
-		self.print_by_node = vec![PrintOverride::default(); asset.nodes.len()];
+		let mut by_node = vec![PrintOverride::default(); asset.nodes.len()];
 
 		for (part, change) in &self.print_parts {
 			for node in Self::subtree(asset, Some(part)) {
-				self.print_by_node[node].overlay(change);
+				by_node[node].overlay(change);
 			}
 		}
+
+		self.print_by_node = by_node.into();
 	}
 
 	/// Replaces the relief-print override for `target`. Setting
