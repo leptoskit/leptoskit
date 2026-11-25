@@ -964,12 +964,12 @@ impl Renderer {
 		let shadow_count = self.upload_shadows(&views);
 
 		self.write_globals(target, &views);
+		// The style alone decides, so the attachments and the pipeline set
+		// stay put while knockout figures walk in and out of view.
 		let use_stencil = matches!(
 			self.world.settings.style.shading,
 			Shading::Print(print) if print.knockout_width > 0.0
-		) && draws
-			.iter()
-			.any(|draw| draw.knockout.is_some() && !draw.variant.blend);
+		);
 		let samples = self.gpu.samples(target.format, use_stencil);
 		let pipelines =
 			self.shared
@@ -2235,6 +2235,12 @@ impl Renderer {
 	}
 }
 
+/// The glTF builders the integration tests use, for the tests below that
+/// draw.
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "../tests/support/fixture.rs"]
+mod fixture;
+
 #[cfg(test)]
 mod tests {
 	use super::*;
@@ -2510,5 +2516,73 @@ mod tests {
 
 		let camera = light_toward(&camera_light, &view_inverse);
 		assert!((camera - Vec3::X).length() < 1.0e-6, "{camera:?}");
+	}
+
+	/// Paper knockout keeps one depth-stencil attachment and one pipeline
+	/// set while figures walk in and out of view: what a frame draws with
+	/// follows the style, not what the frame happens to see.
+	#[cfg(not(target_arch = "wasm32"))]
+	#[test]
+	fn knockout_attachments_hold_while_figures_leave_the_view() {
+		use crate::protocol::AssetId;
+		use crate::protocol::NodeId;
+		use crate::protocol::Op;
+		use crate::protocol::Transform;
+
+		let gpu = match Gpu::headless() {
+			Ok(gpu) => gpu,
+			Err(error) if error.is_unavailable() => return,
+			Err(error) => panic!("{error}"),
+		};
+		let asset = crate::Asset::from_slice(&fixture::lit_sphere(16, None)).unwrap();
+		let mut renderer = Renderer::new(&gpu);
+		let world = renderer.world_mut();
+		world.apply([
+			Op::LoadAsset {
+				asset: AssetId(1),
+				path: "models/sphere.glb".into(),
+			},
+			Op::Spawn {
+				node: NodeId(1),
+				asset: Some(AssetId(1)),
+				parent: None,
+			},
+			Op::SetCamera {
+				transform: Transform::from_translation(0.0, 0.0, 3.0),
+				fov_y: 0.8,
+				near: 0.1,
+				far: 50.0,
+			},
+			Op::SetStyle(Style {
+				shading: Shading::Print(Print::default()),
+				ink: None,
+			}),
+		]);
+		world.take_loads();
+		world.asset_loaded(AssetId(1), Ok(Arc::new(asset)));
+		world.take_events();
+
+		// In view, behind the camera, and back.
+		let keys: Vec<_> = [0.0, 40.0, 0.0]
+			.into_iter()
+			.map(|z| {
+				renderer.world_mut().apply([Op::SetTransform {
+					node: NodeId(1),
+					transform: Transform::from_translation(0.0, 0.0, z),
+				}]);
+				renderer.advance(0.0);
+				renderer.render_to_rgba(32, 32).unwrap();
+				renderer
+					.attachments
+					.as_ref()
+					.map(|attachments| attachments.key)
+			})
+			.collect();
+		assert!(
+			keys[0].is_some_and(|key| key.4),
+			"a knockout style draws with a stencil"
+		);
+		assert_eq!(keys[1], keys[0], "the figure leaving keeps the attachments");
+		assert_eq!(keys[2], keys[0], "the figure returning keeps them too");
 	}
 }
