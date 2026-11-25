@@ -6,13 +6,12 @@
 //! It never talks to the hub or the tenant's database:
 //!
 //! - the cluster's worker makes the database with a release that uses it
-//!   ([`step`]), with the password it is leased under
-//!   [`DATABASE_URL_LEASE`];
+//!   ([`step`]), with the password it is leased under [`DATABASE_URL_LEASE`];
 //! - the app's process is leased the token with that release, under
 //!   [`TOKEN_ENV`];
-//! - the hub asks for its cluster's tenants ([`tenants`]) and is answered
-//!   each changed one's values, each answer recorded in
-//!   `notification_leases` before it is sent.
+//! - the hub asks for its cluster's tenants ([`tenants`]) and is answered each
+//!   changed one's values, each answer recorded in `notification_leases` before
+//!   it is sent.
 //!
 //! A tenant is served while a live release uses it ([`released`]) and
 //! until its environment is deleted ([`removing`]). Anything the hub is
@@ -497,8 +496,8 @@ async fn open(
 			.to_owned()));
 	};
 	let unreadable = || {
-		"the vault couldn't open its notifications credentials; ask the operator about the \
-		 vault's keys"
+		"the vault couldn't open its notifications credentials; ask the operator about the vault's \
+		 keys"
 			.to_owned()
 	};
 	let place = place(row);
@@ -525,8 +524,8 @@ async fn data_key(
 	organization: Id<Organization>,
 ) -> rpc::Result<Result<Unwrapped, Unopened>> {
 	let unreadable = || {
-		"the vault couldn't open its notifications credentials; ask the operator about the \
-		 vault's keys"
+		"the vault couldn't open its notifications credentials; ask the operator about the vault's \
+		 keys"
 			.to_owned()
 	};
 
@@ -591,8 +590,8 @@ pub(crate) async fn credentials(
 	};
 
 	if moved {
-		return Ok(Err("its cluster's notifications service moved after \
-		               this release was built; deploy again"
+		return Ok(Err("its cluster's notifications service moved after this \
+		               release was built; deploy again"
 			.to_owned()));
 	}
 
@@ -744,7 +743,9 @@ async fn answer(cx: &rpc::MutationCx, known: Vec<KnownTenant>) -> rpc::Result<Te
 	};
 	let rows = NotificationTenant::query()
 		.filter(|row| {
-			row.cluster_id.eq(cluster) & row.ready.eq(true) & row.serving.eq(true)
+			row.cluster_id.eq(cluster)
+				& row.ready.eq(true)
+				& row.serving.eq(true)
 				& row.removing.eq(false)
 		})
 		.order_by(|row| row.id.asc())
@@ -920,9 +921,7 @@ async fn config(
 	let origin = domains
 		.is_empty()
 		.then(|| format!("https://{}", placement.hostname));
-	let hostnames: Vec<String> = std::iter::once(placement.hostname)
-		.chain(domains)
-		.collect();
+	let hostnames: Vec<String> = std::iter::once(placement.hostname).chain(domains).collect();
 	let mut names = vec![DATABASE_URL_LEASE.to_owned(), TOKEN_ENV.to_owned()];
 	names.extend(settings.keys().cloned());
 	Ok(Ok((

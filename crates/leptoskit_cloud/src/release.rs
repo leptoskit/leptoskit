@@ -751,7 +751,11 @@ pub fn spec(
 ) -> Result<ReleaseSpec, SpecBuildError> {
 	let mut processes = Vec::with_capacity(plan.processes.len());
 	let mut routes = Vec::new();
-	let hub = match (&plan.notifications, &target.cluster.notifications, target.notifications) {
+	let hub = match (
+		&plan.notifications,
+		&target.cluster.notifications,
+		target.notifications,
+	) {
 		(None, ..) => None,
 		(Some(planned), Some(hub), Some(tenant)) => Some((planned, hub, tenant)),
 		(Some(_), ..) => return Err(SpecBuildError::NoNotifications),
@@ -865,7 +869,9 @@ pub fn spec(
 		}
 	}
 
-	let platform = hub.map_or_else(Vec::new, |hub| bridge_notifications(hub, target, &mut routes));
+	let platform = hub.map_or_else(Vec::new, |hub| {
+		bridge_notifications(hub, target, &mut routes)
+	});
 
 	let database = match (&plan.postgres, &target.cluster.postgres) {
 		(None, _) => None,
@@ -942,8 +948,12 @@ fn bridge_notifications(
 	routes: &mut Vec<Route>,
 ) -> Vec<PlatformService> {
 	if notifications.public {
-		let hostnames = std::iter::once((target.hostname, Tls::Wildcard))
-			.chain(target.domains.iter().map(|domain| (domain.as_str(), Tls::Issued)));
+		let hostnames = std::iter::once((target.hostname, Tls::Wildcard)).chain(
+			target
+				.domains
+				.iter()
+				.map(|domain| (domain.as_str(), Tls::Issued)),
+		);
 
 		for (hostname, tls) in hostnames {
 			routes.push(Route {
@@ -1443,9 +1453,7 @@ mod tests {
 		let spec = built(&plan, &["app"]);
 		assert_eq!(spec.platform.len(), 1);
 		assert!(
-			spec.routes
-				.iter()
-				.all(|route| route.process == "app"),
+			spec.routes.iter().all(|route| route.process == "app"),
 			"{:?}",
 			spec.routes
 		);
