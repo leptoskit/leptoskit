@@ -800,11 +800,13 @@ mod tests {
 
 	#[tokio::test]
 	async fn a_build_runs_in_the_source_and_answers_in_a_file() {
+		// Compared as real paths: the shell's `$PWD` is one, and macOS's
+		// temporary directory is reached through a link.
 		let script = format!(
-			"test -f Cargo.toml && test \"$PWD\" = \"$LEPTOSKIT_BUILD_SOURCE\" && echo building \
-			 && echo careful >&2 && grep -q '\"image_repository\"' \"$LEPTOSKIT_BUILD_INPUT\" && \
-			 ! grep -q secret-address \"$LEPTOSKIT_BUILD_INPUT\" && cat > \
-			 \"$LEPTOSKIT_BUILD_OUTPUT\" <<'JSON'\n{}\nJSON",
+			"test -f Cargo.toml && test \"$(pwd -P)\" = \"$(cd \"$LEPTOSKIT_BUILD_SOURCE\" && pwd \
+			 -P)\" && echo building && echo careful >&2 && grep -q '\"image_repository\"' \
+			 \"$LEPTOSKIT_BUILD_INPUT\" && ! grep -q secret-address \"$LEPTOSKIT_BUILD_INPUT\" && \
+			 cat > \"$LEPTOSKIT_BUILD_OUTPUT\" <<'JSON'\n{}\nJSON",
 			succeeded(REPOSITORY)
 		);
 		let (outcome, mut log, _directory) = build(&script, |builder| builder, Stop::never()).await;

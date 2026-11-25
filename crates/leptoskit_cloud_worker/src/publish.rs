@@ -344,11 +344,13 @@ mod tests {
 
 	#[tokio::test]
 	async fn a_publish_gets_its_stores_and_credentials_and_answers_with_a_report() {
+		// Compared as real paths: the shell's `$PWD` is one, and macOS's
+		// temporary directory is reached through a link.
 		let report = format!(
 			r#"{{"stores":[{{"store":"firefox","summary":"uploaded with ${KEY}"}},{{"store":"steam","summary":"not asked"}}],"steps":[{{"store":"firefox","by":"person","what":"Accept","why":"policy","done_when":"listed"}}]}}"#
 		);
 		let script = [
-			r#"test "$PWD" = "$LEPTOSKIT_PUBLISH_SOURCE""#,
+			r#"test "$(pwd -P)" = "$(cd "$LEPTOSKIT_PUBLISH_SOURCE" && pwd -P)""#,
 			r#"test "$LEPTOSKIT_PUBLISH_STORES" = 'chrome firefox'"#,
 			r#"test "$LEPTOSKIT_PUBLISH_SUBMIT" = 0"#,
 			r#"test "$LEPTOSKIT_PUBLISH_CONTENTS_ONLY" = 1"#,
