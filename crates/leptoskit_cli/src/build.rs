@@ -1439,10 +1439,17 @@ fn inject_web_preloads_html(html: &str, lib_name: &str, has_js: bool, has_wasm: 
 
 	let js_file = format!("pkg/{lib_name}.js");
 	let wasm_file = format!("pkg/{lib_name}_bg.wasm");
+	// The hint must resolve where the page's own request for the file does.
+	// A page that declares a `<base href>` and names neither form reaches its
+	// client through that base, as `main.js` importing the glue does, so its
+	// hint follows the base to wherever the page is served; any other page
+	// keeps the site root.
 	let prefix = if html.contains(&format!("./{js_file}")) {
 		"./"
-	} else {
+	} else if html.contains(&format!("/{js_file}")) || !lower.contains("<base href") {
 		"/"
+	} else {
+		"./"
 	};
 
 	let mut tags = String::new();
@@ -1522,5 +1529,32 @@ mod preload_tests {
 		let updated = inject_web_preloads_html(html, "app", true, true);
 		assert_eq!(updated.matches("modulepreload").count(), 1);
 		assert!(updated.contains("href=\"./pkg/app_bg.wasm\""));
+	}
+
+	#[test]
+	fn a_page_that_reaches_its_client_through_a_base_preloads_through_it() {
+		let html = "<html><head><base href=\"/\" /><script type=\"module\" \
+		            src=\"main.js\"></script></head><body></body></html>";
+		let once = inject_web_preloads_html(html, "app", true, true);
+		assert!(once.contains("<link rel=\"modulepreload\" href=\"./pkg/app.js\" />"));
+		assert!(once.contains("href=\"./pkg/app_bg.wasm\""));
+		assert!(!once.contains("href=\"/pkg/"), "{once}");
+		assert_eq!(inject_web_preloads_html(&once, "app", true, true), once);
+	}
+
+	#[test]
+	fn a_page_that_declares_no_base_keeps_the_site_root() {
+		let html = "<html><head></head><body><script type=\"module\" \
+		            src=\"/bootstrap.js\"></script></body></html>";
+		let updated = inject_web_preloads_html(html, "app", true, true);
+		assert!(updated.contains("<link rel=\"modulepreload\" href=\"/pkg/app.js\" />"));
+	}
+
+	#[test]
+	fn a_page_with_a_base_that_names_the_site_root_keeps_it() {
+		let html = "<html><head><base href=\"/\" /></head><body><script type=\"module\">import \
+		            init from \"/pkg/app.js\";</script></body></html>";
+		let updated = inject_web_preloads_html(html, "app", true, true);
+		assert!(updated.contains("<link rel=\"preload\" href=\"/pkg/app_bg.wasm\" as=\"fetch\""));
 	}
 }
