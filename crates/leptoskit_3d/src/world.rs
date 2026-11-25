@@ -1012,6 +1012,7 @@ impl World {
 			Op::SetInk { node, part, ink } => {
 				self.with_instance(node, |instance| instance.set_ink(part, ink));
 			}
+			Op::SetPrint { .. } => {}
 			Op::SetShadow { node, cast } => {
 				self.with_instance(node, |instance| instance.cast_shadow = cast);
 			}

@@ -249,6 +249,20 @@ fn pixel_size(view: &ViewParams) -> f32 {
 	}
 }
 
+/// World-space unit vector pointing towards the directional light for `view`.
+///
+/// When [`Light::camera_space`] is `true`, [`Light::direction`] is in camera
+/// space (`+x` right, `+y` up, `-z` forward) and is rotated into world space
+/// by the view's inverse.
+fn light_toward(light: &crate::protocol::Light, view_inverse: &Mat4) -> Vec3 {
+	let toward = -Vec3::from(light.direction).normalize_or(Vec3::NEG_Y);
+	if light.camera_space {
+		(Mat3::from_mat4(*view_inverse) * toward).normalize_or(Vec3::Y)
+	} else {
+		toward
+	}
+}
+
 /// The outline's width in `view`'s pixels.
 fn line_pixels(ink: &Ink, view: &ViewParams) -> f32 {
 	ink.width / 1000.0 * view.viewport[3]
@@ -265,6 +279,7 @@ fn style_uniform(style: &Style, time: f64, view: &ViewParams) -> StyleUniform {
 				[toon.shade[0], toon.shade[1], toon.shade[2], toon.hatch],
 			)
 		}
+		Shading::Print(_) => ([0.0; 4], [1.0, 1.0, 1.0, 0.0]),
 	};
 
 	let (ink, ink_noise) = match &style.ink {
@@ -1241,7 +1256,6 @@ impl Renderer {
 	fn write_globals(&self, target: &RenderTarget<'_>, views: &[ViewParams]) {
 		let settings = &self.world.settings;
 		let light = settings.light;
-		let toward = -Vec3::from(light.direction).normalize_or(Vec3::NEG_Y);
 
 		let (occlusion_x, occlusion_y, occlusion_params, occluding) = match &target.occlusion {
 			Some(occlusion) => {
@@ -1258,7 +1272,9 @@ impl Renderer {
 		let mut bytes = vec![0_u8; GLOBALS_STRIDE as usize * views.len()];
 
 		for (index, view) in views.iter().enumerate() {
-			let camera = view.view.inverse().w_axis;
+			let view_inverse = view.view.inverse();
+			let camera = view_inverse.w_axis;
+			let toward = light_toward(&light, &view_inverse);
 			let uniform = GlobalsUniform {
 				view_projection: (view.projection * view.view).to_cols_array_2d(),
 				view: view.view.to_cols_array_2d(),
@@ -1893,5 +1909,26 @@ mod tests {
 			max: Vec3::splat(1.0),
 		};
 		assert!(sight.worth_outlining(&enclosing, 1.0));
+	}
+
+	#[test]
+	fn camera_space_light_rotates_with_the_view() {
+		let world_light = crate::protocol::Light {
+			direction: [0.0, 0.0, -1.0],
+			camera_space: false,
+			..crate::protocol::Light::default()
+		};
+		let camera_light = crate::protocol::Light {
+			camera_space: true,
+			..world_light
+		};
+		// Camera rotated +90 deg around Y (looking along -X, so camera +Z is
+		// world +X).
+		let view_inverse = Mat4::from_rotation_y(std::f32::consts::FRAC_PI_2);
+		let world = light_toward(&world_light, &view_inverse);
+		assert!((world - Vec3::Z).length() < 1.0e-6, "{world:?}");
+
+		let camera = light_toward(&camera_light, &view_inverse);
+		assert!((camera - Vec3::X).length() < 1.0e-6, "{camera:?}");
 	}
 }

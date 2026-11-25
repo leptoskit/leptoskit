@@ -310,9 +310,14 @@ impl Scene {
 	}
 
 	/// Sets how the scene is drawn: [`Style::hand_drawn`] for banded light
-	/// and an ink line.
+	/// and an ink line, or [`Style::print`] for relief-print shading.
 	pub fn set_style(&self, style: Style) {
 		self.push(Op::SetStyle(style));
+	}
+
+	/// Sets the scene's directional light.
+	pub fn set_light(&self, light: Light) {
+		self.push(Op::SetLight(light));
 	}
 
 	/// Sets the line on a part (or, with `None`, the whole instance): its
@@ -322,6 +327,16 @@ impl Scene {
 			node,
 			part: part.map(str::to_owned),
 			ink,
+		});
+	}
+
+	/// Sets relief-print overrides on a model instance, a named part and its
+	/// subtree, or primitives sharing a glTF material base name.
+	pub fn set_print(&self, node: NodeId, target: PrintTarget, print: PrintOverride) {
+		self.push(Op::SetPrint {
+			node,
+			target,
+			print,
 		});
 	}
 
@@ -458,6 +473,35 @@ mod tests {
 				node,
 				part: Some("head".into()),
 				ink: heavy,
+			}
+		);
+	}
+
+	#[test]
+	fn print_and_camera_light_queue_their_ops() {
+		let scene = Scene::new(SceneId(1));
+		let node = scene.spawn(scene.load("models/rig.glb"));
+		let print = PrintOverride {
+			lit: Some([0.8, 0.7, 0.5]),
+			boil_step: Some(1),
+			..PrintOverride::default()
+		};
+		let light = Light {
+			camera_space: true,
+			..Light::default()
+		};
+		scene.set_style(Style::print());
+		scene.set_light(light);
+		scene.set_print(node, PrintTarget::Material("robe".into()), print);
+		let ops = scene.take_ops();
+		assert_eq!(ops[2], Op::SetStyle(Style::print()));
+		assert_eq!(ops[3], Op::SetLight(light));
+		assert_eq!(
+			ops[4],
+			Op::SetPrint {
+				node,
+				target: PrintTarget::Material("robe".into()),
+				print,
 			}
 		);
 	}

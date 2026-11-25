@@ -130,8 +130,75 @@ fn every_op() -> Vec<Op> {
 	]
 	.into_iter()
 	.chain(style_ops())
+	.chain(print_ops())
 	.chain(motion_ops())
 	.collect()
+}
+
+/// Relief-print styles, overrides, and camera-space lights.
+fn print_ops() -> Vec<Op> {
+	vec![
+		Op::SetStyle(Style::print()),
+		Op::SetStyle(Style {
+			shading: Shading::Print(Print {
+				t_lit: 0.4,
+				t_deep: -0.2,
+				t_cross: -0.6,
+				rim: 0.25,
+				paper: [0.9, 0.85, 0.7],
+				knockout_width: 3.0,
+				hatch_per_m: 42.0,
+				hatch_gain: 0.6,
+				hatch_max: 0.7,
+				cross_duty: 0.35,
+				fade_px: [2.0, 5.0],
+				side_heavy: 1.4,
+				side_drop: 0.7,
+				side_from: -0.4,
+				side_to: 0.8,
+				wobble_frequency: 6.0,
+			}),
+			ink: None,
+		}),
+		Op::SetPrint {
+			node: NodeId(3),
+			target: PrintTarget::All,
+			print: PrintOverride {
+				lit: Some([0.9, 0.8, 0.7]),
+				shade: Some([0.6, 0.5, 0.4]),
+				deep: Some([0.3, 0.2, 0.1]),
+				spot: Some([0.95, 0.3, 0.1]),
+				mode: Some(PrintMode::Banded),
+				hatch_min: Some(0.18),
+				hatch_per_m: Some(36.0),
+				cross_hatch: Some(true),
+				specular: Some(0.92),
+				rim: Some(true),
+				ink_weight: Some(1.25),
+				knockout: Some(true),
+				boil_step: Some(2),
+			},
+		},
+		Op::SetPrint {
+			node: NodeId(3),
+			target: PrintTarget::Part("head".into()),
+			print: PrintOverride {
+				lit: Some([1.0, 0.9, 0.8]),
+				mode: Some(PrintMode::Flat),
+				knockout: Some(false),
+				..PrintOverride::default()
+			},
+		},
+		Op::SetPrint {
+			node: NodeId(3),
+			target: PrintTarget::Material("void".into()),
+			print: PrintOverride::default(),
+		},
+		Op::SetLight(Light {
+			camera_space: true,
+			..Light::default()
+		}),
+	]
 }
 
 /// Eased transforms, and clips that ease their crossfade or start at a
@@ -316,6 +383,35 @@ fn malformed_batches_are_rejected() {
 	bytes[10] = 2;
 	assert_eq!(decode_ops(&bytes), Err(DecodeError("an unknown shading")));
 
+	// An unknown print target.
+	let mut bytes = encode_ops(&[Op::SetPrint {
+		node: NodeId(1),
+		target: PrintTarget::All,
+		print: PrintOverride::default(),
+	}]);
+	bytes[14] = 3;
+	assert_eq!(
+		decode_ops(&bytes),
+		Err(DecodeError("an unknown print target"))
+	);
+
+	// An unknown print mode.
+	let mut bytes = encode_ops(&[Op::SetPrint {
+		node: NodeId(1),
+		target: PrintTarget::All,
+		print: PrintOverride {
+			mode: Some(PrintMode::Flat),
+			..PrintOverride::default()
+		},
+	}]);
+	// Header(9) + tag(1) + node(4) + target All(1) + 4 absent colour options(4)
+	// + mode Some(1)
+	bytes[20] = 2;
+	assert_eq!(
+		decode_ops(&bytes),
+		Err(DecodeError("an unknown print mode"))
+	);
+
 	// An unknown easing, of a transform and of a crossfade.
 	let mut bytes = encode_ops(&[Op::EaseTransform {
 		node: NodeId(1),
@@ -369,6 +465,20 @@ fn names_longer_than_their_limit_are_rejected_when_decoding() {
 		decode_ops(&bytes),
 		Err(DecodeError("a string is longer than its limit"))
 	);
+	for target in [
+		PrintTarget::Part("x".repeat(MAX_NAME_BYTES + 1)),
+		PrintTarget::Material("x".repeat(MAX_NAME_BYTES + 1)),
+	] {
+		let bytes = encode_ops(&[Op::SetPrint {
+			node: NodeId(1),
+			target,
+			print: PrintOverride::default(),
+		}]);
+		assert_eq!(
+			decode_ops(&bytes),
+			Err(DecodeError("a string is longer than its limit"))
+		);
+	}
 	let bytes = encode_ops(&[Op::LoadAsset {
 		asset: AssetId(1),
 		path: "x".repeat(MAX_PATH_BYTES),
@@ -599,6 +709,7 @@ fn sanitizing_bounds_every_number() {
 			intensity: value,
 			ambient: value,
 			shadow: value,
+			camera_space: false,
 		})
 		.sanitized() else {
 			unreachable!()
@@ -816,6 +927,159 @@ fn eases_and_phases_are_new_ops_that_leave_old_plays_alone() {
 	assert_eq!(bytes[9], 25);
 	assert_eq!(bytes.len(), 9 + 1 + 4 + 40 + 4 + 1);
 	assert_eq!(bytes.last(), Some(&1));
+}
+
+#[test]
+fn sanitizing_bounds_print_and_camera_light() {
+	let unit = |value: f32| (0.0..=1.0).contains(&value);
+
+	for value in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 1.0e30, -1.0e30] {
+		let Op::SetStyle(style) = Op::SetStyle(Style {
+			shading: Shading::Print(Print {
+				t_lit: value,
+				t_deep: -value,
+				t_cross: value,
+				rim: value,
+				paper: [value; 3],
+				knockout_width: value,
+				hatch_per_m: value,
+				hatch_gain: value,
+				hatch_max: value,
+				cross_duty: value,
+				fade_px: [value, -value],
+				side_heavy: value,
+				side_drop: value,
+				side_from: value,
+				side_to: -value,
+				wobble_frequency: value,
+			}),
+			ink: Some(Ink::default()),
+		})
+		.sanitized() else {
+			unreachable!()
+		};
+		let Shading::Print(print) = style.shading else {
+			unreachable!()
+		};
+		assert!((-1.0..=1.0).contains(&print.t_lit), "{print:?}");
+		assert!((-1.0..=print.t_lit).contains(&print.t_deep), "{print:?}");
+		assert!((-2.0..=print.t_deep).contains(&print.t_cross), "{print:?}");
+		assert!(unit(print.rim), "{print:?}");
+		assert!(print.paper.into_iter().all(unit), "{print:?}");
+		assert!(
+			(0.0..=MAX_INK_WIDTH).contains(&print.knockout_width),
+			"{print:?}"
+		);
+		assert!(
+			(0.0..=MAX_HATCH_PER_M).contains(&print.hatch_per_m),
+			"{print:?}"
+		);
+		assert!(
+			(0.0..=MAX_HATCH_GAIN).contains(&print.hatch_gain),
+			"{print:?}"
+		);
+		assert!(unit(print.hatch_max) && unit(print.cross_duty), "{print:?}");
+		assert!(
+			(MIN_FADE_PX..=MAX_FADE_PX).contains(&print.fade_px[0])
+				&& (print.fade_px[0]..=MAX_FADE_PX).contains(&print.fade_px[1]),
+			"{print:?}"
+		);
+		assert!(
+			(0.0..=MAX_SIDE_WEIGHT).contains(&print.side_heavy)
+				&& (0.0..=MAX_SIDE_WEIGHT).contains(&print.side_drop),
+			"{print:?}"
+		);
+		assert!(
+			(-1.0..=1.0).contains(&print.side_from)
+				&& (print.side_from..=1.0).contains(&print.side_to),
+			"{print:?}"
+		);
+		assert!(
+			(0.0..=MAX_WOBBLE_FREQUENCY).contains(&print.wobble_frequency),
+			"{print:?}"
+		);
+
+		let Op::SetPrint { target, print, .. } = (Op::SetPrint {
+			node: NodeId(1),
+			target: PrintTarget::Material("é".repeat(MAX_NAME_BYTES)),
+			print: PrintOverride {
+				lit: Some([value; 3]),
+				shade: Some([value; 3]),
+				deep: Some([value; 3]),
+				spot: Some([value; 3]),
+				mode: Some(PrintMode::Flat),
+				hatch_min: Some(value),
+				hatch_per_m: Some(value),
+				cross_hatch: Some(true),
+				specular: Some(value),
+				rim: Some(true),
+				ink_weight: Some(value),
+				knockout: Some(false),
+				boil_step: Some(254),
+			},
+		})
+		.sanitized() else {
+			unreachable!()
+		};
+		let PrintTarget::Material(material) = target else {
+			unreachable!()
+		};
+		assert!(material.len() <= MAX_NAME_BYTES);
+		assert!(print.lit.unwrap().into_iter().all(unit));
+		assert!(print.shade.unwrap().into_iter().all(unit));
+		assert!(print.deep.unwrap().into_iter().all(unit));
+		assert!(print.spot.unwrap().into_iter().all(unit));
+		assert!(unit(print.hatch_min.unwrap()));
+		assert!((0.0..=MAX_HATCH_PER_M).contains(&print.hatch_per_m.unwrap()));
+		assert!(unit(print.specular.unwrap()));
+		assert!((0.0..=MAX_INK_WEIGHT).contains(&print.ink_weight.unwrap()));
+		assert_eq!(print.boil_step, Some(2));
+
+		let Op::SetLight(light) = Op::SetLight(Light {
+			direction: [value; 3],
+			color: [value; 3],
+			intensity: value,
+			ambient: value,
+			shadow: value,
+			camera_space: true,
+		})
+		.sanitized() else {
+			unreachable!()
+		};
+		assert!(light.camera_space);
+	}
+}
+
+#[test]
+fn print_and_camera_light_are_new_ops_that_leave_old_batches_alone() {
+	// A world-space light still encodes with tag 16 and the exact same bytes.
+	let world = encode_ops(&[Op::SetLight(Light::default())]);
+	assert_eq!(world[9], 16);
+	assert_eq!(world.len(), 9 + 1 + 9 * 4);
+
+	// A camera-space light uses tag 29 with the exact same payload after the
+	// tag.
+	let camera = encode_ops(&[Op::SetLight(Light {
+		camera_space: true,
+		..Light::default()
+	})]);
+	assert_eq!(camera[9], 29);
+	assert_eq!(&camera[10..], &world[10..]);
+
+	// Print style uses tag 27; PBR and Toon keep tag 23.
+	let print_style = encode_ops(&[Op::SetStyle(Style::print())]);
+	assert_eq!(print_style[9], 27);
+	let toon_style = encode_ops(&[Op::SetStyle(Style::hand_drawn())]);
+	assert_eq!(toon_style[9], 23);
+
+	// SetPrint uses tag 28, node 7, target All (0), 13 absent option bytes.
+	let print_op = encode_ops(&[Op::SetPrint {
+		node: NodeId(7),
+		target: PrintTarget::All,
+		print: PrintOverride::default(),
+	}]);
+	assert_eq!(&print_op[9..15], &[28, 7, 0, 0, 0, 0]);
+	assert_eq!(&print_op[15..], &[0; 13]);
 }
 
 #[test]
