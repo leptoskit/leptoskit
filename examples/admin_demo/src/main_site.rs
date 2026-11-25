@@ -371,12 +371,25 @@ struct SignIn {
 	return_to: Option<String>,
 }
 
+/// A path on this site, which no browser reads as another site's address, so
+/// a `return_to` can't send anyone elsewhere. It's the rule the scaffold's
+/// sign-in page follows (`is_local_path` in `leptoskit_cli`'s `auth_pages`):
+/// a browser reads a backslash as a slash, and drops tabs and line breaks,
+/// so a backslash, whitespace or a control character is refused too.
+fn is_local_path(path: &str) -> bool {
+	path.starts_with('/')
+		&& !path.starts_with("//")
+		&& !path
+			.chars()
+			.any(|c| c == '\\' || c.is_whitespace() || c.is_control())
+}
+
 /// The main site's sign-in page, cut down to two buttons: the demo signs
 /// people in without a code.
 async fn sign_in(Query(query): Query<SignIn>) -> Html<String> {
 	let return_to = query
 		.return_to
-		.filter(|path| path.starts_with('/') && !path.starts_with("//"))
+		.filter(|path| is_local_path(path))
 		.unwrap_or_else(|| "/".to_owned());
 	// A JSON string, with `<` escaped so the path can't close the script.
 	let target = serde_json::to_string(&return_to)
@@ -393,4 +406,65 @@ async fn sign_in(Query(query): Query<SignIn>) -> Html<String> {
 		 body:JSON.stringify({{email:b.dataset.email}})}});if(r.ok)location.href={target};else \
 		 b.textContent='Sign-in failed ('+r.status+')'}}</script>"
 	))
+}
+
+#[cfg(test)]
+mod tests {
+	use axum::body::Body;
+	use axum::body::to_bytes;
+	use axum::http::Request;
+	use tower::ServiceExt;
+
+	use super::*;
+
+	/// Where the sign-in page's script sends the browser once the sign-in
+	/// answers, for a request whose query string is `query`.
+	async fn goes_to(query: &str) -> String {
+		let request = Request::builder()
+			.uri(format!("/sign-in?{query}"))
+			.body(Body::empty())
+			.expect("the request builds");
+		let response = Router::new()
+			.route("/sign-in", get(sign_in))
+			.oneshot(request)
+			.await
+			.expect("the page is served");
+		let page = to_bytes(response.into_body(), 64 * 1024)
+			.await
+			.expect("the page is read");
+		let page = String::from_utf8(page.to_vec()).expect("the page is UTF-8");
+		let assigned = page
+			.split("if(r.ok)location.href=")
+			.nth(1)
+			.expect("the script sets where the browser goes")
+			.split(";else")
+			.next()
+			.expect("the assignment ends");
+
+		serde_json::from_str(assigned).expect("the script assigns a string")
+	}
+
+	// A browser reads a backslash as a slash, and drops tabs and line breaks,
+	// so each of these would take the browser to `//evil.example`. The page
+	// sends the visitor where it sends someone who arrived without a
+	// `return_to`.
+	#[tokio::test]
+	async fn a_backslash_in_return_to_sends_the_visitor_home() {
+		assert_eq!(goes_to("return_to=%2F%5Cevil.example").await, "/");
+	}
+
+	#[tokio::test]
+	async fn a_tab_in_return_to_sends_the_visitor_home() {
+		assert_eq!(goes_to("return_to=%2F%09%2Fevil.example").await, "/");
+	}
+
+	#[tokio::test]
+	async fn a_path_on_this_site_is_kept() {
+		assert_eq!(goes_to("return_to=%2Fnotes").await, "/notes");
+	}
+
+	#[tokio::test]
+	async fn a_query_on_this_site_is_kept() {
+		assert_eq!(goes_to("return_to=%2F%3Fplan%3Dpro").await, "/?plan=pro");
+	}
 }
