@@ -6555,6 +6555,7 @@ dependencies = [
  "leptoskit_native",
  "leptoskit_yoga",
  "png 0.17.16",
+ "rayon",
  "thiserror 2.0.21",
 ]
 

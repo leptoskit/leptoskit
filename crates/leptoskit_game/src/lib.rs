@@ -1,31 +1,74 @@
-//! A game host for leptoskit.
+//! A high-performance 3D and 2D game engine for leptoskit.
 //!
-//! Gameplay stays Rust: implement [`Game`] with [`Game::setup`] and
-//! [`Game::tick`]. Menus and HUDs are ordinary leptoskit components. Each
-//! frame the host commits that tree through
+//! Gameplay stays pure Rust, powered by a cache-friendly, safe-Rust Archetype
+//! ECS ([`ecs`]), modular [`GameApp`] schedules and [`GamePlugin`]s,
+//! double-buffered [`Events`], and Godot-style names, groups, and synchronous
+//! signal observers.
+//!
+//! Menus and HUDs are ordinary leptoskit components (`View`, `Text`, `Button`,
+//! Tailwind classes). Each frame the host commits that tree through
 //! [`leptoskit_native::NativeSurface`], the same mutation plan the native
-//! backends apply, and draws the resulting boxes over a wgpu picture of the
-//! world. There is no second UI language and no second compiler.
+//! backends apply, and draws the resulting interface over the game world.
+//! There is no second UI language and no second compiler.
 //!
-//! The picture is [`leptoskit_canvas`]'s wgpu renderer. When the machine has
-//! no adapter, the same frame is painted on the CPU and the report says which
-//! painter ran.
-//!
-//! Messages a button posts with [`post`] arrive on the following tick.
+//! Quick-start gameplay can also implement [`Game`] with [`Game::setup`] and
+//! [`Game::tick`]; messages a button posts with [`post`] arrive on the
+//! following tick.
 
+pub mod ecs;
+#[cfg(not(target_arch = "wasm32"))]
 mod font;
+#[cfg(not(target_arch = "wasm32"))]
 mod host;
+#[cfg(not(target_arch = "wasm32"))]
 mod overlay;
 mod project;
+#[cfg(not(target_arch = "wasm32"))]
 mod raster;
+#[cfg(not(target_arch = "wasm32"))]
 mod scene;
 mod sim;
 mod world;
 
+pub use ecs::Added;
+pub use ecs::ArchetypeId;
+pub use ecs::Bundle;
+pub use ecs::Changed;
+pub use ecs::Commands;
+pub use ecs::Component;
+pub use ecs::ComponentId;
+pub use ecs::ComponentTicks;
+pub use ecs::Entity;
+pub use ecs::EventCursor;
+pub use ecs::EventId;
+pub use ecs::Events;
+pub use ecs::GameApp;
+pub use ecs::GamePlugin;
+pub use ecs::Mut;
+pub use ecs::NextState;
+pub use ecs::ObserverId;
+pub use ecs::QueryFilter;
+pub use ecs::QueryPlan;
+pub use ecs::ReadQuery;
+pub use ecs::Schedule;
+pub use ecs::Stage;
+pub use ecs::State;
+pub use ecs::SystemAccess;
+pub use ecs::SystemConfig;
+pub use ecs::Time;
+pub use ecs::Trigger;
+pub use ecs::With;
+pub use ecs::Without;
+pub use ecs::WriteQuery;
+#[cfg(not(target_arch = "wasm32"))]
 pub use host::Options;
+#[cfg(not(target_arch = "wasm32"))]
 pub use host::Painter;
+#[cfg(not(target_arch = "wasm32"))]
 pub use host::Report;
+#[cfg(not(target_arch = "wasm32"))]
 pub use host::run;
+#[cfg(not(target_arch = "wasm32"))]
 pub use host::run_with;
 pub use project::Camera;
 pub use sim::Game;

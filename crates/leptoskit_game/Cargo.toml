@@ -5,12 +5,12 @@ authors.workspace = true
 categories = ["game-development", "gui", "graphics"]
 edition.workspace = true
 homepage.workspace = true
-keywords = ["game", "wgpu", "leptoskit", "ui"]
+keywords = ["game", "wgpu", "leptoskit", "ui", "ecs"]
 license.workspace = true
 readme = "readme.md"
 repository.workspace = true
 rust-version.workspace = true
-description = "A game host for leptoskit: Rust gameplay, leptoskit menus, drawn with wgpu."
+description = "A high-performance 3D and 2D game engine for leptoskit: archetype ECS, scene tree, physics, wgpu rendering, and native leptoskit UI."
 
 [dependencies]
 glam = { workspace = true }
@@ -19,6 +19,9 @@ leptoskit_native = { workspace = true }
 leptoskit_yoga = { workspace = true }
 png = { workspace = true }
 thiserror = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+rayon = { workspace = true }
 
 [lints]
 workspace = true
