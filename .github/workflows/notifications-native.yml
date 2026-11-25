@@ -1,0 +1,145 @@
+name: notifications native
+# The notifications plugin's Swift and Kotlin hosts only run on a Mac and on an
+# Android emulator, which the Linux `ci` workflow does not cover. Run this by
+# hand after changing the plugin's hosts, its generated app code, or the
+# native_plugin_suite fixture.
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_NET_RETRY: 10
+concurrency:
+  group: notifications-native-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  apple:
+    name: notifications on macOS and the iOS simulator
+    runs-on: macos-latest
+    timeout-minutes: 90
+    steps:
+      - name: checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: install rust
+        uses: ./.github/actions/rust
+
+      - name: cache rust artifacts
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          prefix-key: notifications-apple
+
+      - name: lint Swift
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v swiftlint >/dev/null || brew install swiftlint
+          swiftlint lint --strict --config .swiftlint.yml
+
+      # The plugin's Swift tests link the Rust C ABI, so the bridge library is
+      # built first; the iOS build compiles the same package for the simulator.
+      - name: test the notifications plugin's Swift host
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --locked --package leptoskit_bridge_ffi --features async-host
+          rust_lib="$PWD/target/debug"
+          swift test --package-path crates/leptoskit_plugin_notifications -Xlinker -L -Xlinker "$rust_lib"
+          swift build --package-path crates/leptoskit_plugin_notifications \
+            --triple arm64-apple-ios17.0-simulator \
+            --sdk "$(xcrun --sdk iphonesimulator --show-sdk-path)"
+
+      # The generated iOS and macOS App.swift compile against the real
+      # bridge and notifications modules, with and without the plugin.
+      - name: typecheck the generated app Swift
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --locked --package leptoskit_cli --lib generated_app_swift_typechecks -- --test-threads=1 --nocapture
+
+  android:
+    name: notifications on an Android emulator
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    env:
+      NDK_VERSION: 27.1.12297006
+    steps:
+      # The NDK, the generated applications, and the emulator image outgrow
+      # the runner's free disk.
+      - name: free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          df -h /
+
+      - name: checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: install rust
+        uses: ./.github/actions/rust
+        with:
+          targets: x86_64-linux-android
+
+      - name: cache rust artifacts
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          prefix-key: notifications-android
+
+      # Installs everything the emulator step needs too, with retries, so the
+      # emulator runner's own sdkmanager call downloads nothing.
+      - name: install the android sdk packages
+        run: |
+          set -euo pipefail
+          bash setup/scripts/android_sdk_install.sh "ndk;${NDK_VERSION}" "platforms;android-35" "platforms;android-36" "build-tools;36.0.0" \
+            emulator "system-images;android-35;default;x86_64" "build-tools;37.0.0" platform-tools
+
+      - name: build the CLI
+        run: cargo build --locked -p leptoskit_cli --bin leptoskit
+
+      # The first app is push-off, as NotificationsPluginTest requires. The
+      # second turns [native.android] push on with a fake google-services.json,
+      # so the Firebase messaging service is compiled and NotificationsPushTest
+      # runs against it.
+      - name: prepare the generated Android applications
+        shell: bash
+        run: |
+          set -euo pipefail
+          export ANDROID_NDK_HOME="${ANDROID_HOME}/ndk/${NDK_VERSION}"
+          cargo run --locked -p leptoskit_cli --example native_plugin_suite -- \
+            --cli target/debug/leptoskit --destination "$RUNNER_TEMP/mobile-app" --target android-x86_64
+          cargo run --locked -p leptoskit_cli --example native_plugin_suite -- \
+            --cli target/debug/leptoskit --destination "$RUNNER_TEMP/push-app" --target android-x86_64 --push
+
+      - name: enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: run the notifications tests on the emulator
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2
+        with:
+          api-level: 35
+          arch: x86_64
+          disable-animations: true
+          script: |
+            bash setup/scripts/android_settle.sh emulator-5554
+            cd "$RUNNER_TEMP/mobile-app/android" && ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=dev.leptoskit.plugins.notifications.NotificationsPluginTest
+            cd "$RUNNER_TEMP/push-app/android" && ./gradlew --no-daemon connectedDebugAndroidTest
+
+      - name: retain the Android test reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: notifications-android
+          path: |
+            ${{ runner.temp }}/mobile-app/android/app/build/reports/androidTests
+            ${{ runner.temp }}/mobile-app/android/app/build/outputs/androidTest-results
+            ${{ runner.temp }}/push-app/android/app/build/reports/androidTests
+            ${{ runner.temp }}/push-app/android/app/build/outputs/androidTest-results
+          if-no-files-found: ignore
