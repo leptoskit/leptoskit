@@ -585,3 +585,175 @@ pub async fn a_hub_serves_only_its_own_cluster(app: &App) {
 	.await
 	.refused(400, "too_many_pushes");
 }
+
+/// The token and database address a release was given.
+fn values_of(release: &Value) -> (String, String) {
+	let secrets = &release["secrets"];
+	(
+		secrets["LEPTOSKIT_SERVICE_NOTIFICATIONS_TOKEN"]
+			.as_str()
+			.expect("a token")
+			.to_owned(),
+		secrets["LEPTOSKIT_NOTIFICATIONS_DATABASE_URL"]
+			.as_str()
+			.expect("an address")
+			.to_owned(),
+	)
+}
+
+/// Revoking a worker that was given a cluster's tenants' values gives each
+/// new ones to move to. The hub takes the old and the new until a release
+/// that leased the new is applied; a release that fails tells it to open
+/// the database again, as it may have the new password already.
+#[expect(
+	clippy::cognitive_complexity,
+	reason = "a scenario is one story, read top to bottom; its asserts are what count"
+)]
+pub async fn revoking_a_worker_gives_its_tenants_new_values(app: &App) {
+	let shop = Shop::open(app).await;
+	with_hub(&shop, "eu-one").await;
+	let first = ship(&shop, "production", b"first", with_notifications()).await;
+	let (token, address) = values_of(&first);
+	let revoked = hub(&shop, "eu-one").await;
+	let given = ask(&revoked, json!([])).await;
+	let tenant = given["changed"][0]["tenant"].clone();
+	assert_eq!(given["changed"][0]["secrets"].get("next"), None);
+	assert_eq!(summary(&shop, "production").await["rotating"], false);
+
+	// Revoking a build worker gives nobody new values.
+	let builds = pair(
+		app,
+		&shop.ops,
+		json!({ "role": "build" }),
+		"another-build-worker",
+	)
+	.await;
+	app.call(
+		"revoke_worker",
+		json!({ "worker": builds.id }),
+		shop.as_ops(),
+	)
+	.await
+	.expect(200);
+	assert_eq!(summary(&shop, "production").await["rotating"], false);
+
+	// Revoking the hub does: the new hub is given both.
+	app.call(
+		"revoke_worker",
+		json!({ "worker": revoked.id }),
+		shop.as_ops(),
+	)
+	.await
+	.expect(200);
+	assert_eq!(summary(&shop, "production").await["rotating"], true);
+	let told = leptoskit_cloud::tables::AuditEvent::query()
+		.filter(|event| event.action.eq("notifications.rotate"))
+		.all(&app.system())
+		.await
+		.expect("events");
+	assert_eq!(told.len(), 1, "the tenant's owners are told");
+	let hub = hub(&shop, "eu-one").await;
+	let given = ask(&hub, json!([])).await;
+	let secrets = &given["changed"][0]["secrets"];
+	assert_eq!(secrets["token"], token.as_str());
+	assert_eq!(secrets["database_url"], address.as_str());
+	let next_token = secrets["next"]["token"]
+		.as_str()
+		.expect("a token")
+		.to_owned();
+	let next_address = secrets["next"]["database_url"]
+		.as_str()
+		.expect("an address")
+		.to_owned();
+	assert_eq!(next_token.len(), 64);
+	assert_ne!(next_token, token);
+	assert_ne!(next_address, address);
+	let database = first["input"]["notifications"]["name"]
+		.as_str()
+		.expect("a name");
+	assert!(
+		next_address.starts_with(&format!("postgres://{database}:")),
+		"{next_address}"
+	);
+	let leases = NotificationLease::query()
+		.all(&app.system())
+		.await
+		.expect("leases");
+	assert!(
+		leases
+			.last()
+			.expect("a lease")
+			.names
+			.0
+			.iter()
+			.any(|name| name.ends_with("(next)")),
+		"{leases:?}"
+	);
+	let known = json!([{ "tenant": tenant, "version": given["changed"][0]["version"] }]);
+
+	// The next release is given the new values; it fails, and the hub is
+	// told to open the tenant again.
+	let digest = shop.upload(b"failing").await;
+	shop.deploy("production", &digest, with_notifications())
+		.await
+		.expect(200);
+	let job = shop.build.take().await;
+	shop.build
+		.finish(&job, built(&job, b"failing", &[]))
+		.await
+		.expect(200);
+	let release = shop.cluster.take().await;
+	assert_eq!(
+		values_of(&release),
+		(next_token.clone(), next_address.clone())
+	);
+	shop.cluster
+		.finish(
+			&release,
+			json!({
+				"kind": "release",
+				"result": "not_ready",
+				"process": "app",
+				"reason": "it didn't start",
+			}),
+		)
+		.await
+		.expect(200);
+	assert_eq!(summary(&shop, "production").await["rotating"], true);
+	let reopened = ask(&hub, known).await;
+	assert_eq!(
+		reopened["changed"][0]["secrets"]["next"]["token"],
+		next_token.as_str()
+	);
+
+	// One that is applied finishes it: the new values are the tenant's
+	// alone, given to the hub and to every release after.
+	let applied_release = ship(&shop, "production", b"second", with_notifications()).await;
+	assert_eq!(
+		values_of(&applied_release),
+		(next_token.clone(), next_address.clone())
+	);
+	assert_eq!(summary(&shop, "production").await["rotating"], false);
+	let moved = ask(&hub, json!([])).await;
+	let secrets = &moved["changed"][0]["secrets"];
+	assert_eq!(secrets["token"], next_token.as_str());
+	assert_eq!(secrets["database_url"], next_address.as_str());
+	assert_eq!(secrets.get("next"), None);
+	let third = ship(&shop, "production", b"third", with_notifications()).await;
+	assert_eq!(values_of(&third), (next_token.clone(), next_address));
+
+	// Revoking the cluster's own worker, which leased them to every
+	// release, gives new ones again.
+	app.call(
+		"revoke_worker",
+		json!({ "worker": shop.cluster.id }),
+		shop.as_ops(),
+	)
+	.await
+	.expect(200);
+	assert_eq!(summary(&shop, "production").await["rotating"], true);
+	let again = ask(&hub, json!([])).await;
+	let next = &again["changed"][0]["secrets"]["next"];
+	assert_ne!(next["token"], next_token.as_str());
+	assert_ne!(next["token"], Value::Null);
+}

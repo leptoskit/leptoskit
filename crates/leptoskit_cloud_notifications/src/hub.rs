@@ -356,9 +356,12 @@ impl Hub {
 		let secrets = secrets_of(&config);
 		// The pool it holds for the same address, which a new version
 		// reuses rather than opening another beside it.
+		// Not while its password is being replaced: the pool's connections
+		// were made with a password the database may no longer take.
 		let reuse = self.tenants().served.get(&tenant).and_then(|served| {
 			let served = served.lock().unwrap_or_else(PoisonError::into_inner);
-			(served.address == config.secrets.database_url).then(|| served.db.clone())
+			(config.secrets.next.is_none() && served.address == config.secrets.database_url)
+				.then(|| (served.address.clone(), served.db.clone()))
 		});
 		let opening = open(self.open.as_ref(), config, reuse);
 		let opened = match tokio::time::timeout(OPEN_WITHIN, opening).await {
@@ -642,16 +645,15 @@ fn host_of(request: &Request) -> Option<String> {
 /// database's address and password, and the values of its settings.
 fn secrets_of(config: &TenantConfig) -> Vec<String> {
 	let address = &config.secrets.database_url;
-	// `scheme://user:password@host/…`: the password alone, as an error
-	// may quote it apart from the address.
-	let password = address
-		.split_once("://")
-		.and_then(|(_, rest)| rest.rsplit_once('@'))
-		.and_then(|(credentials, _)| credentials.split_once(':'))
-		.map(|(_, password)| password.to_owned());
+	let password = password_of(address);
+	let next = config.secrets.next.as_ref();
+	let next_password = next.and_then(|next| password_of(&next.database_url));
 	let mut secrets: Vec<String> = [config.secrets.token.clone(), address.clone()]
 		.into_iter()
 		.chain(password)
+		.chain(next.map(|next| next.token.clone()))
+		.chain(next.map(|next| next.database_url.clone()))
+		.chain(next_password)
 		.chain(config.secrets.settings.values().cloned())
 		// Shorter values are words a reason may use on its own account.
 		.filter(|secret| secret.len() >= 4)
@@ -661,6 +663,28 @@ fn secrets_of(config: &TenantConfig) -> Vec<String> {
 	secrets
 }
 
+/// The password in `address`, `scheme://user:password@host/…`, alone, as
+/// an error may quote it apart from the address.
+fn password_of(address: &str) -> Option<String> {
+	address
+		.split_once("://")
+		.and_then(|(_, rest)| rest.rsplit_once('@'))
+		.and_then(|(credentials, _)| credentials.split_once(':'))
+		.map(|(_, password)| password.to_owned())
+}
+
+/// Where `config`'s database may be reached: its address, then, while its
+/// password is replaced, the one with the new password.
+fn addresses(config: &TenantConfig) -> impl Iterator<Item = &str> {
+	std::iter::once(config.secrets.database_url.as_str()).chain(
+		config
+			.secrets
+			.next
+			.as_ref()
+			.map(|next| next.database_url.as_str()),
+	)
+}
+
 /// `reason` with each of `secrets` it holds replaced by [`REDACTED`].
 fn redacted(reason: &str, secrets: &[String]) -> String {
 	secrets.iter().fold(reason.to_owned(), |reason, secret| {
@@ -668,21 +692,41 @@ fn redacted(reason: &str, secrets: &[String]) -> String {
 	})
 }
 
+/// Whether `db` takes a connection now: a pool connects only when first
+/// used, so a password the database no longer takes shows only here.
+async fn reached(db: &Db) -> Result<(), String> {
+	use leptoskit_db::Read as _;
+
+	db.fetch(leptoskit_db::Statement {
+		sql: "SELECT 1".into(),
+		args: Vec::new(),
+	})
+	.await
+	.map(drop)
+	// The driver's error can repeat the address, password and all.
+	.map_err(|_| "its database couldn't be reached".to_owned())
+}
+
 /// Opens one tenant: its settings, its database (`reuse`, when it already
-/// holds one at the same address), migrated, and its routes and job
+/// holds one at an address it is given), migrated, and its routes and job
 /// workers. Returns what it serves, and its router and hostnames.
+///
+/// While the tenant's values are replaced, the database takes whichever
+/// password its last applied release set, so the new one is tried when
+/// the old one fails; and the app holds either token, so both are taken.
 async fn open(
 	open: &dyn Open,
 	config: TenantConfig,
-	reuse: Option<Db>,
+	reuse: Option<(String, Db)>,
 ) -> Result<(Served, (Router, Vec<String>)), String> {
 	// Only the service's own settings: anything else the hub is given is
 	// the operator's to say, not a tenant's.
 	let settings: Vec<(String, String)> = config
 		.secrets
 		.settings
-		.into_iter()
+		.iter()
 		.filter(|(name, _)| leptoskit_cloud::notifications::is_setting(name))
+		.map(|(name, value)| (name.clone(), value.clone()))
 		.collect();
 	let push = service::config::PushConfig::from_vars(settings.iter().cloned())?;
 	let open_topics = service::config::OpenTopics::from_vars(settings.iter().cloned())?;
@@ -694,9 +738,23 @@ async fn open(
 	};
 	let push = service::push::Push { runtime };
 
-	let db = match reuse {
-		Some(db) => db,
-		None => open.open(&config.secrets.database_url).await?,
+	let (address, db) = if let Some(reused) = reuse {
+		reused
+	} else {
+		let mut tried = Err(String::new());
+
+		for address in addresses(&config) {
+			tried = match open.open(address).await {
+				Ok(db) => reached(&db).await.map(|()| (address.to_owned(), db)),
+				Err(why) => Err(why),
+			};
+
+			if tried.is_ok() {
+				break;
+			}
+		}
+
+		tried?
 	};
 	let migrations = match db.dialect() {
 		leptoskit_db::Dialect::Postgres => leptoskit_notifications::POSTGRES_MIGRATIONS,
@@ -706,10 +764,16 @@ async fn open(
 		.await
 		.map_err(|error| format!("its database couldn't be migrated: {error}"))?;
 
-	let token = config.secrets.token;
-	let callers = ServiceCallers::new(Anonymous)
-		.caller(&token, rpc::server::APP_CALLER)
-		.forwarded_identity(SERVICE, &token);
+	let mut callers = ServiceCallers::new(Anonymous)
+		.caller(&config.secrets.token, rpc::server::APP_CALLER)
+		.forwarded_identity(SERVICE, &config.secrets.token);
+
+	if let Some(next) = &config.secrets.next {
+		callers = callers
+			.caller(&next.token, rpc::server::APP_CALLER)
+			.forwarded_identity(SERVICE, &next.token);
+	}
+
 	let (router, live) = service::routes_with_settings(
 		db.clone(),
 		config.origin.as_deref(),
@@ -734,7 +798,7 @@ async fn open(
 			live,
 			jobs,
 			db,
-			address: config.secrets.database_url,
+			address,
 			cursor: config.usage_cursor,
 		},
 		(router, hostnames),

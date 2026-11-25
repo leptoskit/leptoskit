@@ -32,6 +32,8 @@ Every round, the hub asks the control plane's `notification_tenants` what change
 
 A tenant whose settings or database fail is served by no one. Its reason is reported, and is shown to the environment's owners by the `notifications` query. The hub tries again when the tenant changes, or after five minutes. Opening a tenant that takes more than two minutes counts as a failure. A reason never shows the tenant's token, its database's address or password, or its settings' values: each is replaced by `[redacted]`.
 
+When a worker that saw a tenant's values is revoked, the tenant is given a new database password and token. Until a deployment applies them, the hub is given both sets of values. It accepts either token, and it reaches the database with whichever password the database still takes.
+
 ## Routing
 
 - `/_leptoskit/services/notifications/…`, with a tenant's hostname as `Host` (or, over HTTP/2, as the request's authority), goes to that tenant. The edge sends these from each app hostname and verified domain. If two tenants claim one hostname, which happens only while the control plane moves it, the one opened more recently has it.

@@ -539,6 +539,33 @@ pub(crate) async fn revoke_worker(
 		})?;
 	row.revoked_at = Some(leptoskit_db::now());
 	row.save(cx.tx()).await?;
+
+	// A cluster's worker leased its tenants' passwords and tokens to their
+	// releases, and its notifications hub was given them: each moves to new
+	// ones, which the next deployment finishes.
+	if matches!(row.role, WorkerRole::Cluster | WorkerRole::Notifications)
+		&& let Some(cluster) = row.cluster_id
+	{
+		let vault = &services(cx.context())?.shipping().vault;
+
+		// Each tenant's owners are told, whether it moved or couldn't.
+		for rotated in super::notifications::rotate(cx.tx(), vault, cluster).await? {
+			audit::record(
+				cx.tx(),
+				&Actor::Person(account),
+				if rotated.done {
+					"notifications.rotate"
+				} else {
+					"notifications.rotate_failed"
+				},
+				Some(rotated.organization),
+				Some(rotated.project),
+				Some(format!("{} after revoking {}", rotated.tenant, row.name)),
+				&client(cx.context()),
+			)
+			.await?;
+		}
+	}
 	let held = Job::query()
 		.filter(|job| job.worker_id.eq(Some(id)) & job.state.eq(JobState::Leased))
 		.all(cx.tx())

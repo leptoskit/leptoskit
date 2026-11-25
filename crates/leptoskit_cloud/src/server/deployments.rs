@@ -2681,6 +2681,10 @@ pub(crate) async fn release_finished(
 	job: &Job,
 	outcome: &ReleaseOutcome,
 ) -> rpc::Result<()> {
+	// Whatever happened, the database may have the password the release
+	// leased now: the hub opens it again.
+	super::notifications::release_ended(tx, job).await?;
+
 	let Some(mut changing) = changing_for(tx, job).await? else {
 		return Ok(());
 	};
@@ -2759,6 +2763,7 @@ pub(crate) async fn release_finished(
 				tx,
 				environment_id,
 				changing.row.plan.0.notifications.is_some(),
+				job,
 			)
 			.await?;
 
