@@ -3738,3 +3738,57 @@ fn print_shadows_stay_under_the_paper_knockout() {
 		darkened.first()
 	);
 }
+
+/// Print's band edges blend over about a pixel, so the bands hold still on
+/// curved surfaces instead of stair-stepping.
+#[test]
+fn print_band_edges_are_antialiased() {
+	let Some(gpu) = gpu() else { return };
+	let lit = [0.90, 0.90, 0.90];
+	let shade = [0.50, 0.50, 0.50];
+	let mut renderer = lit_sphere(gpu, None);
+	renderer.world_mut().apply([
+		style(
+			Shading::Print(Print {
+				t_lit: 0.30,
+				t_deep: -0.30,
+				rim: 0.0,
+				hatch_per_m: 0.0,
+				..print_no_knockout()
+			}),
+			None,
+		),
+		Op::SetPrint {
+			node: NodeId(1),
+			target: PrintTarget::All,
+			print: PrintOverride {
+				lit: Some(lit),
+				shade: Some(shade),
+				deep: Some([0.10, 0.10, 0.10]),
+				..PrintOverride::default()
+			},
+		},
+	]);
+
+	let image = render_size(&mut renderer, 256);
+	let [lit, shade] = [exact_srgb(lit)[0], exact_srgb(shade)[0]];
+	// The lit edge (N·L = 0.3) crosses the equator near x = 171. It blends
+	// over one pixel, so a row shows a value clearly between the bands only
+	// where a pixel centre falls well inside that pixel; a hard edge never
+	// shows one.
+	let rows: Vec<u32> = (96..160).collect();
+	let blended = rows
+		.iter()
+		.filter(|&&y| {
+			(150..200).any(|x| {
+				let value = image.at(x, y)[0];
+				value > shade + 4 && value + 4 < lit
+			})
+		})
+		.count();
+	assert!(
+		blended * 8 >= rows.len(),
+		"{blended} of {} rows blend the lit band's edge",
+		rows.len()
+	);
+}

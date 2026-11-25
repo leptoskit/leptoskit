@@ -447,18 +447,24 @@ fn safe_normalize(v: vec3<f32>, fallback: vec3<f32>) -> vec3<f32> {
 	return fallback;
 }
 
-// Relief-print shading: three hard un-tonemapped bands, object-space hatching
-// and cross-hatching, turning-edge paper specular, and backlit spot rim.
-// Skips all PBR textures (except Mask cutout alpha), lighting intensity, and
-// tonemapping.
+// Relief-print shading: three un-tonemapped bands whose edges blend over
+// about a pixel, object-space hatching and cross-hatching, turning-edge
+// paper specular, and backlit spot rim. Skips all PBR textures (except Mask
+// cutout alpha), lighting intensity, and tonemapping.
 fn print_shade(in: Varyings, front: bool) -> vec4<f32> {
 	let extra = data_texel(in.print_meta & 0x00ffffffu);
 	let hatch_per_m = extra.w;
-	// Derivatives stay in uniform control flow and precede any alpha discard.
+	// Every derivative is taken here, in uniform control flow, before any
+	// branch on the part's flags and before any alpha discard.
 	let u1 = dot(in.local, PRINT_HATCH_DIR) * hatch_per_m;
 	let fw1 = max(fwidth(u1), 1.0e-5);
 	let u2 = dot(in.local, PRINT_CROSS_DIR) * hatch_per_m * 1.1;
 	let fw2 = max(fwidth(u2), 1.0e-5);
+	let n = select(-1.0, 1.0, front) * safe_normalize(in.normal, vec3<f32>(0.0, 1.0, 0.0));
+	let l = globals.light_direction.xyz;
+	let n_dot_l = dot(n, l);
+	// Half a pixel's change in N·L on either side of a band edge.
+	let band_edge = 0.5 * max(fwidth(n_dot_l), 1.0e-5);
 
 	var alpha = in.tint.a;
 	if (material.flags.x == 1u) {
@@ -480,24 +486,24 @@ fn print_shade(in: Varyings, front: bool) -> vec4<f32> {
 
 	var color = in.tint.rgb;
 	if (!flat_mode) {
-		var n = safe_normalize(in.normal, vec3<f32>(0.0, 1.0, 0.0));
-		if (!front) {
-			n = -n;
-		}
 		let v = safe_normalize(globals.camera.xyz - in.world, vec3<f32>(0.0, 0.0, 1.0));
-		let l = globals.light_direction.xyz;
-		let n_dot_l = dot(n, l);
 		let n_dot_v = max(dot(n, v), 0.0);
 
-		color = select(in.tint.rgb, in.emissive.rgb, n_dot_l < globals.print_bands.x);
-		color = select(color, in.rim.rgb, n_dot_l < globals.print_bands.y);
+		// How far into the lit band and into the deep band, from 0 to 1,
+		// each rising over about a pixel at its edge.
+		let t_lit = globals.print_bands.x;
+		let t_deep = globals.print_bands.y;
+		let lit_w = smoothstep(t_lit - band_edge, t_lit + band_edge, n_dot_l);
+		let deep_w = 1.0 - smoothstep(t_deep - band_edge, t_deep + band_edge, n_dot_l);
+		color = mix(mix(in.emissive.rgb, in.tint.rgb, lit_w), in.rim.rgb, deep_w);
 
-		if (n_dot_l < globals.print_bands.y && in.rim.w > 0.0 && hatch_per_m > 0.0) {
-			let duty = min(globals.shade.z, in.rim.w + globals.shade.y * (globals.print_bands.y - n_dot_l));
-			color = print_hatch(color, in.ink.rgb, u1, fw1, duty);
+		if (deep_w > 0.0 && in.rim.w > 0.0 && hatch_per_m > 0.0) {
+			let duty = min(globals.shade.z, in.rim.w + globals.shade.y * max(t_deep - n_dot_l, 0.0));
+			var hatched = print_hatch(color, in.ink.rgb, u1, fw1, duty);
 			if (cross_enabled && n_dot_l < globals.print_bands.z && globals.shade.w > 0.0) {
-				color = print_hatch(color, in.ink.rgb, u2, fw2, globals.shade.w);
+				hatched = print_hatch(hatched, in.ink.rgb, u2, fw2, globals.shade.w);
 			}
+			color = mix(color, hatched, deep_w);
 		}
 
 		let half_vec = l + v;

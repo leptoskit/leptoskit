@@ -311,10 +311,10 @@ pub enum Shading {
 	Pbr,
 	/// Cartoon shading: the light falls in a few flat bands.
 	Toon(Toon),
-	/// Relief-print shading: three hard bands with exact un-tonemapped
-	/// colours per surface, object-space hatching and cross-hatching,
-	/// turning-edge paper specular, backlit spot rim, light-side ink
-	/// weighting, and an optional outer paper knockout.
+	/// Relief-print shading: three bands with exact un-tonemapped colours
+	/// per surface and edges blended over about a pixel, object-space
+	/// hatching and cross-hatching, turning-edge paper specular, backlit spot
+	/// rim, light-side ink weighting, and an optional outer paper knockout.
 	Print(Print),
 }
 
@@ -405,8 +405,9 @@ impl Default for Print {
 /// How a surface shades in [`Shading::Print`] mode.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum PrintMode {
-	/// Three hard bands (`lit`, `shade`, `deep`), optional hatching,
-	/// turning-edge paper specular, and backlit spot rim.
+	/// Three bands (`lit`, `shade`, `deep`) with edges blended over about a
+	/// pixel, optional hatching, turning-edge paper specular, and backlit
+	/// spot rim.
 	#[default]
 	Banded,
 	/// Exact un-tonemapped `lit` colour, with no bands, hatching, specular,
