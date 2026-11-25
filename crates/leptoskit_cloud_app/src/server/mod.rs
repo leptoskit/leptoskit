@@ -126,7 +126,7 @@ pub async fn run(command: Command, vars: Vars<'_>) -> Result<(), Error> {
 			}
 
 			if let Some(email) = config::bootstrap_operator_email(vars)?
-				&& leptoskit_cloud::server::operators(&db).await?.is_empty()
+				&& leptoskit_cloud::server::bootstrap_needed(&db).await?
 			{
 				leptoskit_cloud::server::bootstrap_operator(&db, &email).await?;
 				println!("bootstrapped operator {email}");
@@ -138,12 +138,12 @@ pub async fn run(command: Command, vars: Vars<'_>) -> Result<(), Error> {
 			let database = DatabaseUrl::from_vars(vars)?;
 			let db = open(&database).await?;
 			ready(&db, &database).await?;
-			operator(&db, command).await
+			operator(&db, command, vars).await
 		}
 	}
 }
 
-async fn operator(db: &Db, command: OperatorCommand) -> Result<(), Error> {
+async fn operator(db: &Db, command: OperatorCommand, vars: Vars<'_>) -> Result<(), Error> {
 	use leptoskit_cloud::server::grant_operator;
 	use leptoskit_cloud::server::operators;
 	use leptoskit_cloud::server::revoke_operator;
@@ -156,6 +156,20 @@ async fn operator(db: &Db, command: OperatorCommand) -> Result<(), Error> {
 		OperatorCommand::Revoke { email } => {
 			if revoke_operator(db, &email).await? {
 				println!("{email} is no longer an operator");
+
+				// A variable that isn't an address names nobody: `migrate` and
+				// `serve` refuse it.
+				let configured = matches!(
+					config::bootstrap_operator_email(vars),
+					Ok(Some(configured)) if configured == email.trim().to_ascii_lowercase()
+				);
+				if configured && operators(db).await?.is_empty() {
+					println!(
+						"{email} is the address {} names, and no operator remains: the next start \
+						 doesn't promote it again",
+						config::BOOTSTRAP_OPERATOR_EMAIL
+					);
+				}
 			} else {
 				println!("{email} wasn't an operator");
 			}
@@ -180,7 +194,7 @@ async fn serve(config: ServeConfig) -> Result<(), Error> {
 	}
 
 	if let Some(email) = &config.bootstrap_operator_email
-		&& leptoskit_cloud::server::operators(&db).await?.is_empty()
+		&& leptoskit_cloud::server::bootstrap_needed(&db).await?
 	{
 		leptoskit_cloud::server::bootstrap_operator(&db, email).await?;
 	}
