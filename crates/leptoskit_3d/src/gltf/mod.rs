@@ -572,6 +572,7 @@ pub(crate) fn load(
 	load_skins(&document, &mut asset)?;
 	load_clips(&document, &mut asset)?;
 	asset.units = rest_units(&asset);
+	build_knockout_vertices(&mut asset);
 	Ok(asset)
 }
 
@@ -1381,6 +1382,199 @@ fn weld_mesh(asset: &mut Asset, first_vertex: usize) {
 	}
 }
 
+/// Detects open boundary edges per mesh and builds `asset.knockout_vertices`
+/// when any primitive has open edges (such as a single-sided robe hem or
+/// sheet). Closed meshes leave `asset.knockout_vertices` empty and reuse
+/// `ink_vertices`.
+fn build_knockout_vertices(asset: &mut Asset) {
+	for mesh in &mut asset.meshes {
+		if mesh.primitives.is_empty() {
+			continue;
+		}
+		let first_vertex = mesh
+			.primitives
+			.iter()
+			.map(|primitive| primitive.base_vertex as usize)
+			.min()
+			.unwrap_or(0);
+		let end_vertex = mesh
+			.primitives
+			.iter()
+			.map(|primitive| primitive.base_vertex as usize + primitive.vertex_count as usize)
+			.max()
+			.unwrap_or(first_vertex);
+
+		if end_vertex <= first_vertex || end_vertex > asset.vertices.len() {
+			continue;
+		}
+
+		// Compute extent in f64 so extreme f32 coordinates never overflow to
+		// Inf.
+		let mut min = [f64::INFINITY; 3];
+		let mut max = [f64::NEG_INFINITY; 3];
+		for vertex in &asset.vertices[first_vertex..end_vertex] {
+			for axis in 0..3 {
+				let v = f64::from(vertex.position[axis]);
+				if v.is_finite() {
+					min[axis] = min[axis].min(v);
+					max[axis] = max[axis].max(v);
+				}
+			}
+		}
+		let extent = [
+			(max[0] - min[0]).max(0.0),
+			(max[1] - min[1]).max(0.0),
+			(max[2] - min[2]).max(0.0),
+		];
+		let diag = (extent[0] * extent[0] + extent[1] * extent[1] + extent[2] * extent[2]).sqrt();
+		let cell = if diag.is_finite() && diag > 0.0 {
+			(diag * 1.0e-5).max(1.0e-12)
+		} else {
+			1.0
+		};
+
+		let local_count = end_vertex - first_vertex;
+		let mut cells: HashMap<[i64; 3], usize> = HashMap::with_capacity(local_count);
+		let mut group_of = vec![0_usize; local_count];
+		let mut group_count = 0_usize;
+
+		for (offset, vertex) in asset.vertices[first_vertex..end_vertex].iter().enumerate() {
+			let key = vertex.position.map(|value| {
+				let scaled = f64::from(value) / cell;
+				if scaled.is_finite() {
+					scaled.round() as i64
+				} else {
+					0
+				}
+			});
+			let group = *cells.entry(key).or_insert_with(|| {
+				let id = group_count;
+				group_count += 1;
+				id
+			});
+			group_of[offset] = group;
+		}
+
+		let mut edge_counts: HashMap<(usize, usize), u32> = HashMap::new();
+		for primitive in &mesh.primitives {
+			let base = primitive.base_vertex as usize;
+			let start = primitive.first_index as usize;
+			let end = start + primitive.index_count as usize;
+			for tri in asset.indices[start..end].chunks_exact(3) {
+				let va = base + tri[0] as usize;
+				let vb = base + tri[1] as usize;
+				let vc = base + tri[2] as usize;
+				if va < first_vertex
+					|| vb < first_vertex
+					|| vc < first_vertex
+					|| va >= end_vertex
+					|| vb >= end_vertex
+					|| vc >= end_vertex
+				{
+					continue;
+				}
+				let ga = group_of[va - first_vertex];
+				let gb = group_of[vb - first_vertex];
+				let gc = group_of[vc - first_vertex];
+				if ga == gb || gb == gc || gc == ga {
+					continue;
+				}
+				for (u, v) in [(ga, gb), (gb, gc), (gc, ga)] {
+					let edge = if u < v { (u, v) } else { (v, u) };
+					*edge_counts.entry(edge).or_insert(0) += 1;
+				}
+			}
+		}
+
+		if !edge_counts.values().any(|&count| count == 1) {
+			continue;
+		}
+
+		let mut boundary_outward = vec![Vec3::ZERO; group_count];
+		for primitive in &mut mesh.primitives {
+			let base = primitive.base_vertex as usize;
+			let start = primitive.first_index as usize;
+			let end = start + primitive.index_count as usize;
+			let mut prim_open = false;
+
+			for tri in asset.indices[start..end].chunks_exact(3) {
+				let va = base + tri[0] as usize;
+				let vb = base + tri[1] as usize;
+				let vc = base + tri[2] as usize;
+				if va < first_vertex
+					|| vb < first_vertex
+					|| vc < first_vertex
+					|| va >= end_vertex
+					|| vb >= end_vertex
+					|| vc >= end_vertex
+				{
+					continue;
+				}
+				let ga = group_of[va - first_vertex];
+				let gb = group_of[vb - first_vertex];
+				let gc = group_of[vc - first_vertex];
+				if ga == gb || gb == gc || gc == ga {
+					continue;
+				}
+				let verts = [(va, ga), (vb, gb), (vc, gc)];
+				for edge_idx in 0..3 {
+					let (v0, g0) = verts[edge_idx];
+					let (v1, g1) = verts[(edge_idx + 1) % 3];
+					let (v2, _) = verts[(edge_idx + 2) % 3];
+					let edge = if g0 < g1 { (g0, g1) } else { (g1, g0) };
+					if edge_counts.get(&edge).copied() != Some(1) {
+						continue;
+					}
+					prim_open = true;
+					let p0 = Vec3::from(asset.vertices[v0].position);
+					let p1 = Vec3::from(asset.vertices[v1].position);
+					let p2 = Vec3::from(asset.vertices[v2].position);
+					let e = p1 - p0;
+					let len2 = e.length_squared();
+					if len2 > 1.0e-20 {
+						let to_opp = p2 - p0;
+						let perp = to_opp - e * (to_opp.dot(e) / len2);
+						let outward = (-perp).normalize_or_zero();
+						boundary_outward[g0] += outward;
+						boundary_outward[g1] += outward;
+					}
+				}
+			}
+
+			primitive.has_open_edges = prim_open;
+		}
+
+		if asset.knockout_vertices.is_empty() {
+			asset.knockout_vertices = asset.ink_vertices.clone();
+		}
+
+		for primitive in &mesh.primitives {
+			if !primitive.has_open_edges {
+				continue;
+			}
+			let start = primitive.base_vertex as usize;
+			let end = start + primitive.vertex_count as usize;
+			for v in start..end {
+				let out_sum = boundary_outward[group_of[v - first_vertex]];
+				if out_sum.length_squared() <= 1.0e-6 {
+					continue;
+				}
+				let out_dir = out_sum.normalize();
+				let surf_n = Vec3::from(
+					asset.ink_vertices[v]
+						.normal
+						.map(|channel| f32::from(channel) / 127.0),
+				)
+				.normalize_or_zero();
+				let combined = (out_dir + surf_n * 0.20).normalize_or_zero();
+				if combined.length_squared() > 0.0 {
+					asset.knockout_vertices[v].normal = snorm(combined);
+				}
+			}
+		}
+	}
+}
+
 /// Reads one primitive's vertices and indices into the asset's shared
 /// arrays. Strips and fans become lists, missing normals are computed, and
 /// skin weights are renormalized, so the renderer sees one vertex layout.
@@ -1500,6 +1694,7 @@ fn load_primitive(
 		bounds,
 		skin_base,
 		morph,
+		has_open_edges: false,
 	}))
 }
 

@@ -566,3 +566,100 @@ pub fn multi_material_parts() -> Vec<u8> {
 	);
 	builder.glb(&json)
 }
+
+/// A single-sided open flat quad (`[-0.45, 0.45]` on XY at `z = 0`) with
+/// `doubleSided: true` and 4 open boundary edges, modeling a single-sided
+/// cloth sheet or robe hem.
+pub fn open_sheet() -> Vec<u8> {
+	let mut builder = Builder::default();
+	let positions: Vec<f32> = vec![
+		-0.45, -0.45, 0.0, 0.45, -0.45, 0.0, 0.45, 0.45, 0.0, -0.45, 0.45, 0.0,
+	];
+	let normals: Vec<f32> = vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0];
+	let indices: Vec<u16> = vec![0, 1, 2, 0, 2, 3];
+	let position = builder.floats(&positions, 3, true);
+	let normal = builder.floats(&normals, 3, false);
+	let index = builder.u16s(&indices, 1);
+	let json = format!(
+		r#""asset":{{"version":"2.0"}},
+"scenes":[{{"nodes":[0]}}],
+"nodes":[{{"name":"sheet","mesh":0}}],
+"meshes":[{{"name":"sheet","primitives":[{{"attributes":{{"POSITION":{position},"NORMAL":{normal}}},"indices":{index},"material":0}}]}}],
+"materials":[{{"name":"cloth","pbrMetallicRoughness":{{"baseColorFactor":[0.2,0.4,0.8,1]}},"doubleSided":true}}]"#
+	);
+	builder.glb(&json)
+}
+
+/// An `AlphaMode::Mask` (`alphaCutoff = 0.5`) double-sided mesh with two
+/// side-by-side quads: the left quad (`x in [-0.55, -0.05]`) has vertex alpha
+/// `1.0` (visible) and the right quad (`x in [0.05, 0.55]`) has vertex alpha
+/// `0.0` (cutout).
+pub fn masked_quads() -> Vec<u8> {
+	let mut builder = Builder::default();
+	let positions: Vec<f32> = vec![
+		-0.55, -0.35, 0.0, -0.05, -0.35, 0.0, -0.05, 0.35, 0.0, -0.55, 0.35, 0.0, 0.05, -0.35, 0.0,
+		0.55, -0.35, 0.0, 0.55, 0.35, 0.0, 0.05, 0.35, 0.0,
+	];
+	let normals: Vec<f32> = [0.0, 0.0, 1.0].repeat(8);
+	let colors: Vec<f32> = vec![
+		1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0,
+		1.0, 0.0, 1.0, 1.0, 1.0, 0.0, 1.0, 1.0, 1.0, 0.0, 1.0, 1.0, 1.0, 0.0,
+	];
+	let indices: Vec<u16> = vec![0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7];
+	let position = builder.floats(&positions, 3, true);
+	let normal = builder.floats(&normals, 3, false);
+	let color = builder.floats(&colors, 4, false);
+	let index = builder.u16s(&indices, 1);
+	let json = format!(
+		r#""asset":{{"version":"2.0"}},
+"scenes":[{{"nodes":[0]}}],
+"nodes":[{{"name":"cutout","mesh":0}}],
+"meshes":[{{"name":"cutout","primitives":[{{"attributes":{{"POSITION":{position},"NORMAL":{normal},"COLOR_0":{color}}},"indices":{index},"material":0}}]}}],
+"materials":[{{"name":"lace","pbrMetallicRoughness":{{"baseColorFactor":[0.2,0.4,0.8,1]}},"alphaMode":"MASK","alphaCutoff":0.5,"doubleSided":true}}]"#
+	);
+	builder.glb(&json)
+}
+
+/// Like [`lit_sphere`] with `doubleSided: true`, so mirrored negative-scale
+/// transforms stay visible in mesh rendering for knockout hull tests.
+pub fn double_sided_sphere(segments: usize) -> Vec<u8> {
+	let mut builder = Builder::default();
+	let rings = segments / 2;
+	let mut positions = Vec::new();
+	let mut normals = Vec::new();
+	let mut indices = Vec::new();
+
+	for ring in 0..=rings {
+		let (sin_theta, cos_theta) = (ring as f32 / rings as f32 * std::f32::consts::PI).sin_cos();
+
+		for step in 0..=segments {
+			let (sin_phi, cos_phi) =
+				(step as f32 / segments as f32 * std::f32::consts::TAU).sin_cos();
+			let normal = [sin_theta * cos_phi, cos_theta, sin_theta * sin_phi];
+			positions.extend(normal.map(|value| value * 0.5));
+			normals.extend(normal);
+		}
+	}
+
+	for ring in 0..rings {
+		for step in 0..segments {
+			let a = (ring * (segments + 1) + step) as u16;
+			let b = a + 1;
+			let c = a + segments as u16 + 1;
+			let d = c + 1;
+			indices.extend_from_slice(&[a, b, c, b, d, c]);
+		}
+	}
+
+	let position = builder.floats(&positions, 3, true);
+	let normal = builder.floats(&normals, 3, false);
+	let index = builder.u16s(&indices, 1);
+	let json = format!(
+		r#""asset":{{"version":"2.0"}},
+"scenes":[{{"nodes":[0]}}],
+"nodes":[{{"name":"sphere","mesh":0}}],
+"meshes":[{{"primitives":[{{"attributes":{{"POSITION":{position},"NORMAL":{normal}}},"indices":{index},"material":0}}]}}],
+"materials":[{{"name":"grey","pbrMetallicRoughness":{{"baseColorFactor":[0.5,0.5,0.5,1]}},"doubleSided":true}}]"#
+	);
+	builder.glb(&json)
+}

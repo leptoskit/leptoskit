@@ -14,6 +14,11 @@ use crate::asset::TextureRef;
 use crate::gpu::Shared;
 
 pub(crate) const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
+/// Depth-stencil format used only when relief-print paper knockout is active.
+/// Core WebGPU, GLES 3.0, and WebGL2 guarantee 4× MSAA render-attachment
+/// support for `Depth24PlusStencil8` with `Features::empty()`.
+pub(crate) const DEPTH_STENCIL_FORMAT: wgpu::TextureFormat =
+	wgpu::TextureFormat::Depth24PlusStencil8;
 /// Texels per row of the morph texture; the shader's `MORPH_WIDTH`.
 pub(crate) const MORPH_WIDTH: u32 = 2048;
 /// Texels per row of the per-frame data texture; the shader's `DATA_WIDTH`.
@@ -51,6 +56,9 @@ pub(crate) struct GpuAsset {
 	/// Each vertex's [`InkVertex`](crate::asset::InkVertex), read only by
 	/// the outline pipelines.
 	pub ink: wgpu::Buffer,
+	/// Optional knockout vertex stream with outward boundary-edge normals for
+	/// assets that have open sheets; `None` when every mesh is closed.
+	pub knockout: Option<wgpu::Buffer>,
 	pub skin: Option<wgpu::Buffer>,
 	pub indices: wgpu::Buffer,
 	pub morphs: Option<wgpu::BindGroup>,
@@ -245,6 +253,13 @@ impl GpuAsset {
 			bytemuck::cast_slice(&asset.ink_vertices),
 			wgpu::BufferUsages::VERTEX,
 		);
+		let knockout = (!asset.knockout_vertices.is_empty()).then(|| {
+			buffer(
+				"leptoskit_3d knockout",
+				bytemuck::cast_slice(&asset.knockout_vertices),
+				wgpu::BufferUsages::VERTEX,
+			)
+		});
 		let skin = (!asset.skin_vertices.is_empty()).then(|| {
 			buffer(
 				"leptoskit_3d skin",
@@ -379,6 +394,7 @@ impl GpuAsset {
 		Self {
 			vertices,
 			ink,
+			knockout,
 			skin,
 			indices,
 			morphs,
