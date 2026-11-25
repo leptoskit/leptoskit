@@ -8,11 +8,12 @@
 </p>
 
 <p align="center">
-  <strong>One leptos tree. Real native widgets.</strong>
+  <strong>One Rust codebase. Real native widgets on every screen. Zero-boilerplate cloud to match.</strong>
 </p>
 
 <p align="center">
   <a href="https://leptoskit.dev/docs/">Documentation</a> ·
+  <a href="https://leptoskit.dev/llms.txt">llms.txt</a> ·
   <a href="https://crates.io/crates/leptoskit">crates.io</a> ·
   <a href="https://docs.rs/leptoskit">docs.rs</a> ·
   <a href="https://github.com/leptoskit/leptoskit/actions/workflows/ci.yml">CI</a>
@@ -24,11 +25,34 @@
 
 leptoskit is a full-stack Rust toolkit for taking an app from a single codebase to every screen and to production:
 
-- **One UI, real native widgets:** describe screens once as a tree of components (`View`, `Text`, `Button`, `TextInput`, `ScrollView`, …) styled with built-in Tailwind. On the web it renders to the DOM with SSR, CSR, or islands; on macOS, iOS, Android, Linux, Windows, the terminal, and experimental HarmonyOS it renders native controls with no web view.
-- **Full-stack by default:** typed server functions (`leptoskit_rpc`), file-based routing, cached queries, SQLite or Postgres migrations, sign-in, background jobs, real-time updates, and sidecar services live beside the UI in one workspace configured by `leptoskit.toml`.
+- **One UI, real native widgets:** describe screens once as a tree of components (`View`, `Text`, `Button`, `TextInput`, `ScrollView`, …) styled with built-in Tailwind. On the web it renders to the DOM with SSR, CSR, or islands; on macOS, iOS, Android, Linux, Windows, the terminal, browser extensions, and experimental HarmonyOS it renders native controls with no web view and built-in signed WebAssembly over-the-air updates.
+- **Full-stack by default:** typed server functions (`leptoskit_rpc`), file-based routing, cached queries, Rust-struct SQLite or Postgres schemas and migrations (`leptoskit_db`), passkey/OAuth sign-in and OIDC IdP (`leptoskit_auth`, `leptoskit_idp`), background jobs, real-time updates, and native device plugins live beside the UI in one workspace configured by `leptoskit.toml`.
+- **Built for AI agents:** compiler-checked builder syntax by default (`[lint] markup = "builder"`), a built-in MCP server (`lk mcp`) for live DevTools inspection and cloud deploys, safe runtime generative UI (`leptoskit_agent_ui`), verifiable releases (`leptoskit verify`), a first-party skill, and `llms.txt` docs.
 - **Two clear ways to ship:** deploy straight from `leptoskit.toml` to **LeptosKit Cloud** (`lk cloud launch` / `lk deploy`), or self-host on your own Linux VMs with **OpenTofu + Kamal** (`lk infra`).
 
 <!-- {/leptoskitOverview} -->
+
+## Why leptoskit
+
+Shipping a product across web, phones, desktops, and a backend usually means maintaining four or five separate stacks—React or Next.js for the web, Swift/Kotlin or React Native for mobile, Electron for desktop, a separate auth/database/API layer, and hand-rolled Terraform to deploy it.
+
+leptoskit unifies the entire product stack in one Rust workspace and one `leptoskit.toml`:
+
+- **Real native widgets without WebView or engine bloat:** your UI compiles to WebAssembly, runs inside a lightweight non-JIT interpreter (`wasmi`), computes Flexbox and CSS Grid layout in Rust (`leptoskit_yoga`), and commits mutations straight to real OS views (`NSView`, `UIView`, Android `View`, GTK 4, Win32, ArkUI, terminal cells, and DOM on the web).
+- **Small binaries and fast frames:** measured in [`benchmarks.md`](docs/src/benchmarks.md), minimal apps weigh ~5.0 MB on iOS, ~5.75 MB on Android, and ~3.3 MB on macOS (compared to 18–20 MB for React Native and 13.6–36.9 MB for Flutter). On a physical Android device, mounting 1,000 cards takes 108 ms (vs. 253 ms Flutter, 443 ms Lynx, 745 ms React Native) and the 60 Hz ticker wall runs at 5.0 ms/s hitch time (vs. 129.8 ms/s Lynx, 478.0 ms/s React Native, 578.6 ms/s Flutter). On the web, the keyed-table fixture transfers 64.2 KB gzipped with a 5.29 MB heap, and warm rebuilds are 2.3× faster than `cargo-leptos`.
+- **Built-in OTA updates and device plugins:** signed, content-hashed WebAssembly bundles with binary deltas and automatic rollback on failed first render (`leptoskit_codepush`), paired with 90+ `leptoskit_plugin_*` crates for camera, audio, video, BLE, NFC, health, location, passkeys, secure store, SQLite, tray/menus, Live Activities, home widgets, and notifications.
+- **One type system from Postgres column to iOS button:** declare tables as Rust structs with automatic migrations and `Public*` projection safety (`leptoskit_db`), wire passkeys and 20 OAuth providers (`leptoskit_auth`), publish to app and extension stores (`lk publish`), and ship to LeptosKit Cloud or your own Linux VMs with zero lock-in under the public-domain [Unlicense](license).
+
+## Built for AI agents
+
+leptoskit is designed both for **coding agents building and operating apps** and for **apps that host AI assistants**:
+
+- **One workspace, one compiler, headless verification:** instead of coordinating Swift, Kotlin, TypeScript, SQL, and Terraform across separate repositories, an agent works in one Rust workspace configured by `leptoskit.toml`. `cargo`, `lk lint --deny-warnings`, and `WidgetTester` ([`leptoskit_testing`](crates/leptoskit_testing)) give fast, deterministic feedback across UI, routes, database schema, and backend logic without booting an emulator.
+- **Builder syntax by default (`[lint] markup = "builder"`):** `lk new` scaffolds plain Rust builder calls (`View().class("gap-4 p-6").child(Text("Hello"))`) rather than proc-macro markup. Compiler errors point directly at the offending call, `rust-analyzer` completes every method, builds are faster, and standard Rust loops and helpers compose cleanly. (`view!` markup remains supported for humans and is used throughout the examples and docs.)
+- **Live inspection and deployment over MCP (`lk mcp`):** coding agents connect to `lk mcp` to inspect running web and native apps (`devtools_sessions`, `inspect_tree`, `inspect_node`, `explain_styles`, `query_cache`, `navigate`, `set_state`, `highlight`, `runtime_errors`, `performance`, `read_logs`, `screenshot`) and to validate or ship to production (`db_check`, `cloud_estimate`, `cloud_deploy`, `cloud_status`, `cloud_logs`, `cloud_secrets_list`) with structured JSON—without shell scraping or exposing secret values.
+- **First-party skill and LLM-ready docs:** install the bundled agent skill at [`skills/leptoskit/SKILL.md`](skills/leptoskit/SKILL.md), or load the plain-Markdown documentation index at [https://leptoskit.dev/llms.txt](https://leptoskit.dev/llms.txt) and full book at [https://leptoskit.dev/llms-full.txt](https://leptoskit.dev/llms-full.txt).
+- **Safe generative UI inside your app ([`leptoskit_agent_ui`](crates/leptoskit_agent_ui)):** let an in-app assistant answer with streaming, interactive native UI—stats, charts, sliders, tables, and action buttons driven by reactive formulas—written as pure Markdown + component data. It executes no arbitrary code, requires no app-store review to introduce new layouts, exposes `ui.reference()` to teach the model your registered components, and returns structured diagnostics via `ui.check()`. See [interfaces from agents](docs/src/guide/31-agent-interfaces.md).
+- **Verifiable releases (`leptoskit verify`):** build reproducible Linux backend binaries with SLSA provenance (`leptoskit verify build` / `reproduce`) so a reviewer—or an auditing agent—can confirm byte-for-byte that the shipped executable matches the public commit. See [verifying a release](docs/src/guide/30-verifying-releases.md).
 
 ## Examples
 
@@ -72,6 +96,9 @@ Generated macOS, iOS, and Android apps use the Swift or Kotlin renderers in `lep
 | [`leptoskit_codepush`](crates/leptoskit_codepush)               | Over-the-air updates: content-hashed manifests, a single-file bundle container, binary deltas, an update protocol, Axum routes, and a client that verifies every hash.                                         |
 | [`leptoskit_axum`](crates/leptoskit_axum)                       | The Axum server toolkit: static files with precompressed gzip, SPA fallback, health checks, and the code push registry. Axum is the one supported server.                                                      |
 | [`leptoskit_rpc`](crates/leptoskit_rpc)                         | Retrying queries and mutations over leptos server functions, with errors classified so "offline" and "invalid input" stop looking the same.                                                                    |
+| [`leptoskit_db`](crates/leptoskit_db)                           | Rust-struct database schemas for SQLite and Postgres with automatic migrations and `Public*` projection types that keep private columns off the wire.                                                          |
+| [`leptoskit_auth`](crates/leptoskit_auth)                       | Full sign-in, MFA, passkeys, and 20 OAuth providers, paired with [`leptoskit_idp`](crates/leptoskit_idp) when your app also acts as an OIDC identity provider.                                                 |
+| [`leptoskit_agent_ui`](crates/leptoskit_agent_ui)               | Safe streaming UI written as Markdown + component data by LLMs: reactive variables, formulas, charts, sliders, tables, and actions rendered as native widgets with no code execution.                          |
 | [`leptoskit_router`](crates/leptoskit_router)                   | Typed file routes: `src/routes/` becomes one `Route` enum that parses URLs and writes hrefs, generated by `leptoskit routes` with `leptoskit_router_codegen`.                                                  |
 | [`leptoskit_query`](crates/leptoskit_query)                     | Async state in the style of TanStack Query: cached, deduplicated, retrying queries, infinite queries, and mutations on fine-grained signals, synced across tabs and windows.                                   |
 | [`leptoskit_virtual`](crates/leptoskit_virtual)                 | Headless list virtualization in the style of TanStack Virtual: a windowing core over fixed or measured sizes, overscan, aligned scroll targets, and a scroll container that renders only the visible items.    |
@@ -82,9 +109,9 @@ Generated macOS, iOS, and Android apps use the Swift or Kotlin renderers in `lep
 | [`leptoskit_form`](crates/leptoskit_form)                       | Headless form state in the style of TanStack Form: typed fields, sync validation, touch and submit tracking, and inputs wired through the aria fields.                                                         |
 | [`leptoskit_config`](crates/leptoskit_config)                   | `leptoskit.toml`: app identity, platforms, servers, cloud environments and storage, native targets, code push channels, and plugin declarations.                                                               |
 | [`leptoskit_cloud`](crates/leptoskit_cloud)                     | Shared types, source archive, price estimator, and control plane for LeptosKit Cloud (paired with `leptoskit_cloud_runtime`, `leptoskit_cloud_worker`, `leptoskit_cloud_platform`, and `leptoskit_cloud_app`). |
-| [`leptoskit_plugin`](crates/leptoskit_plugin)                   | The plugin system: build hooks for leptoskit plugins, and leptos plugins forwarded as app cargo features.                                                                                                      |
+| [`leptoskit_plugin`](crates/leptoskit_plugin)                   | The plugin system: build hooks for leptoskit plugins, leptos plugins forwarded as cargo features, and 90+ `leptoskit_plugin_*` native device capability crates.                                                |
 | [`leptoskit_docs`](crates/leptoskit_docs)                       | Markdown with leptos components, in the style of MDX, and the static site generator that builds these docs: navigation, search, highlighting, and checked links.                                               |
-| [`leptoskit_cli`](crates/leptoskit_cli)                         | The `leptoskit` (`lk`) binary: `new`, `dev`, `build`, `cloud`, `infra`, `deploy`, `mcp`, `game`, `serve`, `lint`, `format`, `codepush`, `doctor`, `completions`.                                               |
+| [`leptoskit_cli`](crates/leptoskit_cli)                         | The `leptoskit` (`lk`) binary: `new`, `dev`, `build`, `cloud`, `infra`, `deploy`, `publish`, `verify`, `mcp`, `game`, `serve`, `lint`, `format`, `codepush`, `doctor`, `completions`.                          |
 | [`leptoskit_testing`](crates/leptoskit_testing)                 | Native widget tests with semantic finders, interactions, bounded pumping, and diagnostic trees.                                                                                                                |
 | [`leptoskit_lint`](crates/leptoskit_lint)                       | The project rules behind `leptoskit lint`: components carry `#[component]`, and trees are written the way `[lint] markup` says.                                                                                |
 | [`leptoskit_testing_library`](crates/leptoskit_testing_library) | Testing Library queries and widget-test actions (`tap`, `enter_text`, `toggle`) for leptoskit components in a real browser, sharing `leptoskit_testing`'s finders.                                             |
@@ -99,9 +126,11 @@ lk new my_app                            # one app, all six platforms enabled (a
 lk dev                                   # run every platform, rebuild on change
 lk routes                                # write the typed Route enum from src/routes/
 lk build --release --platform web        # cached builds
+lk mcp                                   # start the MCP server for coding agents (live DevTools + cloud tools)
 lk cloud login && lk cloud launch        # ship straight to LeptosKit Cloud from leptoskit.toml
 lk deploy                                # deploy to LeptosKit Cloud (or self-hosted OpenTofu/Kamal)
 lk codepush release                      # pack dist/ into a versioned over-the-air release
+lk verify build --recipe recipe.json     # build a reproducible, SLSA-provenanced backend release
 lk doctor                                # check the toolchain
 ```
 

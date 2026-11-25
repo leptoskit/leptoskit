@@ -7,8 +7,9 @@ Keep relative file links outside these blocks so consumers in `readme.md`,
 <!-- {@leptoskitOverview} -->
 leptoskit is a full-stack Rust toolkit for taking an app from a single codebase to every screen and to production:
 
-- **One UI, real native widgets:** describe screens once as a tree of components (`View`, `Text`, `Button`, `TextInput`, `ScrollView`, …) styled with built-in Tailwind. On the web it renders to the DOM with SSR, CSR, or islands; on macOS, iOS, Android, Linux, Windows, the terminal, and experimental HarmonyOS it renders native controls with no web view.
-- **Full-stack by default:** typed server functions (`leptoskit_rpc`), file-based routing, cached queries, SQLite or Postgres migrations, sign-in, background jobs, real-time updates, and sidecar services live beside the UI in one workspace configured by `leptoskit.toml`.
+- **One UI, real native widgets:** describe screens once as a tree of components (`View`, `Text`, `Button`, `TextInput`, `ScrollView`, …) styled with built-in Tailwind. On the web it renders to the DOM with SSR, CSR, or islands; on macOS, iOS, Android, Linux, Windows, the terminal, browser extensions, and experimental HarmonyOS it renders native controls with no web view and built-in signed WebAssembly over-the-air updates.
+- **Full-stack by default:** typed server functions (`leptoskit_rpc`), file-based routing, cached queries, Rust-struct SQLite or Postgres schemas and migrations (`leptoskit_db`), passkey/OAuth sign-in and OIDC IdP (`leptoskit_auth`, `leptoskit_idp`), background jobs, real-time updates, and native device plugins live beside the UI in one workspace configured by `leptoskit.toml`.
+- **Built for AI agents:** compiler-checked builder syntax by default (`[lint] markup = "builder"`), a built-in MCP server (`lk mcp`) for live DevTools inspection and cloud deploys, safe runtime generative UI (`leptoskit_agent_ui`), verifiable releases (`leptoskit verify`), a first-party skill, and `llms.txt` docs.
 - **Two clear ways to ship:** deploy straight from `leptoskit.toml` to **LeptosKit Cloud** (`lk cloud launch` / `lk deploy`), or self-host on your own Linux VMs with **OpenTofu + Kamal** (`lk infra`).
 <!-- {/leptoskitOverview} -->
 
