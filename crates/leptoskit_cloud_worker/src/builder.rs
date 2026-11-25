@@ -622,7 +622,9 @@ pub fn build_server_output(
 	}];
 
 	for (name, service) in &request.app.services {
-		if service.remote {
+		// One that runs elsewhere, or that the cloud serves itself, is no
+		// process of the app's.
+		if service.remote || service.hosted.is_some() {
 			continue;
 		}
 
@@ -717,6 +719,15 @@ mod tests {
 				public: true,
 				isolated: false,
 				database: false,
+				..ServiceFacts::default()
+			},
+		);
+		services.insert(
+			"notifications".to_owned(),
+			ServiceFacts {
+				public: true,
+				hosted: Some(leptoskit_cloud::deployments::HostedService::Notifications),
+				..ServiceFacts::default()
 			},
 		);
 		services.insert(
@@ -726,6 +737,7 @@ mod tests {
 				public: false,
 				isolated: false,
 				database: false,
+				..ServiceFacts::default()
 			},
 		);
 
@@ -765,6 +777,7 @@ mod tests {
 
 	#[test]
 	fn build_server_output_includes_app_and_local_services_only() {
+		// Neither a remote service nor one the cloud hosts is built.
 		let request = sample_request();
 		let digest = Digest::of(b"image");
 		let output = build_server_output(&request, digest.clone(), DEFAULT_APP_PORT, Vec::new());

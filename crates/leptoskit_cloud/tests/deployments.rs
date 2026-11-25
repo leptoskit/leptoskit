@@ -23,6 +23,7 @@ use support::config;
 use support::databases;
 use support::domains;
 use support::limits;
+use support::notifications;
 use support::publishing;
 use support::review;
 use support::shipping;
@@ -546,6 +547,21 @@ async fn a_clusters_postgres_is_checked() {
 #[tokio::test]
 async fn a_failed_release_does_not_print_the_password() {
 	databases::a_failed_release_does_not_print_the_password(&support::app().await).await;
+}
+
+#[tokio::test]
+async fn an_app_with_notifications_is_served_by_the_hub() {
+	notifications::an_app_with_notifications_is_served_by_the_hub(&support::app().await).await;
+}
+
+#[tokio::test]
+async fn a_tenant_lives_with_its_releases_and_its_environment() {
+	notifications::a_tenant_lives_with_its_releases_and_its_environment(&support::app().await).await;
+}
+
+#[tokio::test]
+async fn a_hub_serves_only_its_own_cluster() {
+	notifications::a_hub_serves_only_its_own_cluster(&support::app().await).await;
 }
 
 #[tokio::test]

@@ -473,6 +473,33 @@ mod domains {
 	}
 }
 
+/// Hosted notifications (`support/notifications.rs`), on Postgres.
+mod notifications {
+	use super::app;
+	use super::support::notifications;
+
+	#[tokio::test]
+	async fn an_app_with_notifications_is_served_by_the_hub() {
+		if let Some((_postgres, app)) = app().await {
+			notifications::an_app_with_notifications_is_served_by_the_hub(&app).await;
+		}
+	}
+
+	#[tokio::test]
+	async fn a_tenant_lives_with_its_releases_and_its_environment() {
+		if let Some((_postgres, app)) = app().await {
+			notifications::a_tenant_lives_with_its_releases_and_its_environment(&app).await;
+		}
+	}
+
+	#[tokio::test]
+	async fn a_hub_serves_only_its_own_cluster() {
+		if let Some((_postgres, app)) = app().await {
+			notifications::a_hub_serves_only_its_own_cluster(&app).await;
+		}
+	}
+}
+
 /// Managed Postgres databases (`support/databases.rs`), on Postgres.
 mod databases {
 	use super::app;

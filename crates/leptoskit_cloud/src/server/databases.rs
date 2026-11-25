@@ -205,7 +205,7 @@ impl std::fmt::Debug for Address {
 /// The `DATABASE_URL` of a role called `name` on `server`. The name and
 /// the password are lower-case hex and `_`, and the host was checked when
 /// the facts were set, so nothing needs escaping.
-fn url(server: &ClusterPostgres, name: &str, password: &str) -> String {
+pub(crate) fn url(server: &ClusterPostgres, name: &str, password: &str) -> String {
 	format!(
 		"postgres://{name}:{password}@{}:{}/{name}?sslmode={}",
 		server.host,

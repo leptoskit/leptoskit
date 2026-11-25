@@ -527,6 +527,10 @@ pub const OPERATIONS: &[(&str, Requirement)] = &[
 		"restore_backup",
 		Requirement::Project(Permission::DeleteEnvironment),
 	),
+	(
+		"notifications",
+		Requirement::Project(Permission::ViewProjects),
+	),
 	("domains", Requirement::Project(Permission::ViewProjects)),
 	(
 		"attach_domain",
@@ -569,6 +573,8 @@ pub const OPERATIONS: &[(&str, Requirement)] = &[
 	("finish", Requirement::Worker),
 	("report_status", Requirement::Worker),
 	("cluster_environments", Requirement::Worker),
+	("notification_tenants", Requirement::Worker),
+	("report_notifications", Requirement::Worker),
 	("clusters", Requirement::Operator),
 	("register_cluster", Requirement::Operator),
 	("set_cluster_facts", Requirement::Operator),

@@ -536,7 +536,8 @@ pub async fn a_clusters_postgres_is_checked(app: &App) {
 	assert!(
 		target.starts_with(&format!(
 			"eu-one: now runtime class none, never sleeps, postgres {HOST}:5432 in \
-			 leptoskit-postgres, no tls; was runtime class gvisor, wakes sleeping, postgres none"
+			 leptoskit-postgres, no tls, notifications none; was runtime class gvisor, wakes \
+			 sleeping, postgres none, notifications none"
 		)),
 		"{target}"
 	);

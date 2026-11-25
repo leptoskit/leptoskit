@@ -17,11 +17,13 @@ use leptoskit_cloud::deployments;
 use leptoskit_cloud::deployments::AppFacts;
 use leptoskit_cloud::deployments::DatabaseDialect;
 use leptoskit_cloud::deployments::DeployConfig;
+use leptoskit_cloud::deployments::HostedService;
 use leptoskit_cloud::deployments::ServiceFacts;
 use leptoskit_cloud::projects;
 use leptoskit_config::DbDialect;
 use leptoskit_config::DbLiveCapture;
 use leptoskit_config::LeptoskitConfig;
+use leptoskit_config::ResolvedService;
 use serde_json::Value;
 use serde_json::json;
 
@@ -66,6 +68,11 @@ pub(crate) fn app_facts(config: &LeptoskitConfig) -> AppFacts {
 					public: service.public.unwrap_or(false),
 					isolated: service.trust == Some(leptoskit_config::ServiceTrust::Isolated),
 					database: service.database.unwrap_or(false),
+					// As `[services]` settles it; a table that doesn't
+					// resolve is refused when the app is built.
+					forward_identity: ResolvedService::merge(name, service, None)
+						.is_ok_and(|resolved| resolved.forward_identity),
+					hosted: hosted(service),
 				},
 			)
 		})
@@ -75,6 +82,21 @@ pub(crate) fn app_facts(config: &LeptoskitConfig) -> AppFacts {
 		live,
 		services,
 	}
+}
+
+/// The service the cloud serves itself that `service` is, if any: a
+/// registry `crate` it knows, fetched from the registry rather than Git or a
+/// path, and run by the cloud rather than elsewhere.
+fn hosted(service: &leptoskit_config::ServiceConfig) -> Option<HostedService> {
+	if service.url.is_some()
+		|| service.git.is_some()
+		|| service.path.is_some()
+		|| service.package.is_some()
+	{
+		return None;
+	}
+
+	service.krate.as_deref().and_then(HostedService::for_crate)
 }
 
 fn load_full_config(context: &Context) -> Result<(LeptoskitConfig, &Path)> {

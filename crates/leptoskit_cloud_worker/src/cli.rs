@@ -441,6 +441,13 @@ async fn run(arguments: Run, shutdown: watch::Receiver<bool>) -> Result<(), Comm
 		.then(|| Duration::from_secs(arguments.status_interval_seconds));
 
 	let worker = match identity.role {
+		WorkerRole::Notifications => {
+			return Err(CommandError::Usage(
+				"this worker is paired as a notifications hub, which takes no jobs; run it with \
+				 `leptoskit-cloud-notifications`"
+					.to_owned(),
+			));
+		}
 		WorkerRole::Build => {
 			let using_builtin = arguments.build_command.is_none();
 			let (program, args) = if let Some(program) = arguments.build_command {
@@ -555,6 +562,7 @@ async fn run(arguments: Run, shutdown: watch::Receiver<bool>) -> Result<(), Comm
 		match identity.role {
 			WorkerRole::Build => "build",
 			WorkerRole::Cluster => "cluster",
+			WorkerRole::Notifications => "notifications",
 		}
 	);
 	Ok(worker.run(shutdown).await?)

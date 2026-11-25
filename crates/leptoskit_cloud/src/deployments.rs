@@ -141,6 +141,34 @@ pub struct ServiceFacts {
 	/// It has `database = true`: a database of its own, on the app's
 	/// engine.
 	pub database: bool,
+	/// The app's server tells it who is signed in (`forward_identity`, as
+	/// `[services]` settles it). Read only for a service the cloud serves
+	/// itself: for any other, the cloud gives the app no address of it yet.
+	pub forward_identity: bool,
+	/// It is a service the cloud serves itself, from a platform component,
+	/// rather than running a process for: see [`HostedService`].
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub hosted: Option<HostedService>,
+}
+
+/// A service the cloud serves from a component of its own, shared by every
+/// environment on a cluster that uses it, instead of running a process of
+/// the app's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum HostedService {
+	/// `leptoskit_notifications`, served by the cluster's notifications hub:
+	/// see [`crate::notifications`].
+	Notifications,
+}
+
+impl HostedService {
+	/// The hosted service a `[services.<name>]` table's registry `crate`
+	/// is, if any.
+	#[must_use]
+	pub fn for_crate(name: &str) -> Option<Self> {
+		(name == crate::notifications::CRATE).then_some(Self::Notifications)
+	}
 }
 
 /// What the CLI reports about the app beside `[cloud]`: what

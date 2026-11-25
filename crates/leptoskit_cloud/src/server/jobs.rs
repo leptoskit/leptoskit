@@ -778,6 +778,7 @@ mod tests {
 					},
 				),
 				database: None,
+				notifications: None,
 			})),
 			attempt: 0,
 			max_attempts: 1,

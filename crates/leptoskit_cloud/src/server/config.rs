@@ -117,7 +117,7 @@ pub(crate) async fn set_variable(
 	)
 	.await?;
 	let environment_id = environment(cx.tx(), &project, environment_name).await?.id;
-	check_name(&name).map_err(|error| invalid_name(&error))?;
+	check_variable_name(&name).map_err(|error| invalid_name(&error))?;
 
 	if value.len() > MAX_VARIABLE_VALUE_LEN {
 		return Err(rpc::Error::invalid(format!(
@@ -186,6 +186,10 @@ pub(crate) async fn set_variable(
 		.insert(cx.tx())
 		.await?
 	};
+	if crate::notifications::is_setting(&row.name) {
+		super::notifications::changed(cx.tx(), environment_id).await?;
+	}
+
 	// The name only: a value, even a variable's, isn't the audit log's to
 	// keep.
 	audit::record(
@@ -219,13 +223,18 @@ pub(crate) async fn unset_variable(
 	let environment_id = environment(cx.tx(), &project, environment_name).await?.id;
 	// A name that isn't one may be a value sent by mistake: the answer
 	// never repeats it.
-	check_name(name).map_err(|error| invalid_name(&error))?;
+	check_variable_name(name).map_err(|error| invalid_name(&error))?;
 	let Some(mut row) = variable_named(cx.tx(), environment_id, name).await? else {
 		return Err(rpc::Error::not_found(format!(
 			"variable_not_found: `{environment_name}` has no variable `{name}`"
 		)));
 	};
 	row.delete(cx.tx()).await?;
+
+	if crate::notifications::is_setting(name) {
+		super::notifications::changed(cx.tx(), environment_id).await?;
+	}
+
 	audit::record(
 		cx.tx(),
 		&Actor::from(&access.caller),
@@ -431,6 +440,11 @@ async fn store(cx: &rpc::MutationCx, args: StoreSecret) -> rpc::Result<SecretSum
 	row.version = version;
 	row.updated_by = updated_by;
 	row.save(cx.tx()).await?;
+
+	if crate::notifications::is_setting(&row.name) {
+		super::notifications::changed(cx.tx(), environment_id).await?;
+	}
+
 	audit::record(
 		cx.tx(),
 		&Actor::from(&access.caller),
@@ -475,6 +489,11 @@ pub(crate) async fn unset_secret(
 	};
 	let version = row.version;
 	row.delete(cx.tx()).await?;
+
+	if crate::notifications::is_setting(name) {
+		super::notifications::changed(cx.tx(), environment_id).await?;
+	}
+
 	audit::record(
 		cx.tx(),
 		&Actor::from(&access.caller),
@@ -488,10 +507,27 @@ pub(crate) async fn unset_secret(
 	Ok(())
 }
 
+/// Checks that `name` can name a variable: one the cloud doesn't set, or
+/// one of the hosted notifications service's settings, which only its hub
+/// reads.
+fn check_variable_name(name: &str) -> Result<(), String> {
+	if crate::notifications::SECRET_SETTINGS.contains(&name) {
+		return Err(format!(
+			"`{name}` is a private key: set it as a secret, which nobody can read back"
+		));
+	}
+
+	if crate::notifications::is_setting(name) {
+		return Ok(());
+	}
+
+	check_name(name)
+}
+
 /// Checks that `name` can name a secret: as a variable's name, or one of
 /// the store credentials a publish carries, which no release is given.
 fn check_secret_name(name: &str) -> Result<(), String> {
-	if crate::workers::is_publish_credential(name) {
+	if crate::workers::is_publish_credential(name) || crate::notifications::is_setting(name) {
 		return Ok(());
 	}
 
@@ -500,7 +536,8 @@ fn check_secret_name(name: &str) -> Result<(), String> {
 
 /// What a release of `environment` starts its processes with: the
 /// variables and their values, and the names of the secrets. A store
-/// credential is a publish's, never the app's.
+/// credential is a publish's, and a notifications setting its cluster's
+/// hub's: never the app's.
 pub(crate) async fn for_release(
 	db: &impl leptoskit_db::Read,
 	environment: Id<Environment>,
@@ -510,6 +547,7 @@ pub(crate) async fn for_release(
 		.all(db)
 		.await?
 		.into_iter()
+		.filter(|row| !crate::notifications::is_setting(&row.name))
 		.map(|row| (row.name, row.value))
 		.collect();
 	let mut secrets: Vec<String> = Secret::query()
@@ -518,7 +556,9 @@ pub(crate) async fn for_release(
 		.await?
 		.into_iter()
 		.map(|row| row.name)
-		.filter(|name| !crate::workers::is_publish_credential(name))
+		.filter(|name| {
+			!crate::workers::is_publish_credential(name) && !crate::notifications::is_setting(name)
+		})
 		.collect();
 	secrets.sort_unstable();
 	Ok((variables, secrets))
@@ -596,6 +636,11 @@ pub(crate) async fn leased_values(
 	let mut values = Vec::new();
 
 	for lease in &leases {
+		if let Some(value) = super::notifications::leased_value(tx, &key, lease).await? {
+			values.push(value);
+			continue;
+		}
+
 		let secret_id = lease.secret_id;
 		let version = lease.version;
 		let Some(row) = Secret::query()

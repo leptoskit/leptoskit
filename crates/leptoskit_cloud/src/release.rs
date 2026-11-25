@@ -26,6 +26,7 @@ use leptoskit_cloud_runtime::DatabaseAccess;
 use leptoskit_cloud_runtime::Egress;
 use leptoskit_cloud_runtime::EnvironmentRef;
 use leptoskit_cloud_runtime::Image;
+use leptoskit_cloud_runtime::PlatformService;
 use leptoskit_cloud_runtime::Policy;
 use leptoskit_cloud_runtime::Probes;
 use leptoskit_cloud_runtime::Process;
@@ -53,6 +54,8 @@ use uuid::Uuid;
 use crate::deployments::AppFacts;
 use crate::deployments::DatabaseDialect;
 use crate::deployments::DeployConfig;
+use crate::deployments::HostedService;
+use crate::deployments::ServiceFacts;
 use crate::operator::ClusterFacts;
 use crate::projects::EnvironmentScale;
 use crate::projects::ProcessScale;
@@ -166,12 +169,15 @@ pub fn app_config(facts: &AppFacts) -> LeptoskitConfig {
 	}
 
 	for (name, service) in &facts.services {
+		// A service the cloud serves itself is, to `[cloud]`, one that
+		// runs elsewhere: no process, so nothing to size.
+		let elsewhere = service.remote || is_hosted(service);
 		app.services.insert(
 			name.clone(),
 			ServiceConfig {
-				url: service.remote.then(|| REMOTE_SERVICE.to_owned()),
+				url: elsewhere.then(|| REMOTE_SERVICE.to_owned()),
 				public: Some(service.public),
-				database: Some(service.database),
+				database: Some(service.database && !elsewhere),
 				trust: service.isolated.then_some(ServiceTrust::Isolated),
 				..ServiceConfig::default()
 			},
@@ -179,6 +185,12 @@ pub fn app_config(facts: &AppFacts) -> LeptoskitConfig {
 	}
 
 	app
+}
+
+/// Whether the cloud serves `service` itself rather than running a process
+/// for it. A remote service is never hosted, whatever it reports.
+fn is_hosted(service: &ServiceFacts) -> bool {
+	!service.remote && service.hosted.is_some()
 }
 
 /// Why a deployment's configuration doesn't resolve.
@@ -346,6 +358,16 @@ pub struct PlannedDatabase {
 	pub backups: Backups,
 }
 
+/// The hosted notifications a plan's environment is a tenant of.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct PlannedNotifications {
+	/// Browsers reach it under `/_leptoskit/services/notifications/` on
+	/// the environment's hostnames.
+	pub public: bool,
+	/// The app's server tells it who is signed in.
+	pub forward_identity: bool,
+}
+
 /// What a deployment will run, before the build says how each process
 /// starts.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -359,6 +381,10 @@ pub struct Plan {
 	/// The managed Postgres database, when that is the app's database.
 	#[serde(default)]
 	pub postgres: Option<PlannedDatabase>,
+	/// The cluster's shared notifications service, when the app declares
+	/// `[services.notifications]` with [`crate::notifications::CRATE`].
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub notifications: Option<PlannedNotifications>,
 	/// What the release won't do, as sentences.
 	pub fine_print: Vec<String>,
 }
@@ -399,6 +425,23 @@ pub enum PlanError {
 		 volume, so it can't run as a separate process"
 	)]
 	SqliteShared { name: String },
+	/// The app uses hosted notifications, and the environment's cluster
+	/// runs no notifications hub, or no Postgres server for its database.
+	#[error(
+		"notifications_unavailable: `[services.notifications]` is served by the cluster's shared \
+		 notifications service, and the cluster this environment runs on has none"
+	)]
+	NotificationsUnavailable,
+	/// A hosted service under a name its paths don't answer to.
+	#[error(
+		"hosted_service_name: `{name}` is `{krate}`, which the cloud serves only as \
+		 `[services.{expected}]`; rename the table"
+	)]
+	HostedServiceName {
+		name: String,
+		krate: &'static str,
+		expected: &'static str,
+	},
 	/// A service's name can't name a process.
 	#[error(
 		"invalid_service_name: `{name}` can't name a process: it must be a DNS label other than \
@@ -496,6 +539,17 @@ pub fn plan(
 		));
 	}
 
+	let notifications = hosted_notifications(facts, cluster)?;
+
+	if notifications.is_some() {
+		fine_print.push(
+			"Its notifications are served by the cluster's shared notifications service, with a \
+			 database of their own on the cluster's Postgres server, which isn't backed up on a \
+			 schedule yet. Each push a provider accepts counts toward `notification_pushes`."
+				.to_owned(),
+		);
+	}
+
 	if postgres.is_some() {
 		fine_print.push(
 			"Its Postgres database is a database and a role of its own on the cluster's shared \
@@ -534,8 +588,50 @@ pub fn plan(
 		sqlite,
 		database: !matches!(resolved.database, ResolvedDatabase::None),
 		postgres,
+		notifications,
 		fine_print,
 	})
+}
+
+/// The hosted notifications `facts` declare, when the cluster can serve
+/// them.
+fn hosted_notifications(
+	facts: &AppFacts,
+	cluster: &ClusterFacts,
+) -> Result<Option<PlannedNotifications>, PlanError> {
+	let mut planned = None;
+
+	for (name, service) in &facts.services {
+		let Some(HostedService::Notifications) = service.hosted.filter(|_| is_hosted(service))
+		else {
+			continue;
+		};
+
+		// The service answers under its own name's paths, whatever the
+		// table is called.
+		if name != crate::notifications::SERVICE {
+			return Err(PlanError::HostedServiceName {
+				name: name.clone(),
+				krate: crate::notifications::CRATE,
+				expected: crate::notifications::SERVICE,
+			});
+		}
+
+		if service.public && service.isolated {
+			return Err(PlanError::IsolatedPublicService { name: name.clone() });
+		}
+
+		if cluster.notifications.is_none() || cluster.postgres.is_none() {
+			return Err(PlanError::NotificationsUnavailable);
+		}
+
+		planned = Some(PlannedNotifications {
+			public: service.public,
+			forward_identity: service.forward_identity,
+		});
+	}
+
+	Ok(planned)
 }
 
 fn from_resolved(process: ResolvedProcess) -> ProcessScale {
@@ -611,6 +707,10 @@ pub enum SpecBuildError {
 	/// say where its server is.
 	#[error("the cluster no longer has a Postgres server for this environment's database")]
 	NoPostgres,
+	/// The plan has hosted notifications, and the cluster's facts no longer
+	/// say where its hub is, or the environment has no tenant.
+	#[error("the cluster no longer has a notifications service for this environment")]
+	NoNotifications,
 	/// The spec failed [`ReleaseSpec::validate`].
 	#[error("the release spec is invalid: {0}")]
 	Invalid(#[from] SpecError),
@@ -632,6 +732,8 @@ pub struct SpecTarget<'a> {
 	/// The environment's verified custom domains. Each serves what the
 	/// hostname does, with a certificate issued for it.
 	pub domains: &'a [String],
+	/// The environment's hosted notifications tenant, when it has one.
+	pub notifications: Option<Uuid>,
 }
 
 /// The spec for `plan`, built as `output` says, checked with
@@ -649,6 +751,11 @@ pub fn spec(
 ) -> Result<ReleaseSpec, SpecBuildError> {
 	let mut processes = Vec::with_capacity(plan.processes.len());
 	let mut routes = Vec::new();
+	let hub = match (&plan.notifications, &target.cluster.notifications, target.notifications) {
+		(None, ..) => None,
+		(Some(planned), Some(hub), Some(tenant)) => Some((planned, hub, tenant)),
+		(Some(_), ..) => return Err(SpecBuildError::NoNotifications),
+	};
 
 	for planned in &plan.processes {
 		let facts = output
@@ -696,6 +803,10 @@ pub fn spec(
 			// release it claims.
 			env.remove(DATABASE_URL);
 			secret_env.insert(DATABASE_URL.to_owned(), DATABASE_URL.to_owned());
+		}
+
+		if let (ProcessKind::App, Some(hub)) = (planned.kind, &hub) {
+			reach_notifications(&mut env, &mut secret_env, *hub);
 		}
 
 		processes.push(Process {
@@ -754,6 +865,8 @@ pub fn spec(
 		}
 	}
 
+	let platform = hub.map_or_else(Vec::new, |hub| bridge_notifications(hub, target, &mut routes));
+
 	let database = match (&plan.postgres, &target.cluster.postgres) {
 		(None, _) => None,
 		(Some(_), None) => return Err(SpecBuildError::NoPostgres),
@@ -766,7 +879,7 @@ pub fn spec(
 	};
 	let quota = Quota::for_processes(&processes);
 	let spec = ReleaseSpec {
-		platform: Vec::new(),
+		platform,
 		environment: target.environment.clone(),
 		deployment: target.deployment,
 		processes,
@@ -780,6 +893,75 @@ pub fn spec(
 	};
 	spec.validate()?;
 	Ok(spec)
+}
+
+/// The hub serving a plan's hosted notifications: what is planned, where
+/// the hub is, and the environment's tenant.
+type Hub<'a> = (
+	&'a PlannedNotifications,
+	&'a crate::operator::ClusterNotifications,
+	Uuid,
+);
+
+/// The app's server calls hosted notifications as it would its own
+/// service: at an address, with a token, under the tenant's path.
+fn reach_notifications(
+	env: &mut BTreeMap<String, String>,
+	secret_env: &mut BTreeMap<String, String>,
+	(notifications, server, tenant): Hub<'_>,
+) {
+	use crate::notifications::IDENTITY_ENV;
+	use crate::notifications::TOKEN_ENV;
+	use crate::notifications::URL_ENV;
+
+	env.insert(
+		URL_ENV.to_owned(),
+		format!(
+			"http://{}:{}{}",
+			server.host,
+			server.port,
+			crate::notifications::tenant_path(tenant)
+		),
+	);
+
+	if notifications.forward_identity {
+		env.insert(IDENTITY_ENV.to_owned(), "forward".to_owned());
+	} else {
+		env.remove(IDENTITY_ENV);
+	}
+
+	env.remove(TOKEN_ENV);
+	secret_env.insert(TOKEN_ENV.to_owned(), TOKEN_ENV.to_owned());
+}
+
+/// The bridge to the hub, and, when the service is public, a route to it on
+/// the hostname and each verified domain.
+fn bridge_notifications(
+	(notifications, server, _): Hub<'_>,
+	target: &SpecTarget<'_>,
+	routes: &mut Vec<Route>,
+) -> Vec<PlatformService> {
+	if notifications.public {
+		let hostnames = std::iter::once((target.hostname, Tls::Wildcard))
+			.chain(target.domains.iter().map(|domain| (domain.as_str(), Tls::Issued)));
+
+		for (hostname, tls) in hostnames {
+			routes.push(Route {
+				hostname: hostname.to_owned(),
+				path_prefix: service_prefix(crate::notifications::SERVICE),
+				process: crate::notifications::PLATFORM_SERVICE.to_owned(),
+				strip_cookies: false,
+				tls,
+			});
+		}
+	}
+
+	vec![PlatformService {
+		name: crate::notifications::PLATFORM_SERVICE.to_owned(),
+		namespace: server.namespace.clone(),
+		host: server.host.clone(),
+		port: server.port,
+	}]
 }
 
 /// Whether `name` is a DNS label: 1 to 63 lower-case letters, digits, and
@@ -873,6 +1055,7 @@ mod tests {
 			runtime_class: Some("gvisor".to_owned()),
 			wakes_sleeping: true,
 			postgres: Some(server()),
+			notifications: Some(hub()),
 		};
 		let spec = spec(
 			plan,
@@ -885,6 +1068,7 @@ mod tests {
 				variables: &BTreeMap::new(),
 				secrets: &[],
 				domains: &[],
+				notifications: Some(TENANT),
 			},
 		)
 		.expect("a spec");
@@ -899,7 +1083,18 @@ mod tests {
 		runtime_class: None,
 		wakes_sleeping: true,
 		postgres: None,
+		notifications: None,
 	};
+
+	const TENANT: Uuid = Uuid::from_u128(0x0123_4567_89ab_cdef_0123_4567_89ab_cdef);
+
+	fn hub() -> crate::operator::ClusterNotifications {
+		crate::operator::ClusterNotifications {
+			namespace: "leptoskit-notifications".to_owned(),
+			host: "hub.leptoskit-notifications.svc.cluster.local".to_owned(),
+			port: 8080,
+		}
+	}
 
 	fn server() -> crate::operator::ClusterPostgres {
 		crate::operator::ClusterPostgres {
@@ -1108,6 +1303,219 @@ mod tests {
 		);
 	}
 
+	/// An app that declares hosted notifications, as the CLI reports it.
+	fn hosted(name: &str, public: bool) -> DeployConfig {
+		let mut facts = AppFacts {
+			database: Some(DatabaseDialect::Sqlite),
+			..AppFacts::default()
+		};
+		facts.services.insert(
+			name.to_owned(),
+			ServiceFacts {
+				public,
+				database: true,
+				forward_identity: true,
+				hosted: Some(HostedService::Notifications),
+				..ServiceFacts::default()
+			},
+		);
+		reported(
+			"[app]\nname = \"notes\"\n[db]\ndialect = \"sqlite\"\n[cloud]\nproject = \"notes\"\n",
+			facts,
+		)
+		.1
+	}
+
+	#[test]
+	fn hosted_notifications_are_a_platform_service_and_no_process() {
+		let config = hosted("notifications", true);
+		let resolved = super::resolve(&config, "production").expect("resolved");
+		// Nothing to size: `[cloud]` sees a service that runs elsewhere.
+		assert!(resolved.services.is_empty());
+		let cluster = ClusterFacts {
+			postgres: Some(server()),
+			notifications: Some(hub()),
+			..WAKES
+		};
+		// Its database is its own, on Postgres, even beside a SQLite app.
+		let plan = plan(&resolved, None, &config.app, &cluster).expect("planned");
+		assert_eq!(
+			plan.notifications,
+			Some(PlannedNotifications {
+				public: true,
+				forward_identity: true,
+			})
+		);
+		assert_eq!(plan.processes.len(), 1);
+		assert!(
+			plan.fine_print
+				.iter()
+				.any(|line| line.contains("shared notifications service"))
+		);
+
+		let domains = ["notes.example.com".to_owned()];
+		let spec = spec(
+			&plan,
+			&output(&["app"]),
+			&SpecTarget {
+				environment: environment(),
+				deployment: 1,
+				hostname: "notes-acme.leptoskit.app",
+				cluster: &cluster,
+				variables: &BTreeMap::new(),
+				secrets: &[],
+				domains: &domains,
+				notifications: Some(TENANT),
+			},
+		)
+		.expect("a spec");
+		assert_eq!(
+			spec.platform,
+			[PlatformService {
+				name: "notifications".to_owned(),
+				namespace: "leptoskit-notifications".to_owned(),
+				host: "hub.leptoskit-notifications.svc.cluster.local".to_owned(),
+				port: 8080,
+			}]
+		);
+		let routed: Vec<(&str, &str, &str)> = spec
+			.routes
+			.iter()
+			.map(|route| {
+				(
+					route.hostname.as_str(),
+					route.process.as_str(),
+					route.path_prefix.as_str(),
+				)
+			})
+			.collect();
+		assert_eq!(
+			routed,
+			[
+				("notes-acme.leptoskit.app", "app", "/"),
+				("notes.example.com", "app", "/"),
+				(
+					"notes-acme.leptoskit.app",
+					"notifications",
+					"/_leptoskit/services/notifications/"
+				),
+				(
+					"notes.example.com",
+					"notifications",
+					"/_leptoskit/services/notifications/"
+				),
+			]
+		);
+		let app = &spec.processes[0];
+		assert_eq!(
+			app.env.get(crate::notifications::URL_ENV).map(String::as_str),
+			Some(
+				"http://hub.leptoskit-notifications.svc.cluster.local:8080/t/\
+				 0123456789abcdef0123456789abcdef"
+			)
+		);
+		assert_eq!(
+			app.env
+				.get(crate::notifications::IDENTITY_ENV)
+				.map(String::as_str),
+			Some("forward")
+		);
+		// The token is a secret, leased with the release.
+		assert_eq!(
+			app.secret_env
+				.get(crate::notifications::TOKEN_ENV)
+				.map(String::as_str),
+			Some(crate::notifications::TOKEN_ENV)
+		);
+		assert!(!app.env.contains_key(crate::notifications::TOKEN_ENV));
+	}
+
+	#[test]
+	fn private_hosted_notifications_have_no_route() {
+		let config = hosted("notifications", false);
+		let resolved = super::resolve(&config, "production").expect("resolved");
+		let cluster = ClusterFacts {
+			postgres: Some(server()),
+			notifications: Some(hub()),
+			..WAKES
+		};
+		let plan = plan(&resolved, None, &config.app, &cluster).expect("planned");
+		let spec = built(&plan, &["app"]);
+		assert_eq!(spec.platform.len(), 1);
+		assert!(
+			spec.routes
+				.iter()
+				.all(|route| route.process == "app"),
+			"{:?}",
+			spec.routes
+		);
+	}
+
+	#[test]
+	fn hosted_notifications_need_a_hub_a_server_and_their_own_name() {
+		let config = hosted("notifications", true);
+		let resolved = super::resolve(&config, "production").expect("resolved");
+
+		for cluster in [
+			WAKES,
+			ClusterFacts {
+				postgres: Some(server()),
+				..WAKES
+			},
+			ClusterFacts {
+				notifications: Some(hub()),
+				..WAKES
+			},
+		] {
+			assert_eq!(
+				plan(&resolved, None, &config.app, &cluster),
+				Err(PlanError::NotificationsUnavailable)
+			);
+		}
+
+		let renamed = hosted("inbox", true);
+		let resolved = super::resolve(&renamed, "production").expect("resolved");
+		let cluster = ClusterFacts {
+			postgres: Some(server()),
+			notifications: Some(hub()),
+			..WAKES
+		};
+		assert_eq!(
+			plan(&resolved, None, &renamed.app, &cluster),
+			Err(PlanError::HostedServiceName {
+				name: "inbox".to_owned(),
+				krate: "leptoskit_notifications",
+				expected: "notifications",
+			})
+		);
+
+		// A spec without the tenant is refused, not built without it.
+		let plan = plan(
+			&super::resolve(&config, "production").expect("resolved"),
+			None,
+			&config.app,
+			&cluster,
+		)
+		.expect("planned");
+		assert_eq!(
+			spec(
+				&plan,
+				&output(&["app"]),
+				&SpecTarget {
+					environment: environment(),
+					deployment: 1,
+					hostname: "notes-acme.leptoskit.app",
+					cluster: &cluster,
+					variables: &BTreeMap::new(),
+					secrets: &[],
+					domains: &[],
+					notifications: None,
+				},
+			),
+			Err(SpecBuildError::NoNotifications)
+		);
+	}
+
 	#[test]
 	fn a_plan_stored_before_databases_still_reads() {
 		let stored = r#"{"processes":[{"name":"app","kind":"app","size":"s","min":1,"max":1,"sleep":false,"routed":true,"sqlite":false}],"sqlite":false,"database":false,"fine_print":[]}"#;
@@ -1197,6 +1605,7 @@ mod tests {
 				variables: &BTreeMap::new(),
 				secrets: &[],
 				domains: &[],
+				notifications: None,
 			},
 		)
 		.unwrap_err();

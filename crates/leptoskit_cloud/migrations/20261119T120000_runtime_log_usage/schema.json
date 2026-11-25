@@ -2332,7 +2332,7 @@
         {
           "name": "runtime_bytes",
           "type": {
-            "kind": "int8"
+            "kind": "int64"
           },
           "nullable": true,
           "comment": "Unexpired runtime log bytes kept across this organisation's environments."

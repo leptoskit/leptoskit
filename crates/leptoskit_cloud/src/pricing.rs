@@ -57,6 +57,9 @@ pub enum Meter {
 	MacosBuildMinutes,
 	/// Custom hostnames, per hostname-month.
 	CustomHostnames,
+	/// Pushes a provider (APNs, FCM, Web Push) accepted from the cluster's
+	/// hosted notifications service.
+	NotificationPushes,
 }
 
 /// A string that isn't a [`Meter`] code.
@@ -66,7 +69,7 @@ pub struct UnknownMeter(String);
 
 impl Meter {
 	/// Every meter, in the order estimates list them.
-	pub const ALL: [Self; 14] = [
+	pub const ALL: [Self; 15] = [
 		Self::Compute(Size::Xs),
 		Self::Compute(Size::S),
 		Self::Compute(Size::M),
@@ -81,6 +84,7 @@ impl Meter {
 		Self::LinuxBuildMinutes,
 		Self::MacosBuildMinutes,
 		Self::CustomHostnames,
+		Self::NotificationPushes,
 	];
 
 	/// The stable code, as catalogues and Stripe meters name it.
@@ -101,6 +105,7 @@ impl Meter {
 			Self::LinuxBuildMinutes => "build_minutes_linux",
 			Self::MacosBuildMinutes => "build_minutes_macos",
 			Self::CustomHostnames => "custom_hostname_months",
+			Self::NotificationPushes => "notification_pushes",
 		}
 	}
 
@@ -114,6 +119,7 @@ impl Meter {
 			Self::Egress => "megabyte",
 			Self::LinuxBuildMinutes | Self::MacosBuildMinutes => "minute",
 			Self::CustomHostnames => "hostname-month",
+			Self::NotificationPushes => "push",
 		}
 	}
 }

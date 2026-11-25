@@ -565,7 +565,9 @@ impl Fixture {
 			| "workers"
 			| "jobs"
 			| "plans"
-			| "cluster_environments" => json!({}),
+			| "cluster_environments"
+			| "notification_tenants"
+			| "report_notifications" => json!({}),
 			"rpc.service_token" => json!({ "service": "billing" }),
 			"create_organization" => json!({ "slug": "new-team", "name": "New team" }),
 			"accept_invitation" => json!({ "token": "0".repeat(64) }),
@@ -707,6 +709,7 @@ impl Fixture {
 				})
 			}
 			"variables" | "secrets" | "domains" | "database" | "database_backups"
+			| "notifications"
 			| "create_backup" => {
 				json!({ "organization": organization, "project": "web", "environment": "staging" })
 			}
@@ -993,6 +996,9 @@ async fn a_worker_runs_only_the_protocol() {
 					"report_status" | "cluster_environments" => {
 						answer.message().starts_with("cluster_worker_required")
 					}
+					"notification_tenants" | "report_notifications" => {
+						answer.message().starts_with("notifications_worker_required")
+					}
 					_ => answer.message().starts_with("job_not_held"),
 				}
 			}
@@ -1028,6 +1034,10 @@ async fn a_cluster_worker_runs_only_the_protocol() {
 			Requirement::Worker => {
 				match *operation {
 					"claim" | "cluster_environments" => answer.status == 200,
+					"notification_tenants" | "report_notifications" => {
+						answer.status == 403
+							&& answer.message().starts_with("notifications_worker_required")
+					}
 					"report_status" => {
 						answer.status == 404
 							&& answer.message().starts_with("environment_not_found")
