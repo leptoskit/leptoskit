@@ -203,10 +203,16 @@ impl Default for LeptoskitConfig {
 /// [theme.lengths]
 /// gap = "1rem"
 /// pad = "16px"
+///
+/// [theme.fonts.hand]
+/// family = "Skribble Noto Sketch"
+/// faces = [{ file = "fonts/NotoSketch-Regular.ttf" }]
 /// ```
 ///
 /// Call `Theme::install_maps(&theme.colors, &theme.lengths)` once at app
 /// startup so native paint and the web `:root` sheet see the same names.
+/// Fonts need no call: the build bundles them and every host registers them
+/// before its first layout.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields, default)]
@@ -219,16 +225,24 @@ pub struct ThemeConfig {
 	/// leading `--`.
 	#[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
 	pub lengths: BTreeMap<String, String>,
+	/// Typefaces the app bundles, by custom property name: `[theme.fonts.hand]`
+	/// is chosen with `font-[var(--hand)]` on every platform. Keys may omit
+	/// the leading `--`, and may not also name a color or length.
+	#[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+	pub fonts: BTreeMap<String, FontConfig>,
 }
 
 impl ThemeConfig {
-	/// Whether both maps are empty.
+	/// The most font faces an app may declare, across every family.
+	pub const MAX_FONT_FACES: usize = 256;
+
+	/// Whether every map is empty.
 	#[must_use]
 	pub fn is_empty(&self) -> bool {
-		self.colors.is_empty() && self.lengths.is_empty()
+		self.colors.is_empty() && self.lengths.is_empty() && self.fonts.is_empty()
 	}
 
-	/// A human-readable problem with a color or length entry, if any.
+	/// A human-readable problem with a color, length, or font entry, if any.
 	#[must_use]
 	pub fn problem(&self) -> Option<String> {
 		for (name, value) in &self.colors {
@@ -251,8 +265,255 @@ impl ThemeConfig {
 			}
 		}
 
+		let faces: usize = self.fonts.values().map(|font| font.faces.len()).sum();
+
+		if faces > Self::MAX_FONT_FACES {
+			return Some(format!(
+				"fonts: declare at most {} faces in all; found {faces}",
+				Self::MAX_FONT_FACES
+			));
+		}
+
+		for (name, font) in &self.fonts {
+			if let Err(reason) = validate_theme_color_name(name) {
+				return Some(format!("fonts.{name}: {reason}"));
+			}
+
+			let bare = theme_name(name);
+			let shadowed = self
+				.colors
+				.keys()
+				.chain(self.lengths.keys())
+				.any(|other| theme_name(other) == bare);
+
+			if shadowed {
+				return Some(format!(
+					"fonts.{name}: `--{bare}` already names a color or length; give the font its \
+					 own name"
+				));
+			}
+
+			if let Err(reason) = font.validate() {
+				return Some(format!("fonts.{name}: {reason}"));
+			}
+		}
+
 		None
 	}
+
+	/// The custom property name of a theme key, without its leading `--`:
+	/// `hand` for both `hand` and `--hand`.
+	#[must_use]
+	pub fn property_name(key: &str) -> &str {
+		theme_name(key)
+	}
+}
+
+fn theme_name(key: &str) -> &str {
+	key.trim().trim_start_matches('-')
+}
+
+/// A typeface the app bundles, from one `[theme.fonts.<name>]` table.
+///
+/// ```toml
+/// [theme.fonts.hand]
+/// family = "Skribble Noto Sketch"
+/// faces = [
+///   { file = "fonts/NotoSketch-Regular.ttf" },
+///   { file = "fonts/NotoSketch-Bold.ttf", weight = 700 },
+///   { file = "fonts/NotoSketch-Italic.ttf", style = "italic" },
+/// ]
+///
+/// [theme.fonts.display]
+/// faces = [{ file = "fonts/Recursive.ttf", weight = [300, 1000] }]
+/// ```
+///
+/// Each face is one TrueType (`.ttf`) or OpenType (`.otf`) file inside the
+/// app's `assets` folder. A face declares the weight it draws, or the
+/// `[min, max]` range of a variable font's `wght` axis.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct FontConfig {
+	/// The family name the web stylesheet declares. Defaults to the table's
+	/// key.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub family: Option<String>,
+	/// The family's files, at least one.
+	pub faces: Vec<FontFaceConfig>,
+}
+
+impl FontConfig {
+	/// The longest family name accepted.
+	pub const MAX_FAMILY_LEN: usize = 128;
+
+	/// Checks the family name and every face.
+	///
+	/// # Errors
+	///
+	/// Returns a human-readable reason naming the first problem.
+	pub fn validate(&self) -> Result<(), String> {
+		if let Some(family) = &self.family {
+			let family = family.trim();
+
+			if family.is_empty() || family.len() > Self::MAX_FAMILY_LEN {
+				return Err(format!(
+					"family must be 1 to {} characters",
+					Self::MAX_FAMILY_LEN
+				));
+			}
+
+			if family
+				.chars()
+				.any(|ch| ch.is_control() || matches!(ch, '"' | '\\' | ';' | '{' | '}' | '<' | '>'))
+			{
+				return Err(format!(
+					"family `{family}` may not contain quotes, backslashes, `;`, braces, or angle \
+					 brackets"
+				));
+			}
+		}
+
+		if self.faces.is_empty() {
+			return Err("declare at least one face, such as `faces = [{ file = \
+			            \"fonts/Body.ttf\" }]`"
+				.to_owned());
+		}
+
+		for (index, face) in self.faces.iter().enumerate() {
+			face.validate()
+				.map_err(|reason| format!("faces[{index}]: {reason}"))?;
+		}
+
+		Ok(())
+	}
+}
+
+/// One file of a [`FontConfig`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct FontFaceConfig {
+	/// The file's path inside the app's `assets` folder, written as
+	/// `asset://` paths are: `fonts/Body.ttf` for `assets/fonts/Body.ttf`.
+	/// TrueType (`.ttf`) or OpenType (`.otf`).
+	pub file: String,
+	/// The weight the file draws, from 1 to 1000, or `[min, max]` for a
+	/// variable font's `wght` axis. Defaults to 400.
+	#[serde(default, skip_serializing_if = "is_default_value")]
+	pub weight: FontWeightConfig,
+	/// Whether the file is upright (`normal`, the default) or `italic`.
+	#[serde(default, skip_serializing_if = "is_default_value")]
+	pub style: FontStyleConfig,
+}
+
+impl FontFaceConfig {
+	/// The file's format, from its extension: `truetype` or `opentype`.
+	#[must_use]
+	pub fn format(&self) -> Option<&'static str> {
+		let (_, extension) = self.file.rsplit_once('.')?;
+
+		if extension.eq_ignore_ascii_case("ttf") {
+			Some("truetype")
+		} else if extension.eq_ignore_ascii_case("otf") {
+			Some("opentype")
+		} else {
+			None
+		}
+	}
+
+	fn validate(&self) -> Result<(), String> {
+		let file = self.file.as_str();
+		let unsafe_segment = file
+			.split('/')
+			.any(|segment| segment.is_empty() || segment == "." || segment == "..");
+
+		if file.is_empty()
+			|| file.starts_with('/')
+			|| file.contains(['\\', '\0', '"', '\''])
+			|| file.chars().any(char::is_control)
+			|| unsafe_segment
+		{
+			return Err(format!(
+				"file `{file}` must be a relative path inside the assets folder, such as \
+				 `fonts/Body.ttf`"
+			));
+		}
+
+		if self.format().is_none() {
+			return Err(format!(
+				"file `{file}` must be TrueType (.ttf) or OpenType (.otf); WOFF and WOFF2 load \
+				 only in browsers"
+			));
+		}
+
+		let [min, max] = self.weight.range();
+
+		if !(1..=1000).contains(&min) || !(1..=1000).contains(&max) || min > max {
+			return Err(format!(
+				"weight must be from 1 to 1000, or a range [min, max] with min no greater than \
+				 max; found {}",
+				self.weight
+			));
+		}
+
+		Ok(())
+	}
+}
+
+/// The weight a [`FontFaceConfig`] draws.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(untagged)]
+pub enum FontWeightConfig {
+	/// A static face's one weight.
+	Fixed(u16),
+	/// A variable face's `wght` axis, `[min, max]`.
+	Range([u16; 2]),
+}
+
+impl FontWeightConfig {
+	/// The weights drawn, as `[min, max]`; equal for a static face.
+	#[must_use]
+	pub const fn range(self) -> [u16; 2] {
+		match self {
+			Self::Fixed(weight) => [weight, weight],
+			Self::Range(range) => range,
+		}
+	}
+}
+
+impl Default for FontWeightConfig {
+	fn default() -> Self {
+		Self::Fixed(400)
+	}
+}
+
+impl fmt::Display for FontWeightConfig {
+	fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+		match self {
+			Self::Fixed(weight) => write!(formatter, "{weight}"),
+			Self::Range([min, max]) => write!(formatter, "[{min}, {max}]"),
+		}
+	}
+}
+
+/// Whether a [`FontFaceConfig`] is upright or italic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "lowercase")]
+pub enum FontStyleConfig {
+	/// Upright.
+	#[default]
+	Normal,
+	/// Italic.
+	Italic,
+}
+
+/// Whether `value` is its type's default: a predicate for serde's
+/// `skip_serializing_if`, which passes the field by reference.
+fn is_default_value<T: Default + PartialEq>(value: &T) -> bool {
+	*value == T::default()
 }
 
 fn validate_theme_color_name(name: &str) -> Result<(), String> {

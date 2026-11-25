@@ -1609,6 +1609,135 @@ fn theme_rejects_bad_colors_and_lengths() {
 }
 
 #[test]
+fn theme_fonts_declare_families_by_custom_property() {
+	let config = load(
+		"theme_fonts",
+		r#"
+[theme.fonts.hand]
+family = "Skribble Noto Sketch"
+faces = [
+  { file = "fonts/Sketch-Regular.ttf" },
+  { file = "fonts/Sketch-Black.otf", weight = 900 },
+  { file = "fonts/Sketch-Italic.ttf", style = "italic" },
+]
+
+[theme.fonts.--display]
+faces = [{ file = "fonts/Recursive.ttf", weight = [300, 1000] }]
+"#,
+	)
+	.expect("fonts");
+	let theme = config.theme.expect("theme table");
+	let hand = &theme.fonts["hand"];
+
+	assert_eq!(hand.family.as_deref(), Some("Skribble Noto Sketch"));
+	assert_eq!(hand.faces.len(), 3);
+	assert_eq!(hand.faces[0].weight.range(), [400, 400]);
+	assert_eq!(hand.faces[0].format(), Some("truetype"));
+	assert_eq!(hand.faces[1].weight.range(), [900, 900]);
+	assert_eq!(hand.faces[1].format(), Some("opentype"));
+	assert_eq!(
+		hand.faces[2].style,
+		leptoskit_config::FontStyleConfig::Italic
+	);
+
+	let display = &theme.fonts["--display"];
+
+	assert_eq!(display.family, None);
+	assert_eq!(display.faces[0].weight.range(), [300, 1000]);
+	assert_eq!(
+		leptoskit_config::ThemeConfig::property_name("--display"),
+		"display"
+	);
+	assert!(!theme.is_empty());
+}
+
+#[test]
+fn theme_fonts_reject_what_no_platform_can_load() {
+	let cases = [
+		("faces = []", "at least one face"),
+		(r#"faces = [{ file = "fonts/Body.woff2" }]"#, "WOFF2"),
+		(
+			r#"faces = [{ file = "../Body.ttf" }]"#,
+			"inside the assets folder",
+		),
+		(
+			r#"faces = [{ file = "/fonts/Body.ttf" }]"#,
+			"inside the assets folder",
+		),
+		(
+			r#"faces = [{ file = "fonts//Body.ttf" }]"#,
+			"inside the assets folder",
+		),
+		(
+			r#"faces = [{ file = "Body.ttf", weight = 0 }]"#,
+			"from 1 to 1000",
+		),
+		(
+			r#"faces = [{ file = "Body.ttf", weight = 1001 }]"#,
+			"from 1 to 1000",
+		),
+		(
+			r#"faces = [{ file = "Body.ttf", weight = [700, 300] }]"#,
+			"[700, 300]",
+		),
+		(
+			"family = \"Bad\\\"Name\"\nfaces = [{ file = \"Body.ttf\" }]",
+			"may not contain quotes",
+		),
+		(
+			"family = \"\"\nfaces = [{ file = \"Body.ttf\" }]",
+			"1 to 128",
+		),
+	];
+
+	for (index, (table, expected)) in cases.into_iter().enumerate() {
+		let error = load(
+			&format!("theme_font_bad_{index}"),
+			&format!("[theme.fonts.hand]\n{table}\n"),
+		)
+		.expect_err(table);
+
+		assert!(matches!(error, ConfigError::InvalidTheme(_)), "{error}");
+		assert!(error.to_string().contains("fonts.hand"), "{error}");
+		assert!(error.to_string().contains(expected), "{table}: {error}");
+	}
+
+	let error = load(
+		"theme_font_style",
+		"[theme.fonts.hand]\nfaces = [{ file = \"Body.ttf\", style = \"oblique\" }]\n",
+	)
+	.expect_err("oblique");
+	let ConfigError::Parse { source, .. } = error else {
+		panic!("expected a parse error, found {error}");
+	};
+	assert!(source.to_string().contains("oblique"), "{source}");
+
+	let error = load(
+		"theme_font_shadows_color",
+		"[theme.colors]\nhand = \"#000\"\n\n[theme.fonts.--hand]\nfaces = [{ file = \"Body.ttf\" \
+		 }]\n",
+	)
+	.expect_err("shared name");
+	assert!(
+		error
+			.to_string()
+			.contains("already names a color or length"),
+		"{error}"
+	);
+
+	let faces = (0..=leptoskit_config::ThemeConfig::MAX_FONT_FACES)
+		.map(|index| format!("{{ file = \"Body{index}.ttf\" }}"))
+		.collect::<Vec<_>>()
+		.join(", ");
+	let error = load(
+		"theme_font_too_many",
+		&format!("[theme.fonts.hand]\nfaces = [{faces}]\n"),
+	)
+	.expect_err("too many faces");
+	assert!(error.to_string().contains("at most 256 faces"), "{error}");
+}
+
+#[test]
 fn launch_screens_take_opaque_colours_and_a_sized_image() {
 	let config = load(
 		"launch_screen",
