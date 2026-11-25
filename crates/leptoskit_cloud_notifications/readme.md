@@ -63,11 +63,11 @@ A push counts when its provider accepts it. The service writes each accepted pus
 
 `leptoskit-cloud-platform` runs the hub when `[workers]` names its image, `notifications_image`. The image is `ghcr.io/leptoskit/leptoskit/leptoskit-cloud-notifications`, built from the `notifications` target of the worker's Dockerfile; pin it by digest. Each cluster then gets:
 
-- The `leptoskit-notifications` namespace, with `Deployment/hub` (one replica, no service-account token, a read-only root), its state on `PersistentVolumeClaim/hub-state`, and `Service/hub` on port 8080.
-- A `NetworkPolicy` that admits the platform's namespaces, the edge among them, and the apps' namespaces on port 8080 only.
+- The `leptoskit-notifications` namespace (enforcing `restricted`), with `Deployment/hub` (one replica, no service-account token, a read-only root), its state on `PersistentVolumeClaim/hub-state`, and `Service/hub` on port 8080.
+- Policies that admit Traefik and the apps' namespaces to the hub on port 8080 only, and the hub to the shared Postgres on 5432 and the cluster's DNS. Nothing else of the platform admits it.
 - The cluster worker run with `--notifications-namespace leptoskit-notifications`, `--notifications-host hub.leptoskit-notifications.svc.cluster.local` and `--notifications-port 8080`.
 
-The hub pairs itself from the Secret `hub-pairing` (key `code`) in its namespace. Issue a code for the `notifications` role and the cluster, create the Secret within ten minutes, and delete it once the hub's log says it serves. Until the Secret exists, an unpaired hub stops and Kubernetes restarts it. Then set the cluster's `notifications` facts with `set_cluster_facts` to the same namespace, host and port. The cluster worker must be running with its `--notifications-*` options first: an older worker would mark tenants ready with no database.
+The hub pairs itself from the Secret `hub-pairing` (key `code`) in its namespace. Issue a code for the `notifications` role and the cluster (a code for any other role is spent, its key isn't kept, and the worker it made must be revoked), create the Secret within ten minutes, and delete it once the hub's log says it serves. Until the Secret exists, an unpaired hub stops and Kubernetes restarts it. Then set the cluster's `notifications` facts with `set_cluster_facts` to the same namespace, host and port. The cluster worker must be running with its `--notifications-*` options first: an older worker would mark tenants ready with no database.
 
 ## Limits
 

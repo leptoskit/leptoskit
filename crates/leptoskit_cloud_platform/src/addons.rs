@@ -240,13 +240,6 @@ fn platform_namespaces(config: &PlatformConfig, edge: bool) -> Vec<&'static str>
 	if edge && config.control_plane.is_some() {
 		namespaces.push(workloads::CONTROL_NAMESPACE);
 	}
-	if config
-		.workers
-		.as_ref()
-		.is_some_and(|workers| workers.notifications_image.is_some())
-	{
-		namespaces.push(workloads::NOTIFICATIONS_NAMESPACE);
-	}
 	namespaces
 }
 
@@ -538,11 +531,6 @@ fn platform_network_policies(cluster: &Cluster, namespaces: &[&str]) -> Document
 		}
 		if ns == "database" {
 			ingress.push(json!({"from":[{"namespaceSelector":{"matchLabels":{"app.kubernetes.io/managed-by":"leptoskit-cloud"}}}],"ports":[{"protocol":"TCP","port":5432}]}));
-		}
-		if ns == workloads::NOTIFICATIONS_NAMESPACE {
-			// Apps call the hub on its port, under their tenant's path. The
-			// edge reaches it from kube-system, a platform namespace.
-			ingress.push(json!({"from":[{"namespaceSelector":{"matchLabels":{"app.kubernetes.io/managed-by":"leptoskit-cloud"}}}],"ports":[{"protocol":"TCP","port":workloads::NOTIFICATIONS_PORT}]}));
 		}
 		docs.push((
 			"10-policies",

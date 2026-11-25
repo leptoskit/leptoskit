@@ -572,9 +572,19 @@ pub(super) fn worker_documents(
 	Ok((documents, required))
 }
 
-/// The cluster's notifications hub (`60-workers`): its state, `Deployment/hub`
-/// and `Service/hub` in [`NOTIFICATIONS_NAMESPACE`], and the one Secret it
-/// reads, the pairing code that pairs it on its first start.
+/// The cluster's notifications hub: its namespace (`00-namespaces`), the
+/// policies around it (`10-policies`), its state, `Deployment/hub` and
+/// `Service/hub` (`60-workers`), and the one Secret it reads, the pairing
+/// code that pairs it on its first start.
+///
+/// The hub's namespace isn't a platform namespace: the hub answers tenants
+/// and the internet, so the platform's namespaces don't admit it. It is
+/// admitted to the shared Postgres on 5432 and to the cluster's DNS, and
+/// admits only Traefik and the apps' namespaces, on its port.
+#[expect(
+	clippy::too_many_lines,
+	reason = "declarative Kubernetes manifests for the notifications hub"
+)]
 fn notifications_documents(
 	config: &PlatformConfig,
 	platform: &Value,
@@ -582,6 +592,70 @@ fn notifications_documents(
 	worker_name: &str,
 ) -> (Documents, Vec<Value>) {
 	let mut documents = Vec::new();
+
+	// The hub's pod meets `restricted`; the namespace enforces it.
+	let mut namespace = object("v1", "Namespace", NOTIFICATIONS_NAMESPACE, None, json!({}));
+	namespace["metadata"]["labels"] = json!({
+		"pod-security.kubernetes.io/enforce": "restricted",
+		"pod-security.kubernetes.io/enforce-version": "v1.35"
+	});
+	documents.push(("00-namespaces", namespace));
+
+	let hub = json!({"namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": NOTIFICATIONS_NAMESPACE}}});
+	documents.push((
+		"10-policies",
+		object(
+			"networking.k8s.io/v1",
+			"NetworkPolicy",
+			"hub-ingress",
+			Some(NOTIFICATIONS_NAMESPACE),
+			json!({"spec": {
+				"podSelector": {},
+				"policyTypes": ["Ingress"],
+				"ingress": [
+					{
+						"from": [{
+							"namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": "kube-system"}},
+							"podSelector": {"matchLabels": {"app.kubernetes.io/name": "traefik"}}
+						}],
+						"ports": [{"protocol": "TCP", "port": NOTIFICATIONS_PORT}]
+					},
+					{
+						"from": [{"namespaceSelector": {"matchLabels": {"app.kubernetes.io/managed-by": "leptoskit-cloud"}}}],
+						"ports": [{"protocol": "TCP", "port": NOTIFICATIONS_PORT}]
+					}
+				]
+			}}),
+		),
+	));
+	documents.push((
+		"10-policies",
+		object(
+			"networking.k8s.io/v1",
+			"NetworkPolicy",
+			"notifications-hub",
+			Some("database"),
+			json!({"spec": {
+				"podSelector": {"matchLabels": {"cnpg.io/cluster": "shared"}},
+				"policyTypes": ["Ingress"],
+				"ingress": [{"from": [hub.clone()], "ports": [{"protocol": "TCP", "port": 5432}]}]
+			}}),
+		),
+	));
+	documents.push((
+		"10-policies",
+		object(
+			"networking.k8s.io/v1",
+			"NetworkPolicy",
+			"notifications-dns",
+			Some("kube-system"),
+			json!({"spec": {
+				"podSelector": {"matchLabels": {"k8s-app": "kube-dns"}},
+				"policyTypes": ["Ingress"],
+				"ingress": [{"from": [hub], "ports": [{"protocol": "UDP", "port": 53}, {"protocol": "TCP", "port": 53}]}]
+			}}),
+		),
+	));
 
 	documents.push((
 		"60-workers",

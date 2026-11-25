@@ -518,7 +518,7 @@ fn a_notifications_image_runs_the_clusters_hub_and_tells_its_worker() {
 		.expect("the hub's namespace");
 	assert_eq!(
 		namespace["metadata"]["labels"]["pod-security.kubernetes.io/enforce"],
-		"baseline"
+		"restricted"
 	);
 
 	let hub = find("Deployment", "hub", "leptoskit-notifications");
@@ -577,24 +577,44 @@ fn a_notifications_image_runs_the_clusters_hub_and_tells_its_worker() {
 		assert!(args.windows(2).any(|w| w == pair), "{pair:?} in {args:?}");
 	}
 
-	// Tenants reach the hub on its port and nothing else; the platform's
-	// namespaces, the edge among them, reach it as they reach each other.
-	let policy = find(
-		"NetworkPolicy",
-		"platform-ingress",
-		"leptoskit-notifications",
-	);
+	// Only Traefik and the apps reach the hub, on its port.
+	let policy = find("NetworkPolicy", "hub-ingress", "leptoskit-notifications");
+	let port = serde_json::json!([{"protocol": "TCP", "port": 8080}]);
 	let ingress = policy["spec"]["ingress"].as_array().unwrap();
-	assert!(ingress.iter().any(|rule| {
-		rule["from"][0]["namespaceSelector"]["matchLabels"]["app.kubernetes.io/managed-by"]
-			== "leptoskit-cloud"
-			&& rule["ports"] == serde_json::json!([{"protocol": "TCP", "port": 8080}])
-	}));
-	assert!(ingress.iter().any(|rule| {
-		rule["from"][0]["namespaceSelector"]["matchExpressions"][0]["values"]
-			.as_array()
-			.is_some_and(|names| names.iter().any(|n| n == "kube-system"))
-	}));
+	assert_eq!(ingress.len(), 2);
+	assert!(ingress.iter().all(|rule| rule["ports"] == port));
+	assert_eq!(
+		ingress[0]["from"][0]["podSelector"]["matchLabels"]["app.kubernetes.io/name"],
+		"traefik"
+	);
+	assert_eq!(
+		ingress[1]["from"][0]["namespaceSelector"]["matchLabels"]["app.kubernetes.io/managed-by"],
+		"leptoskit-cloud"
+	);
+
+	// The hub isn't a platform namespace: the others don't admit it, but
+	// the shared Postgres does on 5432, and the cluster's DNS on 53.
+	for policy in docs
+		.iter()
+		.filter(|d| d["kind"] == "NetworkPolicy" && d["metadata"]["name"] == "platform-ingress")
+	{
+		assert_ne!(policy["metadata"]["namespace"], "leptoskit-notifications");
+		assert!(
+			!policy.to_string().contains("leptoskit-notifications"),
+			"{policy}"
+		);
+	}
+	let postgres = find("NetworkPolicy", "notifications-hub", "database");
+	assert_eq!(
+		postgres["spec"]["ingress"][0]["ports"],
+		serde_json::json!([{"protocol": "TCP", "port": 5432}])
+	);
+	let dns = find("NetworkPolicy", "notifications-dns", "kube-system");
+	assert_eq!(
+		dns["spec"]["ingress"][0]["from"][0]["namespaceSelector"]["matchLabels"]
+			["kubernetes.io/metadata.name"],
+		"leptoskit-notifications"
+	);
 
 	let required = find("ConfigMap", "required-secrets", "kube-system");
 	let required: Value =

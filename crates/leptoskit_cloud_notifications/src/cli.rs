@@ -120,6 +120,7 @@ async fn pair_unless_paired(arguments: &Run) -> Result<(), CommandError> {
 		name: name.clone(),
 		capabilities: Vec::new(),
 		state: arguments.state.clone(),
+		role: Some(WorkerRole::Notifications),
 	})
 	.await?;
 	Ok(())
