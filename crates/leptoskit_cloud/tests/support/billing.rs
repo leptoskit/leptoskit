@@ -46,6 +46,38 @@ pub fn catalogue() -> Catalogue {
 	.expect("a catalogue")
 }
 
+/// [`catalogue`] with a second plan sold for money: `team` costs more,
+/// includes the same twenty, and caps what comes after at five hundred.
+pub fn catalogue_with_team() -> Catalogue {
+	leptoskit_cloud::server::catalogue_from_json(
+		r#"{
+			"currency": "usd",
+			"plans": [
+				{
+					"id": "hobby", "name": "Hobby", "monthly": 0,
+					"allowances": { "build_minutes_linux": 2 },
+					"limits": { "organizations": 2, "projects": 1, "custom_domains": 0 }
+				},
+				{
+					"id": "pro", "name": "Pro", "monthly": 2000, "included_usage": 20,
+					"limits": { "custom_domains": 2 },
+					"spend_cap": 50
+				},
+				{
+					"id": "team", "name": "Team", "monthly": 5000, "included_usage": 20,
+					"limits": { "custom_domains": 2 },
+					"spend_cap": 500
+				}
+			],
+			"meters": {
+				"build_minutes_linux": { "minor": 10 },
+				"compute_seconds_xs": { "minor": 1, "per": 100 }
+			}
+		}"#,
+	)
+	.expect("a catalogue")
+}
+
 /// An estimate prices a whole `[cloud]` table before anything is
 /// deployed: on the organisation's plan or another, for members only.
 pub async fn an_estimate_prices_a_table(app: &App) {
@@ -118,7 +150,9 @@ pub async fn an_estimate_prices_a_table(app: &App) {
 		.expect(401);
 }
 
-async fn usage(shop: &Shop<'_>) -> Value {
+/// What `shop`'s organisation used this month and what it costs, as its
+/// owner asks for it.
+pub async fn usage(shop: &Shop<'_>) -> Value {
 	shop.app
 		.call("usage", json!({ "organization": shop.org }), shop.as_ana())
 		.await
@@ -138,7 +172,7 @@ async fn put_on(shop: &Shop<'_>, plan: &str) {
 
 /// Deploys `bytes` and has a build worker hold the build for `seconds`
 /// before finishing it; the release is applied.
-async fn ship_after(shop: &Shop<'_>, bytes: &[u8], seconds: i64) {
+pub async fn ship_after(shop: &Shop<'_>, bytes: &[u8], seconds: i64) {
 	let digest = shop.upload(bytes).await;
 	shop.deploy("production", &digest, json!({ "database": "sqlite" }))
 		.await

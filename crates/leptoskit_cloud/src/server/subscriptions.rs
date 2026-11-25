@@ -519,6 +519,34 @@ fn plan_for(
 		.map(|plan| plan.id.as_str().to_owned())
 }
 
+/// Brings `account`'s own spend cap down to the cap of `plan`, the one its
+/// organisation moves to. The cap was checked against the plan it was set
+/// on, and `set_spend_cap` would have refused more on `plan`. One that
+/// fits, or none at all, is left as it is.
+async fn clamp_own_cap(
+	tx: &leptoskit_db::Tx,
+	services: &Services,
+	account: &mut BillingAccount,
+	plan: &str,
+) -> leptoskit_db::Result<()> {
+	let most = services
+		.shipping()
+		.catalogue
+		.as_ref()
+		.and_then(|catalogue| catalogue.plan(plan))
+		.and_then(|plan| plan.spend_cap)
+		.and_then(|most| i64::try_from(most).ok());
+
+	if let (Some(cap), Some(most)) = (account.spend_cap, most)
+		&& cap > most
+	{
+		account.spend_cap = Some(most);
+		account.save(tx).await?;
+	}
+
+	Ok(())
+}
+
 /// Makes the organisation whose customer `subscription` belongs to follow
 /// it, and answers that organisation.
 ///
@@ -599,6 +627,7 @@ async fn apply(
 		let target = format!("{} to {plan}", organization.plan);
 		organization.plan = plan;
 		organization.save(tx).await?;
+		clamp_own_cap(tx, services, &mut account, &organization.plan).await?;
 		audit::record_provider(tx, "billing.plan_changed", organization_id, Some(target)).await?;
 	}
 
