@@ -80,7 +80,7 @@ async fn cluster_summary(
 ) -> rpc::Result<ClusterSummary> {
 	let id = cluster.id;
 	let environments = Placement::query()
-		.filter(|placement| placement.cluster_id.eq(id))
+		.filter(|placement| placement.cluster_id.eq(id) & placement.removing.eq(false))
 		.count(db)
 		.await?;
 	Ok(ClusterSummary {
@@ -637,6 +637,7 @@ pub(crate) async fn reconcile(
 
 			if let Some(environment) = row.environment_id {
 				super::domains::environment_destroyed(cx.tx(), environment).await?;
+				super::deployments::placement_destroyed(cx.tx(), environment).await?;
 			}
 		}
 		(JobKind::DestroyEnvironment, Reconciliation::NotApplied { .. }) => {

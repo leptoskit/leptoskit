@@ -1042,6 +1042,8 @@ An independent review of the commit, reading the code without running it, found 
 | 5. A certificate's secret outlives its domain in the namespace.                                                                                                                                                          | Not changed; listed above, for Worker 2's pruning.                                                                                                                    |
 | 6. The control plane's own host was compared as written.                                                                                                                                                                 | Compared in lower case.                                                                                                                                               |
 
+A later audit found the same defect in a platform hostname, whose only record is its `environment_placements` row: the row now outlives its environment the same way, marked `removing` until the removal is reported done or reconciled, and isn't counted as a live placement meanwhile (`tests/placement_claims.rs`).
+
 ### Security review of Control 3, part 1
 
 An independent review of the commit, reading the code without running it, found no way to read across organisations or environments and no way for a value to leave other than the cluster worker's claim. It found six lesser things:

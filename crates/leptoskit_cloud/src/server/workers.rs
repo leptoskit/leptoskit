@@ -1018,6 +1018,7 @@ pub(crate) async fn finish(
 			// Off the cluster: the hostnames it held are free.
 			if let Some(environment) = row.environment_id {
 				super::domains::environment_destroyed(tx, environment).await?;
+				super::deployments::placement_destroyed(tx, environment).await?;
 			}
 		}
 		JobOutcome::DestroyEnvironment(DestroyOutcome::Failed { .. }) => {}
@@ -1337,7 +1338,7 @@ async fn report(cx: &rpc::MutationCx, args: ReportStatus) -> rpc::Result<Reporte
 }
 
 /// The environment's placement, when it is on the calling cluster worker's
-/// cluster; `NotFound` otherwise.
+/// cluster and isn't being removed; `NotFound` otherwise.
 async fn placed(
 	db: &impl leptoskit_db::Read,
 	caller: &WorkerCaller,
@@ -1346,7 +1347,9 @@ async fn placed(
 	let environment_id = Id::from_uuid(environment);
 
 	Placement::query()
-		.filter(|placement| placement.environment_id.eq(environment_id))
+		.filter(|placement| {
+			placement.environment_id.eq(environment_id) & placement.removing.eq(false)
+		})
 		.first(db)
 		.await?
 		.filter(|placement| Some(placement.cluster_id) == caller.cluster)
