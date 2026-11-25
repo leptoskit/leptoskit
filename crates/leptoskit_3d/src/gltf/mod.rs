@@ -1507,6 +1507,21 @@ fn smooth_outline_normals(document: &Document<'_>, asset: &mut Asset, options: L
 	}
 }
 
+/// The smoothing grid's cell, in the mesh's own units, for a mesh whose
+/// bounds' diagonal is `diag` and whose unit is `unit_scale` metres: 1.2 mm,
+/// kept between a hundred-thousandth and a hundredth of the diagonal. The
+/// unit is floored only against zero, as the renderer floors it when it
+/// packs units, since quantized meshes use units of a few hundredths of a
+/// millimetre.
+fn smoothing_cell(diag: f64, unit_scale: f32) -> f64 {
+	if !(diag.is_finite() && diag > 0.0) {
+		return 1.0;
+	}
+
+	let weld = 1.2e-3_f64 / f64::from(unit_scale).max(1.0e-12);
+	(diag * 1.0e-5).max(weld).min(diag * 0.01).max(1.0e-12)
+}
+
 fn smooth_mesh_outline_normals(asset: &mut Asset, mesh_index: usize, rings: u8) {
 	let Some((first_vertex, end_vertex)) =
 		mesh_vertex_range(&asset.meshes[mesh_index].primitives, asset.vertices.len())
@@ -1523,12 +1538,7 @@ fn smooth_mesh_outline_normals(asset: &mut Asset, mesh_index: usize, rings: u8) 
 		})
 		.unwrap_or(1.0);
 	let diag = mesh_extent_diagonal(&asset.vertices[first_vertex..end_vertex]);
-	let weld_m = 1.2e-3_f64 / f64::from(unit_scale).max(1.0e-4);
-	let cell = if diag.is_finite() && diag > 0.0 {
-		(diag * 1.0e-5).max(weld_m).min(diag * 0.01).max(1.0e-12)
-	} else {
-		1.0
-	};
+	let cell = smoothing_cell(diag, unit_scale);
 
 	let local_count = end_vertex - first_vertex;
 	let vertices = &asset.vertices[first_vertex..end_vertex];
@@ -3103,5 +3113,18 @@ mod tests {
 			apex.iter().all(|normal| *normal == apex[0]),
 			"the apex's copies at {low:e} and {high:e} smooth apart: {apex:?}"
 		);
+	}
+
+	#[test]
+	fn smoothing_welds_1_2_mm_on_finely_quantized_meshes() {
+		// Quantized meshes measure in units of a few hundredths of a
+		// millimetre; a mesh 1.2 m across still smooths across 1.2 mm.
+		for unit in [1.0_f32, 1.0e-3, 5.0e-5, 3.8e-5] {
+			let cell = smoothing_cell(1.2 / f64::from(unit), unit) * f64::from(unit);
+			assert!(
+				(cell - 1.2e-3).abs() < 1.0e-9,
+				"a unit of {unit} m smooths across {cell} m"
+			);
+		}
 	}
 }
