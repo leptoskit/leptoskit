@@ -1650,3 +1650,214 @@ fn fading_part_ink_weight_does_not_clamp_to_one_pixel() {
 		ink_runs(&image, 32)
 	);
 }
+
+#[test]
+fn toon_softness_widens_the_band_transition() {
+	let Some(gpu) = gpu() else { return };
+	let distinct_levels = |softness: f32| {
+		let mut renderer = lit_sphere(gpu, None);
+		renderer.world_mut().apply([style(
+			Shading::Toon(Toon {
+				softness,
+				..flat_toon(2)
+			}),
+			None,
+		)]);
+		let image = draw(&mut renderer);
+		let mut levels: Vec<[u8; 4]> = Vec::new();
+
+		for x in 0..SIZE {
+			let pixel = image.at(x, 32);
+
+			if pixel[3] == 255 && !levels.iter().any(|level| near(*level, pixel, 2)) {
+				levels.push(pixel);
+			}
+		}
+
+		levels.len()
+	};
+	let crisp = distinct_levels(0.0);
+	let soft = distinct_levels(1.0);
+	assert!(crisp <= 4, "crisp 2-band toon should be flat: {crisp}");
+	assert!(
+		soft >= 10,
+		"softness=1.0 should blend smoothly across the band edge: crisp={crisp} soft={soft}"
+	);
+}
+
+#[test]
+fn toon_specular_draws_a_hard_highlight_spot() {
+	let Some(gpu) = gpu() else { return };
+	let peak_red = |specular: f32| {
+		let mut renderer = lit_sphere(gpu, None);
+		renderer.world_mut().apply([
+			Op::SetLight(Light {
+				direction: [-0.3, -0.3, -1.0],
+				shadow: 0.0,
+				..Light::default()
+			}),
+			Op::SetMaterial {
+				node: NodeId(1),
+				part: None,
+				material: MaterialOverride {
+					color: Some([0.2, 0.2, 0.2, 1.0]),
+					..MaterialOverride::default()
+				},
+			},
+			style(
+				Shading::Toon(Toon {
+					bands: 2,
+					specular,
+					..Toon::default()
+				}),
+				None,
+			),
+		]);
+		let image = draw(&mut renderer);
+		image
+			.pixels
+			.as_chunks::<4>()
+			.0
+			.iter()
+			.filter(|pixel| pixel[3] == 255)
+			.map(|pixel| pixel[0])
+			.max()
+			.unwrap_or(0)
+	};
+	let plain = peak_red(0.0);
+	let shiny = peak_red(2.0);
+	assert!(
+		shiny > plain + 40,
+		"toon specular=2.0 should brighten the highlight spot: plain={plain} shiny={shiny}"
+	);
+}
+
+#[test]
+fn toon_rim_is_hard_edged_rather_than_soft() {
+	let Some(gpu) = gpu() else { return };
+	let mut renderer = lit_sphere(gpu, None);
+	renderer.world_mut().apply([
+		style(Shading::Toon(flat_toon(2)), None),
+		Op::SetMaterial {
+			node: NodeId(1),
+			part: None,
+			material: MaterialOverride {
+				color: Some([0.2, 0.2, 0.2, 1.0]),
+				rim: Some(Rim {
+					color: [0.0, 1.0, 0.0],
+					strength: 1.5,
+					power: 1.0,
+				}),
+				..MaterialOverride::default()
+			},
+		},
+	]);
+	let image = draw(&mut renderer);
+	let opaque: Vec<u32> = (0..SIZE).filter(|&x| image.at(x, 32)[3] == 255).collect();
+	let left = *opaque.first().unwrap();
+	let right = *opaque.last().unwrap();
+	let half = (right - left) / 2;
+	let center = u32::midpoint(left, right);
+	// With power = 1.0, hard toon rim starts at facing = 0.5.
+	// At ~60% of the radius from center, facing is ~0.2 (< 0.5): a soft rim
+	// adds 1.5 * 0.2 = 0.3 linear green (> +70 sRGB), while hard toon rim adds
+	// 0.
+	let interior = image.at(center + half * 3 / 5, 32);
+	let edge = image.at(right - 1, 32);
+	assert!(
+		edge[1] > edge[0].saturating_add(60),
+		"silhouette should carry the bright green rim: edge={edge:?}"
+	);
+	assert!(
+		interior[1] <= interior[0].saturating_add(15),
+		"interior below rim threshold must not get soft rim glow: interior={interior:?}"
+	);
+}
+
+/// A sphere with the same world-space radius (0.5) as `fixture::lit_sphere`,
+/// stored in quantized-style mesh coordinates multiplied by `1 / scale` with
+/// node scale `scale`, so `rest_units` equals `scale`.
+fn quantized_scale_sphere(segments: usize, scale: f32) -> Vec<u8> {
+	let mut builder = fixture::Builder::default();
+	let rings = segments / 2;
+	let mut positions = Vec::new();
+	let mut normals = Vec::new();
+	let mut indices = Vec::new();
+	let inv_scale = 1.0 / scale;
+
+	for ring in 0..=rings {
+		let (sin_theta, cos_theta) = (ring as f32 / rings as f32 * std::f32::consts::PI).sin_cos();
+
+		for step in 0..=segments {
+			let (sin_phi, cos_phi) =
+				(step as f32 / segments as f32 * std::f32::consts::TAU).sin_cos();
+			let normal = [sin_theta * cos_phi, cos_theta, sin_theta * sin_phi];
+			positions.extend(normal.map(|value| value * 0.5 * inv_scale));
+			normals.extend(normal);
+		}
+	}
+
+	for ring in 0..rings {
+		for step in 0..segments {
+			let a = (ring * (segments + 1) + step) as u16;
+			let b = a + 1;
+			let c = a + segments as u16 + 1;
+			let d = c + 1;
+			indices.extend_from_slice(&[a, b, c, b, d, c]);
+		}
+	}
+
+	let position = builder.floats(&positions, 3, true);
+	let normal = builder.floats(&normals, 3, false);
+	let index = builder.u16s(&indices, 1);
+	let json = format!(
+		r#""asset":{{"version":"2.0"}},
+"scenes":[{{"nodes":[0]}}],
+"nodes":[{{"name":"sphere","mesh":0,"scale":[{scale},{scale},{scale}]}}],
+"meshes":[{{"primitives":[{{"attributes":{{"POSITION":{position},"NORMAL":{normal}}},"indices":{index},"material":0}}]}}],
+"materials":[{{"name":"grey","pbrMetallicRoughness":{{"baseColorFactor":[0.5,0.5,0.5,1],"metallicFactor":0,"roughnessFactor":0.7}}}}]"#
+	);
+	builder.glb(&json)
+}
+
+#[test]
+fn quantized_scale_mesh_hatches_at_rest_pose_density() {
+	let Some(gpu) = gpu() else { return };
+	let mut renderer = renderer(gpu);
+	// 5e-5 matches gltfpack-quantized models (below f16::MIN_POSITIVE).
+	spawn(&mut renderer, 1, 1, &quantized_scale_sphere(48, 5.0e-5));
+	renderer.world_mut().apply([
+		Op::SetTransform {
+			node: NodeId(1),
+			transform: Transform::IDENTITY.with_scale(2.0),
+		},
+		Op::SetLight(Light {
+			direction: [-1.0, 0.0, 0.0],
+			shadow: 0.0,
+			..Light::default()
+		}),
+		style(
+			Shading::Toon(Toon {
+				hatch: 1.0,
+				..flat_toon(3)
+			}),
+			Some(red_ink(2.0)),
+		),
+	]);
+	renderer.advance(0.0);
+	let image = Image {
+		pixels: renderer.render_to_rgba(512, 512).unwrap(),
+		width: 512,
+	};
+	let shaded_ink = (112..224)
+		.flat_map(|x| (160..352).map(move |y| (x, y)))
+		.filter(|(x, y)| is_ink(image.at(*x, *y)))
+		.count();
+	assert!(
+		shaded_ink > 1000,
+		"quantized sphere should hatch in rest-pose metres, got only {shaded_ink} ink pixels"
+	);
+	let row: Vec<bool> = (112..224).map(|x| is_ink(image.at(x, 256))).collect();
+	let changes = row.windows(2).filter(|pair| pair[0] != pair[1]).count();
+	assert!(changes >= 8, "expected distinct hatch lines, got {changes}");
+}

@@ -1360,4 +1360,56 @@ mod tests {
 		assert_eq!(world.nodes[&node].transform, there);
 		assert!(!world.needs_frame());
 	}
+
+	#[test]
+	fn nodes_ease_rotation_and_scale() {
+		let node = NodeId(1);
+		let target = Transform::IDENTITY
+			.with_yaw(std::f32::consts::FRAC_PI_2)
+			.with_scale(3.0);
+		let mut world = World::new();
+		world.apply([
+			Op::Spawn {
+				node,
+				asset: None,
+				parent: None,
+			},
+			Op::EaseTransform {
+				node,
+				transform: target,
+				seconds: 1.0,
+				easing: Easing::Linear,
+			},
+		]);
+		world.advance(0.25);
+		world.advance(0.25);
+		let mid = world.nodes[&node].transform;
+		let expected_rot = Quat::from_rotation_y(std::f32::consts::FRAC_PI_4);
+		let actual_rot = Quat::from_array(mid.rotation);
+		assert!(
+			actual_rot.dot(expected_rot).abs() > 0.9999,
+			"expected midpoint yaw 45 deg ({expected_rot:?}), got {actual_rot:?}"
+		);
+		for axis in 0..3 {
+			assert!(
+				(mid.scale[axis] - 2.0).abs() < 1.0e-5,
+				"expected midpoint scale 2.0, got {:?}",
+				mid.scale
+			);
+		}
+		world.advance(0.25);
+		world.advance(0.25);
+		let end = world.nodes[&node].transform;
+		assert!(
+			Quat::from_array(end.rotation)
+				.dot(Quat::from_array(target.rotation))
+				.abs()
+				> 0.99999,
+			"expected final rotation {:?}, got {:?}",
+			target.rotation,
+			end.rotation
+		);
+		assert_eq!(end.scale, target.scale);
+		assert!(!world.needs_frame());
+	}
 }
