@@ -434,13 +434,23 @@ impl Sight {
 
 	/// Whether some view sees `bounds` large enough for a line of `weight`.
 	fn worth_outlining(&self, bounds: &Aabb, weight: f32) -> bool {
+		if bounds.is_empty() {
+			return false;
+		}
 		let radius = (bounds.max - bounds.min).length() * 0.5;
 		let center = bounds.center().extend(1.0);
 
 		self.scales[..self.views].iter().any(|scale| {
 			let depth = -(scale.view * center).z;
-			// A view inside the bounds sees the part fill it.
-			depth <= radius || outline_worthy(radius * scale.focal / depth, scale.line * weight)
+			// A part wholly behind the view is never worth outlining for it;
+			// a view inside the bounds sees the part fill it.
+			if depth < -radius {
+				false
+			} else if depth <= radius {
+				true
+			} else {
+				outline_worthy(radius * scale.focal / depth, scale.line * weight)
+			}
 		})
 	}
 }
@@ -1849,5 +1859,39 @@ mod tests {
 				"scale {scale:.3e} decoded to {decoded:.3e}"
 			);
 		}
+	}
+
+	#[test]
+	fn worth_outlining_rejects_tiny_part_behind_view() {
+		let v = view(1000.0);
+		let mut scales = [ViewScale::default(); MAX_VIEWS];
+		scales[0] = ViewScale {
+			view: v.view,
+			focal: v.projection.y_axis.y.abs() * v.viewport[3] * 0.5,
+			line: 2.0,
+		};
+		let sight = Sight {
+			frustums: Vec::new(),
+			eye: v.view,
+			ink: Some(Ink::default()),
+			scales,
+			views: 1,
+		};
+		// A tiny 2 mm cube 5 m behind the camera (z = +5.0 -> depth = -5.0).
+		let behind = Aabb {
+			min: Vec3::new(-0.001, -0.001, 4.999),
+			max: Vec3::new(0.001, 0.001, 5.001),
+		};
+		assert!(
+			!sight.worth_outlining(&behind, 1.0),
+			"tiny part behind camera (depth=-5.0) passed depth <= radius"
+		);
+		// A large box enclosing the camera (depth = 0.0, radius > 1) still
+		// counts.
+		let enclosing = Aabb {
+			min: Vec3::splat(-1.0),
+			max: Vec3::splat(1.0),
+		};
+		assert!(sight.worth_outlining(&enclosing, 1.0));
 	}
 }
