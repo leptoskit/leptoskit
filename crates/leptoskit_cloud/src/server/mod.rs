@@ -178,7 +178,9 @@ pub struct ShippingSettings {
 	/// own limit for the program, two hours by default, and the fetch
 	/// before it.
 	pub publish_deadline: Duration,
-	/// The most log bytes one build may send, over all its attempts.
+	/// The most log bytes one build may send, over all its attempts. The
+	/// bytes are its chunks' as stored, and a build's log also has at most
+	/// [`crate::workers::MAX_BUILD_LOG_CHUNKS`] chunks, whatever their bytes.
 	pub build_log_cap: u64,
 	/// The most build log bytes one organisation may keep at once; they
 	/// count until their retention ends.

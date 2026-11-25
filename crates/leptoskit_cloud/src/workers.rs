@@ -101,6 +101,10 @@ pub const MAX_LOG_LINE_BYTES: usize = 4 * 1024;
 /// The most runtime log lines one `report_status` may carry.
 pub const MAX_STATUS_LOG_LINES: usize = 500;
 
+/// The most chunks one job's log may have, over all its attempts: each is
+/// an index row and an object in the store, whatever its bytes.
+pub const MAX_BUILD_LOG_CHUNKS: u64 = 4_096;
+
 /// A value from `leptoskit_cloud_runtime` on the wire, unchanged: the
 /// runtime's types are plain serde data without schemas, and this describes
 /// them to generated clients by name.

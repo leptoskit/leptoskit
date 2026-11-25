@@ -523,7 +523,7 @@ pub struct LogChunk {
 	pub seq: i64,
 	pub first_line: i64,
 	pub lines: i64,
-	/// The bytes of its lines as the worker sent them, counted against the
+	/// The bytes of the chunk as it is stored, counted against the
 	/// organisation's log cap until the chunk is deleted.
 	pub bytes: i64,
 	/// SHA-256 of the lines as the worker sent them, so a chunk sent again
