@@ -9,7 +9,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
 import java.nio.ByteBuffer
@@ -135,10 +137,15 @@ class BackgroundPluginTest {
             BackgroundConfigStore.save(context, config)
             assertEquals(config, BackgroundConfigStore.load(context))
 
-            val intent = BackgroundService.startIntent(context, config)
-            assertEquals(StartIntent.WithConfig(config), BackgroundService.classifyIntent(intent))
+            val pluginIntent = BackgroundService.startIntent(context, config, fromBackground = false)
+            assertEquals(StartIntent.FromPlugin(config), BackgroundService.classifyIntent(pluginIntent))
+            val backgroundIntent = BackgroundService.startIntent(context, config, fromBackground = true)
+            assertEquals(StartIntent.FromBackground(config), BackgroundService.classifyIntent(backgroundIntent))
             assertEquals(StartIntent.Bare, BackgroundService.classifyIntent(Intent(context, BackgroundService::class.java)))
             assertEquals(StartIntent.Null, BackgroundService.classifyIntent(null))
+
+            assertTrue(BackgroundService.hasRequiredPermissions(context, CRATE_TYPE_DATA_SYNC, 34))
+            assertTrue(BackgroundService.hasRequiredPermissions(context, ALL_CRATE_TYPES, 33))
 
             BackgroundConfigStore.clear(context)
             assertNull(BackgroundConfigStore.load(context))
@@ -166,7 +173,18 @@ class BackgroundPluginTest {
 
         assertEquals(
             StartCommandDecision.StartForeground(explicit, ServiceInfo.FOREGROUND_SERVICE_TYPE_HEALTH),
-            decideStartCommand(StartIntent.WithConfig(explicit), persisted, 34),
+            decideStartCommand(StartIntent.FromPlugin(explicit), persisted, 34),
+        )
+        assertEquals(
+            StartCommandDecision.StopAfterForeground(explicit, ServiceInfo.FOREGROUND_SERVICE_TYPE_HEALTH),
+            decideStartCommand(StartIntent.FromBackground(explicit), null, 34),
+        )
+        assertEquals(
+            StartCommandDecision.StartForeground(
+                persisted,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE,
+            ),
+            decideStartCommand(StartIntent.FromBackground(explicit), persisted, 34),
         )
         assertEquals(
             StartCommandDecision.StartForeground(
@@ -186,17 +204,37 @@ class BackgroundPluginTest {
         )
         assertEquals(
             StartCommandDecision.Stop,
-            decideStartCommand(StartIntent.WithConfig(persisted.copy(types = 0)), null, 34),
+            decideStartCommand(StartIntent.FromPlugin(persisted.copy(types = 0)), null, 34),
         )
 
-        assertEquals(WorkerDecision.WakeOnly, decideWorkerAction(true, persisted, 34))
-        assertEquals(WorkerDecision.StartService(persisted), decideWorkerAction(false, persisted, 34))
-        assertEquals(WorkerDecision.CancelWork, decideWorkerAction(false, null, 34))
-        assertEquals(WorkerDecision.CancelWork, decideWorkerAction(false, persisted.copy(types = 0), 34))
+        assertEquals(
+            ForegroundStartFallback.RetryWithDataSync(
+                CRATE_TYPE_DATA_SYNC,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
+            ),
+            decideForegroundStartFallback(ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION, 34),
+        )
+        assertEquals(
+            ForegroundStartFallback.StopAndCancelWork,
+            decideForegroundStartFallback(ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC, 35),
+        )
 
-        assertEquals(BootDecision.DoNothing, decideBootAction(false, persisted, 35))
-        assertEquals(BootDecision.DoNothing, decideBootAction(true, null, 35))
-        assertEquals(BootDecision.StartService(persisted), decideBootAction(true, persisted, 35))
+        val timeout = decideTimeout(ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+        assertTrue(timeout.stopForeground)
+        assertTrue(timeout.stopService)
+        assertFalse(timeout.clearPersistedConfig)
+        assertFalse(timeout.cancelPeriodicWork)
+
+        assertEquals(WorkerDecision.WakeOnly, decideWorkerAction(true, persisted, true, 34))
+        assertEquals(WorkerDecision.StartService(persisted), decideWorkerAction(false, persisted, true, 34))
+        assertEquals(WorkerDecision.WakeOnly, decideWorkerAction(false, persisted, false, 34))
+        assertEquals(WorkerDecision.DoNothing, decideWorkerAction(false, null, true, 34))
+        assertEquals(WorkerDecision.WakeOnly, decideWorkerAction(false, persisted.copy(types = 0), true, 34))
+
+        assertEquals(BootDecision.DoNothing, decideBootAction(false, persisted, true, 35))
+        assertEquals(BootDecision.DoNothing, decideBootAction(true, null, true, 35))
+        assertEquals(BootDecision.DoNothing, decideBootAction(true, persisted, false, 35))
+        assertEquals(BootDecision.StartService(persisted), decideBootAction(true, persisted, true, 35))
     }
 
     @Test

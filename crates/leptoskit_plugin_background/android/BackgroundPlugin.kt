@@ -28,6 +28,7 @@ internal object BackgroundState {
     const val EXTRA_TEXT = "text"
     const val EXTRA_TYPES = "types"
     const val EXTRA_INTERVAL = "interval"
+    const val EXTRA_FROM_BACKGROUND = "from_background"
 
     /**
      * Whether the service runs. A JVM field, because the location and
@@ -139,7 +140,7 @@ class BackgroundPlugin(
         BackgroundService.ensureNotificationChannel(context, config.title)
         BackgroundConfigStore.save(context, config)
 
-        val intent = BackgroundService.startIntent(context, config)
+        val intent = BackgroundService.startIntent(context, config, fromBackground = false)
 
         if (Build.VERSION.SDK_INT >= 26) {
             context.startForegroundService(intent)

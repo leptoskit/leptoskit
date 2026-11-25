@@ -19,10 +19,19 @@ class BackgroundWorker(
     params: WorkerParameters,
 ) : Worker(context, params) {
     override fun doWork(): Result {
+        val persisted = BackgroundConfigStore.load(applicationContext)
+        val hasPermissions =
+            persisted != null &&
+                BackgroundService.hasRequiredPermissions(
+                    applicationContext,
+                    persisted.types,
+                    Build.VERSION.SDK_INT,
+                )
         val decision =
             decideWorkerAction(
                 serviceRunning = BackgroundState.running,
-                persistedConfig = BackgroundConfigStore.load(applicationContext),
+                persistedConfig = persisted,
+                hasRequiredPermissions = hasPermissions,
                 sdkInt = Build.VERSION.SDK_INT,
             )
 
@@ -32,7 +41,12 @@ class BackgroundWorker(
             }
 
             is WorkerDecision.StartService -> {
-                val service = BackgroundService.startIntent(applicationContext, decision.config)
+                val service =
+                    BackgroundService.startIntent(
+                        applicationContext,
+                        decision.config,
+                        fromBackground = true,
+                    )
 
                 try {
                     if (Build.VERSION.SDK_INT >= 26) {
@@ -47,8 +61,9 @@ class BackgroundWorker(
                 }
             }
 
-            WorkerDecision.CancelWork -> {
-                cancel(applicationContext)
+            WorkerDecision.DoNothing -> {
+                // Keep the periodic work enqueued so upgrades from older plugin
+                // versions do not lose their keep-alive before the next `start()`.
             }
         }
 

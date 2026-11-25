@@ -17,10 +17,19 @@ class BootReceiver : BroadcastReceiver() {
     ) {
         if (intent.action != Intent.ACTION_BOOT_COMPLETED) return
 
+        val persisted = BackgroundConfigStore.load(context)
+        val hasPermissions =
+            persisted != null &&
+                BackgroundService.hasRequiredPermissions(
+                    context,
+                    persisted.types,
+                    Build.VERSION.SDK_INT,
+                )
         val decision =
             decideBootAction(
                 bootRestartEnabled = BackgroundState.bootRestart,
-                persistedConfig = BackgroundConfigStore.load(context),
+                persistedConfig = persisted,
+                hasRequiredPermissions = hasPermissions,
                 sdkInt = Build.VERSION.SDK_INT,
             )
 
@@ -30,7 +39,7 @@ class BootReceiver : BroadcastReceiver() {
                 BootDecision.DoNothing -> return
             }
 
-        val service = BackgroundService.startIntent(context, config)
+        val service = BackgroundService.startIntent(context, config, fromBackground = true)
 
         try {
             if (Build.VERSION.SDK_INT >= 26) {

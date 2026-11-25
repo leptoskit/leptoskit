@@ -1,16 +1,18 @@
 package dev.leptoskit.plugins.background
 
 // Pure JVM tests for foreground-service type mapping, configuration encoding,
-// and service/worker/boot restart decisions. Run with `kotlinc` against
-// `BackgroundConfig.kt` with no Android runtime.
+// fallback/timeout policy, and service/worker/boot restart decisions. Run with
+// `kotlinc` against `BackgroundConfig.kt` with no Android runtime.
 
 fun main() {
     maskMappingChecks()
     configRoundTripChecks()
     startCommandDecisionChecks()
+    foregroundStartFallbackChecks()
+    timeoutDecisionChecks()
     workerDecisionChecks()
     bootDecisionChecks()
-    println("Background config, mask mapping, and restart decision checks passed")
+    println("Background config, mask mapping, fallback, timeout, and restart decision checks passed")
 }
 
 private fun maskMappingChecks() {
@@ -174,14 +176,45 @@ private fun startCommandDecisionChecks() {
             intervalSecs = 15,
         )
 
-    // Intent with extras takes precedence over persisted configuration and maps types.
+    // Explicit BackgroundPlugin.start intent takes precedence over persisted config.
     check(
-        decideStartCommand(StartIntent.WithConfig(explicit), persisted, 34) ==
+        decideStartCommand(StartIntent.FromPlugin(explicit), persisted, 34) ==
             StartCommandDecision.StartForeground(explicit, ANDROID_TYPE_MICROPHONE),
     )
     check(
-        decideStartCommand(StartIntent.WithConfig(explicit), null, 36) ==
+        decideStartCommand(StartIntent.FromPlugin(explicit), null, 36) ==
             StartCommandDecision.StartForeground(explicit, ANDROID_TYPE_MICROPHONE),
+    )
+
+    // Worker/boot restart with persisted config uses the latest persisted config.
+    check(
+        decideStartCommand(StartIntent.FromBackground(explicit), persisted, 34) ==
+            StartCommandDecision.StartForeground(
+                persisted,
+                ANDROID_TYPE_HEALTH or ANDROID_TYPE_LOCATION,
+            ),
+    )
+
+    // Worker/boot restart racing with `stop()` (empty store): satisfy the foreground
+    // promise and stop immediately without rescheduling periodic work.
+    check(
+        decideStartCommand(StartIntent.FromBackground(explicit), null, 34) ==
+            StartCommandDecision.StopAfterForeground(explicit, ANDROID_TYPE_MICROPHONE),
+    )
+    check(
+        decideStartCommand(StartIntent.FromBackground(explicit), null, 36) ==
+            StartCommandDecision.StopAfterForeground(explicit, ANDROID_TYPE_MICROPHONE),
+    )
+    // On API 34+, a background start with zero types still gets a valid dataSync type
+    // to satisfy the foreground promise before immediately stopping.
+    val zeroType = persisted.copy(types = 0)
+    check(
+        decideStartCommand(StartIntent.FromBackground(zeroType), null, 34) ==
+            StartCommandDecision.StopAfterForeground(zeroType, ANDROID_TYPE_DATA_SYNC),
+    )
+    check(
+        decideStartCommand(StartIntent.FromBackground(zeroType), null, 33) ==
+            StartCommandDecision.StopAfterForeground(zeroType, 0),
     )
 
     // Bare intent (no extras) preserves persisted configuration instead of zeroing types.
@@ -216,18 +249,76 @@ private fun startCommandDecisionChecks() {
     check(decideStartCommand(StartIntent.Null, null, 29) == StartCommandDecision.Stop)
 
     // Zero type mask is rejected on API 34+, permitted on API < 34.
-    val zeroType = persisted.copy(types = 0)
-    check(decideStartCommand(StartIntent.WithConfig(zeroType), null, 34) == StartCommandDecision.Stop)
+    check(decideStartCommand(StartIntent.FromPlugin(zeroType), null, 34) == StartCommandDecision.Stop)
     check(decideStartCommand(StartIntent.Bare, zeroType, 34) == StartCommandDecision.Stop)
     check(decideStartCommand(StartIntent.Null, zeroType, 36) == StartCommandDecision.Stop)
     check(
-        decideStartCommand(StartIntent.WithConfig(zeroType), null, 33) ==
+        decideStartCommand(StartIntent.FromPlugin(zeroType), null, 33) ==
             StartCommandDecision.StartForeground(zeroType, 0),
     )
     check(
-        decideStartCommand(StartIntent.WithConfig(zeroType), null, 28) ==
+        decideStartCommand(StartIntent.FromPlugin(zeroType), null, 28) ==
             StartCommandDecision.StartForeground(zeroType, 0),
     )
+}
+
+private fun foregroundStartFallbackChecks() {
+    // Non-dataSync failures retry once with dataSync alone (both crate and Android masks).
+    for (failedAndroidTypes in listOf(
+        ANDROID_TYPE_LOCATION,
+        ANDROID_TYPE_HEALTH,
+        ANDROID_TYPE_MICROPHONE,
+        ANDROID_TYPE_CONNECTED_DEVICE,
+        ANDROID_TYPE_DATA_SYNC or ANDROID_TYPE_LOCATION,
+        ANDROID_TYPE_DATA_SYNC or ANDROID_TYPE_HEALTH,
+    )) {
+        check(
+            decideForegroundStartFallback(failedAndroidTypes, 34) ==
+                ForegroundStartFallback.RetryWithDataSync(
+                    crateTypes = CRATE_TYPE_DATA_SYNC,
+                    androidTypes = ANDROID_TYPE_DATA_SYNC,
+                ),
+        )
+        check(
+            decideForegroundStartFallback(failedAndroidTypes, 35) ==
+                ForegroundStartFallback.RetryWithDataSync(
+                    crateTypes = CRATE_TYPE_DATA_SYNC,
+                    androidTypes = ANDROID_TYPE_DATA_SYNC,
+                ),
+        )
+    }
+
+    // When dataSync alone was already tried (e.g. API 35 6-hour limit exhausted or
+    // background start forbidden), do not retry: stop and cancel periodic work.
+    for (sdk in listOf(29, 30, 33, 34, 35, 36)) {
+        check(
+            decideForegroundStartFallback(ANDROID_TYPE_DATA_SYNC, sdk) ==
+                ForegroundStartFallback.StopAndCancelWork,
+        )
+    }
+
+    // On API 33, DATA_SYNC | HEALTH mapped to ANDROID_TYPE_DATA_SYNC alone, so it does not retry.
+    val api33DataSyncAndHealth = mapForegroundServiceTypes(CRATE_TYPE_DATA_SYNC or CRATE_TYPE_HEALTH, 33)
+    check(
+        decideForegroundStartFallback(api33DataSyncAndHealth, 33) ==
+            ForegroundStartFallback.StopAndCancelWork,
+    )
+
+    // Pre-API 29 has no type mask on startForeground, so there is no fallback type to retry.
+    check(decideForegroundStartFallback(0, 28) == ForegroundStartFallback.StopAndCancelWork)
+    check(decideForegroundStartFallback(0, 26) == ForegroundStartFallback.StopAndCancelWork)
+}
+
+private fun timeoutDecisionChecks() {
+    val expected =
+        TimeoutDecision(
+            stopForeground = true,
+            stopService = true,
+            clearPersistedConfig = false,
+            cancelPeriodicWork = false,
+        )
+    check(decideTimeout(ANDROID_TYPE_DATA_SYNC) == expected)
+    check(decideTimeout(0) == expected)
 }
 
 private fun workerDecisionChecks() {
@@ -235,37 +326,99 @@ private fun workerDecisionChecks() {
         BackgroundConfig(
             title = "Sync",
             text = "Background",
-            types = CRATE_TYPE_DATA_SYNC,
+            types = CRATE_TYPE_LOCATION,
             intervalSecs = 60,
         )
 
     // Service already running: only wake, never start the service again.
-    check(decideWorkerAction(serviceRunning = true, persistedConfig = persisted, sdkInt = 34) == WorkerDecision.WakeOnly)
-    check(decideWorkerAction(serviceRunning = true, persistedConfig = null, sdkInt = 34) == WorkerDecision.WakeOnly)
-
-    // Service not running with valid persisted configuration: restart with extras.
     check(
-        decideWorkerAction(serviceRunning = false, persistedConfig = persisted, sdkInt = 34) ==
-            WorkerDecision.StartService(persisted),
+        decideWorkerAction(
+            serviceRunning = true,
+            persistedConfig = persisted,
+            hasRequiredPermissions = true,
+            sdkInt = 34,
+        ) == WorkerDecision.WakeOnly,
     )
     check(
-        decideWorkerAction(serviceRunning = false, persistedConfig = persisted, sdkInt = 36) ==
-            WorkerDecision.StartService(persisted),
+        decideWorkerAction(
+            serviceRunning = true,
+            persistedConfig = null,
+            hasRequiredPermissions = false,
+            sdkInt = 34,
+        ) == WorkerDecision.WakeOnly,
     )
 
-    // Service not running with nothing persisted: do not start, cancel periodic work.
-    check(decideWorkerAction(serviceRunning = false, persistedConfig = null, sdkInt = 34) == WorkerDecision.CancelWork)
-    check(decideWorkerAction(serviceRunning = false, persistedConfig = null, sdkInt = 29) == WorkerDecision.CancelWork)
+    // Service not running with valid persisted configuration and permissions granted: restart.
+    check(
+        decideWorkerAction(
+            serviceRunning = false,
+            persistedConfig = persisted,
+            hasRequiredPermissions = true,
+            sdkInt = 34,
+        ) == WorkerDecision.StartService(persisted),
+    )
+    check(
+        decideWorkerAction(
+            serviceRunning = false,
+            persistedConfig = persisted,
+            hasRequiredPermissions = true,
+            sdkInt = 36,
+        ) == WorkerDecision.StartService(persisted),
+    )
 
-    // Service not running with a zero-type config on API 34+: never call startForegroundService, cancel work.
+    // Service not running with missing runtime permissions: skip start (wake only), keep work.
+    check(
+        decideWorkerAction(
+            serviceRunning = false,
+            persistedConfig = persisted,
+            hasRequiredPermissions = false,
+            sdkInt = 34,
+        ) == WorkerDecision.WakeOnly,
+    )
+    check(
+        decideWorkerAction(
+            serviceRunning = false,
+            persistedConfig = persisted,
+            hasRequiredPermissions = false,
+            sdkInt = 36,
+        ) == WorkerDecision.WakeOnly,
+    )
+
+    // Service not running with nothing persisted: do nothing and keep the periodic work.
+    check(
+        decideWorkerAction(
+            serviceRunning = false,
+            persistedConfig = null,
+            hasRequiredPermissions = false,
+            sdkInt = 34,
+        ) == WorkerDecision.DoNothing,
+    )
+    check(
+        decideWorkerAction(
+            serviceRunning = false,
+            persistedConfig = null,
+            hasRequiredPermissions = true,
+            sdkInt = 29,
+        ) == WorkerDecision.DoNothing,
+    )
+
+    // Service not running with a zero-type config on API 34+: skip start (wake only), keep work.
     val zeroType = persisted.copy(types = 0)
     check(
-        decideWorkerAction(serviceRunning = false, persistedConfig = zeroType, sdkInt = 34) ==
-            WorkerDecision.CancelWork,
+        decideWorkerAction(
+            serviceRunning = false,
+            persistedConfig = zeroType,
+            hasRequiredPermissions = true,
+            sdkInt = 34,
+        ) == WorkerDecision.WakeOnly,
     )
     check(
-        decideWorkerAction(serviceRunning = false, persistedConfig = zeroType, sdkInt = 33) ==
-            WorkerDecision.StartService(zeroType),
+        decideWorkerAction(
+            serviceRunning = false,
+            persistedConfig = zeroType,
+            hasRequiredPermissions = true,
+            sdkInt = 33,
+        ) == WorkerDecision.StartService(zeroType),
     )
 }
 
@@ -279,23 +432,51 @@ private fun bootDecisionChecks() {
         )
 
     check(
-        decideBootAction(bootRestartEnabled = false, persistedConfig = persisted, sdkInt = 35) ==
-            BootDecision.DoNothing,
+        decideBootAction(
+            bootRestartEnabled = false,
+            persistedConfig = persisted,
+            hasRequiredPermissions = true,
+            sdkInt = 35,
+        ) == BootDecision.DoNothing,
     )
     check(
-        decideBootAction(bootRestartEnabled = true, persistedConfig = null, sdkInt = 35) ==
-            BootDecision.DoNothing,
+        decideBootAction(
+            bootRestartEnabled = true,
+            persistedConfig = null,
+            hasRequiredPermissions = true,
+            sdkInt = 35,
+        ) == BootDecision.DoNothing,
     )
     check(
-        decideBootAction(bootRestartEnabled = true, persistedConfig = persisted, sdkInt = 35) ==
-            BootDecision.StartService(persisted),
+        decideBootAction(
+            bootRestartEnabled = true,
+            persistedConfig = persisted,
+            hasRequiredPermissions = false,
+            sdkInt = 35,
+        ) == BootDecision.DoNothing,
     )
     check(
-        decideBootAction(bootRestartEnabled = true, persistedConfig = persisted.copy(types = 0), sdkInt = 34) ==
-            BootDecision.DoNothing,
+        decideBootAction(
+            bootRestartEnabled = true,
+            persistedConfig = persisted,
+            hasRequiredPermissions = true,
+            sdkInt = 35,
+        ) == BootDecision.StartService(persisted),
     )
     check(
-        decideBootAction(bootRestartEnabled = true, persistedConfig = persisted.copy(types = 0), sdkInt = 33) ==
-            BootDecision.StartService(persisted.copy(types = 0)),
+        decideBootAction(
+            bootRestartEnabled = true,
+            persistedConfig = persisted.copy(types = 0),
+            hasRequiredPermissions = true,
+            sdkInt = 34,
+        ) == BootDecision.DoNothing,
+    )
+    check(
+        decideBootAction(
+            bootRestartEnabled = true,
+            persistedConfig = persisted.copy(types = 0),
+            hasRequiredPermissions = true,
+            sdkInt = 33,
+        ) == BootDecision.StartService(persisted.copy(types = 0)),
     )
 }
