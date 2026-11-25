@@ -1206,6 +1206,6 @@ mod tests {
 		}
 
 		assert_eq!(kept_exports, ["leptoskit_main"]);
-		assert!(custom_names.is_empty());
+		assert_eq!(custom_names, [] as [String; 0]);
 	}
 }

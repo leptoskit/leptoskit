@@ -637,7 +637,7 @@ fn shrinking_children_list_reconciles_and_tears_down_removed_nodes() {
 	assert_eq!(surface.children(root), &[first]);
 
 	surface.set_root(&Element::view());
-	assert!(surface.children(root).is_empty());
+	assert_eq!(surface.children(root), []);
 
 	surface.set_root(
 		&Element::view()
