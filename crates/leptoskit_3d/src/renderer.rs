@@ -536,10 +536,22 @@ fn instance_record(
 }
 
 /// An instance's `params.w`: bit 0 set when the part is additive, and in the
-/// high half, as a half float, how long a unit of its mesh's space is in
-/// metres, or 0 when nothing reads it.
+/// high half, as a half float, `log2` of how long a unit of its mesh's space
+/// is in metres (0 when nothing reads it or when the unit is 1 m, avoiding
+/// half-float overflow above 65504 and subnormal flush-to-zero on quantized
+/// meshes).
 fn additive_and_units(additive: bool, units: f32) -> u32 {
-	u32::from(additive) | (u32::from(half::f16::from_f32(units).to_bits()) << 16)
+	let log_units = if units > 0.0 && units.is_finite() {
+		let value = units.clamp(1.0e-12, 1.0e12).log2();
+		if value.abs() < half::f16::MIN_POSITIVE.to_f32() {
+			0.0
+		} else {
+			value
+		}
+	} else {
+		0.0
+	};
+	u32::from(additive) | (u32::from(half::f16::from_f32(log_units).to_bits()) << 16)
 }
 
 /// How much wider than its footprint a model's shadow is, so the soft edge
@@ -1794,9 +1806,48 @@ mod tests {
 	fn the_additive_flag_shares_its_word_with_the_units() {
 		assert_eq!(additive_and_units(false, 0.0), 0);
 		assert_eq!(additive_and_units(true, 0.0), 1);
+		assert_eq!(additive_and_units(false, 1.0), 0);
 		let packed = additive_and_units(true, 7.845_902e-5);
 		assert_eq!(packed & 1, 1);
-		let units = half::f16::from_bits((packed >> 16) as u16).to_f32();
-		assert!((units - 7.845_902e-5).abs() < 1.0e-7, "{units}");
+		let units = half::f16::from_bits((packed >> 16) as u16).to_f32().exp2();
+		assert!(
+			(units - 7.845_902e-5).abs() / 7.845_902e-5 < 0.01,
+			"{units}"
+		);
+	}
+
+	#[test]
+	fn units_packing_handles_large_scales_without_overflow() {
+		let large = additive_and_units(false, 100_000.0);
+		let large_f16 = half::f16::from_bits((large >> 16) as u16);
+		assert!(
+			large_f16.is_finite(),
+			"100_000.0 overflowed f16 to {large_f16} (bits=0x{:04x})",
+			large_f16.to_bits()
+		);
+		let decoded = large_f16.to_f32().exp2();
+		assert!(
+			(decoded - 100_000.0).abs() / 100_000.0 < 0.01,
+			"100_000.0 decoded to {decoded}"
+		);
+	}
+
+	#[test]
+	fn units_packing_avoids_subnormal_f16_for_small_quantized_models() {
+		for scale in [3.792e-5_f32, 4.772e-5, 4.969e-5] {
+			let packed = additive_and_units(false, scale);
+			let bits = (packed >> 16) as u16;
+			let exponent = (bits >> 10) & 0x1f;
+			assert!(
+				exponent > 0,
+				"scale {scale:.3e} packed as subnormal f16 (bits=0x{bits:04x}), which flushes to \
+				 0 on FTZ mobile GPUs"
+			);
+			let decoded = half::f16::from_bits(bits).to_f32().exp2();
+			assert!(
+				(decoded - scale).abs() / scale < 0.01,
+				"scale {scale:.3e} decoded to {decoded:.3e}"
+			);
+		}
 	}
 }

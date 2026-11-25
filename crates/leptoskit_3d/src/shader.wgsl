@@ -91,7 +91,8 @@ struct Instance {
 	@location(10) rim: vec4<f32>,
 	// x: joints' first texel; y: morph header's texel; z: rim power bits;
 	// w: bit 0 set when the part adds its light to what is behind it, and
-	// in its high half the length of a unit of the mesh's space in metres.
+	// in its high half log2 of the length of a unit of the mesh's space in
+	// metres as a half float (0 for 1 m).
 	@location(11) params: vec4<u32>,
 	// rgb: the part's ink; w: its line's weight, 0 for none.
 	@location(14) ink: vec4<f32>,
@@ -170,10 +171,10 @@ fn morph(header_at: u32, vertex: u32, position: ptr<function, vec3<f32>>, normal
 }
 
 // A position in the mesh's own space, measured in metres of the model's
-// rest pose, which ink on the surface reads.
+// rest pose, which ink on the surface reads. `params`' high half carries
+// `log2(units)` as a half float so quantized and large scales stay normal.
 fn local_position(position: vec3<f32>, params: u32) -> vec3<f32> {
-	let units = unpack2x16float(params).y;
-	return position * select(1.0, units, units > 0.0);
+	return position * exp2(unpack2x16float(params).y);
 }
 
 fn finish(world: vec4<f32>, normal: vec3<f32>, vertex: Vertex, instance: Instance) -> Varyings {
