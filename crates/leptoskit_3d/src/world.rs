@@ -114,6 +114,41 @@ impl Motion {
 			scale: self.scale.lerp(to.scale, t),
 		}
 	}
+
+	fn to_transform(self) -> Transform {
+		Transform {
+			translation: self.translation.to_array(),
+			rotation: self.rotation.to_array(),
+			scale: self.scale.to_array(),
+		}
+	}
+}
+
+/// A node on its way to a transform, after [`Op::EaseTransform`].
+#[derive(Clone, Copy, Debug)]
+struct Ease {
+	from: Motion,
+	to: Transform,
+	seconds: f32,
+	elapsed: f32,
+	easing: Easing,
+}
+
+impl Ease {
+	/// Moves `elapsed` seconds further along the way: where the node is now,
+	/// and whether it has arrived.
+	fn advance(&mut self, elapsed: f32) -> (Transform, bool) {
+		self.elapsed = (self.elapsed + elapsed).min(self.seconds);
+
+		if self.elapsed >= self.seconds {
+			// Exactly where it was sent, not a blend that nearly lands there.
+			return (self.to, true);
+		}
+
+		let t = self.easing.apply(self.elapsed / self.seconds);
+		let motion = self.from.towards(Motion::from_transform(&self.to), t);
+		(motion.to_transform(), false)
+	}
 }
 
 /// A part the guest has moved, and how far it is on its way.
@@ -402,8 +437,7 @@ impl Instance {
 
 		if let Some(index) = asset.clips.iter().position(|clip| clip.name == play.clip) {
 			let duration = asset.clips[index].duration;
-			self.animator
-				.play(index, play.speed, play.mode, play.fade, duration);
+			self.animator.play(index, play, duration);
 		}
 	}
 
@@ -536,11 +570,34 @@ pub(crate) struct Node {
 	/// The part of the parent instance this node follows, after an attach.
 	pub bone: Option<String>,
 	pub transform: Transform,
+	/// Where it is going, while it eases there.
+	ease: Option<Ease>,
 	pub visible: bool,
 	pub instance: Option<Instance>,
 	pub world: Mat4,
 	/// Hidden itself or under a hidden node.
 	pub hidden: bool,
+}
+
+impl Node {
+	/// Sets off from where the node is towards `transform`, or puts it
+	/// there at once.
+	fn ease_to(&mut self, transform: Transform, seconds: f32, easing: Easing) {
+		if seconds <= 0.0 {
+			self.transform = transform;
+			self.ease = None;
+
+			return;
+		}
+
+		self.ease = Some(Ease {
+			from: Motion::from_transform(&self.transform),
+			to: transform,
+			seconds,
+			elapsed: 0.0,
+			easing,
+		});
+	}
 }
 
 /// Where the camera is and how it projects.
@@ -737,13 +794,12 @@ impl World {
 	}
 
 	/// Whether the scene needs drawing again: it changed since the last
-	/// [`World::advance`], or something in it is animating.
+	/// [`World::advance`], or something in it is animating or easing.
 	pub fn needs_frame(&self) -> bool {
 		self.changed
-			|| self
-				.nodes
-				.values()
-				.any(|node| node.instance.as_ref().is_some_and(Instance::is_moving))
+			|| self.nodes.values().any(|node| {
+				node.ease.is_some() || node.instance.as_ref().is_some_and(Instance::is_moving)
+			})
 	}
 
 	/// How many nodes the scene has.
@@ -859,6 +915,7 @@ impl World {
 				children: Vec::new(),
 				bone: None,
 				transform: Transform::IDENTITY,
+				ease: None,
 				visible: true,
 				instance,
 				world: Mat4::IDENTITY,
@@ -902,6 +959,17 @@ impl World {
 			Op::SetTransform { node, transform } => {
 				if let Some(node) = self.nodes.get_mut(&node) {
 					node.transform = transform;
+					node.ease = None;
+				}
+			}
+			Op::EaseTransform {
+				node,
+				transform,
+				seconds,
+				easing,
+			} => {
+				if let Some(node) = self.nodes.get_mut(&node) {
+					node.ease_to(transform, seconds, easing);
 				}
 			}
 			Op::SetVisible { node, visible } => {
@@ -1051,6 +1119,15 @@ impl World {
 		let mut finished = Vec::new();
 
 		for (id, node) in &mut self.nodes {
+			if let Some(ease) = &mut node.ease {
+				let (transform, arrived) = ease.advance(elapsed);
+				node.transform = transform;
+
+				if arrived {
+					node.ease = None;
+				}
+			}
+
 			if let Some(instance) = &mut node.instance {
 				for clip in instance.advance(elapsed) {
 					finished.push(Event::AnimationFinished { node: *id, clip });
@@ -1216,5 +1293,68 @@ mod tests {
 		instance.set_ink(Some("head".into()), PartInk::default());
 		instance.set_ink(Some("tail".into()), weight(5.0));
 		assert_eq!(lines(&instance), [weight(3.0); 4]);
+	}
+
+	#[test]
+	fn nodes_ease_to_a_transform() {
+		let node = NodeId(1);
+		let there = Transform::from_translation(4.0, 0.0, 0.0);
+		let ease = |transform, seconds, easing| {
+			Op::EaseTransform {
+				node,
+				transform,
+				seconds,
+				easing,
+			}
+		};
+		let x = |world: &World| world.nodes[&node].transform.translation[0];
+		let mut world = World::new();
+		world.apply([Op::Spawn {
+			node,
+			asset: None,
+			parent: None,
+		}]);
+		world.advance(0.0);
+		assert!(!world.needs_frame());
+
+		// Smoothstep: 5/32 of the way a quarter through, half way half
+		// through, and exactly there at the end.
+		world.apply([ease(there, 1.0, Easing::Smooth)]);
+		world.advance(0.25);
+		assert_eq!(x(&world), 4.0 * 5.0 / 32.0);
+		assert!(world.needs_frame(), "it draws every frame of the way");
+		world.advance(0.25);
+		assert_eq!(x(&world), 2.0);
+		world.advance(0.25);
+		world.advance(0.25);
+		assert_eq!(world.nodes[&node].transform, there);
+		assert_eq!(world.nodes[&node].world.w_axis.x, 4.0);
+		assert!(!world.needs_frame(), "and stops asking once there");
+
+		// Another ease starts from wherever the last one has got to.
+		world.apply([ease(Transform::IDENTITY, 1.0, Easing::Linear)]);
+		world.advance(0.25);
+		world.advance(0.25);
+		assert_eq!(x(&world), 2.0);
+		world.apply([ease(there, 1.0, Easing::Out)]);
+		world.advance(0.25);
+		world.advance(0.25);
+		// 1 − (1 − ½)³ = 7/8 of the way from 2 to 4.
+		assert_eq!(x(&world), 3.75);
+
+		// A transform set outright stops it where it is set.
+		world.apply([Op::SetTransform {
+			node,
+			transform: Transform::IDENTITY,
+		}]);
+		world.advance(0.25);
+		assert_eq!(x(&world), 0.0);
+		assert!(!world.needs_frame());
+
+		// No time puts it there at once.
+		world.apply([ease(there, 0.0, Easing::Smooth)]);
+		world.advance(0.0);
+		assert_eq!(world.nodes[&node].transform, there);
+		assert!(!world.needs_frame());
 	}
 }

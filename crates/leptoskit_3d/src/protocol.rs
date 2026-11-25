@@ -137,6 +137,39 @@ pub enum LoopMode {
 	PingPong,
 }
 
+/// How something moves from where it is to where it is going: how far along
+/// the way it is at each moment of the time it takes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Easing {
+	/// At a steady rate.
+	#[default]
+	Linear,
+	/// Slow to start and slow to settle: smoothstep, `3t² − 2t³`.
+	Smooth,
+	/// Slow to start, then faster: `t³`.
+	In,
+	/// Quick to start, then settling: `1 − (1 − t)³`.
+	Out,
+}
+
+impl Easing {
+	/// How far along the way something is, from 0 to 1, when `t` of its time
+	/// has passed, also from 0 to 1. Outside that, `t` is clamped.
+	pub fn apply(self, t: f32) -> f32 {
+		let t = t.clamp(0.0, 1.0);
+
+		match self {
+			Self::Linear => t,
+			Self::Smooth => t * t * (3.0 - 2.0 * t),
+			Self::In => t * t * t,
+			Self::Out => {
+				let rest = 1.0 - t;
+				1.0 - rest * rest * rest
+			}
+		}
+	}
+}
+
 /// Starts an animation clip on a model instance.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Play {
@@ -149,6 +182,16 @@ pub struct Play {
 	/// Seconds over which the clip fades in while the one playing fades out.
 	/// Zero cuts straight to it.
 	pub fade: f32,
+	/// How the crossfade moves from the clip playing to this one. The
+	/// default, [`Easing::Linear`], blends at a steady rate;
+	/// [`Easing::Smooth`] eases out of the old clip and into the new.
+	pub fade_easing: Easing,
+	/// Where the clip starts, as a fraction of its duration from 0, its
+	/// first frame, to 1, its last (which a looping clip shows as its first).
+	/// `None`, the default, starts at its first frame, or at its last for a
+	/// clip played backwards once. Instances playing one clip at different
+	/// phases keep a crowd from moving in step.
+	pub phase: Option<f32>,
 }
 
 impl Play {
@@ -159,6 +202,8 @@ impl Play {
 			speed: 1.0,
 			mode: LoopMode::Loop,
 			fade: 0.0,
+			fade_easing: Easing::Linear,
+			phase: None,
 		}
 	}
 
@@ -186,6 +231,21 @@ impl Play {
 	#[must_use]
 	pub fn fade(mut self, seconds: f32) -> Self {
 		self.fade = seconds;
+		self
+	}
+
+	/// Moves the crossfade along `easing` instead of at a steady rate.
+	#[must_use]
+	pub fn fade_easing(mut self, easing: Easing) -> Self {
+		self.fade_easing = easing;
+		self
+	}
+
+	/// Starts the clip `phase` of the way through, from 0 (its first frame)
+	/// to 1 (its last).
+	#[must_use]
+	pub fn phase(mut self, phase: f32) -> Self {
+		self.phase = Some(phase);
 		self
 	}
 }
@@ -442,6 +502,21 @@ pub enum Op {
 		node: NodeId,
 		/// Its new transform.
 		transform: Transform,
+	},
+	/// Moves a node from where it is to `transform` over `seconds`, along
+	/// `easing`: translation and scale along a straight line, rotation along
+	/// the shorter arc. The scene draws every frame of the way. Another ease
+	/// on the node starts from wherever this one has got to, and a
+	/// [`Op::SetTransform`] stops it where it is set.
+	EaseTransform {
+		/// The node to move.
+		node: NodeId,
+		/// Where it ends up, relative to its parent.
+		transform: Transform,
+		/// How long the way takes; zero puts it there at once.
+		seconds: f32,
+		/// How it moves along the way.
+		easing: Easing,
 	},
 	/// Shows or hides a node and everything under it.
 	SetVisible {
@@ -702,6 +777,10 @@ const SET_PART_OFFSET: u8 = 21;
 const SET_BLEND: u8 = 22;
 const SET_STYLE: u8 = 23;
 const SET_INK: u8 = 24;
+const EASE_TRANSFORM: u8 = 25;
+/// A [`Play`] that eases its crossfade or starts at a phase; one that does
+/// neither is written as [`PLAY`], as it always was.
+const PLAY_EASED: u8 = 26;
 
 // Event tags.
 const ASSET_LOADED: u8 = 1;
@@ -962,6 +1041,41 @@ fn read_style(reader: &mut Reader<'_>) -> Result<Style, DecodeError> {
 	Ok(Style { shading, ink })
 }
 
+fn read_easing(reader: &mut Reader<'_>) -> Result<Easing, DecodeError> {
+	Ok(match reader.u8()? {
+		0 => Easing::Linear,
+		1 => Easing::Smooth,
+		2 => Easing::In,
+		3 => Easing::Out,
+		_ => return Err(DecodeError("an unknown easing")),
+	})
+}
+
+/// `clip:str speed:f32 mode:u8 fade:f32`, then for [`PLAY_EASED`]
+/// `fade_easing:u8 phase:opt<f32>`.
+fn read_play(reader: &mut Reader<'_>, eased: bool) -> Result<Play, DecodeError> {
+	let mut play = Play {
+		clip: reader.str(crate::MAX_NAME_BYTES)?,
+		speed: reader.f32()?,
+		mode: match reader.u8()? {
+			0 => LoopMode::Once,
+			1 => LoopMode::Loop,
+			2 => LoopMode::PingPong,
+			_ => return Err(DecodeError("an unknown loop mode")),
+		},
+		fade: reader.f32()?,
+		fade_easing: Easing::Linear,
+		phase: None,
+	};
+
+	if eased {
+		play.fade_easing = read_easing(reader)?;
+		play.phase = reader.option(Reader::f32)?;
+	}
+
+	Ok(play)
+}
+
 impl Op {
 	#[allow(clippy::too_many_lines)]
 	fn write(&self, writer: &mut Writer) {
@@ -994,6 +1108,18 @@ impl Op {
 				writer.u32(node.0);
 				writer.transform(transform);
 			}
+			Self::EaseTransform {
+				node,
+				transform,
+				seconds,
+				easing,
+			} => {
+				writer.u8(EASE_TRANSFORM);
+				writer.u32(node.0);
+				writer.transform(transform);
+				writer.f32(*seconds);
+				writer.u8(*easing as u8);
+			}
 			Self::SetVisible { node, visible } => {
 				writer.u8(SET_VISIBLE);
 				writer.u32(node.0);
@@ -1010,12 +1136,18 @@ impl Op {
 				writer.bool(*visible);
 			}
 			Self::Play { node, play } => {
-				writer.u8(PLAY);
+				let eased = play.fade_easing != Easing::Linear || play.phase.is_some();
+				writer.u8(if eased { PLAY_EASED } else { PLAY });
 				writer.u32(node.0);
 				writer.str(&play.clip);
 				writer.f32(play.speed);
 				writer.u8(play.mode as u8);
 				writer.f32(play.fade);
+
+				if eased {
+					writer.u8(play.fade_easing as u8);
+					writer.option(play.phase, Writer::f32);
+				}
 			}
 			Self::Stop { node, fade } => {
 				writer.u8(STOP);
@@ -1177,6 +1309,14 @@ impl Op {
 					transform: reader.transform()?,
 				}
 			}
+			EASE_TRANSFORM => {
+				Self::EaseTransform {
+					node: NodeId(reader.u32()?),
+					transform: reader.transform()?,
+					seconds: reader.f32()?,
+					easing: read_easing(reader)?,
+				}
+			}
 			SET_VISIBLE => {
 				Self::SetVisible {
 					node: NodeId(reader.u32()?),
@@ -1190,21 +1330,10 @@ impl Op {
 					visible: reader.bool()?,
 				}
 			}
-			PLAY => {
+			PLAY | PLAY_EASED => {
 				Self::Play {
 					node: NodeId(reader.u32()?),
-					play: Play {
-						clip: reader.str(NAME)?,
-						speed: reader.f32()?,
-						mode: match reader.u8()? {
-							0 => LoopMode::Once,
-							1 => LoopMode::Loop,
-							2 => LoopMode::PingPong,
-							_ => return Err(DecodeError("an unknown loop mode")),
-						},
-
-						fade: reader.f32()?,
-					},
+					play: read_play(reader, tag == PLAY_EASED)?,
 				}
 			}
 			STOP => {

@@ -48,7 +48,7 @@ pub const MAX_COORDINATE: f32 = 1.0e6;
 pub const MAX_SCALE: f32 = 1.0e4;
 /// The fastest playback rate, either way.
 pub const MAX_SPEED: f32 = 100.0;
-/// The longest fade, in seconds.
+/// The longest fade or ease, in seconds.
 pub const MAX_FADE: f32 = 60.0;
 /// The largest morph weight, either way.
 pub const MAX_MORPH_WEIGHT: f32 = 16.0;
@@ -276,6 +276,19 @@ impl Op {
 					transform: transform.sanitized(),
 				}
 			}
+			Self::EaseTransform {
+				node,
+				transform,
+				seconds,
+				easing,
+			} => {
+				Self::EaseTransform {
+					node,
+					transform: transform.sanitized(),
+					seconds: bounded(seconds, 0.0, MAX_FADE),
+					easing,
+				}
+			}
 			Self::SetPartVisible {
 				node,
 				part,
@@ -308,6 +321,8 @@ impl Op {
 						speed: bounded(play.speed, -MAX_SPEED, MAX_SPEED),
 						mode: play.mode,
 						fade: bounded(play.fade, 0.0, MAX_FADE),
+						fade_easing: play.fade_easing,
+						phase: play.phase.map(unit),
 					},
 				}
 			}

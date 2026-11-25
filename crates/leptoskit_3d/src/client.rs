@@ -236,6 +236,17 @@ impl Scene {
 		self.push(Op::SetTransform { node, transform });
 	}
 
+	/// Moves a node from where it is to `transform` over `seconds`, along
+	/// `easing` (see [`Op::EaseTransform`]).
+	pub fn ease_transform(&self, node: NodeId, transform: Transform, seconds: f32, easing: Easing) {
+		self.push(Op::EaseTransform {
+			node,
+			transform,
+			seconds,
+			easing,
+		});
+	}
+
 	/// Shows or hides a node.
 	pub fn set_visible(&self, node: NodeId, visible: bool) {
 		self.push(Op::SetVisible { node, visible });
@@ -447,6 +458,23 @@ mod tests {
 				node,
 				part: Some("head".into()),
 				ink: heavy,
+			}
+		);
+	}
+
+	#[test]
+	fn eases_queue_their_op() {
+		let scene = Scene::new(SceneId(1));
+		let node = scene.spawn(scene.load("models/rig.glb"));
+		let there = Transform::from_translation(0.0, 1.0, 0.0);
+		scene.ease_transform(node, there, 0.4, Easing::Out);
+		assert_eq!(
+			scene.take_ops()[2],
+			Op::EaseTransform {
+				node,
+				transform: there,
+				seconds: 0.4,
+				easing: Easing::Out,
 			}
 		);
 	}
