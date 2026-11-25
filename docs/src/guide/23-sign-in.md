@@ -149,7 +149,7 @@ The newest key hashes new codes and encrypts new authenticator secrets, and any 
 - **SMTP** (the `auth-smtp` feature): `smtp_url_env` names a variable holding a URL such as `smtps://user:password@smtp.example.com`, and `from` is who email comes from.
 - **A webhook** (the `auth-webhook` feature): `webhook_url_env` and `webhook_secret_env` name a URL you control and its signing secret. Each email arrives there as JSON, `{ "type": "email", "from", "to", "subject", "text" }`, signed the way [Standard Webhooks](https://www.standardwebhooks.com) describes, and your endpoint sends it through any provider. Check the `webhook-signature` header before you trust a request.
 
-With neither, a debug build keeps every email in the development mailbox, and a release build refuses to start rather than silently send nothing. Any other provider takes a few lines: implement `auth::Mailer`, and pass it to `.mailer(…)`.
+With neither, a debug build keeps the newest 500 emails in the development mailbox, and a release build refuses to start rather than silently send nothing. Any other provider takes a few lines: implement `auth::Mailer`, and pass it to `.mailer(…)`.
 
 ## Sign in with an emailed code
 
@@ -253,7 +253,7 @@ The client's IP address, for rate limits and the audit trail, is the connection'
 
 Two builder options make sign-in easy to try. Release builds don't have either, so they can't ship by accident:
 
-- `.dev_mailbox()` keeps every email instead of sending it, and shows them at `/_leptoskit/mail`.
+- `.dev_mailbox()` keeps the newest 500 emails instead of sending them, and shows them at `/_leptoskit/mail`.
 - `.dev_sign_in()` adds `POST /auth/dev/sign-in`, which takes `{ "email" }` and signs in to that address without a code, creating its account if needed.
 
 ## Build the sign-in screen

@@ -22,7 +22,7 @@ Open it in two windows, sign in as two people, and type in one: the other sees t
 
 Tips use a **simulated** settlement service that runs inside the server: it takes about two seconds and declines a fifth of tips (`HUDDLE_SETTLEMENT_DELAY_MS`, `HUDDLE_SETTLEMENT_FAILURE_RATE`), so every state is easy to see. No money, coins, or blockchain are involved. The summarizer is local and deterministic too: it counts who spoke and which words came up, and calls nothing outside.
 
-Sign-in is the screen `leptoskit generate auth` writes, with emailed codes. Every email, sign-in codes and invitations alike, stays in the server's mailbox at `/_leptoskit/mail`. In a debug build the browser's sign-in screen also has buttons that sign in as Ada, Grace, or Lin at once. The first person to sign in is the admin.
+Sign-in is the screen `leptoskit generate auth` writes, with emailed codes. Every email, sign-in codes and invitations alike, goes to the server's mailbox at `/_leptoskit/mail`, which keeps the newest 500. In a debug build the browser's sign-in screen also has buttons that sign in as Ada, Grace, or Lin at once. The first person to sign in is the admin.
 
 ## How it's built
 

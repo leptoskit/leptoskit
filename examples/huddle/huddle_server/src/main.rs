@@ -99,6 +99,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 	options.origin = std::env::var("HUDDLE_ORIGIN")
 		.ok()
 		.or_else(|| config.auth.as_ref().and_then(|auth| auth.origin.clone()));
+	// The same header sign-in counts callers by.
+	options.client_ip_header = std::env::var("HUDDLE_CLIENT_IP_HEADER").ok().or_else(|| {
+		config
+			.auth
+			.as_ref()
+			.and_then(|auth| auth.client_ip_header.clone())
+	});
 	options.site_root = Some(site_root.into());
 	options.jobs = Jobs::from_config(db.clone(), &config.rpc.jobs);
 	options.roles = roles;
