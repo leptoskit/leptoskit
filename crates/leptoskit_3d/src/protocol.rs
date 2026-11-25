@@ -330,7 +330,8 @@ pub struct Print {
 	/// `shade`.
 	pub t_deep: f32,
 	/// `N·L` threshold below which cross-hatching is added, from -2 to
-	/// `t_deep`; values at or below -1.5 disable cross-hatching.
+	/// `t_deep`. `N·L` never falls below -1, so values at or below -1
+	/// disable cross-hatching.
 	pub t_cross: f32,
 	/// Backlit rim threshold: prints `spot` where `N·V < rim` and
 	/// `N·L < 0.05`, from 0 (off) to 1.
