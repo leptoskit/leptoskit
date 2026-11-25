@@ -15,12 +15,18 @@
 //! - `--toon` shades in [`Toon::default`]'s bands; `--bands 2`, `--softness
 //!   0.2`, `--shade 0.4,0.4,0.6`, `--specular 1`, and `--hatch 0.6` change
 //!   them.
+//! - `--print` shades in [`Print::default`]'s relief-print bands; `--t-lit`,
+//!   `--t-deep`, `--t-cross`, `--rim`, `--paper r,g,b`, `--knockout`,
+//!   `--hatch-per-m`, `--hatch-gain`, `--hatch-max`, `--cross-duty`, `--fade-px
+//!   lo,hi`, `--side-heavy`, `--side-drop`, `--side-from`, `--side-to`,
+//!   `--wobble-frequency`, and `--palette file.json` configure it.
 //! - `--ink 2` draws an [`Ink::default`] line 2 thousandths of the view's
 //!   height wide; `--ink-color 0.03,0.02,0.05`, `--facing 0.7`, `--shade-weight
 //!   1`, `--wobble 0.3`, `--boil 8`, and `--seed 7` change it.
-//! - `--distance 8` moves the camera back, `--size 360x480` sets the image's
-//!   size, `--backdrop 0.1,0.1,0.12` its colour, and `--exposure 1.3` its
-//!   exposure.
+//! - `--light x,y,z`, `--camera-light`, `--no-shadow`, `--distance 8`, `--aim-y
+//!   1.0`, `--pitch 7`, `--fov 36`, `--yaw 25`, `--smooth-rings 2`, `--attach
+//!   path.glb:bone`, `--attach-hide a,b`, `--size 360x480`, `--backdrop
+//!   0.1,0.1,0.12`, and `--exposure 1.3` configure the scene.
 
 #[cfg(target_arch = "wasm32")]
 fn main() {}
@@ -33,19 +39,76 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// Rendering offscreen needs a blocking device, which the browser lacks.
 #[cfg(not(target_arch = "wasm32"))]
 mod native {
+	use std::collections::BTreeMap;
 	use std::collections::HashMap;
 	use std::sync::Arc;
 
 	use leptoskit_3d::*;
+	use serde::Deserialize;
 
 	type Failure = Box<dyn std::error::Error>;
 
-	/// The command line: positional arguments, and `--name value` options
-	/// (`--toon` takes no value).
+	#[derive(Deserialize, Default)]
+	#[serde(default)]
+	struct PaletteOverride {
+		lit: Option<[f32; 3]>,
+		shade: Option<[f32; 3]>,
+		deep: Option<[f32; 3]>,
+		spot: Option<[f32; 3]>,
+		mode: Option<String>,
+		hatch_min: Option<f32>,
+		hatch_per_m: Option<f32>,
+		cross_hatch: Option<bool>,
+		specular: Option<f32>,
+		rim: Option<bool>,
+		ink_weight: Option<f32>,
+		knockout: Option<bool>,
+		boil_step: Option<u8>,
+	}
+
+	impl PaletteOverride {
+		fn into_print_override(self) -> Result<PrintOverride, Failure> {
+			let mode = match self.mode.as_deref() {
+				None => None,
+				Some("banded") => Some(PrintMode::Banded),
+				Some("flat") => Some(PrintMode::Flat),
+				Some(other) => return Err(format!("unknown print mode {other:?}").into()),
+			};
+			Ok(PrintOverride {
+				lit: self.lit,
+				shade: self.shade,
+				deep: self.deep,
+				spot: self.spot,
+				mode,
+				hatch_min: self.hatch_min,
+				hatch_per_m: self.hatch_per_m,
+				cross_hatch: self.cross_hatch,
+				specular: self.specular,
+				rim: self.rim,
+				ink_weight: self.ink_weight,
+				knockout: self.knockout,
+				boil_step: self.boil_step,
+			})
+		}
+	}
+
+	#[derive(Deserialize, Default)]
+	#[serde(default)]
+	struct PaletteFile {
+		all: Option<PaletteOverride>,
+		materials: BTreeMap<String, PaletteOverride>,
+		parts: BTreeMap<String, PaletteOverride>,
+	}
+
+	/// The command line: positional arguments, boolean flags, and `--name
+	/// value` options.
 	struct Arguments {
 		positional: Vec<String>,
 		options: HashMap<String, String>,
 		toon: bool,
+		print: bool,
+		camera_light: bool,
+		no_shadow: bool,
 	}
 
 	impl Arguments {
@@ -55,11 +118,17 @@ mod native {
 				positional: Vec::new(),
 				options: HashMap::new(),
 				toon: false,
+				print: false,
+				camera_light: false,
+				no_shadow: false,
 			};
 
 			while let Some(argument) = arguments.next() {
 				match argument.strip_prefix("--") {
 					Some("toon") => parsed.toon = true,
+					Some("print") => parsed.print = true,
+					Some("camera-light") => parsed.camera_light = true,
+					Some("no-shadow") => parsed.no_shadow = true,
 					Some(name) => {
 						let value = arguments.next().unwrap_or_default();
 						parsed.options.insert(name.to_owned(), value);
@@ -79,6 +148,32 @@ mod native {
 				.map_err(|error| format!("--{name}: {error}").into())
 		}
 
+		fn integer<T: std::str::FromStr>(&self, name: &str) -> Result<Option<T>, Failure>
+		where
+			T::Err: std::fmt::Display,
+		{
+			self.options
+				.get(name)
+				.map(|value| value.parse::<T>())
+				.transpose()
+				.map_err(|error| format!("--{name}: {error}").into())
+		}
+
+		fn pair(&self, name: &str) -> Result<Option<[f32; 2]>, Failure> {
+			let Some(value) = self.options.get(name) else {
+				return Ok(None);
+			};
+			let parts = value
+				.split(',')
+				.map(str::parse::<f32>)
+				.collect::<Result<Vec<_>, _>>()
+				.map_err(|error| format!("--{name}: {error}"))?;
+			let [first, second] = parts[..] else {
+				return Err(format!("--{name} takes two numbers, as 2.5,4.0").into());
+			};
+			Ok(Some([first, second]))
+		}
+
 		fn color(&self, name: &str) -> Result<Option<[f32; 3]>, Failure> {
 			let Some(value) = self.options.get(name) else {
 				return Ok(None);
@@ -96,7 +191,28 @@ mod native {
 
 		/// The style the options describe.
 		fn style(&self) -> Result<Style, Failure> {
-			let shading = if self.toon || self.options.contains_key("bands") {
+			let shading = if self.print {
+				let mut print = Print::default();
+				print.t_lit = self.number("t-lit")?.unwrap_or(print.t_lit);
+				print.t_deep = self.number("t-deep")?.unwrap_or(print.t_deep);
+				print.t_cross = self.number("t-cross")?.unwrap_or(print.t_cross);
+				print.rim = self.number("rim")?.unwrap_or(print.rim);
+				print.paper = self.color("paper")?.unwrap_or(print.paper);
+				print.knockout_width = self.number("knockout")?.unwrap_or(print.knockout_width);
+				print.hatch_per_m = self.number("hatch-per-m")?.unwrap_or(print.hatch_per_m);
+				print.hatch_gain = self.number("hatch-gain")?.unwrap_or(print.hatch_gain);
+				print.hatch_max = self.number("hatch-max")?.unwrap_or(print.hatch_max);
+				print.cross_duty = self.number("cross-duty")?.unwrap_or(print.cross_duty);
+				print.fade_px = self.pair("fade-px")?.unwrap_or(print.fade_px);
+				print.side_heavy = self.number("side-heavy")?.unwrap_or(print.side_heavy);
+				print.side_drop = self.number("side-drop")?.unwrap_or(print.side_drop);
+				print.side_from = self.number("side-from")?.unwrap_or(print.side_from);
+				print.side_to = self.number("side-to")?.unwrap_or(print.side_to);
+				print.wobble_frequency = self
+					.number("wobble-frequency")?
+					.unwrap_or(print.wobble_frequency);
+				Shading::Print(print)
+			} else if self.toon || self.options.contains_key("bands") {
 				let mut toon = Toon::default();
 
 				if let Some(bands) = self.number("bands")? {
@@ -124,8 +240,8 @@ mod native {
 					ink.wobble = self.number("wobble")?.unwrap_or(ink.wobble);
 					ink.boil = self.number("boil")?.unwrap_or(ink.boil);
 
-					if let Some(seed) = self.number("seed")? {
-						ink.seed = seed as u32;
+					if let Some(seed) = self.integer::<u32>("seed")? {
+						ink.seed = seed;
 					}
 
 					Some(ink)
@@ -147,6 +263,16 @@ mod native {
 		}
 	}
 
+	fn apply_palette(world: &mut World, node: NodeId, palette: &[(PrintTarget, PrintOverride)]) {
+		for (target, print) in palette {
+			world.apply([Op::SetPrint {
+				node,
+				target: target.clone(),
+				print: *print,
+			}]);
+		}
+	}
+
 	pub fn main() -> Result<(), Failure> {
 		let arguments = Arguments::parse();
 		let mut positional = arguments.positional.iter();
@@ -161,7 +287,33 @@ mod native {
 		let backdrop = arguments.color("backdrop")?.unwrap_or([0.8, 0.8, 0.82]);
 		let exposure = arguments.number("exposure")?.unwrap_or(1.0);
 		let (width, height) = arguments.size()?;
-		let asset = Arc::new(Asset::from_slice(&std::fs::read(input)?)?);
+		let load_options = LoadOptions {
+			outline_smooth_rings: arguments.integer::<u8>("smooth-rings")?,
+		};
+		let palette_ops = match arguments.options.get("palette") {
+			Some(path) => {
+				let parsed: PaletteFile = serde_json::from_str(&std::fs::read_to_string(path)?)?;
+				let mut ops = Vec::new();
+				if let Some(all) = parsed.all {
+					ops.push((PrintTarget::All, all.into_print_override()?));
+				}
+				for (material, entry) in parsed.materials {
+					ops.push((
+						PrintTarget::Material(material),
+						entry.into_print_override()?,
+					));
+				}
+				for (part, entry) in parsed.parts {
+					ops.push((PrintTarget::Part(part), entry.into_print_override()?));
+				}
+				ops
+			}
+			None => Vec::new(),
+		};
+		let asset = Arc::new(Asset::from_slice_with_options(
+			&std::fs::read(input)?,
+			load_options,
+		)?);
 		let gpu = Gpu::headless()?;
 
 		let mut renderer = Renderer::new(&gpu);
@@ -185,20 +337,120 @@ mod native {
 			Op::SetExposure(exposure),
 			Op::SetStyle(style),
 		]);
+
+		if arguments.options.contains_key("light") || arguments.camera_light || arguments.no_shadow
+		{
+			let mut light = Light::default();
+			if let Some(direction) = arguments.color("light")? {
+				light.direction = direction;
+			}
+			light.camera_space = arguments.camera_light;
+			if arguments.no_shadow {
+				light.shadow = 0.0;
+			}
+			world.apply([Op::SetLight(light)]);
+		}
+		if arguments.no_shadow {
+			world.apply([Op::SetShadow {
+				node: NodeId(1),
+				cast: false,
+			}]);
+		}
+		if let Some(yaw_deg) = arguments.number("yaw")? {
+			world.apply([Op::SetTransform {
+				node: NodeId(1),
+				transform: Transform::IDENTITY.with_yaw(yaw_deg.to_radians()),
+			}]);
+		}
+
 		world.take_loads();
 		world.asset_loaded(AssetId(1), Ok(asset.clone()));
+		apply_palette(world, NodeId(1), &palette_ops);
+
+		if let Some(attach_spec) = arguments.options.get("attach") {
+			let (attach_path, bone) = attach_spec
+				.rsplit_once(':')
+				.ok_or("--attach takes path.glb:bone")?;
+			let attached = Arc::new(Asset::from_slice_with_options(
+				&std::fs::read(attach_path)?,
+				load_options,
+			)?);
+			world.apply([
+				Op::LoadAsset {
+					asset: AssetId(2),
+					path: "attach.glb".into(),
+				},
+				Op::Spawn {
+					node: NodeId(2),
+					asset: Some(AssetId(2)),
+					parent: None,
+				},
+				Op::Attach {
+					node: NodeId(2),
+					target: NodeId(1),
+					bone: bone.into(),
+				},
+			]);
+			if arguments.no_shadow {
+				world.apply([Op::SetShadow {
+					node: NodeId(2),
+					cast: false,
+				}]);
+			}
+			world.take_loads();
+			world.asset_loaded(AssetId(2), Ok(attached));
+			apply_palette(world, NodeId(2), &palette_ops);
+
+			for part in arguments
+				.options
+				.get("attach-hide")
+				.map(String::as_str)
+				.unwrap_or_default()
+				.split(',')
+				.filter(|part| !part.is_empty())
+			{
+				world.apply([Op::SetPartVisible {
+					node: NodeId(2),
+					part: part.into(),
+					visible: false,
+				}]);
+			}
+		}
+
 		world.advance(0.0);
-		// Frame the model's bounds, found by casting rays would be overkill:
-		// a person-sized model sits in a 2.5 m box at the origin. Further
-		// cameras back away along the same line, and the default distance
-		// places the camera exactly where it always was.
-		let eye = glam::Vec3::new(0.0, 1.3, 3.6);
-		let aim = glam::Vec3::new(0.0, 1.3 - 3.6 * 0.12_f32.tan(), 0.0);
-		let position = eye + (eye - aim) * ((distance - 3.6) / 3.6);
+
+		let custom_camera = arguments.options.contains_key("aim-y")
+			|| arguments.options.contains_key("pitch")
+			|| arguments.options.contains_key("fov");
+		let (cam_transform, fov_y) = if custom_camera {
+			let aim_y = arguments.number("aim-y")?.unwrap_or(0.95);
+			let pitch = arguments.number("pitch")?.unwrap_or(6.88).to_radians();
+			let fov_y = arguments.number("fov")?.unwrap_or(42.97).to_radians();
+			let position =
+				glam::Vec3::new(0.0, aim_y + distance * pitch.sin(), distance * pitch.cos());
+			(
+				Transform::from_translation(position.x, position.y, position.z)
+					.with_rotation(glam::Quat::from_rotation_x(-pitch).to_array()),
+				fov_y,
+			)
+		} else {
+			// Frame the model's bounds, found by casting rays would be
+			// overkill: a person-sized model sits in a 2.5 m box at
+			// the origin. Further cameras back away along the same
+			// line, and the default distance places the camera
+			// exactly where it always was.
+			let eye = glam::Vec3::new(0.0, 1.3, 3.6);
+			let aim = glam::Vec3::new(0.0, 1.3 - 3.6 * 0.12_f32.tan(), 0.0);
+			let position = eye + (eye - aim) * ((distance - 3.6) / 3.6);
+			(
+				Transform::from_translation(position.x, position.y, position.z)
+					.with_rotation(glam::Quat::from_rotation_x(-0.12).to_array()),
+				0.75,
+			)
+		};
 		world.apply([Op::SetCamera {
-			transform: Transform::from_translation(position.x, position.y, position.z)
-				.with_rotation(glam::Quat::from_rotation_x(-0.12).to_array()),
-			fov_y: 0.75,
+			transform: cam_transform,
+			fov_y,
 			near: 0.05,
 			far: 50.0,
 		}]);
