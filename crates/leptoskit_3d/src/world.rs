@@ -659,6 +659,10 @@ pub(crate) struct Node {
 	pub children: Vec<NodeId>,
 	/// The part of the parent instance this node follows, after an attach.
 	pub bone: Option<String>,
+	/// Whether it joined its parent by [`Op::Attach`] rather than by
+	/// [`Op::Spawn`]: an attached model prints as one figure with what it
+	/// is attached to.
+	pub attached: bool,
 	pub transform: Transform,
 	/// Where it is going, while it eases there.
 	ease: Option<Ease>,
@@ -1004,6 +1008,7 @@ impl World {
 				parent: None,
 				children: Vec::new(),
 				bone: None,
+				attached: false,
 				transform: Transform::IDENTITY,
 				ease: None,
 				visible: true,
@@ -1172,6 +1177,10 @@ impl World {
 
 		self.detach(node);
 		self.adopt(node, Some(target), (!bone.is_empty()).then_some(bone));
+
+		if let Some(node) = self.nodes.get_mut(&node) {
+			node.attached = true;
+		}
 	}
 
 	/// Casts a ray from the camera through a point of the view.

@@ -669,7 +669,10 @@ pub enum Op {
 		node: NodeId,
 		/// The model to instance.
 		asset: Option<AssetId>,
-		/// The node it moves with, or `None` for the scene's root.
+		/// The node it moves with, or `None` for the scene's root. A model
+		/// spawned under another model is a figure of its own: in
+		/// [`Shading::Print`] it keeps its own paper knockout. To print it as
+		/// one figure with its parent, [`Op::Attach`] it instead.
 		parent: Option<NodeId>,
 	},
 	/// Removes a node and every node under it.
@@ -823,7 +826,9 @@ pub enum Op {
 	},
 	/// Makes `node` move with a named part (a bone, a socket, any node) of
 	/// the instance `target`, such as a weapon in a hand. An empty `bone`
-	/// attaches it to the instance itself.
+	/// attaches it to the instance itself. An attached model prints as one
+	/// figure with `target`: in [`Shading::Print`] they share one paper
+	/// knockout, with no paper between them.
 	Attach {
 		/// The node to attach.
 		node: NodeId,

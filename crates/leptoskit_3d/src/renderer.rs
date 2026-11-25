@@ -649,30 +649,38 @@ struct Part<'a> {
 	stencil_ref: u8,
 }
 
-/// The root figure owning `id`: the highest ancestor (including `id`) that
-/// holds a model instance. Attached children (such as a weapon mounted on a
-/// bone) share their parent figure's stencil reference with no interior seam,
-/// while separate figures under a transform-only group get distinct references.
+/// The figure `id` prints as part of: the highest model instance reached by
+/// following [`Op::Attach`](crate::protocol::Op::Attach) links up from `id`,
+/// or `id` itself. A weapon attached to a hand shares its wielder's stencil
+/// reference, with no paper seam between them, while a model spawned under
+/// another (a figure on a stage) is a figure of its own.
 fn figure_root(world: &World, id: crate::protocol::NodeId) -> crate::protocol::NodeId {
-	let mut best = id;
-	let mut cursor = world.nodes.get(&id).and_then(|node| node.parent);
-	let mut steps = 0_usize;
+	let mut figure = id;
+	let mut cursor = id;
 
-	while let Some(parent) = cursor {
-		if steps >= world.nodes.len() {
-			break;
-		}
-		steps += 1;
-		let Some(node) = world.nodes.get(&parent) else {
+	// At most one step per node, so no shape of the tree can hang a frame.
+	for _ in 0..world.nodes.len() {
+		let Some(parent) = world
+			.nodes
+			.get(&cursor)
+			.filter(|node| node.attached)
+			.and_then(|node| node.parent)
+		else {
 			break;
 		};
-		if node.instance.is_some() {
-			best = parent;
+
+		if world
+			.nodes
+			.get(&parent)
+			.is_some_and(|node| node.instance.is_some())
+		{
+			figure = parent;
 		}
-		cursor = node.parent;
+
+		cursor = parent;
 	}
 
-	best
+	figure
 }
 
 /// A primitive's instance attributes: its matrix, its part's overrides,

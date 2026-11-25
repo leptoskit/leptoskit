@@ -620,6 +620,27 @@ pub fn masked_quads() -> Vec<u8> {
 	builder.glb(&json)
 }
 
+/// A single-sided opaque rectangle facing +z at depth `z`, from `min` to
+/// `max` on x and y, in one grey material named `name`.
+pub fn flat_quad(min: [f32; 2], max: [f32; 2], z: f32, name: &str) -> Vec<u8> {
+	let mut builder = Builder::default();
+	let positions = vec![
+		min[0], min[1], z, max[0], min[1], z, max[0], max[1], z, min[0], max[1], z,
+	];
+	let normals = [0.0, 0.0, 1.0].repeat(4);
+	let indices: Vec<u16> = vec![0, 1, 2, 0, 2, 3];
+	let position = builder.floats(&positions, 3, true);
+	let normal = builder.floats(&normals, 3, false);
+	let index = builder.u16s(&indices, 1);
+	builder.glb(&format!(
+		r#""asset":{{"version":"2.0"}},
+"scenes":[{{"nodes":[0]}}],
+"nodes":[{{"name":"{name}","mesh":0}}],
+"meshes":[{{"primitives":[{{"attributes":{{"POSITION":{position},"NORMAL":{normal}}},"indices":{index},"material":0}}]}}],
+"materials":[{{"name":"{name}","pbrMetallicRoughness":{{"baseColorFactor":[0.5,0.5,0.5,1]}}}}]"#
+	))
+}
+
 /// Like [`lit_sphere`] with `doubleSided: true`, so mirrored negative-scale
 /// transforms stay visible in mesh rendering for knockout hull tests.
 pub fn double_sided_sphere(segments: usize) -> Vec<u8> {

@@ -2714,6 +2714,14 @@ fn print_paper_knockout_separates_overlapping_figures() {
 #[test]
 fn print_attached_child_shares_stencil_ref_with_no_interior_seam() {
 	let Some(gpu) = gpu() else { return };
+
+	// Attached to a part, as a weapon is to a hand, and to the model itself.
+	for bone in ["sphere", ""] {
+		attached_child_shares_its_figure(gpu, bone);
+	}
+}
+
+fn attached_child_shares_its_figure(gpu: &Gpu, bone: &str) {
 	let blue = [0.10, 0.25, 0.85];
 	let green = [0.10, 0.75, 0.20];
 	let mut renderer = renderer(gpu);
@@ -2730,11 +2738,16 @@ fn print_attached_child_shares_stencil_ref_with_no_interior_seam() {
 			node: NodeId(1),
 			transform: Transform::IDENTITY.with_scale(0.90),
 		},
-		// Child weapon/part attached to NodeId(1) crossing right in front of its torso.
+		// A model attached to NodeId(1), crossing right in front of its torso.
 		Op::Spawn {
 			node: NodeId(2),
 			asset: Some(AssetId(1)),
-			parent: Some(NodeId(1)),
+			parent: None,
+		},
+		Op::Attach {
+			node: NodeId(2),
+			target: NodeId(1),
+			bone: bone.into(),
 		},
 		Op::SetTransform {
 			node: NodeId(2),
@@ -3231,5 +3244,117 @@ fn outline_smooth_rings_loads_and_renders_closed_smoothed_hull() {
 	assert_ne!(
 		plain.pixels, smooth.pixels,
 		"2 smoothing rings visibly adjust faceted hull corners"
+	);
+}
+
+/// Loads `bytes` as asset `id` without spawning it.
+fn load(renderer: &mut Renderer, id: u32, bytes: &[u8]) {
+	let asset = Arc::new(Asset::from_slice(bytes).unwrap());
+	let world = renderer.world_mut();
+	world.apply([Op::LoadAsset {
+		asset: AssetId(id),
+		path: format!("models/{id}.glb"),
+	}]);
+	world.take_loads();
+	world.asset_loaded(AssetId(id), Ok(asset));
+	world.take_events();
+}
+
+/// Prints all of `node` flat in `color`, opting in or out of the knockout.
+fn flat_print(node: u32, color: [f32; 3], knockout: Option<bool>) -> Op {
+	Op::SetPrint {
+		node: NodeId(node),
+		target: PrintTarget::All,
+		print: PrintOverride {
+			lit: Some(color),
+			mode: Some(PrintMode::Flat),
+			knockout,
+			..PrintOverride::default()
+		},
+	}
+}
+
+/// A dark backdrop and a light that casts no shadow, for knockout tests.
+fn knockout_stage() -> [Op; 2] {
+	[
+		Op::SetBackdrop(Backdrop::Color([0.04, 0.04, 0.08, 1.0])),
+		Op::SetLight(Light {
+			shadow: 0.0,
+			..Light::default()
+		}),
+	]
+}
+
+fn knockout_print(width: f32) -> Op {
+	style(
+		Shading::Print(Print {
+			paper: PAPER_COLOR,
+			knockout_width: width,
+			..Print::default()
+		}),
+		None,
+	)
+}
+
+/// A figure spawned under another model (a stage, a room, a table) is a
+/// figure of its own: its paper knockout still draws over that model.
+#[test]
+fn print_a_figure_spawned_under_a_model_keeps_its_knockout() {
+	let Some(gpu) = gpu() else { return };
+	let blue = [0.10, 0.25, 0.85];
+	let green = [0.10, 0.75, 0.20];
+	let mut paper = Vec::new();
+
+	for parent in [None, Some(NodeId(1))] {
+		let mut renderer = renderer(gpu);
+		load(
+			&mut renderer,
+			1,
+			&fixture::flat_quad([-2.0; 2], [2.0; 2], -1.0, "stage"),
+		);
+		load(&mut renderer, 2, &fixture::lit_sphere(32, None));
+		renderer.world_mut().apply(knockout_stage());
+		renderer.world_mut().apply([
+			Op::Spawn {
+				node: NodeId(1),
+				asset: Some(AssetId(1)),
+				parent: None,
+			},
+			Op::Spawn {
+				node: NodeId(2),
+				asset: Some(AssetId(2)),
+				parent,
+			},
+			Op::SetTransform {
+				node: NodeId(2),
+				transform: Transform::IDENTITY.with_scale(0.6),
+			},
+			flat_print(1, green, Some(false)),
+			flat_print(2, blue, None),
+			knockout_print(30.0),
+		]);
+		let image = render_size(&mut renderer, 128);
+		assert!(
+			near(image.at(64, 64), exact_srgb(blue), 4),
+			"{:?}",
+			image.at(64, 64)
+		);
+		assert!(
+			near(image.at(4, 4), exact_srgb(green), 4),
+			"{:?}",
+			image.at(4, 4)
+		);
+		paper.push(paper_count(&image));
+	}
+
+	assert!(
+		paper[0] > 40,
+		"the figure at the root has paper: {}",
+		paper[0]
+	);
+	assert_eq!(
+		paper[1], paper[0],
+		"paper around the figure over the stage: at the root {} pixels, under the stage {} pixels",
+		paper[0], paper[1]
 	);
 }
