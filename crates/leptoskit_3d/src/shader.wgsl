@@ -534,11 +534,19 @@ fn print_shade(in: Varyings, front: bool) -> vec4<f32> {
 
 @fragment
 fn fs_mesh(in: Varyings, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
-	if (occluded(in.clip, in.view_depth)) {
-		discard;
-	}
+	let hidden = occluded(in.clip, in.view_depth);
 	if (globals.style.x > 1.5) {
-		return print_shade(in, front);
+		// Shaded first and dropped after: on GLSL ES a discarded fragment
+		// leaves its quad's derivatives undefined, and print_shade takes
+		// fwidth and samples a texture.
+		let printed = print_shade(in, front);
+		if (hidden) {
+			discard;
+		}
+		return printed;
+	}
+	if (hidden) {
+		discard;
 	}
 	let mask = material.flags.z;
 	var base = material.base_color * in.color * in.tint;
