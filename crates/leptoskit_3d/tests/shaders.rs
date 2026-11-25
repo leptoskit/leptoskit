@@ -316,18 +316,28 @@ fn toon_light_guards_backlit_half_vector_and_specular() {
 	);
 }
 
+struct CallSite {
+	condition: Option<Handle<Expression>>,
+	result: Option<Handle<Expression>>,
+}
+
 /// Finds the condition of the innermost `if` enclosing a call to `target`,
 /// along with the call's result expression handle.
 fn innermost_if_around_call(
 	block: &Block,
 	target: Handle<Function>,
 	enclosing: Option<Handle<Expression>>,
-) -> Option<(Option<Handle<Expression>>, Option<Handle<Expression>>)> {
+) -> Option<CallSite> {
 	for statement in block {
 		match statement {
 			Statement::Call {
 				function, result, ..
-			} if *function == target => return Some((enclosing, *result)),
+			} if *function == target => {
+				return Some(CallSite {
+					condition: enclosing,
+					result: *result,
+				});
+			}
 			Statement::If {
 				condition,
 				accept,
@@ -376,9 +386,11 @@ fn inner_line_is_only_called_when_facing_is_enabled() {
 		.find(|entry| entry.name == "fs_mesh")
 		.expect("shader.wgsl defines fs_mesh");
 
-	let (condition, result) = innermost_if_around_call(&fs_mesh.function.body, inner_line, None)
+	let call = innermost_if_around_call(&fs_mesh.function.body, inner_line, None)
 		.expect("fs_mesh calls inner_line");
-	let condition = condition.expect("inner_line call must be guarded by an if");
+	let condition = call
+		.condition
+		.expect("inner_line call must be guarded by an if");
 
 	assert!(
 		matches!(
@@ -390,7 +402,7 @@ fn inner_line_is_only_called_when_facing_is_enabled() {
 		),
 		"inner_line must sit directly inside `if (globals.ink.y > 0.0)`, not an outer `||` guard"
 	);
-	if let Some(result) = result {
+	if let Some(result) = call.result {
 		let discarded_by_select = fs_mesh.function.expressions.iter().any(|(_, expr)| {
 			matches!(
 				*expr,

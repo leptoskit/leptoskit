@@ -1146,6 +1146,57 @@ fn dist2_f64(a: [f64; 3], b: [f64; 3]) -> f64 {
 	dx * dx + dy * dy + dz * dz
 }
 
+fn boundary_offsets(frac: f64) -> &'static [i64] {
+	if frac < 0.26 {
+		&[0, -1]
+	} else if frac > 0.74 {
+		&[0, 1]
+	} else {
+		&[0]
+	}
+}
+
+fn weld_boundary_neighbors(
+	index: usize,
+	key: [i64; 3],
+	frac: [f64; 3],
+	positions: &[Vec3],
+	cells: &HashMap<[i64; 3], Vec<usize>>,
+	tol2: f64,
+	parent: &mut [usize],
+) {
+	let dx = boundary_offsets(frac[0]);
+	let dy = boundary_offsets(frac[1]);
+	let dz = boundary_offsets(frac[2]);
+
+	if dx.len() == 1 && dy.len() == 1 && dz.len() == 1 {
+		return;
+	}
+
+	let point = f64_point(positions[index]);
+
+	for &ox in dx {
+		for &oy in dy {
+			for &oz in dz {
+				if ox == 0 && oy == 0 && oz == 0 {
+					continue;
+				}
+
+				let neighbor = [key[0] + ox, key[1] + oy, key[2] + oz];
+				let Some(other) = cells.get(&neighbor) else {
+					continue;
+				};
+
+				for &other_index in other {
+					if dist2_f64(point, f64_point(positions[other_index])) <= tol2 {
+						union_roots(parent, index, other_index);
+					}
+				}
+			}
+		}
+	}
+}
+
 pub(crate) fn welded_normals(positions: &[Vec3], normals: &[Vec3]) -> Vec<Vec3> {
 	let count = positions.len().min(normals.len());
 	let mut welded = normals.to_vec();
@@ -1230,46 +1281,8 @@ pub(crate) fn welded_normals(positions: &[Vec3], normals: &[Vec3]) -> Vec<Vec3> 
 		}
 
 		for &index in reps {
-			let Some((key, frac)) = coords[index] else {
-				continue;
-			};
-			let axis_offsets = |f: f64| -> &[i64] {
-				if f < 0.26 {
-					&[0, -1]
-				} else if f > 0.74 {
-					&[0, 1]
-				} else {
-					&[0]
-				}
-			};
-			let dx = axis_offsets(frac[0]);
-			let dy = axis_offsets(frac[1]);
-			let dz = axis_offsets(frac[2]);
-
-			if dx.len() == 1 && dy.len() == 1 && dz.len() == 1 {
-				continue;
-			}
-
-			let point = f64_point(positions[index]);
-
-			for &ox in dx {
-				for &oy in dy {
-					for &oz in dz {
-						if ox == 0 && oy == 0 && oz == 0 {
-							continue;
-						}
-
-						let neighbor = [key[0] + ox, key[1] + oy, key[2] + oz];
-
-						if let Some(other) = cells.get(&neighbor) {
-							for &other_index in other {
-								if dist2_f64(point, f64_point(positions[other_index])) <= tol2 {
-									union_roots(&mut parent, index, other_index);
-								}
-							}
-						}
-					}
-				}
+			if let Some((key, frac)) = coords[index] {
+				weld_boundary_neighbors(index, key, frac, positions, &cells, tol2, &mut parent);
 			}
 		}
 	}

@@ -312,6 +312,10 @@ const AUTO_BACKENDS: wgpu::Backends = if cfg!(target_arch = "wasm32") {
 /// whether back faces are culled, and whether its transform mirrors
 /// triangle winding (negative determinant).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[allow(
+	clippy::struct_excessive_bools,
+	reason = "four orthogonal pipeline flags"
+)]
 pub(crate) struct Variant {
 	pub skinned: bool,
 	pub blend: bool,
