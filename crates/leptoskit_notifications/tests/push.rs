@@ -1676,6 +1676,85 @@ async fn a_send_fans_out_one_delivery_per_endpoint() {
 	}
 }
 
+/// Every accepted push is written to the acceptance ledger with its
+/// delivery: forgetting the person leaves it, so a host that meters pushes
+/// still counts it, and only its own age prunes it.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_accepted_push_outlasts_its_person_in_the_ledger() {
+	let mock = Mock::new();
+	let mut service = service(&mock, &all_transports()).await;
+
+	for n in 1..=2 {
+		let (status, body) = enroll(&service, ALICE, apns_credential(&device_token(n))).await;
+		assert_eq!(status, 200, "{body}");
+	}
+
+	service.resume();
+	let (status, body) = send(&service, "ledger", spec(), &[ALICE]).await;
+	assert_eq!(status, 200, "{body}");
+	let outcomes = settled(&service, "ledger").await;
+	assert_eq!(outcomes.len(), 2, "{outcomes:?}");
+
+	let ledger = rows(
+		&service,
+		"SELECT lower(hex(delivery)), platform FROM push_acceptances ORDER BY delivery",
+	)
+	.await;
+	let deliveries = rows(
+		&service,
+		"SELECT lower(hex(id)) FROM push_deliveries WHERE state = 'accepted' ORDER BY id",
+	)
+	.await;
+	assert_eq!(ledger.len(), 2, "one row per accepted delivery");
+	assert_eq!(
+		ledger.iter().map(|row| text(&row[0])).collect::<Vec<_>>(),
+		deliveries
+			.iter()
+			.map(|row| text(&row[0]))
+			.collect::<Vec<_>>()
+	);
+	assert!(ledger.iter().all(|row| text(&row[1]) == "apns"));
+
+	let (status, body) = post(
+		&service,
+		"forget_person",
+		json!({ "person": ALICE }),
+		Some(TOKEN),
+	)
+	.await;
+	assert_eq!(status, 200, "{body}");
+	let count = |table: &'static str| {
+		let service = &service;
+		async move { text(&rows(service, &format!("SELECT count(*) FROM {table}")).await[0][0]) }
+	};
+	assert_eq!(count("push_deliveries").await, "0", "her deliveries go");
+	assert_eq!(count("push_acceptances").await, "2", "the ledger stays");
+
+	// Kept for its days, whatever the operator keeps, and pruned after.
+	let now = leptoskit_db::now();
+	let within = now
+		+ chrono::TimeDelta::days(i64::from(leptoskit_notifications::push::ACCEPTANCES_DAYS) - 1);
+	let pruned = leptoskit_notifications::service::retention::prune(
+		&service.db,
+		&config::Retention::forever(),
+		within,
+	)
+	.await
+	.expect("prunes");
+	assert_eq!(pruned.acceptances, 0);
+	let after = now
+		+ chrono::TimeDelta::days(i64::from(leptoskit_notifications::push::ACCEPTANCES_DAYS) + 1);
+	let pruned = leptoskit_notifications::service::retention::prune(
+		&service.db,
+		&config::Retention::forever(),
+		after,
+	)
+	.await
+	.expect("prunes");
+	assert_eq!(pruned.acceptances, 2);
+	assert_eq!(count("push_acceptances").await, "0");
+}
+
 /// A topic send's fanout enqueues the same per-endpoint deliveries a
 /// recipients send does: one per enrolled endpoint of everyone the
 /// fanout matched, attempted when the notification is visible.

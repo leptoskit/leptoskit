@@ -3,6 +3,7 @@
 
 use std::time::Duration;
 
+use leptoskit_cloud::notifications;
 use leptoskit_cloud::workers;
 use leptoskit_cloud::workers::Assignment;
 use leptoskit_cloud::workers::Finished;
@@ -408,6 +409,41 @@ impl Control {
 	) -> Result<Vec<workers::ClusterEnvironment>, CallError> {
 		self.call(&workers::ClusterEnvironments {}, Duration::ZERO)
 			.await
+	}
+
+	/// For a notifications hub: what changed among its cluster's tenants,
+	/// given the ones it holds at their versions.
+	///
+	/// # Errors
+	///
+	/// [`CallError`]; `notifications_worker_required` for any other worker.
+	pub async fn notification_tenants(
+		&self,
+		known: Vec<notifications::KnownTenant>,
+	) -> Result<notifications::TenantChanges, CallError> {
+		self.call(
+			&notifications::NotificationTenants { known },
+			Duration::ZERO,
+		)
+		.await
+	}
+
+	/// For a notifications hub: how each tenant is doing, and the pushes
+	/// each sent since its cursor.
+	///
+	/// # Errors
+	///
+	/// [`CallError`]; `notifications_worker_required` for any other worker.
+	pub async fn report_notifications(
+		&self,
+		tenants: Vec<notifications::TenantReport>,
+		usage: Vec<notifications::UsageReport>,
+	) -> Result<notifications::NotificationsReported, CallError> {
+		self.call(
+			&notifications::ReportNotifications { tenants, usage },
+			Duration::ZERO,
+		)
+		.await
 	}
 }
 

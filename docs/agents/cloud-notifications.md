@@ -161,3 +161,34 @@ Not yet: the cluster's worker doesn't make or drop the tenant's database (slice 
 **Review.** An independent security review of this slice found nothing serious. Its low findings (a partial removal leaving the notifications database, the password not checked against the app's values, the window between making a database and closing it, the hub's options unchecked at startup) are fixed as above. It also noted an unchanged limit: the worker trusts which environment a job names, so a compromised control plane can still name another environment's databases; the names only keep it to environments' databases.
 
 **Rollout.** A cluster's `notifications` facts are set only once its worker is from this slice and has the `--notifications-*` options: an older worker would apply the release without the database, and the control plane would count the tenant ready. Rotating a tenant's values when a notifications worker is revoked comes with the hub (slice 4).
+
+### The hub as built (slice 4)
+
+**The crate.** `crates/leptoskit_cloud_notifications` builds `leptoskit-cloud-notifications`. It runs from a worker state directory paired for the `notifications` role with `leptoskit-cloud-worker pair`, and refuses any other role. The worker's `Control` gains `notification_tenants` and `report_notifications`. `Hub::round` takes the control plane as a `Plane` and the tenants' databases as an `Open`: `Connect` in production, an in-memory map in tests.
+
+**A round.** The hub asks with the tenants it serves at their versions, and with those that failed in the last five minutes at theirs, so a broken tenant isn't opened every round. It asks again while `more`, up to 20 times. A removed tenant is dropped: its routes go, its job workers stop, and its live connections are sent `Reconnect` and closed (`Live::drain`). A changed tenant is opened before anything is dropped, then replaces the old one, keeping the usage cursor when the answer carries none; the old one's sockets are closed the same way, so a client reconnects to the new routes and is identified under the new settings.
+
+To open a tenant, the hub does this:
+
+- It keeps only the settings `notifications::is_setting` names.
+- It builds `PushConfig`, `OpenTopics` and `Retention` from those settings, and the push runtime when any provider is set.
+- It opens the database with a pool of `--connections`, or reuses the pool it holds when the address hasn't changed, and migrates it with the dialect's migrations.
+- It starts `routes_with_settings` (`ServiceCallers` knowing the tenant's token as the app, and forwarded identities keyed from it) and `workers_with_settings`.
+
+Opening one tenant may take two minutes, after which it counts as failed, so one slow database doesn't hold up the round. A failure becomes the tenant's `Failed` reason, with the tenant's token, database address and password, and every setting value of four characters or more replaced by `[redacted]`. A database the hub can't reach says only that, because the driver's error can repeat the address.
+
+The service's `WithSettings` wrapper, which adds the tenant's push settings to each identity, passes `lease`, `identify_token` and `admit` through to the callers, so a lease they set still expires a socket and a limit they set still holds there.
+
+**Routing.** `Hub::router` sends `/t/<32 lower-case hex>/_leptoskit/services/notifications/…` to that tenant, with the prefix taken off and the query kept. It sends the service's prefix on any other path to the tenant whose hostname is the `Host`, lower-cased and without its port, or over HTTP/2 the URI's authority. A hostname two tenants claim reaches the one opened most recently, and the conflict is logged: the control plane gives a hostname to one environment at a time, so the other hasn't been told it lost it yet. `/healthz` and `/readyz` are the hub's own. Everything else is `404`.
+
+**Usage.** The service keeps a ledger, `push_acceptances`: one row per accepted delivery (its id, platform and `accepted_at`), written in the transaction that marks it accepted, unique by delivery. It names no person, so `forget_person` and the operator's retention leave it; its own stage of the retention sweep deletes rows after `ACCEPTANCES_DAYS` (90). `usage::count` counts its rows with `accepted_at` after the cursor and at or before `now - LAG` (one minute). An app can't make a push go uncounted by forgetting its person or pruning its deliveries before the hub's next round. The lag is safe because the job workers that write `accepted_at` and the hub that counts run in one process, on one clock. The cursor is written `accepted:<epoch milliseconds>`. A count of zero isn't reported. A cursor the hub can't read stops that tenant's counting, rather than counting from anywhere. The cursors the control plane answers with become the hub's.
+
+**Tests.** `tests/hub.rs` drives a scripted control plane through these: three tenants, one with half-set APNs settings; routing by path and by host (each tenant accepts its own token and refuses another's, and an unknown host or tenant gets the hub's `404`); the failed tenant held at its version; pushes counted once across rounds with the lag; a new version reopened on the same database with new hostnames; and removal. Against a real Postgres, the database the cluster worker's `Postgres::ensure` makes is migrated and served by the hub as its plain login role, and its pushes are counted. Further steps check that a new version at the same address reuses its pool, that a hostname two tenants claim reaches the later and goes back when it lets go, and that a failure quoting a setting's value shows `[redacted]`. In the service, `tests/push.rs` checks that every accepted delivery is in the ledger, that forgetting its person leaves it, and that retention prunes it after 90 days and not before.
+
+**Review.** An independent security review found two medium and five low findings, all fixed as above: usage counted from deliveries an app could delete first (the ledger), and `WithSettings` dropping the callers' `lease` and `admit` (pass-through, and sockets closed when a tenant changes); the low ones were a new pool on each reopen, the first claimant keeping a hostname, a slow tenant stalling the round, secrets in a reason, and the lag's clock. Recorded in [cloud.md](cloud.md).
+
+Not yet:
+
+- Rotation. Revoking a notifications worker doesn't yet give its cluster's tenants new tokens and passwords (slice 4b).
+- A hub says it holds at most `MAX_KNOWN_TENANTS` (10,000) tenants in one ask; past that, the control plane sends the rest again each round.
+- Packaging. The hub's image, release binary and Kubernetes manifests come with slice 5.

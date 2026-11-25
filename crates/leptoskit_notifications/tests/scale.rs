@@ -1740,6 +1740,7 @@ async fn pruning_takes_what_is_over_and_nothing_else(db: &Db) {
 			notifications: 4,
 			deliveries: 3,
 			sends: 3,
+			acceptances: 0,
 		}
 	);
 
@@ -1789,6 +1790,7 @@ async fn pruning_takes_what_is_over_and_nothing_else(db: &Db) {
 			notifications: 3,
 			deliveries: 1,
 			sends: 3,
+			acceptances: 0,
 		}
 	);
 }
@@ -1835,6 +1837,7 @@ async fn a_sweep_works_through_more_than_one_batch(db: &Db) {
 			notifications: 1_203,
 			deliveries: 1_203,
 			sends: 1,
+			acceptances: 0,
 		}
 	);
 	assert_eq!(notifications_left(db).await, ["kept"]);
@@ -1933,6 +1936,7 @@ async fn a_key_is_remembered_until_its_send_is_gone(db: &Db) {
 			notifications: 1,
 			deliveries: 0,
 			sends: 1,
+			acceptances: 0,
 		}
 	);
 	assert_eq!(count(db, rows).await, 0);

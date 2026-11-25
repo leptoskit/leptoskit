@@ -268,7 +268,9 @@ leptoskit_canvas = { path = "crates/leptoskit_canvas", version = "0.3.0" }
 leptoskit_canvist = { path = "crates/leptoskit_canvist", version = "0.3.0" }
 leptoskit_cli = { path = "crates/leptoskit_cli", version = "0.3.0" }
 leptoskit_cloud = { path = "crates/leptoskit_cloud", version = "0.3.0" }
+leptoskit_cloud_notifications = { path = "crates/leptoskit_cloud_notifications", version = "0.3.0" }
 leptoskit_cloud_runtime = { path = "crates/leptoskit_cloud_runtime", version = "0.3.0" }
+leptoskit_cloud_worker = { path = "crates/leptoskit_cloud_worker", version = "0.3.0" }
 leptoskit_codepush = { path = "crates/leptoskit_codepush", version = "0.3.0" }
 leptoskit_config = { path = "crates/leptoskit_config", version = "0.3.0" }
 leptoskit_db = { path = "crates/leptoskit_db", version = "0.3.0" }

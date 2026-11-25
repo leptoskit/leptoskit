@@ -6187,6 +6187,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "leptoskit_cloud_notifications"
+version = "0.3.0"
+dependencies = [
+ "chrono",
+ "clap",
+ "leptoskit_axum",
+ "leptoskit_cloud",
+ "leptoskit_cloud_runtime",
+ "leptoskit_cloud_worker",
+ "leptoskit_db",
+ "leptoskit_notifications",
+ "leptoskit_rpc",
+ "reqwest 0.12.28",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "tower",
+ "url",
+ "uuid",
+]
+
+[[package]]
 name = "leptoskit_cloud_platform"
 version = "0.3.0"
 dependencies = [

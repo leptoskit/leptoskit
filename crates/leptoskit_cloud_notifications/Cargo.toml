@@ -1,0 +1,49 @@
+[package]
+name = "leptoskit_cloud_notifications"
+version = "0.3.0"
+authors.workspace = true
+categories = ["command-line-utilities", "web-programming::http-server"]
+edition.workspace = true
+homepage.workspace = true
+keywords = ["leptoskit", "cloud", "notifications", "push"]
+license.workspace = true
+readme = "readme.md"
+repository.workspace = true
+rust-version.workspace = true
+description = "LeptosKit Cloud's notifications hub: `leptoskit-cloud-notifications` serves the hosted notifications of every environment on one cluster."
+
+[[bin]]
+name = "leptoskit-cloud-notifications"
+doc = false
+path = "src/main.rs"
+
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/leptoskit-cloud-notifications-{ target }-v{ version }{ archive-suffix }"
+pkg-fmt = "tgz"
+bin-dir = "{ bin }{ binary-ext }"
+
+# The hub runs where the worker does: it shares its paired state, which is
+# locked with `flock`.
+[target.'cfg(unix)'.dependencies]
+chrono = { workspace = true }
+clap = { workspace = true, features = ["derive", "env"] }
+leptoskit_axum = { workspace = true }
+leptoskit_cloud = { workspace = true }
+leptoskit_cloud_worker = { workspace = true }
+leptoskit_db = { workspace = true, features = ["postgres", "sqlite"] }
+leptoskit_notifications = { workspace = true, features = ["postgres", "service"] }
+leptoskit_rpc = { workspace = true, features = ["server"] }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+tower = { workspace = true, features = ["util"] }
+uuid = { workspace = true, features = ["serde"] }
+
+[target.'cfg(unix)'.dev-dependencies]
+leptoskit_cloud_runtime = { workspace = true }
+reqwest = { workspace = true, features = ["json"] }
+serde_json = { workspace = true }
+tempfile = { workspace = true }
+url = { workspace = true }
+
+[lints]
+workspace = true

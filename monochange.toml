@@ -218,6 +218,7 @@ packages = [
 	"leptoskit_cloud_runtime",
 	"leptoskit_cloud_platform",
 	"leptoskit_cloud_worker",
+	"leptoskit_cloud_notifications",
 	"leptoskit_cloud_app",
 	"leptoskit_extension",
 	"leptoskit_service_worker",
@@ -820,6 +821,10 @@ type = "cargo"
 
 [package.leptoskit_cloud_worker]
 path = "crates/leptoskit_cloud_worker"
+type = "cargo"
+
+[package.leptoskit_cloud_notifications]
+path = "crates/leptoskit_cloud_notifications"
 type = "cargo"
 
 [package.leptoskit_cloud_app]

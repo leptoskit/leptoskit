@@ -1622,6 +1622,25 @@ async fn write_outcome(db: &Db, delivery: &PushDelivery, outcome: Outcome) -> rp
 	Ok(())
 }
 
+/// Writes `delivery`'s row in the acceptance ledger a metering host counts,
+/// in the write that accepts it, so an accepted delivery is never missing
+/// from it.
+async fn record_acceptance(
+	tx: &leptoskit_db::Tx,
+	delivery: &PushDelivery,
+	now: leptoskit_db::Timestamp,
+) -> rpc::Result<()> {
+	crate::push::NewPushAcceptance {
+		id: Uuid::now_v7(),
+		delivery: delivery.id,
+		platform: delivery.platform.clone(),
+		accepted_at: now,
+	}
+	.insert(tx)
+	.await?;
+	Ok(())
+}
+
 /// Applies an outcome while the endpoint's exact credential revision is locked.
 async fn apply_outcome(
 	tx: &leptoskit_db::Tx,
@@ -1630,11 +1649,7 @@ async fn apply_outcome(
 ) -> rpc::Result<()> {
 	let now = leptoskit_db::now();
 	let attempted = outcome.network_attempted();
-	let attempted_at = if attempted {
-		Some(now)
-	} else {
-		delivery.attempted_at
-	};
+	let attempted_at = attempted.then_some(now).or(delivery.attempted_at);
 	let attempts = delivery.attempts.saturating_add(i64::from(attempted));
 	let still_queued = |row: &<PushDelivery as leptoskit_db::Table>::Columns| {
 		row.id.eq(delivery.id)
@@ -1667,6 +1682,7 @@ async fn apply_outcome(
 				.set(|row| row.next_attempt_at, None)
 				.run(tx)
 				.await?;
+			record_acceptance(tx, delivery, now).await?;
 		}
 		Outcome::Transient { after }
 		| Outcome::Stalled { after }
