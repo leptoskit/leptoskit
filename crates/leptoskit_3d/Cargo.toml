@@ -57,6 +57,11 @@ divan = { version = "0.1", default-features = false }
 # backend in `tests/shaders.rs`.
 naga = { version = "30.0.1", default-features = false, features = ["glsl-out", "hlsl-out", "msl-out", "spv-out", "wgsl-in"] }
 
+[[bench]]
+name = "frame"
+harness = false
+required-features = ["renderer"]
+
 [features]
 default = ["renderer"]
 # The glTF loader, the retained scene, and the wgpu renderer. Without it the
