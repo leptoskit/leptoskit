@@ -14,8 +14,20 @@ test("Horizon scene applies mutations, preserves identity, and computes scroll c
 		root: 0,
 		mutations: [
 			{ Create: { id: 0, kind: "scroll_view", props: { horizontal: false } } },
-			{ Create: { id: 1, kind: "text", props: { text: "Score: 10", font_size: 20, font_weight: 700 } } },
-			{ Create: { id: 2, kind: "button", props: { text: "Play", border_radius: 12 } } },
+			{
+				Create: {
+					id: 1,
+					kind: "text",
+					props: { text: "Score: 10", font_size: 20, font_weight: 700 },
+				},
+			},
+			{
+				Create: {
+					id: 2,
+					kind: "button",
+					props: { text: "Play", border_radius: 12 },
+				},
+			},
 			{ InsertChild: { parent: 0, child: 1, index: 0 } },
 			{ InsertChild: { parent: 0, child: 2, index: 1 } },
 			{ UpdateLayout: { id: 0, x: 0, y: 0, width: 320, height: 240 } },
@@ -55,7 +67,10 @@ test("Horizon scene applies mutations, preserves identity, and computes scroll c
 });
 
 test("Horizon scene rejects unsupported widgets, bad protocol versions, and remote image URLs", () => {
-	throws(() => new Scene().apply({ version: 2, root: null, mutations: [] }), /protocol/);
+	throws(
+		() => new Scene().apply({ version: 2, root: null, mutations: [] }),
+		/protocol/,
+	);
 	throws(
 		() =>
 			new Scene().apply({
@@ -70,7 +85,13 @@ test("Horizon scene rejects unsupported widgets, bad protocol versions, and remo
 			new Scene().apply({
 				version: 1,
 				root: 0,
-				mutations: [{ Create: { id: 0, kind: "image", props: { source: "https://example.com/a.png" } } }],
+				mutations: [{
+					Create: {
+						id: 0,
+						kind: "image",
+						props: { source: "https://example.com/a.png" },
+					},
+				}],
 			}),
 		/remote URLs/,
 	);

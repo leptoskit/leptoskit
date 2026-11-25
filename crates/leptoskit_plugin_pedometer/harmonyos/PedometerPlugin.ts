@@ -65,8 +65,16 @@ export class PedometerPlugin implements NativePlugin {
 				view.setUint32(0, 0, true); // bounded_reply: Present
 				view.setUint32(4, 1, true); // BootCounter scope
 				view.setUint32(8, 0, true); // reserved
-				view.setBigUint64(12, BigInt(Math.max(0, Math.round(data.steps))), true);
-				view.setFloat64(20, data.timestamp > 0 ? data.timestamp / 1e9 : Date.now() / 1000.0, true);
+				view.setBigUint64(
+					12,
+					BigInt(Math.max(0, Math.round(data.steps))),
+					true,
+				);
+				view.setFloat64(
+					20,
+					data.timestamp > 0 ? data.timestamp / 1e9 : Date.now() / 1000.0,
+					true,
+				);
 				view.setFloat64(28, 0.0, true);
 				resolve(buf);
 			};

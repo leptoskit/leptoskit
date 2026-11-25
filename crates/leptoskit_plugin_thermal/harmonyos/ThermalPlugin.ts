@@ -22,7 +22,9 @@ export class ThermalPlugin implements NativePlugin {
 			throw new PluginError(CANCELLED);
 		}
 		if (call.method === 0) {
-			if (call.payload.byteLength !== 0) throw new PluginError(INVALID_ARGUMENT);
+			if (call.payload.byteLength !== 0) {
+				throw new PluginError(INVALID_ARGUMENT);
+			}
 			return this.snapshot();
 		}
 		throw new PluginError(UNAVAILABLE);
@@ -36,7 +38,9 @@ export class ThermalPlugin implements NativePlugin {
 		const level = thermal.getLevel();
 		// Map HarmonyOS ThermalLevel (COOL..ESCAPE) to shared 4-level State.
 		let state = 1; // Nominal
-		if (level === thermal.ThermalLevel.WARM || level === thermal.ThermalLevel.HOT) {
+		if (
+			level === thermal.ThermalLevel.WARM || level === thermal.ThermalLevel.HOT
+		) {
 			state = 2; // Fair
 		} else if (level === thermal.ThermalLevel.OVERHEATED) {
 			state = 3; // Serious

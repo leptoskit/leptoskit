@@ -647,10 +647,20 @@ fn writes_llms_txt_and_plain_markdown_chapters() {
 	// `llms-full.txt`, and chapters may link to `llms.txt` / `llms-full.txt`.
 	let root = book(&[
 		("SUMMARY.md", "[Home](readme.md)\n- [Guide](guide/a.md)\n"),
+		// The page carries a real MDT block, kept in step with `tests/snippet.t.md`
+		// by `mdt update`, so it is a raw string with the block at column 0.
 		(
 			"readme.md",
-			"# Home\n\n<!-- {=snippet} -->\n\nShared prose.\n\n<!-- {/snippet} -->\n\nSee \
-			 [llms.txt](llms.txt) and [llms-full.txt](llms-full.txt).\n",
+			r"# Home
+
+<!-- {=snippet|trim} -->
+
+Shared prose.
+
+<!-- {/snippet} -->
+
+See [llms.txt](llms.txt) and [llms-full.txt](llms-full.txt).
+",
 		),
 		("guide/a.md", "# Guide\n\nBack to [index](../llms.txt).\n"),
 	]);

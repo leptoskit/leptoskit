@@ -336,13 +336,19 @@ private data class AndroidLiveUpdateMessage(
                 if (length !in 1..10_000) throw PluginException(PluginException.INVALID_ARGUMENT)
                 val colorHex =
                     when (reader.u32()) {
-                        0 -> null
+                        0 -> {
+                            null
+                        }
+
                         1 -> {
                             val hex = reader.text(7, required = true)
                             if (!isValidHexColor(hex)) throw PluginException(PluginException.INVALID_ARGUMENT)
                             hex
                         }
-                        else -> throw PluginException(PluginException.INVALID_ARGUMENT)
+
+                        else -> {
+                            throw PluginException(PluginException.INVALID_ARGUMENT)
+                        }
                     }
                 segments.add(ProgressSegment(length, colorHex))
             }

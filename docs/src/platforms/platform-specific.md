@@ -123,17 +123,17 @@ Your app crate can opt into mobile and desktop OS integrations directly through 
 leptoskit = { version = "0.3", features = ["mobile-surfaces"] }
 ```
 
-| `leptoskit` Cargo feature | Re-exported module                        | Covers                                                                                   |
-| ------------------------- | ----------------------------------------- | ---------------------------------------------------------------------------------------- |
-| `live-activities`         | `leptoskit::platform::live_activities`    | iOS ActivityKit Live Activities, Dynamic Island, push-to-start, Android 16+ Live Updates |
-| `home-widgets`            | `leptoskit::platform::home_widgets`       | Home, Lock Screen, StandBy, iOS 18+ Control Center, Android App Widgets & Quick Settings |
-| `app-shortcuts`           | `leptoskit::platform::app_shortcuts`      | Quick Actions, Launcher Shortcuts, CoreSpotlight, Handoff, incoming share intake         |
-| `android-intent`          | `leptoskit::platform::android_intent`     | Explicit/implicit Android Intents, choosers, broadcasts, and `intent:` URIs              |
-| `menu`                    | `leptoskit::platform::menu`               | Desktop menu bars, context menus, and iOS/iPadOS `UIMenuBuilder` / `UIKeyCommand`        |
-| `window-state`            | `leptoskit::platform::window_state`       | Window placement, floating/always-on-top overlays, custom chrome, background-only mode   |
-| `updater`                 | `leptoskit::platform::updater`            | Native desktop executable auto-updater hooks and feeds                                   |
-| `mobile-surfaces`         | Bundle                                    | Enables `live-activities`, `home-widgets`, `app-shortcuts`, `android-intent`, and `menu` |
-| `desktop-extras`          | Bundle                                    | Enables `menu`, `window-state`, and `updater`                                            |
+| `leptoskit` Cargo feature | Re-exported module                     | Covers                                                                                   |
+| ------------------------- | -------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `live-activities`         | `leptoskit::platform::live_activities` | iOS ActivityKit Live Activities, Dynamic Island, push-to-start, Android 16+ Live Updates |
+| `home-widgets`            | `leptoskit::platform::home_widgets`    | Home, Lock Screen, StandBy, iOS 18+ Control Center, Android App Widgets & Quick Settings |
+| `app-shortcuts`           | `leptoskit::platform::app_shortcuts`   | Quick Actions, Launcher Shortcuts, CoreSpotlight, Handoff, incoming share intake         |
+| `android-intent`          | `leptoskit::platform::android_intent`  | Explicit/implicit Android Intents, choosers, broadcasts, and `intent:` URIs              |
+| `menu`                    | `leptoskit::platform::menu`            | Desktop menu bars, context menus, and iOS/iPadOS `UIMenuBuilder` / `UIKeyCommand`        |
+| `window-state`            | `leptoskit::platform::window_state`    | Window placement, floating/always-on-top overlays, custom chrome, background-only mode   |
+| `updater`                 | `leptoskit::platform::updater`         | Native desktop executable auto-updater hooks and feeds                                   |
+| `mobile-surfaces`         | Bundle                                 | Enables `live-activities`, `home-widgets`, `app-shortcuts`, `android-intent`, and `menu` |
+| `desktop-extras`          | Bundle                                 | Enables `menu`, `window-state`, and `updater`                                            |
 
 When you also enable `leptoskit/guest`, the `guest` bridge client feature forwards automatically to each enabled runtime plugin. Because native hosts intentionally discover runtime plugins only from direct Cargo dependencies for entitlement auditing, also add each runtime plugin crate to your platform host package and list its runtime name under `native.plugins` in `leptoskit.toml`.
 

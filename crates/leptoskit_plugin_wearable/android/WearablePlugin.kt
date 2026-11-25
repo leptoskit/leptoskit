@@ -91,12 +91,18 @@ class WearablePlugin(
                 }
             }
 
-            override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
+            override fun onAccuracyChanged(
+                sensor: Sensor?,
+                accuracy: Int,
+            ) = Unit
         }
 
     private val measureCallback =
         object : MeasureCallback {
-            override fun onAvailabilityChanged(dataType: DeltaDataType<*, *>, availability: Availability) = Unit
+            override fun onAvailabilityChanged(
+                dataType: DeltaDataType<*, *>,
+                availability: Availability,
+            ) = Unit
 
             override fun onDataReceived(data: DataPointContainer) {
                 val now = System.currentTimeMillis()
@@ -144,7 +150,10 @@ class WearablePlugin(
             }
         }
 
-    override suspend fun invoke(method: Int, payload: ByteBuffer): ByteArray {
+    override suspend fun invoke(
+        method: Int,
+        payload: ByteBuffer,
+    ): ByteArray {
         if (closed) throw PluginException(PluginException.CANCELLED)
         return when (method) {
             0 -> capabilities()
@@ -171,7 +180,9 @@ class WearablePlugin(
         if (measureRegistered && isWatch()) {
             measureRegistered = false
             runCatching {
-                HealthServices.getClient(context).measureClient
+                HealthServices
+                    .getClient(context)
+                    .measureClient
                     .unregisterMeasureCallbackAsync(DataType.HEART_RATE_BPM, measureCallback)
             }
         }
@@ -182,8 +193,7 @@ class WearablePlugin(
         }
     }
 
-    private fun isWatch(): Boolean =
-        context.packageManager.hasSystemFeature(PackageManager.FEATURE_WATCH)
+    private fun isWatch(): Boolean = context.packageManager.hasSystemFeature(PackageManager.FEATURE_WATCH)
 
     private fun capabilities(): ByteArray {
         val watch = isWatch()
@@ -299,7 +309,9 @@ class WearablePlugin(
             if (isWatch()) {
                 registeredMeasure =
                     runCatching {
-                        HealthServices.getClient(context).measureClient
+                        HealthServices
+                            .getClient(context)
+                            .measureClient
                             .registerMeasureCallback(DataType.HEART_RATE_BPM, measureCallback)
                         true
                     }.getOrDefault(false)
@@ -329,7 +341,9 @@ class WearablePlugin(
         stopSensorsLocked()
         if (measureRegistered && isWatch()) {
             runCatching {
-                HealthServices.getClient(context).measureClient
+                HealthServices
+                    .getClient(context)
+                    .measureClient
                     .unregisterMeasureCallbackAsync(DataType.HEART_RATE_BPM, measureCallback)
                     .awaitResult()
             }
@@ -426,16 +440,27 @@ class WearablePlugin(
             }
 
         fun encodeU32(value: Int): ByteArray =
-            ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(value).array()
+            ByteBuffer
+                .allocate(4)
+                .order(ByteOrder.LITTLE_ENDIAN)
+                .putInt(value)
+                .array()
 
-        fun writeU32(out: ByteArrayOutputStream, value: Int) {
+        fun writeU32(
+            out: ByteArrayOutputStream,
+            value: Int,
+        ) {
             out.write(value and 0xFF)
             out.write((value shr 8) and 0xFF)
             out.write((value shr 16) and 0xFF)
             out.write((value shr 24) and 0xFF)
         }
 
-        fun encodeHeartRate(timeMs: Long, bpm: Double, accuracy: Int): ByteArray =
+        fun encodeHeartRate(
+            timeMs: Long,
+            bpm: Double,
+            accuracy: Int,
+        ): ByteArray =
             ByteBuffer
                 .allocate(24)
                 .order(ByteOrder.LITTLE_ENDIAN)
@@ -445,7 +470,11 @@ class WearablePlugin(
                 .putInt(accuracy)
                 .array()
 
-        fun encodeSteps(startMs: Long, endMs: Long, count: Long): ByteArray =
+        fun encodeSteps(
+            startMs: Long,
+            endMs: Long,
+            count: Long,
+        ): ByteArray =
             ByteBuffer
                 .allocate(28)
                 .order(ByteOrder.LITTLE_ENDIAN)
@@ -455,7 +484,12 @@ class WearablePlugin(
                 .putLong(count)
                 .array()
 
-        fun encodeIntervalDouble(kind: Int, startMs: Long, endMs: Long, value: Double): ByteArray =
+        fun encodeIntervalDouble(
+            kind: Int,
+            startMs: Long,
+            endMs: Long,
+            value: Double,
+        ): ByteArray =
             ByteBuffer
                 .allocate(28)
                 .order(ByteOrder.LITTLE_ENDIAN)
@@ -465,7 +499,10 @@ class WearablePlugin(
                 .putDouble(value)
                 .array()
 
-        fun encodeWearState(timeMs: Long, onWrist: Boolean): ByteArray =
+        fun encodeWearState(
+            timeMs: Long,
+            onWrist: Boolean,
+        ): ByteArray =
             ByteBuffer
                 .allocate(16)
                 .order(ByteOrder.LITTLE_ENDIAN)

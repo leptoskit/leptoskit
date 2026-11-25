@@ -84,6 +84,9 @@
 		"benchmarks/arena/apps/**/*.xcassets/**",
 		"benchmarks/arena/apps/**/*.xcodeproj/**",
 		"benchmarks/arena/apps/**/*.xcworkspace/**",
+		// Scaffold templates hold `__APP_NAME__`-style placeholders that the
+		// generator string-replaces; dprint reads them as `**APP_NAME**`.
+		"crates/leptoskit_platform_horizon/templates/**/*.md",
 		"benchmarks/arena/apps/**/assets/**"
 	],
 	"plugins": [

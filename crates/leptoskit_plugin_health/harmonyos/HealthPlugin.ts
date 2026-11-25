@@ -208,7 +208,9 @@ export class HealthPlugin implements NativePlugin {
 		const view = new DataView(payload);
 		const mask = view.getUint32(0, true) & HARMONY_TYPES;
 		const flags = view.getUint32(4, true);
-		if (mask === 0 || (flags & ~0b11) !== 0) throw new PluginError(INVALID_ARGUMENT);
+		if (mask === 0 || (flags & ~0b11) !== 0) {
+			throw new PluginError(INVALID_ARGUMENT);
+		}
 
 		const requestAuth = store["requestAuthorizations"] as
 			| ((ctx: common.Context, req: Record<string, unknown>) => Promise<void>)
@@ -233,7 +235,9 @@ export class HealthPlugin implements NativePlugin {
 		const view = new DataView(payload);
 		const mask = view.getUint32(0, true) & HARMONY_TYPES;
 		const flags = view.getUint32(4, true);
-		if (mask === 0 || (flags & ~0b11) !== 0) throw new PluginError(INVALID_ARGUMENT);
+		if (mask === 0 || (flags & ~0b11) !== 0) {
+			throw new PluginError(INVALID_ARGUMENT);
+		}
 		return new WireWriter().string(`harmony:${mask}:${Date.now()}`).bytes();
 	}
 
@@ -256,7 +260,10 @@ export class HealthPlugin implements NativePlugin {
 		}
 		const mask = Number(parts[1]);
 		const sinceMs = Number(parts[2]);
-		if (!Number.isFinite(mask) || !Number.isFinite(sinceMs) || (mask & HARMONY_TYPES) === 0) {
+		if (
+			!Number.isFinite(mask) || !Number.isFinite(sinceMs) ||
+			(mask & HARMONY_TYPES) === 0
+		) {
 			throw new PluginError(INVALID_ARGUMENT);
 		}
 		const now = Date.now();
@@ -343,7 +350,11 @@ export class HealthPlugin implements NativePlugin {
 	}
 }
 
-function encodeSample(writer: WireWriter, row: HealthStoreSample, dataType: number): void {
+function encodeSample(
+	writer: WireWriter,
+	row: HealthStoreSample,
+	dataType: number,
+): void {
 	writer
 		.string(row.id)
 		.u32(dataType)
