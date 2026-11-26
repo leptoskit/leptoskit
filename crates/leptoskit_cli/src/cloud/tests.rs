@@ -1320,6 +1320,20 @@ fn notifications_say_what_their_state_means() {
 	assert!(!failed.contains('\u{1b}'), "{failed}");
 	assert!(failed.contains("Push providers: none"), "{failed}");
 	assert!(failed.contains("Deploy to finish"), "{failed}");
+	assert!(!failed.contains("Pushes are paused"), "{failed}");
+
+	let paused = ship::notifications_text(&json!({
+		"tenant": "00000000-0000-0000-0000-000000000001",
+		"database": "ntf_00000000000000000000000000000001",
+		"state": {"state": "serving"},
+		"providers": ["apns"],
+		"settings": [],
+		"project_pushes_this_month": 10000,
+		"pushes_paused": true,
+		"created_at": "2026-11-25T12:00:00Z"
+	}));
+	assert!(paused.contains("Pushes are paused"), "{paused}");
+	assert!(paused.contains("the inbox keeps working"), "{paused}");
 
 	let serving = ship::notifications_text(&json!({
 		"tenant": "00000000-0000-0000-0000-000000000001",

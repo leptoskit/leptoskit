@@ -494,6 +494,13 @@ impl Usage {
 		*total = total.saturating_add(quantity);
 	}
 
+	/// Keeps at most `most` of `meter`.
+	pub fn limit(&mut self, meter: Meter, most: u64) {
+		if let Some(total) = self.0.get_mut(&meter) {
+			*total = (*total).min(most);
+		}
+	}
+
 	/// The quantity of `meter`; 0 when there is none.
 	#[must_use]
 	pub fn get(&self, meter: Meter) -> u64 {

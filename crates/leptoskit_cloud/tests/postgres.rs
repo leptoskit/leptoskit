@@ -505,6 +505,24 @@ mod notifications {
 			notifications::a_hub_serves_only_its_own_cluster(&app).await;
 		}
 	}
+
+	#[tokio::test]
+	async fn a_free_plan_stops_pushing_at_its_allowance() {
+		let Some(server) = super::postgres::Postgres::start() else {
+			return;
+		};
+		let db = leptoskit_db::Db::connect(&server.database())
+			.await
+			.expect("connect");
+		db.migrate(leptoskit_cloud::POSTGRES_MIGRATIONS)
+			.await
+			.expect("the Postgres migrations apply");
+		let app = super::support::app_with(db, |config| {
+			config.catalogue = Some(notifications::catalogue());
+		})
+		.await;
+		notifications::a_free_plan_stops_pushing_at_its_allowance(&app).await;
+	}
 }
 
 /// Managed Postgres databases (`support/databases.rs`), on Postgres.

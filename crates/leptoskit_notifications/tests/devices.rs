@@ -169,6 +169,7 @@ async fn service() -> Service {
 		web: None,
 	};
 	let push = push::Push {
+		paused: push::Paused::default(),
 		runtime: Some(Arc::new(
 			PushRuntime::build_over(&config, recorder.clone()).expect("the runtime builds"),
 		)),

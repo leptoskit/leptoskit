@@ -118,7 +118,9 @@ Pushes this month (whole project): 1834
 Database: ntf_0a1b2c3d4e5f60718293a4b5c6d7e8f9
 ```
 
-A provider that is only half set up, such as an APNs key without its team ID, shows as `failed` with the service's own message, and the service serves nothing for the environment until it is fixed, inbox included. Each push a provider accepts counts toward the `notification_pushes` line of `lk cloud usage`. Its database isn't backed up on a schedule yet, and Hobby's push allowance isn't enforced yet.
+A provider that is only half set up, such as an APNs key without its team ID, shows as `failed` with the service's own message, and the service serves nothing for the environment until it is fixed, inbox included. Its database isn't backed up on a schedule yet.
+
+Each push a provider accepts counts toward the `notification_pushes` line of `lk cloud usage`, over all of an organisation's projects. Every plan includes a monthly allowance of them, and a paid plan pays per 1,000 beyond it. On Hobby, pushes stop for the rest of the month once the allowance is used: `lk cloud notifications` says `Pushes are paused`, each push that would have gone out is kept as skipped with the reason `paused`, and everything else, the inbox and its live updates included, keeps working. Pushes start again on the first of the next month (UTC), or within a couple of minutes of the organisation moving to a paid plan. The few a service sends in the couple of minutes before it stops are free, up to the allowance again.
 
 ## Configuring `[cloud]` in `leptoskit.toml`
 

@@ -652,6 +652,7 @@ async fn concurrent_enrollments_of_one_credential_land_on_one_endpoint() {
 		Some(ORIGIN),
 		callers,
 		push::Push {
+			paused: push::Paused::default(),
 			runtime: Some(std::sync::Arc::new(
 				PushRuntime::build_over(&config, std::sync::Arc::new(DeadBoundary))
 					.expect("the runtime builds"),
@@ -889,6 +890,7 @@ async fn a_test_send_holds_up_no_write_on_postgres() {
 		Some(ORIGIN),
 		callers,
 		push::Push {
+			paused: push::Paused::default(),
 			runtime: Some(Arc::new(runtime)),
 		},
 	);
@@ -1092,6 +1094,7 @@ async fn apns_service(db: Db) -> Service {
 		Some(ORIGIN),
 		callers,
 		push::Push {
+			paused: push::Paused::default(),
 			runtime: Some(std::sync::Arc::new(
 				PushRuntime::build_over(&config, std::sync::Arc::new(DeadBoundary))
 					.expect("the runtime builds"),

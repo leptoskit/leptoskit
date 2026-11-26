@@ -510,6 +510,13 @@ pub(super) fn notifications_text(summary: &Value) -> String {
 	if let Some(reported) = summary["reported_at"].as_str() {
 		lines.push(format!("Last report: {}", super::printable(reported)));
 	}
+	if summary["pushes_paused"] == true {
+		lines.push(
+			"Pushes are paused: the organisation's free plan has used this month's push \
+			 allowance. They resume next month or on a paid plan, and the inbox keeps working."
+				.to_owned(),
+		);
+	}
 	if summary["rotating"] == true {
 		lines.push(
 			"Its credentials are being replaced because a worker that held them was revoked. \

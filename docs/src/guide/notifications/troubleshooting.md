@@ -42,7 +42,7 @@ The spec is a full `SendSpec`, options and silent data messages included, so the
 
 Each of the person's live devices, at most ten, is attempted exactly once. There is no queue behind a test, so a state is `accepted`, `rejected`, or `skipped`, never `enqueued` or `retrying`. A failure that a real send would retry answers `rejected` with no reason: call again to retry. There is no idempotency key either, so calling twice pushes twice.
 
-`send_test` is refused with a `400` when no transport is configured at all, and with a `404` when `endpoint` is not one of that person's live devices.
+`send_test` is refused with a `400` when no transport is configured at all or the server's pushes are [paused](#skipped), and with a `404` when `endpoint` is not one of that person's live devices.
 
 ## Read what happened to a send
 
@@ -102,6 +102,7 @@ Every delivery that ends as `rejected` or `skipped` has one of these reasons. Th
 | `transport_unavailable` | the device's platform has no transport configured on the service now, though it had one when the device enrolled                                                                                                          | set that platform's variables again and list them under `secrets` ([configure a transport](push-setup.md#configure-a-transport))                                 |
 | `subscription_unusable` | a browser's subscription has a key the service cannot encrypt to, so no push can ever reach it                                                                                                                            | have the page unsubscribe and enroll again                                                                                                                       |
 | `platform_unsupported`  | the send is a silent data message and the device is a browser                                                                                                                                                             | nothing: data messages are [never pushed to browsers](shaping-messages.md#silent-data-messages). Use a visible send, or let the open page's live inbox update it |
+| `paused`                | the server's pushes were stopped when this push's turn came. In LeptosKit Cloud, the organisation is on a free plan and has used the month's push allowance                                                               | nothing: the notification is in the inbox. Pushes start again next month, or on a paid plan ([LeptosKit Cloud](../41-leptoskit-cloud.md#notifications))          |
 
 ### Rejected
 
@@ -196,21 +197,22 @@ Another person's notification, endpoint, or send is always "not found", never "f
 
 Most `400`s name a field and its limit and need no table. These are the ones that are not about one field:
 
-| Message starts with                                             | Cause and fix                                                                                                                        |
-| --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `push is not configured on this server`                         | a device tried to enroll, or you called `send_test`, and no transport is on. The variables are missing or not listed under `secrets` |
-| `push for … is not configured on this server`                   | the same, for one platform: for example an iPhone enrolling while only FCM is configured                                             |
-| `a person holds at most 10 live endpoints; revoke one first`    | the person has ten devices enrolled. Let them remove one from their device list                                                      |
-| `a person holds at most 500 topics; unsubscribe from one first` | a person's own `subscribe` at the limit                                                                                              |
-| `a topic batch names 1 to 1000 people`                          | split the batch                                                                                                                      |
-| `an attribute batch names 1 to 1000 people`                     | split the batch                                                                                                                      |
-| `an attribute call names at most 100 keys …`                    | split the change into several calls                                                                                                  |
-| `there are already 1000 draft campaigns`                        | launch or archive some drafts                                                                                                        |
-| `choose who this campaign is for before launching it`           | the draft has no target                                                                                                              |
-| `this campaign was scheduled for …, which has passed`           | pick a new time, or clear the schedule to send now                                                                                   |
-| `this campaign has recorded 100 tests`                          | duplicate the campaign to go on testing                                                                                              |
-| `local_time.default_time_zone: …`                               | the send's default time zone is not an IANA name the service knows                                                                   |
-| `… isn't a cursor of this query`                                | `after` or `until` was not a value a previous page answered                                                                          |
+| Message starts with                                             | Cause and fix                                                                                                                                                                                   |
+| --------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `push is not configured on this server`                         | a device tried to enroll, or you called `send_test`, and no transport is on. The variables are missing or not listed under `secrets`                                                            |
+| `push is paused on this server`                                 | you called `send_test` while the server's pushes are stopped. In LeptosKit Cloud, the organisation's free plan has used the month's push allowance: wait for next month, or move to a paid plan |
+| `push for … is not configured on this server`                   | the same, for one platform: for example an iPhone enrolling while only FCM is configured                                                                                                        |
+| `a person holds at most 10 live endpoints; revoke one first`    | the person has ten devices enrolled. Let them remove one from their device list                                                                                                                 |
+| `a person holds at most 500 topics; unsubscribe from one first` | a person's own `subscribe` at the limit                                                                                                                                                         |
+| `a topic batch names 1 to 1000 people`                          | split the batch                                                                                                                                                                                 |
+| `an attribute batch names 1 to 1000 people`                     | split the batch                                                                                                                                                                                 |
+| `an attribute call names at most 100 keys …`                    | split the change into several calls                                                                                                                                                             |
+| `there are already 1000 draft campaigns`                        | launch or archive some drafts                                                                                                                                                                   |
+| `choose who this campaign is for before launching it`           | the draft has no target                                                                                                                                                                         |
+| `this campaign was scheduled for …, which has passed`           | pick a new time, or clear the schedule to send now                                                                                                                                              |
+| `this campaign has recorded 100 tests`                          | duplicate the campaign to go on testing                                                                                                                                                         |
+| `local_time.default_time_zone: …`                               | the send's default time zone is not an IANA name the service knows                                                                                                                              |
+| `… isn't a cursor of this query`                                | `after` or `until` was not a value a previous page answered                                                                                                                                     |
 
 A condition that does not parse is also a `400`, and its message gives the byte where parsing stopped.
 

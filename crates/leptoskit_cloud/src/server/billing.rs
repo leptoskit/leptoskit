@@ -33,6 +33,7 @@ use crate::deployments::CostLine;
 use crate::pricing::Catalogue;
 use crate::pricing::EstimateInput;
 use crate::pricing::Limits;
+use crate::pricing::Meter;
 use crate::pricing::Plan;
 use crate::pricing::Usage;
 use crate::tables::BillingAccount;
@@ -165,7 +166,32 @@ async fn own_cap(
 }
 
 /// `usage` on `plan`, priced, with the cap in force.
-fn bill(catalogue: &Catalogue, plan: &Plan, usage: Usage, own: Option<i64>) -> UsageBill {
+///
+/// On a plan that costs nothing and lists a `notification_pushes`
+/// allowance, pushes are stopped at it rather than charged
+/// ([`pushes_stopped`]). The pushes a hub sends before it hears cost
+/// nothing up to the allowance again, so they don't reach the cap; past
+/// twice the allowance they are priced, and reach it, as they did before
+/// this existed, so a hub that doesn't stop still stops deploys. A free
+/// plan that lists none is billed as before.
+fn bill(catalogue: &Catalogue, plan: &Plan, mut usage: Usage, own: Option<i64>) -> UsageBill {
+	if plan.is_free()
+		&& let Some(allowance) = plan.allowances.get(&Meter::NotificationPushes)
+	{
+		let pushes = usage.get(Meter::NotificationPushes);
+		let free = allowance.saturating_mul(2);
+		// Up to twice the allowance counts as the allowance; past it, only
+		// what is past it is billed.
+		usage.limit(
+			Meter::NotificationPushes,
+			if pushes <= free {
+				*allowance
+			} else {
+				allowance.saturating_add(pushes - free)
+			},
+		);
+	}
+
 	let estimate = crate::pricing::estimate(
 		catalogue,
 		plan,
@@ -397,6 +423,90 @@ pub(crate) async fn set_spend_cap(
 	.await?;
 	let (cap, own) = effective_cap(plan, stored);
 	Ok(SpendCap { cap, own })
+}
+
+/// The organisations among `organizations` whose hosted pushes are stopped
+/// this month: on a plan that costs nothing, which lists a
+/// `notification_pushes` allowance, with that allowance used. A paid plan
+/// pays for pushes past its allowance, and a free plan that lists none
+/// isn't stopped; an unpriced organisation never is.
+///
+/// # Errors
+///
+/// When the database fails.
+pub(crate) async fn pushes_stopped(
+	db: &impl leptoskit_db::Read,
+	shipping: &Shipping,
+	organizations: &std::collections::BTreeSet<Id<Organization>>,
+) -> leptoskit_db::Result<std::collections::BTreeSet<Id<Organization>>> {
+	let mut stopped = std::collections::BTreeSet::new();
+	// The least any free plan lets an organisation push: below it, nobody
+	// is stopped, and nobody's plan needs reading.
+	let Some(least) = shipping.catalogue.as_ref().and_then(|catalogue| {
+		catalogue
+			.plans()
+			.iter()
+			.filter(|plan| plan.is_free())
+			.filter_map(|plan| plan.allowances.get(&Meter::NotificationPushes).copied())
+			.min()
+	}) else {
+		return Ok(stopped);
+	};
+
+	if organizations.is_empty() {
+		return Ok(stopped);
+	}
+
+	// Both queries use the `(organization_id, period)` index, and read the
+	// cluster's organisations alone: this runs on every hub's every ask.
+	let month = metering::period(leptoskit_db::now());
+	let rows = crate::tables::UsageTotal::query()
+		.filter(|row| {
+			row.organization_id
+				.in_list(organizations.iter().copied().collect::<Vec<_>>())
+				& row.period.eq(month.as_str())
+				& row.meter.eq(Meter::NotificationPushes.code())
+		})
+		.all(db)
+		.await?;
+	let mut pushed: std::collections::BTreeMap<Id<Organization>, u64> =
+		std::collections::BTreeMap::new();
+
+	for row in rows {
+		let total = pushed.entry(row.organization_id).or_default();
+		*total = total.saturating_add(u64::try_from(row.quantity).unwrap_or_default());
+	}
+
+	let near: Vec<Id<Organization>> = pushed
+		.iter()
+		.filter(|(_, pushed)| **pushed >= least)
+		.map(|(id, _)| *id)
+		.collect();
+
+	if near.is_empty() {
+		return Ok(stopped);
+	}
+
+	let near = Organization::query()
+		.filter(|row| row.id.in_list(near.clone()))
+		.all(db)
+		.await?;
+
+	for organization in near {
+		let pushed = pushed.get(&organization.id).copied().unwrap_or_default();
+
+		if let Ok((_, plan)) = priced(shipping, &organization)
+			&& plan.is_free()
+			&& plan
+				.allowances
+				.get(&Meter::NotificationPushes)
+				.is_some_and(|allowance| pushed >= *allowance)
+		{
+			stopped.insert(organization.id);
+		}
+	}
+
+	Ok(stopped)
 }
 
 /// `Forbidden` (`spend_cap_reached`) once what `organization` used this

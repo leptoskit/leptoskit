@@ -2662,6 +2662,12 @@ pub(crate) async fn send_test(
 	person: Uuid,
 	endpoint: Option<Uuid>,
 ) -> rpc::Result<Vec<crate::TestSendOutcome>> {
+	if cx.get::<push::Push>().is_some_and(|push| push.paused.get()) {
+		return Err(rpc::Error::invalid(
+			"push is paused on this server: whoever runs it has stopped its pushes for now",
+		));
+	}
+
 	let Some(runtime) = cx
 		.get::<push::Push>()
 		.and_then(|push| push.runtime.as_ref())
@@ -2956,7 +2962,13 @@ pub fn routes(db: Db, origin: Option<&str>) -> (Router, rpc::server::Live) {
 /// is the framework's default.
 #[must_use]
 pub fn workers(db: Db) -> rpc::server::Jobs {
-	workers_with_push(db, push::Push { runtime: None })
+	workers_with_push(
+		db,
+		push::Push {
+			paused: push::Paused::default(),
+			runtime: None,
+		},
+	)
 }
 
 /// Workers sharing the same push configuration as [`routes_with_push`].
