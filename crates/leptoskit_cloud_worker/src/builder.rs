@@ -35,6 +35,13 @@ use crate::command::BuildRequest;
 /// Default HTTP port aligned with `lk generate deploy --target docker`.
 pub const DEFAULT_APP_PORT: u16 = 3000;
 
+/// The most of one project's `BuildKit` cache that is kept, in MiB, when
+/// `--build-cache-max-mib` is not given. Every layer of a Dockerfile is
+/// exported, so one build with a large layer can fill the volume every
+/// organisation's builds share: a fifth of the 40 GiB the platform gives a
+/// build worker leaves room for four more such projects.
+pub const DEFAULT_CACHE_MAX_MIB: u64 = 8 * 1024;
+
 /// Maximum metadata file size accepted from `BuildKit` / `docker buildx`.
 const MAX_METADATA_BYTES: u64 = 1024 * 1024;
 
@@ -68,6 +75,15 @@ pub struct BuildAppArgs {
 	/// Persistent cache directory (defaults to `LEPTOSKIT_BUILD_CACHE_DIR`).
 	#[arg(long, env = "LEPTOSKIT_BUILD_CACHE_DIR")]
 	pub cache_dir: Option<PathBuf>,
+	/// The most of this project's `BuildKit` cache that is kept, in MiB. An
+	/// export larger than it is removed once the build has succeeded: the
+	/// build's result doesn't change, and its next build is only slower.
+	#[arg(
+		long,
+		env = "LEPTOSKIT_BUILD_CACHE_MAX_MIB",
+		default_value_t = DEFAULT_CACHE_MAX_MIB
+	)]
+	pub cache_max_mib: u64,
 	/// Container builder backend to invoke.
 	#[arg(
 		long,
@@ -143,6 +159,8 @@ struct CachePlan {
 	live_dir: PathBuf,
 	import_existing: bool,
 	export_temp: PathBuf,
+	/// The most of the cache that is kept, in bytes.
+	max_bytes: u64,
 }
 
 /// Validated inputs for a single container image build invocation.
@@ -183,7 +201,12 @@ async fn build_and_push(
 		.suffix(".json")
 		.tempfile()
 		.map_err(|error| format!("couldn't create build metadata temp file: {error}"))?;
-	let cache = prepare_cache_plan(args.cache_dir.as_deref(), request.deployment.number).await?;
+	let cache = prepare_cache_plan(
+		args.cache_dir.as_deref(),
+		request.deployment.number,
+		args.cache_max_mib.saturating_mul(1024 * 1024),
+	)
+	.await?;
 
 	let ctx = BuildContext {
 		source,
@@ -276,6 +299,7 @@ fn validate_platform(platform: &str) -> Result<(), String> {
 async fn prepare_cache_plan(
 	cache_dir: Option<&Path>,
 	deployment_number: u64,
+	max_bytes: u64,
 ) -> Result<Option<CachePlan>, String> {
 	let Some(root) = cache_dir else {
 		return Ok(None);
@@ -296,6 +320,7 @@ async fn prepare_cache_plan(
 		live_dir,
 		import_existing,
 		export_temp,
+		max_bytes,
 	}))
 }
 
@@ -305,10 +330,33 @@ async fn cleanup_cache_export(cache: Option<&CachePlan>) {
 	}
 }
 
+/// Whether `directory` holds more of the cache than `plan` keeps, or a
+/// size that can't be known: one that can't is never what keeps an export
+/// on the volume. A directory that isn't there holds nothing.
+async fn too_large(plan: &CachePlan, directory: &Path) -> bool {
+	let (directory, max_bytes) = (directory.to_owned(), plan.max_bytes);
+
+	tokio::task::spawn_blocking(move || {
+		std::fs::symlink_metadata(&directory).is_ok()
+			&& crate::run::bytes_under(&directory).is_none_or(|bytes| bytes > max_bytes)
+	})
+	.await
+	.unwrap_or(true)
+}
+
+/// Throws `directory` away, with whatever a build made unreadable in it.
+async fn discard(directory: &Path) {
+	let directory = directory.to_owned();
+
+	let _ = tokio::task::spawn_blocking(move || crate::run::remove_all(&directory)).await;
+}
+
 /// Promotes a freshly exported local `BuildKit` cache into `live_dir` with a
 /// two-step rename (`live_dir -> backup`, `export_temp -> live_dir`) so a
 /// failed or incomplete build never corrupts the last good cache and a failed
-/// second rename rolls back to `backup`.
+/// second rename rolls back to `backup`. An export too large to keep is
+/// thrown away instead: by now the build has succeeded, and its cache is only
+/// a saving for the next build.
 async fn rotate_cache_export(cache: Option<&CachePlan>) {
 	let Some(plan) = cache else {
 		return;
@@ -316,6 +364,18 @@ async fn rotate_cache_export(cache: Option<&CachePlan>) {
 
 	if !plan.export_temp.join("index.json").is_file() {
 		let _ = tokio::fs::remove_dir_all(&plan.export_temp).await;
+
+		return;
+	}
+
+	if too_large(plan, &plan.export_temp).await {
+		discard(&plan.export_temp).await;
+
+		// Nor may what an earlier build kept stay, if a larger maximum
+		// let it grow past this one.
+		if too_large(plan, &plan.live_dir).await {
+			discard(&plan.live_dir).await;
+		}
 
 		return;
 	}
@@ -710,6 +770,34 @@ mod tests {
 
 	const CUSTOM_PORT: u16 = 8080;
 
+	/// The most of the cache a plan of the tests keeps: a kibibyte.
+	const MAX: u64 = 1024;
+
+	/// A cache of `bytes` in all, as `BuildKit` writes one: an index and
+	/// a layer.
+	async fn a_cache(directory: &Path, bytes: u64) {
+		tokio::fs::create_dir_all(directory.join("blobs/sha256"))
+			.await
+			.expect("mkdir");
+		tokio::fs::write(directory.join("index.json"), b"{}")
+			.await
+			.expect("write");
+		tokio::fs::write(
+			directory.join("blobs/sha256/layer"),
+			vec![0_u8; (bytes - 2) as usize],
+		)
+		.await
+		.expect("a layer");
+	}
+
+	/// The plan of the `deployment`'s build for a cache of [`MAX`] at most.
+	async fn the_plan(dir: &Path, deployment: u64) -> CachePlan {
+		prepare_cache_plan(Some(dir), deployment, MAX)
+			.await
+			.expect("plan")
+			.expect("some")
+	}
+
 	fn sample_request() -> BuildRequest {
 		let mut services = BTreeMap::new();
 		services.insert(
@@ -827,7 +915,7 @@ mod tests {
 	#[tokio::test]
 	async fn cache_plan_imports_only_when_index_json_exists_and_rotates_atomically() {
 		let dir = tempfile::tempdir().expect("tempdir");
-		let initial = prepare_cache_plan(Some(dir.path()), 1)
+		let initial = prepare_cache_plan(Some(dir.path()), 1, MAX)
 			.await
 			.expect("plan")
 			.expect("some");
@@ -845,11 +933,86 @@ mod tests {
 		assert!(dir.path().join("buildkit/index.json").is_file());
 		assert!(!initial.export_temp.exists());
 
-		let second = prepare_cache_plan(Some(dir.path()), 2)
+		let second = prepare_cache_plan(Some(dir.path()), 2, MAX)
 			.await
 			.expect("plan")
 			.expect("some");
 		assert!(second.import_existing);
+	}
+
+	#[tokio::test]
+	async fn an_export_larger_than_the_maximum_is_not_kept() {
+		let dir = tempfile::tempdir().expect("tempdir");
+
+		// One byte over the maximum, after a build that succeeded.
+		let plan = the_plan(dir.path(), 1).await;
+		a_cache(&plan.export_temp, MAX + 1).await;
+		rotate_cache_export(Some(&plan)).await;
+		assert!(!plan.live_dir.exists(), "the export was kept");
+		assert!(!plan.export_temp.exists(), "the export was left behind");
+
+		// The maximum itself is kept.
+		let plan = the_plan(dir.path(), 2).await;
+		a_cache(&plan.export_temp, MAX).await;
+		rotate_cache_export(Some(&plan)).await;
+		assert!(plan.live_dir.join("index.json").is_file());
+		assert!(!plan.export_temp.exists());
+	}
+
+	#[tokio::test]
+	async fn the_cache_kept_before_stays_while_it_is_within_the_maximum() {
+		let dir = tempfile::tempdir().expect("tempdir");
+		// An earlier build's cache, within the maximum.
+		a_cache(&dir.path().join("buildkit"), MAX / 2).await;
+
+		// This build's is too large to keep. The build has succeeded, and
+		// the earlier cache is still a saving for the next build.
+		let plan = the_plan(dir.path(), 1).await;
+		a_cache(&plan.export_temp, MAX * 2).await;
+		rotate_cache_export(Some(&plan)).await;
+
+		assert_eq!(
+			crate::run::bytes_under(&plan.live_dir),
+			Some(MAX / 2),
+			"what stays isn't the cache kept before"
+		);
+		assert!(!plan.export_temp.exists());
+	}
+
+	#[tokio::test]
+	async fn a_cache_kept_before_that_is_over_the_maximum_goes_too() {
+		let dir = tempfile::tempdir().expect("tempdir");
+		// Kept by an earlier build, under a larger maximum.
+		a_cache(&dir.path().join("buildkit"), MAX * 4).await;
+
+		let plan = the_plan(dir.path(), 1).await;
+		a_cache(&plan.export_temp, MAX * 2).await;
+		rotate_cache_export(Some(&plan)).await;
+
+		assert_eq!(crate::run::bytes_under(dir.path()), Some(0));
+	}
+
+	#[tokio::test]
+	async fn an_export_whose_size_cannot_be_known_is_not_kept() {
+		use std::os::unix::fs::PermissionsExt as _;
+
+		// Root reads what a build made unreadable, so for it the size is
+		// known, and the export within the maximum: nothing to see here.
+		if rustix::process::geteuid().as_raw() == 0 {
+			return;
+		}
+
+		let dir = tempfile::tempdir().expect("tempdir");
+		let plan = the_plan(dir.path(), 1).await;
+		a_cache(&plan.export_temp, MAX / 2).await;
+		let hidden = plan.export_temp.join("blobs");
+		tokio::fs::set_permissions(&hidden, std::fs::Permissions::from_mode(0o000))
+			.await
+			.expect("unreadable");
+
+		rotate_cache_export(Some(&plan)).await;
+
+		assert!(!plan.live_dir.exists(), "the export was kept");
 	}
 
 	#[tokio::test]
@@ -867,6 +1030,7 @@ mod tests {
 			output: dir.path().join("out.json"),
 			source: Some(dir.path().to_path_buf()),
 			cache_dir: None,
+			cache_max_mib: DEFAULT_CACHE_MAX_MIB,
 			backend: BuilderBackend::Auto,
 			lk_bin: PathBuf::from("lk"),
 			platform: None,

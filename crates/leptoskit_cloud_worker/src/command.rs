@@ -8,6 +8,10 @@
 //! - `LEPTOSKIT_BUILD_OUTPUT`: where it writes how the build ended, as JSON:
 //!   `{"result": "succeeded", …}` with a `BuildServerOutput`'s fields, or
 //!   `{"result": "failed", "reason": "…", "steps": […]}`;
+//! - `LEPTOSKIT_BUILD_CACHE_DIR`, `CARGO_HOME` and `SCCACHE_DIR`, and
+//!   `LEPTOSKIT_BUILD_CACHE_MAX_MIB`: the project's own directories under a
+//!   persistent cache directory ([`CommandBuilder::cache_dir`]), and the most
+//!   of the cache, in MiB, the build may leave in them;
 //! - `HOME` and `TMPDIR`: empty directories deleted with the source;
 //! - `PATH`, and any variable the operator named to pass on.
 //!
@@ -27,6 +31,7 @@ use std::path::PathBuf;
 use std::pin::Pin;
 use std::process::Stdio;
 use std::time::Duration;
+use std::time::SystemTime;
 
 use leptoskit_cloud::archive::Digest;
 use leptoskit_cloud::deployments::AppFacts;
@@ -53,6 +58,25 @@ const GRACE: Duration = Duration::from_secs(10);
 
 /// The longest a failure's reason is.
 const MAX_REASON: usize = 500;
+
+/// How long a project's cache goes unused before another project's build
+/// removes it, when `--build-cache-idle-days` is not given. Without it every
+/// project a worker ever built holds its cache for good. A week is longer
+/// than a project that still deploys goes between builds.
+pub(crate) const DEFAULT_CACHE_IDLE_DAYS: u64 = 7;
+
+/// The most of the cache directory's volume that may be taken when a build
+/// starts, in percent, when `--build-cache-max-used-percent` is not given.
+/// What is left is room for the export the build writes: a quarter of the
+/// 40 GiB volume the platform gives a build worker is 10 GiB, more than the
+/// largest export a build keeps, so on a volume that holds nothing but
+/// caches an export within that maximum has room.
+pub(crate) const DEFAULT_CACHE_MAX_USED_PERCENT: u64 = 75;
+
+/// `days`, as a duration, however many there are of them.
+pub(crate) fn days(days: u64) -> Duration {
+	Duration::from_secs(days.saturating_mul(24 * 60 * 60))
+}
 
 /// What the program is asked to build: a job's input without the
 /// archive's address, which is a credential the program has no use for.
@@ -92,6 +116,15 @@ pub struct CommandBuilder {
 	/// with the per-build workspace). Exposes `CARGO_HOME`, `SCCACHE_DIR`, and
 	/// `LEPTOSKIT_BUILD_CACHE_DIR` to the build command.
 	cache_dir: Option<PathBuf>,
+	/// How long another project's cache under `cache_dir` may go unused
+	/// before a build removes it.
+	cache_idle: Duration,
+	/// The most of `cache_dir`'s volume, in percent, that may be taken when a
+	/// build starts.
+	cache_max_used: u64,
+	/// The most of the cache, in MiB, the build command may leave under its
+	/// `LEPTOSKIT_BUILD_CACHE_DIR`.
+	cache_max_mib: u64,
 	/// Optional sandbox wrapper command prefix (e.g. `["bwrap",
 	/// "--unshare-pid", ...]`). When non-empty, `sandbox[0]` is spawned
 	/// with `sandbox[1..]`, followed by `program` and `arguments`.
@@ -109,6 +142,9 @@ impl CommandBuilder {
 			arguments,
 			pass: Vec::new(),
 			cache_dir: None,
+			cache_idle: days(DEFAULT_CACHE_IDLE_DAYS),
+			cache_max_used: DEFAULT_CACHE_MAX_USED_PERCENT,
+			cache_max_mib: crate::builder::DEFAULT_CACHE_MAX_MIB,
 			sandbox: Vec::new(),
 			timeout: Duration::from_hours(1),
 		}
@@ -127,6 +163,35 @@ impl CommandBuilder {
 	#[must_use]
 	pub fn cache_dir(mut self, dir: impl Into<PathBuf>) -> Self {
 		self.cache_dir = Some(dir.into());
+		self
+	}
+
+	/// Before a build, removes the caches of other projects under the cache
+	/// directory that no build has used for `idle`. Without it every project
+	/// a worker ever built holds its cache for good, on a volume every
+	/// organisation's builds share.
+	#[must_use]
+	pub fn cache_idle(mut self, idle: Duration) -> Self {
+		self.cache_idle = idle;
+		self
+	}
+
+	/// Before a build, removes the caches of other projects under the cache
+	/// directory, the least recently used first, until no more than
+	/// `percent` of its volume is taken. What is left is room for the export
+	/// the build writes, so one organisation's caches never decide whether
+	/// another's build has any.
+	#[must_use]
+	pub fn cache_max_used(mut self, percent: u64) -> Self {
+		self.cache_max_used = percent;
+		self
+	}
+
+	/// Tells the build command, as `LEPTOSKIT_BUILD_CACHE_MAX_MIB`, that it
+	/// may leave at most `mib` MiB of cache in its `LEPTOSKIT_BUILD_CACHE_DIR`.
+	#[must_use]
+	pub fn cache_max_mib(mut self, mib: u64) -> Self {
+		self.cache_max_mib = mib;
 		self
 	}
 
@@ -433,6 +498,110 @@ fn scoped_cache_root(base: &Path, organization: &str, project: &str) -> PathBuf 
 		.join(sanitize(project))
 }
 
+/// The directories under `directory`, when `directory` is one itself: a
+/// link is neither followed nor listed, and nor is anything else.
+fn directories(directory: &Path) -> Vec<PathBuf> {
+	if !std::fs::symlink_metadata(directory).is_ok_and(|metadata| metadata.is_dir()) {
+		return Vec::new();
+	}
+
+	let Ok(entries) = std::fs::read_dir(directory) else {
+		return Vec::new();
+	};
+
+	entries
+		.flatten()
+		.map(|entry| entry.path())
+		.filter(|path| std::fs::symlink_metadata(path).is_ok_and(|metadata| metadata.is_dir()))
+		.collect()
+}
+
+/// Every project's cache under `tenants`, least recently used first: when
+/// a build last used it, and where it is. One whose age can't be read counts
+/// as the oldest, so that it goes first: nothing stays on the volume for
+/// being unmeasurable.
+fn kept(tenants: &Path) -> Vec<(SystemTime, PathBuf)> {
+	let mut kept = Vec::new();
+
+	for organisation in directories(tenants) {
+		for project in directories(&organisation) {
+			let used = std::fs::symlink_metadata(&project)
+				.and_then(|metadata| metadata.modified())
+				.unwrap_or(SystemTime::UNIX_EPOCH);
+
+			kept.push((used, project));
+		}
+	}
+
+	kept.sort();
+	kept
+}
+
+/// How much of the volume `directory` is on is taken, in percent: what is
+/// not available to this user.
+fn used_percent(directory: &Path) -> Option<u64> {
+	let volume = rustix::fs::statvfs(directory).ok()?;
+	let block = volume.f_frsize;
+	let total = volume.f_blocks.checked_mul(block)?;
+	let taken = volume
+		.f_blocks
+		.checked_sub(volume.f_bavail)?
+		.checked_mul(block)?;
+
+	Some(taken.saturating_mul(100) / total.max(1))
+}
+
+/// Removes, from the caches under `tenants`, every one but `own` last used
+/// before `idle_since`, then the least recently used while `used_percent`
+/// says more than `max_used` of the volume is taken. `own`, the building
+/// project's, is never removed: its build is about to use it. A volume that
+/// can't be measured is taken to be full, since a build that finds no room
+/// is what this is here to prevent.
+fn reap(
+	kept: Vec<(SystemTime, PathBuf)>,
+	own: &Path,
+	idle_since: SystemTime,
+	max_used: u64,
+	mut used_percent: impl FnMut() -> Option<u64>,
+) {
+	for (used, directory) in kept {
+		if directory == own {
+			continue;
+		}
+
+		// The least recently used come first, so every stale one has gone
+		// by the time one that isn't is found.
+		if used >= idle_since && used_percent().is_some_and(|percent| percent <= max_used) {
+			break;
+		}
+
+		if crate::run::remove_all(&directory).is_err() {
+			crate::run::note(&format!(
+				"the build cache {} couldn't be deleted",
+				directory.display()
+			));
+		}
+	}
+}
+
+/// Before a build adds to the cache under `root`: every other project's
+/// cache that has gone unused for `idle` goes, then the least recently used
+/// while more than `max_used` percent of the volume is taken. The building
+/// project's own, `own`, is never removed.
+async fn sweep_caches(root: &Path, own: &Path, idle: Duration, max_used: u64) {
+	let (tenants, volume, own) = (root.join("tenants"), root.to_owned(), own.to_owned());
+	let idle_since = SystemTime::now()
+		.checked_sub(idle)
+		.unwrap_or(SystemTime::UNIX_EPOCH);
+
+	let _ = tokio::task::spawn_blocking(move || {
+		reap(kept(&tenants), &own, idle_since, max_used, || {
+			used_percent(&volume)
+		});
+	})
+	.await;
+}
+
 /// One run of an operator's program: in `source`, with a cleared
 /// environment but for `PATH`, what the operator passes, and `env`.
 pub(crate) struct Launch<'a, S: AsRef<std::ffi::OsStr> = String> {
@@ -639,6 +808,10 @@ impl CommandBuilder {
 				&input.deployment.organization,
 				&input.deployment.project,
 			);
+			// What may not stay on the volume goes before the build adds to
+			// it: on a full one, making this project's directories is what
+			// fails first.
+			sweep_caches(cache_root, &scoped, self.cache_idle, self.cache_max_used).await;
 			let cargo_home = scoped.join("cargo");
 			let sccache_dir = scoped.join("sccache");
 			let buildkit_dir = scoped.join("buildkit");
@@ -649,9 +822,24 @@ impl CommandBuilder {
 			{
 				return failed("the worker couldn't prepare its persistent build cache directory");
 			}
+			// Its cache was used now, whatever the build does to it: a
+			// project that builds every day keeps its cache, even when its
+			// builds never write to it.
+			if let Err(error) = std::fs::File::open(&scoped)
+				.and_then(|directory| directory.set_modified(SystemTime::now()))
+			{
+				crate::run::note(&format!(
+					"the build cache {} couldn't be marked used: {error}",
+					scoped.display()
+				));
+			}
 			env.push(("LEPTOSKIT_BUILD_CACHE_DIR".to_owned(), scoped.into()));
 			env.push(("CARGO_HOME".to_owned(), cargo_home.into()));
 			env.push(("SCCACHE_DIR".to_owned(), sccache_dir.into()));
+			env.push((
+				"LEPTOSKIT_BUILD_CACHE_MAX_MIB".to_owned(),
+				self.cache_max_mib.to_string().into(),
+			));
 		}
 
 		let (program, arguments): (PathBuf, Vec<std::ffi::OsString>) =
@@ -1095,5 +1283,244 @@ mod tests {
 
 		let escaped = scoped_cache_root(base, "../etc", "///");
 		assert_eq!(escaped, base.join("tenants/etc/default"));
+	}
+
+	/// A project's cache of `bytes` under `tenants`, last used `ago`.
+	fn a_cache(tenants: &Path, project: &[&str], bytes: usize, ago: Duration) -> PathBuf {
+		let directory = project
+			.iter()
+			.fold(tenants.to_path_buf(), |path, part| path.join(part));
+		std::fs::create_dir_all(directory.join("buildkit")).expect("a cache");
+		std::fs::write(directory.join("buildkit/layer"), vec![0_u8; bytes]).expect("a layer");
+		let used = SystemTime::now()
+			.checked_sub(ago)
+			.expect("a time in the past");
+
+		std::fs::File::open(&directory)
+			.expect("the cache")
+			.set_modified(used)
+			.expect("last used");
+
+		directory
+	}
+
+	/// What is left under `tenants`, as `organisation/project`.
+	fn caches_left(tenants: &Path) -> Vec<String> {
+		let mut left: Vec<String> = directories(tenants)
+			.iter()
+			.flat_map(|organisation| directories(organisation))
+			.map(|project| {
+				project
+					.strip_prefix(tenants)
+					.expect("under tenants")
+					.display()
+					.to_string()
+			})
+			.collect();
+		left.sort();
+		left
+	}
+
+	/// How full a volume is that holds nothing but `tenants` and has room
+	/// for `capacity` bytes, in percent as the sweep measures it.
+	fn fullness(tenants: &Path, capacity: u64) -> impl FnMut() -> Option<u64> {
+		move || Some(crate::run::bytes_under(tenants)? * 100 / capacity)
+	}
+
+	#[test]
+	fn stale_caches_go_first_and_may_be_all_that_goes() {
+		let root = tempfile::tempdir().expect("a cache directory");
+		let tenants = root.path().join("tenants");
+		let day = Duration::from_hours(24);
+		// 650 of the volume's 1000 bytes, of which 500 may be taken when a
+		// build starts. One cache was last used ten days ago.
+		let stale = a_cache(&tenants, &["ana", "notes"], 300, 10 * day);
+		let own = a_cache(&tenants, &["bob", "site"], 200, 2 * day);
+		a_cache(&tenants, &["ana", "blog"], 100, Duration::ZERO);
+		a_cache(&tenants, &["cid", "wiki"], 50, day);
+
+		reap(
+			kept(&tenants),
+			&own,
+			SystemTime::now() - 7 * day,
+			50,
+			fullness(&tenants, 1000),
+		);
+
+		// With it gone 350 bytes are left, 35%: every other cache stays.
+		assert!(!stale.exists());
+		assert_eq!(caches_left(&tenants), ["ana/blog", "bob/site", "cid/wiki"]);
+	}
+
+	#[test]
+	fn the_least_recently_used_go_until_the_volume_has_room() {
+		let root = tempfile::tempdir().expect("a cache directory");
+		let tenants = root.path().join("tenants");
+		let day = Duration::from_hours(24);
+		// 600 of 1000 bytes, 60%: more than the half a build may find taken,
+		// and none of it a week old. The building project's own cache is the
+		// oldest of all.
+		let own = a_cache(&tenants, &["bob", "site"], 300, 10 * day);
+		let older = a_cache(&tenants, &["cid", "wiki"], 200, day);
+		a_cache(&tenants, &["ana", "blog"], 100, Duration::from_secs(3600));
+
+		reap(
+			kept(&tenants),
+			&own,
+			SystemTime::now() - 7 * day,
+			50,
+			fullness(&tenants, 1000),
+		);
+
+		// One cache was enough: 400 bytes are left, 40%. The oldest of all
+		// stays, being the building project's own.
+		assert!(!older.exists());
+		assert_eq!(caches_left(&tenants), ["ana/blog", "bob/site"]);
+	}
+
+	#[test]
+	fn a_volume_with_room_keeps_every_cache() {
+		let root = tempfile::tempdir().expect("a cache directory");
+		let tenants = root.path().join("tenants");
+		let day = Duration::from_hours(24);
+		// 400 of 1000 bytes, 40%: within the half, and the oldest of them
+		// only six days old.
+		a_cache(&tenants, &["ana", "notes"], 300, 6 * day);
+		let own = a_cache(&tenants, &["bob", "site"], 100, Duration::ZERO);
+
+		reap(
+			kept(&tenants),
+			&own,
+			SystemTime::now() - 7 * day,
+			50,
+			fullness(&tenants, 1000),
+		);
+
+		assert_eq!(caches_left(&tenants), ["ana/notes", "bob/site"]);
+	}
+
+	#[test]
+	fn a_volume_that_cannot_be_measured_is_taken_to_be_full() {
+		let root = tempfile::tempdir().expect("a cache directory");
+		let tenants = root.path().join("tenants");
+		let day = Duration::from_hours(24);
+		let own = a_cache(&tenants, &["bob", "site"], 300, Duration::ZERO);
+		let other = a_cache(&tenants, &["ana", "notes"], 100, Duration::ZERO);
+
+		reap(
+			kept(&tenants),
+			&own,
+			SystemTime::now() - 7 * day,
+			75,
+			|| None,
+		);
+
+		assert!(!other.exists());
+		assert_eq!(caches_left(&tenants), ["bob/site"]);
+	}
+
+	#[test]
+	fn an_unreadable_cache_goes_and_a_link_is_not_followed() {
+		use std::os::unix::fs::PermissionsExt as _;
+
+		let root = tempfile::tempdir().expect("a cache directory");
+		let tenants = root.path().join("tenants");
+		let day = Duration::from_hours(24);
+		// A cache a build made unreadable to its own user, a month ago.
+		let unreadable = a_cache(&tenants, &["ana", "notes"], 10, 30 * day);
+		std::fs::set_permissions(&unreadable, std::fs::Permissions::from_mode(0o000))
+			.expect("unreadable");
+		// Links where an organisation's directory and a project's cache
+		// would be, to a directory that is someone else's.
+		let elsewhere = tempfile::tempdir().expect("another directory");
+		std::fs::create_dir_all(elsewhere.path().join("precious")).expect("a directory");
+		std::fs::write(elsewhere.path().join("precious/file"), b"keep").expect("a file");
+		std::fs::create_dir_all(tenants.join("bob")).expect("an organisation's directory");
+		std::os::unix::fs::symlink(elsewhere.path(), tenants.join("bob/site")).expect("a link");
+		std::os::unix::fs::symlink(elsewhere.path(), tenants.join("cid")).expect("a link");
+		let own = a_cache(&tenants, &["dan", "app"], 10, Duration::ZERO);
+
+		// Nothing may stay on the volume but the building project's own.
+		reap(
+			kept(&tenants),
+			&own,
+			SystemTime::now() - 7 * day,
+			0,
+			fullness(&tenants, 1000),
+		);
+
+		assert!(!unreadable.exists());
+		assert!(elsewhere.path().join("precious/file").is_file());
+		assert_eq!(caches_left(&tenants), ["dan/app"]);
+	}
+
+	#[tokio::test]
+	async fn before_a_build_other_projects_stale_caches_go_and_its_own_stays() {
+		let cache = tempfile::tempdir().expect("cache dir");
+		let cache_path = cache.path().to_path_buf();
+		let tenants = cache_path.join("tenants");
+		let day = Duration::from_hours(24);
+		// Another project's cache, last used a month ago; the building
+		// project's own, just as old; and a third project's, used today.
+		let stale = a_cache(&tenants, &["bob", "site"], 10, 30 * day);
+		let own = a_cache(&tenants, &["ana", "notes"], 10, 30 * day);
+		let recent = a_cache(&tenants, &["cid", "wiki"], 10, Duration::ZERO);
+
+		// Nothing is removed for the volume being full: that is this
+		// machine's own volume, and how full it is isn't the test's to say.
+		let script = format!(
+			"echo cached > \"$CARGO_HOME/marker\" && cat > \"$LEPTOSKIT_BUILD_OUTPUT\" \
+			 <<'JSON'\n{}\nJSON",
+			succeeded(REPOSITORY)
+		);
+		let (outcome, log, _directory) = build(
+			&script,
+			|builder| {
+				builder
+					.cache_dir(&cache_path)
+					.cache_idle(day)
+					.cache_max_used(100)
+			},
+			Stop::never(),
+		)
+		.await;
+
+		assert!(
+			matches!(outcome, BuildOutcome::Succeeded(_)),
+			"{outcome:?} {log:?}"
+		);
+		assert!(
+			!stale.exists(),
+			"another project's stale cache stays: {}",
+			stale.display()
+		);
+		assert!(recent.is_dir());
+		assert!(own.join("cargo/marker").is_file());
+
+		// The build counted its own cache as used, so a month without a
+		// build starts from now for it.
+		let used = std::fs::symlink_metadata(&own)
+			.expect("its own")
+			.modified()
+			.expect("a time");
+
+		assert!(used.elapsed().expect("a time in the past") < day);
+	}
+
+	#[tokio::test]
+	async fn the_build_command_is_told_how_much_cache_it_may_leave() {
+		let cache = tempfile::tempdir().expect("cache dir");
+		let script = "echo \"${LEPTOSKIT_BUILD_CACHE_MAX_MIB:-none}\"";
+		let (_, log, _directory) = build(
+			script,
+			|builder| builder.cache_dir(cache.path()).cache_max_mib(32),
+			Stop::never(),
+		)
+		.await;
+		assert_eq!(log, ["32"]);
+
+		// Without a cache directory there is no cache to bound.
+		let (_, log, _directory) = build(script, |builder| builder, Stop::never()).await;
+		assert_eq!(log, ["none"]);
 	}
 }
