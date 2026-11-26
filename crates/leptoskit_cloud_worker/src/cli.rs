@@ -95,9 +95,41 @@ pub struct Run {
 	#[arg(long = "build-env")]
 	pub build_environment: Vec<String>,
 	/// Persistent cache directory shared across builds (`CARGO_HOME`,
-	/// `SCCACHE_DIR`, and `BuildKit` local cache). Not deleted between jobs.
+	/// `SCCACHE_DIR`, and `BuildKit` local cache). Each project's own is
+	/// kept between its jobs; what may happen to the others is set by the
+	/// three `--build-cache-…` options after this.
 	#[arg(long, env = "LEPTOSKIT_CLOUD_WORKER_BUILD_CACHE_DIR")]
 	pub build_cache_dir: Option<PathBuf>,
+	/// The most of the build cache one project may keep, in MiB. An export
+	/// larger than it is removed once its build has succeeded: the build's
+	/// result doesn't change, and its next build is only slower. Without it
+	/// one build with a large layer fills the volume every organisation's
+	/// builds share.
+	#[arg(
+		long,
+		env = "LEPTOSKIT_CLOUD_WORKER_BUILD_CACHE_MAX_MIB",
+		default_value_t = crate::builder::DEFAULT_CACHE_MAX_MIB
+	)]
+	pub build_cache_max_mib: u64,
+	/// How long another project's cache may go unused before a build removes
+	/// it, in days. Without it every project a worker ever built keeps its
+	/// cache for good.
+	#[arg(
+		long,
+		env = "LEPTOSKIT_CLOUD_WORKER_BUILD_CACHE_IDLE_DAYS",
+		default_value_t = crate::command::DEFAULT_CACHE_IDLE_DAYS
+	)]
+	pub build_cache_idle_days: u64,
+	/// The most of the cache directory's volume that may be taken when a
+	/// build starts, in percent: the least recently used caches of other
+	/// projects are removed until less is, so that one organisation's caches
+	/// never decide whether another's build has room.
+	#[arg(
+		long,
+		env = "LEPTOSKIT_CLOUD_WORKER_BUILD_CACHE_MAX_USED_PERCENT",
+		default_value_t = crate::command::DEFAULT_CACHE_MAX_USED_PERCENT
+	)]
+	pub build_cache_max_used_percent: u64,
 	/// Optional sandbox wrapper command prefix (repeatable, e.g.
 	/// `--build-sandbox bwrap --build-sandbox --unshare-pid`).
 	#[arg(long = "build-sandbox")]
@@ -480,6 +512,12 @@ fn validate_run_args(arguments: &Run) -> Result<(), CommandError> {
 		));
 	}
 
+	if arguments.build_cache_max_used_percent > 100 {
+		return Err(CommandError::Usage(
+			"--build-cache-max-used-percent must be at most 100".to_owned(),
+		));
+	}
+
 	if arguments.postgres_url.is_some()
 		&& !(1..=1000).contains(&arguments.postgres_connection_limit)
 	{
@@ -538,7 +576,10 @@ async fn run(arguments: Run, shutdown: watch::Receiver<bool>) -> Result<(), Comm
 				.sandbox(arguments.build_sandbox)
 				.timeout(Duration::from_secs(
 					arguments.build_timeout_minutes.saturating_mul(60),
-				));
+				))
+				.cache_idle(crate::command::days(arguments.build_cache_idle_days))
+				.cache_max_used(arguments.build_cache_max_used_percent)
+				.cache_max_mib(arguments.build_cache_max_mib);
 			if let Some(cache_dir) = arguments.build_cache_dir {
 				builder = builder.cache_dir(cache_dir);
 			}
@@ -782,5 +823,47 @@ mod tests {
 		assert!(builtin.contains(&"CUSTOM_VAR".to_owned()));
 		assert!(builtin.contains(&"LEPTOSKIT_CLOUD_BUILDER_BACKEND".to_owned()));
 		assert!(builtin.contains(&"BUILDKIT_HOST".to_owned()));
+	}
+
+	#[test]
+	fn the_build_cache_is_bounded_by_default_and_a_share_is_at_most_the_whole_volume() {
+		let Command::Run(arguments) =
+			Command::parse_from(["leptoskit-cloud-worker", "run", "--state", "/tmp/state"])
+		else {
+			panic!("expected Run");
+		};
+
+		assert_eq!(
+			arguments.build_cache_max_mib,
+			crate::builder::DEFAULT_CACHE_MAX_MIB
+		);
+		assert_eq!(
+			arguments.build_cache_idle_days,
+			crate::command::DEFAULT_CACHE_IDLE_DAYS
+		);
+		assert_eq!(
+			arguments.build_cache_max_used_percent,
+			crate::command::DEFAULT_CACHE_MAX_USED_PERCENT
+		);
+		assert!(validate_run_args(&arguments).is_ok());
+
+		let Command::Run(arguments) = Command::parse_from([
+			"leptoskit-cloud-worker",
+			"run",
+			"--state",
+			"/tmp/state",
+			"--build-cache-max-used-percent",
+			"101",
+		]) else {
+			panic!("expected Run");
+		};
+
+		let refused = validate_run_args(&arguments).expect_err("more than the whole volume");
+		assert!(
+			refused
+				.to_string()
+				.contains("--build-cache-max-used-percent"),
+			"{refused}"
+		);
 	}
 }

@@ -187,7 +187,7 @@ fn summary(outcome: &JobOutcome) -> String {
 
 /// Tells the operator `text`, which may hold a build's words: no control
 /// character reaches their terminal or journal.
-fn note(text: &str) {
+pub(crate) fn note(text: &str) {
 	let text: String = text
 		.chars()
 		.map(|c| if c.is_control() { ' ' } else { c })
@@ -197,7 +197,7 @@ fn note(text: &str) {
 
 /// Deletes `path` and everything in it, even what a build made
 /// unreadable to its own user. Links are removed, never followed.
-fn remove_all(path: &Path) -> std::io::Result<()> {
+pub(crate) fn remove_all(path: &Path) -> std::io::Result<()> {
 	use std::os::unix::fs::PermissionsExt as _;
 
 	if std::fs::remove_dir_all(path).is_ok() {
@@ -222,6 +222,25 @@ fn remove_all(path: &Path) -> std::io::Result<()> {
 
 	open_up(path);
 	std::fs::remove_dir_all(path)
+}
+
+/// How many bytes the files under `path` hold, or `None` when some of it
+/// can't be read: a size that can't be known is never taken to be small.
+/// Links are counted, not followed.
+pub(crate) fn bytes_under(path: &Path) -> Option<u64> {
+	let metadata = std::fs::symlink_metadata(path).ok()?;
+
+	if !metadata.is_dir() {
+		return Some(metadata.len());
+	}
+
+	let mut bytes = 0;
+
+	for entry in std::fs::read_dir(path).ok()? {
+		bytes += bytes_under(&entry.ok()?.path())?;
+	}
+
+	Some(bytes)
 }
 
 /// Deletes what builds left in `workspace`: a worker that was killed, or
