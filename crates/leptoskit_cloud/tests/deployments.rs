@@ -592,6 +592,16 @@ async fn a_deleted_environment_takes_its_backups() {
 }
 
 #[tokio::test]
+async fn a_free_plan_stops_pushing_at_its_allowance() {
+	let db = leptoskit_db::testing::sqlite_migrated(leptoskit_cloud::MIGRATIONS).await;
+	let app = support::app_with(db, |config| {
+		config.catalogue = Some(notifications::catalogue());
+	})
+	.await;
+	notifications::a_free_plan_stops_pushing_at_its_allowance(&app).await;
+}
+
+#[tokio::test]
 async fn usage_is_counted_priced_and_capped() {
 	let db = leptoskit_db::testing::sqlite_migrated(leptoskit_cloud::MIGRATIONS).await;
 	let app = support::app_with(db, |config| config.catalogue = Some(billing::catalogue())).await;

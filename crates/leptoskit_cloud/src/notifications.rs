@@ -188,6 +188,11 @@ pub struct NotificationsSummary {
 	/// Pushes the providers accepted this calendar month (UTC) for the
 	/// whole project: usage is counted per project.
 	pub project_pushes_this_month: u64,
+	/// Its pushes are stopped until next month, or until the organisation
+	/// is on a paid plan: the plan costs nothing and its push allowance is
+	/// used. The inbox works as before.
+	#[serde(default)]
+	pub pushes_paused: bool,
 	/// Its token and its database's password are being replaced, because a
 	/// worker that was given them was revoked: the next deployment
 	/// finishes it.
@@ -297,6 +302,12 @@ pub struct TenantChanges {
 	pub removed: Vec<Uuid>,
 	/// More changed tenants are waiting: ask again.
 	pub more: bool,
+	/// The tenants among those served on the cluster whose pushes are
+	/// stopped now, because their organisation's plan costs nothing and its
+	/// push allowance for the month is used. Every answer lists all of
+	/// them; the hub stops their pushes and starts the others'.
+	#[serde(default)]
+	pub paused: Vec<Uuid>,
 }
 
 /// What changed among the tenants of the calling hub's cluster, given what

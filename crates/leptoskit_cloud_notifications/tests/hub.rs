@@ -95,6 +95,7 @@ impl Plane for Scripted {
 				changed: Vec::new(),
 				removed: Vec::new(),
 				more: false,
+				paused: Vec::new(),
 			});
 		Box::pin(async move { Ok(answer) })
 	}
@@ -274,6 +275,7 @@ async fn a_hub_serves_each_tenant_apart_and_counts_its_pushes_once() {
 		],
 		removed: Vec::new(),
 		more: true,
+		paused: Vec::new(),
 	});
 	plane.answer(TenantChanges {
 		changed: vec![tenant(
@@ -284,6 +286,7 @@ async fn a_hub_serves_each_tenant_apart_and_counts_its_pushes_once() {
 		)],
 		removed: Vec::new(),
 		more: false,
+		paused: Vec::new(),
 	});
 	let now = leptoskit_db::now();
 	let round = hub.round(&plane, now).await;
@@ -410,6 +413,7 @@ async fn a_hub_serves_each_tenant_apart_and_counts_its_pushes_once() {
 		changed: vec![tenant(A, 2, "a2.apps.example.test", &[])],
 		removed: Vec::new(),
 		more: false,
+		paused: Vec::new(),
 	});
 	let round = hub.round(&plane, later).await;
 	assert_eq!(round.opened, vec![A]);
@@ -435,6 +439,7 @@ async fn a_hub_serves_each_tenant_apart_and_counts_its_pushes_once() {
 		changed: vec![b],
 		removed: Vec::new(),
 		more: false,
+		paused: Vec::new(),
 	});
 	hub.round(&plane, later).await;
 	assert_eq!(
@@ -447,6 +452,7 @@ async fn a_hub_serves_each_tenant_apart_and_counts_its_pushes_once() {
 		changed: vec![tenant(B, 6, "b.apps.example.test", &[])],
 		removed: Vec::new(),
 		more: false,
+		paused: Vec::new(),
 	});
 	hub.round(&plane, later).await;
 	assert_eq!(
@@ -474,6 +480,7 @@ async fn a_hub_serves_each_tenant_apart_and_counts_its_pushes_once() {
 		)],
 		removed: Vec::new(),
 		more: false,
+		paused: Vec::new(),
 	});
 	let round = hub.round(&plane, later).await;
 	assert_eq!(round.failed.len(), 1, "{round:?}");
@@ -489,6 +496,7 @@ async fn a_hub_serves_each_tenant_apart_and_counts_its_pushes_once() {
 		changed: Vec::new(),
 		removed: vec![A],
 		more: false,
+		paused: Vec::new(),
 	});
 	let round = hub.round(&plane, later).await;
 	assert_eq!(round.removed, vec![A]);
@@ -537,6 +545,7 @@ async fn a_tenant_being_given_new_values_takes_the_old_and_the_new() {
 		changed: vec![rotating(2)],
 		removed: Vec::new(),
 		more: false,
+		paused: Vec::new(),
 	});
 	let round = hub.round(&plane, leptoskit_db::now()).await;
 	assert_eq!(round.opened, vec![A], "{round:?}");
@@ -552,6 +561,7 @@ async fn a_tenant_being_given_new_values_takes_the_old_and_the_new() {
 		changed: vec![rotating(3)],
 		removed: Vec::new(),
 		more: false,
+		paused: Vec::new(),
 	});
 	let round = hub.round(&plane, leptoskit_db::now()).await;
 	assert_eq!(round.opened, vec![A], "{round:?}");
@@ -570,11 +580,82 @@ async fn a_tenant_being_given_new_values_takes_the_old_and_the_new() {
 		changed: vec![moved],
 		removed: Vec::new(),
 		more: false,
+		paused: Vec::new(),
 	});
 	let round = hub.round(&plane, leptoskit_db::now()).await;
 	assert_eq!(round.opened, vec![A], "{round:?}");
 	assert_eq!(status(&by_path, None, "next-token").await.0, 404);
 	assert_eq!(status(&by_path, None, &token(A)).await.0, 403);
+}
+
+/// A tenant the control plane names as paused stops pushing, at once and
+/// without being opened again, and the others push; every answer names
+/// every paused tenant, so one it no longer names pushes again.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_paused_tenant_stops_pushing_until_it_is_named_no_more() {
+	let plane = Scripted::default();
+	let memory = Arc::new(Memory::default());
+	let hub = Hub::new(Arc::clone(&memory) as Arc<dyn Open>);
+	let base = serve(&hub).await;
+	let test_send = |tenant: Uuid| {
+		let url = format!("{base}/t/{}{PREFIX}/rpc/send_test", tenant.simple());
+		async move {
+			let response = reqwest::Client::new()
+				.post(url)
+				.bearer_auth(token(tenant))
+				.json(&json!({
+					"spec": { "category": "news", "title": "It ships", "body": "Push is here." },
+					"person": Uuid::from_u128(7),
+				}))
+				.send()
+				.await
+				.expect("answers");
+			(
+				response.status().as_u16(),
+				response.text().await.expect("a body"),
+			)
+		}
+	};
+
+	// Opened paused.
+	plane.answer(TenantChanges {
+		changed: vec![
+			tenant(A, 1, "a.apps.example.test", &[]),
+			tenant(B, 1, "b.apps.example.test", &[]),
+		],
+		removed: Vec::new(),
+		more: false,
+		paused: vec![A],
+	});
+	let round = hub.round(&plane, leptoskit_db::now()).await;
+	assert_eq!(round.opened, vec![A, B]);
+	assert_eq!(round.paused, vec![A]);
+	let (status, body) = test_send(A).await;
+	assert_eq!(status, 400, "{body}");
+	assert!(body.contains("paused"), "{body}");
+	let (_, body) = test_send(B).await;
+	assert!(!body.contains("paused"), "{body}");
+
+	// Named no more, it pushes again, without being opened again.
+	let opens = memory.1.load(Ordering::Relaxed);
+	let round = hub.round(&plane, leptoskit_db::now()).await;
+	assert_eq!(round.opened, Vec::<Uuid>::new());
+	assert_eq!(round.paused, Vec::<Uuid>::new());
+	assert!(!test_send(A).await.1.contains("paused"));
+
+	// Paused while served.
+	plane.answer(TenantChanges {
+		changed: Vec::new(),
+		removed: Vec::new(),
+		more: false,
+		paused: vec![B],
+	});
+	let round = hub.round(&plane, leptoskit_db::now()).await;
+	assert_eq!(round.opened, Vec::<Uuid>::new());
+	assert_eq!(round.paused, vec![B]);
+	assert!(test_send(B).await.1.contains("paused"));
+	assert!(!test_send(A).await.1.contains("paused"));
+	assert_eq!(memory.1.load(Ordering::Relaxed), opens);
 }
 
 /// On a real Postgres server, a tenant's database as the cluster's worker
@@ -621,6 +702,7 @@ async fn a_tenant_is_served_from_the_database_the_cluster_worker_made() {
 		changed: vec![config],
 		removed: Vec::new(),
 		more: false,
+		paused: Vec::new(),
 	});
 	let hub = Hub::new(Arc::new(leptoskit_cloud_notifications::Connect {
 		connections: 2,
@@ -695,6 +777,7 @@ async fn a_tenant_is_served_from_the_database_the_cluster_worker_made() {
 		changed: vec![config],
 		removed: Vec::new(),
 		more: false,
+		paused: Vec::new(),
 	});
 	let round = hub.round(&plane, now).await;
 	assert_eq!(round.failed, Vec::new());

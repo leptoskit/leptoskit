@@ -105,7 +105,7 @@ A forged `Host` or a forged path reaches another tenant's router and nothing mor
 
 ## 8. Decisions for the owner
 
-- **Price.** A push accepted by a provider is the unit. The proposal is 10,000 a month included on every plan, then $0.10 per 1,000 on paid plans; Hobby stops sending pushes at its allowance and keeps the inbox working. Prices are catalogue data, so this changes no code.
+- **Price.** Decided by the owner on 26 November 2026: a push accepted by a provider is the unit, 10,000 a month are included on every plan, and paid plans pay $0.10 per 1,000 beyond that. Hobby stops sending pushes at its allowance and keeps the inbox working. The prices are catalogue data; stopping Hobby is code, described in "Pricing as built" below.
 
 ## 9. As built
 
@@ -237,3 +237,43 @@ Not yet:
 - The hub's egress isn't limited: it must reach the control plane and every push provider on the internet.
 
 **Review.** An independent security review found one medium and four low findings, fixed or documented as above: the namespace was first a platform namespace, which every other admitted on every port; it enforced `baseline`; a code for another role kept its key; the tenant-pool fallback; and the image not rebuilding for `leptoskit_rpc`. Recorded in [cloud.md](cloud.md).
+
+### Pricing as built
+
+**The catalogue.** The price is the operator's, in the catalogue at `LEPTOSKIT_CLOUD_PRICE_CATALOGUE`. For the owner's decision, every plan lists the allowance and the meter has a price in minor units (here US cents):
+
+```json
+{
+	"plans": [
+		{
+			"id": "hobby",
+			"monthly": 0,
+			"allowances": { "notification_pushes": 10000 }
+		},
+		{
+			"id": "pro",
+			"monthly": 2000,
+			"allowances": { "notification_pushes": 10000 }
+		}
+	],
+	"meters": { "notification_pushes": { "minor": 10, "per": 1000 } }
+}
+```
+
+Each plan keeps its other fields and allowances; only these entries are new. Allowances are counted per organisation, over all its projects, for the calendar month (UTC), as every meter is.
+
+**Stopping a free plan.** `billing::pushes_stopped` names the organisations, among those asked about, whose plan costs nothing, lists a `notification_pushes` allowance, and has `notification_pushes` usage this month at or above it. It reads the usage rows first and loads only the organisations at or above the smallest such allowance any free plan lists, so it costs one query when nobody is near. An unpriced organisation, a paid plan, and a free plan that lists no allowance are never stopped.
+
+`notification_tenants` answers `paused`: every served tenant of the cluster whose organisation is stopped, in every answer, so a tenant the answer doesn't name pushes again. The hub keeps one `service::push::Paused` switch per tenant, shared by its routes and its job workers, sets it before a tenant's workers start, and sets every tenant's after each answer, so stopping and starting need no reopening and nothing else of the tenant stops. `Round.paused` says which are stopped. A paused service skips each push round's deliveries with the reason `paused` (`DeliveryReason::Paused`) and refuses `send_test` with a `400`; the notification, the inbox, live updates and every other operation are untouched. Pushes start again at the next month's first answer, or within a minute of the organisation moving to a paid plan.
+
+**Billing.** On a free plan that lists the allowance, `bill` counts no more pushes than it, so the pushes a hub sends before its next answer (at most a minute's) are never charged and never reach the free plan's cap of zero, which would stop deploys. The usage rows still hold every push. A free plan that lists no allowance is billed as before, so a catalogue without the entries above behaves as it did.
+
+**Seen.** `lk cloud notifications` says `Pushes are paused` when the summary's `pushes_paused` is set; `pushes_paused` is `false` from an older control plane, and `paused` empty, through `#[serde(default)]`.
+
+**Tests.** `a_free_plan_stops_pushing_at_its_allowance` (SQLite and Postgres) runs a catalogue with a Hobby allowance of 10: under it nothing is paused, at it every answer names the tenant and the summary says so, 500 more pushes leave the bill at nothing and deploys going, and the `pro` plan starts it again and bills 500 past its allowance. The hub's `a_paused_tenant_stops_pushing_until_it_is_named_no_more` opens a tenant paused, starts it, and pauses a served one, with no reopening. The service's `a_paused_service_skips_its_pushes_and_keeps_its_inbox` sends while paused (every delivery skipped as `paused`, no provider asked, the inbox row there, `send_test` refused) and again once started.
+
+Not yet:
+
+- `send_test` writes no ledger row, as before, so its pushes aren't counted; while a tenant isn't paused it is an uncounted way to push to one person's devices.
+- Pushes aren't stopped on a paid plan at its spend cap: the cap stops deploys only, as for every meter.
+- Nothing tells the organisation by email when its pushes stop.

@@ -64,7 +64,10 @@ async fn start(db: Db, open: &str) -> Service {
 		db.clone(),
 		Some(ORIGIN),
 		callers,
-		leptoskit_notifications::service::push::Push { runtime: None },
+		leptoskit_notifications::service::push::Push {
+			paused: leptoskit_notifications::service::push::Paused::default(),
+			runtime: None,
+		},
 		open_topics,
 	);
 	live.start().await.expect("live starts");

@@ -78,6 +78,7 @@ async fn run(env: ServiceEnv) -> Result<Router, Error> {
 		})
 		.map_err(|error| -> Box<dyn std::error::Error + Send + Sync> { error.into() })?;
 	let push = service::push::Push {
+		paused: service::push::Paused::default(),
 		runtime: push.map(std::sync::Arc::new),
 	};
 

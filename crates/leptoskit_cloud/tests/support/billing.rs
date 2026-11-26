@@ -160,7 +160,7 @@ pub async fn usage(shop: &Shop<'_>) -> Value {
 		.json()
 }
 
-async fn put_on(shop: &Shop<'_>, plan: &str) {
+pub async fn put_on(shop: &Shop<'_>, plan: &str) {
 	let slug = shop.org.clone();
 	Organization::update()
 		.filter(|organization| organization.slug.eq(slug.as_str()))

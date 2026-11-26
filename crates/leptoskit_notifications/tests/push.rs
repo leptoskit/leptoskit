@@ -268,6 +268,7 @@ async fn start(db: Db, config: &config::PushConfig, mock: &Arc<Mock>) -> Service
 /// [`start`], over an already-built (or absent) runtime.
 async fn start_push(db: Db, runtime: Option<PushRuntime>) -> Service {
 	let push = push::Push {
+		paused: push::Paused::default(),
 		runtime: runtime.map(Arc::new),
 	};
 
@@ -1674,6 +1675,67 @@ async fn a_send_fans_out_one_delivery_per_endpoint() {
 			"{id} is one of the send's notifications"
 		);
 	}
+}
+
+/// Whoever runs the service can stop its pushes, as a hosting plan does
+/// when its allowance is used: a send's deliveries skip as `paused` with
+/// nothing on the wire, a test send is refused, and enrollment and the
+/// inbox go on. Turned off, the next send pushes as before.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_paused_service_skips_its_pushes_and_keeps_its_inbox() {
+	let mock = Mock::new();
+	let mut service = service(&mock, &all_transports()).await;
+	let (status, body) = enroll(&service, ALICE, apns_credential(&device_token(1))).await;
+	assert_eq!(status, 200, "{body}");
+
+	service.push.paused.set(true);
+	service.resume();
+
+	// Enrolling another device still works while paused.
+	let (status, body) = enroll(&service, ALICE, apns_credential(&device_token(2))).await;
+	assert_eq!(status, 200, "{body}");
+
+	let (status, body) = send(&service, "held", spec(), &[ALICE]).await;
+	assert_eq!(status, 200, "{body}");
+	let outcomes = settled(&service, "held").await;
+	assert_eq!(outcomes.len(), 2, "{outcomes:?}");
+	assert!(
+		outcomes
+			.iter()
+			.all(|(state, reason)| state == "skipped" && reason.as_deref() == Some("paused")),
+		"{outcomes:?}"
+	);
+	assert!(mock.requests_to(APNS_HOST).is_empty(), "nothing was pushed");
+
+	// The inbox has the notification all the same.
+	let stored = rows(
+		&service,
+		"SELECT count(*) FROM notifications WHERE send_key = 'held'",
+	)
+	.await;
+	assert_eq!(text(&stored[0][0]), "1");
+
+	let (status, body) = post(
+		&service,
+		"send_test",
+		json!({ "spec": spec(), "person": ALICE }),
+		Some(TOKEN),
+	)
+	.await;
+	assert_eq!(status, 400, "{body}");
+	assert!(body.contains("paused"), "{body}");
+
+	service.push.paused.set(false);
+	let (status, body) = send(&service, "resumed", spec(), &[ALICE]).await;
+	assert_eq!(status, 200, "{body}");
+	let outcomes = settled(&service, "resumed").await;
+	assert!(
+		outcomes
+			.iter()
+			.all(|(state, reason)| state == "accepted" && reason.is_none()),
+		"{outcomes:?}"
+	);
+	assert_eq!(mock.requests_to(APNS_HOST).len(), 2);
 }
 
 /// Every accepted push is written to the acceptance ledger with its

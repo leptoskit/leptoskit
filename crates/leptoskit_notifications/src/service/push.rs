@@ -71,6 +71,30 @@ pub struct Push {
 	/// enrollment refuses every platform, and queued deliveries skip as
 	/// unconfigured.
 	pub runtime: Option<Arc<PushRuntime>>,
+	/// Whether whoever runs the service has stopped its pushes, such as a
+	/// hosting plan whose allowance is used. Shared by every clone, so it
+	/// can be turned on and off without building the routes again.
+	pub paused: Paused,
+}
+
+/// A switch that stops a service instance's pushes while it is on. Queued
+/// deliveries skip as [`DeliveryReason::Paused`] and test sends are
+/// refused; enrollment, the inbox and everything else go on. Clones share
+/// one switch.
+#[derive(Clone, Debug, Default)]
+pub struct Paused(Arc<std::sync::atomic::AtomicBool>);
+
+impl Paused {
+	/// Turns the switch on or off.
+	pub fn set(&self, paused: bool) {
+		self.0.store(paused, std::sync::atomic::Ordering::Relaxed);
+	}
+
+	/// Whether pushes are stopped now.
+	#[must_use]
+	pub fn get(&self) -> bool {
+		self.0.load(std::sync::atomic::Ordering::Relaxed)
+	}
 }
 
 impl Push {
@@ -1034,6 +1058,13 @@ const FANOUT_POLL_SECS: i64 = 5;
 /// already written are skipped by their state on the retry.
 #[doc(hidden)]
 pub async fn round(cx: &rpc::JobCx, send_key: &str, round: u32, push: &Push) -> rpc::Result<()> {
+	// Pushes are stopped by whoever runs the service: every delivery of
+	// this send skips, and says why in the send's status.
+	if push.paused.get() {
+		skip_all(cx.db(), send_key, DeliveryReason::Paused).await?;
+		return Ok(());
+	}
+
 	let Some(runtime) = push.runtime.as_ref() else {
 		// Nothing is configured: every delivery of this send skips,
 		// loudly and visibly in the send's status.
@@ -1581,6 +1612,7 @@ pub(crate) fn state_of(reason: DeliveryReason) -> DeliveryState {
 		| DeliveryReason::EndpointRevoked
 		| DeliveryReason::EndpointUnavailable
 		| DeliveryReason::TransportUnavailable
+		| DeliveryReason::Paused
 		| DeliveryReason::SubscriptionUnusable
 		| DeliveryReason::PlatformUnsupported => DeliveryState::Skipped,
 		DeliveryReason::Oversized

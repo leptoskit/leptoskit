@@ -757,3 +757,117 @@ pub async fn revoking_a_worker_gives_its_tenants_new_values(app: &App) {
 	assert_ne!(next["token"], next_token.as_str());
 	assert_ne!(next["token"], Value::Null);
 }
+
+/// [`super::billing::catalogue`], with hosted pushes priced at ten minor
+/// units a thousand and ten of them included in Hobby, which costs nothing.
+pub fn catalogue() -> leptoskit_cloud::pricing::Catalogue {
+	leptoskit_cloud::server::catalogue_from_json(
+		r#"{
+			"currency": "usd",
+			"plans": [
+				{
+					"id": "hobby", "name": "Hobby", "monthly": 0,
+					"allowances": { "build_minutes_linux": 1000, "notification_pushes": 10 }
+				},
+				{
+					"id": "pro", "name": "Pro", "monthly": 2000, "included_usage": 20,
+					"allowances": { "notification_pushes": 10 },
+					"spend_cap": 50
+				}
+			],
+			"meters": {
+				"build_minutes_linux": { "minor": 10 },
+				"compute_seconds_xs": { "minor": 0 },
+				"notification_pushes": { "minor": 10, "per": 1000 }
+			}
+		}"#,
+	)
+	.expect("a catalogue")
+}
+
+/// On a plan that costs nothing, an organisation's pushes stop once they
+/// reach the plan's allowance: every answer names its tenants as paused
+/// until it is on a paid plan. What the hub sent before it heard is never
+/// charged, so it never reaches the free plan's cap. Run with [`catalogue`].
+#[expect(
+	clippy::cognitive_complexity,
+	reason = "a scenario is one story, read top to bottom; its asserts are what count"
+)]
+pub async fn a_free_plan_stops_pushing_at_its_allowance(app: &App) {
+	let shop = Shop::open(app).await;
+	with_hub(&shop, "eu-one").await;
+	ship(&shop, "production", b"first", with_notifications()).await;
+	let made = summary(&shop, "production").await;
+	let tenant = made["tenant"].as_str().expect("a tenant").to_owned();
+	assert_eq!(made["pushes_paused"], false);
+
+	let hub = hub(&shop, "eu-one").await;
+	let answer = ask(&hub, json!([])).await;
+	assert_eq!(answer["paused"], json!([]));
+	let version = answer["changed"][0]["version"].clone();
+	let known = json!([{ "tenant": tenant, "version": version }]);
+	let report = |after: Value, until: &str, pushes: u64| {
+		hub.call(
+			"report_notifications",
+			json!({
+				"usage": [{ "tenant": tenant, "after": after, "until": until, "pushes": pushes }],
+			}),
+		)
+	};
+
+	// Under the allowance, it pushes.
+	report(Value::Null, "c1", 9).await.expect(200);
+	assert_eq!(ask(&hub, known.clone()).await["paused"], json!([]));
+	assert_eq!(summary(&shop, "production").await["pushes_paused"], false);
+
+	// At it, every answer names the tenant, with nothing else changed.
+	report(json!("c1"), "c2", 1).await.expect(200);
+	let stopped = ask(&hub, known.clone()).await;
+	assert_eq!(stopped["paused"], json!([tenant]));
+	assert_eq!(stopped["changed"], json!([]));
+	assert_eq!(ask(&hub, known.clone()).await["paused"], json!([tenant]));
+	assert_eq!(summary(&shop, "production").await["pushes_paused"], true);
+
+	// What the hub sent before it heard is counted and never charged: the
+	// free plan's cap isn't reached, and deploys go on.
+	report(json!("c2"), "c3", 500).await.expect(200);
+	assert_eq!(
+		summary(&shop, "production").await["project_pushes_this_month"],
+		510
+	);
+	let cost = super::billing::usage(&shop).await["cost"].clone();
+	assert_eq!(
+		(&cost["usage"], &cost["cap_reached"], &cost["unpriced"]),
+		(&json!(0), &json!(false), &json!([])),
+		"{cost}"
+	);
+	assert_eq!(
+		pushes_line(&cost),
+		json!({ "meter": "notification_pushes", "quantity": 10, "allowance": 10, "billable": 0, "amount": 0 })
+	);
+	ship(&shop, "production", b"second", with_notifications()).await;
+
+	// A paid plan pays for pushes past its allowance, and starts them again.
+	super::billing::put_on(&shop, "pro").await;
+	let answer = ask(&hub, json!([])).await;
+	assert_eq!(answer["paused"], json!([]));
+	assert_eq!(summary(&shop, "production").await["pushes_paused"], false);
+	let cost = super::billing::usage(&shop).await["cost"].clone();
+	assert_eq!(
+		pushes_line(&cost),
+		json!({ "meter": "notification_pushes", "quantity": 510, "allowance": 10, "billable": 500, "amount": 5 })
+	);
+}
+
+/// The bill's line for hosted pushes.
+fn pushes_line(cost: &Value) -> Value {
+	cost["lines"]
+		.as_array()
+		.and_then(|lines| {
+			lines
+				.iter()
+				.find(|line| line["meter"] == "notification_pushes")
+		})
+		.cloned()
+		.unwrap_or_else(|| panic!("no line for pushes: {cost}"))
+}

@@ -161,6 +161,7 @@ async fn start(mock: &Arc<Mock>) -> Service {
 	};
 	let runtime = PushRuntime::build_over(&push_config, mock.clone()).expect("the runtime builds");
 	let push = push::Push {
+		paused: push::Paused::default(),
 		runtime: Some(Arc::new(runtime)),
 	};
 	let callers = ServiceCallers::new(Anonymous)

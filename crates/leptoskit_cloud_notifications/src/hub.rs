@@ -2,6 +2,7 @@
 //! one.
 
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
@@ -149,6 +150,9 @@ struct Served {
 	address: String,
 	/// What the control plane counts this tenant's pushes from.
 	cursor: Option<String>,
+	/// Stops the tenant's pushes while its plan's allowance is used: the
+	/// switch its routes and job workers share.
+	paused: service::push::Paused,
 }
 
 /// A tenant that stops being served, or is served anew, stops its jobs and
@@ -233,6 +237,8 @@ pub struct Round {
 	pub pushes: BTreeMap<Uuid, u64>,
 	/// Why asking or telling the control plane failed, when it did.
 	pub unreachable: Option<String>,
+	/// Tenants whose pushes are stopped after the round.
+	pub paused: Vec<Uuid>,
 }
 
 /// The tenants of one cluster, and their routes.
@@ -253,6 +259,23 @@ impl Hub {
 
 	fn tenants(&self) -> std::sync::MutexGuard<'_, Tenants> {
 		self.tenants.lock().unwrap_or_else(PoisonError::into_inner)
+	}
+
+	/// The tenants it serves whose pushes are stopped.
+	#[must_use]
+	pub fn paused(&self) -> Vec<Uuid> {
+		self.tenants()
+			.served
+			.iter()
+			.filter(|(_, served)| {
+				served
+					.lock()
+					.unwrap_or_else(PoisonError::into_inner)
+					.paused
+					.get()
+			})
+			.map(|(tenant, _)| *tenant)
+			.collect()
 	}
 
 	/// The tenants it serves, at their versions.
@@ -329,13 +352,24 @@ impl Hub {
 				round.removed.push(tenant);
 			}
 
+			let paused: BTreeSet<Uuid> = changes.paused.into_iter().collect();
+
 			for config in changes.changed {
 				let tenant = config.tenant;
 
-				match self.serve(config).await {
+				match self.serve(config, paused.contains(&tenant)).await {
 					Ok(()) => round.opened.push(tenant),
 					Err(reason) => round.failed.push((tenant, reason)),
 				}
+			}
+
+			// Every answer names every stopped tenant: the others push.
+			for (tenant, served) in &self.tenants().served {
+				served
+					.lock()
+					.unwrap_or_else(PoisonError::into_inner)
+					.paused
+					.set(paused.contains(tenant));
 			}
 
 			if !changes.more {
@@ -344,13 +378,14 @@ impl Hub {
 		}
 
 		self.report(plane, now, &mut round).await;
+		round.paused = self.paused();
 		round
 	}
 
 	/// Opens `config`'s tenant, and serves it in place of what it served
 	/// for that tenant before; or, when it can't, stops serving it and
 	/// remembers why.
-	async fn serve(&self, config: TenantConfig) -> Result<(), String> {
+	async fn serve(&self, config: TenantConfig, paused: bool) -> Result<(), String> {
 		let tenant = config.tenant;
 		let version = config.version;
 		let secrets = secrets_of(&config);
@@ -363,7 +398,7 @@ impl Hub {
 			(config.secrets.next.is_none() && served.address == config.secrets.database_url)
 				.then(|| (served.address.clone(), served.db.clone()))
 		});
-		let opening = open(self.open.as_ref(), config, reuse);
+		let opening = open(self.open.as_ref(), config, reuse, paused);
 		let opened = match tokio::time::timeout(OPEN_WITHIN, opening).await {
 			Ok(opened) => opened,
 			Err(_) => {
@@ -718,6 +753,7 @@ async fn open(
 	open: &dyn Open,
 	config: TenantConfig,
 	reuse: Option<(String, Db)>,
+	paused: bool,
 ) -> Result<(Served, (Router, Vec<String>)), String> {
 	// Only the service's own settings: anything else the hub is given is
 	// the operator's to say, not a tenant's.
@@ -736,7 +772,12 @@ async fn open(
 	} else {
 		Some(Arc::new(service::transport::PushRuntime::build(&push)?))
 	};
-	let push = service::push::Push { runtime };
+	// Set before its job workers start, so a stopped tenant sends nothing.
+	let push = service::push::Push {
+		paused: service::push::Paused::default(),
+		runtime,
+	};
+	push.paused.set(paused);
 
 	let (address, db) = if let Some(reused) = reuse {
 		reused
@@ -784,6 +825,7 @@ async fn open(
 	live.start()
 		.await
 		.map_err(|error| format!("its live queries couldn't start: {error}"))?;
+	let push_paused = push.paused.clone();
 	let jobs = service::workers_with_settings(db.clone(), push, retention).start();
 
 	let hostnames = config
@@ -800,6 +842,7 @@ async fn open(
 			db,
 			address,
 			cursor: config.usage_cursor,
+			paused: push_paused,
 		},
 		(router, hostnames),
 	))

@@ -111,6 +111,7 @@ async fn serve_over(db: &Db, fcm: Option<config::FcmConfig>) -> std::net::Socket
 		Some(ORIGIN),
 		callers,
 		push::Push {
+			paused: push::Paused::default(),
 			runtime: Some(std::sync::Arc::new(
 				PushRuntime::build_over(&config, std::sync::Arc::new(DeadBoundary))
 					.expect("the runtime builds"),

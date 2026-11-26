@@ -127,6 +127,7 @@ pub async fn serve(db: &Db, workers: bool) -> Service {
 		web: None,
 	};
 	let push = push::Push {
+		paused: push::Paused::default(),
 		runtime: Some(Arc::new(
 			PushRuntime::build_over(&config, Arc::new(Provider)).expect("the runtime builds"),
 		)),
@@ -2750,9 +2751,16 @@ fn instant(value: &Value, name: &str) -> chrono::DateTime<chrono::Utc> {
 /// Makes whatever is due as of `now`, the way the service's job does
 /// when the clock says `now`.
 async fn due(service: &Service, now: chrono::DateTime<chrono::Utc>) -> recurrence::Ran {
-	recurrence::run(&service.db, Some(&push::Push { runtime: None }), now)
-		.await
-		.expect("the run makes what is due")
+	recurrence::run(
+		&service.db,
+		Some(&push::Push {
+			paused: push::Paused::default(),
+			runtime: None,
+		}),
+		now,
+	)
+	.await
+	.expect("the run makes what is due")
 }
 
 /// The key of the send recurrence `id` makes for the occurrence at `at`.
@@ -2879,10 +2887,13 @@ pub async fn racing_runs_make_one_send_per_occurrence(service: &Service) {
 	let id = id_of(&saved).to_owned();
 	let first = instant(&saved, "next_at");
 
-	let runs = futures::future::join_all(
-		(0..8).map(|_| recurrence::run(&service.db, Some(&push::Push { runtime: None }), first)),
-	)
-	.await;
+	let push = push::Push {
+		paused: push::Paused::default(),
+		runtime: None,
+	};
+	let runs =
+		futures::future::join_all((0..8).map(|_| recurrence::run(&service.db, Some(&push), first)))
+			.await;
 	let made: u32 = runs
 		.iter()
 		.map(|ran| ran.as_ref().expect("every run ends well").sent)

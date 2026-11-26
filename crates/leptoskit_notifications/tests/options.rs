@@ -93,6 +93,7 @@ async fn service() -> Service {
 	};
 	let runtime = PushRuntime::build_over(&config, Arc::new(Provider)).expect("the runtime builds");
 	let push = push::Push {
+		paused: push::Paused::default(),
 		runtime: Some(Arc::new(runtime)),
 	};
 
@@ -814,7 +815,10 @@ async fn a_test_send_needs_transports_and_audience() {
 		db.clone(),
 		Some(ORIGIN),
 		callers,
-		push::Push { runtime: None },
+		push::Push {
+			paused: push::Paused::default(),
+			runtime: None,
+		},
 	);
 	live.start().await.expect("live starts");
 	let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -825,7 +829,10 @@ async fn a_test_send_needs_transports_and_audience() {
 	let bare = Service {
 		address,
 		db,
-		push: push::Push { runtime: None },
+		push: push::Push {
+			paused: push::Paused::default(),
+			runtime: None,
+		},
 		jobs: None,
 	};
 

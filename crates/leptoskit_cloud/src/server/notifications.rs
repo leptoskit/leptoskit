@@ -217,6 +217,13 @@ pub(crate) async fn summary(
 		.first(cx.db())
 		.await?
 		.map_or(0, |usage| u64::try_from(usage.quantity).unwrap_or(0));
+	let pushes_paused = super::billing::pushes_stopped(
+		cx.db(),
+		services(cx.context())?.shipping(),
+		&BTreeSet::from([organization_id]),
+	)
+	.await?
+	.contains(&organization_id);
 	Ok(Some(NotificationsSummary {
 		tenant: row.id.uuid(),
 		database: row.database.clone(),
@@ -225,6 +232,7 @@ pub(crate) async fn summary(
 		providers: providers(settings.iter().map(String::as_str)),
 		settings,
 		project_pushes_this_month: pushes,
+		pushes_paused,
 		rotating: row.next_version.is_some(),
 		created_at: row.created_at,
 	}))
@@ -965,6 +973,7 @@ async fn answer(cx: &rpc::MutationCx, known: Vec<KnownTenant>) -> rpc::Result<Te
 			changed: Vec::new(),
 			removed: held.into_keys().collect(),
 			more: false,
+			paused: Vec::new(),
 		});
 	};
 	let rows = NotificationTenant::query()
@@ -985,6 +994,20 @@ async fn answer(cx: &rpc::MutationCx, known: Vec<KnownTenant>) -> rpc::Result<Te
 		.collect();
 	let services = services(cx.context())?;
 	let vault = &services.shipping().vault;
+	let stopped = super::billing::pushes_stopped(
+		tx,
+		services.shipping(),
+		&rows
+			.iter()
+			.map(|row| row.organization_id)
+			.collect::<BTreeSet<_>>(),
+	)
+	.await?;
+	let paused: Vec<Uuid> = rows
+		.iter()
+		.filter(|row| stopped.contains(&row.organization_id))
+		.map(|row| row.id.uuid())
+		.collect();
 	let mut changed = Vec::new();
 	let mut more = false;
 	// Tenants whose values were opened this answer, given or not: one that
@@ -1047,6 +1070,7 @@ async fn answer(cx: &rpc::MutationCx, known: Vec<KnownTenant>) -> rpc::Result<Te
 		changed,
 		removed,
 		more,
+		paused,
 	})
 }
 

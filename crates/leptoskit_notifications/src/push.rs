@@ -987,6 +987,9 @@ pub enum DeliveryReason {
 	OptedOut,
 	/// No transport for this platform is configured on this server.
 	TransportUnavailable,
+	/// Whoever runs the service stopped its pushes when the delivery was
+	/// due, such as a hosting plan whose push allowance is used.
+	Paused,
 	/// The notification's content doesn't fit the provider's payload
 	/// limit, even in the minimal id-only envelope.
 	Oversized,
@@ -1028,6 +1031,7 @@ impl DeliveryReason {
 			Self::Cancelled => "cancelled",
 			Self::OptedOut => "opted_out",
 			Self::TransportUnavailable => "transport_unavailable",
+			Self::Paused => "paused",
 			Self::Oversized => "oversized",
 			Self::Unregistered => "unregistered",
 			Self::ProviderRejected => "provider_rejected",
@@ -1050,6 +1054,7 @@ impl DeliveryReason {
 			"cancelled" => Some(Self::Cancelled),
 			"opted_out" => Some(Self::OptedOut),
 			"transport_unavailable" => Some(Self::TransportUnavailable),
+			"paused" => Some(Self::Paused),
 			"oversized" => Some(Self::Oversized),
 			"unregistered" => Some(Self::Unregistered),
 			"provider_rejected" => Some(Self::ProviderRejected),
