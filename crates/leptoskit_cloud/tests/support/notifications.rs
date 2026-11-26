@@ -787,8 +787,9 @@ pub fn catalogue() -> leptoskit_cloud::pricing::Catalogue {
 
 /// On a plan that costs nothing, an organisation's pushes stop once they
 /// reach the plan's allowance: every answer names its tenants as paused
-/// until it is on a paid plan. What the hub sent before it heard is never
-/// charged, so it never reaches the free plan's cap. Run with [`catalogue`].
+/// until it is on a paid plan. What the hub sent before it heard is free up
+/// to the allowance again, so it doesn't reach the free plan's cap; past
+/// that it is priced and does. Run with [`catalogue`].
 #[expect(
 	clippy::cognitive_complexity,
 	reason = "a scenario is one story, read top to bottom; its asserts are what count"
@@ -828,12 +829,13 @@ pub async fn a_free_plan_stops_pushing_at_its_allowance(app: &App) {
 	assert_eq!(ask(&hub, known.clone()).await["paused"], json!([tenant]));
 	assert_eq!(summary(&shop, "production").await["pushes_paused"], true);
 
-	// What the hub sent before it heard is counted and never charged: the
-	// free plan's cap isn't reached, and deploys go on.
-	report(json!("c2"), "c3", 500).await.expect(200);
+	// What the hub sent before it heard is counted, and free up to the
+	// allowance again: the free plan's cap isn't reached, and deploys go
+	// on.
+	report(json!("c2"), "c3", 10).await.expect(200);
 	assert_eq!(
 		summary(&shop, "production").await["project_pushes_this_month"],
-		510
+		20
 	);
 	let cost = super::billing::usage(&shop).await["cost"].clone();
 	assert_eq!(
@@ -847,7 +849,18 @@ pub async fn a_free_plan_stops_pushing_at_its_allowance(app: &App) {
 	);
 	ship(&shop, "production", b"second", with_notifications()).await;
 
-	// A paid plan pays for pushes past its allowance, and starts them again.
+	// Past twice the allowance, as from a hub that doesn't stop, what is
+	// past it is priced, and the free plan's cap is reached.
+	report(json!("c3"), "c4", 500).await.expect(200);
+	let cost = super::billing::usage(&shop).await["cost"].clone();
+	assert_eq!(cost["cap_reached"], true, "{cost}");
+	assert_eq!(
+		pushes_line(&cost),
+		json!({ "meter": "notification_pushes", "quantity": 510, "allowance": 10, "billable": 500, "amount": 5 })
+	);
+
+	// A paid plan pays for every push past its allowance, and starts them
+	// again.
 	super::billing::put_on(&shop, "pro").await;
 	let answer = ask(&hub, json!([])).await;
 	assert_eq!(answer["paused"], json!([]));
@@ -855,7 +868,7 @@ pub async fn a_free_plan_stops_pushing_at_its_allowance(app: &App) {
 	let cost = super::billing::usage(&shop).await["cost"].clone();
 	assert_eq!(
 		pushes_line(&cost),
-		json!({ "meter": "notification_pushes", "quantity": 510, "allowance": 10, "billable": 500, "amount": 5 })
+		json!({ "meter": "notification_pushes", "quantity": 520, "allowance": 10, "billable": 510, "amount": 5 })
 	);
 }
 
