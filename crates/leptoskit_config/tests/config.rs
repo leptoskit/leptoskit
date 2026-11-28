@@ -1725,6 +1725,19 @@ fn theme_fonts_reject_what_no_platform_can_load() {
 		"{error}"
 	);
 
+	let error = load(
+		"theme_font_duplicate_normalized_name",
+		"[theme.fonts.hand]\nfaces = [{ file = \"Body.ttf\" }]\n\n[theme.fonts.--hand]\nfaces = \
+		 [{ file = \"Other.ttf\" }]\n",
+	)
+	.expect_err("duplicate normalized font name");
+	assert!(
+		error
+			.to_string()
+			.contains("is already declared under [theme.fonts]"),
+		"{error}"
+	);
+
 	let faces = (0..=leptoskit_config::ThemeConfig::MAX_FONT_FACES)
 		.map(|index| format!("{{ file = \"Body{index}.ttf\" }}"))
 		.collect::<Vec<_>>()

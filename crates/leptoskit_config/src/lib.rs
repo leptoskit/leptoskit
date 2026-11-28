@@ -274,12 +274,22 @@ impl ThemeConfig {
 			));
 		}
 
+		let mut seen_fonts = BTreeSet::new();
+
 		for (name, font) in &self.fonts {
 			if let Err(reason) = validate_theme_color_name(name) {
 				return Some(format!("fonts.{name}: {reason}"));
 			}
 
 			let bare = theme_name(name);
+
+			if !seen_fonts.insert(bare) {
+				return Some(format!(
+					"fonts.{name}: `--{bare}` is already declared under [theme.fonts]; declare \
+					 each font family once"
+				));
+			}
+
 			let shadowed = self
 				.colors
 				.keys()

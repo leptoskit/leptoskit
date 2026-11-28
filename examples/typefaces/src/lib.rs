@@ -67,7 +67,7 @@ pub fn Page() -> Element {
 #[cfg(all(target_arch = "wasm32", feature = "web"))]
 #[wasm_bindgen::prelude::wasm_bindgen(start)]
 pub fn start() {
-	leptos::mount::mount_to_body(|| leptoskit::web::render(Page()));
+	leptos::mount::mount_to_body(|| leptoskit::web::render(view! { <Page /> }));
 }
 
 /// Mounts the same page in the native Wasm runtime.

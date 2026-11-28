@@ -44,7 +44,7 @@ fn every_line_is_measured_in_the_face_its_classes_choose() {
 	let measurer: Arc<dyn TextMeasurer> = recorder.clone();
 	let mut surface = NativeSurface::new(HeadlessBackend::new().with_text_measurer(measurer));
 	surface.set_viewport(390.0, 844.0);
-	surface.set_root(&Page());
+	surface.set_root(&leptoskit::view! { <Page /> });
 
 	let styles = recorder.0.lock().unwrap().clone();
 	let faces = |text: &str| {

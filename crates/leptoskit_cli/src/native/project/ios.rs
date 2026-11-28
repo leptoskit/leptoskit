@@ -62,7 +62,7 @@ pub(super) fn generate(
 	// folder, a copy of the app's own.
 	let mut resources = String::new();
 
-	if registry.scene3d || root.join(super::super::ASSETS).is_dir() {
+	if registry.scene3d || root.join(&config.build.inputs.assets).is_dir() {
 		writeln!(
 			objects,
 			"{} = {{isa = PBXFileReference; lastKnownFileType = folder; name = assets; path = {}; \

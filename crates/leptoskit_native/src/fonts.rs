@@ -141,10 +141,11 @@ impl Fonts {
 			.filter(|(_, face)| !has_style || face.italic == italic)
 			.min_by_key(|(_, face)| weight_rank(weight, face.weight))?;
 		let index = u16::try_from(first + position).ok()?;
+		let (min, max) = ordered_weight(face.weight);
 
 		Some(Face {
 			index,
-			weight: weight.clamp(face.weight[0], face.weight[1]),
+			weight: weight.clamp(min, max),
 		})
 	}
 
@@ -159,9 +160,21 @@ impl Fonts {
 	}
 }
 
+/// Orders a face's `[min, max]` weight bounds so an inverted range in a
+/// hand-edited manifest never panics `u16::clamp` or underflows subtraction.
+const fn ordered_weight([first, second]: [u16; 2]) -> (u16, u16) {
+	if first <= second {
+		(first, second)
+	} else {
+		(second, first)
+	}
+}
+
 /// How far a face drawing `range` is from the `requested` weight, in the
 /// order CSS font matching prefers: lower is better.
-fn weight_rank(requested: u16, [min, max]: [u16; 2]) -> (u8, u16) {
+fn weight_rank(requested: u16, range: [u16; 2]) -> (u8, u16) {
+	let (min, max) = ordered_weight(range);
+
 	if (min..=max).contains(&requested) {
 		return (0, 0);
 	}
@@ -434,6 +447,38 @@ mod tests {
 		assert_eq!(
 			join(Path::new("bundle/assets"), "fonts/Body.ttf"),
 			Path::new("bundle/assets").join("fonts").join("Body.ttf")
+		);
+	}
+
+	#[test]
+	fn inverted_weight_ranges_never_panic() {
+		let fonts = Fonts {
+			families: vec![family(
+				"broken",
+				vec![face("broken.ttf", [900, 300], false)],
+			)],
+		};
+
+		assert_eq!(
+			fonts.select(0, 600, false),
+			Some(Face {
+				index: 0,
+				weight: 600
+			})
+		);
+		assert_eq!(
+			fonts.select(0, 100, false),
+			Some(Face {
+				index: 0,
+				weight: 300
+			})
+		);
+		assert_eq!(
+			fonts.select(0, 1000, false),
+			Some(Face {
+				index: 0,
+				weight: 900
+			})
 		);
 	}
 

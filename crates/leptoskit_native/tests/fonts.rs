@@ -4,6 +4,7 @@
 //!
 //! The manifest is process-wide, so every test here installs the same one.
 
+#[cfg(feature = "serde")]
 use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -12,6 +13,7 @@ use leptoskit_native::Element;
 use leptoskit_native::FontFamily;
 use leptoskit_native::FontWeight;
 use leptoskit_native::HeadlessBackend;
+#[cfg(feature = "serde")]
 use leptoskit_native::NativeKind;
 use leptoskit_native::NativeProps;
 use leptoskit_native::NativeSurface;
@@ -24,6 +26,7 @@ use leptoskit_native::fonts::DeclaredFamily;
 use leptoskit_native::fonts::Face;
 use leptoskit_native::fonts::FontFace;
 use leptoskit_native::fonts::Fonts;
+#[cfg(feature = "serde")]
 use leptoskit_native::wire::KINDS;
 use leptoskit_yoga::AvailableSpace;
 use leptoskit_yoga::Size;
@@ -275,6 +278,7 @@ fn changing_the_family_remeasures_the_text() {
 /// A new kind that measures text must join `TEXT_KINDS`, and every platform
 /// renderer must draw it with the face its style carries, which
 /// `leptoskit_bridge_ffi`'s `font_guard` test holds the renderers to.
+#[cfg(feature = "serde")]
 #[test]
 fn every_text_bearing_kind_measures_in_the_declared_face() {
 	const TEXT_KINDS: [NativeKind; 6] = [
