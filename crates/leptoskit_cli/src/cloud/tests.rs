@@ -631,7 +631,7 @@ fn environment_cases() -> Vec<(Vec<&'static str>, &'static str, Value, Value)> {
 			vec!["notifications"],
 			"notifications",
 			json!({"organization": "team", "project": "notes", "environment": "production"}),
-			json!({"tenant": id, "database": "ntf_00000000000000000000000000000001", "state": {"state": "serving"}, "reported_at": time, "providers": ["apns"], "settings": ["LEPTOSKIT_NOTIFICATIONS_APNS_KEY_P8"], "project_pushes_this_month": 12, "rotating": false, "created_at": time}),
+			json!({"tenant": id, "database": "ntf_00000000000000000000000000000001", "state": {"state": "serving"}, "reported_at": time, "providers": ["apns"], "settings": ["LEPTOSKIT_NOTIFICATIONS_APNS_KEY_P8"], "project_pushes_this_month": 12, "pushes_paused": false, "rotating": false, "created_at": time}),
 		),
 		(
 			vec!["publications", "list"],

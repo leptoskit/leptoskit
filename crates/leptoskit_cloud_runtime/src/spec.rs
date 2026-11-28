@@ -1272,7 +1272,7 @@ mod tests {
 			),
 			(
 				Box::new(move |service: &mut PlatformService| {
-					process.clone_into(&mut service.name)
+					process.clone_into(&mut service.name);
 				}),
 				SpecError::DuplicateProcess {
 					name: "app".to_owned(),
