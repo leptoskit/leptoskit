@@ -1,0 +1,14 @@
+---
+source: crates/leptoskit_cli/src/cloud/tests.rs
+expression: human(&output)
+---
+created_at: 2026-11-18T00:00:00Z
+database: ntf_00000000000000000000000000000001
+project_pushes_this_month: 12
+providers: apns
+pushes_paused: false
+reported_at: 2026-11-18T00:00:00Z
+rotating: false
+settings: LEPTOSKIT_NOTIFICATIONS_APNS_KEY_P8
+state: state: serving
+tenant: 00000000-0000-0000-0000-000000000001

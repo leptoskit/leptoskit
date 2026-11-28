@@ -930,12 +930,14 @@ pub(crate) async fn finish(
 	};
 
 	// A publish's report and reason held to their bounds, and the values
-	// leased to this attempt hidden, whatever the worker sent.
+	// leased to this attempt hidden, and a build's steps held to theirs,
+	// whatever the worker sent.
 	let outcome = match (outcome, &row.input.0) {
 		(JobOutcome::Publish(outcome), jobs::StoredInput::Publish { stores, .. }) => {
 			let leased = super::config::leased_values(tx, services, &row).await?;
 			hide_leased(JobOutcome::Publish(outcome.bounded(stores)), &leased)
 		}
+		(JobOutcome::BuildServer(outcome), _) => JobOutcome::BuildServer(outcome.bounded()),
 		(outcome, _) => outcome,
 	};
 

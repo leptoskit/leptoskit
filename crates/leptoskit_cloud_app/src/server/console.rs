@@ -103,23 +103,25 @@ pub fn routes(site: Option<PathBuf>) -> Router {
 /// person's data (their organisations, and on the billing page its usage and
 /// cap) in the query results it streams, so no shared cache may keep it.
 /// Fonts and the client build keep their own caching.
+///
+/// A page also carries what keeps it a page of this console's: no site may
+/// frame it, a browser reads it as HTML only, and it tells no other site its
+/// address.
 async fn private_pages(
 	mut response: leptoskit::server::axum::response::Response,
 ) -> leptoskit::server::axum::response::Response {
-	let html = response
-		.headers()
-		.get(header::CONTENT_TYPE)
-		.and_then(|value| value.to_str().ok())
-		.is_some_and(|value| value.starts_with("text/html"));
-
-	if html {
-		response.headers_mut().insert(
+	if super::pages::is_html(&response) {
+		let headers = response.headers_mut();
+		headers.insert(
 			header::CACHE_CONTROL,
 			HeaderValue::from_static("private, no-store"),
 		);
+		headers
+			.entry(header::REFERRER_POLICY)
+			.or_insert(HeaderValue::from_static("no-referrer"));
 	}
 
-	response
+	super::pages::refuse_framing(response).await
 }
 
 /// `path` with each `:name` segment written `{name}`, as axum 0.8 captures

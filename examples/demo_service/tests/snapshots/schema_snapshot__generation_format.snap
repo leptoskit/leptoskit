@@ -3,7 +3,7 @@ source: examples/demo_service/tests/schema_snapshot.rs
 expression: snapshot
 ---
 {
-  "admin_schema_json": "d17c237a94d6e7f917aed9f6a770e8059eea56e287a3f36792b9213ba4e2c1b9",
+  "admin_schema_json": "4e92e1f2cbb467d1d0c05c3bafcf3cfd8007b3a7fe3593bc2a34e41af307ceea",
   "admin_sqlite_master": {
     "names": [
       "admin_people_account_id_key",
@@ -105,6 +105,11 @@ expression: snapshot
       "log_usage_organization_id_key",
       "memberships_account_id_idx",
       "memberships_organization_id_account_id_key",
+      "notification_leases_environment_id_idx",
+      "notification_leases_tenant_id_idx",
+      "notification_tenants_cluster_id_idx",
+      "notification_tenants_database_key",
+      "notification_tenants_environment_id_key",
       "notifications_person_id_idx",
       "notifications_person_kind_dismissed_at_read_at_idx",
       "notifications_send_key_person_key",
@@ -116,6 +121,8 @@ expression: snapshot
       "person_attributes_person_key_key",
       "persons_created_at_idx",
       "projects_organization_id_slug_key",
+      "push_acceptances_accepted_at_idx",
+      "push_acceptances_delivery_key",
       "push_deliveries_endpoint_state_idx",
       "push_deliveries_notification_endpoint_key",
       "push_deliveries_send_key_id_idx",
@@ -216,6 +223,8 @@ expression: snapshot
       "log_chunks",
       "log_usage",
       "memberships",
+      "notification_leases",
+      "notification_tenants",
       "notifications",
       "operators",
       "organizations",
@@ -225,6 +234,7 @@ expression: snapshot
       "person_overrides",
       "persons",
       "projects",
+      "push_acceptances",
       "push_deliveries",
       "push_endpoints",
       "recurrences",
@@ -283,8 +293,8 @@ expression: snapshot
       "live_wakes_insert",
       "live_wakes_update"
     ],
-    "objects": 276,
-    "sql_sha256": "6958bee8277026223c4117811a09fa1ea327e2429eb38bb64ebf196b6d53cf7a"
+    "objects": 286,
+    "sql_sha256": "25227e9b62bc6f77daeb0bb2c8167b4a19c76f2b0fd4f8913c0ae35b9a05f32a"
   },
   "analytics_sqlite_master": {
     "names": [
@@ -365,7 +375,7 @@ expression: snapshot
     "objects": 11,
     "sql_sha256": "bbf053fc26946fc27ad5b928e6112e5c3ba51165d2d6fbd77854eb87823ff70f"
   },
-  "fingerprint": "b1e103ecfb0918cdc76e0f4a34ed56717ad0cd2225d8955fa85b4d76b3fd63a8",
+  "fingerprint": "e9f871922dd84071bdf072bd1a1e58060f69d0ca0bc34de4569b7dbaaff3ff36",
   "format": 3,
   "site_sqlite_master": {
     "names": [
@@ -468,6 +478,11 @@ expression: snapshot
       "log_usage_organization_id_key",
       "memberships_account_id_idx",
       "memberships_organization_id_account_id_key",
+      "notification_leases_environment_id_idx",
+      "notification_leases_tenant_id_idx",
+      "notification_tenants_cluster_id_idx",
+      "notification_tenants_database_key",
+      "notification_tenants_environment_id_key",
       "notifications_person_id_idx",
       "notifications_person_kind_dismissed_at_read_at_idx",
       "notifications_send_key_person_key",
@@ -479,6 +494,8 @@ expression: snapshot
       "person_attributes_person_key_key",
       "persons_created_at_idx",
       "projects_organization_id_slug_key",
+      "push_acceptances_accepted_at_idx",
+      "push_acceptances_delivery_key",
       "push_deliveries_endpoint_state_idx",
       "push_deliveries_notification_endpoint_key",
       "push_deliveries_send_key_id_idx",
@@ -579,6 +596,8 @@ expression: snapshot
       "log_chunks",
       "log_usage",
       "memberships",
+      "notification_leases",
+      "notification_tenants",
       "notifications",
       "operators",
       "organizations",
@@ -588,6 +607,7 @@ expression: snapshot
       "person_overrides",
       "persons",
       "projects",
+      "push_acceptances",
       "push_deliveries",
       "push_endpoints",
       "recurrences",
@@ -646,7 +666,7 @@ expression: snapshot
       "live_wakes_insert",
       "live_wakes_update"
     ],
-    "objects": 276,
-    "sql_sha256": "6958bee8277026223c4117811a09fa1ea327e2429eb38bb64ebf196b6d53cf7a"
+    "objects": 286,
+    "sql_sha256": "25227e9b62bc6f77daeb0bb2c8167b4a19c76f2b0fd4f8913c0ae35b9a05f32a"
   }
 }

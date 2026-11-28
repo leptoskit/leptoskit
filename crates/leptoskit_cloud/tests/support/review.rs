@@ -10,7 +10,9 @@ use leptoskit_cloud::tables::LogChunk;
 use leptoskit_cloud::tables::NewJob;
 use leptoskit_cloud::tables::Organization;
 use leptoskit_cloud::tables::SourceArchive;
+use leptoskit_cloud::workers::BuildOutcome;
 use leptoskit_cloud::workers::JobKind;
+use leptoskit_cloud::workers::JobOutcome;
 use leptoskit_db::Id;
 use leptoskit_db::Json;
 use serde_json::Value;
@@ -705,4 +707,133 @@ pub async fn a_removal_that_then_works_is_done(app: &App) {
 		.finish(&destroy, failed)
 		.await
 		.refused(409, "outcome_conflict");
+}
+
+/// The most steps a build's report keeps, and the longest a step's name is
+/// kept, in bytes: `workers::MAX_BUILD_STEPS` and
+/// `workers::MAX_BUILD_STEP_NAME`, written out so a change to either has to
+/// change what [`a_builds_steps_are_bounded`] expects.
+const BUILD_STEPS: usize = 200;
+const BUILD_STEP_NAME: usize = 500;
+
+/// The server's line of a deployment's sheet.
+fn server(sheet: &Value) -> &Value {
+	sheet["lines"]
+		.as_array()
+		.expect("lines")
+		.iter()
+		.find(|line| line["kind"]["kind"] == "server")
+		.expect("the server's line")
+}
+
+/// How many of a deployment's events are build steps.
+fn step_rows(events: &Value) -> usize {
+	events
+		.as_array()
+		.expect("events")
+		.iter()
+		.filter(|event| event["event"]["event"] == "step")
+		.count()
+}
+
+/// A build worker's report is held to its bounds whatever it sent. Every
+/// step is an event row of its own and goes on the sheet, and one report
+/// used to keep as many as its output file fits. Past the bound the last
+/// step kept says how many were left out, and a report within it is kept as
+/// sent.
+pub async fn a_builds_steps_are_bounded(app: &App) {
+	let shop = Shop::open(app).await;
+
+	// 40,000 steps: what a build's 1 MiB output file holds of the smallest
+	// one. Two have names past their own bound: one cut at exactly 500
+	// bytes, and one whose 500th byte falls inside a three-byte character.
+	let digest = shop.upload(b"a build with too much to say").await;
+	let number = shop
+		.deploy("production", &digest, json!({}))
+		.await
+		.expect(200)
+		.json()["number"]
+		.as_u64()
+		.expect("a number");
+	let build = shop.build.take().await;
+	let mut steps: Vec<Value> = (0..40_000)
+		.map(|_| json!({ "name": "a", "millis": 0 }))
+		.collect();
+	steps[0]["name"] = json!("x".repeat(600));
+	steps[1]["name"] = json!("日".repeat(300));
+	let report = json!({
+		"kind": "build_server",
+		"result": "failed",
+		"reason": "boom",
+		"steps": steps,
+	});
+	shop.build.finish(&build, report.clone()).await.expect(200);
+
+	// The bound's rows, where there used to be one per step.
+	let events = shop.on("deployment_events", "production", number).await;
+	let events = events.expect(200).json();
+	assert_eq!(step_rows(&events), BUILD_STEPS);
+
+	// The sheet keeps the first steps but one, with the long names cut, and
+	// a last step that says what was left out.
+	let sheet = shop.sheet("production", number).await;
+	let kept = server(&sheet)["steps"].as_array().expect("steps");
+	assert_eq!(kept.len(), BUILD_STEPS);
+	assert_eq!(kept[0]["name"], format!("{}…", "x".repeat(BUILD_STEP_NAME)));
+	assert_eq!(
+		kept[1]["name"],
+		format!("{}…", "日".repeat(BUILD_STEP_NAME / 3))
+	);
+	assert_eq!(kept[BUILD_STEPS - 2]["name"], "a");
+	assert_eq!(
+		kept[BUILD_STEPS - 1]["name"],
+		format!(
+			"… {} more steps not kept: a build keeps at most {BUILD_STEPS}",
+			40_000 - (BUILD_STEPS - 1)
+		)
+	);
+
+	// The job's row keeps the same, and the same report again is a repeat.
+	let job = Job::query()
+		.all(&app.system())
+		.await
+		.expect("jobs")
+		.into_iter()
+		.find(|job| build["job"] == job.id.uuid().to_string())
+		.expect("the build's job");
+	let Some(JobOutcome::BuildServer(BuildOutcome::Failed { steps, .. })) = job.outcome.0 else {
+		panic!("the build's outcome isn't its failed report");
+	};
+	assert_eq!(steps.len(), BUILD_STEPS);
+	let repeated = shop.build.finish(&build, report).await;
+	assert_eq!(repeated.expect(200).json()["repeated"], true);
+
+	a_built_report_within_the_bound_is_kept_as_sent(&shop).await;
+}
+
+/// A built report within the bound is kept as sent, on the sheet and as
+/// rows. `cached_percent` is always on the wire, `null` when a step has
+/// none: sent that way, so what is kept can be compared whole.
+async fn a_built_report_within_the_bound_is_kept_as_sent(shop: &Shop<'_>) {
+	let digest = shop.upload(b"two hundred steps, no more").await;
+	let number = shop
+		.deploy("production", &digest, json!({}))
+		.await
+		.expect(200)
+		.json()["number"]
+		.as_u64()
+		.expect("a number");
+	let build = shop.build.take().await;
+	let steps: Vec<Value> = (0..BUILD_STEPS)
+		.map(|n| json!({ "name": format!("step {n}"), "millis": n, "cached_percent": null }))
+		.collect();
+	let mut report = built(&build, b"image", &[]);
+	report["steps"] = json!(steps);
+	shop.build.finish(&build, report).await.expect(200);
+	let sheet = shop.sheet("production", number).await;
+	assert_eq!(server(&sheet)["stamp"], "built");
+	assert_eq!(server(&sheet)["steps"], json!(steps));
+	let events = shop.on("deployment_events", "production", number).await;
+	let events = events.expect(200).json();
+	assert_eq!(step_rows(&events), BUILD_STEPS);
 }

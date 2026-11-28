@@ -2647,7 +2647,8 @@ fn uuid_of(value: &leptoskit_db::Value) -> Option<Uuid> {
 
 /// The body of [`send_test`](crate::send_test): the person's live
 /// endpoints — the one named, when an id came — each attempted exactly
-/// once through its platform's transport, with nothing written anywhere.
+/// once through its platform's transport, every accepted one written to
+/// the acceptance ledger a metering host counts, and nothing else written.
 /// The endpoints are read first, in a query of their own; the provider
 /// requests go out after it, with no transaction open.
 ///
@@ -2655,7 +2656,7 @@ fn uuid_of(value: &leptoskit_db::Value) -> Option<Uuid> {
 ///
 /// [`rpc::Error::Invalid`] when no transport is configured at all,
 /// [`rpc::Error::NotFound`] for an endpoint id the person doesn't hold
-/// live, and whatever a read fails with.
+/// live, and whatever a read or a ledger write fails with.
 pub(crate) async fn send_test(
 	cx: &rpc::ActionCx,
 	spec: &crate::SendSpec,
@@ -2763,6 +2764,18 @@ pub(crate) async fn send_test(
 			transport::Outcome::WaitUntil(_) => (crate::push::DeliveryState::Skipped, None),
 			transport::Outcome::Ended { reason, .. } => (push::state_of(reason), Some(reason)),
 		};
+
+		// A test push a provider accepted is a push the app spent, so the
+		// ledger a metering host counts has it: a free plan's pause counts
+		// tests like any other push. There is no delivery of its own, so
+		// the row names one made for it.
+		if state == crate::push::DeliveryState::Accepted {
+			cx.mutate(push::RecordAcceptance {
+				delivery: Uuid::now_v7(),
+				platform: platform.as_str().to_owned(),
+			})
+			.await?;
+		}
 
 		outcomes.push(crate::TestSendOutcome {
 			endpoint: id,

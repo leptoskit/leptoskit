@@ -522,6 +522,33 @@ fn make_generation_dir(dir: &Path) -> Result<()> {
 	Ok(())
 }
 
+/// The variables that point git at a repository whatever directory it runs
+/// in. Git sets some of them for hooks, so a generation built from one, such
+/// as a pre-push hook's tests in a linked worktree, would otherwise
+/// initialize and stage in the hook's repository instead of its own.
+const GIT_REPOSITORY_VARIABLES: &[&str] = &[
+	"GIT_DIR",
+	"GIT_WORK_TREE",
+	"GIT_INDEX_FILE",
+	"GIT_COMMON_DIR",
+	"GIT_OBJECT_DIRECTORY",
+	"GIT_ALTERNATE_OBJECT_DIRECTORIES",
+	"GIT_NAMESPACE",
+	"GIT_PREFIX",
+];
+
+/// `git -C <root>`, which finds its repository from `root` alone.
+fn git_command(root: &Path) -> std::process::Command {
+	let mut command = std::process::Command::new("git");
+	command.arg("-C").arg(root);
+
+	for variable in GIT_REPOSITORY_VARIABLES {
+		command.env_remove(variable);
+	}
+
+	command
+}
+
 /// The demo project: a git repository with the fixture committed as it
 /// stands and the two-instance change staged, so the admin has a change
 /// to plan. Nothing here commits — git only ever initializes and stages.
@@ -534,9 +561,8 @@ fn init_project(dir: &Path) -> Result<PathBuf> {
 	let root = dir.join("project");
 	std::fs::create_dir_all(&root).with_context(|| format!("creating {}", root.display()))?;
 	let git = |args: &[&str]| -> Result<()> {
-		let status = std::process::Command::new("git")
+		let status = git_command(&root)
 			.args(args)
-			.current_dir(&root)
 			.stdout(std::process::Stdio::null())
 			.stderr(std::process::Stdio::null())
 			.status()
@@ -695,6 +721,34 @@ fn dir_size(dir: &Path) -> Result<u64> {
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	/// A generation's repository is its own: git sets the variables that
+	/// name a repository for hooks, so a test run from one — a pre-push
+	/// hook's tests in a linked worktree — would otherwise initialize and
+	/// stage in the hook's repository.
+	#[test]
+	fn a_hooks_repository_variables_are_left_behind() {
+		let root = tempfile::tempdir().expect("a temporary directory");
+		let mut git = git_command(root.path());
+		let removed: Vec<_> = git
+			.get_envs()
+			.filter(|(_, value)| value.is_none())
+			.map(|(name, _)| name.to_string_lossy().into_owned())
+			.collect();
+
+		for variable in GIT_REPOSITORY_VARIABLES {
+			assert!(removed.iter().any(|name| name == variable), "{variable}");
+		}
+
+		let output = git
+			.args(["rev-parse", "--is-inside-work-tree"])
+			.output()
+			.expect("git runs");
+		assert!(
+			!output.status.success(),
+			"a temporary directory isn't a repository"
+		);
+	}
 
 	/// Recognition separates three facts a collector must not confuse: a
 	/// published generation (whatever format), a genuinely unpublished

@@ -8,12 +8,14 @@
 pub mod config;
 #[cfg(feature = "ssr")]
 pub mod console;
+mod pages;
 
 use std::net::SocketAddr;
 
 use leptoskit_axum::GracefulShutdown;
 use leptoskit_axum::Readiness;
 use leptoskit_axum::axum::Router;
+use leptoskit_axum::axum::middleware::map_response;
 use leptoskit_cloud::server::Control;
 use leptoskit_db::Db;
 use leptoskit_db::Migration;
@@ -237,11 +239,17 @@ async fn serve(config: ServeConfig) -> Result<(), Error> {
 /// the same way, last, and nothing is merged afterwards. Merging into a
 /// layered router instead would swap its fallback for the merged router's
 /// unlayered one, and those endpoints would answer 404.
+///
+/// The outer layer is the one every page passes, including the control
+/// plane's own: no answer may be framed, whichever layer rendered it.
 pub fn router(control: &Control, own: Router) -> Router {
 	let own = own
 		.layer(control.auth().layer())
 		.layer(control.idp().layer());
-	control.router().fallback_service(own)
+	control
+		.router()
+		.fallback_service(own)
+		.layer(map_response(pages::refuse_framing))
 }
 
 /// Says where the server listens: the one line a supervisor, or a test,

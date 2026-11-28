@@ -2282,8 +2282,9 @@ pub async fn forget_person(cx: &rpc::MutationCx, person: uuid::Uuid) -> rpc::Res
 
 /// Pushes a spec to one person's live endpoints, right now, as a test:
 /// the app's server only, the way FCM's "test on device" is. Nothing is
-/// written — no inbox row, no delivery row, no send bookkeeping, no
-/// count anywhere — and each endpoint answers its own outcome, because
+/// written but a push's acceptance ledger — no inbox row, no delivery row,
+/// no send bookkeeping — because a provider that took a test pushed it, and
+/// a plan's pushes count it; each endpoint answers its own outcome, because
 /// a test is a question about a device, not a send.
 ///
 /// The spec takes the same [options](MessageOptions) a send does —
@@ -2296,8 +2297,8 @@ pub async fn forget_person(cx: &rpc::MutationCx, person: uuid::Uuid) -> rpc::Res
 /// their [`MAX_ENDPOINTS`](crate::push::MAX_ENDPOINTS) live endpoints,
 /// each attempted exactly once. Name an endpoint id to probe one device;
 /// an id that isn't the person's own live endpoint is not found. There
-/// is no idempotency key to reuse — a test answers, it does not record —
-/// so a retried call pushes again.
+/// is no idempotency key to reuse — a test answers, it does not record a
+/// send — so a retried call pushes again.
 ///
 /// It is an [action](rpc::ActionCx): the endpoints are read first, and the
 /// provider requests go out with no transaction open, so however slow a

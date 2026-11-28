@@ -177,6 +177,11 @@ async fn a_removal_that_then_works_is_done() {
 }
 
 #[tokio::test]
+async fn a_builds_steps_are_bounded() {
+	review::a_builds_steps_are_bounded(&support::app().await).await;
+}
+
+#[tokio::test]
 async fn build_logs_are_capped() {
 	let db = leptoskit_db::testing::sqlite_migrated(leptoskit_cloud::MIGRATIONS).await;
 	let app = support::app_with(db, |config| review::settings(&mut config.shipping)).await;
