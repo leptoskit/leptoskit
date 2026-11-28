@@ -11893,16 +11893,18 @@ dependencies = [
 
 [[package]]
 name = "skribble_core"
-version = "0.1.0"
-source = "git+https://github.com/openbudgetfun/skribble?rev=20af15049b3af35885dac03d546306b7a3e33c3a#20af15049b3af35885dac03d546306b7a3e33c3a"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d262f06b4b9030dbff6913ff5e0e56de3307f9ae4d58d2a1ae4781cf5e0b87d1"
 dependencies = [
  "skribble_rough",
 ]
 
 [[package]]
 name = "skribble_rough"
-version = "0.1.0"
-source = "git+https://github.com/openbudgetfun/skribble?rev=20af15049b3af35885dac03d546306b7a3e33c3a#20af15049b3af35885dac03d546306b7a3e33c3a"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5f450e46eecf05d9f7c1dc4c672b8e6ed27f3f9d4877e225c2aff31883020e8b"
 
 [[package]]
 name = "slab"
