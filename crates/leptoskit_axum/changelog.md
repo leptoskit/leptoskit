@@ -4,6 +4,18 @@ All notable changes to this project are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1](https://github.com/leptoskit/leptoskit/releases/tag/v0.3.1) (2026-11-28)
+
+### Fixes
+
+#### Smaller web Wasm, lazy listeners & precompressed serving
+
+_Owner:_ Ifiok Jr. · _Introduced in:_ [4001dbb](https://github.com/leptoskit/leptoskit/commit/4001dbb8ed91ecbdcb3caffdc86690b17607ba9c)
+
+- Remove `sha2` from `leptoskit_native`'s `web` feature in favor of a deterministic 64-bit `ScopeHasher`, emit non-default base CSS style deltas directly with `styles::delta_for`, fuse tree pre-scans into one `scan_tree` pass, attach DOM event listeners lazily via `Either` only when handled, and make `NodePath` zero-sized without `devtools`.
+- Inject `<link rel="modulepreload">` and `<link rel="preload" as="fetch" type="application/wasm" crossorigin>` hints into built `index.html` files and enable `--strip-producers --low-memory-unused` in `leptoskit_cli`'s `wasm-opt` pipeline.
+- Negotiate precompressed `.br`/`.gz` `index.html` in `leptoskit_axum`'s `SpaFallback` and serve precompressed static site/docs assets with `Vary: accept-encoding` in `leptoskit_app`.
+
 ## [0.3.0](https://github.com/leptoskit/leptoskit/releases/tag/v0.3.0) (2026-11-06)
 
 ### Breaking changes

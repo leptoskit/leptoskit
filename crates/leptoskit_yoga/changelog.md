@@ -4,6 +4,27 @@ All notable changes to this project are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1](https://github.com/leptoskit/leptoskit/releases/tag/v0.3.1) (2026-11-28)
+
+### Fixes
+
+#### Compact layouts, fast Yoga, streaming diff & O(log N) hit
+
+_Owner:_ Ifiok Jr. · _Introduced in:_ [3677b62](https://github.com/leptoskit/leptoskit/commit/3677b6245db20cc2387b3f547855364c319db735)
+
+- Box cold `Style.grid`, `Element.gesture`, and `Element.bindings` fields, pack `Tailwind` into a single `Option<Arc<TailwindInner>>`, gate DevTools-only `#[track_caller]` behind `devtools`, and fuse `Element::validate()` into a single pass.
+- Optimize `leptoskit_yoga` with contiguous flex-line ranges, empty/measured leaf fast paths, direct in-flow child iteration, inline `LayoutCache`, and `subtree_pass` dirty pruning.
+- Stream `NativeSurface` reconciliation directly without cloning a resolved intermediate tree, prune clean subtrees in `collect_frames`/`place`, binary-search monotonic hit-test siblings in O(log N), switch `Flattener` to a dense zero-clone arena, and encode FFI mutation props by reference without cloning `NativeProps`.
+
+#### Faster Wasm host, external measure & in-place guest tree
+
+_Owner:_ Ifiok Jr. · _Introduced in:_ [53e3f0e](https://github.com/leptoskit/leptoskit/commit/53e3f0e757532c73ef87282497e75c28e7df0fde)
+
+- Consolidate `leptoskit_wasm`'s `HostState` into a single `FastHash` node map with dense `wire_by_node` lookups, bool-deduped dirty lists, cached `TypedFunc` Wasm exports, and O(1) tail detachment in `HostState::detach`.
+- Add `Yoga::set_measured` and `Yoga::calculate_layout*_with_measure` so `NativeSurface` measures text via an inline `Copy` `TextMeasureCache` reading `&shadow.props` directly instead of allocating per-node `Arc<RwLock<_>>` closures and cloning strings.
+- Add `NativeBackend::apply_owned` so `HeadlessBackend` moves `MutationList` without cloning every `NativeProps`, share a static default `ApproxTextMeasurer`, and accelerate `LogBudget::admit` with exact fast-path JSON byte accounting.
+- Reconcile `guest::tree::Tree::update` in place with a leaf fast path, immediate subtree eviction reusing a single DFS stack, and reverse build-order deletions (leaves and trailing siblings first).
+
 ## [0.3.0](https://github.com/leptoskit/leptoskit/releases/tag/v0.3.0) (2026-11-06)
 
 ### Breaking changes
