@@ -525,6 +525,80 @@ pub const MAX_PUBLISH_TEXT: usize = 2_000;
 /// The longest a publish's failure reason is.
 pub const MAX_PUBLISH_REASON: usize = 500;
 
+/// The most steps a build report keeps: every step becomes an event of its
+/// deployment's, so past this many the rest are left out, and the last step
+/// kept says how many. The platform's own builder reports two.
+pub const MAX_BUILD_STEPS: usize = 200;
+
+/// The longest a build's step name is kept, in bytes; a longer one is cut,
+/// saying so.
+pub const MAX_BUILD_STEP_NAME: usize = 500;
+
+/// `name` cut to [`MAX_BUILD_STEP_NAME`] bytes at a character boundary,
+/// ending in `…` when it was cut.
+fn cut(name: &str) -> String {
+	if name.len() <= MAX_BUILD_STEP_NAME {
+		return name.to_owned();
+	}
+
+	let mut end = MAX_BUILD_STEP_NAME;
+
+	while !name.is_char_boundary(end) {
+		end -= 1;
+	}
+
+	format!("{}…", &name[..end])
+}
+
+impl BuildOutcome {
+	/// The outcome held to [`MAX_BUILD_STEPS`] steps, each name cut to
+	/// [`MAX_BUILD_STEP_NAME`] bytes, whatever the worker sent: when steps
+	/// are left out, the last one kept says how many.
+	#[must_use]
+	pub fn bounded(self) -> Self {
+		fn steps(mut steps: Vec<BuildStep>) -> Vec<BuildStep> {
+			let kept = MAX_BUILD_STEPS - 1;
+
+			if steps.len() > MAX_BUILD_STEPS {
+				let left_out = steps.len() - kept;
+				steps.truncate(kept);
+				steps.push(BuildStep {
+					name: format!(
+						"… {left_out} more steps not kept: a build keeps at most {MAX_BUILD_STEPS}"
+					),
+					millis: 0,
+					cached_percent: None,
+				});
+			}
+
+			for step in &mut steps {
+				step.name = cut(&step.name);
+			}
+
+			steps
+		}
+
+		match self {
+			Self::Succeeded(output) => {
+				Self::Succeeded(BuildServerOutput {
+					steps: steps(output.steps),
+					..output
+				})
+			}
+			Self::Failed {
+				reason,
+				steps: reported,
+			} => {
+				Self::Failed {
+					reason,
+					steps: steps(reported),
+				}
+			}
+			Self::Stopped => Self::Stopped,
+		}
+	}
+}
+
 impl PublishOutcome {
 	/// The outcome held to its bounds, about `stores` only: see
 	/// [`PublishReport::bounded`].
@@ -1125,6 +1199,10 @@ pub async fn append_log(
 /// nothing; a different one is refused. A worker whose lease ran out on a
 /// release may still send the outcome it saved: the control plane was
 /// waiting to learn it.
+///
+/// A build's outcome is kept with at most [`MAX_BUILD_STEPS`] steps, each
+/// name at most [`MAX_BUILD_STEP_NAME`] bytes, whatever the worker sent; the
+/// last step kept says when any were left out.
 ///
 /// # Errors
 ///

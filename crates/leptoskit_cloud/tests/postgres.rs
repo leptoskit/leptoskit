@@ -348,6 +348,13 @@ mod review {
 	}
 
 	#[tokio::test]
+	async fn a_builds_steps_are_bounded() {
+		if let Some((_postgres, app)) = app().await {
+			review::a_builds_steps_are_bounded(&app).await;
+		}
+	}
+
+	#[tokio::test]
 	async fn build_logs_are_capped() {
 		let Some(server) = postgres::Postgres::start() else {
 			return;
