@@ -8,6 +8,8 @@ enum NativeAppFactory {
     static func create(
         wasm: Data, identifier: String?, pluginContext: NativePluginContext? = nil
     ) throws -> NativeAppLifecycle {
+        // Layout measures in the app's declared fonts from its first commit.
+        try NativeFonts.install()
         let dataDirectory = try directory(.applicationSupportDirectory, identifier: identifier)
         let cacheDirectory = try directory(.cachesDirectory, identifier: identifier)
         let dataPath = Array(dataDirectory.path.utf8)

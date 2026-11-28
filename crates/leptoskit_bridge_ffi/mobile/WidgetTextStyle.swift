@@ -170,9 +170,18 @@ enum WidgetTextStyle {
         let weight: CGFloat
     }
 
+    /// The font every text view draws in: the declared face its family,
+    /// weight, and style choose, as layout measured it, else the system font.
     private static func font(_ props: WidgetProps) -> UIFont {
-        let weight = WidgetFontWeight.uiKit(props.fontWeight)
         let size = props.fontSize ?? defaultSize
+
+        if let declared = NativeFonts.font(
+            family: props.fontFamily?.declared, weight: props.fontWeight, italic: props.italic ?? false, size: size
+        ) {
+            return declared as UIFont
+        }
+
+        let weight = WidgetFontWeight.uiKit(props.fontWeight)
         let key = FontKey(size: size, weight: weight.rawValue)
 
         if let cached = fonts[key] { return cached }

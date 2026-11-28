@@ -88,6 +88,8 @@ class NativeHeadlessGuest(
         checkMain()
         NativeBridge.load()
         try {
+            // Layout measures in the app's declared fonts from its first commit.
+            NativeFonts.install(context.assets)
             app =
                 NativeApp.create(
                     wasm,

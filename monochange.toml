@@ -248,6 +248,7 @@ versioned_files = [
 	# would leave them unable to resolve the crates they sit beside.
 	{ path = "examples/file_routes/**/Cargo.toml", regex = 'leptoskit\w* = \{ version = "=(?<version>\d+\.\d+\.\d+)"' },
 	{ path = "examples/commonplace/**/Cargo.toml", regex = 'leptoskit\w* = \{ version = "=(?<version>\d+\.\d+\.\d+)"' },
+	{ path = "examples/typefaces/**/Cargo.toml", regex = 'leptoskit\w* = \{ version = "=(?<version>\d+\.\d+\.\d+)"' },
 	{ path = "examples/huddle/linux/Cargo.toml", regex = 'leptoskit\w* = \{ version = "=(?<version>\d+\.\d+\.\d+)"' },
 	# The DevTools interface is versioned with the CLI that downloads it.
 	{ path = "devtools/Cargo.toml", regex = 'leptoskit\w* = \{ version = "=(?<version>\d+\.\d+\.\d+)"' },
@@ -1035,6 +1036,7 @@ steps = [
 	# CI builds them `--locked`, so each lockfile has to name the versions just released.
 	{ type = "Command", name = "refresh the file_routes lockfile", when = "{{ number_of_changesets > 0 }}", command = "cargo update --workspace --manifest-path examples/file_routes/Cargo.toml" },
 	{ type = "Command", name = "refresh the commonplace lockfile", when = "{{ number_of_changesets > 0 }}", command = "cargo update --workspace --manifest-path examples/commonplace/Cargo.toml" },
+	{ type = "Command", name = "refresh the typefaces lockfile", when = "{{ number_of_changesets > 0 }}", command = "cargo update --workspace --manifest-path examples/typefaces/Cargo.toml" },
 	{ type = "Command", name = "refresh the devtools interface lockfile", when = "{{ number_of_changesets > 0 }}", command = "cargo update --workspace --manifest-path devtools/Cargo.toml" },
 	{ type = "Command", name = "refresh the arena lockfile", when = "{{ number_of_changesets > 0 }}", command = "cargo update --workspace --manifest-path benchmarks/arena/apps/leptoskit/Cargo.toml" },
 	{ type = "Command", name = "refresh the app-service fixture lockfile", when = "{{ number_of_changesets > 0 }}", command = "cargo update --workspace --manifest-path crates/leptoskit_cli/tests/fixtures/app-service/Cargo.toml" },

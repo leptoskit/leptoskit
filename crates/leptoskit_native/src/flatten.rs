@@ -102,6 +102,7 @@ pub fn is_layout_only(kind: NativeKind, props: &NativeProps) -> bool {
 		font_weight: _,
 		line_height: _,
 		italic,
+		font_family: _,
 		spans,
 		text_align: _,
 		direction: _,

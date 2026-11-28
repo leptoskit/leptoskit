@@ -1275,7 +1275,8 @@ fn assets_destination(root: &Path, target: Target) -> PathBuf {
 /// Writes what the target's shell bundles from the built guest. Desktop gets
 /// the raw Wasm. Mobile gets the guest inside its store container, which the
 /// update store verifies, and the update configuration, but never the Wasm a
-/// second time.
+/// second time. The Apple and Android hosts also get `fonts.json`, the
+/// typefaces `[theme.fonts]` declares.
 fn write_assets(
 	root: &Path,
 	config: &LeptoskitConfig,
@@ -1285,6 +1286,14 @@ fn write_assets(
 	contract: &HostCapabilityDescriptor,
 ) -> Result<()> {
 	let generated = generated_dir(root, target);
+	// A missing face fails every build. The Apple and Android hosts register
+	// the declared faces from the manifest; the others draw the system font.
+	if matches!(target, Target::Macos | Target::Ios | Target::IosSimulator) || target.is_android() {
+		crate::fonts::write_manifest(root, config, &generated.join("mobile"))?;
+	} else {
+		crate::fonts::check(root, config)?;
+	}
+
 	if matches!(
 		target,
 		Target::Macos | Target::Windows | Target::Linux | Target::Tui

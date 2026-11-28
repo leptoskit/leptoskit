@@ -71,9 +71,9 @@ use crate::overlay::Hanging;
 use crate::overlay::Sheet;
 use crate::pressable::content_button;
 use crate::text::attributed_string;
+use crate::text::font;
 use crate::text::ns_alignment;
 use crate::text::ns_color;
-use crate::text::system_font;
 use crate::text::text_color;
 use crate::vector::VectorLayers;
 use crate::vector::VectorView;
@@ -1170,7 +1170,7 @@ fn apply_control(control: &mut Control, props: &NativeProps) {
 			button.setTitle(&NSString::from_str(
 				props.text.as_deref().unwrap_or_default(),
 			));
-			button.setFont(Some(&system_font(props.text_style())));
+			button.setFont(Some(&font(props.text_style())));
 			button.setEnabled(enabled);
 		}
 		Control::Slider { slider, target } => {
@@ -1232,7 +1232,7 @@ fn apply_control(control: &mut Control, props: &NativeProps) {
 				NSFocusRingType::Default
 			});
 
-			field.setFont(Some(&system_font(props.text_style())));
+			field.setFont(Some(&font(props.text_style())));
 			field.setTextColor(props.color.map(ns_color).as_deref());
 			field.setAlignment(ns_alignment(props.text_style()));
 			field.setBaseWritingDirection(match props.text_style().direction {
@@ -1313,7 +1313,7 @@ fn apply_area(
 	scroll.setDrawsBackground(!custom);
 	text.setDrawsBackground(!custom);
 
-	let font = system_font(props.text_style());
+	let font = font(props.text_style());
 	text.setFont(Some(&font));
 	text.setTextColor(Some(&text_color(props.color)));
 	text.setAlignment(ns_alignment(props.text_style()));

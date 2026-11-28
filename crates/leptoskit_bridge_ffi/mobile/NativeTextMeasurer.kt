@@ -104,22 +104,26 @@ internal class NativeTextMeasurer(
     private var painted: TextPaint? = null
     private var paintedSize = Float.NaN
     private var paintedWeight = 0
+    private var paintedFace = SYSTEM_FACE
 
     /**
      * Returns the logical width and height of UTF-8 [text] at [fontSize] (in the
-     * scaled points text views use), CSS [weight], and [rtl] direction within
+     * scaled points text views use) in [face], and [rtl] direction within
      * [width] logical points: `-1` is unbounded and `-2` is the widest word.
+     * [face] is a declared face's position in `fonts.json`, drawn at [weight],
+     * or `-1` for the system font at CSS [weight].
      */
     @Suppress("unused") // Called by JNI.
     fun measure(
         text: ByteArray,
         fontSize: Float,
         weight: Int,
+        face: Int,
         width: Float,
         rtl: Boolean,
     ): FloatArray {
         val value = text.toString(Charsets.UTF_8)
-        val paint = paint(fontSize, weight)
+        val paint = paint(fontSize, weight, face)
         val limit =
             when (width) {
                 UNBOUNDED -> Layout.getDesiredWidth(value, paint)
@@ -169,21 +173,25 @@ internal class NativeTextMeasurer(
     private fun paint(
         size: Float,
         weight: Int,
+        face: Int,
     ): TextPaint {
         val existing = painted
 
-        if (existing != null && size == paintedSize && weight == paintedWeight) return existing
+        if (existing != null && size == paintedSize && weight == paintedWeight && face == paintedFace) {
+            return existing
+        }
 
         val paint =
             (existing ?: TextPaint(TextPaint.ANTI_ALIAS_FLAG)).apply {
                 textSize = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, size, metrics)
 
-                typeface = nativeTypeface(weight)
+                typeface = if (face == SYSTEM_FACE) nativeTypeface(weight) else NativeFonts.face(face, weight)
                 isAntiAlias = true
             }
         painted = paint
         paintedSize = size
         paintedWeight = weight
+        paintedFace = face
 
         return paint
     }
@@ -197,5 +205,6 @@ internal class NativeTextMeasurer(
 
         private const val UNBOUNDED = -1f
         private const val WIDEST_WORD = -2f
+        private const val SYSTEM_FACE = -1
     }
 }

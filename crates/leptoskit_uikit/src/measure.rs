@@ -68,10 +68,7 @@ impl UIKitTextMeasurer {
 
 		// UIFont is immutable and supports creation on any thread. Bridge the
 		// exact drawing font rather than reconstructing its private descriptor.
-		let ui_font = UIFont::systemFontOfSize_weight(
-			f64::from(style.font_size),
-			font_weight(style.font_weight),
-		);
+		let ui_font = font(style);
 		let font: &CTFont = ui_font.as_ref();
 		// SAFETY: Core Text accepts its documented font and paragraph-style
 		// keys and values; the objects are immutable once made.
@@ -147,9 +144,26 @@ impl UIKitTextMeasurer {
 	}
 }
 
+/// The font text in `style` draws and measures with: the declared face the
+/// style carries, else the system font at its size and weight.
+///
+/// Every font UIKit text gets comes from here, so a declared family reaches
+/// every widget that draws text.
+pub(crate) fn font(style: TextStyle) -> Retained<UIFont> {
+	style
+		.face
+		.and_then(|face| crate::fonts::declared(face, style.font_size))
+		.unwrap_or_else(|| {
+			UIFont::systemFontOfSize_weight(
+				f64::from(style.font_size),
+				font_weight(style.font_weight),
+			)
+		})
+}
+
 /// UIKit's weight for each CSS weight: ultralight is 100 and thin 200, as
 /// Apple's fonts number them, and heavy is 800.
-pub(crate) const fn font_weight(weight: FontWeight) -> f64 {
+const fn font_weight(weight: FontWeight) -> f64 {
 	match weight {
 		FontWeight::Thin => -0.8,
 		FontWeight::ExtraLight => -0.6,

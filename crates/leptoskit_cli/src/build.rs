@@ -323,6 +323,7 @@ fn run_with(
 	if platform == Platform::Web {
 		collect_assets(&config, &root, &out_dir)?;
 		write_web_branding(&root, &config, out_dir.as_std_path())?;
+		crate::fonts::write_web(root.as_std_path(), &config, out_dir.as_std_path())?;
 	}
 
 	let mut post = leptoskit_plugin::PluginPostBuildContext {
@@ -465,7 +466,8 @@ pub(crate) mod devtools {
 	}
 }
 
-/// Copies `web/`, `public/`, and `assets/` and refreshes the launch screen.
+/// Copies `web/`, `public/`, and `assets/` and refreshes the launch screen
+/// and the font stylesheet.
 fn copy_assets_only(
 	config: &LeptoskitConfig,
 	root: &Utf8PathBuf,
@@ -473,6 +475,7 @@ fn copy_assets_only(
 ) -> Result<BuildOutput> {
 	collect_assets(config, root, &out_dir)?;
 	write_web_branding(root, config, out_dir.as_std_path())?;
+	crate::fonts::write_web(root.as_std_path(), config, out_dir.as_std_path())?;
 	crate::ui::success(format_args!("copied assets into {out_dir}"));
 	Ok(BuildOutput {
 		out_dir,

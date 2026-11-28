@@ -2266,6 +2266,91 @@
 			},
 			"additionalProperties": false
 		},
+		"FontConfig": {
+			"description": "A typeface the app bundles, from one `[theme.fonts.<name>]` table.\n\n```toml\n[theme.fonts.hand]\nfamily = \"Skribble Noto Sketch\"\nfaces = [\n  { file = \"fonts/NotoSketch-Regular.ttf\" },\n  { file = \"fonts/NotoSketch-Bold.ttf\", weight = 700 },\n  { file = \"fonts/NotoSketch-Italic.ttf\", style = \"italic\" },\n]\n\n[theme.fonts.display]\nfaces = [{ file = \"fonts/Recursive.ttf\", weight = [300, 1000] }]\n```\n\nEach face is one TrueType (`.ttf`) or OpenType (`.otf`) file inside the\napp's `assets` folder. A face declares the weight it draws, or the\n`[min, max]` range of a variable font's `wght` axis.",
+			"type": "object",
+			"properties": {
+				"faces": {
+					"description": "The family's files, at least one.",
+					"type": "array",
+					"items": {
+						"$ref": "#/$defs/FontFaceConfig"
+					}
+				},
+				"family": {
+					"description": "The family name the web stylesheet declares. Defaults to the table's\nkey.",
+					"type": [
+						"string",
+						"null"
+					]
+				}
+			},
+			"additionalProperties": false,
+			"required": [
+				"faces"
+			]
+		},
+		"FontFaceConfig": {
+			"description": "One file of a [`FontConfig`].",
+			"type": "object",
+			"properties": {
+				"file": {
+					"description": "The file's path inside the app's `assets` folder, written as\n`asset://` paths are: `fonts/Body.ttf` for `assets/fonts/Body.ttf`.\nTrueType (`.ttf`) or OpenType (`.otf`).",
+					"type": "string"
+				},
+				"style": {
+					"description": "Whether the file is upright (`normal`, the default) or `italic`.",
+					"$ref": "#/$defs/FontStyleConfig"
+				},
+				"weight": {
+					"description": "The weight the file draws, from 1 to 1000, or `[min, max]` for a\nvariable font's `wght` axis. Defaults to 400.",
+					"$ref": "#/$defs/FontWeightConfig"
+				}
+			},
+			"additionalProperties": false,
+			"required": [
+				"file"
+			]
+		},
+		"FontStyleConfig": {
+			"description": "Whether a [`FontFaceConfig`] is upright or italic.",
+			"oneOf": [
+				{
+					"description": "Upright.",
+					"type": "string",
+					"const": "normal"
+				},
+				{
+					"description": "Italic.",
+					"type": "string",
+					"const": "italic"
+				}
+			]
+		},
+		"FontWeightConfig": {
+			"description": "The weight a [`FontFaceConfig`] draws.",
+			"anyOf": [
+				{
+					"description": "A static face's one weight.",
+					"type": "integer",
+					"format": "uint16",
+					"maximum": 65535,
+					"minimum": 0
+				},
+				{
+					"description": "A variable face's `wght` axis, `[min, max]`.",
+					"type": "array",
+					"items": {
+						"type": "integer",
+						"format": "uint16",
+						"maximum": 65535,
+						"minimum": 0
+					},
+					"maxItems": 2,
+					"minItems": 2
+				}
+			]
+		},
 		"FormatConfig": {
 			"description": "How `leptoskit format` lays out the markup inside `view!` macros.\n\nWidth and indentation are not set here: they come from the project's\n`rustfmt.toml`, so markup and the Rust around it always agree.",
 			"type": "object",
@@ -5068,7 +5153,7 @@
 			"additionalProperties": false
 		},
 		"ThemeConfig": {
-			"description": "Design tokens from the `[theme]` table, matching CSS custom properties\nthat Tailwind `var(--name)` utilities and the process-wide `Theme` map\nresolve.\n\n```toml\n[theme.colors]\nbrand = \"#3b82f6\"\nink = \"black\"\n\n[theme.lengths]\ngap = \"1rem\"\npad = \"16px\"\n```\n\nCall `Theme::install_maps(&theme.colors, &theme.lengths)` once at app\nstartup so native paint and the web `:root` sheet see the same names.",
+			"description": "Design tokens from the `[theme]` table, matching CSS custom properties\nthat Tailwind `var(--name)` utilities and the process-wide `Theme` map\nresolve.\n\n```toml\n[theme.colors]\nbrand = \"#3b82f6\"\nink = \"black\"\n\n[theme.lengths]\ngap = \"1rem\"\npad = \"16px\"\n\n[theme.fonts.hand]\nfamily = \"Skribble Noto Sketch\"\nfaces = [{ file = \"fonts/NotoSketch-Regular.ttf\" }]\n```\n\nCall `Theme::install_maps(&theme.colors, &theme.lengths)` once at app\nstartup so native paint and the web `:root` sheet see the same names.\nFonts need no call: the build bundles them and every host registers them\nbefore its first layout.",
 			"type": "object",
 			"properties": {
 				"colors": {
@@ -5076,6 +5161,13 @@
 					"type": "object",
 					"additionalProperties": {
 						"type": "string"
+					}
+				},
+				"fonts": {
+					"description": "Typefaces the app bundles, by custom property name: `[theme.fonts.hand]`\nis chosen with `font-[var(--hand)]` on every platform. Keys may omit\nthe leading `--`, and may not also name a color or length.",
+					"type": "object",
+					"additionalProperties": {
+						"$ref": "#/$defs/FontConfig"
 					}
 				},
 				"lengths": {

@@ -1453,11 +1453,27 @@ fn theme_lengths_parse_and_install_without_losing_their_unit() {
 
 #[test]
 fn web_only_utilities_parse_everywhere_and_leave_native_unchanged() {
-	let classes = "font-mono font-[var(--admin-font-note)] tabular-nums truncate tracking-wide \
+	// A family variable no installed font declares leaves the inherited
+	// family, as a browser does for a `var()` that names nothing.
+	let classes = "font-[var(--admin-font-note)] tabular-nums truncate tracking-wide \
 	               cursor-pointer hover:bg-black hover:opacity-50";
 	let (style, props) = resolve(classes);
 	assert_eq!(style, Style::default());
 	assert_eq!(props, NativeProps::default());
+
+	// The stacks choose the system face, so they reset an inherited family.
+	for class in ["font-sans", "font-serif", "font-mono"] {
+		let (style, props) = resolve(class);
+		assert_eq!(style, Style::default());
+		assert_eq!(
+			props,
+			NativeProps {
+				font_family: Some(leptoskit_native::FontFamily::System),
+				..NativeProps::default()
+			},
+			"{class}"
+		);
+	}
 
 	// Held or not, dark or light, native hosts never hover.
 	let mut style = Style::default();

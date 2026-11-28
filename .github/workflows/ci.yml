@@ -152,7 +152,8 @@ jobs:
             examples/commonplace/Cargo.toml \
             examples/dev_client/Cargo.toml \
             examples/file_routes/Cargo.toml \
-            examples/huddle/linux/Cargo.toml; do
+            examples/huddle/linux/Cargo.toml \
+            examples/typefaces/Cargo.toml; do
             cargo metadata --locked --format-version 1 --manifest-path "$manifest" > /dev/null
           done
 

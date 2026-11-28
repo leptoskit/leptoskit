@@ -35,6 +35,7 @@ use crate::NativeRequest;
 mod binary;
 #[cfg(all(feature = "devtools", not(target_arch = "wasm32")))]
 mod devtools;
+mod fonts;
 #[cfg(not(target_arch = "wasm32"))]
 mod guest;
 mod render;
@@ -45,6 +46,8 @@ mod rive;
 mod plugin_host;
 mod services;
 mod text;
+pub use fonts::lk_fonts_install;
+pub use fonts::lk_fonts_select;
 #[cfg(not(target_arch = "wasm32"))]
 pub use guest::*;
 #[cfg(not(target_arch = "wasm32"))]

@@ -13,6 +13,7 @@ use crate::Appearance;
 use crate::BorderWidths;
 use crate::Capitalize;
 use crate::Color;
+use crate::FontFamily;
 use crate::FontWeight;
 use crate::Keyboard;
 use crate::LineHeight;
@@ -196,6 +197,7 @@ struct FlatWireNode {
 	font_weight: Option<FontWeight>,
 	line_height: Option<LineHeight>,
 	italic: Option<bool>,
+	font_family: Option<FontFamily>,
 	spans: Option<Vec<TextSpan>>,
 	text_align: Option<TextAlign>,
 	direction: Option<Direction>,
@@ -261,6 +263,7 @@ impl From<FlatWireNode> for WireNode {
 				font_weight: flat.font_weight,
 				line_height: flat.line_height,
 				italic: flat.italic,
+				font_family: flat.font_family,
 				spans: flat.spans,
 				text_align: flat.text_align,
 				direction: flat.direction,
@@ -331,6 +334,8 @@ struct RestWireNode<'a> {
 	#[serde(skip_serializing_if = "Option::is_none")]
 	animation: Option<&'a crate::Animation>,
 	#[serde(skip_serializing_if = "Option::is_none")]
+	font_family: Option<FontFamily>,
+	#[serde(skip_serializing_if = "Option::is_none")]
 	spans: Option<&'a [TextSpan]>,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	reveal: Option<RevealRequest>,
@@ -369,6 +374,7 @@ struct RestWireNodeOwned {
 	border_widths: Option<BorderWidths>,
 	transform: Option<Transform>,
 	animation: Option<Box<crate::Animation>>,
+	font_family: Option<FontFamily>,
 	spans: Option<Vec<TextSpan>>,
 	reveal: Option<RevealRequest>,
 	overlay: Option<Overlay>,
@@ -462,6 +468,7 @@ fn has_rest_fields(
 		font_weight: _,
 		line_height: _,
 		italic: _,
+		font_family,
 		spans,
 		text_align: _,
 		direction: _,
@@ -499,6 +506,7 @@ fn has_rest_fields(
 		|| border_widths.is_some()
 		|| transform.is_some()
 		|| animation.is_some()
+		|| font_family.is_some()
 		|| spans.is_some()
 		|| reveal.is_some()
 		|| overlay.is_some()
@@ -780,6 +788,7 @@ pub fn encode_binary_into(
 			border_widths: props.border_widths,
 			transform: props.transform,
 			animation: props.animation.as_deref(),
+			font_family: props.font_family,
 			spans: props.spans.as_deref(),
 			reveal: props.reveal,
 			overlay: props.overlay.as_ref(),
@@ -1044,6 +1053,7 @@ impl WireNode {
 			node.props.border_widths = rest.border_widths;
 			node.props.transform = rest.transform;
 			node.props.animation = rest.animation;
+			node.props.font_family = rest.font_family;
 			node.props.spans = rest.spans;
 			node.props.reveal = rest.reveal;
 			node.props.overlay = rest.overlay;

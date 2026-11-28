@@ -14,6 +14,11 @@ fn assembly_preserves_app_owned_usage_descriptions() {
 	write(&root.join("hosts/macos/Info.plist"), plist).unwrap();
 	write(&root.join("binary"), "executable").unwrap();
 	write(&root.join(".leptoskit/assets/app.wasm"), "guest").unwrap();
+	write(
+		&root.join(".leptoskit/mobile/fonts.json"),
+		"{\"families\":[]}",
+	)
+	.unwrap();
 	let bundle = assemble(&root, &LeptoskitConfig::default(), &root.join("binary")).unwrap();
 	assert_eq!(
 		std::fs::read_to_string(bundle.join("Contents/Info.plist")).unwrap(),
@@ -22,6 +27,11 @@ fn assembly_preserves_app_owned_usage_descriptions() {
 	assert_eq!(
 		std::fs::read_to_string(bundle.join("Contents/Resources/app.wasm")).unwrap(),
 		"guest"
+	);
+	// The host reads the font manifest beside the guest.
+	assert_eq!(
+		std::fs::read_to_string(bundle.join("Contents/Resources/fonts.json")).unwrap(),
+		"{\"families\":[]}"
 	);
 
 	std::fs::remove_dir_all(root).unwrap();
@@ -83,6 +93,11 @@ fn assembly_falls_back_to_the_template_plist_for_older_apps() {
 		.join(format!("leptoskit-macos-plist-{}", std::process::id()));
 	write(&root.join("binary"), "executable").unwrap();
 	write(&root.join(".leptoskit/assets/app.wasm"), "guest").unwrap();
+	write(
+		&root.join(".leptoskit/mobile/fonts.json"),
+		"{\"families\":[]}",
+	)
+	.unwrap();
 	let mut config = LeptoskitConfig::default();
 	config.native.package_id = "dev.example.legacy".into();
 	let bundle = assemble(&root, &config, &root.join("binary")).unwrap();

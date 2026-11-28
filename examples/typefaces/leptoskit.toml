@@ -1,0 +1,28 @@
+#:schema https://leptoskit.dev/schemas/leptoskit.v0.schema.json
+
+schema_version = 0
+
+# Typefaces runs in the browser through `leptoskit dev`, and on iOS, Android
+# and macOS through `leptoskit build --platform <platform>`.
+[app]
+name = "typefaces_example"
+platforms = ["web", "ios", "android", "macos"]
+render = "csr"
+
+[build]
+client_package = "typefaces_example"
+
+[native]
+package_id = "dev.leptoskit.typefaces"
+
+# Two bundled families beside the system font. Each file sits in `assets/`,
+# and `font-[var(--hand)]` or `font-[var(--gentle)]` chooses the family on
+# every platform.
+[theme.fonts.hand]
+family = "Skribble Noto Sketch"
+faces = [{ file = "fonts/SkribbleNotoSketch-Latin.ttf" }]
+
+# A variable font: one file draws every weight from 300 to 900.
+[theme.fonts.gentle]
+family = "Skribble Gentle"
+faces = [{ file = "fonts/SkribbleVariableGentle-Latin.ttf", weight = [300, 900] }]

@@ -36,7 +36,11 @@ pub(super) fn generate(
 	// its Wasm through the update store.
 	let mobile = super::super::generated_dir(root, Target::Ios).join("mobile");
 
-	for (offset, name) in [(BUNDLE_FILE, "app.lkb"), (UPDATE_FILE, "codepush.json")] {
+	for (offset, name) in [
+		(BUNDLE_FILE, "app.lkb"),
+		(UPDATE_FILE, "codepush.json"),
+		(FONTS_FILE, "fonts.json"),
+	] {
 		writeln!(
 			objects,
 			"{} = {{isa = PBXFileReference; lastKnownFileType = file; path = {}; sourceTree = \
@@ -58,7 +62,7 @@ pub(super) fn generate(
 	// folder, a copy of the app's own.
 	let mut resources = String::new();
 
-	if registry.scene3d || root.join(super::super::ASSETS).is_dir() {
+	if registry.scene3d || root.join(&config.build.inputs.assets).is_dir() {
 		writeln!(
 			objects,
 			"{} = {{isa = PBXFileReference; lastKnownFileType = folder; name = assets; path = {}; \
@@ -700,6 +704,8 @@ const PROJECT_DEBUG: usize = 40;
 const PROJECT_RELEASE: usize = 41;
 const APP_DEBUG: usize = 42;
 const APP_RELEASE: usize = 43;
+const FONTS_FILE: usize = 44;
+const FONTS_BUILD: usize = 45;
 
 const TEST_SOURCE: usize = 50;
 const TEST_SOURCE_BUILD: usize = 51;
@@ -769,11 +775,12 @@ fn build_phases(
 	)?;
 	writeln!(
 		objects,
-		"{} = {{isa = PBXGroup; children = ({source_refs}{},{},{},{},{}); sourceTree = \
+		"{} = {{isa = PBXGroup; children = ({source_refs}{},{},{},{},{},{}); sourceTree = \
 		 \"<group>\"; }};",
 		id(ROOT_GROUP),
 		id(BUNDLE_FILE),
 		id(UPDATE_FILE),
+		id(FONTS_FILE),
 		id(APP_PRODUCT),
 		id(TEST_SOURCE),
 		id(TEST_PRODUCT)
@@ -788,10 +795,11 @@ fn build_phases(
 	writeln!(
 		objects,
 		"{} = {{isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = \
-		 ({},{}{resources}); runOnlyForDeploymentPostprocessing = 0; }};",
+		 ({},{},{}{resources}); runOnlyForDeploymentPostprocessing = 0; }};",
 		id(RESOURCE_PHASE),
 		id(BUNDLE_BUILD),
-		id(UPDATE_BUILD)
+		id(UPDATE_BUILD),
+		id(FONTS_BUILD)
 	)?;
 	writeln!(
 		objects,
@@ -1264,6 +1272,25 @@ mod tests {
 				.unwrap();
 
 		assert!(project.contains("lastKnownFileType = folder; name = assets;"));
+		// The font manifest ships beside the update configuration, and the
+		// resources phase copies it into the bundle.
+		let fonts = format!(
+			"{} = {{isa = PBXFileReference; lastKnownFileType = file; path = \"{}\";",
+			super::id(super::FONTS_FILE),
+			root.join(".leptoskit/mobile/fonts.json").display()
+		);
+		assert!(project.contains(&fonts), "{project}");
+		assert!(project.contains(&format!(
+			"{} = {{isa = PBXBuildFile; fileRef = {}; }};",
+			super::id(super::FONTS_BUILD),
+			super::id(super::FONTS_FILE)
+		)));
+		assert!(project.contains(&format!(
+			"{},{},{}",
+			super::id(super::BUNDLE_BUILD),
+			super::id(super::UPDATE_BUILD),
+			super::id(super::FONTS_BUILD)
+		)));
 		// Without app.icon, the launch screen's colour still needs the catalog,
 		// but no AppIcon set.
 		assert!(project.contains("folder.assetcatalog"));

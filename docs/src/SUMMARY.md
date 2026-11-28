@@ -47,6 +47,7 @@
 - [Gestures](guide/38-gestures.md)
 - [Toasts](guide/33-toasts.md)
 - [Images and other assets](guide/36-assets.md)
+- [Fonts](guide/42-fonts.md)
 - [Rive animations](guide/20-rive.md)
 - [Playing sound](guide/34-audio.md)
 - [3D scenes](guide/33-3d-scenes.md)

@@ -103,7 +103,7 @@ struct TextContext {
 };
 
 bool text_measure(void* opaque, const uint8_t* text, size_t len, float font_size,
-    uint32_t font_weight, float width, bool rtl, float* out) {
+    uint32_t font_weight, int32_t face, float width, bool rtl, float* out) {
     auto* context = static_cast<TextContext*>(opaque);
     CallbackEnv scope(context->java_vm);
     JNIEnv* env = scope.get();
@@ -114,7 +114,8 @@ bool text_measure(void* opaque, const uint8_t* text, size_t len, float font_size
     if (bytes) {
         env->SetByteArrayRegion(bytes, 0, static_cast<jsize>(len), reinterpret_cast<const jbyte*>(text));
         auto size = static_cast<jfloatArray>(env->CallObjectMethod(context->measurer, context->measure,
-            bytes, font_size, static_cast<jint>(font_weight), width, static_cast<jboolean>(rtl)));
+            bytes, font_size, static_cast<jint>(font_weight), static_cast<jint>(face), width,
+            static_cast<jboolean>(rtl)));
 
         if (size && !env->ExceptionCheck() && env->GetArrayLength(size) == 2) {
             env->GetFloatArrayRegion(size, 0, 2, out);
@@ -263,6 +264,33 @@ Java_dev_leptoskit_mobile_NativeApp_activateService(JNIEnv* env, jclass, jlong h
 }
 
 extern "C" JNIEXPORT jint JNICALL
+Java_dev_leptoskit_mobile_NativeApp_installFonts(JNIEnv* env, jclass, jbyteArray manifest) {
+    if (!manifest) return -1;
+    const jsize len = env->GetArrayLength(manifest);
+    jbyte* bytes = env->GetByteArrayElements(manifest, nullptr);
+
+    if (!bytes) return -1;
+    // Android reads font files from the APK's assets, never from a folder.
+    static constexpr char root[] = "assets";
+    const int32_t status = lk_fonts_install(reinterpret_cast<const uint8_t*>(bytes),
+        static_cast<size_t>(len), reinterpret_cast<const uint8_t*>(root), sizeof(root) - 1);
+    env->ReleaseByteArrayElements(manifest, bytes, JNI_ABORT);
+    return status;
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_dev_leptoskit_mobile_NativeApp_selectFont(JNIEnv*, jclass, jint family, jint weight, jboolean italic) {
+    if (family < 0 || weight < 0) return -1;
+    uint32_t face[2] = {0, 0};
+
+    if (lk_fonts_select(static_cast<uint32_t>(family), static_cast<uint32_t>(weight), italic, face) != 1) {
+        return -1;
+    }
+
+    return static_cast<jint>((face[0] << 16) | (face[1] & 0xFFFF));
+}
+
+extern "C" JNIEXPORT jint JNICALL
 Java_dev_leptoskit_mobile_NativeApp_setTextMeasurer(JNIEnv* env, jclass, jlong handle, jobject measurer) {
     if (!measurer) return -1;
     JavaVM* java_vm = nullptr;
@@ -271,7 +299,7 @@ Java_dev_leptoskit_mobile_NativeApp_setTextMeasurer(JNIEnv* env, jclass, jlong h
     jclass type = env->GetObjectClass(measurer);
 
     if (!type) return -1;
-    const auto measure = env->GetMethodID(type, "measure", "([BFIFZ)[F");
+    const auto measure = env->GetMethodID(type, "measure", "([BFIIFZ)[F");
     env->DeleteLocalRef(type);
 
     if (!measure) return -1;

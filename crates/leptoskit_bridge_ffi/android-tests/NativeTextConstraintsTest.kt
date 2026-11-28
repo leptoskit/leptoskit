@@ -18,12 +18,16 @@ class NativeTextConstraintsTest {
             val width = pixels / metrics.density
 
             for (weight in listOf(400, 700)) {
-                val measured = measurer.measure(text, 16f, weight, width, false)
+                val measured = measurer.measure(text, 16f, weight, SYSTEM_FACE, width, false)
                 assertTrue(
                     "weight $weight in a $pixels px box measured ${measured[0]} points for $width points",
                     measured[0] > 0f && measured[0] <= width,
                 )
             }
         }
+    }
+
+    private companion object {
+        const val SYSTEM_FACE = -1
     }
 }

@@ -57,9 +57,21 @@ pub(crate) fn font_weight(weight: FontWeight) -> NSFontWeight {
 	}
 }
 
-/// The system font at the style's size and weight.
-pub(crate) fn system_font(style: TextStyle) -> Retained<NSFont> {
-	NSFont::systemFontOfSize_weight(f64::from(style.font_size), font_weight(style.font_weight))
+/// The font text in `style` draws and measures with: the declared face the
+/// style carries, else the system font at its size and weight.
+///
+/// Every font AppKit text gets comes from here, so a declared family reaches
+/// every widget that draws text.
+pub(crate) fn font(style: TextStyle) -> Retained<NSFont> {
+	style
+		.face
+		.and_then(|face| crate::fonts::declared(face, style.font_size))
+		.unwrap_or_else(|| {
+			NSFont::systemFontOfSize_weight(
+				f64::from(style.font_size),
+				font_weight(style.font_weight),
+			)
+		})
 }
 
 /// How far to raise each line's glyphs so they sit centered in a line of
@@ -105,7 +117,7 @@ pub(crate) fn attributed_string(
 	style: TextStyle,
 	color: &NSColor,
 ) -> Retained<NSAttributedString> {
-	let font = system_font(style);
+	let font = font(style);
 	let paragraph = NSMutableParagraphStyle::new();
 	paragraph.setAlignment(ns_alignment(style));
 	paragraph.setBaseWritingDirection(match style.direction {

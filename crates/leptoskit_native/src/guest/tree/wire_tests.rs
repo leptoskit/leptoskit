@@ -207,6 +207,7 @@ fn every_prop() -> NativeProps {
 		font_size: Some(13.5),
 		font_weight: Some(FontWeight::Semibold),
 		italic: Some(true),
+		font_family: Some(crate::FontFamily::Declared(2)),
 		line_height: Some(LineHeight::Relative(1.375)),
 		spans: Some(vec![
 			TextSpan::new("The dead market ").color(Color(0xFFFF_FFFF)),

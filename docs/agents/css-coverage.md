@@ -10,7 +10,7 @@ Which tests back each row of the public [CSS and Tailwind coverage reference](..
 - [Positioned Layout](https://www.w3.org/TR/css-position-3/): Tests cover signed offsets, direction-dependent edge precedence, grid-area offsets, and explicit dimensions with opposing insets.
 - [Display](https://www.w3.org/TR/css-display-3/): [Component tests](https://github.com/leptoskit/leptoskit/blob/main/crates/leptoskit_native/tests/components.rs) cover hidden subtrees and restoration after resizing.
 - [Overflow](https://www.w3.org/TR/css-overflow-3/): Component tests cover overflow hit testing.
-- [Fonts](https://www.w3.org/TR/css-fonts-3/): Tests compare measured label sizes with actual AppKit cells.
+- [Fonts](https://www.w3.org/TR/css-fonts-3/): Tests compare measured label sizes with actual AppKit cells. Declared families (`[theme.fonts]`) are covered at each layer: [configuration tests](https://github.com/leptoskit/leptoskit/blob/main/crates/leptoskit_config/tests/config.rs) parse and reject declarations; the [font tests](https://github.com/leptoskit/leptoskit/blob/main/crates/leptoskit_native/tests/fonts.rs) resolve `font-[var(--name)]`, inherit and reset the family, select faces by weight and style, remeasure on a family change, and hold every text-bearing widget kind to measuring in the declared face; the [CLI's font tests](https://github.com/leptoskit/leptoskit/blob/main/crates/leptoskit_cli/src/fonts/tests.rs) check the manifest, the web stylesheet, and the build error for a missing or non-font file; [`macos_fonts`](https://github.com/leptoskit/leptoskit/blob/main/crates/leptoskit_bridge_ffi/tests/macos_fonts.rs) measures two real families through Core Text and the host C ABI; the `leptoskit_appkit` unit tests check the loaded PostScript name and the variable `wght` instance; the host measurer test in `leptoskit_bridge_ffi`'s `src/app/text.rs` checks the face reaches the Android measurer; and [`font_guard`](https://github.com/leptoskit/leptoskit/blob/main/crates/leptoskit_bridge_ffi/tests/font_guard.rs) fails on a Swift, Kotlin, or Rust renderer that makes a system font outside the designated font functions. The [typefaces example](https://github.com/leptoskit/leptoskit/tree/main/examples/typefaces) is the device check: build it for each platform and compare its three samples.
 - [Color](https://www.w3.org/TR/css-color-4/): [Compiler tests](https://github.com/leptoskit/leptoskit/blob/main/crates/leptoskit_native/tests/tailwind.rs) check resolved colors and palette entries.
 - [Backgrounds and Borders](https://www.w3.org/TR/css-backgrounds-3/): The widget suites that painted radius clipping are not in the tree.
 - [Syntax](https://www.w3.org/TR/css-syntax-3/) and [Values and Units](https://www.w3.org/TR/css-values-3/): Tests reject malformed brackets, non-finite numbers, invalid ranges, and unsafe tokens.
@@ -33,6 +33,9 @@ Run the implementation checks with:
 cargo test --package leptoskit_yoga
 cargo test --package leptoskit_native --all-features
 cargo test --package leptoskit_appkit --test appkit
+cargo test --package leptoskit_native --all-features --test fonts
+cargo test --package leptoskit_cli --lib fonts
+cargo test --package leptoskit_bridge_ffi --features app --test macos_fonts --test font_guard
 ```
 
 The AppKit tests run only on macOS. Browser tests use the workspace's `wasm-bindgen-test-runner` and an installed ChromeDriver:

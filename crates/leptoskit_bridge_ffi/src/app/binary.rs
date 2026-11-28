@@ -519,6 +519,7 @@ fn encode_rest(props: &NativeProps) -> io::Result<RestProps> {
 		border_widths,
 		line_height,
 		italic,
+		font_family,
 		spans,
 		direction,
 		focused,
@@ -555,6 +556,7 @@ fn encode_rest(props: &NativeProps) -> io::Result<RestProps> {
 		|| border_widths.is_some()
 		|| line_height.is_some()
 		|| italic.is_some()
+		|| font_family.is_some()
 		|| spans.is_some()
 		|| focused.is_some()
 		|| focus_request.is_some()

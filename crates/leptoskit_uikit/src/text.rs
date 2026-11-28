@@ -20,9 +20,8 @@ use objc2_ui_kit::NSParagraphStyleAttributeName;
 use objc2_ui_kit::NSTextAlignment;
 use objc2_ui_kit::NSWritingDirection;
 use objc2_ui_kit::UIColor;
-use objc2_ui_kit::UIFont;
 
-use crate::measure::font_weight;
+use crate::measure::font;
 
 pub(crate) fn alignment(style: TextStyle) -> NSTextAlignment {
 	match (style.text_align, style.direction) {
@@ -48,8 +47,7 @@ pub(crate) fn attributed(
 	style: TextStyle,
 	color: &UIColor,
 ) -> Retained<NSAttributedString> {
-	let font =
-		UIFont::systemFontOfSize_weight(f64::from(style.font_size), font_weight(style.font_weight));
+	let font = font(style);
 	let paragraph = NSMutableParagraphStyle::new();
 	paragraph.setAlignment(alignment(style));
 	paragraph.setBaseWritingDirection(match style.direction {

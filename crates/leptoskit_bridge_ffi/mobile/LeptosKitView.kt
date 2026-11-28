@@ -137,6 +137,8 @@ class LeptosKitView(
         // The guest can queue its first model before a Scene3d view exists.
         if (NativeScene3d.available()) NativeScene3d.configure(context)
         try {
+            // Layout measures in the app's declared fonts from its first commit.
+            NativeFonts.install(context.assets)
             app =
                 NativeApp.create(
                     wasm,

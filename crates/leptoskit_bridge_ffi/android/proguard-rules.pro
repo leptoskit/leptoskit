@@ -18,7 +18,7 @@
     void completed(long);
 }
 -keepclassmembers class dev.leptoskit.mobile.NativeTextMeasurer {
-    float[] measure(byte[], float, int, float, boolean);
+    float[] measure(byte[], float, int, int, float, boolean);
 }
 -keepclassmembers class dev.leptoskit.mobile.GuestNotifier {
     void notified();

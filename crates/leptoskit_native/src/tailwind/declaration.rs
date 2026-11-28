@@ -150,8 +150,9 @@ pub(super) enum Declaration {
 	/// A transform or animation utility.
 	Motion(super::motion::Motion),
 	/// A typeface family, from `font-sans`, `font-serif`, `font-mono`, or a
-	/// theme variable (`font-[var(--name)]`). The web only: native text keeps
-	/// the platform's system face.
+	/// theme variable (`font-[var(--name)]`). Natively, a variable chooses
+	/// the family the app declares under that name, and the three stacks
+	/// choose the platform's system face.
 	FontFamily(FontFamily),
 	/// Whether digits share one width (`tabular-nums`) or keep the font's
 	/// proportional widths (`normal-nums`). The web only.
@@ -194,6 +195,23 @@ impl FontFamily {
 					.to_owned()
 			}
 			Self::Var(name) => format!("var({name})"),
+		}
+	}
+
+	/// The family native text draws in: the declared family a theme
+	/// variable names, or the system face for the three stacks.
+	///
+	/// `None` for a variable the installed fonts do not declare, which
+	/// leaves the inherited family, as a browser does when a `var()` in
+	/// `font-family` names nothing.
+	fn native(&self) -> Option<crate::props::FontFamily> {
+		match self {
+			Self::Sans | Self::Serif | Self::Mono => Some(crate::props::FontFamily::System),
+			Self::Var(name) => {
+				crate::fonts::installed()?
+					.family(name)
+					.map(crate::props::FontFamily::Declared)
+			}
 		}
 	}
 }
@@ -422,6 +440,11 @@ impl Declaration {
 				});
 			}
 			Self::Italic(value) => props.italic = Some(*value),
+			Self::FontFamily(family) => {
+				if let Some(family) = family.native() {
+					props.font_family = Some(family);
+				}
+			}
 			Self::TextAlign(value) => props.text_align = Some(*value),
 			Self::BorderWidth(value) => {
 				let width = value.points(context);

@@ -16,6 +16,7 @@ On Wear OS, leptoskit does not pretend a phone activity is a watch. You describe
 | Android Gradle APK packaging with `android.hardware.type.watch` manifest transform                                       | Code push updates on Wear OS                |
 | Full Android runtime plugins (`wearable`, `health`, `watch-sync`, `ble`, `location`, `battery`, `thermal`, `background`) | Automated Wear OS emulator harness in CI    |
 | Samsung Galaxy Watch (Wear OS / One UI Watch) + optional Samsung Health Sensor SDK hook                                  |                                             |
+| An app's own [fonts](../guide/42-fonts.md), loaded as on Android                                                         | Running them on a watch: not yet checked    |
 
 ## Build
 

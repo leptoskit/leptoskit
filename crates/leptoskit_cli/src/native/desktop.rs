@@ -364,6 +364,12 @@ fn assemble(root: &Path, config: &LeptoskitConfig, binary: &Path) -> Result<std:
 		&super::generated_dir(root, Target::Macos).join("assets/app.wasm"),
 		&bundle.join("Resources/app.wasm"),
 	)?;
+	// The typefaces `[theme.fonts]` declares, which the host registers from
+	// the staged `assets/` before its first layout.
+	copy(
+		&super::generated_dir(root, Target::Macos).join("mobile/fonts.json"),
+		&bundle.join("Resources/fonts.json"),
+	)?;
 	// The app's `assets/`, staged for the bundle, where `asset://` images,
 	// 3D models, and sounds read it.
 	super::sync_folder(
