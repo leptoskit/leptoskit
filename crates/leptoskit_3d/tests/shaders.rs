@@ -153,10 +153,10 @@ fn vertex_stages_fit_webgl2() {
 		}
 	}
 
-	// The mesh's two (static, skinned), the outline's two, and
-	// the background's and shadow's: a stage renamed or dropped
-	// should be noticed here.
-	assert!(vertex_stages >= 6, "{vertex_stages}");
+	// The mesh's two (static, skinned), the outline's two, the knockout's two,
+	// and the background's and shadow's: a stage renamed or dropped should be
+	// noticed here.
+	assert!(vertex_stages >= 8, "{vertex_stages}");
 }
 
 fn positive_literal(

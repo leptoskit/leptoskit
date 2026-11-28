@@ -23,6 +23,13 @@ pub struct Root {
 	pub samplers: Vec<Sampler>,
 	pub skins: Vec<Skin>,
 	pub animations: Vec<Animation>,
+	pub extras: Option<RootExtras>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct RootExtras {
+	pub outline_smooth_rings: Option<u8>,
 }
 
 #[derive(Deserialize, Default)]
@@ -64,6 +71,7 @@ pub struct Mesh {
 #[serde(default, rename_all = "camelCase")]
 pub struct MeshExtras {
 	pub target_names: Vec<String>,
+	pub outline_smooth_rings: Option<u8>,
 }
 
 #[derive(Deserialize, Default)]

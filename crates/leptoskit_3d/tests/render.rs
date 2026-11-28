@@ -1861,3 +1861,1987 @@ fn quantized_scale_mesh_hatches_at_rest_pose_density() {
 	let changes = row.windows(2).filter(|pair| pair[0] != pair[1]).count();
 	assert!(changes >= 8, "expected distinct hatch lines, got {changes}");
 }
+
+/// Exact sRGB encoding of a linear colour without exposure or tonemapping, as
+/// relief-print surfaces and ink lines output on an `Rgba8Unorm` target.
+fn exact_srgb(color: [f32; 3]) -> [u8; 4] {
+	let encode = |value: f32| {
+		let value = value.clamp(0.0, 1.0);
+		let srgb = if value <= 0.003_130_8 {
+			value * 12.92
+		} else {
+			1.055 * value.powf(1.0 / 2.4) - 0.055
+		};
+		(srgb * 255.0).round() as u8
+	};
+	[encode(color[0]), encode(color[1]), encode(color[2]), 255]
+}
+
+fn print_no_knockout() -> Print {
+	Print {
+		knockout_width: 0.0,
+		..Print::default()
+	}
+}
+
+#[test]
+fn print_bands_output_exact_un_tonemapped_colours_and_flat_mode() {
+	let Some(gpu) = gpu() else { return };
+	let lit = [0.85, 0.70, 0.15];
+	let shade = [0.15, 0.55, 0.20];
+	let deep = [0.12, 0.10, 0.60];
+	let mut renderer = lit_sphere(gpu, None);
+	renderer.world_mut().apply([
+		Op::SetExposure(4.0),
+		Op::SetLight(Light {
+			direction: [-1.0, 0.0, 0.0],
+			intensity: 10.0,
+			shadow: 0.0,
+			..Light::default()
+		}),
+		style(
+			Shading::Print(Print {
+				t_lit: 0.30,
+				t_deep: -0.10,
+				rim: 0.0,
+				..print_no_knockout()
+			}),
+			None,
+		),
+		Op::SetPrint {
+			node: NodeId(1),
+			target: PrintTarget::All,
+			print: PrintOverride {
+				lit: Some(lit),
+				shade: Some(shade),
+				deep: Some(deep),
+				..PrintOverride::default()
+			},
+		},
+	]);
+
+	let image = draw(&mut renderer);
+	assert!(
+		near(image.at(48, 32), exact_srgb(lit), 2),
+		"lit band: {:?} vs {:?}",
+		image.at(48, 32),
+		exact_srgb(lit)
+	);
+	assert!(
+		near(image.at(32, 32), exact_srgb(shade), 2),
+		"shade band: {:?} vs {:?}",
+		image.at(32, 32),
+		exact_srgb(shade)
+	);
+	assert!(
+		near(image.at(16, 32), exact_srgb(deep), 2),
+		"deep band: {:?} vs {:?}",
+		image.at(16, 32),
+		exact_srgb(deep)
+	);
+
+	// Flat mode outputs exact `lit` everywhere regardless of N·L.
+	renderer.world_mut().apply([Op::SetPrint {
+		node: NodeId(1),
+		target: PrintTarget::All,
+		print: PrintOverride {
+			lit: Some(lit),
+			shade: Some(shade),
+			deep: Some(deep),
+			mode: Some(PrintMode::Flat),
+			..PrintOverride::default()
+		},
+	}]);
+	let flat = draw(&mut renderer);
+	for x in [16, 32, 48] {
+		assert!(
+			near(flat.at(x, 32), exact_srgb(lit), 2),
+			"flat at x={x}: {:?} vs {:?}",
+			flat.at(x, 32),
+			exact_srgb(lit)
+		);
+	}
+}
+
+#[test]
+fn print_hatching_cross_hatching_and_fade_to_mean_tone() {
+	let Some(gpu) = gpu() else { return };
+	let lit = [0.90, 0.90, 0.90];
+	let shade = [0.50, 0.50, 0.50];
+	let deep = [0.05, 0.05, 0.80];
+	let ink_color = [0.95, 0.05, 0.05];
+	let mut renderer = lit_sphere(gpu, None);
+	let render_at = |renderer: &mut Renderer, size: u32| {
+		renderer.advance(0.0);
+		Image {
+			pixels: renderer.render_to_rgba(size, size).unwrap(),
+			width: size,
+		}
+	};
+
+	renderer.world_mut().apply([
+		style(
+			Shading::Print(Print {
+				t_lit: 0.30,
+				t_deep: 0.05,
+				t_cross: -0.40,
+				rim: 0.0,
+				hatch_per_m: 32.0,
+				hatch_gain: 0.40,
+				hatch_max: 0.55,
+				cross_duty: 0.35,
+				fade_px: [2.5, 4.0],
+				..print_no_knockout()
+			}),
+			Some(Ink {
+				color: ink_color,
+				width: 0.0,
+				..Ink::default()
+			}),
+		),
+		Op::SetPrint {
+			node: NodeId(1),
+			target: PrintTarget::All,
+			print: PrintOverride {
+				lit: Some(lit),
+				shade: Some(shade),
+				deep: Some(deep),
+				hatch_min: Some(0.25),
+				cross_hatch: Some(false),
+				..PrintOverride::default()
+			},
+		},
+	]);
+
+	let primary = render_at(&mut renderer, 256);
+	let red_count = |image: &Image, cols: std::ops::Range<u32>, rows: std::ops::Range<u32>| {
+		cols.flat_map(|x| rows.clone().map(move |y| (x, y)))
+			.filter(|(x, y)| {
+				let p = image.at(*x, *y);
+				u16::from(p[0]) > u16::from(p[2]) + 40
+			})
+			.count()
+	};
+	// Lit side (right) stays clear of hatching.
+	assert_eq!(red_count(&primary, 165..210, 96..160), 0);
+	// Deep side (left) has crisp alternating hatch stripes.
+	let primary_deep_red = red_count(&primary, 48..116, 96..160);
+	assert!(primary_deep_red > 500, "{primary_deep_red}");
+	let row: Vec<bool> = (52..116)
+		.map(|x| {
+			let p = primary.at(x, 128);
+			p[0] > p[2]
+		})
+		.collect();
+	let transitions = row.windows(2).filter(|pair| pair[0] != pair[1]).count();
+	assert!(transitions >= 6, "expected discrete stripes: {transitions}");
+
+	// Enabling cross-hatch adds secondary strokes in the deepest shadow (N·L <
+	// t_cross).
+	renderer.world_mut().apply([Op::SetPrint {
+		node: NodeId(1),
+		target: PrintTarget::All,
+		print: PrintOverride {
+			lit: Some(lit),
+			shade: Some(shade),
+			deep: Some(deep),
+			hatch_min: Some(0.25),
+			cross_hatch: Some(true),
+			..PrintOverride::default()
+		},
+	}]);
+	let crossed = render_at(&mut renderer, 256);
+	let crossed_deep_red = red_count(&crossed, 48..92, 96..160);
+	let primary_deepest_red = red_count(&primary, 48..92, 96..160);
+	assert!(
+		crossed_deep_red > primary_deepest_red + 100,
+		"cross-hatch adds ink in deepest band: {crossed_deep_red} vs {primary_deepest_red}"
+	);
+
+	// Very fine pitch (< fade_lo px) fades cleanly to the mean tone instead of
+	// moiré or 0.
+	renderer.world_mut().apply([Op::SetPrint {
+		node: NodeId(1),
+		target: PrintTarget::All,
+		print: PrintOverride {
+			lit: Some(lit),
+			shade: Some(shade),
+			deep: Some(deep),
+			hatch_min: Some(0.50),
+			hatch_per_m: Some(1000.0),
+			cross_hatch: Some(false),
+			..PrintOverride::default()
+		},
+	}]);
+	let faded = draw(&mut renderer);
+	let samples: Vec<[u8; 4]> = (14..22).map(|x| faded.at(x, 32)).collect();
+	let min_r = samples.iter().map(|p| p[0]).min().unwrap();
+	let max_r = samples.iter().map(|p| p[0]).max().unwrap();
+	// Uniform mean blend of red ink into blue deep (noticeably redder than pure
+	// deep [62,62,231]).
+	let pure_deep = exact_srgb(deep);
+	assert!(
+		min_r > pure_deep[0] + 60,
+		"faded hatch keeps mean ink tone instead of vanishing: {samples:?} vs pure {pure_deep:?}"
+	);
+	assert!(
+		max_r - min_r <= 20,
+		"faded hatch stays smooth without moiré stripes: {samples:?}"
+	);
+}
+
+#[test]
+fn print_paper_specular_and_backlit_spot_rim() {
+	let Some(gpu) = gpu() else { return };
+	let lit = [0.20, 0.25, 0.30];
+	let shade = [0.10, 0.12, 0.15];
+	let deep = [0.05, 0.05, 0.08];
+	let paper = [0.95, 0.90, 0.65];
+	let spot = [0.95, 0.15, 0.85];
+	let mut renderer = lit_sphere(gpu, None);
+	renderer.world_mut().apply([
+		Op::SetLight(Light {
+			// Side-key light (matching cel.toml's grazing key angle) so the right turning flank
+			// has N·V < 0.5 and N·H > 0.90, while the left silhouette has N·V < rim and N·L < 0.05.
+			direction: [-0.95, 0.0, 0.30],
+			shadow: 0.0,
+			..Light::default()
+		}),
+		style(
+			Shading::Print(Print {
+				t_lit: 0.30,
+				t_deep: -0.10,
+				rim: 0.45,
+				paper,
+				..print_no_knockout()
+			}),
+			None,
+		),
+		Op::SetPrint {
+			node: NodeId(1),
+			target: PrintTarget::All,
+			print: PrintOverride {
+				lit: Some(lit),
+				shade: Some(shade),
+				deep: Some(deep),
+				spot: Some(spot),
+				specular: Some(0.90),
+				rim: Some(true),
+				..PrintOverride::default()
+			},
+		},
+	]);
+
+	let image = draw(&mut renderer);
+	let expected_paper = exact_srgb(paper);
+	let expected_spot = exact_srgb(spot);
+	let expected_deep = exact_srgb(deep);
+
+	// Center faces camera (N·V ~ 1.0 >= 0.5): must NOT get turning-edge paper
+	// specular or rim.
+	assert!(
+		near(image.at(32, 32), expected_deep, 2),
+		"center should be deep (not paper or spot): {:?} vs {expected_deep:?}",
+		image.at(32, 32)
+	);
+
+	// Scan equator row for paper specular on right turning flank and spot rim
+	// on left shadow flank.
+	let right_paper = (33..60)
+		.filter(|&x| near(image.at(x, 32), expected_paper, 4))
+		.count();
+	let left_spot = (4..31)
+		.filter(|&x| near(image.at(x, 32), expected_spot, 4))
+		.count();
+	assert!(
+		right_paper >= 2,
+		"expected paper specular on turning edge, got {right_paper}"
+	);
+	assert!(
+		left_spot >= 2,
+		"expected spot rim on shadow silhouette, got {left_spot}"
+	);
+}
+
+#[test]
+fn print_overrides_part_beats_material_beats_all_on_screen() {
+	let Some(gpu) = gpu() else { return };
+	let mut renderer = renderer(gpu);
+	spawn(&mut renderer, 1, 1, &fixture::multi_material_parts());
+	let blue = [0.05, 0.15, 0.85];
+	let green = [0.10, 0.80, 0.15];
+	let red = [0.85, 0.10, 0.10];
+
+	renderer.world_mut().apply([
+		Op::SetLight(Light {
+			direction: [0.0, 0.0, -1.0],
+			shadow: 0.0,
+			..Light::default()
+		}),
+		style(Shading::Print(print_no_knockout()), None),
+		Op::SetPrint {
+			node: NodeId(1),
+			target: PrintTarget::All,
+			print: PrintOverride {
+				lit: Some(blue),
+				mode: Some(PrintMode::Flat),
+				..PrintOverride::default()
+			},
+		},
+		Op::SetPrint {
+			node: NodeId(1),
+			target: PrintTarget::Material("cloth".into()),
+			print: PrintOverride {
+				lit: Some(green),
+				..PrintOverride::default()
+			},
+		},
+		Op::SetPrint {
+			node: NodeId(1),
+			target: PrintTarget::Part("right".into()),
+			print: PrintOverride {
+				lit: Some(red),
+				..PrintOverride::default()
+			},
+		},
+	]);
+
+	let image = draw(&mut renderer);
+	// Left-top is `left` with `cloth.001` -> Material("cloth") beats All ->
+	// green.
+	assert!(
+		near(image.at(20, 24), exact_srgb(green), 2),
+		"left/cloth.001: {:?} vs {:?}",
+		image.at(20, 24),
+		exact_srgb(green)
+	);
+	// Left-bottom is `left` with `gold` -> falls back to All -> blue.
+	assert!(
+		near(image.at(20, 42), exact_srgb(blue), 2),
+		"left/gold: {:?} vs {:?}",
+		image.at(20, 42),
+		exact_srgb(blue)
+	);
+	// Right is `right` with `cloth.002` -> Part("right") beats
+	// Material("cloth") -> red.
+	assert!(
+		near(image.at(44, 32), exact_srgb(red), 2),
+		"right/cloth.002: {:?} vs {:?}",
+		image.at(44, 32),
+		exact_srgb(red)
+	);
+}
+
+#[test]
+fn camera_space_light_follows_the_camera() {
+	let Some(gpu) = gpu() else { return };
+	let lit = [0.90, 0.85, 0.20];
+	let deep = [0.10, 0.10, 0.50];
+	let mut renderer = lit_sphere(gpu, None);
+	renderer.world_mut().apply([
+		style(
+			Shading::Print(Print {
+				t_lit: 0.25,
+				t_deep: -0.25,
+				rim: 0.0,
+				..print_no_knockout()
+			}),
+			None,
+		),
+		Op::SetPrint {
+			node: NodeId(1),
+			target: PrintTarget::All,
+			print: PrintOverride {
+				lit: Some(lit),
+				shade: Some([0.4, 0.4, 0.4]),
+				deep: Some(deep),
+				..PrintOverride::default()
+			},
+		},
+		// Light travels -X in camera space (from camera's right).
+		Op::SetLight(Light {
+			direction: [-1.0, 0.0, 0.0],
+			shadow: 0.0,
+			camera_space: true,
+			..Light::default()
+		}),
+	]);
+
+	let front = draw(&mut renderer);
+	assert!(near(front.at(48, 32), exact_srgb(lit), 2));
+	assert!(near(front.at(16, 32), exact_srgb(deep), 2));
+
+	// Orbit camera 180 deg to the opposite side: camera-space light stays on
+	// screen right.
+	renderer.world_mut().apply([Op::SetCamera {
+		transform: Transform::from_translation(0.0, 0.0, -3.0).with_yaw(std::f32::consts::PI),
+		fov_y: 0.8,
+		near: 0.1,
+		far: 50.0,
+	}]);
+	let back = draw(&mut renderer);
+	assert!(
+		near(back.at(48, 32), exact_srgb(lit), 2),
+		"camera-space light stayed on right: {:?}",
+		back.at(48, 32)
+	);
+	assert!(
+		near(back.at(16, 32), exact_srgb(deep), 2),
+		"camera-space shadow stayed on left: {:?}",
+		back.at(16, 32)
+	);
+
+	// Flip to world-space light: now screen right and left swap.
+	renderer.world_mut().apply([Op::SetLight(Light {
+		direction: [-1.0, 0.0, 0.0],
+		shadow: 0.0,
+		camera_space: false,
+		..Light::default()
+	})]);
+	let world = draw(&mut renderer);
+	assert!(
+		near(world.at(16, 32), exact_srgb(lit), 2),
+		"world-space light moved to screen left: {:?}",
+		world.at(16, 32)
+	);
+	assert!(
+		near(world.at(48, 32), exact_srgb(deep), 2),
+		"world-space shadow moved to screen right: {:?}",
+		world.at(48, 32)
+	);
+}
+
+#[test]
+fn print_outline_thins_on_lit_side_and_thickens_on_shadow_side() {
+	let Some(gpu) = gpu() else { return };
+	let mut renderer = lit_sphere(gpu, None);
+	let render_128 = |renderer: &mut Renderer| {
+		renderer.advance(0.0);
+		Image {
+			pixels: renderer.render_to_rgba(128, 128).unwrap(),
+			width: 128,
+		}
+	};
+
+	renderer.world_mut().apply([
+		Op::SetLight(Light {
+			// Light shines from the right (-X travel, toward +X).
+			direction: [-1.0, 0.0, 0.0],
+			shadow: 0.0,
+			..Light::default()
+		}),
+		Op::SetPrint {
+			node: NodeId(1),
+			target: PrintTarget::All,
+			print: PrintOverride {
+				lit: Some([0.2, 0.3, 0.8]),
+				shade: Some([0.1, 0.2, 0.6]),
+				deep: Some([0.05, 0.1, 0.4]),
+				..PrintOverride::default()
+			},
+		},
+		style(
+			Shading::Print(Print {
+				side_heavy: 1.40,
+				side_drop: 0.90,
+				side_from: -0.35,
+				side_to: 0.75,
+				..print_no_knockout()
+			}),
+			Some(Ink {
+				wobble: 0.0,
+				..red_ink(55.0)
+			}),
+		),
+	]);
+
+	let image = render_128(&mut renderer);
+	let runs = ink_runs(&image, 64);
+	assert_eq!(runs.len(), 2, "two silhouette edges at equator: {runs:?}");
+	let shadow_width = runs[0].1;
+	let lit_width = runs[1].1;
+	assert!(
+		shadow_width > lit_width + 3,
+		"shadow edge ({shadow_width}px) must be noticeably thicker than lit edge ({lit_width}px): \
+		 {runs:?}"
+	);
+
+	// Zero side_drop restores symmetric edges.
+	renderer.world_mut().apply([style(
+		Shading::Print(Print {
+			side_heavy: 1.0,
+			side_drop: 0.0,
+			..print_no_knockout()
+		}),
+		Some(Ink {
+			wobble: 0.0,
+			..red_ink(55.0)
+		}),
+	)]);
+	let symmetric = render_128(&mut renderer);
+	let sym_runs = ink_runs(&symmetric, 64);
+	assert_eq!(sym_runs.len(), 2, "{sym_runs:?}");
+	assert!(
+		sym_runs[0].1.abs_diff(sym_runs[1].1) <= 1,
+		"zero side_drop yields symmetric edges: {sym_runs:?}"
+	);
+}
+
+#[test]
+fn print_outline_wobble_frequency_and_per_figure_three_slot_boil() {
+	let Some(gpu) = gpu() else { return };
+	let mut renderer = renderer(gpu);
+	let sphere = fixture::lit_sphere(32, None);
+	spawn(&mut renderer, 1, 1, &sphere);
+	renderer.world_mut().apply([
+		Op::SetBackdrop(Backdrop::Color([0.05, 0.05, 0.10, 1.0])),
+		Op::SetLight(Light {
+			direction: [0.0, 0.0, -1.0],
+			shadow: 0.0,
+			..Light::default()
+		}),
+		Op::SetTransform {
+			node: NodeId(1),
+			transform: Transform::from_translation(-0.65, 0.0, 0.0).with_scale(0.45),
+		},
+		Op::Spawn {
+			node: NodeId(2),
+			asset: Some(AssetId(1)),
+			parent: None,
+		},
+		Op::SetTransform {
+			node: NodeId(2),
+			transform: Transform::from_translation(0.65, 0.0, 0.0).with_scale(0.45),
+		},
+		style(
+			Shading::Print(Print {
+				wobble_frequency: 5.0,
+				..print_no_knockout()
+			}),
+			Some(Ink {
+				wobble: 0.45,
+				boil: 0.0,
+				..red_ink(55.0)
+			}),
+		),
+	]);
+
+	let half = |image: &Image, cols: std::ops::Range<u32>| -> Vec<[u8; 4]> {
+		(0..128)
+			.flat_map(|y| cols.clone().map(move |x| image.at(x, y)))
+			.collect()
+	};
+
+	let mut frames = Vec::new();
+	for slot in 0..=3_u8 {
+		renderer.world_mut().apply([Op::SetPrint {
+			node: NodeId(1),
+			target: PrintTarget::All,
+			print: PrintOverride {
+				lit: Some([0.1, 0.3, 0.8]),
+				shade: Some([0.1, 0.2, 0.6]),
+				deep: Some([0.05, 0.1, 0.4]),
+				boil_step: Some(slot),
+				..PrintOverride::default()
+			},
+		}]);
+		renderer.advance(0.0);
+		frames.push(Image {
+			pixels: renderer.render_to_rgba(128, 128).unwrap(),
+			width: 128,
+		});
+	}
+
+	// Boiling figure (left half) differs across slots 0, 1, 2 and wraps back at
+	// 3 == 0.
+	let left: Vec<_> = frames.iter().map(|img| half(img, 0..64)).collect();
+	assert_ne!(left[0], left[1], "slot 0 and 1 must differ");
+	assert_ne!(left[1], left[2], "slot 1 and 2 must differ");
+	assert_ne!(left[0], left[2], "slot 0 and 2 must differ");
+	assert_eq!(left[0], left[3], "slot 3 wraps back to slot 0");
+
+	// Static sibling (right half) is byte-for-byte identical across all frames.
+	let right: Vec<_> = frames.iter().map(|img| half(img, 64..128)).collect();
+	assert_eq!(right[0], right[1], "static sibling must not boil");
+	assert_eq!(right[0], right[2], "static sibling must not boil");
+	assert_eq!(right[0], right[3], "static sibling must not boil");
+
+	// Changing wobble_frequency alters the wobbled outline profile.
+	renderer.world_mut().apply([style(
+		Shading::Print(Print {
+			wobble_frequency: 1.0,
+			..print_no_knockout()
+		}),
+		Some(Ink {
+			wobble: 0.45,
+			boil: 0.0,
+			..red_ink(55.0)
+		}),
+	)]);
+	renderer.advance(0.0);
+	let low_freq = Image {
+		pixels: renderer.render_to_rgba(128, 128).unwrap(),
+		width: 128,
+	};
+	assert_ne!(
+		half(&low_freq, 0..64),
+		left[0],
+		"wobble_frequency must affect outline wobble"
+	);
+}
+
+#[test]
+fn print_mode_keeps_outlining_small_parts_above_half_pixel() {
+	let Some(gpu) = gpu() else { return };
+	let mut renderer = lit_sphere(gpu, None);
+	// Scale 0.06 at z = 3 projects to ~1.5 px radius (< 4 px Toon cull, >= 0.5
+	// px Print floor).
+	renderer.world_mut().apply([Op::SetTransform {
+		node: NodeId(1),
+		transform: Transform::IDENTITY.with_scale(0.06),
+	}]);
+
+	renderer
+		.world_mut()
+		.apply([style(Shading::Toon(flat_toon(3)), Some(red_ink(3.0)))]);
+	let _ = draw(&mut renderer);
+	assert_eq!(
+		renderer.stats().outlines,
+		0,
+		"Toon culls small parts under MIN_OUTLINED_RADIUS"
+	);
+
+	renderer.world_mut().apply([style(
+		Shading::Print(print_no_knockout()),
+		Some(red_ink(3.0)),
+	)]);
+	let print_small = draw(&mut renderer);
+	assert_eq!(
+		renderer.stats().outlines,
+		1,
+		"Print keeps outlining small parts above 0.5 px"
+	);
+	assert!(ink_count(&print_small) > 0, "small part has visible ink");
+
+	// Sub-pixel speck (~0.12 px radius) is still dropped.
+	renderer.world_mut().apply([Op::SetTransform {
+		node: NodeId(1),
+		transform: Transform::IDENTITY.with_scale(0.005),
+	}]);
+	let _ = draw(&mut renderer);
+	assert_eq!(renderer.stats().outlines, 0, "sub-pixel speck is dropped");
+}
+
+const PAPER_COLOR: [f32; 3] = [0.95, 0.90, 0.20];
+
+fn is_paper(pixel: [u8; 4]) -> bool {
+	near(pixel, exact_srgb(PAPER_COLOR), 12)
+}
+
+fn paper_count(image: &Image) -> usize {
+	(0..image.width)
+		.flat_map(|y| (0..image.width).map(move |x| (x, y)))
+		.filter(|(x, y)| is_paper(image.at(*x, *y)))
+		.count()
+}
+
+fn render_size(renderer: &mut Renderer, size: u32) -> Image {
+	renderer.advance(0.0);
+	Image {
+		pixels: renderer.render_to_rgba(size, size).unwrap(),
+		width: size,
+	}
+}
+
+#[test]
+fn print_paper_knockout_frames_figure_outside_key_line() {
+	let Some(gpu) = gpu() else { return };
+	let blue = [0.10, 0.20, 0.85];
+	let mut renderer = lit_sphere(gpu, None);
+	renderer.world_mut().apply([
+		Op::SetBackdrop(Backdrop::Color([0.04, 0.04, 0.08, 1.0])),
+		Op::SetLight(Light {
+			direction: [0.0, 0.0, -1.0],
+			shadow: 0.0,
+			..Light::default()
+		}),
+		Op::SetPrint {
+			node: NodeId(1),
+			target: PrintTarget::All,
+			print: PrintOverride {
+				lit: Some(blue),
+				mode: Some(PrintMode::Flat),
+				..PrintOverride::default()
+			},
+		},
+		style(
+			Shading::Print(Print {
+				paper: PAPER_COLOR,
+				knockout_width: 45.0,
+				..Print::default()
+			}),
+			Some(Ink {
+				wobble: 0.0,
+				..red_ink(35.0)
+			}),
+		),
+	]);
+
+	let image = render_size(&mut renderer, 128);
+	// Center is untouched blue fill.
+	assert!(near(image.at(64, 64), exact_srgb(blue), 4));
+	// Scanning right from center: blue -> red key ink -> yellow paper knockout
+	// -> backdrop.
+	let mut saw_ink = false;
+	let mut saw_paper_after_ink = false;
+	for x in 64..128 {
+		let p = image.at(x, 64);
+		if is_ink(p) {
+			assert!(
+				!saw_paper_after_ink,
+				"key ink must sit inside paper knockout at x={x}"
+			);
+			saw_ink = true;
+		} else if is_paper(p) {
+			assert!(saw_ink, "paper knockout must sit outside key ink at x={x}");
+			saw_paper_after_ink = true;
+		}
+	}
+	assert!(saw_ink && saw_paper_after_ink);
+
+	// Same ordering scanning left from center.
+	let mut saw_ink_l = false;
+	let mut saw_paper_l = false;
+	for x in (0..=64).rev() {
+		let p = image.at(x, 64);
+		if is_ink(p) {
+			assert!(!saw_paper_l, "left ink inside paper at x={x}");
+			saw_ink_l = true;
+		} else if is_paper(p) {
+			assert!(saw_ink_l, "left paper outside ink at x={x}");
+			saw_paper_l = true;
+		}
+	}
+	assert!(saw_ink_l && saw_paper_l);
+}
+
+#[test]
+fn print_paper_knockout_separates_overlapping_figures() {
+	let Some(gpu) = gpu() else { return };
+	let blue = [0.10, 0.25, 0.85];
+	let green = [0.10, 0.75, 0.20];
+	let mut renderer = renderer(gpu);
+	let sphere = fixture::lit_sphere(32, None);
+	spawn(&mut renderer, 1, 1, &sphere);
+	renderer.world_mut().apply([
+		Op::SetBackdrop(Backdrop::Color([0.04, 0.04, 0.08, 1.0])),
+		Op::SetLight(Light {
+			direction: [0.0, 0.0, -1.0],
+			shadow: 0.0,
+			..Light::default()
+		}),
+		// Near figure on the left-front.
+		Op::SetTransform {
+			node: NodeId(1),
+			transform: Transform::from_translation(-0.22, 0.0, 0.45).with_scale(0.55),
+		},
+		// Far figure overlapping directly behind the near figure.
+		Op::Spawn {
+			node: NodeId(2),
+			asset: Some(AssetId(1)),
+			parent: None,
+		},
+		Op::SetTransform {
+			node: NodeId(2),
+			transform: Transform::from_translation(0.25, 0.0, -0.75).with_scale(1.05),
+		},
+		Op::SetPrint {
+			node: NodeId(1),
+			target: PrintTarget::All,
+			print: PrintOverride {
+				lit: Some(blue),
+				mode: Some(PrintMode::Flat),
+				..PrintOverride::default()
+			},
+		},
+		Op::SetPrint {
+			node: NodeId(2),
+			target: PrintTarget::All,
+			print: PrintOverride {
+				lit: Some(green),
+				mode: Some(PrintMode::Flat),
+				..PrintOverride::default()
+			},
+		},
+		style(
+			Shading::Print(Print {
+				paper: PAPER_COLOR,
+				knockout_width: 55.0,
+				..Print::default()
+			}),
+			Some(Ink {
+				wobble: 0.0,
+				..red_ink(25.0)
+			}),
+		),
+	]);
+
+	let image = render_size(&mut renderer, 128);
+	// Scan across the equator from the near blue figure into the far green
+	// figure: per-figure stencil refs must put a paper knockout border
+	// between them.
+	let mut seen_blue = false;
+	let mut paper_between = 0_usize;
+	let mut seen_green_after_paper = false;
+	for x in 20..115 {
+		let p = image.at(x, 64);
+		if near(p, exact_srgb(blue), 12) {
+			seen_blue = true;
+		} else if seen_blue && is_paper(p) && !seen_green_after_paper {
+			paper_between += 1;
+		} else if seen_blue && paper_between > 0 && near(p, exact_srgb(green), 12) {
+			seen_green_after_paper = true;
+		}
+	}
+	assert!(
+		seen_blue && paper_between >= 3 && seen_green_after_paper,
+		"expected paper separation between near blue and far green figures \
+		 (seen_blue={seen_blue}, paper_between={paper_between}, \
+		 seen_green={seen_green_after_paper})"
+	);
+}
+
+#[test]
+fn print_attached_child_shares_stencil_ref_with_no_interior_seam() {
+	let Some(gpu) = gpu() else { return };
+
+	// Attached to a part, as a weapon is to a hand, and to the model itself.
+	for bone in ["sphere", ""] {
+		attached_child_shares_its_figure(gpu, bone);
+	}
+}
+
+fn attached_child_shares_its_figure(gpu: &Gpu, bone: &str) {
+	let blue = [0.10, 0.25, 0.85];
+	let green = [0.10, 0.75, 0.20];
+	let mut renderer = renderer(gpu);
+	let sphere = fixture::lit_sphere(32, None);
+	spawn(&mut renderer, 1, 1, &sphere);
+	renderer.world_mut().apply([
+		Op::SetBackdrop(Backdrop::Color([0.04, 0.04, 0.08, 1.0])),
+		Op::SetLight(Light {
+			direction: [0.0, 0.0, -1.0],
+			shadow: 0.0,
+			..Light::default()
+		}),
+		Op::SetTransform {
+			node: NodeId(1),
+			transform: Transform::IDENTITY.with_scale(0.90),
+		},
+		// A model attached to NodeId(1), crossing right in front of its torso.
+		Op::Spawn {
+			node: NodeId(2),
+			asset: Some(AssetId(1)),
+			parent: None,
+		},
+		Op::Attach {
+			node: NodeId(2),
+			target: NodeId(1),
+			bone: bone.into(),
+		},
+		Op::SetTransform {
+			node: NodeId(2),
+			transform: Transform::from_translation(0.0, 0.0, 0.55).with_scale(0.35),
+		},
+		Op::SetPrint {
+			node: NodeId(1),
+			target: PrintTarget::All,
+			print: PrintOverride {
+				lit: Some(blue),
+				mode: Some(PrintMode::Flat),
+				..PrintOverride::default()
+			},
+		},
+		Op::SetPrint {
+			node: NodeId(2),
+			target: PrintTarget::All,
+			print: PrintOverride {
+				lit: Some(green),
+				mode: Some(PrintMode::Flat),
+				..PrintOverride::default()
+			},
+		},
+		style(
+			Shading::Print(Print {
+				paper: PAPER_COLOR,
+				knockout_width: 60.0,
+				..Print::default()
+			}),
+			None,
+		),
+	]);
+
+	let image = render_size(&mut renderer, 128);
+	// Child sits on top at center; parent surrounds it inside radius 22 px.
+	assert!(near(image.at(64, 64), exact_srgb(green), 4));
+	assert!(near(image.at(64, 48), exact_srgb(blue), 4));
+	// Strictly inside the parent figure's circular disc (radius <= 19 px),
+	// the attached child must produce ZERO interior paper seam pixels.
+	let interior_paper = (0..128)
+		.flat_map(|y| (0..128).map(move |x| (x, y)))
+		.filter(|&(x, y)| {
+			let dx = x as i32 - 64;
+			let dy = y as i32 - 64;
+			dx * dx + dy * dy <= 19 * 19 && is_paper(image.at(x, y))
+		})
+		.count();
+	assert_eq!(
+		interior_paper, 0,
+		"attached child must not draw an interior paper seam over its parent"
+	);
+	// Outside the combined silhouette, the figure still gets a paper knockout.
+	assert!(paper_count(&image) > 100, "outer silhouette has knockout");
+}
+
+#[test]
+fn print_paper_knockout_frames_open_single_sided_sheet() {
+	let Some(gpu) = gpu() else { return };
+	let blue = [0.10, 0.25, 0.85];
+	let mut renderer = renderer(gpu);
+	spawn(&mut renderer, 1, 1, &fixture::open_sheet());
+	renderer.world_mut().apply([
+		Op::SetBackdrop(Backdrop::Color([0.04, 0.04, 0.08, 1.0])),
+		Op::SetLight(Light {
+			direction: [0.0, 0.0, -1.0],
+			shadow: 0.0,
+			..Light::default()
+		}),
+		Op::SetPrint {
+			node: NodeId(1),
+			target: PrintTarget::All,
+			print: PrintOverride {
+				lit: Some(blue),
+				mode: Some(PrintMode::Flat),
+				..PrintOverride::default()
+			},
+		},
+		style(
+			Shading::Print(Print {
+				paper: PAPER_COLOR,
+				knockout_width: 30.0,
+				..Print::default()
+			}),
+			None,
+		),
+	]);
+
+	let check_sheet = |image: &Image, label: &str| {
+		assert!(
+			near(image.at(128, 128), exact_srgb(blue), 4),
+			"{label}: center must stay blue, got {:?}",
+			image.at(128, 128)
+		);
+		let left = (0..128).filter(|&x| is_paper(image.at(x, 128))).count();
+		let right = (128..256).filter(|&x| is_paper(image.at(x, 128))).count();
+		let top = (0..128).filter(|&y| is_paper(image.at(128, y))).count();
+		let bottom = (128..256).filter(|&y| is_paper(image.at(128, y))).count();
+		assert!(
+			left >= 3 && right >= 3 && top >= 3 && bottom >= 3,
+			"{label}: all 4 open edges must be framed in paper (left={left}, right={right}, \
+			 top={top}, bottom={bottom})"
+		);
+	};
+
+	check_sheet(&render_size(&mut renderer, 256), "front view");
+
+	// View the same single-sided sheet from the back: all 4 edges stay framed.
+	renderer.world_mut().apply([Op::SetCamera {
+		transform: Transform::from_translation(0.0, 0.0, -3.0).with_yaw(std::f32::consts::PI),
+		fov_y: 0.8,
+		near: 0.1,
+		far: 50.0,
+	}]);
+	check_sheet(&render_size(&mut renderer, 256), "back view");
+}
+
+#[test]
+fn print_knockout_opt_out_draws_no_halo() {
+	let Some(gpu) = gpu() else { return };
+	let blue = [0.10, 0.25, 0.85];
+	let mut renderer = renderer(gpu);
+	let sphere = fixture::lit_sphere(32, None);
+	spawn(&mut renderer, 1, 1, &sphere);
+	renderer.world_mut().apply([
+		Op::SetBackdrop(Backdrop::Color([0.04, 0.04, 0.08, 1.0])),
+		Op::SetTransform {
+			node: NodeId(1),
+			transform: Transform::from_translation(-0.65, 0.0, 0.0).with_scale(0.45),
+		},
+		Op::Spawn {
+			node: NodeId(2),
+			asset: Some(AssetId(1)),
+			parent: None,
+		},
+		Op::SetTransform {
+			node: NodeId(2),
+			transform: Transform::from_translation(0.65, 0.0, 0.0).with_scale(0.45),
+		},
+		Op::SetPrint {
+			node: NodeId(1),
+			target: PrintTarget::All,
+			print: PrintOverride {
+				lit: Some(blue),
+				mode: Some(PrintMode::Flat),
+				knockout: Some(true),
+				..PrintOverride::default()
+			},
+		},
+		Op::SetPrint {
+			node: NodeId(2),
+			target: PrintTarget::All,
+			print: PrintOverride {
+				lit: Some(blue),
+				mode: Some(PrintMode::Flat),
+				knockout: Some(false),
+				..PrintOverride::default()
+			},
+		},
+		style(
+			Shading::Print(Print {
+				paper: PAPER_COLOR,
+				knockout_width: 55.0,
+				..Print::default()
+			}),
+			None,
+		),
+	]);
+
+	let image = render_size(&mut renderer, 128);
+	let left_paper = (0..128)
+		.flat_map(|y| (0..64).map(move |x| (x, y)))
+		.filter(|(x, y)| is_paper(image.at(*x, *y)))
+		.count();
+	let right_paper = (0..128)
+		.flat_map(|y| (64..128).map(move |x| (x, y)))
+		.filter(|(x, y)| is_paper(image.at(*x, *y)))
+		.count();
+	assert!(left_paper > 100, "opted-in figure has paper: {left_paper}");
+	assert_eq!(right_paper, 0, "opted-out figure has zero paper");
+}
+
+#[test]
+fn print_knockout_zero_width_keeps_depth32_and_toggles_cleanly() {
+	let Some(gpu) = gpu() else { return };
+	let blue = [0.10, 0.25, 0.85];
+	let mut renderer = lit_sphere(gpu, None);
+	renderer.world_mut().apply([
+		Op::SetBackdrop(Backdrop::Color([0.04, 0.04, 0.08, 1.0])),
+		Op::SetPrint {
+			node: NodeId(1),
+			target: PrintTarget::All,
+			print: PrintOverride {
+				lit: Some(blue),
+				mode: Some(PrintMode::Flat),
+				..PrintOverride::default()
+			},
+		},
+		style(
+			Shading::Print(Print {
+				paper: PAPER_COLOR,
+				knockout_width: 0.0,
+				..Print::default()
+			}),
+			None,
+		),
+	]);
+
+	let before = draw(&mut renderer);
+	assert_eq!(paper_count(&before), 0);
+
+	// Toggle stencil knockout on, then back off: Depth32Float path stays
+	// identical.
+	renderer.world_mut().apply([style(
+		Shading::Print(Print {
+			paper: PAPER_COLOR,
+			knockout_width: 55.0,
+			..Print::default()
+		}),
+		None,
+	)]);
+	let with_knockout = draw(&mut renderer);
+	assert!(paper_count(&with_knockout) > 40);
+
+	renderer.world_mut().apply([style(
+		Shading::Print(Print {
+			paper: PAPER_COLOR,
+			knockout_width: 0.0,
+			..Print::default()
+		}),
+		None,
+	)]);
+	let after = draw(&mut renderer);
+	assert_eq!(before.pixels, after.pixels);
+}
+
+#[test]
+fn print_paper_knockout_respects_real_world_depth_occlusion() {
+	let Some(gpu) = gpu() else { return };
+	let blue = [0.10, 0.25, 0.85];
+	let mut renderer = lit_sphere(gpu, None);
+	renderer.world_mut().apply([
+		Op::SetBackdrop(Backdrop::Color([0.04, 0.04, 0.08, 1.0])),
+		Op::SetPrint {
+			node: NodeId(1),
+			target: PrintTarget::All,
+			print: PrintOverride {
+				lit: Some(blue),
+				mode: Some(PrintMode::Flat),
+				..PrintOverride::default()
+			},
+		},
+		style(
+			Shading::Print(Print {
+				paper: PAPER_COLOR,
+				knockout_width: 60.0,
+				..Print::default()
+			}),
+			None,
+		),
+	]);
+	let near_wall = solid_texture(gpu, wgpu::TextureFormat::R32Float, &1.0_f32.to_le_bytes());
+	let far_wall = solid_texture(gpu, wgpu::TextureFormat::R32Float, &10.0_f32.to_le_bytes());
+
+	for (depth, visible) in [(&near_wall, false), (&far_wall, true)] {
+		let occlusion = Occlusion {
+			depth,
+			transform: Mat3::IDENTITY,
+			scale: 1.0,
+			tolerance: 0.05,
+		};
+		let image = render_with(&mut renderer, &[], Background::Scene, Some(occlusion));
+		assert_eq!(
+			paper_count(&image) > 0,
+			visible,
+			"knockout visibility mismatch for visible={visible}"
+		);
+	}
+}
+
+#[test]
+fn print_paper_knockout_handles_alpha_mask_and_mirrored_transform() {
+	let Some(gpu) = gpu() else { return };
+	let blue = [0.10, 0.25, 0.85];
+
+	// (a) AlphaMode::Mask cutout half must NOT be filled with paper knockout.
+	let mut masked = renderer(gpu);
+	spawn(&mut masked, 1, 1, &fixture::masked_quads());
+	masked.world_mut().apply([
+		Op::SetBackdrop(Backdrop::Color([0.04, 0.04, 0.08, 1.0])),
+		Op::SetPrint {
+			node: NodeId(1),
+			target: PrintTarget::All,
+			print: PrintOverride {
+				lit: Some(blue),
+				mode: Some(PrintMode::Flat),
+				..PrintOverride::default()
+			},
+		},
+		style(
+			Shading::Print(Print {
+				paper: PAPER_COLOR,
+				knockout_width: 55.0,
+				..Print::default()
+			}),
+			None,
+		),
+	]);
+	let mask_img = render_size(&mut masked, 128);
+	// Center of the right cutout quad (~x=86, y=64) must stay dark backdrop,
+	// never filled with paper.
+	let right_cutout_paper = (44..84)
+		.flat_map(|y| (74..104).map(move |x| (x, y)))
+		.filter(|(x, y)| is_paper(mask_img.at(*x, *y)))
+		.count();
+	assert_eq!(
+		right_cutout_paper, 0,
+		"AlphaMode::Mask cutout must not be filled with paper knockout"
+	);
+	let left_paper = (0..128)
+		.flat_map(|y| (0..64).map(move |x| (x, y)))
+		.filter(|(x, y)| is_paper(mask_img.at(*x, *y)))
+		.count();
+	assert!(
+		left_paper > 40,
+		"opaque half of masked mesh still gets paper knockout: {left_paper}"
+	);
+
+	// (b) Negative-determinant (mirrored) transform keeps an outer paper ring
+	// instead of filling the front of the mesh with solid paper.
+	let mut mirrored = renderer(gpu);
+	spawn(&mut mirrored, 1, 1, &fixture::double_sided_sphere(32));
+	mirrored.world_mut().apply([
+		Op::SetBackdrop(Backdrop::Color([0.04, 0.04, 0.08, 1.0])),
+		Op::SetTransform {
+			node: NodeId(1),
+			transform: Transform {
+				scale: [-0.8, 0.8, 0.8],
+				..Transform::IDENTITY
+			},
+		},
+		Op::SetPrint {
+			node: NodeId(1),
+			target: PrintTarget::All,
+			print: PrintOverride {
+				lit: Some(blue),
+				mode: Some(PrintMode::Flat),
+				..PrintOverride::default()
+			},
+		},
+		style(
+			Shading::Print(Print {
+				paper: PAPER_COLOR,
+				knockout_width: 50.0,
+				..Print::default()
+			}),
+			None,
+		),
+	]);
+	let mir_img = render_size(&mut mirrored, 128);
+	assert!(
+		near(mir_img.at(64, 64), exact_srgb(blue), 4),
+		"mirrored sphere center must stay blue, got {:?}",
+		mir_img.at(64, 64)
+	);
+	let left_ring = (0..64).filter(|&x| is_paper(mir_img.at(x, 64))).count();
+	let right_ring = (64..128).filter(|&x| is_paper(mir_img.at(x, 64))).count();
+	assert!(
+		left_ring >= 3 && right_ring >= 3,
+		"mirrored sphere must have outer paper ring (left={left_ring}, right={right_ring})"
+	);
+}
+
+#[test]
+fn outline_smooth_rings_loads_and_renders_closed_smoothed_hull() {
+	let Some(gpu) = gpu() else { return };
+	// Build a hard-edged 3-band faceted cube (3 rings along Y so middle rings
+	// sit 1 hop from the top/bottom 90 deg caps) and compare rings=0 vs
+	// rings=2.
+	let mut builder = fixture::Builder::default();
+	let (mut positions, mut normals, mut indices) = (Vec::new(), Vec::new(), Vec::new());
+	let bands: [(f32, f32, f32, f32); 3] = [
+		(-0.5, -0.2, 0.5, 0.5),
+		(-0.2, 0.2, 0.5, 0.5),
+		(0.2, 0.5, 0.5, 0.35),
+	];
+	let mut push_quad = |quad: [[f32; 3]; 4], normal: [f32; 3]| {
+		let base = (positions.len() / 3) as u16;
+		for p in quad {
+			positions.extend_from_slice(&p);
+			normals.extend_from_slice(&normal);
+		}
+		indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+	};
+	for &(y0, y1, r0, r1) in &bands {
+		let side_dirs: [([f32; 2], [f32; 2], [f32; 3]); 4] = [
+			([-1.0, 1.0], [1.0, 1.0], [0.0, 0.0, 1.0]),
+			([1.0, 1.0], [1.0, -1.0], [1.0, 0.0, 0.0]),
+			([1.0, -1.0], [-1.0, -1.0], [0.0, 0.0, -1.0]),
+			([-1.0, -1.0], [-1.0, 1.0], [-1.0, 0.0, 0.0]),
+		];
+		for (a, b, n) in side_dirs {
+			push_quad(
+				[
+					[a[0] * r0, y0, a[1] * r0],
+					[b[0] * r0, y0, b[1] * r0],
+					[b[0] * r1, y1, b[1] * r1],
+					[a[0] * r1, y1, a[1] * r1],
+				],
+				n,
+			);
+		}
+	}
+	// Top and bottom caps.
+	push_quad(
+		[
+			[-0.35, 0.5, 0.35],
+			[0.35, 0.5, 0.35],
+			[0.35, 0.5, -0.35],
+			[-0.35, 0.5, -0.35],
+		],
+		[0.0, 1.0, 0.0],
+	);
+	push_quad(
+		[
+			[-0.5, -0.5, -0.5],
+			[0.5, -0.5, -0.5],
+			[0.5, -0.5, 0.5],
+			[-0.5, -0.5, 0.5],
+		],
+		[0.0, -1.0, 0.0],
+	);
+	let p = builder.floats(&positions, 3, true);
+	let n = builder.floats(&normals, 3, false);
+	let i = builder.u16s(&indices, 1);
+	let glb = builder.glb(&format!(
+		r#""asset":{{"version":"2.0"}},"scenes":[{{"nodes":[0]}}],"nodes":[{{"name":"bevel","mesh":0}}],"meshes":[{{"primitives":[{{"attributes":{{"POSITION":{p},"NORMAL":{n}}},"indices":{i},"material":0}}]}}],"materials":[{{"name":"clay","pbrMetallicRoughness":{{"baseColorFactor":[0.5,0.5,0.5,1]}}}}]"#
+	));
+
+	let render_with_rings = |rings: Option<u8>| {
+		let asset = Arc::new(
+			Asset::from_slice_with_options(
+				&glb,
+				LoadOptions {
+					outline_smooth_rings: rings,
+				},
+			)
+			.unwrap(),
+		);
+		let mut r = renderer(gpu);
+		let world = r.world_mut();
+		world.apply([
+			Op::LoadAsset {
+				asset: AssetId(1),
+				path: "bevel.glb".into(),
+			},
+			Op::Spawn {
+				node: NodeId(1),
+				asset: Some(AssetId(1)),
+				parent: None,
+			},
+			Op::SetTransform {
+				node: NodeId(1),
+				transform: Transform::IDENTITY.with_yaw(0.45),
+			},
+			Op::SetBackdrop(Backdrop::Color([0.04, 0.04, 0.08, 1.0])),
+			Op::SetPrint {
+				node: NodeId(1),
+				target: PrintTarget::All,
+				print: PrintOverride {
+					lit: Some([0.1, 0.25, 0.85]),
+					mode: Some(PrintMode::Flat),
+					..PrintOverride::default()
+				},
+			},
+			style(
+				Shading::Print(print_no_knockout()),
+				Some(Ink {
+					wobble: 0.0,
+					..red_ink(30.0)
+				}),
+			),
+		]);
+		world.take_loads();
+		world.asset_loaded(AssetId(1), Ok(asset));
+		world.take_events();
+		render_size(&mut r, 128)
+	};
+
+	let plain = render_with_rings(None);
+	let zero = render_with_rings(Some(0));
+	let smooth = render_with_rings(Some(2));
+	assert_eq!(plain.pixels, zero.pixels, "None and Some(0) match exactly");
+	assert!(ink_count(&smooth) > 200, "smoothed hull draws full outline");
+	assert_ne!(
+		plain.pixels, smooth.pixels,
+		"2 smoothing rings visibly adjust faceted hull corners"
+	);
+}
+
+/// Loads `bytes` as asset `id` without spawning it.
+fn load(renderer: &mut Renderer, id: u32, bytes: &[u8]) {
+	let asset = Arc::new(Asset::from_slice(bytes).unwrap());
+	let world = renderer.world_mut();
+	world.apply([Op::LoadAsset {
+		asset: AssetId(id),
+		path: format!("models/{id}.glb"),
+	}]);
+	world.take_loads();
+	world.asset_loaded(AssetId(id), Ok(asset));
+	world.take_events();
+}
+
+/// Prints all of `node` flat in `color`, opting in or out of the knockout.
+fn flat_print(node: u32, color: [f32; 3], knockout: Option<bool>) -> Op {
+	Op::SetPrint {
+		node: NodeId(node),
+		target: PrintTarget::All,
+		print: PrintOverride {
+			lit: Some(color),
+			mode: Some(PrintMode::Flat),
+			knockout,
+			..PrintOverride::default()
+		},
+	}
+}
+
+/// A dark backdrop and a light that casts no shadow, for knockout tests.
+fn knockout_stage() -> [Op; 2] {
+	[
+		Op::SetBackdrop(Backdrop::Color([0.04, 0.04, 0.08, 1.0])),
+		Op::SetLight(Light {
+			shadow: 0.0,
+			..Light::default()
+		}),
+	]
+}
+
+fn knockout_print(width: f32) -> Op {
+	style(
+		Shading::Print(Print {
+			paper: PAPER_COLOR,
+			knockout_width: width,
+			..Print::default()
+		}),
+		None,
+	)
+}
+
+/// A figure spawned under another model (a stage, a room, a table) is a
+/// figure of its own: its paper knockout still draws over that model.
+#[test]
+fn print_a_figure_spawned_under_a_model_keeps_its_knockout() {
+	let Some(gpu) = gpu() else { return };
+	let blue = [0.10, 0.25, 0.85];
+	let green = [0.10, 0.75, 0.20];
+	let mut paper = Vec::new();
+
+	for parent in [None, Some(NodeId(1))] {
+		let mut renderer = renderer(gpu);
+		load(
+			&mut renderer,
+			1,
+			&fixture::flat_quad([-2.0; 2], [2.0; 2], -1.0, "stage"),
+		);
+		load(&mut renderer, 2, &fixture::lit_sphere(32, None));
+		renderer.world_mut().apply(knockout_stage());
+		renderer.world_mut().apply([
+			Op::Spawn {
+				node: NodeId(1),
+				asset: Some(AssetId(1)),
+				parent: None,
+			},
+			Op::Spawn {
+				node: NodeId(2),
+				asset: Some(AssetId(2)),
+				parent,
+			},
+			Op::SetTransform {
+				node: NodeId(2),
+				transform: Transform::IDENTITY.with_scale(0.6),
+			},
+			flat_print(1, green, Some(false)),
+			flat_print(2, blue, None),
+			knockout_print(30.0),
+		]);
+		let image = render_size(&mut renderer, 128);
+		assert!(
+			near(image.at(64, 64), exact_srgb(blue), 4),
+			"{:?}",
+			image.at(64, 64)
+		);
+		assert!(
+			near(image.at(4, 4), exact_srgb(green), 4),
+			"{:?}",
+			image.at(4, 4)
+		);
+		paper.push(paper_count(&image));
+	}
+
+	assert!(
+		paper[0] > 40,
+		"the figure at the root has paper: {}",
+		paper[0]
+	);
+	assert_eq!(
+		paper[1], paper[0],
+		"paper around the figure over the stage: at the root {} pixels, under the stage {} pixels",
+		paper[0], paper[1]
+	);
+}
+
+/// Only figures drawn with a knockout this frame take a stencil reference,
+/// so figures out of view never use one up: the 256th model in a scene
+/// still separates from the first.
+#[test]
+fn print_knockout_references_go_to_figures_in_view() {
+	let Some(gpu) = gpu() else { return };
+	let blue = [0.10, 0.25, 0.85];
+	let green = [0.10, 0.75, 0.20];
+	let mut renderer = renderer(gpu);
+	load(&mut renderer, 1, &fixture::lit_sphere(32, None));
+	let mut ops = knockout_stage().to_vec();
+
+	for node in 1..=256_u32 {
+		ops.push(Op::Spawn {
+			node: NodeId(node),
+			asset: Some(AssetId(1)),
+			parent: None,
+		});
+		let transform = match node {
+			1 => Transform::from_translation(-0.22, 0.0, 0.45).with_scale(0.55),
+			256 => Transform::from_translation(0.25, 0.0, -0.75).with_scale(1.05),
+			// Everyone else stands behind the camera.
+			_ => Transform::from_translation(0.0, 0.0, 40.0),
+		};
+		ops.push(Op::SetTransform {
+			node: NodeId(node),
+			transform,
+		});
+	}
+
+	ops.push(flat_print(1, blue, None));
+	ops.push(flat_print(256, green, None));
+	ops.push(style(
+		Shading::Print(Print {
+			paper: PAPER_COLOR,
+			knockout_width: 30.0,
+			..Print::default()
+		}),
+		Some(Ink {
+			wobble: 0.0,
+			..red_ink(25.0)
+		}),
+	));
+	renderer.world_mut().apply(ops);
+
+	let image = render_size(&mut renderer, 128);
+	let mut seen_blue = false;
+	let mut seen_green = false;
+	let mut paper_between = 0_usize;
+	let mut row = Vec::new();
+
+	for x in 20..115 {
+		let pixel = image.at(x, 64);
+		row.push(pixel);
+
+		if near(pixel, exact_srgb(blue), 12) {
+			seen_blue = true;
+		} else if seen_blue && !seen_green && near(pixel, exact_srgb(green), 12) {
+			seen_green = true;
+		} else if seen_blue && !seen_green && is_paper(pixel) {
+			paper_between += 1;
+		}
+	}
+
+	assert!(
+		seen_blue && seen_green && paper_between >= 3,
+		"figure 1 and figure 256 overlap with no paper between them \
+		 (paper_between={paper_between}, seen_green={seen_green}); row: {row:?}"
+	);
+}
+
+/// The paper knockout sits behind its figure: whatever stands in front of
+/// the figure keeps its colour across the paper ring.
+#[test]
+fn print_knockout_never_paints_over_what_stands_in_front() {
+	let Some(gpu) = gpu() else { return };
+	let blue = [0.10, 0.25, 0.85];
+	let green = [0.10, 0.75, 0.20];
+	let mut renderer = renderer(gpu);
+	load(&mut renderer, 1, &fixture::lit_sphere(32, None));
+	// A slab 2 m from the camera, over the sphere's right edge and the ring
+	// of paper beyond it.
+	load(
+		&mut renderer,
+		2,
+		&fixture::flat_quad([0.2, -0.12], [0.62, 0.12], 1.0, "slab"),
+	);
+	renderer.world_mut().apply(knockout_stage());
+	renderer.world_mut().apply([
+		Op::Spawn {
+			node: NodeId(1),
+			asset: Some(AssetId(1)),
+			parent: None,
+		},
+		Op::Spawn {
+			node: NodeId(2),
+			asset: Some(AssetId(2)),
+			parent: None,
+		},
+		flat_print(1, blue, None),
+		flat_print(2, green, Some(false)),
+		knockout_print(60.0),
+	]);
+
+	let image = render_size(&mut renderer, 128);
+	let left_ring = (0..64).filter(|&x| is_paper(image.at(x, 64))).count();
+	assert!(
+		left_ring >= 3,
+		"the ring shows where nothing stands in front"
+	);
+	let covered: Vec<[u8; 4]> = (82..104).map(|x| image.at(x, 64)).collect();
+	assert!(
+		covered
+			.iter()
+			.all(|&pixel| near(pixel, exact_srgb(green), 4)),
+		"the slab in front keeps its colour over the ring: {covered:?}"
+	);
+}
+
+/// A mirrored figure's paper knockout sits behind it, as an unmirrored
+/// figure's does: a slab standing between the figure's front and back keeps
+/// its colour beside the figure in both.
+#[test]
+fn print_mirrored_knockout_sits_behind_the_figure() {
+	let Some(gpu) = gpu() else { return };
+	let blue = [0.10, 0.25, 0.85];
+	let green = [0.10, 0.75, 0.20];
+	let render = |scale_x: f32| {
+		let mut renderer = renderer(gpu);
+		load(&mut renderer, 1, &fixture::lit_cube());
+		// Level with the cube's middle, reaching out from inside it.
+		load(
+			&mut renderer,
+			2,
+			&fixture::flat_quad([0.2, -0.1], [0.8, 0.1], 0.0, "slab"),
+		);
+		renderer.world_mut().apply(knockout_stage());
+		renderer.world_mut().apply([
+			Op::Spawn {
+				node: NodeId(1),
+				asset: Some(AssetId(1)),
+				parent: None,
+			},
+			Op::Spawn {
+				node: NodeId(2),
+				asset: Some(AssetId(2)),
+				parent: None,
+			},
+			Op::SetTransform {
+				node: NodeId(1),
+				transform: Transform {
+					scale: [0.6 * scale_x, 0.6, 0.6],
+					..Transform::IDENTITY
+				},
+			},
+			flat_print(1, blue, None),
+			flat_print(2, green, Some(false)),
+			knockout_print(60.0),
+		]);
+		render_size(&mut renderer, 128)
+	};
+	let slab_beside = |image: &Image| {
+		(60..68)
+			.flat_map(|y| (78..96).map(move |x| (x, y)))
+			.filter(|&(x, y)| near(image.at(x, y), exact_srgb(green), 4))
+			.count()
+	};
+
+	let plain = render(1.0);
+	let mirrored = render(-1.0);
+	assert!(
+		near(mirrored.at(64, 64), exact_srgb(blue), 4),
+		"the mirrored cube draws its front: {:?}",
+		mirrored.at(64, 64)
+	);
+	assert!(
+		slab_beside(&plain) > 0,
+		"the slab shows inside the unmirrored cube's ring"
+	);
+	assert_eq!(
+		slab_beside(&mirrored),
+		slab_beside(&plain),
+		"the mirrored cube's knockout covers the slab as the unmirrored one's does"
+	);
+}
+
+/// Cross-hatching draws only below `t_cross`: between `t_cross` and
+/// `t_deep` the deep band carries its primary strokes alone.
+#[test]
+fn print_cross_hatching_stays_below_t_cross() {
+	let Some(gpu) = gpu() else { return };
+	let mut renderer = lit_sphere(gpu, None);
+	renderer.world_mut().apply([style(
+		Shading::Print(Print {
+			t_lit: 0.30,
+			t_deep: 0.05,
+			t_cross: -0.60,
+			rim: 0.0,
+			hatch_per_m: 32.0,
+			hatch_gain: 0.40,
+			hatch_max: 0.55,
+			cross_duty: 0.35,
+			..print_no_knockout()
+		}),
+		Some(Ink {
+			color: [0.95, 0.05, 0.05],
+			width: 0.0,
+			..Ink::default()
+		}),
+	)]);
+	let mut render = |cross: bool| {
+		renderer.world_mut().apply([Op::SetPrint {
+			node: NodeId(1),
+			target: PrintTarget::All,
+			print: PrintOverride {
+				lit: Some([0.90, 0.90, 0.90]),
+				shade: Some([0.50, 0.50, 0.50]),
+				deep: Some([0.05, 0.05, 0.80]),
+				hatch_min: Some(0.25),
+				cross_hatch: Some(cross),
+				..PrintOverride::default()
+			},
+		}]);
+		render_size(&mut renderer, 256)
+	};
+	let primary = render(false);
+	let crossed = render(true);
+	let differing = |columns: std::ops::Range<u32>| {
+		columns
+			.flat_map(|x| (124..132).map(move |y| (x, y)))
+			.filter(|&(x, y)| !near(primary.at(x, y), crossed.at(x, y), 8))
+			.count()
+	};
+
+	// Lit from +x, so N·L is the normal's x: on the equator, t_cross falls
+	// near x = 45 and t_deep near x = 136.
+	assert_eq!(differing(60..118), 0, "no cross strokes above t_cross");
+	assert!(differing(24..40) > 20, "cross strokes below t_cross");
+}
+
+/// Primary hatching thickens deeper into shadow at `hatch_gain`.
+#[test]
+fn print_hatch_coverage_grows_with_hatch_gain() {
+	let Some(gpu) = gpu() else { return };
+	let mut renderer = lit_sphere(gpu, None);
+	renderer.world_mut().apply([Op::SetPrint {
+		node: NodeId(1),
+		target: PrintTarget::All,
+		print: PrintOverride {
+			lit: Some([0.90, 0.90, 0.90]),
+			shade: Some([0.50, 0.50, 0.50]),
+			deep: Some([0.05, 0.05, 0.80]),
+			hatch_min: Some(0.10),
+			cross_hatch: Some(false),
+			..PrintOverride::default()
+		},
+	}]);
+	let mut render = |gain: f32| {
+		renderer.world_mut().apply([style(
+			Shading::Print(Print {
+				t_lit: 0.30,
+				t_deep: 0.05,
+				rim: 0.0,
+				hatch_per_m: 32.0,
+				hatch_gain: gain,
+				hatch_max: 0.90,
+				..print_no_knockout()
+			}),
+			Some(Ink {
+				color: [0.95, 0.05, 0.05],
+				width: 0.0,
+				..Ink::default()
+			}),
+		)]);
+		let image = render_size(&mut renderer, 256);
+		(24..100)
+			.flat_map(|x| (120..136).map(move |y| (x, y)))
+			.filter(|&(x, y)| {
+				let pixel = image.at(x, y);
+				u16::from(pixel[0]) > u16::from(pixel[2]) + 40
+			})
+			.count()
+	};
+	let flat = render(0.0);
+	let steep = render(1.5);
+	assert!(
+		steep > flat + 200,
+		"deeper shadow carries heavier hatching: {steep} red pixels at gain 1.5, {flat} at gain 0"
+	);
+}
+
+/// Unlit parts (glows, eyes, screens) print flat by default, as they shade
+/// nowhere else: no bands and no hatching across them.
+#[test]
+fn print_draws_unlit_parts_flat_by_default() {
+	let Some(gpu) = gpu() else { return };
+	let color = [0.9, 0.6, 0.1];
+	let mut renderer = renderer(gpu);
+	spawn(
+		&mut renderer,
+		1,
+		1,
+		&fixture::unlit_cube([color[0], color[1], color[2], 1.0], false),
+	);
+	renderer.world_mut().apply([
+		Op::SetTransform {
+			node: NodeId(1),
+			transform: Transform::IDENTITY.with_yaw(0.6),
+		},
+		Op::SetLight(Light {
+			direction: [-1.0, 0.0, 0.0],
+			shadow: 0.0,
+			..Light::default()
+		}),
+		style(Shading::Print(print_no_knockout()), None),
+	]);
+
+	let image = render_size(&mut renderer, 128);
+	for x in [44, 52, 72, 80] {
+		assert!(
+			near(image.at(x, 64), exact_srgb(color), 2),
+			"x={x}: {:?} vs {:?}",
+			image.at(x, 64),
+			exact_srgb(color)
+		);
+	}
+}
+
+/// The ground shadow falls under the paper knockout, never over it: the
+/// paper around a figure's feet stays bare paper.
+#[test]
+fn print_shadows_stay_under_the_paper_knockout() {
+	let Some(gpu) = gpu() else { return };
+	let blue = [0.10, 0.25, 0.85];
+	let render = |shadow: f32| {
+		let mut renderer = renderer(gpu);
+		spawn(&mut renderer, 1, 1, &fixture::lit_sphere(32, None));
+		renderer.world_mut().apply([
+			Op::SetBackdrop(Backdrop::Color([0.04, 0.04, 0.08, 1.0])),
+			Op::SetLight(Light {
+				shadow,
+				..Light::default()
+			}),
+			// Above and in front, looking down at the shadow's disc.
+			Op::SetCamera {
+				transform: Transform::from_translation(0.0, 2.2, 2.2).with_rotation(
+					glam::Quat::from_rotation_x(-std::f32::consts::FRAC_PI_4).to_array(),
+				),
+				fov_y: 0.8,
+				near: 0.1,
+				far: 50.0,
+			},
+			flat_print(1, blue, None),
+			knockout_print(60.0),
+		]);
+		let image = render_size(&mut renderer, 128);
+		(image, renderer.stats().shadows)
+	};
+
+	let (bare, _) = render(0.0);
+	let (shadowed, shadows) = render(1.0);
+	assert_eq!(shadows, 1, "the figure casts its shadow");
+	let paper: Vec<(u32, u32)> = (0..128)
+		.flat_map(|y| (0..128).map(move |x| (x, y)))
+		.filter(|&(x, y)| is_paper(bare.at(x, y)))
+		.collect();
+	assert!(paper.len() > 100, "the figure has paper: {}", paper.len());
+	let darkened: Vec<_> = paper
+		.iter()
+		.filter(|&&(x, y)| !near(shadowed.at(x, y), bare.at(x, y), 1))
+		.map(|&(x, y)| (x, y, bare.at(x, y), shadowed.at(x, y)))
+		.collect();
+	assert!(
+		darkened.is_empty(),
+		"the shadow darkens {} paper pixels, such as {:?}",
+		darkened.len(),
+		darkened.first()
+	);
+}
+
+/// Print's band edges blend over about a pixel, so the bands hold still on
+/// curved surfaces instead of stair-stepping.
+#[test]
+fn print_band_edges_are_antialiased() {
+	let Some(gpu) = gpu() else { return };
+	let lit = [0.90, 0.90, 0.90];
+	let shade = [0.50, 0.50, 0.50];
+	let mut renderer = lit_sphere(gpu, None);
+	renderer.world_mut().apply([
+		style(
+			Shading::Print(Print {
+				t_lit: 0.30,
+				t_deep: -0.30,
+				rim: 0.0,
+				hatch_per_m: 0.0,
+				..print_no_knockout()
+			}),
+			None,
+		),
+		Op::SetPrint {
+			node: NodeId(1),
+			target: PrintTarget::All,
+			print: PrintOverride {
+				lit: Some(lit),
+				shade: Some(shade),
+				deep: Some([0.10, 0.10, 0.10]),
+				..PrintOverride::default()
+			},
+		},
+	]);
+
+	let image = render_size(&mut renderer, 256);
+	let [lit, shade] = [exact_srgb(lit)[0], exact_srgb(shade)[0]];
+	// The lit edge (N·L = 0.3) crosses the equator near x = 171. It blends
+	// over one pixel, so a row shows a value clearly between the bands only
+	// where a pixel centre falls well inside that pixel; a hard edge never
+	// shows one.
+	let rows: Vec<u32> = (96..160).collect();
+	let blended = rows
+		.iter()
+		.filter(|&&y| {
+			(150..200).any(|x| {
+				let value = image.at(x, y)[0];
+				value > shade + 4 && value + 4 < lit
+			})
+		})
+		.count();
+	assert!(
+		blended * 8 >= rows.len(),
+		"{blended} of {} rows blend the lit band's edge",
+		rows.len()
+	);
+}
+
+/// Print keeps a blended part's texture alpha, as PBR does: the transparent
+/// texels of glass, hair cards, and decals stay clear.
+#[test]
+fn print_keeps_the_transparent_texels_of_a_blended_texture_clear() {
+	let Some(gpu) = gpu() else { return };
+	let backdrop = [0.04, 0.04, 0.08];
+	let red = [0.9, 0.1, 0.1];
+	let mut samples = Vec::new();
+
+	for print in [false, true] {
+		let mut renderer = renderer(gpu);
+		spawn(&mut renderer, 1, 1, &fixture::blended_textured_quad());
+		renderer.world_mut().apply([
+			Op::SetBackdrop(Backdrop::Color([
+				backdrop[0],
+				backdrop[1],
+				backdrop[2],
+				1.0,
+			])),
+			flat_print(1, red, None),
+		]);
+
+		if print {
+			renderer
+				.world_mut()
+				.apply([style(Shading::Print(print_no_knockout()), None)]);
+		}
+
+		let image = render_size(&mut renderer, 256);
+		// The quad's left half samples the opaque texel, its right half the
+		// transparent one.
+		samples.push((image.at(103, 128), image.at(153, 128)));
+	}
+
+	let (pbr_left, pbr_right) = samples[0];
+	let (print_left, print_right) = samples[1];
+	let clear = exact_srgb(backdrop);
+	assert!(pbr_left[0] > 100, "PBR draws the opaque half: {pbr_left:?}");
+	assert!(
+		near(pbr_right, clear, 6),
+		"PBR keeps the transparent half clear: {pbr_right:?}"
+	);
+	assert!(
+		near(print_left, exact_srgb(red), 4),
+		"Print draws the opaque half: {print_left:?}"
+	);
+	assert!(
+		near(print_right, clear, 6),
+		"Print keeps the transparent half clear: {print_right:?} (PBR {pbr_right:?}, backdrop \
+		 {clear:?})"
+	);
+}

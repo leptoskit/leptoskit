@@ -14,8 +14,12 @@ const DATA_WIDTH: u32 = 1024u;
 const MORPH_WIDTH: u32 = 2048u;
 // Cells of the line's wobble per unit of the model's own space.
 const WOBBLE_FREQUENCY: f32 = 10.0;
-// Hatching lines per unit of the model's own space.
+// Hatching lines per unit of the model's own space (Toon mode).
 const HATCH_DENSITY: f32 = 60.0;
+// Relief-print hatch directions in glTF Y-up rest-pose space:
+// normalize(vec3(0.70, -0.70, -0.30)) and normalize(vec3(0.55, 0.80, 0.20)).
+const PRINT_HATCH_DIR: vec3<f32> = vec3<f32>(0.67671553, -0.67671553, -0.29002094);
+const PRINT_CROSS_DIR: vec3<f32> = vec3<f32>(0.55487660, 0.80709323, 0.20177331);
 
 struct Globals {
 	view_projection: mat4x4<f32>,
@@ -37,17 +41,21 @@ struct Globals {
 	occlusion_y: vec4<f32>,
 	// x: metres per occlusion unit; y: tolerance in metres.
 	occlusion_params: vec4<f32>,
-	// x: 1 for toon shading; y: its bands; z: their edges' softness; w: the
-	// hard highlight's strength.
+	// x: 0 PBR, 1 Toon, 2 Print.
+	// Toon: [1, bands, softness, specular]; Print: [2, side_heavy, side_drop, side_from].
 	style: vec4<f32>,
-	// rgb: the darkest band's tint; w: hatching strength.
+	// Toon: [shade.rgb, hatch]; Print: [side_to, hatch_gain, hatch_max, cross_duty].
 	shade: vec4<f32>,
-	// x: the outline's width in this view's pixels; y: the inner line's
-	// strength; z: extra weight in shade; w: wobble.
+	// Toon/PBR: [line_px, facing, shade_weight, wobble].
+	// Print: [line_px, fade_lo_px, fade_hi_px, wobble].
 	ink: vec4<f32>,
 	// xyz: where the wobble's noise is read, from the seed and the boil's
 	// step; w: the world size of one of this view's pixels at a clip w of 1.
 	ink_noise: vec4<f32>,
+	// Print: [t_lit, t_deep, t_cross, rim]. Zero in PBR and Toon.
+	print_bands: vec4<f32>,
+	// Print: [paper.rgb, knockout_px]. Zero in PBR and Toon.
+	print_paper: vec4<f32>,
 }
 
 struct Material {
@@ -127,6 +135,9 @@ struct Varyings {
 	// The position in the model's own space before morphs and skinning, so
 	// ink drawn on the surface stays fixed to it.
 	@location(11) local: vec3<f32>,
+	// Print mode: high 8 bits are flags (bit 0 flat, bit 1 cross-hatch,
+	// bit 2 rim, bit 3 knockout); low 24 bits index the per-part data texel.
+	@location(12) @interpolate(flat) print_meta: u32,
 }
 
 fn data_texel(index: u32) -> vec4<f32> {
@@ -187,11 +198,13 @@ fn finish(world: vec4<f32>, normal: vec3<f32>, vertex: Vertex, instance: Instanc
 	out.tint = instance.tint;
 	out.emissive = instance.emissive;
 	out.rim = instance.rim;
-	out.rim_power = bitcast<f32>(instance.params.z);
+	let is_print = globals.style.x > 1.5;
+	out.rim_power = select(bitcast<f32>(instance.params.z), 0.0, is_print);
 	out.view_depth = -(globals.view * world).z;
 	out.additive = f32(instance.params.w & 1u);
 	out.ink = instance.ink;
 	out.local = local_position(vertex.position, instance.params.w);
+	out.print_meta = select(0u, instance.params.z, is_print);
 	return out;
 }
 
@@ -406,9 +419,133 @@ fn occluded(position: vec4<f32>, view_depth: f32) -> bool {
 	return real > 0.0 && view_depth > real + globals.occlusion_params.y;
 }
 
+// Relief-print hatching: symmetric two-edge antialiasing that fades smoothly
+// to its exact mean tone as its device-pixel pitch shrinks below fade_px.
+fn print_hatch(under: vec3<f32>, ink: vec3<f32>, u: f32, fw: f32, duty: f32) -> vec3<f32> {
+	if (duty <= 0.0) {
+		return under;
+	}
+	let centered = fract(u - 0.5 * duty + 0.5) - 0.5;
+	let inside = 0.5 * duty - abs(centered);
+	let cover = clamp(inside / fw + 0.5, 0.0, 1.0);
+	let drawn = mix(under, ink, cover);
+	let mean = mix(under, ink, duty);
+	let fade_lo = globals.ink.y;
+	let fade_span = max(globals.ink.z - fade_lo, 1.0e-4);
+	let fade_hi = fade_lo + fade_span;
+	let fade = smoothstep(fade_lo, fade_hi, 1.0 / fw);
+	return mix(mean, drawn, fade);
+}
+
+// Normalizes `v` without ever calling `inverseSqrt(0.0)` or `normalize(0.0)`,
+// which are undefined on OpenGL ES 3.0 / WebGL2.
+fn safe_normalize(v: vec3<f32>, fallback: vec3<f32>) -> vec3<f32> {
+	let len2 = dot(v, v);
+	if (len2 > 1.0e-12) {
+		return v * inverseSqrt(len2);
+	}
+	return fallback;
+}
+
+// Relief-print shading: three un-tonemapped bands whose edges blend over
+// about a pixel, object-space hatching and cross-hatching, turning-edge
+// paper specular, and backlit spot rim. Skips all PBR textures (except the
+// alpha of a Mask cutout or a Blend), lighting intensity, and tonemapping.
+fn print_shade(in: Varyings, front: bool) -> vec4<f32> {
+	let extra = data_texel(in.print_meta & 0x00ffffffu);
+	let hatch_per_m = extra.w;
+	// Every derivative is taken here, in uniform control flow, before any
+	// branch on the part's flags and before any alpha discard.
+	let u1 = dot(in.local, PRINT_HATCH_DIR) * hatch_per_m;
+	let fw1 = max(fwidth(u1), 1.0e-5);
+	let u2 = dot(in.local, PRINT_CROSS_DIR) * hatch_per_m * 1.1;
+	let fw2 = max(fwidth(u2), 1.0e-5);
+	let n = select(-1.0, 1.0, front) * safe_normalize(in.normal, vec3<f32>(0.0, 1.0, 0.0));
+	let l = globals.light_direction.xyz;
+	let n_dot_l = dot(n, l);
+	// Half a pixel's change in N·L on either side of a band edge.
+	let band_edge = 0.5 * max(fwidth(n_dot_l), 1.0e-5);
+
+	var alpha = in.tint.a;
+	if (material.flags.x == 1u) {
+		var mask_alpha = material.base_color.a * in.color.a * in.tint.a;
+		if ((material.flags.z & 1u) != 0u) {
+			mask_alpha *= textureSample(base_texture, material_sampler, in.uv).a;
+		}
+		if (mask_alpha < bitcast<f32>(material.flags.w)) {
+			discard;
+		}
+	} else if (material.flags.x == 2u) {
+		alpha *= material.base_color.a * in.color.a;
+		// The texture's alpha too, as PBR takes it, so the clear texels of
+		// glass, hair cards and decals stay clear.
+		if ((material.flags.z & 1u) != 0u) {
+			alpha *= textureSample(base_texture, material_sampler, in.uv).a;
+		}
+	}
+
+	let flags = in.print_meta >> 24u;
+	let flat_mode = (flags & 1u) != 0u;
+	let cross_enabled = (flags & 2u) != 0u;
+	let rim_enabled = (flags & 4u) != 0u;
+
+	var color = in.tint.rgb;
+	if (!flat_mode) {
+		let v = safe_normalize(globals.camera.xyz - in.world, vec3<f32>(0.0, 0.0, 1.0));
+		let n_dot_v = max(dot(n, v), 0.0);
+
+		// How far into the lit band and into the deep band, from 0 to 1,
+		// each rising over about a pixel at its edge.
+		let t_lit = globals.print_bands.x;
+		let t_deep = globals.print_bands.y;
+		let lit_w = smoothstep(t_lit - band_edge, t_lit + band_edge, n_dot_l);
+		let deep_w = 1.0 - smoothstep(t_deep - band_edge, t_deep + band_edge, n_dot_l);
+		color = mix(mix(in.emissive.rgb, in.tint.rgb, lit_w), in.rim.rgb, deep_w);
+
+		if (deep_w > 0.0 && in.rim.w > 0.0 && hatch_per_m > 0.0) {
+			let duty = min(globals.shade.z, in.rim.w + globals.shade.y * max(t_deep - n_dot_l, 0.0));
+			var hatched = print_hatch(color, in.ink.rgb, u1, fw1, duty);
+			if (cross_enabled && n_dot_l < globals.print_bands.z && globals.shade.w > 0.0) {
+				hatched = print_hatch(hatched, in.ink.rgb, u2, fw2, globals.shade.w);
+			}
+			color = mix(color, hatched, deep_w);
+		}
+
+		let half_vec = l + v;
+		let half_len_sq = dot(half_vec, half_vec);
+		if (in.emissive.w > 0.0 && n_dot_v < 0.5 && half_len_sq > 1.0e-8) {
+			let n_dot_h = dot(n, half_vec * inverseSqrt(half_len_sq));
+			if (n_dot_h > in.emissive.w) {
+				color = globals.print_paper.rgb;
+			}
+		}
+
+		if (rim_enabled && globals.print_bands.w > 0.0 && n_dot_v < globals.print_bands.w && n_dot_l < 0.05) {
+			color = extra.rgb;
+		}
+	}
+
+	if (globals.params.y > 0.5) {
+		color = linear_to_srgb(color);
+	}
+	let opacity = clamp(alpha, 0.0, 1.0);
+	return vec4<f32>(color * opacity, opacity * (1.0 - in.additive));
+}
+
 @fragment
 fn fs_mesh(in: Varyings, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
-	if (occluded(in.clip, in.view_depth)) {
+	let hidden = occluded(in.clip, in.view_depth);
+	if (globals.style.x > 1.5) {
+		// Shaded first and dropped after: on GLSL ES a discarded fragment
+		// leaves its quad's derivatives undefined, and print_shade takes
+		// fwidth and samples a texture.
+		let printed = print_shade(in, front);
+		if (hidden) {
+			discard;
+		}
+		return printed;
+	}
+	if (hidden) {
 		discard;
 	}
 	let mask = material.flags.z;
@@ -567,9 +704,16 @@ fn outline_normal(transform: mat3x3<f32>, welded: vec3<f32>, normal: vec3<f32>, 
 	return select(vec3<f32>(0.0), turned * inverseSqrt(length_squared), length_squared > 0.0);
 }
 
+// Relief-print wobble: reads per-part noise offset and frequency from the
+// frame's data texture so each part has its own seed and boil slot.
+fn print_wobble(local: vec3<f32>, extra_idx: u32) -> f32 {
+	let noise_freq = data_texel(extra_idx + 1u);
+	return 1.0 + globals.ink.w * (noise(local * noise_freq.w + noise_freq.xyz) * 2.0 - 1.0);
+}
+
 // `ink.w` is the instance's line weight and `vertex_weight` the model's own,
 // from 0 to 2. An instance without a line collapses outside the view.
-fn outline(world: vec4<f32>, normal: vec3<f32>, local: vec3<f32>, ink: vec4<f32>, vertex_weight: f32) -> OutlineVaryings {
+fn outline(world: vec4<f32>, normal: vec3<f32>, local: vec3<f32>, ink: vec4<f32>, vertex_weight: f32, params_z: u32) -> OutlineVaryings {
 	var out: OutlineVaryings;
 	out.color = ink.rgb;
 	if (ink.w <= 0.0) {
@@ -577,12 +721,27 @@ fn outline(world: vec4<f32>, normal: vec3<f32>, local: vec3<f32>, ink: vec4<f32>
 		out.view_depth = 0.0;
 		return out;
 	}
-	let shade = 0.5 - 0.5 * dot(normal, globals.light_direction.xyz);
-	var width = globals.ink.x * ink.w * (1.0 + globals.ink.z * shade) * wobble(local);
-	// Hold a 1-pixel floor at full weight (>= 1), tapering the floor down to 0
-	// as `ink.w` fades below 1 so fading a part's line out vanishes smoothly;
-	// the model's own per-vertex weight may also taper it away.
-	width = max(width, min(ink.w, 1.0)) * vertex_weight;
+	var width: f32;
+	if (globals.style.x > 1.5) {
+		let extra_idx = params_z & 0x00ffffffu;
+		let side_span = max(globals.shade.x - globals.style.w, 1.0e-4);
+		let side_to = globals.style.w + side_span;
+		let side = globals.style.y - globals.style.z * smoothstep(globals.style.w, side_to, dot(normal, globals.light_direction.xyz));
+		let base_width = globals.ink.x * max(side, 0.0) * print_wobble(local, extra_idx);
+		// Floor only the base width so part/vertex weights taper smoothly to 0.
+		if (base_width > 0.0) {
+			width = max(base_width, 1.0) * ink.w * vertex_weight;
+		} else {
+			width = 0.0;
+		}
+	} else {
+		let shade = 0.5 - 0.5 * dot(normal, globals.light_direction.xyz);
+		width = globals.ink.x * ink.w * (1.0 + globals.ink.z * shade) * wobble(local);
+		// Hold a 1-pixel floor at full weight (>= 1), tapering the floor down to 0
+		// as `ink.w` fades below 1 so fading a part's line out vanishes smoothly;
+		// the model's own per-vertex weight may also taper it away.
+		width = max(width, min(ink.w, 1.0)) * vertex_weight;
+	}
 	let depth = (globals.view_projection * world).w;
 	let pushed = vec4<f32>(world.xyz + normal * (width * max(depth, 0.0) * globals.ink_noise.w), 1.0);
 	out.clip = globals.view_projection * pushed;
@@ -599,7 +758,7 @@ fn vs_outline_static(vertex: OutlineVertex, instance: OutlineInstance, @location
 	let m = mat3x3<f32>(model[0].xyz, model[1].xyz, model[2].xyz);
 	let world_normal = outline_normal(m, ink_vertex.xyz, normal, vertex.normal);
 	let local = local_position(vertex.position, instance.params.w);
-	return outline(model * vec4<f32>(position, 1.0), world_normal, local, instance.ink, ink_vertex.w + 1.0);
+	return outline(model * vec4<f32>(position, 1.0), world_normal, local, instance.ink, ink_vertex.w + 1.0, instance.params.z);
 }
 
 @vertex
@@ -615,7 +774,7 @@ fn vs_outline_skinned(vertex: OutlineVertex, skin: Skin, instance: OutlineInstan
 	let m = mat3x3<f32>(skinning[0].xyz, skinning[1].xyz, skinning[2].xyz);
 	let world_normal = outline_normal(m, ink_vertex.xyz, normal, vertex.normal);
 	let local = local_position(vertex.position, instance.params.w);
-	return outline(skinning * vec4<f32>(position, 1.0), world_normal, local, instance.ink, ink_vertex.w + 1.0);
+	return outline(skinning * vec4<f32>(position, 1.0), world_normal, local, instance.ink, ink_vertex.w + 1.0, instance.params.z);
 }
 
 // The line's colour, exactly as the style or the part set it: no exposure
@@ -625,6 +784,190 @@ fn fs_outline(in: OutlineVaryings) -> @location(0) vec4<f32> {
 	if (occluded(in.clip, in.view_depth)) {
 		discard;
 	}
+	var color = in.color;
+	if (globals.params.y > 0.5) {
+		color = linear_to_srgb(color);
+	}
+	return vec4<f32>(color, 1.0);
+}
+
+// Same as `fs_outline` without `discard`, enabling hardware Early-Z and
+// Early-Stencil rejection when real-world occlusion is inactive.
+@fragment
+fn fs_outline_solid(in: OutlineVaryings) -> @location(0) vec4<f32> {
+	var color = in.color;
+	if (globals.params.y > 0.5) {
+		color = linear_to_srgb(color);
+	}
+	return vec4<f32>(color, 1.0);
+}
+
+// Relief-print paper knockout: expands each figure past its key ink line in
+// the same render pass, masked outside the figure by per-figure stencil refs.
+struct KnockoutVertex {
+	@builtin(vertex_index) index: u32,
+	@location(0) position: vec3<f32>,
+	@location(1) normal: vec3<f32>,
+	@location(2) uv: vec2<f32>,
+	@location(3) color: vec4<f32>,
+}
+
+struct KnockoutInstance {
+	@location(4) model_0: vec4<f32>,
+	@location(5) model_1: vec4<f32>,
+	@location(6) model_2: vec4<f32>,
+	@location(7) model_3: vec4<f32>,
+	@location(8) tint: vec4<f32>,
+	@location(11) params: vec4<u32>,
+	@location(14) ink: vec4<f32>,
+}
+
+struct KnockoutVaryings {
+	@builtin(position) clip: vec4<f32>,
+	@location(0) @interpolate(flat) color: vec3<f32>,
+	@location(1) view_depth: f32,
+	@location(2) uv: vec2<f32>,
+	@location(3) alpha: f32,
+}
+
+// Like `outline_normal`, flipping the cofactor for mirrored
+// (negative-determinant) transforms and avoiding `inverseSqrt(0.0)`.
+fn knockout_normal(transform: mat3x3<f32>, welded: vec3<f32>, normal: vec3<f32>, rest: vec3<f32>) -> vec3<f32> {
+	let cofactor = cofactor_matrix(transform);
+	let turned = cofactor * (welded + normal - rest);
+	let length_squared = dot(turned, turned);
+	if (length_squared > 0.0) {
+		return turned * inverseSqrt(length_squared);
+	}
+	return vec3<f32>(0.0);
+}
+
+fn knockout(
+	world: vec4<f32>,
+	normal: vec3<f32>,
+	local: vec3<f32>,
+	uv: vec2<f32>,
+	alpha: f32,
+	ink: vec4<f32>,
+	vertex_weight: f32,
+	params_z: u32,
+) -> KnockoutVaryings {
+	var out: KnockoutVaryings;
+	out.color = globals.print_paper.rgb;
+	out.uv = uv;
+	out.alpha = alpha;
+	let enabled = ((params_z >> 24u) & 8u) != 0u;
+	if (!enabled || globals.print_paper.w <= 0.0) {
+		out.clip = vec4<f32>(0.0, 0.0, -2.0, 1.0);
+		out.view_depth = 0.0;
+		return out;
+	}
+	var key_width = 0.0;
+	if (ink.w > 0.0 && globals.ink.x > 0.0) {
+		let extra_idx = params_z & 0x00ffffffu;
+		let side_span = max(globals.shade.x - globals.style.w, 1.0e-4);
+		let side_to = globals.style.w + side_span;
+		let side = globals.style.y - globals.style.z * smoothstep(globals.style.w, side_to, dot(normal, globals.light_direction.xyz));
+		let base_width = globals.ink.x * max(side, 0.0) * print_wobble(local, extra_idx);
+		if (base_width > 0.0) {
+			key_width = max(base_width, 1.0) * ink.w * vertex_weight;
+		}
+	}
+	let total_width = key_width + globals.print_paper.w;
+	// Remove any component toward the camera plane (`+z` in view space) so
+	// double-sided open sheets expand purely laterally with zero forward depth
+	// poke, while closed back faces (`dot <= 0`) keep their exact outward push.
+	let cam_back = safe_normalize(
+		vec3<f32>(globals.view[0].z, globals.view[1].z, globals.view[2].z),
+		vec3<f32>(0.0, 0.0, 1.0),
+	);
+	var push_dir = normal - cam_back * max(dot(normal, cam_back), 0.0);
+	let push_len2 = dot(push_dir, push_dir);
+	if (push_len2 > 0.01) {
+		push_dir *= inverseSqrt(push_len2);
+	} else {
+		push_dir = vec3<f32>(0.0);
+	}
+	let depth = (globals.view_projection * world).w;
+	let pushed = world + vec4<f32>(push_dir * (total_width * max(depth, 0.0) * globals.ink_noise.w), 0.0);
+	out.clip = globals.view_projection * pushed;
+	// Unpushed surface depth keeps AR real-world occlusion aligned with the
+	// figure's true distance.
+	out.view_depth = -(globals.view * world).z;
+	return out;
+}
+
+@vertex
+fn vs_knockout_static(vertex: KnockoutVertex, instance: KnockoutInstance, @location(15) ink_vertex: vec4<f32>) -> KnockoutVaryings {
+	var position = vertex.position;
+	var normal = vertex.normal;
+	morph(instance.params.y, vertex.index, &position, &normal);
+	let model = mat4x4<f32>(instance.model_0, instance.model_1, instance.model_2, instance.model_3);
+	let m = mat3x3<f32>(model[0].xyz, model[1].xyz, model[2].xyz);
+	let world_normal = knockout_normal(m, ink_vertex.xyz, normal, vertex.normal);
+	let local = local_position(vertex.position, instance.params.w);
+	return knockout(
+		model * vec4<f32>(position, 1.0),
+		world_normal,
+		local,
+		vertex.uv,
+		vertex.color.a * instance.tint.a,
+		instance.ink,
+		ink_vertex.w + 1.0,
+		instance.params.z,
+	);
+}
+
+@vertex
+fn vs_knockout_skinned(vertex: KnockoutVertex, skin: Skin, instance: KnockoutInstance, @location(15) ink_vertex: vec4<f32>) -> KnockoutVaryings {
+	var position = vertex.position;
+	var normal = vertex.normal;
+	morph(instance.params.y, vertex.index, &position, &normal);
+	let first = instance.params.x;
+	let skinning = joint(first, skin.joints.x) * skin.weights.x
+		+ joint(first, skin.joints.y) * skin.weights.y
+		+ joint(first, skin.joints.z) * skin.weights.z
+		+ joint(first, skin.joints.w) * skin.weights.w;
+	let m = mat3x3<f32>(skinning[0].xyz, skinning[1].xyz, skinning[2].xyz);
+	let world_normal = knockout_normal(m, ink_vertex.xyz, normal, vertex.normal);
+	let local = local_position(vertex.position, instance.params.w);
+	return knockout(
+		skinning * vec4<f32>(position, 1.0),
+		world_normal,
+		local,
+		vertex.uv,
+		vertex.color.a * instance.tint.a,
+		instance.ink,
+		ink_vertex.w + 1.0,
+		instance.params.z,
+	);
+}
+
+@fragment
+fn fs_knockout(in: KnockoutVaryings) -> @location(0) vec4<f32> {
+	if (material.flags.x == 1u) {
+		var mask_alpha = material.base_color.a * in.alpha;
+		if ((material.flags.z & 1u) != 0u) {
+			mask_alpha *= textureSample(base_texture, material_sampler, in.uv).a;
+		}
+		if (mask_alpha < bitcast<f32>(material.flags.w)) {
+			discard;
+		}
+	}
+	if (occluded(in.clip, in.view_depth)) {
+		discard;
+	}
+	var color = in.color;
+	if (globals.params.y > 0.5) {
+		color = linear_to_srgb(color);
+	}
+	return vec4<f32>(color, 1.0);
+}
+
+// Same as `fs_knockout` without `discard` or texture fetches, keeping hardware
+// Early-Z and Early-Stencil active on opaque unoccluded knockout draws.
+@fragment
+fn fs_knockout_solid(in: KnockoutVaryings) -> @location(0) vec4<f32> {
 	var color = in.color;
 	if (globals.params.y > 0.5) {
 		color = linear_to_srgb(color);

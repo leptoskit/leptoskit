@@ -20,6 +20,9 @@ use crate::gpu::Variant;
 use crate::protocol::Backdrop;
 use crate::protocol::Blend;
 use crate::protocol::Ink;
+use crate::protocol::Print;
+use crate::protocol::PrintMode;
+use crate::protocol::PrintOverride;
 use crate::protocol::Shading;
 use crate::protocol::Style;
 use crate::raycast;
@@ -29,8 +32,8 @@ use crate::world::World;
 /// The most views one target may have.
 pub const MAX_VIEWS: usize = 4;
 const GLOBALS_STRIDE: u64 = 512;
-// Each view's globals fit their stride.
-const _: () = assert!(size_of::<GlobalsUniform>() as u64 <= GLOBALS_STRIDE);
+// Each view's globals fit their stride with at least one vec4 of headroom.
+const _: () = assert!(size_of::<GlobalsUniform>() as u64 + 16 <= GLOBALS_STRIDE);
 const NONE: u32 = u32::MAX;
 
 /// One view of the scene: where it looks from, how it projects, and the
@@ -191,21 +194,28 @@ struct GlobalsUniform {
 	style: StyleUniform,
 }
 
-/// A view's style, as the shader's `style`, `shade`, `ink`, and
-/// `ink_noise` read it.
+/// A view's style, as the shader's `style`, `shade`, `ink`, `ink_noise`,
+/// `print_bands`, and `print_paper` read it.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 struct StyleUniform {
-	/// 1 for toon shading, its bands, their softness, the highlight.
+	/// x: 0 PBR, 1 Toon, 2 Print.
+	/// Toon: `[1, bands, softness, specular]`.
+	/// Print: `[2, side_heavy, side_drop, side_from]`.
 	style: [f32; 4],
-	/// The darkest band's tint, and hatching.
+	/// Toon: `[shade.rgb, hatch]`.
+	/// Print: `[side_to, hatch_gain, hatch_max, cross_duty]`.
 	shade: [f32; 4],
-	/// The outline's width in the view's pixels, the inner line, the weight
-	/// in shade, and the wobble.
+	/// PBR/Toon: `[line_px, facing, shade_weight, wobble]`.
+	/// Print: `[line_px, fade_lo_px, fade_hi_px, wobble]`.
 	ink: [f32; 4],
 	/// Where the wobble's noise is read, and the world size of one of the
 	/// view's pixels at a clip w of 1.
 	ink_noise: [f32; 4],
+	/// Print: `[t_lit, t_deep, t_cross, rim]`. Zero in PBR and Toon.
+	print_bands: [f32; 4],
+	/// Print: `[paper.rgb, knockout_px]`. Zero in PBR and Toon.
+	print_paper: [f32; 4],
 }
 
 /// The smallest radius, in pixels, a part may have on screen and still be
@@ -249,6 +259,20 @@ fn pixel_size(view: &ViewParams) -> f32 {
 	}
 }
 
+/// World-space unit vector pointing towards the directional light for `view`.
+///
+/// When [`Light::camera_space`] is `true`, [`Light::direction`] is in camera
+/// space (`+x` right, `+y` up, `-z` forward) and is rotated into world space
+/// by the view's inverse.
+fn light_toward(light: &crate::protocol::Light, view_inverse: &Mat4) -> Vec3 {
+	let toward = -Vec3::from(light.direction).normalize_or(Vec3::NEG_Y);
+	if light.camera_space {
+		(Mat3::from_mat4(*view_inverse) * toward).normalize_or(Vec3::Y)
+	} else {
+		toward
+	}
+}
+
 /// The outline's width in `view`'s pixels.
 fn line_pixels(ink: &Ink, view: &ViewParams) -> f32 {
 	ink.width / 1000.0 * view.viewport[3]
@@ -257,6 +281,33 @@ fn line_pixels(ink: &Ink, view: &ViewParams) -> f32 {
 /// What a view's globals say of the scene's style at `time`. The default
 /// style packs to zeroes but for the shade, which only toon shading reads.
 fn style_uniform(style: &Style, time: f64, view: &ViewParams) -> StyleUniform {
+	if let Shading::Print(print) = style.shading {
+		let (line_px, wobble, noise) = match &style.ink {
+			None => (0.0, 0.0, [0.0; 3]),
+			Some(ink) => {
+				(
+					line_pixels(ink, view),
+					ink.wobble,
+					noise_offset(ink.seed, boil_step(time, ink.boil)),
+				)
+			}
+		};
+		let knockout_px = print.knockout_width / 1000.0 * view.viewport[3];
+		return StyleUniform {
+			style: [2.0, print.side_heavy, print.side_drop, print.side_from],
+			shade: [
+				print.side_to,
+				print.hatch_gain,
+				print.hatch_max,
+				print.cross_duty,
+			],
+			ink: [line_px, print.fade_px[0], print.fade_px[1], wobble],
+			ink_noise: [noise[0], noise[1], noise[2], pixel_size(view)],
+			print_bands: [print.t_lit, print.t_deep, print.t_cross, print.rim],
+			print_paper: [print.paper[0], print.paper[1], print.paper[2], knockout_px],
+		};
+	}
+
 	let (shading, shade) = match style.shading {
 		Shading::Pbr => ([0.0; 4], [1.0, 1.0, 1.0, 0.0]),
 		Shading::Toon(toon) => {
@@ -265,6 +316,7 @@ fn style_uniform(style: &Style, time: f64, view: &ViewParams) -> StyleUniform {
 				[toon.shade[0], toon.shade[1], toon.shade[2], toon.hatch],
 			)
 		}
+		Shading::Print(_) => unreachable!(),
 	};
 
 	let (ink, ink_noise) = match &style.ink {
@@ -288,7 +340,33 @@ fn style_uniform(style: &Style, time: f64, view: &ViewParams) -> StyleUniform {
 		shade,
 		ink,
 		ink_noise,
+		print_bands: [0.0; 4],
+		print_paper: [0.0; 4],
 	}
+}
+
+/// A part's line in relief-print mode: always carries ink RGB for hatching,
+/// and multiplies a print override's `ink_weight` with any `SetInk` weight.
+fn part_ink_print(
+	part: &crate::world::Overrides,
+	material: &crate::asset::Material,
+	resolved: &PrintOverride,
+	blended: bool,
+	ink: Option<&Ink>,
+) -> [f32; 4] {
+	let [red, green, blue] = part
+		.ink
+		.color
+		.unwrap_or_else(|| ink.map_or(Ink::default().color, |ink| ink.color));
+	let weight = if ink.is_none() {
+		0.0
+	} else if let Some(print_weight) = resolved.ink_weight {
+		print_weight * part.ink.weight.unwrap_or(1.0)
+	} else {
+		let default = if material.unlit || blended { 0.0 } else { 1.0 };
+		part.ink.weight.unwrap_or(default)
+	};
+	[red, green, blue, weight]
 }
 
 /// A part's line as its instance record carries it: its colour, and its
@@ -374,6 +452,15 @@ fn linear_to_srgb(value: f32) -> f32 {
 }
 
 /// A mesh primitive ready to draw, before it is merged with others like it.
+/// Per-draw settings for the relief-print paper knockout hull.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct KnockoutDraw {
+	/// Whether the primitive has open boundary edges (double-sided knockout).
+	open_edges: bool,
+	/// Whether its material uses `AlphaMode::Mask`.
+	masked: bool,
+}
+
 struct Item {
 	variant: Variant,
 	asset: usize,
@@ -385,6 +472,14 @@ struct Item {
 	skin_offset: Option<u64>,
 	/// Whether it draws an ink outline.
 	outlined: bool,
+	/// Relief-print paper knockout settings when this item draws one.
+	knockout: Option<KnockoutDraw>,
+	/// Its figure among [`Renderer::figures`], or [`NONE`] without a
+	/// knockout style.
+	figure: u32,
+	/// Its figure's stencil reference (`1..=255`) when that figure draws a
+	/// knockout this frame, `0` otherwise.
+	stencil_ref: u8,
 	morphed: bool,
 	/// Whether it can share an instanced draw with identical items.
 	batchable: bool,
@@ -404,8 +499,28 @@ struct Draw {
 	/// Whether any of its instances draws an ink outline; the others have
 	/// no weight, so the outline shader drops them.
 	outlined: bool,
+	/// Relief-print paper knockout settings when any instance draws one.
+	knockout: Option<KnockoutDraw>,
+	stencil_ref: u8,
 	morphed: bool,
 	instances: std::ops::Range<u32>,
+}
+
+/// Shared resources and toggles passed into each render pass of one frame.
+struct FramePass<'a> {
+	views: &'a [ViewParams],
+	pipelines: &'a Pipelines,
+	outlines: Option<&'a [wgpu::RenderPipeline; 4]>,
+	knockout_solid: Option<&'a [wgpu::RenderPipeline; 6]>,
+	knockout_discard: Option<&'a [wgpu::RenderPipeline; 6]>,
+	globals: &'a wgpu::BindGroup,
+	background: Option<&'a wgpu::BindGroup>,
+	assets: &'a [Arc<GpuAsset>],
+	draws: &'a [Draw],
+	clear: wgpu::Color,
+	shadow_count: u32,
+	use_stencil: bool,
+	occluded: bool,
 }
 
 /// How large things look in one view: its view matrix, its focal length in
@@ -423,6 +538,7 @@ struct Sight {
 	frustums: Vec<Frustum>,
 	eye: Mat4,
 	ink: Option<Ink>,
+	print: Option<Print>,
 	scales: [ViewScale; MAX_VIEWS],
 	views: usize,
 }
@@ -453,6 +569,23 @@ impl Sight {
 			}
 		})
 	}
+
+	/// Whether some view sees `bounds` at least half a pixel across:
+	/// relief-print mode keeps outlining fine parts and only drops
+	/// sub-pixel specks (and anything strictly behind a view).
+	fn visible_for_print_outline(&self, bounds: &Aabb) -> bool {
+		if bounds.is_empty() {
+			return false;
+		}
+		let radius = (bounds.max - bounds.min).length() * 0.5;
+		let center = bounds.center().extend(1.0);
+
+		self.scales[..self.views].iter().any(|scale| {
+			let depth = -(scale.view * center).z;
+			(depth >= -radius && depth <= radius)
+				|| (depth > radius && radius * scale.focal / depth >= 0.5)
+		})
+	}
 }
 
 /// One model instance's state for a frame, copied out of the world.
@@ -460,6 +593,8 @@ struct ModelState {
 	asset: Arc<crate::asset::Asset>,
 	weights: Vec<Vec<f32>>,
 	overrides: Vec<crate::world::Overrides>,
+	print_by_material: Arc<[PrintOverride]>,
+	print_by_node: Arc<[PrintOverride]>,
 	hidden: Vec<bool>,
 	worlds: Vec<Mat4>,
 	/// Per node: a skinned part's joint matrices and posed bounds.
@@ -486,6 +621,9 @@ impl ModelState {
 		Some(Self {
 			weights: pose.weights.clone(),
 			overrides: instance.overrides.clone(),
+			// Shared, not copied: a frame only reads them.
+			print_by_material: Arc::clone(&instance.print_by_material),
+			print_by_node: Arc::clone(&instance.print_by_node),
 			hidden: instance.hidden.clone(),
 			worlds: instance.world.clone(),
 			skins,
@@ -496,12 +634,56 @@ impl ModelState {
 	}
 }
 
-/// A mesh node of a model: which one, its asset's slot, and its joints.
+/// A mesh node of a model: which one, its asset's slot, its joints, and its
+/// figure.
 struct Part<'a> {
 	model: &'a ModelState,
 	index: usize,
 	slot: usize,
 	joints: u32,
+	figure: u32,
+}
+
+/// A figure met this frame: whether any of its opaque parts in view draws a
+/// paper knockout, and the stencil reference it takes if one does.
+#[derive(Clone, Copy, Debug, Default)]
+struct Figure {
+	knockout: bool,
+	stencil_ref: u8,
+}
+
+/// The figure `id` prints as part of: the highest model instance reached by
+/// following [`Op::Attach`](crate::protocol::Op::Attach) links up from `id`,
+/// or `id` itself. A weapon attached to a hand shares its wielder's stencil
+/// reference, with no paper seam between them, while a model spawned under
+/// another (a figure on a stage) is a figure of its own.
+fn figure_root(world: &World, id: crate::protocol::NodeId) -> crate::protocol::NodeId {
+	let mut figure = id;
+	let mut cursor = id;
+
+	// At most one step per node, so no shape of the tree can hang a frame.
+	for _ in 0..world.nodes.len() {
+		let Some(parent) = world
+			.nodes
+			.get(&cursor)
+			.filter(|node| node.attached)
+			.and_then(|node| node.parent)
+		else {
+			break;
+		};
+
+		if world
+			.nodes
+			.get(&parent)
+			.is_some_and(|node| node.instance.is_some())
+		{
+			figure = parent;
+		}
+
+		cursor = parent;
+	}
+
+	figure
 }
 
 /// A primitive's instance attributes: its matrix, its part's overrides,
@@ -539,6 +721,57 @@ fn instance_record(
 			joints,
 			morph,
 			rim.power.to_bits(),
+			additive_and_units(part.blend == Blend::Additive, units),
+		],
+		ink,
+	}
+}
+
+/// A primitive's instance attributes in relief-print mode.
+#[allow(clippy::too_many_arguments)]
+fn print_instance_record(
+	part: &crate::world::Overrides,
+	material: &crate::asset::Material,
+	resolved: &PrintOverride,
+	model: Mat4,
+	[joints, morph]: [u32; 2],
+	ink: [f32; 4],
+	extra_texel: u32,
+	knockout: bool,
+	units: f32,
+) -> InstanceRecord {
+	let base = [
+		material.base_color[0] * part.color[0],
+		material.base_color[1] * part.color[1],
+		material.base_color[2] * part.color[2],
+	];
+	let lit = resolved.lit.unwrap_or(base);
+	let shade = resolved.shade.unwrap_or(lit.map(|channel| channel * 0.65));
+	let deep = resolved.deep.unwrap_or(lit.map(|channel| channel * 0.35));
+	let specular = resolved.specular.unwrap_or(0.0);
+	let hatch_min = resolved.hatch_min.unwrap_or(0.0);
+	// Unlit parts (glows, eyes, screens) take no light anywhere else, so
+	// they print flat unless a target asks for bands.
+	let mode = resolved.mode.unwrap_or(if material.unlit {
+		PrintMode::Flat
+	} else {
+		PrintMode::Banded
+	});
+	let flags = u32::from(mode == PrintMode::Flat)
+		| (u32::from(resolved.cross_hatch.unwrap_or(false)) << 1)
+		| (u32::from(resolved.rim.unwrap_or(false)) << 2)
+		| (u32::from(knockout) << 3);
+	let print_meta = (flags << 24) | (extra_texel & 0x00ff_ffff);
+
+	InstanceRecord {
+		model: model.to_cols_array_2d(),
+		tint: [lit[0], lit[1], lit[2], part.color[3] * part.opacity],
+		emissive: [shade[0], shade[1], shade[2], specular],
+		rim: [deep[0], deep[1], deep[2], hatch_min],
+		params: [
+			joints,
+			morph,
+			print_meta,
 			additive_and_units(part.blend == Blend::Additive, units),
 		],
 		ink,
@@ -595,7 +828,7 @@ fn shadow_record(bounds: Aabb, ground: f32, opacity: f32, sight: &Sight) -> Opti
 }
 
 struct Attachments {
-	key: (u32, u32, wgpu::TextureFormat, u32),
+	key: (u32, u32, wgpu::TextureFormat, u32, bool),
 	color: Option<wgpu::TextureView>,
 	depth: wgpu::TextureView,
 }
@@ -618,6 +851,11 @@ pub struct Renderer {
 	attachments: Option<Attachments>,
 	items: Vec<Item>,
 	texels: Vec<[f32; 4]>,
+	print_extras: HashMap<[u32; 8], u32>,
+	/// This frame's figures under a knockout style, in the order met, and
+	/// each figure's index by its root node.
+	figures: Vec<Figure>,
+	figure_index: HashMap<crate::protocol::NodeId, u32>,
 	shadow_records: Vec<ShadowRecord>,
 	/// The uploaded assets this frame draws, which [`Item::asset`] indexes.
 	assets: Vec<Arc<GpuAsset>>,
@@ -651,6 +889,9 @@ impl Renderer {
 			attachments: None,
 			items: Vec::new(),
 			texels: Vec::new(),
+			print_extras: HashMap::new(),
+			figures: Vec::new(),
+			figure_index: HashMap::new(),
 			shadow_records: Vec::new(),
 			assets: Vec::new(),
 			asset_index: HashMap::new(),
@@ -722,17 +963,43 @@ impl Renderer {
 		let shadow_count = self.upload_shadows(&views);
 
 		self.write_globals(target, &views);
-		let samples = self.gpu.samples(target.format);
-		let pipelines = self
-			.shared
-			.pipelines(self.gpu.device(), target.format, samples);
+		// The style alone decides, so the attachments and the pipeline set
+		// stay put while knockout figures walk in and out of view.
+		let use_stencil = matches!(
+			self.world.settings.style.shading,
+			Shading::Print(print) if print.knockout_width > 0.0
+		);
+		let samples = self.gpu.samples(target.format, use_stencil);
+		let pipelines =
+			self.shared
+				.pipelines(self.gpu.device(), target.format, samples, use_stencil);
 		let outline_count = draws
 			.iter()
 			.filter(|draw| draw.outlined && !draw.variant.blend)
 			.count() as u32;
-		let outlines = (outline_count > 0)
-			.then(|| self.shared.outline_pipelines(self.gpu.device(), &pipelines));
-		self.prepare_attachments(width, height, target.format, samples);
+		let occluded = target.occlusion.is_some();
+		let outlines = (outline_count > 0).then(|| {
+			self.shared
+				.outline_pipelines(self.gpu.device(), &pipelines, occluded)
+		});
+		let knockout_solid = (use_stencil
+			&& !occluded
+			&& draws
+				.iter()
+				.any(|draw| !draw.variant.blend && draw.knockout.is_some_and(|ko| !ko.masked)))
+		.then(|| {
+			self.shared
+				.knockout_pipelines(self.gpu.device(), &pipelines, false)
+		});
+		let knockout_discard = (use_stencil
+			&& draws.iter().any(|draw| {
+				!draw.variant.blend && draw.knockout.is_some_and(|ko| occluded || ko.masked)
+			}))
+		.then(|| {
+			self.shared
+				.knockout_pipelines(self.gpu.device(), &pipelines, true)
+		});
+		self.prepare_attachments(width, height, target.format, samples, use_stencil);
 		let globals = self.globals_bind_group(target.occlusion.as_ref());
 		let background = self.background_bind_group(target);
 		let assets = std::mem::take(&mut self.assets);
@@ -755,76 +1022,24 @@ impl Renderer {
 			}
 		};
 
+		let frame = FramePass {
+			views: &views,
+			pipelines: &pipelines,
+			outlines,
+			knockout_solid,
+			knockout_discard,
+			globals: &globals,
+			background: background.as_ref(),
+			assets: &assets,
+			draws: &draws,
+			clear,
+			shadow_count,
+			use_stencil,
+			occluded,
+		};
+
 		for (view, range) in passes {
-			let attachments = self
-				.attachments
-				.as_ref()
-				.expect("attachments were prepared");
-
-			let (color_view, resolve) = match &attachments.color {
-				Some(msaa) => (msaa, Some(view)),
-				None => (view, None),
-			};
-
-			let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-				label: Some("leptoskit_3d"),
-				color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-					view: color_view,
-					depth_slice: None,
-					resolve_target: resolve,
-					ops: wgpu::Operations {
-						load: wgpu::LoadOp::Clear(clear),
-						store: if resolve.is_some() {
-							wgpu::StoreOp::Discard
-						} else {
-							wgpu::StoreOp::Store
-						},
-					},
-				})],
-				depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-					view: &attachments.depth,
-					depth_ops: Some(wgpu::Operations {
-						load: wgpu::LoadOp::Clear(1.0),
-						store: wgpu::StoreOp::Discard,
-					}),
-					stencil_ops: None,
-				}),
-				..wgpu::RenderPassDescriptor::default()
-			});
-
-			for index in range {
-				let [x, y, w, h] = views[index].viewport;
-				pass.set_viewport(x, y, w, h, 0.0, 1.0);
-
-				if let Some(background) = &background {
-					pass.set_pipeline(&pipelines.background);
-					pass.set_bind_group(0, background, &[]);
-					pass.draw(0..3, 0..1);
-				}
-
-				let offset = (index as u64 * GLOBALS_STRIDE) as u32;
-				pass.set_bind_group(0, &globals, &[offset]);
-				self.draw_meshes(&mut pass, &pipelines, &assets, &draws, |draw| {
-					!draw.variant.blend
-				});
-
-				// After the opaque meshes, so most of the hull fails the depth
-				// test early, and before anything blended.
-				if let Some(outlines) = outlines {
-					self.draw_outlines(&mut pass, outlines, &assets, &draws);
-				}
-
-				if shadow_count > 0
-					&& let Some(buffer) = &self.shadows.buffer
-				{
-					pass.set_pipeline(&pipelines.shadow);
-					pass.set_vertex_buffer(0, buffer.slice(..));
-					pass.draw(0..4, 0..shadow_count);
-				}
-				self.draw_meshes(&mut pass, &pipelines, &assets, &draws, |draw| {
-					draw.variant.blend
-				});
-			}
+			self.record_pass(&mut encoder, view, range, &frame);
 		}
 
 		self.gpu.queue().submit([encoder.finish()]);
@@ -842,6 +1057,115 @@ impl Renderer {
 			outlines: outline_count,
 		};
 		Ok(self.stats)
+	}
+
+	fn record_pass(
+		&self,
+		encoder: &mut wgpu::CommandEncoder,
+		view: &wgpu::TextureView,
+		range: std::ops::Range<usize>,
+		frame: &FramePass<'_>,
+	) {
+		let attachments = self
+			.attachments
+			.as_ref()
+			.expect("attachments were prepared");
+		let (color_view, resolve) = match &attachments.color {
+			Some(msaa) => (msaa, Some(view)),
+			None => (view, None),
+		};
+
+		let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+			label: Some("leptoskit_3d"),
+			color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+				view: color_view,
+				depth_slice: None,
+				resolve_target: resolve,
+				ops: wgpu::Operations {
+					load: wgpu::LoadOp::Clear(frame.clear),
+					store: if resolve.is_some() {
+						wgpu::StoreOp::Discard
+					} else {
+						wgpu::StoreOp::Store
+					},
+				},
+			})],
+			depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+				view: &attachments.depth,
+				depth_ops: Some(wgpu::Operations {
+					load: wgpu::LoadOp::Clear(1.0),
+					store: wgpu::StoreOp::Discard,
+				}),
+				stencil_ops: frame.use_stencil.then_some(wgpu::Operations {
+					load: wgpu::LoadOp::Clear(0),
+					store: wgpu::StoreOp::Discard,
+				}),
+			}),
+			..wgpu::RenderPassDescriptor::default()
+		});
+
+		for index in range {
+			let [x, y, w, h] = frame.views[index].viewport;
+			pass.set_viewport(x, y, w, h, 0.0, 1.0);
+
+			if let Some(background) = frame.background {
+				pass.set_pipeline(&frame.pipelines.background);
+				pass.set_bind_group(0, background, &[]);
+				pass.draw(0..3, 0..1);
+			}
+
+			let offset = (index as u64 * GLOBALS_STRIDE) as u32;
+			pass.set_bind_group(0, frame.globals, &[offset]);
+			self.draw_meshes(
+				&mut pass,
+				frame.pipelines,
+				frame.assets,
+				frame.draws,
+				frame.use_stencil,
+				|draw| !draw.variant.blend,
+			);
+
+			// After the opaque meshes, so most of the hull fails the depth
+			// test early, and before anything blended.
+			if let Some(outlines) = frame.outlines {
+				self.draw_outlines(
+					&mut pass,
+					outlines,
+					frame.assets,
+					frame.draws,
+					frame.use_stencil,
+				);
+			}
+
+			if frame.shadow_count > 0
+				&& let Some(buffer) = &self.shadows.buffer
+			{
+				pass.set_pipeline(&frame.pipelines.shadow);
+				pass.set_vertex_buffer(0, buffer.slice(..));
+				pass.draw(0..4, 0..frame.shadow_count);
+			}
+
+			// After the shadows, which it covers: the knockout writes no
+			// depth, so a shadow drawn later would darken the paper.
+			if frame.use_stencil {
+				self.draw_knockout(
+					&mut pass,
+					frame.knockout_solid,
+					frame.knockout_discard,
+					frame.occluded,
+					frame.assets,
+					frame.draws,
+				);
+			}
+			self.draw_meshes(
+				&mut pass,
+				frame.pipelines,
+				frame.assets,
+				frame.draws,
+				false,
+				|draw| draw.variant.blend,
+			);
+		}
 	}
 
 	fn views(&self, target: &RenderTarget<'_>) -> Result<Vec<ViewParams>, Error> {
@@ -921,17 +1245,50 @@ impl Renderer {
 		header
 	}
 
+	/// Deduplicates and writes two per-primitive relief-print texels into
+	/// `self.texels`: `[spot.rgb, hatch_per_m]` and `[noise.xyz, wobble_freq]`.
+	fn push_print_extra(&mut self, spot_hatch: [f32; 4], noise_freq: [f32; 4]) -> u32 {
+		let key = [
+			spot_hatch[0].to_bits(),
+			spot_hatch[1].to_bits(),
+			spot_hatch[2].to_bits(),
+			spot_hatch[3].to_bits(),
+			noise_freq[0].to_bits(),
+			noise_freq[1].to_bits(),
+			noise_freq[2].to_bits(),
+			noise_freq[3].to_bits(),
+		];
+
+		if let Some(&index) = self.print_extras.get(&key) {
+			return index;
+		}
+
+		let index = self.texels.len() as u32;
+		self.texels.push(spot_hatch);
+		self.texels.push(noise_freq);
+		self.print_extras.insert(key, index);
+		index
+	}
+
 	/// Collects every visible primitive of every instance, with its instance
 	/// record, culling what no view sees.
 	fn build(&mut self, views: &[ViewParams]) {
 		self.items.clear();
 		self.texels.clear();
+		self.print_extras.clear();
+		self.figures.clear();
+		self.figure_index.clear();
 		self.shadow_records.clear();
 		self.assets.clear();
 		self.asset_index.clear();
 		// Texel 0 is never a valid offset, so a zeroed record reads nothing.
 		self.texels.push([0.0; 4]);
 		let ink = self.world.settings.style.ink;
+		let print = match self.world.settings.style.shading {
+			Shading::Print(print) => Some(print),
+			_ => None,
+		};
+		let print_knockout = print.is_some_and(|print| print.knockout_width > 0.0);
 		let mut scales = [ViewScale::default(); MAX_VIEWS];
 
 		for (scale, view) in scales.iter_mut().zip(views) {
@@ -949,6 +1306,7 @@ impl Renderer {
 				.collect(),
 			eye: views[0].view,
 			ink,
+			print,
 			scales,
 			views: views.len(),
 		};
@@ -962,7 +1320,22 @@ impl Renderer {
 			let Some(model) = ModelState::of(&self.world, id) else {
 				continue;
 			};
-			let bounds = self.build_model(&model, &sight);
+			let figure = if print_knockout {
+				let next = self.figures.len() as u32;
+				let figure = *self
+					.figure_index
+					.entry(figure_root(&self.world, id))
+					.or_insert(next);
+
+				if figure == next {
+					self.figures.push(Figure::default());
+				}
+
+				figure
+			} else {
+				NONE
+			};
+			let bounds = self.build_model(&model, &sight, figure);
 
 			if model.cast_shadow
 				&& let Some(record) = shadow_record(bounds, model.ground, shadow, &sight)
@@ -970,10 +1343,36 @@ impl Renderer {
 				self.shadow_records.push(record);
 			}
 		}
+
+		self.assign_stencil_refs();
+	}
+
+	/// Gives each figure whose knockout draws this frame a stencil reference,
+	/// in the order the figures were met, and every opaque item of that figure
+	/// its reference. Figures out of view, or without a knockout, take none.
+	/// There are 255 references, so past 255 knockout figures in one frame
+	/// they repeat, and two figures sharing one draw no paper between them.
+	fn assign_stencil_refs(&mut self) {
+		let mut drawn = 0_usize;
+
+		for figure in &mut self.figures {
+			if figure.knockout {
+				figure.stencil_ref = ((drawn % 255) + 1) as u8;
+				drawn += 1;
+			}
+		}
+
+		for item in &mut self.items {
+			if let Some(figure) = self.figures.get(item.figure as usize)
+				&& !item.variant.blend
+			{
+				item.stencil_ref = figure.stencil_ref;
+			}
+		}
 	}
 
 	/// Adds a model's visible parts, returning its bounds in this pose.
-	fn build_model(&mut self, model: &ModelState, sight: &Sight) -> Aabb {
+	fn build_model(&mut self, model: &ModelState, sight: &Sight, figure: u32) -> Aabb {
 		let slot = self.asset_slot(&model.asset);
 		let mut bounds = Aabb::EMPTY;
 
@@ -998,6 +1397,7 @@ impl Renderer {
 					index,
 					slot,
 					joints,
+					figure,
 				};
 				bounds = bounds.union(self.build_primitive(&part, primitive, sight));
 			}
@@ -1047,39 +1447,98 @@ impl Renderer {
 		let blend = material.alpha == AlphaMode::Blend
 			|| overrides.color[3] * overrides.opacity < 1.0
 			|| overrides.blend == Blend::Additive;
-		let mut ink = part_ink(overrides, material, blend, sight.ink.as_ref());
-		let inked = !blend && ink[3] > 0.0 && sight.worth_outlining(&bounds, ink[3]);
+		let masked = matches!(material.alpha, AlphaMode::Mask(_));
 
-		if !blend && !inked {
-			// Too small for a line: no ink drawn on its surface either.
-			ink[3] = 0.0;
-		}
+		let (outlined, knockout, record) = if let Some(print) = sight.print {
+			let mut resolved = model.print_by_material[primitive.material];
+			resolved.overlay(&model.print_by_node[index]);
+			let mut ink = part_ink_print(overrides, material, &resolved, blend, sight.ink.as_ref());
+			let inked = !blend && ink[3] > 0.0 && sight.visible_for_print_outline(&bounds);
 
-		// A scene's ink of no width draws no outline, and alpha-masked cutouts
-		// skip the inverted hull so transparent cutout holes are never filled
-		// with ink, while keeping their inner lines and hatching.
-		let outlined = inked
-			&& material.alpha == AlphaMode::Opaque
-			&& sight.ink.is_some_and(|ink| ink.width > 0.0);
+			if !blend && !inked {
+				ink[3] = 0.0;
+			}
 
-		let record = instance_record(
-			overrides,
-			material,
-			if skinned {
-				Mat4::IDENTITY
-			} else {
-				model.worlds[index]
-			},
-			[if skinned { part.joints } else { NONE }, morph],
-			ink,
-			// Only ink reads the units, so a scene without it packs them as
-			// zero, as it always did.
-			if sight.ink.is_some() {
-				model.asset.units.get(index).copied().unwrap_or(1.0)
-			} else {
-				0.0
-			},
-		);
+			// A scene's ink of no width draws no outline, and alpha-masked
+			// cutouts skip the inverted hull so transparent cutout
+			// holes are never filled with ink, while keeping their
+			// inner lines and hatching.
+			let outlined = inked
+				&& material.alpha == AlphaMode::Opaque
+				&& sight.ink.is_some_and(|ink| ink.width > 0.0);
+			let knockout =
+				!blend && print.knockout_width > 0.0 && resolved.knockout.unwrap_or(true);
+			let spot = resolved.spot.unwrap_or(print.paper);
+			let hatch_per_m = resolved.hatch_per_m.unwrap_or(print.hatch_per_m);
+			let noise = match sight.ink {
+				Some(ink) => {
+					let part_seed = model.asset.seeds.get(index).copied().unwrap_or(0) ^ ink.seed;
+					let step = resolved.boil_step.map_or_else(
+						|| boil_step(self.world.time, ink.boil) % 3,
+						|step| u64::from(step % 3),
+					);
+					noise_offset(part_seed, step)
+				}
+				None => [0.0; 3],
+			};
+			let extra = self.push_print_extra(
+				[spot[0], spot[1], spot[2], hatch_per_m],
+				[noise[0], noise[1], noise[2], print.wobble_frequency],
+			);
+			let units = model.asset.units.get(index).copied().unwrap_or(1.0);
+			let record = print_instance_record(
+				overrides,
+				material,
+				&resolved,
+				if skinned {
+					Mat4::IDENTITY
+				} else {
+					model.worlds[index]
+				},
+				[if skinned { part.joints } else { NONE }, morph],
+				ink,
+				extra,
+				knockout,
+				units,
+			);
+			(outlined, knockout, record)
+		} else {
+			let mut ink = part_ink(overrides, material, blend, sight.ink.as_ref());
+			let inked = !blend && ink[3] > 0.0 && sight.worth_outlining(&bounds, ink[3]);
+
+			if !blend && !inked {
+				// Too small for a line: no ink drawn on its surface either.
+				ink[3] = 0.0;
+			}
+
+			// A scene's ink of no width draws no outline, and alpha-masked
+			// cutouts skip the inverted hull so transparent cutout
+			// holes are never filled with ink, while keeping their
+			// inner lines and hatching.
+			let outlined = inked
+				&& material.alpha == AlphaMode::Opaque
+				&& sight.ink.is_some_and(|ink| ink.width > 0.0);
+
+			let record = instance_record(
+				overrides,
+				material,
+				if skinned {
+					Mat4::IDENTITY
+				} else {
+					model.worlds[index]
+				},
+				[if skinned { part.joints } else { NONE }, morph],
+				ink,
+				// Only ink reads the units, so a scene without it packs them as
+				// zero, as it always did.
+				if sight.ink.is_some() {
+					model.asset.units.get(index).copied().unwrap_or(1.0)
+				} else {
+					0.0
+				},
+			);
+			(outlined, false, record)
+		};
 		let mirrored = match (&model.skins[index], skinned) {
 			(Some((matrices, _)), true) => {
 				matrices.first().map_or_else(
@@ -1092,6 +1551,11 @@ impl Renderer {
 		let vertex_size = size_of::<crate::asset::Vertex>() as u64;
 		let ink_size = size_of::<crate::asset::InkVertex>() as u64;
 		let skin_size = size_of::<crate::asset::SkinVertex>() as u64;
+
+		if knockout && let Some(figure) = self.figures.get_mut(part.figure as usize) {
+			figure.knockout = true;
+		}
+
 		self.items.push(Item {
 			variant: Variant {
 				skinned,
@@ -1106,6 +1570,13 @@ impl Renderer {
 			vertex_offset: u64::from(primitive.base_vertex) * vertex_size,
 			ink_offset: u64::from(primitive.base_vertex) * ink_size,
 			outlined,
+			knockout: knockout.then_some(KnockoutDraw {
+				open_edges: primitive.has_open_edges,
+				masked,
+			}),
+			figure: part.figure,
+			// Set once every figure in view is known.
+			stencil_ref: 0,
 			skin_offset: primitive
 				.skin_base
 				.filter(|_| skinned)
@@ -1127,8 +1598,8 @@ impl Renderer {
 		// Opaque front to back within each pipeline and material, so the depth
 		// test rejects hidden fragments early.
 		opaque.sort_by(|a, b| {
-			(a.variant, a.asset, a.material, a.first_index)
-				.cmp(&(b.variant, b.asset, b.material, b.first_index))
+			(a.variant, a.stencil_ref, a.asset, a.material, a.first_index)
+				.cmp(&(b.variant, b.stencil_ref, b.asset, b.material, b.first_index))
 				.then(a.depth.total_cmp(&b.depth))
 		});
 		transparent.sort_by(|a, b| b.depth.total_cmp(&a.depth));
@@ -1144,6 +1615,7 @@ impl Renderer {
 				&& item.batchable
 				&& !last.variant.blend
 				&& last.variant == item.variant
+				&& last.stencil_ref == item.stencil_ref
 				&& last.asset == item.asset
 				&& last.material == item.material
 				&& last.first_index == item.first_index
@@ -1154,6 +1626,7 @@ impl Renderer {
 			{
 				last.instances.end += 1;
 				last.outlined |= item.outlined;
+				last.knockout = last.knockout.or(item.knockout);
 				continue;
 			}
 			draws.push(Draw {
@@ -1165,6 +1638,8 @@ impl Renderer {
 				vertex_offset: item.vertex_offset,
 				ink_offset: item.ink_offset,
 				outlined: item.outlined,
+				knockout: item.knockout,
+				stencil_ref: item.stencil_ref,
 				skin_offset: item.skin_offset,
 				morphed: item.morphed,
 				instances: index..index + 1,
@@ -1241,7 +1716,6 @@ impl Renderer {
 	fn write_globals(&self, target: &RenderTarget<'_>, views: &[ViewParams]) {
 		let settings = &self.world.settings;
 		let light = settings.light;
-		let toward = -Vec3::from(light.direction).normalize_or(Vec3::NEG_Y);
 
 		let (occlusion_x, occlusion_y, occlusion_params, occluding) = match &target.occlusion {
 			Some(occlusion) => {
@@ -1258,7 +1732,9 @@ impl Renderer {
 		let mut bytes = vec![0_u8; GLOBALS_STRIDE as usize * views.len()];
 
 		for (index, view) in views.iter().enumerate() {
-			let camera = view.view.inverse().w_axis;
+			let view_inverse = view.view.inverse();
+			let camera = view_inverse.w_axis;
+			let toward = light_toward(&light, &view_inverse);
 			let uniform = GlobalsUniform {
 				view_projection: (view.projection * view.view).to_cols_array_2d(),
 				view: view.view.to_cols_array_2d(),
@@ -1298,8 +1774,9 @@ impl Renderer {
 		height: u32,
 		format: wgpu::TextureFormat,
 		samples: u32,
+		stencil: bool,
 	) {
-		let key = (width, height, format, samples);
+		let key = (width, height, format, samples, stencil);
 
 		if self
 			.attachments
@@ -1327,10 +1804,15 @@ impl Renderer {
 				})
 				.create_view(&wgpu::TextureViewDescriptor::default())
 		};
+		let depth_format = if stencil {
+			DEPTH_STENCIL_FORMAT
+		} else {
+			DEPTH_FORMAT
+		};
 		self.attachments = Some(Attachments {
 			key,
 			color: (samples > 1).then(|| texture("leptoskit_3d samples", format)),
-			depth: texture("leptoskit_3d depth", DEPTH_FORMAT),
+			depth: texture("leptoskit_3d depth", depth_format),
 		});
 	}
 
@@ -1461,17 +1943,23 @@ impl Renderer {
 		pipelines: &Pipelines,
 		assets: &[Arc<GpuAsset>],
 		draws: &[Draw],
+		write_stencil: bool,
 		include: impl Fn(&Draw) -> bool,
 	) {
 		let Some(instances) = &self.instances.buffer else {
 			return;
 		};
 		let mut current: Option<Variant> = None;
+		let mut current_ref: Option<u8> = None;
 
 		for draw in draws.iter().filter(|draw| include(draw)) {
 			if current != Some(draw.variant) {
 				pass.set_pipeline(&pipelines.meshes[&draw.variant]);
 				current = Some(draw.variant);
+			}
+			if write_stencil && current_ref != Some(draw.stencil_ref) {
+				pass.set_stencil_reference(u32::from(draw.stencil_ref));
+				current_ref = Some(draw.stencil_ref);
 			}
 
 			let asset = &assets[draw.asset];
@@ -1506,11 +1994,13 @@ impl Renderer {
 		pipelines: &[wgpu::RenderPipeline; 4],
 		assets: &[Arc<GpuAsset>],
 		draws: &[Draw],
+		write_stencil: bool,
 	) {
 		let Some(instances) = &self.instances.buffer else {
 			return;
 		};
 		let mut current: Option<(bool, bool)> = None;
+		let mut current_ref: Option<u8> = None;
 
 		for draw in draws
 			.iter()
@@ -1522,6 +2012,10 @@ impl Renderer {
 				let slot = usize::from(key.0) + usize::from(key.1) * 2;
 				pass.set_pipeline(&pipelines[slot]);
 				current = Some(key);
+			}
+			if write_stencil && current_ref != Some(draw.stencil_ref) {
+				pass.set_stencil_reference(u32::from(draw.stencil_ref));
+				current_ref = Some(draw.stencil_ref);
 			}
 
 			let asset = &assets[draw.asset];
@@ -1535,6 +2029,78 @@ impl Renderer {
 			pass.set_vertex_buffer(0, asset.vertices.slice(draw.vertex_offset..));
 			pass.set_vertex_buffer(1, instances.slice(..));
 			pass.set_vertex_buffer(2, asset.ink.slice(draw.ink_offset..));
+
+			if let (Some(offset), Some(skin)) = (draw.skin_offset, &asset.skin) {
+				pass.set_vertex_buffer(3, skin.slice(offset..));
+			}
+
+			pass.set_index_buffer(asset.indices.slice(..), wgpu::IndexFormat::Uint32);
+			pass.draw_indexed(
+				draw.first_index..draw.first_index + draw.index_count,
+				0,
+				draw.instances.clone(),
+			);
+		}
+	}
+
+	/// Draws each figure's outer relief-print paper knockout hull in the same
+	/// render pass, testing stencil `NotEqual` against that figure's reference.
+	fn draw_knockout(
+		&self,
+		pass: &mut wgpu::RenderPass<'_>,
+		solid: Option<&[wgpu::RenderPipeline; 6]>,
+		discard: Option<&[wgpu::RenderPipeline; 6]>,
+		occluded: bool,
+		assets: &[Arc<GpuAsset>],
+		draws: &[Draw],
+	) {
+		let Some(instances) = &self.instances.buffer else {
+			return;
+		};
+		let mut current_pipeline: Option<(bool, usize)> = None;
+		let mut current_ref: Option<u8> = None;
+
+		for draw in draws.iter().filter(|draw| !draw.variant.blend) {
+			let Some(ko) = draw.knockout else {
+				continue;
+			};
+			let use_discard = occluded || ko.masked;
+			let cull_slot = if ko.open_edges {
+				2
+			} else {
+				usize::from(draw.variant.mirrored)
+			};
+			let slot = cull_slot * 2 + usize::from(draw.variant.skinned);
+
+			if current_pipeline != Some((use_discard, slot)) {
+				let set = if use_discard { discard } else { solid };
+				let Some(pipelines) = set else {
+					continue;
+				};
+				pass.set_pipeline(&pipelines[slot]);
+				current_pipeline = Some((use_discard, slot));
+			}
+			if current_ref != Some(draw.stencil_ref) {
+				pass.set_stencil_reference(u32::from(draw.stencil_ref));
+				current_ref = Some(draw.stencil_ref);
+			}
+
+			let asset = &assets[draw.asset];
+			let normals = if ko.open_edges {
+				asset.knockout.as_ref().unwrap_or(&asset.ink)
+			} else {
+				&asset.ink
+			};
+
+			pass.set_bind_group(1, &asset.materials[draw.material].bind_group, &[]);
+			pass.set_bind_group(
+				2,
+				asset.morphs.as_ref().unwrap_or(&self.shared.no_morphs),
+				&[],
+			);
+			pass.set_vertex_buffer(0, asset.vertices.slice(draw.vertex_offset..));
+			pass.set_vertex_buffer(1, instances.slice(..));
+			pass.set_vertex_buffer(2, normals.slice(draw.ink_offset..));
 
 			if let (Some(offset), Some(skin)) = (draw.skin_offset, &asset.skin) {
 				pass.set_vertex_buffer(3, skin.slice(offset..));
@@ -1670,6 +2236,12 @@ impl Renderer {
 	}
 }
 
+/// The glTF builders the integration tests use, for the tests below that
+/// draw.
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "../tests/support/fixture.rs"]
+mod fixture;
+
 #[cfg(test)]
 mod tests {
 	use super::*;
@@ -1694,6 +2266,36 @@ mod tests {
 		assert_eq!(packed.shade[3], 0.0);
 		assert_eq!(packed.ink, [0.0; 4]);
 		assert_eq!(packed.ink_noise, [0.0; 4]);
+		assert_eq!(packed.print_bands, [0.0; 4]);
+		assert_eq!(packed.print_paper, [0.0; 4]);
+	}
+
+	#[test]
+	fn print_style_packs_into_globals_with_headroom() {
+		assert!(size_of::<GlobalsUniform>() as u64 + 16 <= GLOBALS_STRIDE);
+		let style = Style {
+			shading: Shading::Print(Print::default()),
+			ink: None,
+		};
+		let packed = style_uniform(&style, 0.0, &view(1000.0));
+		assert_eq!(packed.style[0], 2.0);
+		assert_eq!(packed.ink[0], 0.0);
+		assert_eq!(packed.ink[1], Print::default().fade_px[0]);
+		assert_eq!(packed.ink[2], Print::default().fade_px[1]);
+		assert!(
+			packed.ink_noise[3] > 0.0,
+			"pixel_size stays set without ink"
+		);
+		assert_eq!(
+			packed.print_bands,
+			[
+				Print::default().t_lit,
+				Print::default().t_deep,
+				Print::default().t_cross,
+				Print::default().rim,
+			]
+		);
+		assert!((packed.print_paper[3] - Print::default().knockout_width).abs() < 1.0e-5);
 	}
 
 	#[test]
@@ -1874,6 +2476,7 @@ mod tests {
 			frustums: Vec::new(),
 			eye: v.view,
 			ink: Some(Ink::default()),
+			print: None,
 			scales,
 			views: 1,
 		};
@@ -1893,5 +2496,120 @@ mod tests {
 			max: Vec3::splat(1.0),
 		};
 		assert!(sight.worth_outlining(&enclosing, 1.0));
+	}
+
+	#[test]
+	fn camera_space_light_rotates_with_the_view() {
+		let world_light = crate::protocol::Light {
+			direction: [0.0, 0.0, -1.0],
+			camera_space: false,
+			..crate::protocol::Light::default()
+		};
+		let camera_light = crate::protocol::Light {
+			camera_space: true,
+			..world_light
+		};
+		// Camera rotated +90 deg around Y (looking along -X, so camera +Z is
+		// world +X).
+		let view_inverse = Mat4::from_rotation_y(std::f32::consts::FRAC_PI_2);
+		let world = light_toward(&world_light, &view_inverse);
+		assert!((world - Vec3::Z).length() < 1.0e-6, "{world:?}");
+
+		let camera = light_toward(&camera_light, &view_inverse);
+		assert!((camera - Vec3::X).length() < 1.0e-6, "{camera:?}");
+	}
+
+	/// A print target's `ink_weight` multiplies the part's own line weight
+	/// from [`Op::SetInk`](crate::protocol::Op::SetInk), so a part set to no
+	/// line keeps none.
+	#[test]
+	fn a_print_ink_weight_scales_the_parts_own_line() {
+		let ink = Ink::default();
+		let material = Material::default();
+		let resolved = PrintOverride {
+			ink_weight: Some(2.0),
+			..PrintOverride::default()
+		};
+		let weighted = |weight: Option<f32>| {
+			let part = Overrides {
+				ink: PartInk {
+					weight,
+					color: None,
+				},
+				..Overrides::default()
+			};
+			part_ink_print(&part, &material, &resolved, false, Some(&ink))[3]
+		};
+		assert_eq!(weighted(None), 2.0);
+		assert_eq!(weighted(Some(0.5)), 1.0);
+		assert_eq!(weighted(Some(0.0)), 0.0, "a part without a line keeps none");
+	}
+
+	/// Paper knockout keeps one depth-stencil attachment and one pipeline
+	/// set while figures walk in and out of view: what a frame draws with
+	/// follows the style, not what the frame happens to see.
+	#[cfg(not(target_arch = "wasm32"))]
+	#[test]
+	fn knockout_attachments_hold_while_figures_leave_the_view() {
+		use crate::protocol::AssetId;
+		use crate::protocol::NodeId;
+		use crate::protocol::Op;
+		use crate::protocol::Transform;
+
+		let gpu = match Gpu::headless() {
+			Ok(gpu) => gpu,
+			Err(error) if error.is_unavailable() => return,
+			Err(error) => panic!("{error}"),
+		};
+		let asset = crate::Asset::from_slice(&fixture::lit_sphere(16, None)).unwrap();
+		let mut renderer = Renderer::new(&gpu);
+		let world = renderer.world_mut();
+		world.apply([
+			Op::LoadAsset {
+				asset: AssetId(1),
+				path: "models/sphere.glb".into(),
+			},
+			Op::Spawn {
+				node: NodeId(1),
+				asset: Some(AssetId(1)),
+				parent: None,
+			},
+			Op::SetCamera {
+				transform: Transform::from_translation(0.0, 0.0, 3.0),
+				fov_y: 0.8,
+				near: 0.1,
+				far: 50.0,
+			},
+			Op::SetStyle(Style {
+				shading: Shading::Print(Print::default()),
+				ink: None,
+			}),
+		]);
+		world.take_loads();
+		world.asset_loaded(AssetId(1), Ok(Arc::new(asset)));
+		world.take_events();
+
+		// In view, behind the camera, and back.
+		let keys: Vec<_> = [0.0, 40.0, 0.0]
+			.into_iter()
+			.map(|z| {
+				renderer.world_mut().apply([Op::SetTransform {
+					node: NodeId(1),
+					transform: Transform::from_translation(0.0, 0.0, z),
+				}]);
+				renderer.advance(0.0);
+				renderer.render_to_rgba(32, 32).unwrap();
+				renderer
+					.attachments
+					.as_ref()
+					.map(|attachments| attachments.key)
+			})
+			.collect();
+		assert!(
+			keys[0].is_some_and(|key| key.4),
+			"a knockout style draws with a stencil"
+		);
+		assert_eq!(keys[1], keys[0], "the figure leaving keeps the attachments");
+		assert_eq!(keys[2], keys[0], "the figure returning keeps them too");
 	}
 }

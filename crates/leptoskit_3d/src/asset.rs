@@ -116,6 +116,10 @@ pub(crate) struct Primitive {
 	/// Where its joints and weights start in [`Asset::skin_vertices`].
 	pub skin_base: Option<u32>,
 	pub morph: Option<MorphRange>,
+	/// Whether any triangle in this primitive touches an open boundary edge of
+	/// its mesh, so paper knockout draws it double-sided with outward edge
+	/// normals.
+	pub has_open_edges: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -271,12 +275,18 @@ pub struct Asset {
 	pub(crate) skin_vertices: Vec<SkinVertex>,
 	/// One per vertex, in [`Asset::vertices`]' order.
 	pub(crate) ink_vertices: Vec<InkVertex>,
+	/// Optional per-vertex knockout normals for assets that contain open
+	/// single-sided sheets; empty when every mesh in the asset is closed.
+	pub(crate) knockout_vertices: Vec<InkVertex>,
 	pub(crate) indices: Vec<u32>,
 	pub(crate) morph_deltas: Vec<[f32; 4]>,
 	pub(crate) names: HashMap<String, usize>,
 	/// Per node, how long a unit of its mesh's space is in the rest pose, in
 	/// the model's metres.
 	pub(crate) units: Vec<f32>,
+	/// Per node, IEEE CRC-32 of its name, for deterministic per-part line
+	/// wobble seeds.
+	pub(crate) seeds: Vec<u32>,
 }
 
 impl Asset {

@@ -17,6 +17,23 @@ use glam::Vec3;
 use crate::asset::*;
 use crate::sanitize::*;
 
+/// Maximum number of vertex-adjacency smoothing rings applied to welded
+/// outline normals via [`LoadOptions::outline_smooth_rings`] or glTF
+/// `extras.outlineSmoothRings`.
+pub const MAX_OUTLINE_SMOOTH_RINGS: u8 = 8;
+
+/// Options controlling how a glTF asset is prepared at load time.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct LoadOptions {
+	/// How many rings of vertex-adjacency Laplacian smoothing to apply to
+	/// welded outline normals (`0` leaves the default welded hull unchanged;
+	/// clamped to [`MAX_OUTLINE_SMOOTH_RINGS`]).
+	///
+	/// When `None`, the loader reads `extras.outlineSmoothRings` from each
+	/// mesh or from the document root, defaulting to `0` when absent.
+	pub outline_smooth_rings: Option<u8>,
+}
+
 /// Why a model could not load.
 #[derive(Debug, thiserror::Error)]
 pub enum LoadError {
@@ -556,12 +573,21 @@ impl<'a> Document<'a> {
 	}
 }
 
-/// Loads a model from the bytes of a `.glb` or `.gltf` file. `resolve` reads
-/// a file the model refers to by a relative path, such as a `.bin` buffer or
-/// a texture beside a `.gltf`; it is never asked for a path outside the
-/// model's folder.
+/// Loads a model from the bytes of a `.glb` or `.gltf` file with default
+/// [`LoadOptions`]. `resolve` reads a file the model refers to by a relative
+/// path, such as a `.bin` buffer or a texture beside a `.gltf`; it is never
+/// asked for a path outside the model's folder.
 pub(crate) fn load(
 	bytes: &[u8],
+	resolve: &mut dyn FnMut(&str) -> Result<Vec<u8>, String>,
+) -> Result<Asset, LoadError> {
+	load_with_options(bytes, LoadOptions::default(), resolve)
+}
+
+/// Loads a model from `.glb` or `.gltf` bytes with explicit [`LoadOptions`].
+pub(crate) fn load_with_options(
+	bytes: &[u8],
+	options: LoadOptions,
 	resolve: &mut dyn FnMut(&str) -> Result<Vec<u8>, String>,
 ) -> Result<Asset, LoadError> {
 	let document = Document::parse(bytes, resolve)?;
@@ -572,6 +598,8 @@ pub(crate) fn load(
 	load_skins(&document, &mut asset)?;
 	load_clips(&document, &mut asset)?;
 	asset.units = rest_units(&asset);
+	smooth_outline_normals(&document, &mut asset, options);
+	build_knockout_vertices(&mut asset);
 	Ok(asset)
 }
 
@@ -618,6 +646,23 @@ fn rest_units(asset: &Asset) -> Vec<f32> {
 		.collect()
 }
 
+/// Standard IEEE CRC-32, used to derive deterministic per-part seeds from
+/// node names without adding a crate dependency.
+pub(crate) fn crc32(bytes: &[u8]) -> u32 {
+	let mut crc = 0xFFFF_FFFF_u32;
+
+	for &byte in bytes {
+		crc ^= u32::from(byte);
+
+		for _ in 0..8 {
+			let mask = (crc & 1).wrapping_neg();
+			crc = (crc >> 1) ^ (0xEDB8_8320 & mask);
+		}
+	}
+
+	!crc
+}
+
 fn load_nodes(document: &Document<'_>, asset: &mut Asset) -> Result<(), LoadError> {
 	let root = &document.root;
 	let mut parents = vec![None; root.nodes.len()];
@@ -659,6 +704,7 @@ fn load_nodes(document: &Document<'_>, asset: &mut Asset) -> Result<(), LoadErro
 		};
 
 		let name = node.name.clone().unwrap_or_else(|| format!("node{index}"));
+		asset.seeds.push(crc32(name.as_bytes()));
 		asset.names.entry(name.clone()).or_insert(index);
 		asset.nodes.push(AssetNode {
 			name,
@@ -1071,8 +1117,9 @@ impl Attributes<'_, '_> {
 
 	/// Each vertex's ink weight, as [`InkVertex::weight`] stores it: twice
 	/// `COLOR_1`'s red channel, so 0.5 is the part's line, 0 none, and 1 a
-	/// line twice as heavy. A primitive without `COLOR_1` has the part's line
-	/// throughout.
+	/// line twice as heavy. `COLOR_1`'s green, blue, and alpha channels are
+	/// reserved for app-specific masks and ignored by the renderer. A
+	/// primitive without `COLOR_1` has the part's line throughout.
 	fn ink_weights(&self) -> Result<Vec<i8>, LoadError> {
 		let Some(index) = self.attribute("COLOR_1") else {
 			return Ok(vec![0; self.count]);
@@ -1363,6 +1410,441 @@ fn weld_mesh(asset: &mut Asset, first_vertex: usize) {
 	}
 }
 
+/// The inclusive-start, exclusive-end vertex range covered by `primitives`.
+fn mesh_vertex_range(primitives: &[Primitive], vertex_len: usize) -> Option<(usize, usize)> {
+	if primitives.is_empty() {
+		return None;
+	}
+	let first = primitives
+		.iter()
+		.map(|primitive| primitive.base_vertex as usize)
+		.min()?;
+	let end = primitives
+		.iter()
+		.map(|primitive| primitive.base_vertex as usize + primitive.vertex_count as usize)
+		.max()?;
+	(end > first && end <= vertex_len).then_some((first, end))
+}
+
+/// Bounding-box diagonal of `vertices` computed in `f64` so extreme finite
+/// `f32` spans never overflow to `Inf`.
+fn mesh_extent_diagonal(vertices: &[Vertex]) -> f64 {
+	let mut min = [f64::INFINITY; 3];
+	let mut max = [f64::NEG_INFINITY; 3];
+	for vertex in vertices {
+		for axis in 0..3 {
+			let value = f64::from(vertex.position[axis]);
+			if value.is_finite() {
+				min[axis] = min[axis].min(value);
+				max[axis] = max[axis].max(value);
+			}
+		}
+	}
+	let extent = [
+		(max[0] - min[0]).max(0.0),
+		(max[1] - min[1]).max(0.0),
+		(max[2] - min[2]).max(0.0),
+	];
+	(extent[0] * extent[0] + extent[1] * extent[1] + extent[2] * extent[2]).sqrt()
+}
+
+/// The weld group of each of `vertices`, named by one of its members:
+/// copies closer than a hundred-thousandth of the bounds' diagonal `diag`
+/// weld, as the outline normals' do, wherever they fall against a grid.
+fn weld_vertex_copies(vertices: &[Vertex], diag: f64) -> Vec<usize> {
+	let positions: Vec<Vec3> = vertices
+		.iter()
+		.map(|vertex| Vec3::from(vertex.position))
+		.collect();
+	let tol = if diag.is_finite() && diag > 0.0 {
+		(diag * 1.0e-5).max(1.0e-12)
+	} else {
+		0.0
+	};
+
+	weld_groups(&positions, tol)
+}
+
+fn quantize_position(position: [f32; 3], cell: f64) -> [i64; 3] {
+	position.map(|value| {
+		let scaled = f64::from(value) / cell;
+		if scaled.is_finite() {
+			scaled.round() as i64
+		} else {
+			0
+		}
+	})
+}
+
+/// Optional vertex-adjacency Laplacian smoothing of welded outline normals.
+/// Runs only when `LoadOptions::outline_smooth_rings` or glTF
+/// `extras.outlineSmoothRings` resolves to `rings > 0`; at `0` (the default),
+/// `asset.ink_vertices` stays byte-for-byte identical to [`weld_mesh`].
+fn smooth_outline_normals(document: &Document<'_>, asset: &mut Asset, options: LoadOptions) {
+	let root_rings = document
+		.root
+		.extras
+		.as_ref()
+		.and_then(|extras| extras.outline_smooth_rings);
+
+	for mesh_index in 0..asset.meshes.len() {
+		let mesh_rings = document
+			.root
+			.meshes
+			.get(mesh_index)
+			.and_then(|mesh| mesh.extras.as_ref())
+			.and_then(|extras| extras.outline_smooth_rings);
+		let rings = options
+			.outline_smooth_rings
+			.or(mesh_rings)
+			.or(root_rings)
+			.unwrap_or(0)
+			.min(MAX_OUTLINE_SMOOTH_RINGS);
+
+		if rings > 0 {
+			smooth_mesh_outline_normals(asset, mesh_index, rings);
+		}
+	}
+}
+
+/// The smoothing grid's cell, in the mesh's own units, for a mesh whose
+/// bounds' diagonal is `diag` and whose unit is `unit_scale` metres: 1.2 mm,
+/// kept between a hundred-thousandth and a hundredth of the diagonal. The
+/// unit is floored only against zero, as the renderer floors it when it
+/// packs units, since quantized meshes use units of a few hundredths of a
+/// millimetre.
+fn smoothing_cell(diag: f64, unit_scale: f32) -> f64 {
+	if !(diag.is_finite() && diag > 0.0) {
+		return 1.0;
+	}
+
+	let weld = 1.2e-3_f64 / f64::from(unit_scale).max(1.0e-12);
+	(diag * 1.0e-5).max(weld).min(diag * 0.01).max(1.0e-12)
+}
+
+fn smooth_mesh_outline_normals(asset: &mut Asset, mesh_index: usize, rings: u8) {
+	let Some((first_vertex, end_vertex)) =
+		mesh_vertex_range(&asset.meshes[mesh_index].primitives, asset.vertices.len())
+	else {
+		return;
+	};
+	let unit_scale = asset
+		.nodes
+		.iter()
+		.enumerate()
+		.find_map(|(node_idx, node)| {
+			(node.mesh == Some(mesh_index))
+				.then(|| asset.units.get(node_idx).copied().unwrap_or(1.0))
+		})
+		.unwrap_or(1.0);
+	let diag = mesh_extent_diagonal(&asset.vertices[first_vertex..end_vertex]);
+	let cell = smoothing_cell(diag, unit_scale);
+
+	let local_count = end_vertex - first_vertex;
+	let vertices = &asset.vertices[first_vertex..end_vertex];
+	// Every copy of a corner snaps to the grid from one shared position, so
+	// copies a rounding apart on either side of a cell boundary still share
+	// a cell. Only copies weld across cells: the
+	// cell is far wider than a weld, and welding it transitively would chain
+	// a dense mesh's neighbouring vertices into one blob.
+	let welded = weld_vertex_copies(vertices, diag);
+	let mut order: Vec<([i64; 3], [i8; 3], usize)> = vertices
+		.iter()
+		.enumerate()
+		.map(|(offset, vertex)| {
+			(
+				quantize_position(vertices[welded[offset]].position, cell),
+				snorm(Vec3::from(vertex.normal)),
+				offset,
+			)
+		})
+		.collect();
+	order.sort_unstable();
+
+	let mut group_of = vec![0_usize; local_count];
+	let mut group_normals: Vec<Vec3> = Vec::new();
+	let mut group_valid: Vec<bool> = Vec::new();
+
+	for copies in order.chunk_by(|a, b| a.0 == b.0) {
+		let group = group_normals.len();
+		let sum: Vec3 = copies
+			.chunk_by(|a, b| a.1 == b.1)
+			.map(|same| {
+				Vec3::from(asset.vertices[first_vertex + same[0].2].normal).normalize_or_zero()
+			})
+			.sum();
+		let valid = sum.length_squared() >= 0.01;
+		group_normals.push(if valid { sum.normalize() } else { Vec3::ZERO });
+		group_valid.push(valid);
+		for (.., offset) in copies {
+			group_of[*offset] = group;
+		}
+	}
+
+	let group_count = group_normals.len();
+	let neighbors = build_group_neighbors(
+		&asset.meshes[mesh_index].primitives,
+		&asset.indices,
+		&group_of,
+		group_count,
+		first_vertex,
+		end_vertex,
+	);
+
+	let mut current = group_normals;
+	let mut next = vec![Vec3::ZERO; group_count];
+	for _ in 0..rings {
+		for g in 0..group_count {
+			if !group_valid[g] {
+				next[g] = Vec3::ZERO;
+				continue;
+			}
+			let mut sum = current[g];
+			let mut count = 1_u32;
+			for &nbr in &neighbors[g] {
+				if group_valid[nbr] {
+					sum += current[nbr];
+					count += 1;
+				}
+			}
+			next[g] = sum / count as f32;
+		}
+		std::mem::swap(&mut current, &mut next);
+	}
+
+	for offset in 0..local_count {
+		let g = group_of[offset];
+		if group_valid[g] && current[g].length_squared() > 1.0e-6 {
+			asset.ink_vertices[first_vertex + offset].normal = snorm(current[g].normalize());
+		}
+	}
+}
+
+fn build_group_neighbors(
+	primitives: &[Primitive],
+	indices: &[u32],
+	group_of: &[usize],
+	group_count: usize,
+	first_vertex: usize,
+	end_vertex: usize,
+) -> Vec<Vec<usize>> {
+	let mut neighbors: Vec<Vec<usize>> = vec![Vec::new(); group_count];
+	for primitive in primitives {
+		let base = primitive.base_vertex as usize;
+		let start = primitive.first_index as usize;
+		let end = start + primitive.index_count as usize;
+		for &[i0, i1, i2] in indices[start..end].as_chunks::<3>().0 {
+			let va = base + i0 as usize;
+			let vb = base + i1 as usize;
+			let vc = base + i2 as usize;
+			if va < first_vertex
+				|| vb < first_vertex
+				|| vc < first_vertex
+				|| va >= end_vertex
+				|| vb >= end_vertex
+				|| vc >= end_vertex
+			{
+				continue;
+			}
+			let ga = group_of[va - first_vertex];
+			let gb = group_of[vb - first_vertex];
+			let gc = group_of[vc - first_vertex];
+			for (u, v) in [(ga, gb), (gb, gc), (gc, ga)] {
+				if u != v {
+					neighbors[u].push(v);
+					neighbors[v].push(u);
+				}
+			}
+		}
+	}
+	for list in &mut neighbors {
+		list.sort_unstable();
+		list.dedup();
+	}
+	neighbors
+}
+
+/// Detects open boundary edges per mesh and builds `asset.knockout_vertices`
+/// when any primitive has open edges (such as a single-sided robe hem or
+/// sheet). Closed meshes leave `asset.knockout_vertices` empty and reuse
+/// `ink_vertices`.
+fn build_knockout_vertices(asset: &mut Asset) {
+	for mesh_index in 0..asset.meshes.len() {
+		build_mesh_knockout_vertices(asset, mesh_index);
+	}
+}
+
+fn build_mesh_knockout_vertices(asset: &mut Asset, mesh_index: usize) {
+	let Some((first_vertex, end_vertex)) =
+		mesh_vertex_range(&asset.meshes[mesh_index].primitives, asset.vertices.len())
+	else {
+		return;
+	};
+	let vertices = &asset.vertices[first_vertex..end_vertex];
+	// Each group is named by one of its vertices, so the vertices' count
+	// covers every name.
+	let group_of = weld_vertex_copies(vertices, mesh_extent_diagonal(vertices));
+	let group_count = group_of.len();
+
+	let edge_counts = count_mesh_edges(
+		&asset.meshes[mesh_index].primitives,
+		&asset.indices,
+		&group_of,
+		first_vertex,
+		end_vertex,
+	);
+	if !edge_counts.values().any(|&count| count == 1) {
+		return;
+	}
+
+	let boundary_outward = collect_boundary_outward(
+		&mut asset.meshes[mesh_index].primitives,
+		&asset.vertices,
+		&asset.indices,
+		&group_of,
+		group_count,
+		first_vertex,
+		end_vertex,
+		&edge_counts,
+	);
+
+	if asset.knockout_vertices.is_empty() {
+		asset.knockout_vertices = asset.ink_vertices.clone();
+	}
+
+	for primitive in &asset.meshes[mesh_index].primitives {
+		if !primitive.has_open_edges {
+			continue;
+		}
+		let start = primitive.base_vertex as usize;
+		let end = start + primitive.vertex_count as usize;
+		for v in start..end {
+			let out_sum = boundary_outward[group_of[v - first_vertex]];
+			if out_sum.length_squared() <= 1.0e-6 {
+				continue;
+			}
+			let out_dir = out_sum.normalize();
+			let surf_n = Vec3::from(
+				asset.ink_vertices[v]
+					.normal
+					.map(|channel| f32::from(channel) / 127.0),
+			)
+			.normalize_or_zero();
+			let combined = (out_dir + surf_n * 0.20).normalize_or_zero();
+			if combined.length_squared() > 0.0 {
+				asset.knockout_vertices[v].normal = snorm(combined);
+			}
+		}
+	}
+}
+
+fn count_mesh_edges(
+	primitives: &[Primitive],
+	indices: &[u32],
+	group_of: &[usize],
+	first_vertex: usize,
+	end_vertex: usize,
+) -> HashMap<(usize, usize), u32> {
+	let mut edge_counts: HashMap<(usize, usize), u32> = HashMap::new();
+	for primitive in primitives {
+		let base = primitive.base_vertex as usize;
+		let start = primitive.first_index as usize;
+		let end = start + primitive.index_count as usize;
+		for &[i0, i1, i2] in indices[start..end].as_chunks::<3>().0 {
+			let va = base + i0 as usize;
+			let vb = base + i1 as usize;
+			let vc = base + i2 as usize;
+			if va < first_vertex
+				|| vb < first_vertex
+				|| vc < first_vertex
+				|| va >= end_vertex
+				|| vb >= end_vertex
+				|| vc >= end_vertex
+			{
+				continue;
+			}
+			let ga = group_of[va - first_vertex];
+			let gb = group_of[vb - first_vertex];
+			let gc = group_of[vc - first_vertex];
+			if ga == gb || gb == gc || gc == ga {
+				continue;
+			}
+			for (u, v) in [(ga, gb), (gb, gc), (gc, ga)] {
+				let edge = if u < v { (u, v) } else { (v, u) };
+				*edge_counts.entry(edge).or_insert(0) += 1;
+			}
+		}
+	}
+	edge_counts
+}
+
+#[allow(clippy::too_many_arguments)]
+fn collect_boundary_outward(
+	primitives: &mut [Primitive],
+	vertices: &[Vertex],
+	indices: &[u32],
+	group_of: &[usize],
+	group_count: usize,
+	first_vertex: usize,
+	end_vertex: usize,
+	edge_counts: &HashMap<(usize, usize), u32>,
+) -> Vec<Vec3> {
+	let mut boundary_outward = vec![Vec3::ZERO; group_count];
+	for primitive in primitives {
+		let base = primitive.base_vertex as usize;
+		let start = primitive.first_index as usize;
+		let end = start + primitive.index_count as usize;
+		let mut prim_open = false;
+
+		for &[i0, i1, i2] in indices[start..end].as_chunks::<3>().0 {
+			let va = base + i0 as usize;
+			let vb = base + i1 as usize;
+			let vc = base + i2 as usize;
+			if va < first_vertex
+				|| vb < first_vertex
+				|| vc < first_vertex
+				|| va >= end_vertex
+				|| vb >= end_vertex
+				|| vc >= end_vertex
+			{
+				continue;
+			}
+			let ga = group_of[va - first_vertex];
+			let gb = group_of[vb - first_vertex];
+			let gc = group_of[vc - first_vertex];
+			if ga == gb || gb == gc || gc == ga {
+				continue;
+			}
+			let verts = [(va, ga), (vb, gb), (vc, gc)];
+			for edge_idx in 0..3 {
+				let (v0, g0) = verts[edge_idx];
+				let (v1, g1) = verts[(edge_idx + 1) % 3];
+				let (v2, _) = verts[(edge_idx + 2) % 3];
+				let edge = if g0 < g1 { (g0, g1) } else { (g1, g0) };
+				if edge_counts.get(&edge).copied() != Some(1) {
+					continue;
+				}
+				prim_open = true;
+				let p0 = Vec3::from(vertices[v0].position);
+				let p1 = Vec3::from(vertices[v1].position);
+				let p2 = Vec3::from(vertices[v2].position);
+				let e = p1 - p0;
+				let len2 = e.length_squared();
+				if len2 > 1.0e-20 {
+					let to_opp = p2 - p0;
+					let perp = to_opp - e * (to_opp.dot(e) / len2);
+					let outward = (-perp).normalize_or_zero();
+					boundary_outward[g0] += outward;
+					boundary_outward[g1] += outward;
+				}
+			}
+		}
+
+		primitive.has_open_edges = prim_open;
+	}
+	boundary_outward
+}
+
 /// Reads one primitive's vertices and indices into the asset's shared
 /// arrays. Strips and fans become lists, missing normals are computed, and
 /// skin weights are renormalized, so the renderer sees one vertex layout.
@@ -1482,6 +1964,7 @@ fn load_primitive(
 		bounds,
 		skin_base,
 		morph,
+		has_open_edges: false,
 	}))
 }
 
@@ -2336,5 +2819,312 @@ mod tests {
 			positions.len(),
 			side * side * side
 		);
+	}
+
+	#[test]
+	fn node_seeds_match_ieee_crc32() {
+		assert_eq!(crc32(b"123456789"), 0xCBF4_3926);
+		assert_ne!(crc32(b"head_0"), crc32(b"robe_0"));
+	}
+
+	/// Builds a minimal faceted bent strip (two flat quads meeting at a 90°
+	/// corner, with a second strip along `+x` so vertices sit 1 and 2 rings
+	/// away from the corner) with optional root and mesh `outlineSmoothRings`
+	/// glTF extras.
+	fn bent_faceted_gltf(root_extra: Option<u8>, mesh_extra: Option<u8>) -> Vec<u8> {
+		// 3 flat quads along x=0..1..2 (normal +z) and 1 bent down at x=0 into
+		// z=0..-1 (normal -x). Vertex 2 at (1, 0, 0) is 1 ring from the 90 deg
+		// crease at x=0; vertex 4 at (2, 0, 0) is 2 rings away.
+		let positions: [[f32; 3]; 12] = [
+			// Quad A: x in [0, 1], z=0, normal +z
+			[0.0, 0.0, 0.0],
+			[1.0, 0.0, 0.0],
+			[1.0, 1.0, 0.0],
+			[0.0, 1.0, 0.0],
+			// Quad B: x in [1, 2], z=0, normal +z
+			[1.0, 0.0, 0.0],
+			[2.0, 0.0, 0.0],
+			[2.0, 1.0, 0.0],
+			[1.0, 1.0, 0.0],
+			// Quad C: x=0, z in [-1, 0], normal -x
+			[0.0, 0.0, -1.0],
+			[0.0, 0.0, 0.0],
+			[0.0, 1.0, 0.0],
+			[0.0, 1.0, -1.0],
+		];
+		let normals: [[f32; 3]; 12] = [
+			[0.0, 0.0, 1.0],
+			[0.0, 0.0, 1.0],
+			[0.0, 0.0, 1.0],
+			[0.0, 0.0, 1.0],
+			[0.0, 0.0, 1.0],
+			[0.0, 0.0, 1.0],
+			[0.0, 0.0, 1.0],
+			[0.0, 0.0, 1.0],
+			[-1.0, 0.0, 0.0],
+			[-1.0, 0.0, 0.0],
+			[-1.0, 0.0, 0.0],
+			[-1.0, 0.0, 0.0],
+		];
+		let indices: [u16; 18] = [0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7, 8, 9, 10, 8, 10, 11];
+
+		let mut bin = Vec::new();
+		let pos_off = bin.len();
+		for p in &positions {
+			for v in p {
+				bin.extend_from_slice(&v.to_le_bytes());
+			}
+		}
+		let pos_len = bin.len() - pos_off;
+		let norm_off = bin.len();
+		for n in &normals {
+			for v in n {
+				bin.extend_from_slice(&v.to_le_bytes());
+			}
+		}
+		let norm_len = bin.len() - norm_off;
+		let idx_off = bin.len();
+		for i in &indices {
+			bin.extend_from_slice(&i.to_le_bytes());
+		}
+		let idx_len = bin.len() - idx_off;
+		while bin.len() % 4 != 0 {
+			bin.push(0);
+		}
+
+		let root_ext = root_extra
+			.map(|rings| format!(r#","extras":{{"outlineSmoothRings":{rings}}}"#))
+			.unwrap_or_default();
+		let mesh_ext = mesh_extra
+			.map(|rings| format!(r#","extras":{{"outlineSmoothRings":{rings}}}"#))
+			.unwrap_or_default();
+		let json = format!(
+			r#"{{"asset":{{"version":"2.0"}},"scenes":[{{"nodes":[0]}}],"nodes":[{{"name":"strip","mesh":0}}],"meshes":[{{"primitives":[{{"attributes":{{"POSITION":0,"NORMAL":1}},"indices":2}}]{mesh_ext}}}],"buffers":[{{"byteLength":{}}}],"bufferViews":[{{"buffer":0,"byteOffset":{pos_off},"byteLength":{pos_len}}},{{"buffer":0,"byteOffset":{norm_off},"byteLength":{norm_len}}},{{"buffer":0,"byteOffset":{idx_off},"byteLength":{idx_len}}}],"accessors":[{{"bufferView":0,"componentType":5126,"count":12,"type":"VEC3","min":[0,0,-1],"max":[2,1,0]}},{{"bufferView":1,"componentType":5126,"count":12,"type":"VEC3"}},{{"bufferView":2,"componentType":5123,"count":18,"type":"SCALAR"}}]{root_ext}}}"#,
+			bin.len()
+		);
+		let mut json_bytes = json.into_bytes();
+		while json_bytes.len() % 4 != 0 {
+			json_bytes.push(b' ');
+		}
+		let total = 12 + 8 + json_bytes.len() + 8 + bin.len();
+		let mut glb = Vec::with_capacity(total);
+		glb.extend_from_slice(b"glTF");
+		glb.extend_from_slice(&2_u32.to_le_bytes());
+		glb.extend_from_slice(&(total as u32).to_le_bytes());
+		glb.extend_from_slice(&(json_bytes.len() as u32).to_le_bytes());
+		glb.extend_from_slice(&0x4E4F_534A_u32.to_le_bytes());
+		glb.extend_from_slice(&json_bytes);
+		glb.extend_from_slice(&(bin.len() as u32).to_le_bytes());
+		glb.extend_from_slice(&0x004E_4942_u32.to_le_bytes());
+		glb.extend_from_slice(&bin);
+		glb
+	}
+
+	#[test]
+	fn outline_smooth_rings_defaults_to_unchanged_and_propagates_across_rings() {
+		let bytes = bent_faceted_gltf(None, None);
+		let default_asset = Asset::from_slice(&bytes).unwrap();
+		let zero_asset = Asset::from_slice_with_options(
+			&bytes,
+			LoadOptions {
+				outline_smooth_rings: Some(0),
+			},
+		)
+		.unwrap();
+		assert_eq!(
+			default_asset.ink_vertices, zero_asset.ink_vertices,
+			"default and 0 rings keep today's hull byte-for-byte unchanged"
+		);
+		// Vertex 1 (at x=1, 1 ring from crease) is pure +z without smoothing.
+		assert_eq!(default_asset.ink_vertices[1].normal, [0, 0, 127]);
+		// Vertex 5 (at x=2, 2 rings from crease) is pure +z without smoothing.
+		assert_eq!(default_asset.ink_vertices[5].normal, [0, 0, 127]);
+
+		// 1 ring tilts vertex 1 (1 hop from crease) toward -x, while vertex 5
+		// (2 hops) stays pure +z.
+		let ring1 = Asset::from_slice_with_options(
+			&bytes,
+			LoadOptions {
+				outline_smooth_rings: Some(1),
+			},
+		)
+		.unwrap();
+		assert!(
+			ring1.ink_vertices[1].normal[0] < -10,
+			"1 ring spreads crease to 1-hop neighbor: {:?}",
+			ring1.ink_vertices[1].normal
+		);
+		assert_eq!(
+			ring1.ink_vertices[5].normal,
+			[0, 0, 127],
+			"1 ring does not reach 2-hop vertex"
+		);
+
+		// 2 rings reaches vertex 5 (2 hops away) as well.
+		let ring2 = Asset::from_slice_with_options(
+			&bytes,
+			LoadOptions {
+				outline_smooth_rings: Some(2),
+			},
+		)
+		.unwrap();
+		assert!(
+			ring2.ink_vertices[5].normal[0] < -5,
+			"2 rings reaches 2-hop vertex: {:?}",
+			ring2.ink_vertices[5].normal
+		);
+
+		// Clamping at MAX_OUTLINE_SMOOTH_RINGS.
+		let capped = Asset::from_slice_with_options(
+			&bytes,
+			LoadOptions {
+				outline_smooth_rings: Some(99),
+			},
+		)
+		.unwrap();
+		let max_rings = Asset::from_slice_with_options(
+			&bytes,
+			LoadOptions {
+				outline_smooth_rings: Some(MAX_OUTLINE_SMOOTH_RINGS),
+			},
+		)
+		.unwrap();
+		assert_eq!(capped.ink_vertices, max_rings.ink_vertices);
+
+		// glTF extras: mesh beats root, explicit LoadOptions beats both.
+		let with_root = Asset::from_slice(&bent_faceted_gltf(Some(2), None)).unwrap();
+		assert_eq!(with_root.ink_vertices, ring2.ink_vertices);
+
+		let with_mesh = Asset::from_slice(&bent_faceted_gltf(Some(2), Some(1))).unwrap();
+		assert_eq!(with_mesh.ink_vertices, ring1.ink_vertices);
+
+		let override_zero = Asset::from_slice_with_options(
+			&bent_faceted_gltf(Some(2), Some(2)),
+			LoadOptions {
+				outline_smooth_rings: Some(0),
+			},
+		)
+		.unwrap();
+		assert_eq!(override_zero.ink_vertices, default_asset.ink_vertices);
+	}
+
+	/// A closed tetrahedron, one primitive with every face's corners copied,
+	/// whose apex copies sit at `apex_x` (one face) and `apex_x_again` (two).
+	fn closed_tetrahedron(apex_x: f32, apex_x_again: f32) -> Asset {
+		let a = [0.0_f32, 0.0, 0.0];
+		let b = [1.0, 0.0, 0.0];
+		let c = [0.0, 1.0, 0.0];
+		let apex = [apex_x, 0.3, 1.0];
+		let apex_again = [apex_x_again, 0.3, 1.0];
+		let faces = [
+			[a, c, b],
+			[a, b, apex],
+			[b, c, apex_again],
+			[c, a, apex_again],
+		];
+		let mut asset = Asset::default();
+
+		for position in faces.into_iter().flatten() {
+			asset.vertices.push(Vertex {
+				position,
+				normal: [0.0, 0.0, 1.0],
+				uv: [0.0, 0.0],
+				color: [255; 4],
+			});
+			asset.ink_vertices.push(InkVertex::default());
+		}
+
+		asset.indices = (0..12).collect();
+		asset.meshes.push(Mesh {
+			primitives: vec![Primitive {
+				base_vertex: 0,
+				vertex_count: 12,
+				first_index: 0,
+				index_count: 12,
+				material: 0,
+				bounds: Aabb::EMPTY,
+				skin_base: None,
+				morph: None,
+				has_open_edges: false,
+			}],
+			..Mesh::default()
+		});
+		asset
+	}
+
+	#[test]
+	fn knockout_keeps_a_closed_mesh_closed_at_a_cell_boundary() {
+		// The knockout welds within a hundred-thousandth of the bounds'
+		// diagonal, here the square root of 3, and once rounded to a grid
+		// that wide. Put the apex's copies one ulp apart, on either side of a
+		// half cell of that grid.
+		let cell = 3.0_f64.sqrt() * 1.0e-5;
+		let boundary = (20_000.0 + 0.5) * cell;
+		let nearest = boundary as f32;
+		let (low, high) = if f64::from(nearest) < boundary {
+			(nearest, f32::from_bits(nearest.to_bits() + 1))
+		} else {
+			(f32::from_bits(nearest.to_bits() - 1), nearest)
+		};
+
+		let mut same = closed_tetrahedron(high, high);
+		build_knockout_vertices(&mut same);
+		assert!(!same.meshes[0].primitives[0].has_open_edges);
+
+		let mut split = closed_tetrahedron(low, high);
+		build_knockout_vertices(&mut split);
+		assert!(
+			!split.meshes[0].primitives[0].has_open_edges,
+			"a closed tetrahedron whose apex copies are one ulp apart ({low:e} and {high:e}) has \
+			 open edges"
+		);
+		assert!(
+			split.knockout_vertices.is_empty(),
+			"a closed mesh needs no knockout normals"
+		);
+	}
+
+	#[test]
+	fn smoothing_keeps_a_corners_copies_together_at_a_cell_boundary() {
+		// Smoothing snaps to a grid 1.2 mm across here. Put the apex's copies
+		// one ulp apart, on either side of a half cell, with each face's own
+		// normal, so copies that fall apart smooth to different normals.
+		let boundary = (288.0 + 0.5) * 1.2e-3_f64;
+		let nearest = boundary as f32;
+		let (low, high) = if f64::from(nearest) < boundary {
+			(nearest, f32::from_bits(nearest.to_bits() + 1))
+		} else {
+			(f32::from_bits(nearest.to_bits() - 1), nearest)
+		};
+		let mut asset = closed_tetrahedron(low, high);
+
+		for face in asset.vertices.chunks_mut(3) {
+			let [a, b, c] = [0, 1, 2].map(|index| Vec3::from(face[index].position));
+			let normal = (b - a).cross(c - a).normalize().to_array();
+
+			for vertex in face {
+				vertex.normal = normal;
+			}
+		}
+
+		smooth_mesh_outline_normals(&mut asset, 0, 1);
+		let apex = [5, 8, 11].map(|index| asset.ink_vertices[index].normal);
+		assert!(
+			apex.iter().all(|normal| *normal == apex[0]),
+			"the apex's copies at {low:e} and {high:e} smooth apart: {apex:?}"
+		);
+	}
+
+	#[test]
+	fn smoothing_welds_1_2_mm_on_finely_quantized_meshes() {
+		// Quantized meshes measure in units of a few hundredths of a
+		// millimetre; a mesh 1.2 m across still smooths across 1.2 mm.
+		for unit in [1.0_f32, 1.0e-3, 5.0e-5, 3.8e-5] {
+			let cell = smoothing_cell(1.2 / f64::from(unit), unit) * f64::from(unit);
+			assert!(
+				(cell - 1.2e-3).abs() < 1.0e-9,
+				"a unit of {unit} m smooths across {cell} m"
+			);
+		}
 	}
 }

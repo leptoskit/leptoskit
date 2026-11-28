@@ -82,6 +82,32 @@ fn merge(into: &mut MaterialOverride, change: &MaterialOverride) {
 	into.rim = change.rim.or(into.rim);
 }
 
+/// The base name of a glTF material before the first `.` (`cloth.001` ->
+/// `cloth`).
+pub(crate) fn material_base_name(name: &str) -> &str {
+	name.split('.').next().unwrap_or(name)
+}
+
+impl PrintOverride {
+	/// Overlays `other` on top of `self`, field by field: every `Some` field in
+	/// `other` wins, while `None` keeps `self`'s value.
+	pub(crate) fn overlay(&mut self, other: &Self) {
+		self.lit = other.lit.or(self.lit);
+		self.shade = other.shade.or(self.shade);
+		self.deep = other.deep.or(self.deep);
+		self.spot = other.spot.or(self.spot);
+		self.mode = other.mode.or(self.mode);
+		self.hatch_min = other.hatch_min.or(self.hatch_min);
+		self.hatch_per_m = other.hatch_per_m.or(self.hatch_per_m);
+		self.cross_hatch = other.cross_hatch.or(self.cross_hatch);
+		self.specular = other.specular.or(self.specular);
+		self.rim = other.rim.or(self.rim);
+		self.ink_weight = other.ink_weight.or(self.ink_weight);
+		self.knockout = other.knockout.or(self.knockout);
+		self.boil_step = other.boil_step.or(self.boil_step);
+	}
+}
+
 /// A part's offset, as the pose composes it.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Motion {
@@ -191,6 +217,9 @@ pub(crate) struct Instance {
 	materials: Vec<(Option<String>, MaterialOverride)>,
 	blends: Vec<(Option<String>, Blend)>,
 	inks: Vec<(Option<String>, PartInk)>,
+	print_all: PrintOverride,
+	print_materials: BTreeMap<String, PrintOverride>,
+	print_parts: Vec<(String, PrintOverride)>,
 	morphs: BTreeMap<(Option<String>, String), f32>,
 	offsets: BTreeMap<String, PartOffset>,
 	pending_play: Option<Play>,
@@ -201,6 +230,12 @@ pub(crate) struct Instance {
 	pub world: Vec<Mat4>,
 	pub hidden: Vec<bool>,
 	pub overrides: Vec<Overrides>,
+	/// Pre-resolved relief-print overrides (`All` overlaid by `Material`) per
+	/// asset material, shared with each frame that draws the instance.
+	pub print_by_material: Arc<[PrintOverride]>,
+	/// Pre-resolved relief-print overrides (`Part` subtrees) per asset node,
+	/// shared with each frame that draws the instance.
+	pub print_by_node: Arc<[PrintOverride]>,
 	manual_weights: Vec<Vec<Option<f32>>>,
 	touched: Vec<usize>,
 }
@@ -215,6 +250,9 @@ impl Instance {
 			materials: Vec::new(),
 			blends: Vec::new(),
 			inks: Vec::new(),
+			print_all: PrintOverride::default(),
+			print_materials: BTreeMap::new(),
+			print_parts: Vec::new(),
 			morphs: BTreeMap::new(),
 			offsets: BTreeMap::new(),
 			pending_play: None,
@@ -224,6 +262,8 @@ impl Instance {
 			world: Vec::new(),
 			hidden: Vec::new(),
 			overrides: Vec::new(),
+			print_by_material: Arc::from([]),
+			print_by_node: Arc::from([]),
 			manual_weights: Vec::new(),
 			touched: Vec::new(),
 		}
@@ -306,6 +346,63 @@ impl Instance {
 				line.color = ink.color.or(line.color);
 			}
 		}
+
+		self.print_by_material = asset
+			.materials
+			.iter()
+			.map(|material| {
+				let mut resolved = self.print_all;
+				let base = material_base_name(&material.name);
+				let exact = (base != material.name).then_some(material.name.as_str());
+
+				// The base name (`cloth` for `cloth.001`), then the exact
+				// name over it, field by field.
+				for name in std::iter::once(base).chain(exact) {
+					if let Some(by_material) = self.print_materials.get(name) {
+						resolved.overlay(by_material);
+					}
+				}
+
+				resolved
+			})
+			.collect();
+
+		let mut by_node = vec![PrintOverride::default(); asset.nodes.len()];
+
+		for (part, change) in &self.print_parts {
+			for node in Self::subtree(asset, Some(part)) {
+				by_node[node].overlay(change);
+			}
+		}
+
+		self.print_by_node = by_node.into();
+	}
+
+	/// Replaces the relief-print override for `target`. Setting
+	/// [`PrintOverride::default`] clears that target back to inheriting from
+	/// broader targets.
+	fn set_print(&mut self, target: PrintTarget, print: PrintOverride) {
+		match target {
+			PrintTarget::All => self.print_all = print,
+			PrintTarget::Material(material) => {
+				if print == PrintOverride::default() {
+					self.print_materials.remove(&material);
+				} else if self.print_materials.len() < MAX_SETTINGS
+					|| self.print_materials.contains_key(&material)
+				{
+					self.print_materials.insert(material, print);
+				}
+			}
+			PrintTarget::Part(part) => {
+				self.print_parts.retain(|(existing, _)| *existing != part);
+
+				if print != PrintOverride::default() && self.print_parts.len() < MAX_SETTINGS {
+					self.print_parts.push((part, print));
+				}
+			}
+		}
+
+		self.resolve_materials();
 	}
 
 	/// Replaces the blend set for `part`, or adds it while there is room. A
@@ -569,6 +666,10 @@ pub(crate) struct Node {
 	pub children: Vec<NodeId>,
 	/// The part of the parent instance this node follows, after an attach.
 	pub bone: Option<String>,
+	/// Whether it joined its parent by [`Op::Attach`] rather than by
+	/// [`Op::Spawn`]: an attached model prints as one figure with what it
+	/// is attached to.
+	pub attached: bool,
 	pub transform: Transform,
 	/// Where it is going, while it eases there.
 	ease: Option<Ease>,
@@ -914,6 +1015,7 @@ impl World {
 				parent: None,
 				children: Vec::new(),
 				bone: None,
+				attached: false,
 				transform: Transform::IDENTITY,
 				ease: None,
 				visible: true,
@@ -1012,6 +1114,13 @@ impl World {
 			Op::SetInk { node, part, ink } => {
 				self.with_instance(node, |instance| instance.set_ink(part, ink));
 			}
+			Op::SetPrint {
+				node,
+				target,
+				print,
+			} => {
+				self.with_instance(node, |instance| instance.set_print(target, print));
+			}
 			Op::SetShadow { node, cast } => {
 				self.with_instance(node, |instance| instance.cast_shadow = cast);
 			}
@@ -1075,6 +1184,10 @@ impl World {
 
 		self.detach(node);
 		self.adopt(node, Some(target), (!bone.is_empty()).then_some(bone));
+
+		if let Some(node) = self.nodes.get_mut(&node) {
+			node.attached = true;
+		}
 	}
 
 	/// Casts a ray from the camera through a point of the view.
@@ -1296,6 +1409,138 @@ mod tests {
 		assert_eq!(instance.inks.len(), before - 1);
 		instance.set_ink(Some("tail".into()), weight(5.0));
 		assert_eq!(lines(&instance), [weight(3.0); 4]);
+	}
+
+	#[test]
+	fn print_overrides_resolve_part_over_material_over_all() {
+		let mut asset = (*figure()).clone();
+		asset.materials = vec![
+			crate::asset::Material {
+				name: "cloth.001".into(),
+				..crate::asset::Material::default()
+			},
+			crate::asset::Material {
+				name: "gold".into(),
+				..crate::asset::Material::default()
+			},
+		];
+		let asset = Arc::new(asset);
+
+		let mut instance = Instance::new(AssetId(1));
+		// Applied before asset load: takes effect when bound.
+		instance.set_print(
+			PrintTarget::All,
+			PrintOverride {
+				lit: Some([0.1, 0.1, 0.1]),
+				spot: Some([0.9, 0.8, 0.2]),
+				hatch_per_m: Some(40.0),
+				..PrintOverride::default()
+			},
+		);
+		instance.set_print(
+			PrintTarget::Material("cloth".into()),
+			PrintOverride {
+				lit: Some([0.2, 0.3, 0.4]),
+				shade: Some([0.1, 0.15, 0.2]),
+				hatch_min: Some(0.24),
+				..PrintOverride::default()
+			},
+		);
+		instance.set_print(
+			PrintTarget::Part("head".into()),
+			PrintOverride {
+				lit: Some([1.0, 0.9, 0.5]),
+				mode: Some(PrintMode::Flat),
+				..PrintOverride::default()
+			},
+		);
+		instance.bind(asset);
+
+		let resolve = |instance: &Instance, node: usize, material: usize| {
+			let mut resolved = instance.print_by_material[material];
+			resolved.overlay(&instance.print_by_node[node]);
+			resolved
+		};
+
+		// body (node 1) with cloth.001 (material 0): Material("cloth") beats
+		// All.
+		let body_cloth = resolve(&instance, 1, 0);
+		assert_eq!(body_cloth.lit, Some([0.2, 0.3, 0.4]));
+		assert_eq!(body_cloth.shade, Some([0.1, 0.15, 0.2]));
+		assert_eq!(body_cloth.spot, Some([0.9, 0.8, 0.2]));
+		assert_eq!(body_cloth.hatch_min, Some(0.24));
+		assert_eq!(body_cloth.hatch_per_m, Some(40.0));
+		assert_eq!(body_cloth.mode, None);
+
+		// body (node 1) with gold (material 1): inherits All.
+		let body_gold = resolve(&instance, 1, 1);
+		assert_eq!(body_gold.lit, Some([0.1, 0.1, 0.1]));
+		assert_eq!(body_gold.shade, None);
+		assert_eq!(body_gold.spot, Some([0.9, 0.8, 0.2]));
+
+		// hat (node 3, child of head) with cloth.001 (material 0): Part beats
+		// Material and All, while inheriting unspecified fields from
+		// Material and All.
+		let hat_cloth = resolve(&instance, 3, 0);
+		assert_eq!(hat_cloth.lit, Some([1.0, 0.9, 0.5]));
+		assert_eq!(hat_cloth.mode, Some(PrintMode::Flat));
+		assert_eq!(hat_cloth.shade, Some([0.1, 0.15, 0.2]));
+		assert_eq!(hat_cloth.spot, Some([0.9, 0.8, 0.2]));
+
+		// Updating Material("cloth") after Part("head") still leaves Part
+		// winning on head/hat.
+		instance.set_print(
+			PrintTarget::Material("cloth".into()),
+			PrintOverride {
+				lit: Some([0.5, 0.5, 0.5]),
+				..PrintOverride::default()
+			},
+		);
+		assert_eq!(resolve(&instance, 1, 0).lit, Some([0.5, 0.5, 0.5]));
+		assert_eq!(resolve(&instance, 3, 0).lit, Some([1.0, 0.9, 0.5]));
+
+		// Clearing Part("head") with default returns hat to Material("cloth").
+		instance.set_print(PrintTarget::Part("head".into()), PrintOverride::default());
+		assert_eq!(resolve(&instance, 3, 0).lit, Some([0.5, 0.5, 0.5]));
+		assert_eq!(resolve(&instance, 3, 0).mode, None);
+	}
+
+	#[test]
+	fn print_material_targets_match_an_exact_name_over_its_base_name() {
+		let mut asset = (*figure()).clone();
+		asset.materials = ["cloth.001", "cloth.002", "cloth"]
+			.map(|name| {
+				crate::asset::Material {
+					name: name.into(),
+					..crate::asset::Material::default()
+				}
+			})
+			.to_vec();
+		let mut instance = Instance::new(AssetId(1));
+		instance.bind(Arc::new(asset));
+		let print = |lit, hatch_min| {
+			PrintOverride {
+				lit: Some(lit),
+				hatch_min,
+				..PrintOverride::default()
+			}
+		};
+		instance.set_print(
+			PrintTarget::Material("cloth".into()),
+			print([0.1; 3], Some(0.25)),
+		);
+		instance.set_print(
+			PrintTarget::Material("cloth.001".into()),
+			print([0.9; 3], None),
+		);
+
+		// The exact name wins where it is set, field by field, and the base
+		// name fills in the rest and covers its other copies.
+		let cloth_001 = instance.print_by_material[0];
+		assert_eq!(cloth_001.lit, Some([0.9; 3]));
+		assert_eq!(cloth_001.hatch_min, Some(0.25));
+		assert_eq!(instance.print_by_material[1], print([0.1; 3], Some(0.25)));
+		assert_eq!(instance.print_by_material[2], print([0.1; 3], Some(0.25)));
 	}
 
 	#[test]

@@ -76,6 +76,20 @@ pub const MAX_SHADE_WEIGHT: f32 = 2.0;
 pub const MAX_BOIL: f32 = 30.0;
 /// The heaviest weight a part's line may have.
 pub const MAX_INK_WEIGHT: f32 = 8.0;
+/// The densest object-space hatching, in lines per metre.
+pub const MAX_HATCH_PER_M: f32 = 2000.0;
+/// The steepest hatch duty growth with shadow depth.
+pub const MAX_HATCH_GAIN: f32 = 4.0;
+/// The narrowest hatch pitch, in device pixels, at which hatching may begin
+/// fading to its mean tone.
+pub const MIN_FADE_PX: f32 = 0.5;
+/// The widest hatch pitch, in device pixels, at which hatching finishes
+/// fading in.
+pub const MAX_FADE_PX: f32 = 64.0;
+/// The heaviest light-side line weight ceiling or drop in relief-print mode.
+pub const MAX_SIDE_WEIGHT: f32 = 4.0;
+/// The finest wobble noise grid, in cells per metre.
+pub const MAX_WOBBLE_FREQUENCY: f32 = 128.0;
 
 /// A finite value clamped to `[min, max]`; an infinity or NaN becomes the
 /// bound closest to zero.
@@ -206,6 +220,68 @@ impl Light {
 			intensity: bounded(self.intensity, 0.0, MAX_INTENSITY),
 			ambient: bounded(self.ambient, 0.0, MAX_INTENSITY),
 			shadow: unit(self.shadow),
+			camera_space: self.camera_space,
+		}
+	}
+}
+
+impl Print {
+	/// Ordered band thresholds, colours between 0 and 1, and every hatching,
+	/// knockout, and light-side weight value within its limit.
+	#[must_use]
+	pub fn sanitized(self) -> Self {
+		let t_lit = bounded(self.t_lit, -1.0, 1.0);
+		let t_deep = bounded(self.t_deep, -1.0, t_lit);
+		let t_cross = bounded(self.t_cross, -2.0, t_deep);
+		let fade_lo = bounded(self.fade_px[0], MIN_FADE_PX, MAX_FADE_PX);
+		let fade_hi = bounded(self.fade_px[1], fade_lo, MAX_FADE_PX);
+		let side_from = bounded(self.side_from, -1.0, 1.0);
+		let side_to = bounded(self.side_to, side_from, 1.0);
+
+		Self {
+			t_lit,
+			t_deep,
+			t_cross,
+			rim: unit(self.rim),
+			paper: color(self.paper),
+			knockout_width: bounded(self.knockout_width, 0.0, MAX_INK_WIDTH),
+			hatch_per_m: bounded(self.hatch_per_m, 0.0, MAX_HATCH_PER_M),
+			hatch_gain: bounded(self.hatch_gain, 0.0, MAX_HATCH_GAIN),
+			hatch_max: unit(self.hatch_max),
+			cross_duty: unit(self.cross_duty),
+			fade_px: [fade_lo, fade_hi],
+			side_heavy: bounded(self.side_heavy, 0.0, MAX_SIDE_WEIGHT),
+			side_drop: bounded(self.side_drop, 0.0, MAX_SIDE_WEIGHT),
+			side_from,
+			side_to,
+			wobble_frequency: bounded(self.wobble_frequency, 0.0, MAX_WOBBLE_FREQUENCY),
+		}
+	}
+}
+
+impl PrintOverride {
+	/// Colours between 0 and 1, hatching, specular, and line weights bounded,
+	/// and the boil slot reduced modulo 3.
+	#[must_use]
+	pub fn sanitized(self) -> Self {
+		Self {
+			lit: self.lit.map(color),
+			shade: self.shade.map(color),
+			deep: self.deep.map(color),
+			spot: self.spot.map(color),
+			mode: self.mode,
+			hatch_min: self.hatch_min.map(unit),
+			hatch_per_m: self
+				.hatch_per_m
+				.map(|density| bounded(density, 0.0, MAX_HATCH_PER_M)),
+			cross_hatch: self.cross_hatch,
+			specular: self.specular.map(unit),
+			rim: self.rim,
+			ink_weight: self
+				.ink_weight
+				.map(|weight| bounded(weight, 0.0, MAX_INK_WEIGHT)),
+			knockout: self.knockout,
+			boil_step: self.boil_step.map(|step| step % 3),
 		}
 	}
 }
@@ -227,6 +303,7 @@ impl Style {
 						hatch: unit(toon.hatch),
 					})
 				}
+				Shading::Print(print) => Shading::Print(print.sanitized()),
 			},
 			ink: self.ink.map(|ink| {
 				Ink {
@@ -369,6 +446,23 @@ impl Op {
 					node,
 					part: part.map(|part| name(part, MAX_NAME_BYTES)),
 					ink: ink.sanitized(),
+				}
+			}
+			Self::SetPrint {
+				node,
+				target,
+				print,
+			} => {
+				Self::SetPrint {
+					node,
+					target: match target {
+						PrintTarget::All => PrintTarget::All,
+						PrintTarget::Part(part) => PrintTarget::Part(name(part, MAX_NAME_BYTES)),
+						PrintTarget::Material(material) => {
+							PrintTarget::Material(name(material, MAX_NAME_BYTES))
+						}
+					},
+					print: print.sanitized(),
 				}
 			}
 			Self::Attach { node, target, bone } => {

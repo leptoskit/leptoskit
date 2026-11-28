@@ -279,6 +279,94 @@ mod native {
 		eprintln!("{stats:?}");
 	}
 
+	/// One reaper with every part shown, playing its idle clip, drawn and
+	/// waited for in relief-print mode, with stencil paper `knockout` off or
+	/// on.
+	#[divan::bench(args = [false, true])]
+	fn frame_one_reaper_print_on_the_gpu(bencher: divan::Bencher<'_, '_>, knockout: bool) {
+		let Some(gpu) = gpu() else { return };
+		let Some(bytes) = std::env::var("LEPTOSKIT_3D_MODELS")
+			.ok()
+			.and_then(|folder| std::fs::read(format!("{folder}/reaper_harvester.glb")).ok())
+		else {
+			eprintln!("skipping: LEPTOSKIT_3D_MODELS is not set");
+
+			return;
+		};
+		let asset = Arc::new(
+			Asset::from_slice_with_options(
+				&bytes,
+				LoadOptions {
+					outline_smooth_rings: Some(2),
+				},
+			)
+			.unwrap(),
+		);
+		let mut world = scene(&[asset], "idle", &[]);
+		world.apply((1..6).map(|node| Op::Remove { node: NodeId(node) }));
+		let mut print = Print::default();
+		if !knockout {
+			print.knockout_width = 0.0;
+		}
+		world.apply([
+			Op::SetTransform {
+				node: NodeId(0),
+				transform: Transform::IDENTITY,
+			},
+			Op::SetCamera {
+				transform: Transform::from_translation(0.0, 1.1, 3.2),
+				fov_y: 0.8,
+				near: 0.1,
+				far: 100.0,
+			},
+			Op::SetLight(Light {
+				direction: [0.86, -0.40, -0.32],
+				camera_space: true,
+				shadow: 0.0,
+				..Light::default()
+			}),
+			Op::SetStyle(Style {
+				shading: Shading::Print(print),
+				ink: Some(Ink::default()),
+			}),
+			Op::SetPrint {
+				node: NodeId(0),
+				target: PrintTarget::All,
+				print: PrintOverride {
+					lit: Some([0.45, 0.36, 0.10]),
+					shade: Some([0.16, 0.12, 0.04]),
+					deep: Some([0.04, 0.03, 0.02]),
+					spot: Some([0.90, 0.62, 0.08]),
+					hatch_min: Some(0.24),
+					cross_hatch: Some(true),
+					rim: Some(true),
+					..PrintOverride::default()
+				},
+			},
+		]);
+
+		let mut renderer = Renderer::with_world(gpu, world);
+		let texture = target_texture(gpu);
+		let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+		let target = RenderTarget::new(&view, wgpu::TextureFormat::Bgra8Unorm, WIDTH, HEIGHT);
+		renderer.render(&target).unwrap();
+		let wait = || {
+			gpu.device()
+				.poll(wgpu::PollType::wait_indefinitely())
+				.unwrap();
+		};
+		wait();
+		bencher.bench_local(|| {
+			renderer.advance(1.0 / 60.0);
+			let stats = renderer.render(&target).unwrap();
+			wait();
+			stats
+		});
+
+		let stats = renderer.stats();
+		eprintln!("{stats:?}");
+	}
+
 	#[divan::bench]
 	fn load_a_reaper(bencher: divan::Bencher<'_, '_>) {
 		let Some(bytes) = std::env::var("LEPTOSKIT_3D_MODELS")

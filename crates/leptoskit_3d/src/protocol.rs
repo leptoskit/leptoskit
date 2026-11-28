@@ -31,9 +31,11 @@ pub const EVENTS_MAGIC: &[u8; 4] = b"LK3E";
 ///
 /// Additive op tags (`23`: [`Op::SetStyle`], `24`: [`Op::SetInk`], `25`:
 /// [`Op::EaseTransform`], `26`: [`Op::Play`] with non-default `fade_easing` or
-/// `phase`) keep `VERSION = 1`: batches that avoid them encode byte for byte as
-/// before and remain compatible with older v1 hosts, while any batch containing
-/// tags `23..=26` requires a matching host/renderer version (an older v1 host
+/// `phase`, `27`: [`Op::SetStyle`] with [`Shading::Print`], `28`:
+/// [`Op::SetPrint`], `29`: [`Op::SetLight`] with `camera_space: true`) keep
+/// `VERSION = 1`: batches that avoid them encode byte for byte as before and
+/// remain compatible with older v1 hosts, while any batch containing tags
+/// `23..=29` requires a matching host/renderer version (an older v1 host
 /// rejects the whole batch with `DecodeError("an unknown op")`).
 pub const VERSION: u8 = 1;
 
@@ -309,6 +311,176 @@ pub enum Shading {
 	Pbr,
 	/// Cartoon shading: the light falls in a few flat bands.
 	Toon(Toon),
+	/// Relief-print shading: three bands with exact un-tonemapped colours
+	/// per surface and edges blended over about a pixel, object-space
+	/// hatching and cross-hatching, turning-edge paper specular, backlit spot
+	/// rim, light-side ink weighting, and an optional outer paper knockout.
+	Print(Print),
+}
+
+/// Relief-print shading parameters: band thresholds, hatching, paper
+/// colour, outer knockout width, and light-side ink weight curve.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Print {
+	/// `N·L` threshold at or above which a surface prints its `lit` colour,
+	/// from -1 to 1.
+	pub t_lit: f32,
+	/// `N·L` threshold below which a surface prints its `deep` colour (and
+	/// hatches), from -1 to `t_lit`. Between `t_deep` and `t_lit` it prints
+	/// `shade`.
+	pub t_deep: f32,
+	/// `N·L` threshold below which cross-hatching is added, from -2 to
+	/// `t_deep`. `N·L` never falls below -1, so values at or below -1
+	/// disable cross-hatching.
+	pub t_cross: f32,
+	/// Backlit rim threshold: prints `spot` where `N·V < rim` and
+	/// `N·L < 0.05`, from 0 (off) to 1.
+	pub rim: f32,
+	/// Bare paper colour in linear RGB, used for turning-edge specular
+	/// highlights and the outer paper knockout.
+	pub paper: [f32; 3],
+	/// Outer paper knockout width around each figure's silhouette, in
+	/// thousandths of the view's height outside the key line, from 0 (off)
+	/// to [`MAX_INK_WIDTH`](crate::MAX_INK_WIDTH). Up to 255 figures in view
+	/// separate from one another; past that, some share a stencil reference
+	/// and draw no paper between them.
+	pub knockout_width: f32,
+	/// Default object-space hatch lines per metre, from 0 (off) to
+	/// [`MAX_HATCH_PER_M`](crate::MAX_HATCH_PER_M). Overridable per figure
+	/// or part via [`PrintOverride::hatch_per_m`].
+	pub hatch_per_m: f32,
+	/// How fast primary hatch duty thickens deeper into shadow:
+	/// `duty = min(hatch_max, hatch_min + hatch_gain * (t_deep - N·L))`,
+	/// from 0 to [`MAX_HATCH_GAIN`](crate::MAX_HATCH_GAIN).
+	pub hatch_gain: f32,
+	/// Maximum primary hatch ink coverage, from 0 to 1.
+	pub hatch_max: f32,
+	/// Constant cross-hatch ink coverage (at 1.1× the primary density),
+	/// from 0 to 1.
+	pub cross_duty: f32,
+	/// Device-pixel pitch range `[lo, hi]` over which hatching fades
+	/// smoothly to its mean tone so distant surfaces never moiré, from
+	/// [`MIN_FADE_PX`](crate::MIN_FADE_PX) to
+	/// [`MAX_FADE_PX`](crate::MAX_FADE_PX) with `lo <= hi`.
+	pub fade_px: [f32; 2],
+	/// Light-side line weight ceiling (shadow side):
+	/// `side = side_heavy - side_drop * smoothstep(side_from, side_to, N·L)`,
+	/// from 0 to [`MAX_SIDE_WEIGHT`](crate::MAX_SIDE_WEIGHT).
+	pub side_heavy: f32,
+	/// Light-side line weight drop from shadow to lit side, from 0 to
+	/// [`MAX_SIDE_WEIGHT`](crate::MAX_SIDE_WEIGHT).
+	pub side_drop: f32,
+	/// Lower `N·L` edge of the light-side weight smoothstep, from -1 to 1.
+	pub side_from: f32,
+	/// Upper `N·L` edge of the light-side weight smoothstep, from `side_from`
+	/// to 1.
+	pub side_to: f32,
+	/// Wobble noise cells per metre of rest-pose space, from 0 to
+	/// [`MAX_WOBBLE_FREQUENCY`](crate::MAX_WOBBLE_FREQUENCY).
+	pub wobble_frequency: f32,
+}
+
+impl Default for Print {
+	fn default() -> Self {
+		Self {
+			t_lit: 0.30,
+			t_deep: -0.10,
+			t_cross: -0.55,
+			rim: 0.30,
+			paper: [0.8388, 0.7682, 0.6240],
+			knockout_width: 2.07,
+			hatch_per_m: 35.0,
+			hatch_gain: 0.55,
+			hatch_max: 0.55,
+			cross_duty: 0.30,
+			fade_px: [2.5, 4.0],
+			side_heavy: 1.30,
+			side_drop: 0.62,
+			side_from: -0.35,
+			side_to: 0.75,
+			wobble_frequency: 5.0,
+		}
+	}
+}
+
+/// How a surface shades in [`Shading::Print`] mode.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PrintMode {
+	/// Three bands (`lit`, `shade`, `deep`) with edges blended over about a
+	/// pixel, optional hatching, turning-edge paper specular, and backlit
+	/// spot rim.
+	#[default]
+	Banded,
+	/// Exact un-tonemapped `lit` colour, with no bands, hatching, specular,
+	/// or rim.
+	Flat,
+}
+
+/// Which primitives of a model instance [`Op::SetPrint`] applies to.
+///
+/// When multiple targets match a primitive, [`PrintTarget::Part`] takes
+/// precedence over [`PrintTarget::Material`], which takes precedence over
+/// [`PrintTarget::All`], field by field.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PrintTarget {
+	/// The whole node subtree.
+	All,
+	/// A named glTF node and everything under it.
+	Part(String),
+	/// Primitives whose glTF material is named this, or whose name before
+	/// its first `.` is: `Material("cloth")` matches `cloth`, `cloth.001`
+	/// and `cloth.002`, while `Material("cloth.001")` matches `cloth.001`
+	/// alone and wins over `Material("cloth")` there, field by field.
+	Material(String),
+}
+
+/// Per-node, per-part, or per-material overrides for [`Shading::Print`].
+/// A field left `None` inherits from broader targets or its default.
+///
+/// Print colours a surface from its material's base colour factor times its
+/// part's colour ([`MaterialOverride::color`]) alone. It reads no texture
+/// but the alpha of a cutout or a blend, no vertex colour (`COLOR_0`) but
+/// its alpha, and no emissive, so a textured model prints in its factor's
+/// colour until its palette is set here.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct PrintOverride {
+	/// Lit band colour (or flat colour in [`PrintMode::Flat`]), linear RGB,
+	/// output without exposure or tonemapping. Defaults to the base colour
+	/// factor times the part's colour.
+	pub lit: Option<[f32; 3]>,
+	/// Shade band colour, linear RGB, output without exposure or tonemapping.
+	/// Defaults to `lit` × 0.65.
+	pub shade: Option<[f32; 3]>,
+	/// Deep band colour, linear RGB, output without exposure or tonemapping.
+	/// Defaults to `lit` × 0.35.
+	pub deep: Option<[f32; 3]>,
+	/// Spot colour for the backlit rim, linear RGB.
+	pub spot: Option<[f32; 3]>,
+	/// Banded or flat shading. Defaults to [`PrintMode::Flat`] on unlit
+	/// materials (`KHR_materials_unlit`) and [`PrintMode::Banded`] on the
+	/// rest.
+	pub mode: Option<PrintMode>,
+	/// Minimum primary hatch duty, from 0 (no hatch) to 1.
+	pub hatch_min: Option<f32>,
+	/// Per-figure or per-part hatch density in lines per metre, from 0 to
+	/// [`MAX_HATCH_PER_M`](crate::MAX_HATCH_PER_M); `None` inherits
+	/// [`Print::hatch_per_m`].
+	pub hatch_per_m: Option<f32>,
+	/// Whether to draw the secondary cross-hatch below `t_cross`.
+	pub cross_hatch: Option<bool>,
+	/// Turning-edge paper specular `N·H` threshold, from 0 (off) to 1.
+	pub specular: Option<f32>,
+	/// Whether to draw the backlit spot rim.
+	pub rim: Option<bool>,
+	/// Outline weight multiplier on this target, from 0 (no line) to
+	/// [`MAX_INK_WEIGHT`](crate::MAX_INK_WEIGHT).
+	pub ink_weight: Option<f32>,
+	/// Whether this target contributes to the outer paper knockout
+	/// silhouette (defaults to `true` on opaque primitives).
+	pub knockout: Option<bool>,
+	/// Stepped boil slot (0, 1, or 2 — modulo 3), allowing individual
+	/// figures to boil without boiling static figures in the same scene.
+	pub boil_step: Option<u8>,
 }
 
 /// Banded "toon" shading, the flat light and shade of a drawing.
@@ -413,6 +585,15 @@ impl Style {
 			ink: Some(Ink::default()),
 		}
 	}
+
+	/// A relief-print look: [`Print::default`] shading and an [`Ink::default`]
+	/// line.
+	pub fn print() -> Self {
+		Self {
+			shading: Shading::Print(Print::default()),
+			ink: Some(Ink::default()),
+		}
+	}
 }
 
 /// A part's line, set with [`Op::SetInk`]. A field left `None` takes what an
@@ -436,7 +617,8 @@ pub struct PartInk {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Light {
 	/// The direction the light travels, towards the scene. Need not be unit
-	/// length.
+	/// length. When [`Light::camera_space`] is `true`, this is in camera
+	/// space (`+x` right, `+y` up, `-z` forward into the scene).
 	pub direction: [f32; 3],
 	/// Linear RGB.
 	pub color: [f32; 3],
@@ -446,6 +628,10 @@ pub struct Light {
 	pub ambient: f32,
 	/// The darkness of the soft shadow under each model, from 0 to 1.
 	pub shadow: f32,
+	/// Whether [`Light::direction`] is given in camera space instead of world
+	/// space, transformed per view so the light stays fixed to the camera
+	/// without pose lag in AR or stereo views.
+	pub camera_space: bool,
 }
 
 impl Default for Light {
@@ -456,6 +642,7 @@ impl Default for Light {
 			intensity: 3.0,
 			ambient: 1.0,
 			shadow: 0.5,
+			camera_space: false,
 		}
 	}
 }
@@ -499,7 +686,10 @@ pub enum Op {
 		node: NodeId,
 		/// The model to instance.
 		asset: Option<AssetId>,
-		/// The node it moves with, or `None` for the scene's root.
+		/// The node it moves with, or `None` for the scene's root. A model
+		/// spawned under another model is a figure of its own: in
+		/// [`Shading::Print`] it keeps its own paper knockout. To print it as
+		/// one figure with its parent, [`Op::Attach`] it instead.
 		parent: Option<NodeId>,
 	},
 	/// Removes a node and every node under it.
@@ -631,6 +821,19 @@ pub enum Op {
 		/// The line.
 		ink: PartInk,
 	},
+	/// Sets relief-print overrides for a model instance, a named part and its
+	/// subtree, or primitives with a glTF material name or base name (see
+	/// [`PrintTarget::Material`]). Replaces any earlier override for the same
+	/// `target`, so [`PrintOverride::default`] clears that target back to
+	/// inheriting from broader targets.
+	SetPrint {
+		/// The model instance.
+		node: NodeId,
+		/// Which primitives to override.
+		target: PrintTarget,
+		/// The print overrides.
+		print: PrintOverride,
+	},
 	/// Turns the soft shadow under a model instance on or off. Instances cast
 	/// one by default.
 	SetShadow {
@@ -641,7 +844,9 @@ pub enum Op {
 	},
 	/// Makes `node` move with a named part (a bone, a socket, any node) of
 	/// the instance `target`, such as a weapon in a hand. An empty `bone`
-	/// attaches it to the instance itself.
+	/// attaches it to the instance itself. An attached model prints as one
+	/// figure with `target`: in [`Shading::Print`] they share one paper
+	/// knockout, with no paper between them.
 	Attach {
 		/// The node to attach.
 		node: NodeId,
@@ -792,6 +997,13 @@ const EASE_TRANSFORM: u8 = 25;
 /// A [`Play`] that eases its crossfade or starts at a phase; one that does
 /// neither is written as [`PLAY`], as it always was.
 const PLAY_EASED: u8 = 26;
+/// A [`Style`] whose shading is [`Shading::Print`]; PBR and Toon styles stay
+/// on [`SET_STYLE`].
+const SET_STYLE_PRINT: u8 = 27;
+const SET_PRINT: u8 = 28;
+/// A [`Light`] whose direction is in camera space; world-space lights stay
+/// on [`SET_LIGHT`].
+const SET_LIGHT_CAMERA: u8 = 29;
 
 // Event tags.
 const ASSET_LOADED: u8 = 1;
@@ -990,6 +1202,36 @@ fn read_material(reader: &mut Reader<'_>) -> Result<MaterialOverride, DecodeErro
 	})
 }
 
+fn write_ink(writer: &mut Writer, ink: Option<Ink>) {
+	writer.option(ink, |writer, ink| {
+		writer.floats(&ink.color);
+		writer.floats(&[
+			ink.width,
+			ink.facing,
+			ink.shade_weight,
+			ink.wobble,
+			ink.boil,
+		]);
+		writer.u32(ink.seed);
+	});
+}
+
+fn read_ink(reader: &mut Reader<'_>) -> Result<Option<Ink>, DecodeError> {
+	reader.option(|reader| {
+		let color = reader.floats()?;
+		let [width, facing, shade_weight, wobble, boil] = reader.floats()?;
+		Ok(Ink {
+			color,
+			width,
+			facing,
+			shade_weight,
+			wobble,
+			boil,
+			seed: reader.u32()?,
+		})
+	})
+}
+
 /// `shading:u8 (0 Pbr | 1 Toon bands:u8 softness:f32 shade:f32×3
 /// specular:f32 hatch:f32) ink:opt<color:f32×3 width:f32 facing:f32
 /// shade_weight:f32 wobble:f32 boil:f32 seed:u32>`
@@ -1003,19 +1245,10 @@ fn write_style(writer: &mut Writer, style: &Style) {
 			writer.floats(&toon.shade);
 			writer.floats(&[toon.specular, toon.hatch]);
 		}
+		Shading::Print(_) => unreachable!("print styles encode with SET_STYLE_PRINT"),
 	}
 
-	writer.option(style.ink, |writer, ink| {
-		writer.floats(&ink.color);
-		writer.floats(&[
-			ink.width,
-			ink.facing,
-			ink.shade_weight,
-			ink.wobble,
-			ink.boil,
-		]);
-		writer.u32(ink.seed);
-	});
+	write_ink(writer, style.ink);
 }
 
 fn read_style(reader: &mut Reader<'_>) -> Result<Style, DecodeError> {
@@ -1036,20 +1269,110 @@ fn read_style(reader: &mut Reader<'_>) -> Result<Style, DecodeError> {
 		}
 		_ => return Err(DecodeError("an unknown shading")),
 	};
-	let ink = reader.option(|reader| {
-		let color = reader.floats()?;
-		let [width, facing, shade_weight, wobble, boil] = reader.floats()?;
-		Ok(Ink {
-			color,
-			width,
-			facing,
-			shade_weight,
-			wobble,
-			boil,
-			seed: reader.u32()?,
-		})
-	})?;
+	let ink = read_ink(reader)?;
 	Ok(Style { shading, ink })
+}
+
+fn write_style_print(writer: &mut Writer, print: &Print, ink: Option<Ink>) {
+	writer.floats(&[print.t_lit, print.t_deep, print.t_cross, print.rim]);
+	writer.floats(&print.paper);
+	writer.floats(&[
+		print.knockout_width,
+		print.hatch_per_m,
+		print.hatch_gain,
+		print.hatch_max,
+		print.cross_duty,
+	]);
+	writer.floats(&print.fade_px);
+	writer.floats(&[
+		print.side_heavy,
+		print.side_drop,
+		print.side_from,
+		print.side_to,
+		print.wobble_frequency,
+	]);
+	write_ink(writer, ink);
+}
+
+fn read_style_print(reader: &mut Reader<'_>) -> Result<Style, DecodeError> {
+	let [t_lit, t_deep, t_cross, rim] = reader.floats()?;
+	let paper = reader.floats()?;
+	let [
+		knockout_width,
+		hatch_per_m,
+		hatch_gain,
+		hatch_max,
+		cross_duty,
+	] = reader.floats()?;
+	let fade_px = reader.floats()?;
+	let [side_heavy, side_drop, side_from, side_to, wobble_frequency] = reader.floats()?;
+	let ink = read_ink(reader)?;
+	Ok(Style {
+		shading: Shading::Print(Print {
+			t_lit,
+			t_deep,
+			t_cross,
+			rim,
+			paper,
+			knockout_width,
+			hatch_per_m,
+			hatch_gain,
+			hatch_max,
+			cross_duty,
+			fade_px,
+			side_heavy,
+			side_drop,
+			side_from,
+			side_to,
+			wobble_frequency,
+		}),
+		ink,
+	})
+}
+
+fn write_print_override(writer: &mut Writer, print: &PrintOverride) {
+	writer.option(print.lit, |writer, color| writer.floats(&color));
+	writer.option(print.shade, |writer, color| writer.floats(&color));
+	writer.option(print.deep, |writer, color| writer.floats(&color));
+	writer.option(print.spot, |writer, color| writer.floats(&color));
+	writer.option(print.mode, |writer, mode| {
+		writer.u8(match mode {
+			PrintMode::Banded => 0,
+			PrintMode::Flat => 1,
+		});
+	});
+	writer.option(print.hatch_min, Writer::f32);
+	writer.option(print.hatch_per_m, Writer::f32);
+	writer.option(print.cross_hatch, Writer::bool);
+	writer.option(print.specular, Writer::f32);
+	writer.option(print.rim, Writer::bool);
+	writer.option(print.ink_weight, Writer::f32);
+	writer.option(print.knockout, Writer::bool);
+	writer.option(print.boil_step, Writer::u8);
+}
+
+fn read_print_override(reader: &mut Reader<'_>) -> Result<PrintOverride, DecodeError> {
+	Ok(PrintOverride {
+		lit: reader.option(Reader::floats)?,
+		shade: reader.option(Reader::floats)?,
+		deep: reader.option(Reader::floats)?,
+		spot: reader.option(Reader::floats)?,
+		mode: reader.option(|reader| {
+			match reader.u8()? {
+				0 => Ok(PrintMode::Banded),
+				1 => Ok(PrintMode::Flat),
+				_ => Err(DecodeError("an unknown print mode")),
+			}
+		})?,
+		hatch_min: reader.option(Reader::f32)?,
+		hatch_per_m: reader.option(Reader::f32)?,
+		cross_hatch: reader.option(Reader::bool)?,
+		specular: reader.option(Reader::f32)?,
+		rim: reader.option(Reader::bool)?,
+		ink_weight: reader.option(Reader::f32)?,
+		knockout: reader.option(Reader::bool)?,
+		boil_step: reader.option(Reader::u8)?,
+	})
 }
 
 fn read_easing(reader: &mut Reader<'_>) -> Result<Easing, DecodeError> {
@@ -1209,8 +1532,13 @@ impl Op {
 				});
 			}
 			Self::SetStyle(style) => {
-				writer.u8(SET_STYLE);
-				write_style(writer, style);
+				if let Shading::Print(print) = &style.shading {
+					writer.u8(SET_STYLE_PRINT);
+					write_style_print(writer, print, style.ink);
+				} else {
+					writer.u8(SET_STYLE);
+					write_style(writer, style);
+				}
 			}
 			Self::SetInk { node, part, ink } => {
 				writer.u8(SET_INK);
@@ -1218,6 +1546,26 @@ impl Op {
 				writer.option(part.as_deref(), Writer::str);
 				writer.option(ink.weight, Writer::f32);
 				writer.option(ink.color, |writer, color| writer.floats(&color));
+			}
+			Self::SetPrint {
+				node,
+				target,
+				print,
+			} => {
+				writer.u8(SET_PRINT);
+				writer.u32(node.0);
+				match target {
+					PrintTarget::All => writer.u8(0),
+					PrintTarget::Part(name) => {
+						writer.u8(1);
+						writer.str(name);
+					}
+					PrintTarget::Material(name) => {
+						writer.u8(2);
+						writer.str(name);
+					}
+				}
+				write_print_override(writer, print);
 			}
 			Self::SetShadow { node, cast } => {
 				writer.u8(SET_SHADOW);
@@ -1246,7 +1594,11 @@ impl Op {
 				writer.floats(projection);
 			}
 			Self::SetLight(light) => {
-				writer.u8(SET_LIGHT);
+				writer.u8(if light.camera_space {
+					SET_LIGHT_CAMERA
+				} else {
+					SET_LIGHT
+				});
 				writer.floats(&light.direction);
 				writer.floats(&light.color);
 				writer.floats(&[light.intensity, light.ambient, light.shadow]);
@@ -1388,6 +1740,7 @@ impl Op {
 				}
 			}
 			SET_STYLE => Self::SetStyle(read_style(reader)?),
+			SET_STYLE_PRINT => Self::SetStyle(read_style_print(reader)?),
 			SET_INK => {
 				Self::SetInk {
 					node: NodeId(reader.u32()?),
@@ -1396,6 +1749,20 @@ impl Op {
 						weight: reader.option(Reader::f32)?,
 						color: reader.option(Reader::floats)?,
 					},
+				}
+			}
+			SET_PRINT => {
+				let node = NodeId(reader.u32()?);
+				let target = match reader.u8()? {
+					0 => PrintTarget::All,
+					1 => PrintTarget::Part(reader.str(NAME)?),
+					2 => PrintTarget::Material(reader.str(NAME)?),
+					_ => return Err(DecodeError("an unknown print target")),
+				};
+				Self::SetPrint {
+					node,
+					target,
+					print: read_print_override(reader)?,
 				}
 			}
 			SET_SHADOW => {
@@ -1427,7 +1794,7 @@ impl Op {
 					projection: reader.floats()?,
 				}
 			}
-			SET_LIGHT => {
+			SET_LIGHT | SET_LIGHT_CAMERA => {
 				let direction = reader.floats()?;
 				let color = reader.floats()?;
 				let [intensity, ambient, shadow] = reader.floats()?;
@@ -1437,6 +1804,7 @@ impl Op {
 					intensity,
 					ambient,
 					shadow,
+					camera_space: tag == SET_LIGHT_CAMERA,
 				})
 			}
 			SET_BACKDROP => {

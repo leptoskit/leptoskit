@@ -518,3 +518,275 @@ pub fn character(joints: usize) -> Vec<u8> {
 	);
 	builder.glb(&json)
 }
+
+/// Two side-by-side cuboids (`left` and `right`) sharing a multi-material
+/// layout: `left` carries `cloth.001` (upper half) and `gold` (lower half);
+/// `right` carries `cloth.002`. Used to test `Part > Material > All`
+/// precedence on screen.
+pub fn multi_material_parts() -> Vec<u8> {
+	let mut builder = Builder::default();
+	let (top_p, top_n, top_i) = cuboid([-0.8, 0.05, -0.2], [-0.1, 0.65, 0.2]);
+	let (bot_p, bot_n, bot_i) = cuboid([-0.8, -0.65, -0.2], [-0.1, -0.05, 0.2]);
+	let (right_p, right_n, right_i) = cuboid([0.1, -0.65, -0.2], [0.8, 0.65, 0.2]);
+
+	let tp = builder.floats(&top_p, 3, true);
+	let tn = builder.floats(&top_n, 3, false);
+	let ti = builder.u16s(&top_i, 1);
+
+	let bp = builder.floats(&bot_p, 3, true);
+	let bn = builder.floats(&bot_n, 3, false);
+	let bi = builder.u16s(&bot_i, 1);
+
+	let rp = builder.floats(&right_p, 3, true);
+	let rn = builder.floats(&right_n, 3, false);
+	let ri = builder.u16s(&right_i, 1);
+
+	let json = format!(
+		r#""asset":{{"version":"2.0"}},
+"scenes":[{{"nodes":[0]}}],
+"nodes":[
+ {{"name":"root","children":[1,2]}},
+ {{"name":"left","mesh":0}},
+ {{"name":"right","mesh":1}}
+],
+"meshes":[
+ {{"name":"left","primitives":[
+   {{"attributes":{{"POSITION":{tp},"NORMAL":{tn}}},"indices":{ti},"material":0}},
+   {{"attributes":{{"POSITION":{bp},"NORMAL":{bn}}},"indices":{bi},"material":1}}
+ ]}},
+ {{"name":"right","primitives":[
+   {{"attributes":{{"POSITION":{rp},"NORMAL":{rn}}},"indices":{ri},"material":2}}
+ ]}}
+],
+"materials":[
+ {{"name":"cloth.001","pbrMetallicRoughness":{{"baseColorFactor":[1,1,1,1]}}}},
+ {{"name":"gold","pbrMetallicRoughness":{{"baseColorFactor":[1,1,1,1]}}}},
+ {{"name":"cloth.002","pbrMetallicRoughness":{{"baseColorFactor":[1,1,1,1]}}}}
+]"#
+	);
+	builder.glb(&json)
+}
+
+/// A single-sided open flat quad (`[-0.45, 0.45]` on XY at `z = 0`) with
+/// `doubleSided: true` and 4 open boundary edges, modeling a single-sided
+/// cloth sheet or robe hem.
+pub fn open_sheet() -> Vec<u8> {
+	let mut builder = Builder::default();
+	let positions: Vec<f32> = vec![
+		-0.45, -0.45, 0.0, 0.45, -0.45, 0.0, 0.45, 0.45, 0.0, -0.45, 0.45, 0.0,
+	];
+	let normals: Vec<f32> = vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0];
+	let indices: Vec<u16> = vec![0, 1, 2, 0, 2, 3];
+	let position = builder.floats(&positions, 3, true);
+	let normal = builder.floats(&normals, 3, false);
+	let index = builder.u16s(&indices, 1);
+	let json = format!(
+		r#""asset":{{"version":"2.0"}},
+"scenes":[{{"nodes":[0]}}],
+"nodes":[{{"name":"sheet","mesh":0}}],
+"meshes":[{{"name":"sheet","primitives":[{{"attributes":{{"POSITION":{position},"NORMAL":{normal}}},"indices":{index},"material":0}}]}}],
+"materials":[{{"name":"cloth","pbrMetallicRoughness":{{"baseColorFactor":[0.2,0.4,0.8,1]}},"doubleSided":true}}]"#
+	);
+	builder.glb(&json)
+}
+
+/// An `AlphaMode::Mask` (`alphaCutoff = 0.5`) double-sided mesh with two
+/// side-by-side quads: the left quad (`x in [-0.55, -0.05]`) has vertex alpha
+/// `1.0` (visible) and the right quad (`x in [0.05, 0.55]`) has vertex alpha
+/// `0.0` (cutout).
+pub fn masked_quads() -> Vec<u8> {
+	let mut builder = Builder::default();
+	let positions: Vec<f32> = vec![
+		-0.55, -0.35, 0.0, -0.05, -0.35, 0.0, -0.05, 0.35, 0.0, -0.55, 0.35, 0.0, 0.05, -0.35, 0.0,
+		0.55, -0.35, 0.0, 0.55, 0.35, 0.0, 0.05, 0.35, 0.0,
+	];
+	let normals: Vec<f32> = [0.0, 0.0, 1.0].repeat(8);
+	let colors: Vec<f32> = vec![
+		1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0,
+		1.0, 0.0, 1.0, 1.0, 1.0, 0.0, 1.0, 1.0, 1.0, 0.0, 1.0, 1.0, 1.0, 0.0,
+	];
+	let indices: Vec<u16> = vec![0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7];
+	let position = builder.floats(&positions, 3, true);
+	let normal = builder.floats(&normals, 3, false);
+	let color = builder.floats(&colors, 4, false);
+	let index = builder.u16s(&indices, 1);
+	let json = format!(
+		r#""asset":{{"version":"2.0"}},
+"scenes":[{{"nodes":[0]}}],
+"nodes":[{{"name":"cutout","mesh":0}}],
+"meshes":[{{"name":"cutout","primitives":[{{"attributes":{{"POSITION":{position},"NORMAL":{normal},"COLOR_0":{color}}},"indices":{index},"material":0}}]}}],
+"materials":[{{"name":"lace","pbrMetallicRoughness":{{"baseColorFactor":[0.2,0.4,0.8,1]}},"alphaMode":"MASK","alphaCutoff":0.5,"doubleSided":true}}]"#
+	);
+	builder.glb(&json)
+}
+
+/// A single-sided opaque rectangle facing +z at depth `z`, from `min` to
+/// `max` on x and y, in one grey material named `name`.
+pub fn flat_quad(min: [f32; 2], max: [f32; 2], z: f32, name: &str) -> Vec<u8> {
+	let mut builder = Builder::default();
+	let positions = vec![
+		min[0], min[1], z, max[0], min[1], z, max[0], max[1], z, min[0], max[1], z,
+	];
+	let normals = [0.0, 0.0, 1.0].repeat(4);
+	let indices: Vec<u16> = vec![0, 1, 2, 0, 2, 3];
+	let position = builder.floats(&positions, 3, true);
+	let normal = builder.floats(&normals, 3, false);
+	let index = builder.u16s(&indices, 1);
+	builder.glb(&format!(
+		r#""asset":{{"version":"2.0"}},
+"scenes":[{{"nodes":[0]}}],
+"nodes":[{{"name":"{name}","mesh":0}}],
+"meshes":[{{"primitives":[{{"attributes":{{"POSITION":{position},"NORMAL":{normal}}},"indices":{index},"material":0}}]}}],
+"materials":[{{"name":"{name}","pbrMetallicRoughness":{{"baseColorFactor":[0.5,0.5,0.5,1]}}}}]"#
+	))
+}
+
+/// The IEEE CRC-32 of `bytes`, as PNG chunks carry it.
+fn crc32(bytes: &[u8]) -> u32 {
+	let mut crc = 0xFFFF_FFFF_u32;
+
+	for &byte in bytes {
+		crc ^= u32::from(byte);
+
+		for _ in 0..8 {
+			crc = (crc >> 1) ^ (0xEDB8_8320 & (crc & 1).wrapping_neg());
+		}
+	}
+
+	!crc
+}
+
+/// An 8-bit RGBA PNG of `width × height` pixels, its image data in one
+/// stored (uncompressed) deflate block.
+pub fn png_rgba(width: u32, height: u32, rgba: &[u8]) -> Vec<u8> {
+	let mut raw = Vec::new();
+
+	for row in rgba.chunks((width * 4) as usize) {
+		raw.push(0);
+		raw.extend_from_slice(row);
+	}
+
+	let (mut a, mut b) = (1_u32, 0_u32);
+
+	for &byte in &raw {
+		a = (a + u32::from(byte)) % 65_521;
+		b = (b + a) % 65_521;
+	}
+
+	let length = u16::try_from(raw.len()).expect("one stored block holds the image");
+	let mut zlib = vec![0x78, 0x01, 0x01];
+	zlib.extend_from_slice(&length.to_le_bytes());
+	zlib.extend_from_slice(&(!length).to_le_bytes());
+	zlib.extend_from_slice(&raw);
+	zlib.extend_from_slice(&((b << 16) | a).to_be_bytes());
+	let mut header = Vec::new();
+	header.extend_from_slice(&width.to_be_bytes());
+	header.extend_from_slice(&height.to_be_bytes());
+	header.extend_from_slice(&[8, 6, 0, 0, 0]);
+	let mut png = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+
+	for (kind, data) in [(*b"IHDR", header), (*b"IDAT", zlib), (*b"IEND", Vec::new())] {
+		png.extend_from_slice(&(data.len() as u32).to_be_bytes());
+		let mut body = kind.to_vec();
+		body.extend_from_slice(&data);
+		png.extend_from_slice(&body);
+		png.extend_from_slice(&crc32(&body).to_be_bytes());
+	}
+
+	png
+}
+
+/// `bytes` in standard, padded base64.
+fn base64(bytes: &[u8]) -> String {
+	const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+	let mut out = String::new();
+
+	for chunk in bytes.chunks(3) {
+		let n = (u32::from(chunk[0]) << 16)
+			| (u32::from(chunk.get(1).copied().unwrap_or(0)) << 8)
+			| u32::from(chunk.get(2).copied().unwrap_or(0));
+
+		for i in 0..4 {
+			if i <= chunk.len() {
+				out.push(char::from(TABLE[((n >> (18 - 6 * i)) & 63) as usize]));
+			} else {
+				out.push('=');
+			}
+		}
+	}
+
+	out
+}
+
+/// A double-sided blended quad, 1 m by 0.7 m at the origin facing +z,
+/// whose white base-colour texture is opaque on its left half and fully
+/// transparent on its right half (two texels, sampled nearest).
+pub fn blended_textured_quad() -> Vec<u8> {
+	let mut builder = Builder::default();
+	let positions = vec![
+		-0.5, -0.35, 0.0, 0.5, -0.35, 0.0, 0.5, 0.35, 0.0, -0.5, 0.35, 0.0,
+	];
+	let normals = [0.0, 0.0, 1.0].repeat(4);
+	let uvs = vec![0.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0];
+	let indices: Vec<u16> = vec![0, 1, 2, 0, 2, 3];
+	let position = builder.floats(&positions, 3, true);
+	let normal = builder.floats(&normals, 3, false);
+	let uv = builder.floats(&uvs, 2, false);
+	let index = builder.u16s(&indices, 1);
+	let png = png_rgba(2, 1, &[255, 255, 255, 255, 255, 255, 255, 0]);
+	let uri = format!("data:image/png;base64,{}", base64(&png));
+	builder.glb(&format!(
+		r#""asset":{{"version":"2.0"}},
+"scenes":[{{"nodes":[0]}}],
+"nodes":[{{"name":"glass","mesh":0}}],
+"meshes":[{{"primitives":[{{"attributes":{{"POSITION":{position},"NORMAL":{normal},"TEXCOORD_0":{uv}}},"indices":{index},"material":0}}]}}],
+"samplers":[{{"magFilter":9728,"minFilter":9728}}],
+"images":[{{"uri":"{uri}"}}],
+"textures":[{{"source":0,"sampler":0}}],
+"materials":[{{"name":"glass","pbrMetallicRoughness":{{"baseColorFactor":[1,1,1,1],"baseColorTexture":{{"index":0}}}},"alphaMode":"BLEND","doubleSided":true}}]"#
+	))
+}
+
+/// Like [`lit_sphere`] with `doubleSided: true`, so mirrored negative-scale
+/// transforms stay visible in mesh rendering for knockout hull tests.
+pub fn double_sided_sphere(segments: usize) -> Vec<u8> {
+	let mut builder = Builder::default();
+	let rings = segments / 2;
+	let mut positions = Vec::new();
+	let mut normals = Vec::new();
+	let mut indices = Vec::new();
+
+	for ring in 0..=rings {
+		let (sin_theta, cos_theta) = (ring as f32 / rings as f32 * std::f32::consts::PI).sin_cos();
+
+		for step in 0..=segments {
+			let (sin_phi, cos_phi) =
+				(step as f32 / segments as f32 * std::f32::consts::TAU).sin_cos();
+			let normal = [sin_theta * cos_phi, cos_theta, sin_theta * sin_phi];
+			positions.extend(normal.map(|value| value * 0.5));
+			normals.extend(normal);
+		}
+	}
+
+	for ring in 0..rings {
+		for step in 0..segments {
+			let a = (ring * (segments + 1) + step) as u16;
+			let b = a + 1;
+			let c = a + segments as u16 + 1;
+			let d = c + 1;
+			indices.extend_from_slice(&[a, b, c, b, d, c]);
+		}
+	}
+
+	let position = builder.floats(&positions, 3, true);
+	let normal = builder.floats(&normals, 3, false);
+	let index = builder.u16s(&indices, 1);
+	let json = format!(
+		r#""asset":{{"version":"2.0"}},
+"scenes":[{{"nodes":[0]}}],
+"nodes":[{{"name":"sphere","mesh":0}}],
+"meshes":[{{"primitives":[{{"attributes":{{"POSITION":{position},"NORMAL":{normal}}},"indices":{index},"material":0}}]}}],
+"materials":[{{"name":"grey","pbrMetallicRoughness":{{"baseColorFactor":[0.5,0.5,0.5,1]}},"doubleSided":true}}]"#
+	);
+	builder.glb(&json)
+}

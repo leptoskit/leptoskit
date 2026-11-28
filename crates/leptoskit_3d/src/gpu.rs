@@ -276,13 +276,19 @@ impl Gpu {
 	}
 
 	/// The largest multisample count up to 4 that `format` renders with on
-	/// this adapter.
-	pub(crate) fn samples(&self, format: wgpu::TextureFormat) -> u32 {
+	/// this adapter, paired with either the plain depth attachment or the
+	/// depth-stencil attachment used for relief-print paper knockout.
+	pub(crate) fn samples(&self, format: wgpu::TextureFormat, stencil: bool) -> u32 {
+		let depth_format = if stencil {
+			crate::upload::DEPTH_STENCIL_FORMAT
+		} else {
+			crate::upload::DEPTH_FORMAT
+		};
 		let flags = self.0.adapter.get_texture_format_features(format).flags;
 		let depth = self
 			.0
 			.adapter
-			.get_texture_format_features(crate::upload::DEPTH_FORMAT)
+			.get_texture_format_features(depth_format)
 			.flags;
 
 		if flags.sample_count_supported(4) && depth.sample_count_supported(4) {
@@ -355,12 +361,59 @@ fn buffer_layout<T>(
 	}
 }
 
-fn depth_state(write: bool, compare: wgpu::CompareFunction) -> wgpu::DepthStencilState {
+fn depth_format(stencil: bool) -> wgpu::TextureFormat {
+	if stencil {
+		crate::upload::DEPTH_STENCIL_FORMAT
+	} else {
+		crate::upload::DEPTH_FORMAT
+	}
+}
+
+fn stencil_write_state() -> wgpu::StencilState {
+	let face = wgpu::StencilFaceState {
+		compare: wgpu::CompareFunction::Always,
+		fail_op: wgpu::StencilOperation::Keep,
+		depth_fail_op: wgpu::StencilOperation::Keep,
+		pass_op: wgpu::StencilOperation::Replace,
+	};
+	wgpu::StencilState {
+		front: face,
+		back: face,
+		read_mask: 0xff,
+		write_mask: 0xff,
+	}
+}
+
+fn stencil_knockout_state() -> wgpu::StencilState {
+	let face = wgpu::StencilFaceState {
+		compare: wgpu::CompareFunction::NotEqual,
+		fail_op: wgpu::StencilOperation::Keep,
+		depth_fail_op: wgpu::StencilOperation::Keep,
+		pass_op: wgpu::StencilOperation::Keep,
+	};
+	wgpu::StencilState {
+		front: face,
+		back: face,
+		read_mask: 0xff,
+		write_mask: 0x00,
+	}
+}
+
+fn depth_state(
+	write: bool,
+	compare: wgpu::CompareFunction,
+	stencil: bool,
+	write_stencil: bool,
+) -> wgpu::DepthStencilState {
 	wgpu::DepthStencilState {
-		format: crate::upload::DEPTH_FORMAT,
+		format: depth_format(stencil),
 		depth_write_enabled: Some(write),
 		depth_compare: Some(compare),
-		stencil: wgpu::StencilState::default(),
+		stencil: if stencil && write_stencil {
+			stencil_write_state()
+		} else {
+			wgpu::StencilState::default()
+		},
 		bias: wgpu::DepthBiasState::default(),
 	}
 }
@@ -373,17 +426,24 @@ fn color_target(format: wgpu::TextureFormat, blend: bool) -> [Option<wgpu::Color
 	})]
 }
 
-/// Every pipeline for one target format and sample count.
+/// Every pipeline for one target format, sample count, and depth/stencil mode.
 pub(crate) struct Pipelines {
 	pub meshes: HashMap<Variant, wgpu::RenderPipeline>,
 	pub shadow: wgpu::RenderPipeline,
 	pub background: wgpu::RenderPipeline,
 	format: wgpu::TextureFormat,
 	multisample: wgpu::MultisampleState,
+	stencil: bool,
 	/// The ink outline's pipelines (`[static, skinned]` for unmirrored then
 	/// mirrored transforms), compiled when a scene first draws a line, so
-	/// scenes without ink never build them.
+	/// scenes without ink never build them. `outlines_solid` omits the AR
+	/// occlusion `discard` so the GPU keeps Early-Z and Early-Stencil active.
 	outlines: OnceLock<[wgpu::RenderPipeline; 4]>,
+	outlines_solid: OnceLock<[wgpu::RenderPipeline; 4]>,
+	/// Paper knockout pipelines (`[front, back, none] × [static, skinned]`),
+	/// compiled only when relief-print knockout draws.
+	knockouts: OnceLock<[wgpu::RenderPipeline; 6]>,
+	knockouts_solid: OnceLock<[wgpu::RenderPipeline; 6]>,
 }
 
 /// The attributes of [`InstanceRecord`](crate::upload::InstanceRecord) that
@@ -421,12 +481,53 @@ const OUTLINE_INSTANCE: [wgpu::VertexAttribute; 6] = [
 	},
 ];
 
+/// Instance attributes for paper knockout: adds `tint` (for cutout alpha) to
+/// `OUTLINE_INSTANCE`.
+const KNOCKOUT_INSTANCE: [wgpu::VertexAttribute; 7] = [
+	wgpu::VertexAttribute {
+		format: wgpu::VertexFormat::Float32x4,
+		offset: 0,
+		shader_location: 4,
+	},
+	wgpu::VertexAttribute {
+		format: wgpu::VertexFormat::Float32x4,
+		offset: 16,
+		shader_location: 5,
+	},
+	wgpu::VertexAttribute {
+		format: wgpu::VertexFormat::Float32x4,
+		offset: 32,
+		shader_location: 6,
+	},
+	wgpu::VertexAttribute {
+		format: wgpu::VertexFormat::Float32x4,
+		offset: 48,
+		shader_location: 7,
+	},
+	wgpu::VertexAttribute {
+		format: wgpu::VertexFormat::Float32x4,
+		offset: 64,
+		shader_location: 8,
+	},
+	wgpu::VertexAttribute {
+		format: wgpu::VertexFormat::Uint32x4,
+		offset: 112,
+		shader_location: 11,
+	},
+	wgpu::VertexAttribute {
+		format: wgpu::VertexFormat::Float32x4,
+		offset: 128,
+		shader_location: 14,
+	},
+];
+
 // The offsets above are the record's own.
 const _: () = {
 	use std::mem::offset_of;
 
 	use crate::upload::InstanceRecord;
 	assert!(offset_of!(InstanceRecord, model) == 0);
+	assert!(offset_of!(InstanceRecord, tint) == 64);
 	assert!(offset_of!(InstanceRecord, params) == 112);
 	assert!(offset_of!(InstanceRecord, ink) == 128);
 	assert!(size_of::<InstanceRecord>() == 144);
@@ -450,7 +551,7 @@ pub(crate) struct Shared {
 	pub flat_normal: wgpu::TextureView,
 	pub no_occlusion: wgpu::TextureView,
 	pub no_morphs: wgpu::BindGroup,
-	pipelines: Mutex<HashMap<(wgpu::TextureFormat, u32), Arc<Pipelines>>>,
+	pipelines: Mutex<HashMap<(wgpu::TextureFormat, u32, bool), Arc<Pipelines>>>,
 	assets: Mutex<UploadedAssets>,
 }
 
@@ -606,7 +707,7 @@ impl Shared {
 				uniform_entry(0, S::VERTEX | S::FRAGMENT, true),
 				texture_entry(1, S::FRAGMENT, filtered, D::Cube),
 				sampler_entry(2),
-				texture_entry(3, S::VERTEX, unfiltered, D::D2),
+				texture_entry(3, S::VERTEX | S::FRAGMENT, unfiltered, D::D2),
 				texture_entry(4, S::FRAGMENT, unfiltered, D::D2),
 			],
 		});
@@ -726,20 +827,22 @@ impl Shared {
 		}
 	}
 
-	/// The pipelines for `format` at `samples`, compiled on first use.
+	/// The pipelines for `format` at `samples` (and `stencil` depth-stencil
+	/// mode), compiled on first use.
 	pub fn pipelines(
 		&self,
 		device: &wgpu::Device,
 		format: wgpu::TextureFormat,
 		samples: u32,
+		stencil: bool,
 	) -> Arc<Pipelines> {
 		let mut pipelines = self
 			.pipelines
 			.lock()
 			.unwrap_or_else(std::sync::PoisonError::into_inner);
 		pipelines
-			.entry((format, samples))
-			.or_insert_with(|| Arc::new(self.compile(device, format, samples)))
+			.entry((format, samples, stencil))
+			.or_insert_with(|| Arc::new(self.compile(device, format, samples, stencil)))
 			.clone()
 	}
 
@@ -789,6 +892,7 @@ impl Shared {
 		device: &wgpu::Device,
 		format: wgpu::TextureFormat,
 		samples: u32,
+		stencil: bool,
 	) -> Pipelines {
 		let multisample = wgpu::MultisampleState {
 			count: samples,
@@ -798,17 +902,21 @@ impl Shared {
 		Pipelines {
 			format,
 			multisample,
+			stencil,
 			outlines: OnceLock::new(),
+			outlines_solid: OnceLock::new(),
+			knockouts: OnceLock::new(),
+			knockouts_solid: OnceLock::new(),
 			meshes: Variant::all()
 				.map(|variant| {
 					(
 						variant,
-						self.mesh_pipeline(device, format, multisample, variant),
+						self.mesh_pipeline(device, format, multisample, stencil, variant),
 					)
 				})
 				.collect(),
-			shadow: self.shadow_pipeline(device, format, multisample),
-			background: self.background_pipeline(device, format, multisample),
+			shadow: self.shadow_pipeline(device, format, multisample, stencil),
+			background: self.background_pipeline(device, format, multisample, stencil),
 		}
 	}
 
@@ -817,6 +925,7 @@ impl Shared {
 		device: &wgpu::Device,
 		format: wgpu::TextureFormat,
 		multisample: wgpu::MultisampleState,
+		stencil: bool,
 		variant: Variant,
 	) -> wgpu::RenderPipeline {
 		let vertex =
@@ -871,11 +980,14 @@ impl Shared {
 				cull_mode: (!variant.double_sided).then_some(wgpu::Face::Back),
 				..wgpu::PrimitiveState::default()
 			},
-			// Blended draws test depth but do not write it, so what is
-			// behind them still blends in.
+			// Blended draws test depth but do not write depth or stencil, so
+			// what is behind them still blends in and stays outside the figure
+			// stencil mask.
 			depth_stencil: Some(depth_state(
 				!variant.blend,
 				wgpu::CompareFunction::LessEqual,
+				stencil,
+				!variant.blend,
 			)),
 			multisample,
 			fragment: Some(wgpu::FragmentState {
@@ -891,36 +1003,52 @@ impl Shared {
 
 	/// The outline pipelines for `pipelines`' format, indexed by
 	/// `usize::from(skinned) + usize::from(mirrored) * 2`, compiled on first
-	/// use.
+	/// use. When `occluded` is `false`, the fragment entry has no `discard`
+	/// so the GPU keeps Early-Z and Early-Stencil active.
 	pub fn outline_pipelines<'p>(
 		&self,
 		device: &wgpu::Device,
 		pipelines: &'p Pipelines,
+		occluded: bool,
 	) -> &'p [wgpu::RenderPipeline; 4] {
-		pipelines.outlines.get_or_init(|| {
-			[(false, false), (true, false), (false, true), (true, true)].map(
-				|(skinned, mirrored)| {
-					self.outline_pipeline(
-						device,
-						pipelines.format,
-						pipelines.multisample,
-						skinned,
-						mirrored,
-					)
-				},
-			)
+		let slot = if occluded {
+			&pipelines.outlines
+		} else {
+			&pipelines.outlines_solid
+		};
+		slot.get_or_init(|| {
+			[
+				(false, wgpu::FrontFace::Ccw),
+				(true, wgpu::FrontFace::Ccw),
+				(false, wgpu::FrontFace::Cw),
+				(true, wgpu::FrontFace::Cw),
+			]
+			.map(|(skinned, front_face)| {
+				self.outline_pipeline(
+					device,
+					pipelines.format,
+					pipelines.multisample,
+					pipelines.stencil,
+					skinned,
+					front_face,
+					occluded,
+				)
+			})
 		})
 	}
 
 	/// The ink outline: the mesh's back faces, pushed out along the welded
 	/// outline normals, opaque and depth-tested like the meshes.
+	#[allow(clippy::too_many_arguments)]
 	fn outline_pipeline(
 		&self,
 		device: &wgpu::Device,
 		format: wgpu::TextureFormat,
 		multisample: wgpu::MultisampleState,
+		stencil: bool,
 		skinned: bool,
-		mirrored: bool,
+		front_face: wgpu::FrontFace,
+		occluded: bool,
 	) -> wgpu::RenderPipeline {
 		let vertex = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3];
 		let ink = wgpu::vertex_attr_array![15 => Snorm8x4];
@@ -964,30 +1092,153 @@ impl Shared {
 			},
 			primitive: wgpu::PrimitiveState {
 				topology: wgpu::PrimitiveTopology::TriangleList,
-				front_face: if mirrored {
-					wgpu::FrontFace::Cw
-				} else {
-					wgpu::FrontFace::Ccw
-				},
+				front_face,
 				cull_mode: Some(wgpu::Face::Front),
 				..wgpu::PrimitiveState::default()
 			},
-			// Strict Less with a small positive depth bias guarantees zero-weight
-			// vertices (where pushed == world) never overwrite double-sided back
-			// faces already drawn by the mesh pass, and avoids z-fighting across
-			// differing vertex contraction on mobile GPUs.
+			// Strict Less with a small positive depth bias (`clamp: 0.0`, safe
+			// on WebGL2) guarantees zero-weight vertices (where pushed == world)
+			// never overwrite double-sided back faces already drawn by the mesh
+			// pass, and avoids z-fighting across differing vertex contraction
+			// on mobile GPUs.
 			depth_stencil: Some(wgpu::DepthStencilState {
 				bias: wgpu::DepthBiasState {
 					constant: 2,
 					slope_scale: 1.0,
 					clamp: 0.0,
 				},
-				..depth_state(true, wgpu::CompareFunction::Less)
+				..depth_state(true, wgpu::CompareFunction::Less, stencil, true)
 			}),
 			multisample,
 			fragment: Some(wgpu::FragmentState {
 				module: &self.mesh_shader,
-				entry_point: Some("fs_outline"),
+				entry_point: Some(if occluded {
+					"fs_outline"
+				} else {
+					"fs_outline_solid"
+				}),
+				compilation_options: wgpu::PipelineCompilationOptions::default(),
+				targets: &targets,
+			}),
+			multiview_mask: None,
+			cache: None,
+		})
+	}
+
+	/// Paper knockout pipelines for `pipelines`: indexed as
+	/// `cull_slot * 2 + usize::from(skinned)`, where `cull_slot` is `0` for
+	/// closed unmirrored meshes (`Face::Front`), `1` for closed mirrored
+	/// meshes (`Face::Back`), and `2` for open single-sided sheets (`None`).
+	pub fn knockout_pipelines<'p>(
+		&self,
+		device: &wgpu::Device,
+		pipelines: &'p Pipelines,
+		discard: bool,
+	) -> &'p [wgpu::RenderPipeline; 6] {
+		let slot = if discard {
+			&pipelines.knockouts
+		} else {
+			&pipelines.knockouts_solid
+		};
+		slot.get_or_init(|| {
+			let culls = [Some(wgpu::Face::Front), Some(wgpu::Face::Back), None];
+			std::array::from_fn(|index| {
+				let cull_mode = culls[index / 2];
+				let skinned = index % 2 == 1;
+				self.knockout_pipeline(
+					device,
+					pipelines.format,
+					pipelines.multisample,
+					cull_mode,
+					skinned,
+					discard,
+				)
+			})
+		})
+	}
+
+	/// Single-pass stencil paper knockout: expands each figure past its key
+	/// ink line and draws only where the stencil differs from that figure's
+	/// reference (`CompareFunction::NotEqual`), using `CompareFunction::Less`
+	/// with a small positive depth bias (`clamp: 0.0`, WebGL2-safe).
+	fn knockout_pipeline(
+		&self,
+		device: &wgpu::Device,
+		format: wgpu::TextureFormat,
+		multisample: wgpu::MultisampleState,
+		cull_mode: Option<wgpu::Face>,
+		skinned: bool,
+		discard: bool,
+	) -> wgpu::RenderPipeline {
+		let vertex =
+			wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x2, 3 => Unorm8x4];
+		let ink = wgpu::vertex_attr_array![15 => Snorm8x4];
+		let skin = wgpu::vertex_attr_array![12 => Uint16x4, 13 => Unorm16x4];
+		let mut buffers = vec![
+			Some(buffer_layout::<crate::asset::Vertex>(
+				wgpu::VertexStepMode::Vertex,
+				&vertex,
+			)),
+			Some(buffer_layout::<crate::upload::InstanceRecord>(
+				wgpu::VertexStepMode::Instance,
+				&KNOCKOUT_INSTANCE,
+			)),
+			Some(buffer_layout::<crate::asset::InkVertex>(
+				wgpu::VertexStepMode::Vertex,
+				&ink,
+			)),
+		];
+
+		if skinned {
+			buffers.push(Some(buffer_layout::<crate::asset::SkinVertex>(
+				wgpu::VertexStepMode::Vertex,
+				&skin,
+			)));
+		}
+
+		let targets = color_target(format, false);
+		let depth = wgpu::DepthStencilState {
+			format: crate::upload::DEPTH_STENCIL_FORMAT,
+			depth_write_enabled: Some(false),
+			depth_compare: Some(wgpu::CompareFunction::Less),
+			stencil: stencil_knockout_state(),
+			// `clamp: 0.0` avoids `DownlevelFlags::DEPTH_BIAS_CLAMP` (absent on
+			// WebGL2).
+			bias: wgpu::DepthBiasState {
+				constant: 3,
+				slope_scale: 1.0,
+				clamp: 0.0,
+			},
+		};
+
+		device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+			label: Some("leptoskit_3d knockout"),
+			layout: Some(&self.mesh_layout),
+			vertex: wgpu::VertexState {
+				module: &self.mesh_shader,
+				entry_point: Some(if skinned {
+					"vs_knockout_skinned"
+				} else {
+					"vs_knockout_static"
+				}),
+				compilation_options: wgpu::PipelineCompilationOptions::default(),
+				buffers: &buffers,
+			},
+			primitive: wgpu::PrimitiveState {
+				topology: wgpu::PrimitiveTopology::TriangleList,
+				front_face: wgpu::FrontFace::Ccw,
+				cull_mode,
+				..wgpu::PrimitiveState::default()
+			},
+			depth_stencil: Some(depth),
+			multisample,
+			fragment: Some(wgpu::FragmentState {
+				module: &self.mesh_shader,
+				entry_point: Some(if discard {
+					"fs_knockout"
+				} else {
+					"fs_knockout_solid"
+				}),
 				compilation_options: wgpu::PipelineCompilationOptions::default(),
 				targets: &targets,
 			}),
@@ -1002,6 +1253,7 @@ impl Shared {
 		device: &wgpu::Device,
 		format: wgpu::TextureFormat,
 		multisample: wgpu::MultisampleState,
+		stencil: bool,
 	) -> wgpu::RenderPipeline {
 		let attributes = wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4];
 		let targets = color_target(format, true);
@@ -1022,7 +1274,12 @@ impl Shared {
 				topology: wgpu::PrimitiveTopology::TriangleStrip,
 				..wgpu::PrimitiveState::default()
 			},
-			depth_stencil: Some(depth_state(false, wgpu::CompareFunction::LessEqual)),
+			depth_stencil: Some(depth_state(
+				false,
+				wgpu::CompareFunction::LessEqual,
+				stencil,
+				false,
+			)),
 			multisample,
 			fragment: Some(wgpu::FragmentState {
 				module: &self.mesh_shader,
@@ -1042,6 +1299,7 @@ impl Shared {
 		device: &wgpu::Device,
 		format: wgpu::TextureFormat,
 		multisample: wgpu::MultisampleState,
+		stencil: bool,
 	) -> wgpu::RenderPipeline {
 		let targets = color_target(format, false);
 
@@ -1055,7 +1313,12 @@ impl Shared {
 				buffers: &[],
 			},
 			primitive: wgpu::PrimitiveState::default(),
-			depth_stencil: Some(depth_state(false, wgpu::CompareFunction::Always)),
+			depth_stencil: Some(depth_state(
+				false,
+				wgpu::CompareFunction::Always,
+				stencil,
+				false,
+			)),
 			multisample,
 			fragment: Some(wgpu::FragmentState {
 				module: &self.background_shader,
@@ -1138,6 +1401,37 @@ mod tests {
 		assert_eq!(
 			surface_alpha_mode(Backend::Gl, &[CompositeAlphaMode::Opaque]),
 			CompositeAlphaMode::Auto
+		);
+	}
+
+	/// Proves `DEPTH_STENCIL_FORMAT` (`Depth24PlusStencil8`) needs no optional
+	/// wgpu features and guarantees 4× MSAA render-attachment support across
+	/// WebGPU, GLES 3.0, WebGL2, Metal, Vulkan, and DX12 (verified against
+	/// `wgpu 30.0.1`'s GLES/WebGL2 backend, which allocates a
+	/// `GL_DEPTH24_STENCIL8` multisampled `Renderbuffer`;
+	/// `Depth32FloatStencil8` would require the
+	/// optional `DEPTH32FLOAT_STENCIL8` feature and is avoided).
+	#[test]
+	fn depth_stencil_format_supports_4x_msaa_without_optional_features() {
+		let format = crate::upload::DEPTH_STENCIL_FORMAT;
+		assert_eq!(format, wgpu::TextureFormat::Depth24PlusStencil8);
+		assert_eq!(format.required_features(), wgpu::Features::empty());
+		let guaranteed = format.guaranteed_format_features(wgpu::Features::empty());
+		assert!(
+			guaranteed
+				.allowed_usages
+				.contains(wgpu::TextureUsages::RENDER_ATTACHMENT)
+		);
+		assert!(
+			guaranteed
+				.flags
+				.contains(wgpu::TextureFormatFeatureFlags::MULTISAMPLE_X4)
+		);
+		// Contrast: Depth32FloatStencil8 requires an optional feature we do not
+		// request in `Gpu::request_on`.
+		assert_ne!(
+			wgpu::TextureFormat::Depth32FloatStencil8.required_features(),
+			wgpu::Features::empty()
 		);
 	}
 }
