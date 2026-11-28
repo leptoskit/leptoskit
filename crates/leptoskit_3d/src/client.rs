@@ -236,6 +236,17 @@ impl Scene {
 		self.push(Op::SetTransform { node, transform });
 	}
 
+	/// Moves a node from where it is to `transform` over `seconds`, along
+	/// `easing` (see [`Op::EaseTransform`]).
+	pub fn ease_transform(&self, node: NodeId, transform: Transform, seconds: f32, easing: Easing) {
+		self.push(Op::EaseTransform {
+			node,
+			transform,
+			seconds,
+			easing,
+		});
+	}
+
 	/// Shows or hides a node.
 	pub fn set_visible(&self, node: NodeId, visible: bool) {
 		self.push(Op::SetVisible { node, visible });
@@ -295,6 +306,22 @@ impl Scene {
 			node,
 			part: part.map(str::to_owned),
 			blend,
+		});
+	}
+
+	/// Sets how the scene is drawn: [`Style::hand_drawn`] for banded light
+	/// and an ink line.
+	pub fn set_style(&self, style: Style) {
+		self.push(Op::SetStyle(style));
+	}
+
+	/// Sets the line on a part (or, with `None`, the whole instance): its
+	/// weight, 0 for none, and its colour.
+	pub fn set_ink(&self, node: NodeId, part: Option<&str>, ink: PartInk) {
+		self.push(Op::SetInk {
+			node,
+			part: part.map(str::to_owned),
+			ink,
 		});
 	}
 
@@ -411,5 +438,44 @@ mod tests {
 		);
 		assert_eq!(scene.pending(), 0);
 		assert_eq!(scene.id(), SceneId(3));
+	}
+
+	#[test]
+	fn styles_and_lines_queue_their_ops() {
+		let scene = Scene::new(SceneId(1));
+		let node = scene.spawn(scene.load("models/rig.glb"));
+		let heavy = PartInk {
+			weight: Some(2.0),
+			color: None,
+		};
+		scene.set_style(Style::hand_drawn());
+		scene.set_ink(node, Some("head"), heavy);
+		let ops = scene.take_ops();
+		assert_eq!(ops[2], Op::SetStyle(Style::hand_drawn()));
+		assert_eq!(
+			ops[3],
+			Op::SetInk {
+				node,
+				part: Some("head".into()),
+				ink: heavy,
+			}
+		);
+	}
+
+	#[test]
+	fn eases_queue_their_op() {
+		let scene = Scene::new(SceneId(1));
+		let node = scene.spawn(scene.load("models/rig.glb"));
+		let there = Transform::from_translation(0.0, 1.0, 0.0);
+		scene.ease_transform(node, there, 0.4, Easing::Out);
+		assert_eq!(
+			scene.take_ops()[2],
+			Op::EaseTransform {
+				node,
+				transform: there,
+				seconds: 0.4,
+				easing: Easing::Out,
+			}
+		);
 	}
 }

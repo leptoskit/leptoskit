@@ -19,6 +19,9 @@ use crate::gpu::Shared;
 use crate::gpu::Variant;
 use crate::protocol::Backdrop;
 use crate::protocol::Blend;
+use crate::protocol::Ink;
+use crate::protocol::Shading;
+use crate::protocol::Style;
 use crate::raycast;
 use crate::upload::*;
 use crate::world::World;
@@ -26,6 +29,8 @@ use crate::world::World;
 /// The most views one target may have.
 pub const MAX_VIEWS: usize = 4;
 const GLOBALS_STRIDE: u64 = 512;
+// Each view's globals fit their stride.
+const _: () = assert!(size_of::<GlobalsUniform>() as u64 <= GLOBALS_STRIDE);
 const NONE: u32 = u32::MAX;
 
 /// One view of the scene: where it looks from, how it projects, and the
@@ -165,6 +170,8 @@ pub struct FrameStats {
 	pub culled: u32,
 	/// Soft shadows drawn.
 	pub shadows: u32,
+	/// Ink outline draw calls, per view.
+	pub outlines: u32,
 }
 
 #[repr(C)]
@@ -181,6 +188,130 @@ struct GlobalsUniform {
 	occlusion_x: [f32; 4],
 	occlusion_y: [f32; 4],
 	occlusion_params: [f32; 4],
+	style: StyleUniform,
+}
+
+/// A view's style, as the shader's `style`, `shade`, `ink`, and
+/// `ink_noise` read it.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+struct StyleUniform {
+	/// 1 for toon shading, its bands, their softness, the highlight.
+	style: [f32; 4],
+	/// The darkest band's tint, and hatching.
+	shade: [f32; 4],
+	/// The outline's width in the view's pixels, the inner line, the weight
+	/// in shade, and the wobble.
+	ink: [f32; 4],
+	/// Where the wobble's noise is read, and the world size of one of the
+	/// view's pixels at a clip w of 1.
+	ink_noise: [f32; 4],
+}
+
+/// The smallest radius, in pixels, a part may have on screen and still be
+/// outlined: below it a line would swallow the part.
+const MIN_OUTLINED_RADIUS: f32 = 4.0;
+
+/// The step the boil is on at `time`: how many times the wobble has been
+/// drawn afresh at `rate` a second.
+fn boil_step(time: f64, rate: f32) -> u64 {
+	if rate > 0.0 && time > 0.0 {
+		(time * f64::from(rate)).floor() as u64
+	} else {
+		0
+	}
+}
+
+/// Where the wobble's noise is read for `seed` at boil `step`: three
+/// offsets from 0 to 256, the same for the same seed and step.
+fn noise_offset(seed: u32, step: u64) -> [f32; 3] {
+	// SplitMix64.
+	let mut state = (u64::from(seed) << 32) ^ step;
+	let mut next = || {
+		state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+		let mut z = state;
+		z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+		z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+		z ^ (z >> 31)
+	};
+	[0; 3].map(|_| (next() >> 40) as f32 / (1_u64 << 24) as f32 * 256.0)
+}
+
+/// The world size of one of `view`'s pixels at a clip w of 1, from its
+/// projection's vertical scale.
+fn pixel_size(view: &ViewParams) -> f32 {
+	let scale = view.projection.y_axis.y.abs() * view.viewport[3];
+
+	if scale > 0.0 && scale.is_finite() {
+		2.0 / scale
+	} else {
+		0.0
+	}
+}
+
+/// The outline's width in `view`'s pixels.
+fn line_pixels(ink: &Ink, view: &ViewParams) -> f32 {
+	ink.width / 1000.0 * view.viewport[3]
+}
+
+/// What a view's globals say of the scene's style at `time`. The default
+/// style packs to zeroes but for the shade, which only toon shading reads.
+fn style_uniform(style: &Style, time: f64, view: &ViewParams) -> StyleUniform {
+	let (shading, shade) = match style.shading {
+		Shading::Pbr => ([0.0; 4], [1.0, 1.0, 1.0, 0.0]),
+		Shading::Toon(toon) => {
+			(
+				[1.0, f32::from(toon.bands), toon.softness, toon.specular],
+				[toon.shade[0], toon.shade[1], toon.shade[2], toon.hatch],
+			)
+		}
+	};
+
+	let (ink, ink_noise) = match &style.ink {
+		None => ([0.0; 4], [0.0; 4]),
+		Some(ink) => {
+			let [x, y, z] = noise_offset(ink.seed, boil_step(time, ink.boil));
+			(
+				[
+					line_pixels(ink, view),
+					ink.facing,
+					ink.shade_weight,
+					ink.wobble,
+				],
+				[x, y, z, pixel_size(view)],
+			)
+		}
+	};
+
+	StyleUniform {
+		style: shading,
+		shade,
+		ink,
+		ink_noise,
+	}
+}
+
+/// A part's line as its instance record carries it: its colour, and its
+/// weight, 0 for none. Unlit, blended, and additive parts have none unless
+/// the guest set one, and a scene without ink has none at all.
+fn part_ink(
+	part: &crate::world::Overrides,
+	material: &crate::asset::Material,
+	blended: bool,
+	ink: Option<&Ink>,
+) -> [f32; 4] {
+	let Some(ink) = ink else {
+		return [0.0; 4];
+	};
+	let default = if material.unlit || blended { 0.0 } else { 1.0 };
+	let [red, green, blue] = part.ink.color.unwrap_or(ink.color);
+	[red, green, blue, part.ink.weight.unwrap_or(default)]
+}
+
+/// Whether a part `radius` pixels across on screen is worth a line `line`
+/// pixels wide: big enough that the line would not swallow it.
+fn outline_worthy(radius: f32, line: f32) -> bool {
+	radius >= (2.0 * line).max(MIN_OUTLINED_RADIUS)
 }
 
 #[repr(C)]
@@ -250,7 +381,10 @@ struct Item {
 	first_index: u32,
 	index_count: u32,
 	vertex_offset: u64,
+	ink_offset: u64,
 	skin_offset: Option<u64>,
+	/// Whether it draws an ink outline.
+	outlined: bool,
 	morphed: bool,
 	/// Whether it can share an instanced draw with identical items.
 	batchable: bool,
@@ -265,20 +399,59 @@ struct Draw {
 	first_index: u32,
 	index_count: u32,
 	vertex_offset: u64,
+	ink_offset: u64,
 	skin_offset: Option<u64>,
+	/// Whether any of its instances draws an ink outline; the others have
+	/// no weight, so the outline shader drops them.
+	outlined: bool,
 	morphed: bool,
 	instances: std::ops::Range<u32>,
 }
 
-/// What every view can see, and the first view's eye for sorting.
+/// How large things look in one view: its view matrix, its focal length in
+/// pixels, and its outline's width in pixels.
+#[derive(Clone, Copy, Debug, Default)]
+struct ViewScale {
+	view: Mat4,
+	focal: f32,
+	line: f32,
+}
+
+/// What every view can see, the first view's eye for sorting, and the scene's
+/// ink with how large things look in each view.
 struct Sight {
 	frustums: Vec<Frustum>,
 	eye: Mat4,
+	ink: Option<Ink>,
+	scales: [ViewScale; MAX_VIEWS],
+	views: usize,
 }
 
 impl Sight {
 	fn sees(&self, bounds: &Aabb) -> bool {
 		self.frustums.iter().any(|frustum| frustum.sees(bounds))
+	}
+
+	/// Whether some view sees `bounds` large enough for a line of `weight`.
+	fn worth_outlining(&self, bounds: &Aabb, weight: f32) -> bool {
+		if bounds.is_empty() {
+			return false;
+		}
+		let radius = (bounds.max - bounds.min).length() * 0.5;
+		let center = bounds.center().extend(1.0);
+
+		self.scales[..self.views].iter().any(|scale| {
+			let depth = -(scale.view * center).z;
+			// A part wholly behind the view is never worth outlining for it;
+			// a view inside the bounds sees the part fill it.
+			if depth < -radius {
+				false
+			} else if depth <= radius {
+				true
+			} else {
+				outline_worthy(radius * scale.focal / depth, scale.line * weight)
+			}
+		})
 	}
 }
 
@@ -338,6 +511,8 @@ fn instance_record(
 	material: &crate::asset::Material,
 	model: Mat4,
 	[joints, morph]: [u32; 2],
+	ink: [f32; 4],
+	units: f32,
 ) -> InstanceRecord {
 	let emissive = match (part.emissive, part.emissive_strength) {
 		(None, None) => [0.0, 0.0, 0.0, -1.0],
@@ -364,9 +539,29 @@ fn instance_record(
 			joints,
 			morph,
 			rim.power.to_bits(),
-			u32::from(part.blend == Blend::Additive),
+			additive_and_units(part.blend == Blend::Additive, units),
 		],
+		ink,
 	}
+}
+
+/// An instance's `params.w`: bit 0 set when the part is additive, and in the
+/// high half, as a half float, `log2` of how long a unit of its mesh's space
+/// is in metres (0 when nothing reads it or when the unit is 1 m, avoiding
+/// half-float overflow above 65504 and subnormal flush-to-zero on quantized
+/// meshes).
+fn additive_and_units(additive: bool, units: f32) -> u32 {
+	let log_units = if units > 0.0 && units.is_finite() {
+		let value = units.clamp(1.0e-12, 1.0e12).log2();
+		if value.abs() < half::f16::MIN_POSITIVE.to_f32() {
+			0.0
+		} else {
+			value
+		}
+	} else {
+		0.0
+	};
+	u32::from(additive) | (u32::from(half::f16::from_f32(log_units).to_bits()) << 16)
 }
 
 /// How much wider than its footprint a model's shadow is, so the soft edge
@@ -531,6 +726,12 @@ impl Renderer {
 		let pipelines = self
 			.shared
 			.pipelines(self.gpu.device(), target.format, samples);
+		let outline_count = draws
+			.iter()
+			.filter(|draw| draw.outlined && !draw.variant.blend)
+			.count() as u32;
+		let outlines = (outline_count > 0)
+			.then(|| self.shared.outline_pipelines(self.gpu.device(), &pipelines));
 		self.prepare_attachments(width, height, target.format, samples);
 		let globals = self.globals_bind_group(target.occlusion.as_ref());
 		let background = self.background_bind_group(target);
@@ -607,6 +808,12 @@ impl Renderer {
 					!draw.variant.blend
 				});
 
+				// After the opaque meshes, so most of the hull fails the depth
+				// test early, and before anything blended.
+				if let Some(outlines) = outlines {
+					self.draw_outlines(&mut pass, outlines, &assets, &draws);
+				}
+
 				if shadow_count > 0
 					&& let Some(buffer) = &self.shadows.buffer
 				{
@@ -632,6 +839,7 @@ impl Renderer {
 				.sum(),
 			culled: self.stats.culled,
 			shadows: shadow_count,
+			outlines: outline_count,
 		};
 		Ok(self.stats)
 	}
@@ -723,12 +931,26 @@ impl Renderer {
 		self.asset_index.clear();
 		// Texel 0 is never a valid offset, so a zeroed record reads nothing.
 		self.texels.push([0.0; 4]);
+		let ink = self.world.settings.style.ink;
+		let mut scales = [ViewScale::default(); MAX_VIEWS];
+
+		for (scale, view) in scales.iter_mut().zip(views) {
+			*scale = ViewScale {
+				view: view.view,
+				focal: view.projection.y_axis.y.abs() * view.viewport[3] * 0.5,
+				line: ink.map_or(0.0, |ink| line_pixels(&ink, view)),
+			};
+		}
+
 		let sight = Sight {
 			frustums: views
 				.iter()
 				.map(|view| Frustum::new(&(view.projection * view.view)))
 				.collect(),
 			eye: views[0].view,
+			ink,
+			scales,
+			views: views.len(),
 		};
 		let shadow = self.world.settings.light.shadow;
 
@@ -821,8 +1043,27 @@ impl Renderer {
 		};
 
 		let material = &model.asset.materials[primitive.material];
+		let overrides = &model.overrides[index];
+		let blend = material.alpha == AlphaMode::Blend
+			|| overrides.color[3] * overrides.opacity < 1.0
+			|| overrides.blend == Blend::Additive;
+		let mut ink = part_ink(overrides, material, blend, sight.ink.as_ref());
+		let inked = !blend && ink[3] > 0.0 && sight.worth_outlining(&bounds, ink[3]);
+
+		if !blend && !inked {
+			// Too small for a line: no ink drawn on its surface either.
+			ink[3] = 0.0;
+		}
+
+		// A scene's ink of no width draws no outline, and alpha-masked cutouts
+		// skip the inverted hull so transparent cutout holes are never filled
+		// with ink, while keeping their inner lines and hatching.
+		let outlined = inked
+			&& material.alpha == AlphaMode::Opaque
+			&& sight.ink.is_some_and(|ink| ink.width > 0.0);
+
 		let record = instance_record(
-			&model.overrides[index],
+			overrides,
 			material,
 			if skinned {
 				Mat4::IDENTITY
@@ -830,22 +1071,41 @@ impl Renderer {
 				model.worlds[index]
 			},
 			[if skinned { part.joints } else { NONE }, morph],
+			ink,
+			// Only ink reads the units, so a scene without it packs them as
+			// zero, as it always did.
+			if sight.ink.is_some() {
+				model.asset.units.get(index).copied().unwrap_or(1.0)
+			} else {
+				0.0
+			},
 		);
+		let mirrored = match (&model.skins[index], skinned) {
+			(Some((matrices, _)), true) => {
+				matrices.first().map_or_else(
+					|| model.worlds[index].determinant() < 0.0,
+					|matrix| matrix.determinant() < 0.0,
+				)
+			}
+			_ => model.worlds[index].determinant() < 0.0,
+		};
 		let vertex_size = size_of::<crate::asset::Vertex>() as u64;
+		let ink_size = size_of::<crate::asset::InkVertex>() as u64;
 		let skin_size = size_of::<crate::asset::SkinVertex>() as u64;
 		self.items.push(Item {
 			variant: Variant {
 				skinned,
-				blend: material.alpha == AlphaMode::Blend
-					|| record.tint[3] < 1.0
-					|| record.params[3] != 0,
+				blend,
 				double_sided: material.double_sided,
+				mirrored,
 			},
 			asset: part.slot,
 			material: primitive.material,
 			first_index: primitive.first_index,
 			index_count: primitive.index_count,
 			vertex_offset: u64::from(primitive.base_vertex) * vertex_size,
+			ink_offset: u64::from(primitive.base_vertex) * ink_size,
+			outlined,
 			skin_offset: primitive
 				.skin_base
 				.filter(|_| skinned)
@@ -893,6 +1153,7 @@ impl Renderer {
 				&& last.instances.end == index
 			{
 				last.instances.end += 1;
+				last.outlined |= item.outlined;
 				continue;
 			}
 			draws.push(Draw {
@@ -902,6 +1163,8 @@ impl Renderer {
 				first_index: item.first_index,
 				index_count: item.index_count,
 				vertex_offset: item.vertex_offset,
+				ink_offset: item.ink_offset,
+				outlined: item.outlined,
 				skin_offset: item.skin_offset,
 				morphed: item.morphed,
 				instances: index..index + 1,
@@ -1018,6 +1281,7 @@ impl Renderer {
 				occlusion_x,
 				occlusion_y,
 				occlusion_params,
+				style: style_uniform(&settings.style, self.world.time, view),
 			};
 
 			let start = index * GLOBALS_STRIDE as usize;
@@ -1234,6 +1498,57 @@ impl Renderer {
 		}
 	}
 
+	/// Draws the ink outline of every opaque draw that has one, with the
+	/// same instances and indices as its mesh.
+	fn draw_outlines(
+		&self,
+		pass: &mut wgpu::RenderPass<'_>,
+		pipelines: &[wgpu::RenderPipeline; 4],
+		assets: &[Arc<GpuAsset>],
+		draws: &[Draw],
+	) {
+		let Some(instances) = &self.instances.buffer else {
+			return;
+		};
+		let mut current: Option<(bool, bool)> = None;
+
+		for draw in draws
+			.iter()
+			.filter(|draw| draw.outlined && !draw.variant.blend)
+		{
+			let key = (draw.variant.skinned, draw.variant.mirrored);
+
+			if current != Some(key) {
+				let slot = usize::from(key.0) + usize::from(key.1) * 2;
+				pass.set_pipeline(&pipelines[slot]);
+				current = Some(key);
+			}
+
+			let asset = &assets[draw.asset];
+
+			pass.set_bind_group(1, &asset.materials[draw.material].bind_group, &[]);
+			pass.set_bind_group(
+				2,
+				asset.morphs.as_ref().unwrap_or(&self.shared.no_morphs),
+				&[],
+			);
+			pass.set_vertex_buffer(0, asset.vertices.slice(draw.vertex_offset..));
+			pass.set_vertex_buffer(1, instances.slice(..));
+			pass.set_vertex_buffer(2, asset.ink.slice(draw.ink_offset..));
+
+			if let (Some(offset), Some(skin)) = (draw.skin_offset, &asset.skin) {
+				pass.set_vertex_buffer(3, skin.slice(offset..));
+			}
+
+			pass.set_index_buffer(asset.indices.slice(..), wgpu::IndexFormat::Uint32);
+			pass.draw_indexed(
+				draw.first_index..draw.first_index + draw.index_count,
+				0,
+				draw.instances.clone(),
+			);
+		}
+	}
+
 	/// Draws the scene offscreen from its camera and reads it back as RGBA
 	/// bytes, four per pixel, row by row, with premultiplied alpha.
 	#[cfg(not(target_arch = "wasm32"))]
@@ -1352,5 +1667,231 @@ impl Renderer {
 		}
 
 		Ok(pixels)
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use crate::asset::Material;
+	use crate::protocol::PartInk;
+	use crate::protocol::Toon;
+	use crate::world::Overrides;
+
+	fn view(height: f32) -> ViewParams {
+		ViewParams {
+			view: Mat4::IDENTITY,
+			projection: glam::camera::rh::proj::directx::perspective(0.8, 0.75, 0.1, 50.0),
+			viewport: [0.0, 0.0, height * 0.75, height],
+		}
+	}
+
+	#[test]
+	fn the_default_style_packs_to_nothing_the_shader_reads() {
+		let packed = style_uniform(&Style::default(), 12.5, &view(960.0));
+		// Toon shading, hatching, the outline, and the inner line are all off.
+		assert_eq!(packed.style, [0.0; 4]);
+		assert_eq!(packed.shade[3], 0.0);
+		assert_eq!(packed.ink, [0.0; 4]);
+		assert_eq!(packed.ink_noise, [0.0; 4]);
+	}
+
+	#[test]
+	fn styles_pack_into_each_views_globals() {
+		let style = Style {
+			shading: Shading::Toon(Toon {
+				bands: 3,
+				softness: 0.2,
+				shade: [0.4, 0.3, 0.6],
+				specular: 1.5,
+				hatch: 0.5,
+			}),
+			ink: Some(Ink {
+				width: 2.5,
+				facing: 0.7,
+				shade_weight: 1.0,
+				wobble: 0.3,
+				..Ink::default()
+			}),
+		};
+		let tall = style_uniform(&style, 0.0, &view(1000.0));
+		assert_eq!(tall.style, [1.0, 3.0, 0.2, 1.5]);
+		assert_eq!(tall.shade, [0.4, 0.3, 0.6, 0.5]);
+		// 2.5 thousandths of a 1000-pixel view.
+		assert_eq!(tall.ink, [2.5, 0.7, 1.0, 0.3]);
+		// Half the height, half the pixels: the line keeps its share of the
+		// view on every density, and each eye of a stereo pair gets its own.
+		let short = style_uniform(&style, 0.0, &view(500.0));
+		assert_eq!(short.ink[0], 1.25);
+		assert!((short.ink_noise[3] - 2.0 * tall.ink_noise[3]).abs() < 1.0e-9);
+		// A pixel of a 1000-pixel view with a 0.8 rad field of view, at a
+		// depth of 1, is 2 tan(0.4) / 1000 wide.
+		let expected = 2.0 * 0.4_f32.tan() / 1000.0;
+		assert!((tall.ink_noise[3] - expected).abs() < 1.0e-8, "{tall:?}");
+	}
+
+	#[test]
+	fn the_boil_steps_at_its_rate_and_holds_between_steps() {
+		assert_eq!(boil_step(10.0, 0.0), 0, "no boil holds still");
+		assert_eq!(boil_step(0.99 / 8.0, 8.0), 0);
+		assert_eq!(boil_step(1.0 / 8.0, 8.0), 1);
+		assert_eq!(boil_step(3.06, 8.0), 24);
+		assert_eq!(noise_offset(7, 24), noise_offset(7, 24));
+		assert_ne!(noise_offset(7, 24), noise_offset(7, 25));
+		assert_ne!(noise_offset(7, 24), noise_offset(8, 24));
+		assert!(
+			noise_offset(7, 24)
+				.into_iter()
+				.all(|value| (0.0..256.0).contains(&value))
+		);
+
+		let style = Style {
+			shading: Shading::Pbr,
+			ink: Some(Ink {
+				boil: 8.0,
+				..Ink::default()
+			}),
+		};
+		let at = |time| style_uniform(&style, time, &view(800.0)).ink_noise;
+		assert_eq!(at(1.0), at(1.1), "the same step draws the same line");
+		assert_ne!(at(1.0), at(1.0 + 1.0 / 8.0), "the next step draws afresh");
+	}
+
+	#[test]
+	fn parts_take_the_scenes_ink_unless_unlit_or_blended() {
+		let ink = Ink {
+			color: [0.1, 0.2, 0.3],
+			..Ink::default()
+		};
+		let lit = Material::default();
+		let unlit = Material {
+			unlit: true,
+			..Material::default()
+		};
+		let part = Overrides::default();
+		assert_eq!(
+			part_ink(&part, &lit, false, None),
+			[0.0; 4],
+			"no ink, no line"
+		);
+		assert_eq!(
+			part_ink(&part, &lit, false, Some(&ink)),
+			[0.1, 0.2, 0.3, 1.0]
+		);
+		assert_eq!(part_ink(&part, &unlit, false, Some(&ink))[3], 0.0);
+		assert_eq!(part_ink(&part, &lit, true, Some(&ink))[3], 0.0);
+
+		// A line the guest sets wins, on any part.
+		let asked = Overrides {
+			ink: PartInk {
+				weight: Some(2.0),
+				color: Some([0.9, 0.8, 0.7]),
+			},
+			..Overrides::default()
+		};
+		assert_eq!(
+			part_ink(&asked, &unlit, true, Some(&ink)),
+			[0.9, 0.8, 0.7, 2.0]
+		);
+		let none = Overrides {
+			ink: PartInk {
+				weight: Some(0.0),
+				color: None,
+			},
+			..Overrides::default()
+		};
+		assert_eq!(part_ink(&none, &lit, false, Some(&ink))[3], 0.0);
+	}
+
+	#[test]
+	fn small_parts_are_not_outlined() {
+		assert!(outline_worthy(40.0, 3.0));
+		assert!(outline_worthy(6.0, 3.0));
+		assert!(!outline_worthy(5.9, 3.0), "the line would swallow it");
+		assert!(!outline_worthy(3.9, 0.5), "too small to see");
+		assert!(outline_worthy(4.0, 0.5));
+	}
+
+	#[test]
+	fn the_additive_flag_shares_its_word_with_the_units() {
+		assert_eq!(additive_and_units(false, 0.0), 0);
+		assert_eq!(additive_and_units(true, 0.0), 1);
+		assert_eq!(additive_and_units(false, 1.0), 0);
+		let packed = additive_and_units(true, 7.845_902e-5);
+		assert_eq!(packed & 1, 1);
+		let units = half::f16::from_bits((packed >> 16) as u16).to_f32().exp2();
+		assert!(
+			(units - 7.845_902e-5).abs() / 7.845_902e-5 < 0.01,
+			"{units}"
+		);
+	}
+
+	#[test]
+	fn units_packing_handles_large_scales_without_overflow() {
+		let large = additive_and_units(false, 100_000.0);
+		let large_f16 = half::f16::from_bits((large >> 16) as u16);
+		assert!(
+			large_f16.is_finite(),
+			"100_000.0 overflowed f16 to {large_f16} (bits=0x{:04x})",
+			large_f16.to_bits()
+		);
+		let decoded = large_f16.to_f32().exp2();
+		assert!(
+			(decoded - 100_000.0).abs() / 100_000.0 < 0.01,
+			"100_000.0 decoded to {decoded}"
+		);
+	}
+
+	#[test]
+	fn units_packing_avoids_subnormal_f16_for_small_quantized_models() {
+		for scale in [3.792e-5_f32, 4.772e-5, 4.969e-5] {
+			let packed = additive_and_units(false, scale);
+			let bits = (packed >> 16) as u16;
+			let exponent = (bits >> 10) & 0x1f;
+			assert!(
+				exponent > 0,
+				"scale {scale:.3e} packed as subnormal f16 (bits=0x{bits:04x}), which flushes to \
+				 0 on FTZ mobile GPUs"
+			);
+			let decoded = half::f16::from_bits(bits).to_f32().exp2();
+			assert!(
+				(decoded - scale).abs() / scale < 0.01,
+				"scale {scale:.3e} decoded to {decoded:.3e}"
+			);
+		}
+	}
+
+	#[test]
+	fn worth_outlining_rejects_tiny_part_behind_view() {
+		let v = view(1000.0);
+		let mut scales = [ViewScale::default(); MAX_VIEWS];
+		scales[0] = ViewScale {
+			view: v.view,
+			focal: v.projection.y_axis.y.abs() * v.viewport[3] * 0.5,
+			line: 2.0,
+		};
+		let sight = Sight {
+			frustums: Vec::new(),
+			eye: v.view,
+			ink: Some(Ink::default()),
+			scales,
+			views: 1,
+		};
+		// A tiny 2 mm cube 5 m behind the camera (z = +5.0 -> depth = -5.0).
+		let behind = Aabb {
+			min: Vec3::new(-0.001, -0.001, 4.999),
+			max: Vec3::new(0.001, 0.001, 5.001),
+		};
+		assert!(
+			!sight.worth_outlining(&behind, 1.0),
+			"tiny part behind camera (depth=-5.0) passed depth <= radius"
+		);
+		// A large box enclosing the camera (depth = 0.0, radius > 1) still
+		// counts.
+		let enclosing = Aabb {
+			min: Vec3::splat(-1.0),
+			max: Vec3::splat(1.0),
+		};
+		assert!(sight.worth_outlining(&enclosing, 1.0));
 	}
 }

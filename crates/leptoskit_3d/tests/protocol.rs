@@ -128,6 +128,86 @@ fn every_op() -> Vec<Op> {
 			y: 0.25,
 		},
 	]
+	.into_iter()
+	.chain(style_ops())
+	.chain(motion_ops())
+	.collect()
+}
+
+/// Eased transforms, and clips that ease their crossfade or start at a
+/// phase.
+fn motion_ops() -> Vec<Op> {
+	let ease = |easing| {
+		Op::EaseTransform {
+			node: NodeId(3),
+			transform: Transform::from_translation(0.5, 0.0, -1.0).with_yaw(1.25),
+			seconds: 0.4,
+			easing,
+		}
+	};
+
+	vec![
+		ease(Easing::Linear),
+		ease(Easing::Smooth),
+		ease(Easing::In),
+		ease(Easing::Out),
+		Op::Play {
+			node: NodeId(3),
+			play: Play::new("walk").fade(0.3).fade_easing(Easing::Smooth),
+		},
+		Op::Play {
+			node: NodeId(3),
+			play: Play::new("walk").phase(0.75),
+		},
+		Op::Play {
+			node: NodeId(3),
+			play: Play::new("walk")
+				.speed(-1.0)
+				.once()
+				.fade(0.2)
+				.fade_easing(Easing::Out)
+				.phase(0.0),
+		},
+	]
+}
+
+/// The scene's style and its parts' lines.
+fn style_ops() -> Vec<Op> {
+	vec![
+		Op::SetStyle(Style::default()),
+		Op::SetStyle(Style::hand_drawn()),
+		Op::SetStyle(Style {
+			shading: Shading::Toon(Toon {
+				bands: 2,
+				softness: 0.25,
+				shade: [0.3, 0.2, 0.5],
+				specular: 2.0,
+				hatch: 0.6,
+			}),
+			ink: Some(Ink {
+				color: [0.9, 0.85, 0.7],
+				width: 3.5,
+				facing: 0.8,
+				shade_weight: 1.5,
+				wobble: 0.4,
+				boil: 8.0,
+				seed: 0xDEAD_BEEF,
+			}),
+		}),
+		Op::SetInk {
+			node: NodeId(3),
+			part: Some("robe".into()),
+			ink: PartInk {
+				weight: Some(0.0),
+				color: Some([0.8, 0.75, 0.6]),
+			},
+		},
+		Op::SetInk {
+			node: NodeId(3),
+			part: None,
+			ink: PartInk::default(),
+		},
+	]
 }
 
 fn every_event() -> Vec<Event> {
@@ -230,6 +310,29 @@ fn malformed_batches_are_rejected() {
 	let mut bytes = encode_ops(&[Op::Remove { node: NodeId(1) }]);
 	bytes[9] = 200;
 	assert_eq!(decode_ops(&bytes), Err(DecodeError("an unknown op")));
+
+	// An unknown shading.
+	let mut bytes = encode_ops(&[Op::SetStyle(Style::default())]);
+	bytes[10] = 2;
+	assert_eq!(decode_ops(&bytes), Err(DecodeError("an unknown shading")));
+
+	// An unknown easing, of a transform and of a crossfade.
+	let mut bytes = encode_ops(&[Op::EaseTransform {
+		node: NodeId(1),
+		transform: Transform::IDENTITY,
+		seconds: 1.0,
+		easing: Easing::Out,
+	}]);
+	*bytes.last_mut().unwrap() = 4;
+	assert_eq!(decode_ops(&bytes), Err(DecodeError("an unknown easing")));
+	let mut bytes = encode_ops(&[Op::Play {
+		node: NodeId(1),
+		play: Play::new("idle").fade_easing(Easing::Smooth),
+	}]);
+	// The easing comes before the absent phase's flag.
+	let easing = bytes.len() - 2;
+	bytes[easing] = 9;
+	assert_eq!(decode_ops(&bytes), Err(DecodeError("an unknown easing")));
 
 	// A flag that is neither 0 nor 1.
 	let mut bytes = encode_ops(&[Op::SetVisible {
@@ -351,6 +454,91 @@ fn sanitizing_bounds_part_offsets() {
 		assert!(finite(&offset.translation) && finite(&offset.rotation) && finite(&offset.scale));
 		assert!((0.0..=MAX_FADE).contains(&seconds));
 	}
+}
+
+#[test]
+fn sanitizing_bounds_eases_and_phases() {
+	for value in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 1.0e30, -1.0e30] {
+		let Op::EaseTransform {
+			transform,
+			seconds,
+			easing,
+			..
+		} = (Op::EaseTransform {
+			node: NodeId(1),
+			transform: Transform {
+				translation: [value; 3],
+				rotation: [value; 4],
+				scale: [value; 3],
+			},
+			seconds: value,
+			easing: Easing::In,
+		})
+		.sanitized()
+		else {
+			unreachable!()
+		};
+		assert!(
+			finite(&transform.translation)
+				&& finite(&transform.rotation)
+				&& finite(&transform.scale)
+		);
+		assert!((0.0..=MAX_FADE).contains(&seconds));
+		assert_eq!(easing, Easing::In);
+
+		let Op::Play { play, .. } = (Op::Play {
+			node: NodeId(1),
+			play: Play::new("idle").phase(value),
+		})
+		.sanitized() else {
+			unreachable!()
+		};
+		assert!(play.phase.is_some_and(|phase| (0.0..=1.0).contains(&phase)));
+	}
+
+	// A phase past the clip's end is its end, and no phase stays none.
+	let phase = |play: Play| {
+		let Op::Play { play, .. } = (Op::Play {
+			node: NodeId(1),
+			play,
+		})
+		.sanitized() else {
+			unreachable!()
+		};
+		play.phase
+	};
+	assert_eq!(phase(Play::new("idle").phase(1.5)), Some(1.0));
+	assert_eq!(phase(Play::new("idle").phase(-0.5)), Some(0.0));
+	assert_eq!(phase(Play::new("idle")), None);
+}
+
+#[test]
+fn easings_run_from_nothing_to_all_of_the_way() {
+	let easings = [Easing::Linear, Easing::Smooth, Easing::In, Easing::Out];
+
+	for easing in easings {
+		assert_eq!(easing.apply(0.0), 0.0, "{easing:?}");
+		assert_eq!(easing.apply(1.0), 1.0, "{easing:?}");
+		// Clamped outside the way.
+		assert_eq!(easing.apply(-1.0), 0.0, "{easing:?}");
+		assert_eq!(easing.apply(2.0), 1.0, "{easing:?}");
+		// Never turning back.
+		let steps: Vec<f32> = (0..=64)
+			.map(|step| easing.apply(step as f32 / 64.0))
+			.collect();
+		assert!(
+			steps.windows(2).all(|pair| pair[0] <= pair[1]),
+			"{easing:?}"
+		);
+	}
+
+	assert_eq!(Easing::default(), Easing::Linear);
+	assert_eq!(Easing::Linear.apply(0.25), 0.25);
+	// Smoothstep: 3t² − 2t³.
+	assert_eq!(Easing::Smooth.apply(0.25), 5.0 / 32.0);
+	assert_eq!(Easing::Smooth.apply(0.5), 0.5);
+	assert_eq!(Easing::In.apply(0.5), 0.125);
+	assert_eq!(Easing::Out.apply(0.5), 0.875);
 }
 
 #[test]
@@ -497,6 +685,140 @@ fn sanitizing_bounds_every_number() {
 }
 
 #[test]
+fn sanitizing_bounds_styles_and_lines() {
+	for value in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 1.0e30, -1.0e30] {
+		let Op::SetStyle(style) = Op::SetStyle(Style {
+			shading: Shading::Toon(Toon {
+				bands: if value > 0.0 { u8::MAX } else { 0 },
+				softness: value,
+				shade: [value; 3],
+				specular: value,
+				hatch: value,
+			}),
+			ink: Some(Ink {
+				color: [value; 3],
+				width: value,
+				facing: value,
+				shade_weight: value,
+				wobble: value,
+				boil: value,
+				seed: 7,
+			}),
+		})
+		.sanitized() else {
+			unreachable!()
+		};
+		let Shading::Toon(toon) = style.shading else {
+			unreachable!()
+		};
+		let ink = style.ink.unwrap();
+		let unit = |value: f32| (0.0..=1.0).contains(&value);
+		assert!(
+			(TOON_BANDS.0..=TOON_BANDS.1).contains(&toon.bands),
+			"{toon:?}"
+		);
+		assert!(unit(toon.softness) && unit(toon.hatch), "{toon:?}");
+		assert!(toon.shade.into_iter().all(unit), "{toon:?}");
+		assert!((0.0..=MAX_SPECULAR).contains(&toon.specular), "{toon:?}");
+		assert!(ink.color.into_iter().all(unit), "{ink:?}");
+		assert!((0.0..=MAX_INK_WIDTH).contains(&ink.width), "{ink:?}");
+		assert!(unit(ink.facing) && unit(ink.wobble), "{ink:?}");
+		assert!(
+			(0.0..=MAX_SHADE_WEIGHT).contains(&ink.shade_weight),
+			"{ink:?}"
+		);
+		assert!((0.0..=MAX_BOIL).contains(&ink.boil), "{ink:?}");
+		assert_eq!(ink.seed, 7);
+
+		let Op::SetInk { ink, part, .. } = (Op::SetInk {
+			node: NodeId(1),
+			part: Some("é".repeat(MAX_NAME_BYTES)),
+			ink: PartInk {
+				weight: Some(value),
+				color: Some([value; 3]),
+			},
+		})
+		.sanitized() else {
+			unreachable!()
+		};
+		assert!(part.unwrap().len() <= MAX_NAME_BYTES);
+		assert!(
+			(0.0..=MAX_INK_WEIGHT).contains(&ink.weight.unwrap()),
+			"{ink:?}"
+		);
+		assert!(ink.color.unwrap().into_iter().all(unit), "{ink:?}");
+	}
+}
+
+#[test]
+fn styles_and_lines_are_new_ops_that_leave_old_batches_alone() {
+	// Batches without the new ops encode exactly as before: only the new
+	// tags carry them.
+	let bytes = encode_ops(&[
+		Op::SetStyle(Style::default()),
+		Op::SetInk {
+			node: NodeId(9),
+			part: None,
+			ink: PartInk::default(),
+		},
+	]);
+	assert_eq!(&bytes[..9], b"LK3D\x01\x02\x00\x00\x00");
+	// SetStyle: tag 23, PBR, no ink.
+	assert_eq!(&bytes[9..12], &[23, 0, 0]);
+	// SetInk: tag 24, node 9, no part, no weight, no colour.
+	assert_eq!(&bytes[12..], &[24, 9, 0, 0, 0, 0, 0, 0]);
+}
+
+#[test]
+fn eases_and_phases_are_new_ops_that_leave_old_plays_alone() {
+	let play = Play::new("idle").speed(1.5).once().fade(0.25);
+	// Tag 8, node 3, the clip, speed 1.5, once, a fade of 0.25: a play that
+	// neither eases nor starts at a phase is written as it always was.
+	let plain: Vec<u8> = [8, 3, 0, 0, 0, 4, 0]
+		.into_iter()
+		.chain(*b"idle")
+		.chain(1.5_f32.to_le_bytes())
+		.chain([0])
+		.chain(0.25_f32.to_le_bytes())
+		.collect();
+	let encoded = |play: Play| {
+		encode_ops(&[Op::Play {
+			node: NodeId(3),
+			play,
+		}])[9..]
+			.to_vec()
+	};
+	assert_eq!(encoded(play.clone()), plain);
+	assert_eq!(
+		encoded(play.clone().fade_easing(Easing::Linear)),
+		plain,
+		"a linear fade is the default, not a change"
+	);
+
+	// One that does takes tag 26, with its easing and phase after.
+	let mut eased = plain.clone();
+	eased[0] = 26;
+	eased.extend([1, 0]);
+	assert_eq!(encoded(play.clone().fade_easing(Easing::Smooth)), eased);
+	let mut phased = plain;
+	phased[0] = 26;
+	phased.extend([0, 1]);
+	phased.extend(0.5_f32.to_le_bytes());
+	assert_eq!(encoded(play.phase(0.5)), phased);
+
+	// EaseTransform: tag 25, node 3, the transform, the seconds, the easing.
+	let bytes = encode_ops(&[Op::EaseTransform {
+		node: NodeId(3),
+		transform: Transform::IDENTITY,
+		seconds: 0.5,
+		easing: Easing::Smooth,
+	}]);
+	assert_eq!(bytes[9], 25);
+	assert_eq!(bytes.len(), 9 + 1 + 4 + 40 + 4 + 1);
+	assert_eq!(bytes.last(), Some(&1));
+}
+
+#[test]
 fn sanitizing_keeps_reasonable_values() {
 	for op in every_op() {
 		let sanitized = op.clone().sanitized();
@@ -511,6 +833,31 @@ fn sanitizing_keeps_reasonable_values() {
 			(Op::SetTransform { .. }, Op::SetTransform { transform, .. }) => {
 				assert_eq!(transform.translation, [1.0, 2.0, 3.0]);
 				assert_eq!(transform.scale, [2.0; 3]);
+			}
+			// The rotation is renormalized, to within a rounding.
+			(
+				Op::EaseTransform {
+					transform: asked,
+					seconds,
+					easing,
+					..
+				},
+				Op::EaseTransform {
+					transform: kept,
+					seconds: kept_seconds,
+					easing: kept_easing,
+					..
+				},
+			) => {
+				assert_eq!(kept.translation, asked.translation);
+				assert_eq!(kept.scale, asked.scale);
+				assert!(
+					kept.rotation
+						.iter()
+						.zip(asked.rotation)
+						.all(|(kept, asked)| (kept - asked).abs() < 1.0e-6)
+				);
+				assert_eq!((kept_seconds, kept_easing), (seconds, easing));
 			}
 			_ => assert_eq!(op, sanitized),
 		}
@@ -556,4 +903,22 @@ fn asset_paths_must_stay_inside_the_assets_folder() {
 		assert!(!is_safe_asset_path(path), "{path:?}");
 	}
 	assert!(!is_safe_asset_path(&"a".repeat(MAX_PATH_BYTES + 1)));
+}
+
+#[test]
+fn short_ops_round_trip_in_repeated_batches() {
+	let styles = vec![Op::SetStyle(Style::default()); 3];
+	assert_eq!(decode_ops(&encode_ops(&styles)), Ok(styles));
+
+	let backdrops = vec![Op::SetBackdrop(Backdrop::Transparent); 4];
+	assert_eq!(decode_ops(&encode_ops(&backdrops)), Ok(backdrops));
+}
+
+#[test]
+fn easing_apply_handles_nan_and_infinities() {
+	for easing in [Easing::Linear, Easing::Smooth, Easing::In, Easing::Out] {
+		assert_eq!(easing.apply(f32::NAN), 0.0, "{easing:?}.apply(NaN)");
+		assert_eq!(easing.apply(f32::NEG_INFINITY), 0.0, "{easing:?}(-inf)");
+		assert_eq!(easing.apply(f32::INFINITY), 1.0, "{easing:?}(+inf)");
+	}
 }

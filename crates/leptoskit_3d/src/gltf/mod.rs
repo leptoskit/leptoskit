@@ -571,7 +571,51 @@ pub(crate) fn load(
 	load_meshes(&document, &mut asset)?;
 	load_skins(&document, &mut asset)?;
 	load_clips(&document, &mut asset)?;
+	asset.units = rest_units(&asset);
 	Ok(asset)
+}
+
+/// How long one unit of each node's mesh space is, in the model's metres,
+/// in its rest pose: the scale a quantized mesh's node or skin undoes. Ink
+/// drawn on a surface measures its noise and hatching in these units, so it
+/// keeps one size whatever the file's units, and stays fixed to the surface
+/// however the model moves.
+fn rest_units(asset: &Asset) -> Vec<f32> {
+	let mut world = vec![Mat4::IDENTITY; asset.nodes.len()];
+	let mut stack: Vec<(usize, Mat4)> = asset
+		.roots
+		.iter()
+		.map(|root| (*root, Mat4::IDENTITY))
+		.collect();
+
+	while let Some((index, parent)) = stack.pop() {
+		let node = &asset.nodes[index];
+		world[index] = parent
+			* Mat4::from_scale_rotation_translation(node.scale, node.rotation, node.translation);
+		stack.extend(node.children.iter().map(|child| (*child, world[index])));
+	}
+
+	let scale = |matrix: Mat4| {
+		let scale = matrix.determinant().abs().cbrt();
+		if scale.is_finite() && scale > 0.0 {
+			scale
+		} else {
+			1.0
+		}
+	};
+
+	asset
+		.nodes
+		.iter()
+		.enumerate()
+		.map(|(index, node)| {
+			let bind = node.skin.and_then(|skin| {
+				let skin = &asset.skins[skin];
+				Some(world[*skin.joints.first()?] * *skin.inverse_bind.first()?)
+			});
+			scale(bind.unwrap_or(world[index]))
+		})
+		.collect()
 }
 
 fn load_nodes(document: &Document<'_>, asset: &mut Asset) -> Result<(), LoadError> {
@@ -1024,6 +1068,299 @@ impl Attributes<'_, '_> {
 			.map(|chunk| [0, 1, 2, 3].map(|index| byte(chunk.get(index).copied().unwrap_or(1.0))))
 			.collect())
 	}
+
+	/// Each vertex's ink weight, as [`InkVertex::weight`] stores it: twice
+	/// `COLOR_1`'s red channel, so 0.5 is the part's line, 0 none, and 1 a
+	/// line twice as heavy. A primitive without `COLOR_1` has the part's line
+	/// throughout.
+	fn ink_weights(&self) -> Result<Vec<i8>, LoadError> {
+		let Some(index) = self.attribute("COLOR_1") else {
+			return Ok(vec![0; self.count]);
+		};
+		let (values, width) = self.document.floats(index)?;
+
+		if values.len() / width.max(1) != self.count || !(3..=4).contains(&width) {
+			return Err(malformed("COLOR_1 must be VEC3 or VEC4 per vertex"));
+		}
+
+		Ok(values
+			.chunks_exact(width)
+			.map(|chunk| ink_weight_byte(chunk[0]))
+			.collect())
+	}
+}
+
+/// `COLOR_1`'s red channel as an ink weight minus one, in signed normalized
+/// bytes: 0 is -127 (no line), 0.5 is 0 (the part's line), 1 is 127.
+fn ink_weight_byte(red: f32) -> i8 {
+	let red = if red.is_finite() {
+		red.clamp(0.0, 1.0)
+	} else {
+		0.5
+	};
+
+	((red * 2.0 - 1.0) * 127.0).round() as i8
+}
+
+/// A unit vector as signed normalized bytes.
+fn snorm(vector: Vec3) -> [i8; 3] {
+	vector
+		.to_array()
+		.map(|value| (value.clamp(-1.0, 1.0) * 127.0).round() as i8)
+}
+
+fn find_root(parent: &mut [usize], mut index: usize) -> usize {
+	while parent[index] != index {
+		parent[index] = parent[parent[index]];
+		index = parent[index];
+	}
+	index
+}
+
+fn union_roots(parent: &mut [usize], a: usize, b: usize) {
+	let root_a = find_root(parent, a);
+	let root_b = find_root(parent, b);
+	if root_a != root_b {
+		parent[root_b] = root_a;
+	}
+}
+
+fn f64_point(point: Vec3) -> [f64; 3] {
+	[f64::from(point.x), f64::from(point.y), f64::from(point.z)]
+}
+
+fn dist2_f64(a: [f64; 3], b: [f64; 3]) -> f64 {
+	let dx = a[0] - b[0];
+	let dy = a[1] - b[1];
+	let dz = a[2] - b[2];
+	dx * dx + dy * dy + dz * dz
+}
+
+fn boundary_offsets(frac: f64) -> &'static [i64] {
+	if frac < 0.26 {
+		&[0, -1]
+	} else if frac > 0.74 {
+		&[0, 1]
+	} else {
+		&[0]
+	}
+}
+
+fn weld_boundary_neighbors(
+	index: usize,
+	key: [i64; 3],
+	frac: [f64; 3],
+	positions: &[Vec3],
+	cells: &HashMap<[i64; 3], Vec<usize>>,
+	tol2: f64,
+	parent: &mut [usize],
+) {
+	let dx = boundary_offsets(frac[0]);
+	let dy = boundary_offsets(frac[1]);
+	let dz = boundary_offsets(frac[2]);
+
+	if dx.len() == 1 && dy.len() == 1 && dz.len() == 1 {
+		return;
+	}
+
+	let point = f64_point(positions[index]);
+
+	for &ox in dx {
+		for &oy in dy {
+			for &oz in dz {
+				if ox == 0 && oy == 0 && oz == 0 {
+					continue;
+				}
+
+				let neighbor = [key[0] + ox, key[1] + oy, key[2] + oz];
+				let Some(other) = cells.get(&neighbor) else {
+					continue;
+				};
+
+				if other.len() > MAX_WELD_CELL {
+					continue;
+				}
+
+				for &other_index in other {
+					if dist2_f64(point, f64_point(positions[other_index])) <= tol2 {
+						union_roots(parent, index, other_index);
+					}
+				}
+			}
+		}
+	}
+}
+
+/// The most distinct points one weld cell compares pairwise. A cell is four
+/// weld tolerances across, so a real mesh holds a handful of points in one;
+/// a denser cell, which only a broken or hostile file makes, welds just its
+/// exact copies, keeping a load linear in its vertices rather than quadratic.
+const MAX_WELD_CELL: usize = 128;
+
+/// The diagonal of the finite points' bounds, measured in `f64` so extreme
+/// finite `f32` coordinates cannot overflow, or `None` when no point is
+/// finite or the diagonal is not.
+fn finite_span(positions: &[Vec3]) -> Option<f64> {
+	let mut min = [f64::INFINITY; 3];
+	let mut max = [f64::NEG_INFINITY; 3];
+
+	for point in positions.iter().filter(|point| point.is_finite()) {
+		let point = f64_point(*point);
+
+		for axis in 0..3 {
+			min[axis] = min[axis].min(point[axis]);
+			max[axis] = max[axis].max(point[axis]);
+		}
+	}
+
+	let span = dist2_f64(max, min).sqrt();
+	span.is_finite().then_some(span)
+}
+
+/// Groups the positions closer than `tol` to one another, transitively:
+/// each position's group, as the index of one position in it. Non-finite
+/// positions stay alone.
+///
+/// Exact copies are found by their bits, then the distinct points are hashed
+/// into cells four tolerances wide and compared within a cell, and with the
+/// neighbouring cell wherever a point lies within a tolerance of a cell's
+/// face, so copies straddling a cell boundary still weld.
+fn weld_groups(positions: &[Vec3], tol: f64) -> Vec<usize> {
+	let count = positions.len();
+	let mut parent: Vec<usize> = (0..count).collect();
+	let mut first_at: HashMap<[u32; 3], usize> = HashMap::with_capacity(count);
+	let mut distinct = Vec::with_capacity(count);
+	let mut min = [f64::INFINITY; 3];
+
+	for (index, point) in positions.iter().enumerate() {
+		if !point.is_finite() {
+			continue;
+		}
+
+		// Adding zero turns -0 into 0, which compares equal to it.
+		match first_at.entry((*point + Vec3::ZERO).to_array().map(f32::to_bits)) {
+			Entry::Occupied(first) => union_roots(&mut parent, *first.get(), index),
+			Entry::Vacant(slot) => {
+				slot.insert(index);
+				distinct.push(index);
+				let point = f64_point(*point);
+
+				for axis in 0..3 {
+					min[axis] = min[axis].min(point[axis]);
+				}
+			}
+		}
+	}
+
+	if distinct.len() > 1 && tol.is_finite() && tol > 0.0 {
+		let tol2 = tol * tol;
+		let cell = 4.0 * tol;
+		let mut cells: HashMap<[i64; 3], Vec<usize>> = HashMap::new();
+		let mut coords = vec![([0_i64; 3], [0.0_f64; 3]); count];
+
+		for &index in &distinct {
+			let point = f64_point(positions[index]);
+			let u = [0, 1, 2].map(|axis| (point[axis] - min[axis]) / cell);
+			let floor = u.map(f64::floor);
+			let key = floor.map(|value| value as i64);
+			coords[index] = (key, [0, 1, 2].map(|axis| u[axis] - floor[axis]));
+			cells.entry(key).or_default().push(index);
+		}
+
+		for reps in cells.values().filter(|reps| reps.len() <= MAX_WELD_CELL) {
+			for a in 0..reps.len() {
+				let pa = f64_point(positions[reps[a]]);
+
+				for b in (a + 1)..reps.len() {
+					if dist2_f64(pa, f64_point(positions[reps[b]])) <= tol2 {
+						union_roots(&mut parent, reps[a], reps[b]);
+					}
+				}
+			}
+
+			for &index in reps {
+				let (key, frac) = coords[index];
+				weld_boundary_neighbors(index, key, frac, positions, &cells, tol2, &mut parent);
+			}
+		}
+	}
+
+	(0..count)
+		.map(|index| find_root(&mut parent, index))
+		.collect()
+}
+
+/// Outline normals for a mesh: at each position, the mean of the distinct
+/// normals its vertices carry there. Vertices split at a hard edge, at a
+/// seam, or between primitives share a position, so they get one normal and
+/// a line pushed out along it stays closed; a smooth vertex keeps its own.
+///
+/// The normals are the file's, made before the mesh was quantized. The
+/// faces' own are not to be trusted: quantizing tilts the smallest
+/// triangles every which way, and a line pushed along them splinters.
+/// Copies whose normals cancel, as the two sides of a thin sheet do, keep
+/// their own.
+pub(crate) fn welded_normals(positions: &[Vec3], normals: &[Vec3]) -> Vec<Vec3> {
+	let count = positions.len().min(normals.len());
+	let mut welded = normals.to_vec();
+
+	if count < 2 {
+		return welded;
+	}
+
+	let Some(span) = finite_span(&positions[..count]) else {
+		return welded;
+	};
+
+	// Positions closer than a hundred-thousandth of the mesh's size weld.
+	let groups = weld_groups(&positions[..count], (span * 1.0e-5).max(1.0e-12));
+
+	// Each vertex by its welded group, then by its normal in bytes, so the
+	// copies at a position sit together and each distinct normal counts once.
+	let mut order: Vec<(usize, [i8; 3], usize)> = (0..count)
+		.map(|index| (groups[index], snorm(normals[index]), index))
+		.collect();
+	order.sort_unstable();
+
+	for copies in order.chunk_by(|a, b| a.0 == b.0) {
+		let sum: Vec3 = copies
+			.chunk_by(|a, b| a.1 == b.1)
+			.map(|same| normals[same[0].2].normalize_or_zero())
+			.sum();
+
+		if copies.len() < 2 || sum.length_squared() < 0.01 {
+			continue;
+		}
+
+		let normal = sum.normalize();
+
+		for (.., index) in copies {
+			welded[*index] = normal;
+		}
+	}
+
+	welded
+}
+
+/// Writes the outline normals of the mesh whose vertices start at
+/// `first_vertex` and run to the end of the asset's.
+fn weld_mesh(asset: &mut Asset, first_vertex: usize) {
+	let vertices = &asset.vertices[first_vertex..];
+	let positions: Vec<Vec3> = vertices
+		.iter()
+		.map(|vertex| Vec3::from(vertex.position))
+		.collect();
+	let normals: Vec<Vec3> = vertices
+		.iter()
+		.map(|vertex| Vec3::from(vertex.normal))
+		.collect();
+
+	for (ink, normal) in asset.ink_vertices[first_vertex..]
+		.iter_mut()
+		.zip(welded_normals(&positions, &normals))
+	{
+		ink.normal = snorm(normal);
+	}
 }
 
 /// Reads one primitive's vertices and indices into the asset's shared
@@ -1104,6 +1441,7 @@ fn load_primitive(
 	}
 
 	let colors = reader.colors()?;
+	let ink_weights = reader.ink_weights()?;
 
 	let mut bounds = Aabb::EMPTY;
 
@@ -1119,6 +1457,10 @@ fn load_primitive(
 			normal: normals[index].to_array(),
 			uv: [uvs[index * 2], uvs[index * 2 + 1]],
 			color: colors[index],
+		});
+		asset.ink_vertices.push(InkVertex {
+			normal: snorm(normals[index]),
+			weight: ink_weights[index],
 		});
 	}
 
@@ -1269,12 +1611,15 @@ fn load_meshes(document: &Document<'_>, asset: &mut Asset) -> Result<(), LoadErr
 			.max()
 			.unwrap_or(0);
 		let mut primitives = Vec::with_capacity(mesh.primitives.len());
+		let first_vertex = asset.vertices.len();
 
 		for primitive in &mesh.primitives {
 			if let Some(primitive) = load_primitive(document, asset, primitive, target_count)? {
 				primitives.push(primitive);
 			}
 		}
+
+		weld_mesh(asset, first_vertex);
 
 		let mut target_names = mesh
 			.extras
@@ -1690,5 +2035,306 @@ mod tests {
 		.unwrap_err();
 		assert!(!asked);
 		assert!(matches!(error, LoadError::Resource(_)));
+	}
+
+	/// A cube from -0.5 to 0.5 split at its hard edges, as exporters write
+	/// one: four vertices a face, each with its face's normal, 24 in all,
+	/// and 12 triangles wound counter-clockwise seen from outside.
+	fn split_cube() -> (Vec<Vec3>, Vec<Vec3>, Vec<[u32; 3]>) {
+		let mut positions = Vec::new();
+		let mut normals = Vec::new();
+		let mut triangles = Vec::new();
+
+		for normal in [
+			Vec3::X,
+			Vec3::NEG_X,
+			Vec3::Y,
+			Vec3::NEG_Y,
+			Vec3::Z,
+			Vec3::NEG_Z,
+		] {
+			// Two axes across the face with u x v = normal, so the corners go
+			// round it counter-clockwise.
+			let u = normal.any_orthonormal_vector();
+			let v = normal.cross(u);
+			let base = positions.len() as u32;
+
+			for (a, b) in [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)] {
+				positions.push((normal + u * a + v * b) * 0.5);
+				normals.push(normal);
+			}
+
+			triangles.extend([[base, base + 1, base + 2], [base, base + 2, base + 3]]);
+		}
+
+		(positions, normals, triangles)
+	}
+
+	/// The split cube as a file whose one mesh has two primitives of three
+	/// faces each, both reading the same vertices, with a `COLOR_1` of
+	/// `(type, component type, bytes)` when one is given.
+	fn split_cube_file(color_1: Option<(&str, u32, Vec<u8>)>) -> Result<Asset, LoadError> {
+		let (positions, normals, triangles) = split_cube();
+		let mut bin: Vec<u8> = positions
+			.iter()
+			.chain(&normals)
+			.flat_map(Vec3::to_array)
+			.flat_map(f32::to_le_bytes)
+			.collect();
+		bin.extend(
+			triangles
+				.iter()
+				.flatten()
+				.flat_map(|index| index.to_le_bytes()),
+		);
+		let (attribute, view, accessor) = match color_1 {
+			Some((kind, component, bytes)) => {
+				let offset = bin.len();
+				let length = bytes.len();
+				bin.extend(bytes);
+				(
+					r#","COLOR_1":4"#.to_owned(),
+					format!(r#",{{"buffer":0,"byteOffset":{offset},"byteLength":{length}}}"#),
+					format!(
+						r#",{{"bufferView":3,"componentType":{component},"normalized":{},"count":24,"type":"{kind}"}}"#,
+						component != 5126
+					),
+				)
+			}
+			None => (String::new(), String::new(), String::new()),
+		};
+		let json = format!(
+			r#"{{"asset":{{"version":"2.0"}},
+			"buffers":[{{"byteLength":{},"uri":"cube.bin"}}],
+			"bufferViews":[{{"buffer":0,"byteLength":288}},{{"buffer":0,"byteOffset":288,"byteLength":288}},
+				{{"buffer":0,"byteOffset":576,"byteLength":144}}{view}],
+			"accessors":[
+				{{"bufferView":0,"componentType":5126,"count":24,"type":"VEC3","min":[-0.5,-0.5,-0.5],"max":[0.5,0.5,0.5]}},
+				{{"bufferView":1,"componentType":5126,"count":24,"type":"VEC3"}},
+				{{"bufferView":2,"componentType":5125,"count":18,"type":"SCALAR"}},
+				{{"bufferView":2,"byteOffset":72,"componentType":5125,"count":18,"type":"SCALAR"}}{accessor}],
+			"meshes":[{{"primitives":[
+				{{"attributes":{{"POSITION":0,"NORMAL":1{attribute}}},"indices":2}},
+				{{"attributes":{{"POSITION":0,"NORMAL":1{attribute}}},"indices":3}}]}}],
+			"nodes":[{{"mesh":0}}],"scenes":[{{"nodes":[0]}}],"scene":0}}"#,
+			bin.len()
+		);
+
+		load(json.as_bytes(), &mut |_| Ok(bin.clone()))
+	}
+
+	#[test]
+	fn outline_normals_weld_across_hard_edges() {
+		let (positions, normals, _) = split_cube();
+		let welded = welded_normals(&positions, &normals);
+
+		// Three faces meet at right angles at every corner, so each of the
+		// corner's three copies points out along the same diagonal.
+		for (point, normal) in positions.iter().zip(&welded) {
+			let diagonal = point.signum() / 3.0_f32.sqrt();
+			assert!(normal.abs_diff_eq(diagonal, 1.0e-6), "{point} {normal}");
+		}
+
+		// Copies with the same normal, as a seam splits, count once; a lone
+		// vertex keeps its own; and the two sides of a sheet, which cancel,
+		// keep theirs.
+		let points = [
+			Vec3::ZERO,
+			Vec3::ZERO,
+			Vec3::ZERO,
+			Vec3::X,
+			Vec3::Y,
+			Vec3::Y,
+		];
+		let normals = [Vec3::X, Vec3::X, Vec3::Y, Vec3::Z, Vec3::Z, Vec3::NEG_Z];
+		let between = Vec3::new(1.0, 1.0, 0.0).normalize();
+		let welded = welded_normals(&points, &normals);
+		assert!(
+			welded[..3]
+				.iter()
+				.all(|normal| normal.abs_diff_eq(between, 1.0e-6)),
+			"{welded:?}"
+		);
+		assert_eq!(welded[3..], [Vec3::Z, Vec3::Z, Vec3::NEG_Z]);
+		assert_eq!(welded_normals(&[], &[]), Vec::<Vec3>::new());
+	}
+
+	#[test]
+	fn outline_normals_weld_across_a_meshs_primitives() {
+		let asset = split_cube_file(None).unwrap();
+		assert_eq!(asset.mesh_count(), (1, 2));
+		assert_eq!(asset.vertices.len(), 48, "each primitive reads all 24");
+		assert_eq!(asset.ink_vertices.len(), asset.vertices.len());
+		// 1/sqrt(3) in signed normalized bytes.
+		let corner = (127.0 / 3.0_f32.sqrt()).round() as i8;
+
+		// The corner at (+, +, +) has faces +x and +y in the first primitive
+		// and +z in the second: welded per primitive, the copies would part.
+		for (vertex, ink) in asset.vertices.iter().zip(&asset.ink_vertices) {
+			let expected = Vec3::from(vertex.position)
+				.signum()
+				.to_array()
+				.map(|sign| sign as i8 * corner);
+			assert_eq!(ink.normal, expected, "{:?}", vertex.position);
+			assert_eq!(ink.weight, 0, "with no COLOR_1, the part's own line");
+		}
+	}
+
+	#[test]
+	fn color_1s_red_channel_weighs_the_line() {
+		assert_eq!(ink_weight_byte(0.0), -127, "no line");
+		assert_eq!(ink_weight_byte(0.5), 0, "the part's line");
+		assert_eq!(ink_weight_byte(1.0), 127, "twice as heavy");
+		assert_eq!(ink_weight_byte(0.75), 64);
+		assert_eq!(ink_weight_byte(3.0), 127);
+		assert_eq!(ink_weight_byte(-1.0), -127);
+		assert_eq!(ink_weight_byte(f32::NAN), 0);
+
+		// Floats, red rising across the vertices; green, blue and alpha are
+		// free for other uses.
+		let colors: Vec<u8> = (0..24)
+			.flat_map(|vertex| [vertex as f32 / 23.0, 0.3, 0.9, 1.0])
+			.flat_map(f32::to_le_bytes)
+			.collect();
+		let asset = split_cube_file(Some(("VEC4", 5126, colors))).unwrap();
+		for (index, ink) in asset.ink_vertices.iter().enumerate() {
+			assert_eq!(ink.weight, ink_weight_byte((index % 24) as f32 / 23.0));
+		}
+
+		// Normalized bytes, as gltfpack writes them: 0, 128 and 255.
+		let colors: Vec<u8> = (0..24_u8)
+			.flat_map(|vertex| [[0, 128, 255][usize::from(vertex % 3)], 7, 7])
+			.collect();
+		let asset = split_cube_file(Some(("VEC3", 5121, colors))).unwrap();
+		for (index, ink) in asset.ink_vertices.iter().enumerate() {
+			assert_eq!(ink.weight, [-127, 0, 127][index % 24 % 3], "vertex {index}");
+		}
+
+		// Anything else is not a colour.
+		let colors = [0.5_f32; 48]
+			.iter()
+			.flat_map(|value| value.to_le_bytes())
+			.collect();
+		assert!(matches!(
+			split_cube_file(Some(("VEC2", 5126, colors))),
+			Err(LoadError::Malformed(_))
+		));
+	}
+
+	#[test]
+	fn units_undo_the_rest_poses_scale() {
+		let node = |scale: f32, children: Vec<usize>, skin: Option<usize>| {
+			AssetNode {
+				name: String::new(),
+				parent: None,
+				children,
+				translation: Vec3::new(1.0, 2.0, 3.0),
+				rotation: Quat::from_rotation_y(0.7),
+				scale: Vec3::splat(scale),
+				mesh: None,
+				skin,
+				weights: None,
+			}
+		};
+		let asset = Asset {
+			nodes: vec![
+				node(0.5, vec![1, 2], None),
+				node(0.25, Vec::new(), None),
+				node(1.0, Vec::new(), Some(0)),
+				node(4.0, Vec::new(), None),
+				node(0.0, Vec::new(), None),
+			],
+			roots: vec![0, 3, 4],
+			skins: vec![Skin {
+				joints: vec![3],
+				inverse_bind: vec![Mat4::from_scale(Vec3::splat(0.5))],
+				joint_radius: vec![0.0],
+			}],
+			..Asset::default()
+		};
+		let units = rest_units(&asset);
+		let expected = [
+			0.5, // A quantized mesh's node scales it down, under its parents.
+			0.125,
+			// A skin is placed by its joints, not its node: the first
+			// joint's rest pose after its inverse bind.
+			2.0, 4.0, // A flat node measures nothing, so its units are one.
+			1.0,
+		];
+		for (unit, expected) in units.iter().zip(expected) {
+			assert!((unit - expected).abs() < 1.0e-5, "{units:?}");
+		}
+		assert_eq!(units.len(), 5);
+	}
+
+	#[test]
+	fn welded_normals_weld_across_cell_boundaries() {
+		// Mesh spans [0, 1] -> length = 1.0, tolerance = 1e-5.
+		// Test seam copies 2e-8 apart straddling both 0.5e-5 and 4.0e-5 cell
+		// boundaries.
+		for boundary in [0.5e-5_f32, 4.0e-5_f32] {
+			let a = Vec3::new(boundary - 1.0e-8, 0.0, 0.0);
+			let b = Vec3::new(boundary + 1.0e-8, 0.0, 0.0);
+			let far = Vec3::new(1.0, 0.0, 0.0);
+			let welded = welded_normals(&[a, b, far], &[Vec3::X, Vec3::Y, Vec3::Z]);
+			assert!(
+				welded[0].abs_diff_eq(welded[1], 1.0e-5),
+				"vertices 2e-8 apart failed to weld across boundary {boundary:e}: {:?} vs {:?}",
+				welded[0],
+				welded[1]
+			);
+			assert!(welded[2].abs_diff_eq(Vec3::Z, 1.0e-5));
+		}
+	}
+
+	#[test]
+	fn welded_normals_do_not_overflow_on_extreme_bounds() {
+		// Valid finite f32 positions whose difference overflows f32 to +inf.
+		let points = [
+			Vec3::new(-1.0e38, 0.0, 0.0),
+			Vec3::new(1.0e38, 0.0, 0.0),
+			Vec3::new(0.0, 1.0, 0.0),
+		];
+		let normals = [Vec3::X, Vec3::Y, Vec3::Z];
+		let welded = welded_normals(&points, &normals);
+		assert_eq!(welded[2], Vec3::Z, "distant vertex got welded: {welded:?}");
+	}
+
+	#[test]
+	fn welding_a_dense_cell_stays_near_linear() {
+		// Two far corners make the weld tolerance 1 cm, in cells 4 cm wide.
+		// A lattice of 46 656 distinct points 1 mm apart then fills one cell,
+		// each point twice, with a different normal on each copy. Comparing
+		// every pair in that cell took minutes.
+		let side = 36_usize;
+		let mut positions = vec![Vec3::ZERO, Vec3::splat(1000.0 / 3.0_f32.sqrt())];
+		let mut normals = vec![Vec3::Z, Vec3::Z];
+
+		for x in 0..side {
+			for y in 0..side {
+				for z in 0..side {
+					let point = Vec3::new(x as f32, y as f32, z as f32) * 1.0e-3 + 0.481;
+					positions.extend([point, point]);
+					normals.extend([Vec3::X, Vec3::Y]);
+				}
+			}
+		}
+
+		let started = std::time::Instant::now();
+		let welded = welded_normals(&positions, &normals);
+		let elapsed = started.elapsed();
+		let mean = (Vec3::X + Vec3::Y).normalize();
+		assert!(
+			welded[2..]
+				.iter()
+				.all(|normal| normal.abs_diff_eq(mean, 1.0e-5)),
+			"the copies of each point weld"
+		);
+		assert!(
+			elapsed < std::time::Duration::from_secs(10),
+			"welding {} vertices with {} distinct points in one cell took {elapsed:?}",
+			positions.len(),
+			side * side * side
+		);
 	}
 }

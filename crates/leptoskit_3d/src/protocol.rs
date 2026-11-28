@@ -28,6 +28,13 @@ pub const OPS_MAGIC: &[u8; 4] = b"LK3D";
 /// The first bytes of an encoded batch of events.
 pub const EVENTS_MAGIC: &[u8; 4] = b"LK3E";
 /// The version of the binary form this crate writes and reads.
+///
+/// Additive op tags (`23`: [`Op::SetStyle`], `24`: [`Op::SetInk`], `25`:
+/// [`Op::EaseTransform`], `26`: [`Op::Play`] with non-default `fade_easing` or
+/// `phase`) keep `VERSION = 1`: batches that avoid them encode byte for byte as
+/// before and remain compatible with older v1 hosts, while any batch containing
+/// tags `23..=26` requires a matching host/renderer version (an older v1 host
+/// rejects the whole batch with `DecodeError("an unknown op")`).
 pub const VERSION: u8 = 1;
 
 macro_rules! id {
@@ -137,6 +144,40 @@ pub enum LoopMode {
 	PingPong,
 }
 
+/// How something moves from where it is to where it is going: how far along
+/// the way it is at each moment of the time it takes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Easing {
+	/// At a steady rate.
+	#[default]
+	Linear,
+	/// Slow to start and slow to settle: smoothstep, `3t² − 2t³`.
+	Smooth,
+	/// Slow to start, then faster: `t³`.
+	In,
+	/// Quick to start, then settling: `1 − (1 − t)³`.
+	Out,
+}
+
+impl Easing {
+	/// How far along the way something is, from 0 to 1, when `t` of its time
+	/// has passed, also from 0 to 1. Outside that, `t` is clamped (and `NaN`
+	/// maps to 0).
+	pub fn apply(self, t: f32) -> f32 {
+		let t = if t.is_nan() { 0.0 } else { t.clamp(0.0, 1.0) };
+
+		match self {
+			Self::Linear => t,
+			Self::Smooth => t * t * (3.0 - 2.0 * t),
+			Self::In => t * t * t,
+			Self::Out => {
+				let rest = 1.0 - t;
+				1.0 - rest * rest * rest
+			}
+		}
+	}
+}
+
 /// Starts an animation clip on a model instance.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Play {
@@ -149,6 +190,16 @@ pub struct Play {
 	/// Seconds over which the clip fades in while the one playing fades out.
 	/// Zero cuts straight to it.
 	pub fade: f32,
+	/// How the crossfade moves from the clip playing to this one. The
+	/// default, [`Easing::Linear`], blends at a steady rate;
+	/// [`Easing::Smooth`] eases out of the old clip and into the new.
+	pub fade_easing: Easing,
+	/// Where the clip starts, as a fraction of its duration from 0, its
+	/// first frame, to 1, its last (which a looping clip shows as its first).
+	/// `None`, the default, starts at its first frame, or at its last for a
+	/// clip played backwards once. Instances playing one clip at different
+	/// phases keep a crowd from moving in step.
+	pub phase: Option<f32>,
 }
 
 impl Play {
@@ -159,6 +210,8 @@ impl Play {
 			speed: 1.0,
 			mode: LoopMode::Loop,
 			fade: 0.0,
+			fade_easing: Easing::Linear,
+			phase: None,
 		}
 	}
 
@@ -186,6 +239,21 @@ impl Play {
 	#[must_use]
 	pub fn fade(mut self, seconds: f32) -> Self {
 		self.fade = seconds;
+		self
+	}
+
+	/// Moves the crossfade along `easing` instead of at a steady rate.
+	#[must_use]
+	pub fn fade_easing(mut self, easing: Easing) -> Self {
+		self.fade_easing = easing;
+		self
+	}
+
+	/// Starts the clip `phase` of the way through, from 0 (its first frame)
+	/// to 1 (its last).
+	#[must_use]
+	pub fn phase(mut self, phase: f32) -> Self {
+		self.phase = Some(phase);
 		self
 	}
 }
@@ -230,6 +298,138 @@ pub enum Blend {
 	/// covers nothing: a glow, a flash, a spark, a beam. Black adds nothing.
 	/// It draws with the transparent parts and hides nothing behind it.
 	Additive,
+}
+
+/// How a scene's lit surfaces take the light.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum Shading {
+	/// Physically based, as the model's materials describe them: smooth
+	/// gradients and the environment's reflections.
+	#[default]
+	Pbr,
+	/// Cartoon shading: the light falls in a few flat bands.
+	Toon(Toon),
+}
+
+/// Banded "toon" shading, the flat light and shade of a drawing.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Toon {
+	/// How many flat bands the light falls into, from 2 to 4.
+	pub bands: u8,
+	/// How soft the edge between two bands is, from 0 (as crisp as the pixels
+	/// allow) to 1 (blended across a whole band).
+	pub softness: f32,
+	/// Multiplies the base colour in the darkest band, linear RGB, each from
+	/// 0 to 1: a coloured shade, such as a cool violet, rather than black.
+	/// The bands between blend from it to full light.
+	pub shade: [f32; 3],
+	/// The strength of a hard-edged highlight, from 0 (none) to 4; 1 is
+	/// natural. Rough surfaces get a wider, fainter one.
+	pub specular: f32,
+	/// The strength of ink hatching in the darkest band, from 0 (none) to 1.
+	/// The lines are fixed to the model's surface, drawn in its ink, and fade
+	/// where they would be too fine to see; a part without a line has none, and
+	/// [`Style::ink`] must be `Some(...)` (even with `width: 0.0`) for hatching
+	/// to draw.
+	pub hatch: f32,
+}
+
+impl Default for Toon {
+	/// Three bands, crisp edges, a cool violet shade, a natural highlight,
+	/// and no hatching.
+	fn default() -> Self {
+		Self {
+			bands: 3,
+			softness: 0.0,
+			shade: [0.42, 0.40, 0.58],
+			specular: 1.0,
+			hatch: 0.0,
+		}
+	}
+}
+
+/// A scene's ink: the line drawn around its models and, optionally, inside
+/// them.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Ink {
+	/// Linear RGB, each from 0 to 1. Lines draw in exactly this colour:
+	/// exposure and tonemapping leave it alone.
+	pub color: [f32; 3],
+	/// The outline's width, in thousandths of the view's height, so a line
+	/// looks the same on every screen density and at every distance: 2 is a
+	/// firm pen line, 2.4 pixels on a 1200-pixel view. 0 draws no outline.
+	pub width: f32,
+	/// The strength of an inner line where a surface turns away from the
+	/// viewer, from 0 (none) to 1.
+	pub facing: f32,
+	/// How much heavier the line is where the surface faces away from the
+	/// light, from 0 (even) to 2 (three times as heavy in full shade).
+	pub shade_weight: f32,
+	/// How much the line's width wanders along its length, from 0 (steady)
+	/// to 1. The wander is fixed to the surface, so it moves with the model
+	/// and never crawls.
+	pub wobble: f32,
+	/// How many times a second the wobble is drawn afresh, like animation
+	/// "on twos", up to 30; 0 holds it still. It moves on only when the scene
+	/// draws a frame anyway, and the same scene time draws the same line.
+	pub boil: f32,
+	/// Picks the wobble's pattern.
+	pub seed: u32,
+}
+
+impl Default for Ink {
+	/// A firm line in deep violet black, with a slight wobble that holds still.
+	fn default() -> Self {
+		Self {
+			color: [0.034, 0.021, 0.050],
+			width: 2.0,
+			facing: 0.0,
+			shade_weight: 0.0,
+			wobble: 0.25,
+			boil: 0.0,
+			seed: 0,
+		}
+	}
+}
+
+/// How a scene is drawn: its shading and its ink.
+///
+/// [`Style::default`] is physically based shading with no ink, which is how
+/// scenes draw until [`Op::SetStyle`] says otherwise.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Style {
+	/// How lit surfaces take the light.
+	pub shading: Shading,
+	/// The ink, or `None` for no lines.
+	pub ink: Option<Ink>,
+}
+
+impl Style {
+	/// A hand-drawn look: [`Toon::default`] shading and an [`Ink::default`]
+	/// line.
+	pub fn hand_drawn() -> Self {
+		Self {
+			shading: Shading::Toon(Toon::default()),
+			ink: Some(Ink::default()),
+		}
+	}
+}
+
+/// A part's line, set with [`Op::SetInk`]. A field left `None` takes what an
+/// enclosing part's setting gave it, or else its default.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct PartInk {
+	/// Multiplies the line's width, from 0 to 8: 0 draws no line (and no inner
+	/// line or hatching), 1 the scene's width. At weight 1 and above, the
+	/// outline keeps at least a 1-pixel floor; weights between 0 and 1 taper
+	/// that floor proportionally to 0 so fading a line out vanishes smoothly.
+	/// `None` is 1, except on unlit, blended, faded, and additive parts, which
+	/// have none unless one is set. Alpha-masked (cutout), blended, faded, and
+	/// additive parts never draw the outline itself, only the inner line and
+	/// hatching: fade a part's line out with its weight before fading the part.
+	pub weight: Option<f32>,
+	/// The line's colour, linear RGB, or `None` for the scene's ink colour.
+	pub color: Option<[f32; 3]>,
 }
 
 /// The directional light, standing in for the sun or a room's key light.
@@ -313,6 +513,21 @@ pub enum Op {
 		node: NodeId,
 		/// Its new transform.
 		transform: Transform,
+	},
+	/// Moves a node from where it is to `transform` over `seconds`, along
+	/// `easing`: translation and scale along a straight line, rotation along
+	/// the shorter arc. The scene draws every frame of the way. Another ease
+	/// on the node starts from wherever this one has got to, and a
+	/// [`Op::SetTransform`] stops it where it is set.
+	EaseTransform {
+		/// The node to move.
+		node: NodeId,
+		/// Where it ends up, relative to its parent.
+		transform: Transform,
+		/// How long the way takes; zero puts it there at once.
+		seconds: f32,
+		/// How it moves along the way.
+		easing: Easing,
 	},
 	/// Shows or hides a node and everything under it.
 	SetVisible {
@@ -399,6 +614,22 @@ pub enum Op {
 		part: Option<String>,
 		/// How it blends.
 		blend: Blend,
+	},
+	/// Sets how the scene is drawn: its shading and its ink line.
+	SetStyle(Style),
+	/// Sets the line on a model instance's parts: its weight and colour.
+	/// It replaces the line set before for the same part, and a later setting
+	/// wins where parts overlap, field by field: a field left `None` keeps
+	/// what a setting on an enclosing part gave it, so
+	/// [`PartInk::default`] returns a part to what encloses it.
+	SetInk {
+		/// The model instance.
+		node: NodeId,
+		/// The part to change, with everything under it, or `None` for the
+		/// whole instance.
+		part: Option<String>,
+		/// The line.
+		ink: PartInk,
 	},
 	/// Turns the soft shadow under a model instance on or off. Instances cast
 	/// one by default.
@@ -555,6 +786,12 @@ const RAYCAST: u8 = 19;
 const RAYCAST_SCREEN: u8 = 20;
 const SET_PART_OFFSET: u8 = 21;
 const SET_BLEND: u8 = 22;
+const SET_STYLE: u8 = 23;
+const SET_INK: u8 = 24;
+const EASE_TRANSFORM: u8 = 25;
+/// A [`Play`] that eases its crossfade or starts at a phase; one that does
+/// neither is written as [`PLAY`], as it always was.
+const PLAY_EASED: u8 = 26;
 
 // Event tags.
 const ASSET_LOADED: u8 = 1;
@@ -753,6 +990,103 @@ fn read_material(reader: &mut Reader<'_>) -> Result<MaterialOverride, DecodeErro
 	})
 }
 
+/// `shading:u8 (0 Pbr | 1 Toon bands:u8 softness:f32 shade:f32×3
+/// specular:f32 hatch:f32) ink:opt<color:f32×3 width:f32 facing:f32
+/// shade_weight:f32 wobble:f32 boil:f32 seed:u32>`
+fn write_style(writer: &mut Writer, style: &Style) {
+	match style.shading {
+		Shading::Pbr => writer.u8(0),
+		Shading::Toon(toon) => {
+			writer.u8(1);
+			writer.u8(toon.bands);
+			writer.f32(toon.softness);
+			writer.floats(&toon.shade);
+			writer.floats(&[toon.specular, toon.hatch]);
+		}
+	}
+
+	writer.option(style.ink, |writer, ink| {
+		writer.floats(&ink.color);
+		writer.floats(&[
+			ink.width,
+			ink.facing,
+			ink.shade_weight,
+			ink.wobble,
+			ink.boil,
+		]);
+		writer.u32(ink.seed);
+	});
+}
+
+fn read_style(reader: &mut Reader<'_>) -> Result<Style, DecodeError> {
+	let shading = match reader.u8()? {
+		0 => Shading::Pbr,
+		1 => {
+			let bands = reader.u8()?;
+			let softness = reader.f32()?;
+			let shade = reader.floats()?;
+			let [specular, hatch] = reader.floats()?;
+			Shading::Toon(Toon {
+				bands,
+				softness,
+				shade,
+				specular,
+				hatch,
+			})
+		}
+		_ => return Err(DecodeError("an unknown shading")),
+	};
+	let ink = reader.option(|reader| {
+		let color = reader.floats()?;
+		let [width, facing, shade_weight, wobble, boil] = reader.floats()?;
+		Ok(Ink {
+			color,
+			width,
+			facing,
+			shade_weight,
+			wobble,
+			boil,
+			seed: reader.u32()?,
+		})
+	})?;
+	Ok(Style { shading, ink })
+}
+
+fn read_easing(reader: &mut Reader<'_>) -> Result<Easing, DecodeError> {
+	Ok(match reader.u8()? {
+		0 => Easing::Linear,
+		1 => Easing::Smooth,
+		2 => Easing::In,
+		3 => Easing::Out,
+		_ => return Err(DecodeError("an unknown easing")),
+	})
+}
+
+/// `clip:str speed:f32 mode:u8 fade:f32`, then for [`PLAY_EASED`]
+/// `fade_easing:u8 phase:opt<f32>`.
+fn read_play(reader: &mut Reader<'_>, eased: bool) -> Result<Play, DecodeError> {
+	let mut play = Play {
+		clip: reader.str(crate::MAX_NAME_BYTES)?,
+		speed: reader.f32()?,
+		mode: match reader.u8()? {
+			0 => LoopMode::Once,
+			1 => LoopMode::Loop,
+			2 => LoopMode::PingPong,
+			_ => return Err(DecodeError("an unknown loop mode")),
+		},
+		fade: reader.f32()?,
+		fade_easing: Easing::Linear,
+		phase: None,
+	};
+
+	if eased {
+		play.fade_easing = read_easing(reader)?;
+		play.phase = reader.option(Reader::f32)?;
+	}
+
+	Ok(play)
+}
+
 impl Op {
 	#[allow(clippy::too_many_lines)]
 	fn write(&self, writer: &mut Writer) {
@@ -785,6 +1119,18 @@ impl Op {
 				writer.u32(node.0);
 				writer.transform(transform);
 			}
+			Self::EaseTransform {
+				node,
+				transform,
+				seconds,
+				easing,
+			} => {
+				writer.u8(EASE_TRANSFORM);
+				writer.u32(node.0);
+				writer.transform(transform);
+				writer.f32(*seconds);
+				writer.u8(*easing as u8);
+			}
 			Self::SetVisible { node, visible } => {
 				writer.u8(SET_VISIBLE);
 				writer.u32(node.0);
@@ -801,12 +1147,18 @@ impl Op {
 				writer.bool(*visible);
 			}
 			Self::Play { node, play } => {
-				writer.u8(PLAY);
+				let eased = play.fade_easing != Easing::Linear || play.phase.is_some();
+				writer.u8(if eased { PLAY_EASED } else { PLAY });
 				writer.u32(node.0);
 				writer.str(&play.clip);
 				writer.f32(play.speed);
 				writer.u8(play.mode as u8);
 				writer.f32(play.fade);
+
+				if eased {
+					writer.u8(play.fade_easing as u8);
+					writer.option(play.phase, Writer::f32);
+				}
 			}
 			Self::Stop { node, fade } => {
 				writer.u8(STOP);
@@ -855,6 +1207,17 @@ impl Op {
 					Blend::Normal => 0,
 					Blend::Additive => 1,
 				});
+			}
+			Self::SetStyle(style) => {
+				writer.u8(SET_STYLE);
+				write_style(writer, style);
+			}
+			Self::SetInk { node, part, ink } => {
+				writer.u8(SET_INK);
+				writer.u32(node.0);
+				writer.option(part.as_deref(), Writer::str);
+				writer.option(ink.weight, Writer::f32);
+				writer.option(ink.color, |writer, color| writer.floats(&color));
 			}
 			Self::SetShadow { node, cast } => {
 				writer.u8(SET_SHADOW);
@@ -957,6 +1320,14 @@ impl Op {
 					transform: reader.transform()?,
 				}
 			}
+			EASE_TRANSFORM => {
+				Self::EaseTransform {
+					node: NodeId(reader.u32()?),
+					transform: reader.transform()?,
+					seconds: reader.f32()?,
+					easing: read_easing(reader)?,
+				}
+			}
 			SET_VISIBLE => {
 				Self::SetVisible {
 					node: NodeId(reader.u32()?),
@@ -970,21 +1341,10 @@ impl Op {
 					visible: reader.bool()?,
 				}
 			}
-			PLAY => {
+			PLAY | PLAY_EASED => {
 				Self::Play {
 					node: NodeId(reader.u32()?),
-					play: Play {
-						clip: reader.str(NAME)?,
-						speed: reader.f32()?,
-						mode: match reader.u8()? {
-							0 => LoopMode::Once,
-							1 => LoopMode::Loop,
-							2 => LoopMode::PingPong,
-							_ => return Err(DecodeError("an unknown loop mode")),
-						},
-
-						fade: reader.f32()?,
-					},
+					play: read_play(reader, tag == PLAY_EASED)?,
 				}
 			}
 			STOP => {
@@ -1024,6 +1384,17 @@ impl Op {
 						0 => Blend::Normal,
 						1 => Blend::Additive,
 						_ => return Err(DecodeError("an unknown blend")),
+					},
+				}
+			}
+			SET_STYLE => Self::SetStyle(read_style(reader)?),
+			SET_INK => {
+				Self::SetInk {
+					node: NodeId(reader.u32()?),
+					part: reader.option(|reader| reader.str(NAME))?,
+					ink: PartInk {
+						weight: reader.option(Reader::f32)?,
+						color: reader.option(Reader::floats)?,
 					},
 				}
 			}
@@ -1206,9 +1577,9 @@ pub fn decode_ops(bytes: &[u8]) -> Result<Vec<Op>, DecodeError> {
 
 	let mut reader = Reader { bytes };
 	let count = reader.header(*OPS_MAGIC)?;
-	// Every op takes at least five bytes, so a count the bytes cannot hold
-	// fails before allocating for it.
-	if count > reader.bytes.len() / 5 + 1 {
+	// The shortest op (`SetBackdrop(Transparent)`) takes two bytes, so a count
+	// the remaining bytes cannot hold fails before allocating for it.
+	if count > reader.bytes.len() / 2 {
 		return Err(DecodeError("it ends early"));
 	}
 

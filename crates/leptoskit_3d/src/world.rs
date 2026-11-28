@@ -27,6 +27,8 @@ pub(crate) struct Overrides {
 	pub opacity: f32,
 	pub rim: Rim,
 	pub blend: Blend,
+	/// The line, from the last `SetInk` that covers the part.
+	pub ink: PartInk,
 }
 
 impl Default for Overrides {
@@ -42,6 +44,7 @@ impl Default for Overrides {
 				power: 2.0,
 			},
 			blend: Blend::Normal,
+			ink: PartInk::default(),
 		}
 	}
 }
@@ -111,6 +114,41 @@ impl Motion {
 			scale: self.scale.lerp(to.scale, t),
 		}
 	}
+
+	fn to_transform(self) -> Transform {
+		Transform {
+			translation: self.translation.to_array(),
+			rotation: self.rotation.to_array(),
+			scale: self.scale.to_array(),
+		}
+	}
+}
+
+/// A node on its way to a transform, after [`Op::EaseTransform`].
+#[derive(Clone, Copy, Debug)]
+struct Ease {
+	from: Motion,
+	to: Transform,
+	seconds: f32,
+	elapsed: f32,
+	easing: Easing,
+}
+
+impl Ease {
+	/// Moves `elapsed` seconds further along the way: where the node is now,
+	/// and whether it has arrived.
+	fn advance(&mut self, elapsed: f32) -> (Transform, bool) {
+		self.elapsed = (self.elapsed + elapsed).min(self.seconds);
+
+		if self.elapsed >= self.seconds {
+			// Exactly where it was sent, not a blend that nearly lands there.
+			return (self.to, true);
+		}
+
+		let t = self.easing.apply(self.elapsed / self.seconds);
+		let motion = self.from.towards(Motion::from_transform(&self.to), t);
+		(motion.to_transform(), false)
+	}
 }
 
 /// A part the guest has moved, and how far it is on its way.
@@ -152,6 +190,7 @@ pub(crate) struct Instance {
 	parts_visible: BTreeMap<String, bool>,
 	materials: Vec<(Option<String>, MaterialOverride)>,
 	blends: Vec<(Option<String>, Blend)>,
+	inks: Vec<(Option<String>, PartInk)>,
 	morphs: BTreeMap<(Option<String>, String), f32>,
 	offsets: BTreeMap<String, PartOffset>,
 	pending_play: Option<Play>,
@@ -175,6 +214,7 @@ impl Instance {
 			parts_visible: BTreeMap::new(),
 			materials: Vec::new(),
 			blends: Vec::new(),
+			inks: Vec::new(),
 			morphs: BTreeMap::new(),
 			offsets: BTreeMap::new(),
 			pending_play: None,
@@ -258,6 +298,14 @@ impl Instance {
 				self.overrides[node].blend = *blend;
 			}
 		}
+
+		for (part, ink) in &self.inks {
+			for node in Self::subtree(asset, part.as_deref()) {
+				let line = &mut self.overrides[node].ink;
+				line.weight = ink.weight.or(line.weight);
+				line.color = ink.color.or(line.color);
+			}
+		}
 	}
 
 	/// Replaces the blend set for `part`, or adds it while there is room. A
@@ -267,6 +315,19 @@ impl Instance {
 
 		if self.blends.len() < MAX_SETTINGS {
 			self.blends.push((part, blend));
+		}
+
+		self.resolve_materials();
+	}
+
+	/// Replaces the line set for `part`, or adds it while there is room. A
+	/// later setting wins where parts overlap, field by field, so a field
+	/// left `None` keeps what a wider setting gave it.
+	fn set_ink(&mut self, part: Option<String>, ink: PartInk) {
+		self.inks.retain(|(existing, _)| *existing != part);
+
+		if ink != PartInk::default() && self.inks.len() < MAX_SETTINGS {
+			self.inks.push((part, ink));
 		}
 
 		self.resolve_materials();
@@ -376,8 +437,7 @@ impl Instance {
 
 		if let Some(index) = asset.clips.iter().position(|clip| clip.name == play.clip) {
 			let duration = asset.clips[index].duration;
-			self.animator
-				.play(index, play.speed, play.mode, play.fade, duration);
+			self.animator.play(index, play, duration);
 		}
 	}
 
@@ -510,11 +570,34 @@ pub(crate) struct Node {
 	/// The part of the parent instance this node follows, after an attach.
 	pub bone: Option<String>,
 	pub transform: Transform,
+	/// Where it is going, while it eases there.
+	ease: Option<Ease>,
 	pub visible: bool,
 	pub instance: Option<Instance>,
 	pub world: Mat4,
 	/// Hidden itself or under a hidden node.
 	pub hidden: bool,
+}
+
+impl Node {
+	/// Sets off from where the node is towards `transform`, or puts it
+	/// there at once.
+	fn ease_to(&mut self, transform: Transform, seconds: f32, easing: Easing) {
+		if seconds <= 0.0 {
+			self.transform = transform;
+			self.ease = None;
+
+			return;
+		}
+
+		self.ease = Some(Ease {
+			from: Motion::from_transform(&self.transform),
+			to: transform,
+			seconds,
+			elapsed: 0.0,
+			easing,
+		});
+	}
 }
 
 /// Where the camera is and how it projects.
@@ -574,12 +657,13 @@ impl Camera {
 	}
 }
 
-/// Scene-wide settings: the light, what draws behind, and exposure.
+/// Scene-wide settings: the light, what draws behind, exposure, and style.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Settings {
 	pub light: Light,
 	pub backdrop: Backdrop,
 	pub exposure: f32,
+	pub style: Style,
 }
 
 impl Default for Settings {
@@ -588,6 +672,7 @@ impl Default for Settings {
 			light: Light::default(),
 			backdrop: Backdrop::Transparent,
 			exposure: 1.0,
+			style: Style::default(),
 		}
 	}
 }
@@ -617,6 +702,8 @@ pub struct World {
 	raycasts: usize,
 	changed: bool,
 	dropped_events: u64,
+	/// Seconds the scene has advanced, the clock of the ink's boil.
+	pub(crate) time: f64,
 }
 
 impl World {
@@ -707,13 +794,12 @@ impl World {
 	}
 
 	/// Whether the scene needs drawing again: it changed since the last
-	/// [`World::advance`], or something in it is animating.
+	/// [`World::advance`], or something in it is animating or easing.
 	pub fn needs_frame(&self) -> bool {
 		self.changed
-			|| self
-				.nodes
-				.values()
-				.any(|node| node.instance.as_ref().is_some_and(Instance::is_moving))
+			|| self.nodes.values().any(|node| {
+				node.ease.is_some() || node.instance.as_ref().is_some_and(Instance::is_moving)
+			})
 	}
 
 	/// How many nodes the scene has.
@@ -829,6 +915,7 @@ impl World {
 				children: Vec::new(),
 				bone: None,
 				transform: Transform::IDENTITY,
+				ease: None,
 				visible: true,
 				instance,
 				world: Mat4::IDENTITY,
@@ -872,6 +959,17 @@ impl World {
 			Op::SetTransform { node, transform } => {
 				if let Some(node) = self.nodes.get_mut(&node) {
 					node.transform = transform;
+					node.ease = None;
+				}
+			}
+			Op::EaseTransform {
+				node,
+				transform,
+				seconds,
+				easing,
+			} => {
+				if let Some(node) = self.nodes.get_mut(&node) {
+					node.ease_to(transform, seconds, easing);
 				}
 			}
 			Op::SetVisible { node, visible } => {
@@ -909,6 +1007,10 @@ impl World {
 			} => self.with_instance(node, |instance| instance.set_material(part, &material)),
 			Op::SetBlend { node, part, blend } => {
 				self.with_instance(node, |instance| instance.set_blend(part, blend));
+			}
+			Op::SetStyle(style) => self.settings.style = style,
+			Op::SetInk { node, part, ink } => {
+				self.with_instance(node, |instance| instance.set_ink(part, ink));
 			}
 			Op::SetShadow { node, cast } => {
 				self.with_instance(node, |instance| instance.cast_shadow = cast);
@@ -1017,6 +1119,15 @@ impl World {
 		let mut finished = Vec::new();
 
 		for (id, node) in &mut self.nodes {
+			if let Some(ease) = &mut node.ease {
+				let (transform, arrived) = ease.advance(elapsed);
+				node.transform = transform;
+
+				if arrived {
+					node.ease = None;
+				}
+			}
+
 			if let Some(instance) = &mut node.instance {
 				for clip in instance.advance(elapsed) {
 					finished.push(Event::AnimationFinished { node: *id, clip });
@@ -1036,6 +1147,7 @@ impl World {
 		}
 
 		self.update_transforms();
+		self.time += f64::from(elapsed);
 		self.changed = false;
 	}
 
@@ -1087,5 +1199,217 @@ impl World {
 				stack.push((child, base.0, hidden || base.1));
 			}
 		}
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use crate::asset::AssetNode;
+
+	/// A model whose `root` holds `body` and `head`, with `hat` on the head.
+	fn figure() -> Arc<Asset> {
+		let node = |name: &str, parent: Option<usize>, children: Vec<usize>| {
+			AssetNode {
+				name: name.into(),
+				parent,
+				children,
+				translation: Vec3::ZERO,
+				rotation: Quat::IDENTITY,
+				scale: Vec3::ONE,
+				mesh: None,
+				skin: None,
+				weights: None,
+			}
+		};
+		let nodes = vec![
+			node("root", None, vec![1, 2]),
+			node("body", Some(0), Vec::new()),
+			node("head", Some(0), vec![3]),
+			node("hat", Some(2), Vec::new()),
+		];
+		let names = nodes
+			.iter()
+			.enumerate()
+			.map(|(index, node)| (node.name.clone(), index))
+			.collect();
+		Arc::new(Asset {
+			nodes,
+			roots: vec![0],
+			names,
+			..Asset::default()
+		})
+	}
+
+	fn lines(instance: &Instance) -> Vec<PartInk> {
+		instance.overrides.iter().map(|part| part.ink).collect()
+	}
+
+	#[test]
+	fn lines_resolve_per_subtree_field_by_field() {
+		let weight = |weight| {
+			PartInk {
+				weight: Some(weight),
+				color: None,
+			}
+		};
+		let red = [1.0, 0.0, 0.0];
+		let mut instance = Instance::new(AssetId(1));
+		// A line set before the asset loads applies once it has.
+		instance.set_ink(None, weight(2.0));
+		instance.bind(figure());
+		instance.set_ink(
+			Some("head".into()),
+			PartInk {
+				weight: None,
+				color: Some(red),
+			},
+		);
+		let red_line = |weight| {
+			PartInk {
+				weight: Some(weight),
+				color: Some(red),
+			}
+		};
+		// The head and the hat under it are red, and keep the whole
+		// model's weight.
+		assert_eq!(
+			lines(&instance),
+			[weight(2.0), weight(2.0), red_line(2.0), red_line(2.0)]
+		);
+
+		// A part set again moves to the end: the whole model's weight now
+		// wins over the hat's.
+		instance.set_ink(Some("hat".into()), weight(0.0));
+		assert_eq!(lines(&instance)[3], red_line(0.0));
+		instance.set_ink(None, weight(3.0));
+		assert_eq!(
+			lines(&instance),
+			[weight(3.0), weight(3.0), red_line(3.0), red_line(3.0)]
+		);
+
+		// Setting a part to nothing returns it to what encloses it without
+		// consuming a slot of `MAX_SETTINGS`, and a part the model lacks
+		// changes nothing.
+		let before = instance.inks.len();
+		instance.set_ink(Some("head".into()), PartInk::default());
+		assert_eq!(instance.inks.len(), before - 1);
+		instance.set_ink(Some("tail".into()), weight(5.0));
+		assert_eq!(lines(&instance), [weight(3.0); 4]);
+	}
+
+	#[test]
+	fn nodes_ease_to_a_transform() {
+		let node = NodeId(1);
+		let there = Transform::from_translation(4.0, 0.0, 0.0);
+		let ease = |transform, seconds, easing| {
+			Op::EaseTransform {
+				node,
+				transform,
+				seconds,
+				easing,
+			}
+		};
+		let x = |world: &World| world.nodes[&node].transform.translation[0];
+		let mut world = World::new();
+		world.apply([Op::Spawn {
+			node,
+			asset: None,
+			parent: None,
+		}]);
+		world.advance(0.0);
+		assert!(!world.needs_frame());
+
+		// Smoothstep: 5/32 of the way a quarter through, half way half
+		// through, and exactly there at the end.
+		world.apply([ease(there, 1.0, Easing::Smooth)]);
+		world.advance(0.25);
+		assert_eq!(x(&world), 4.0 * 5.0 / 32.0);
+		assert!(world.needs_frame(), "it draws every frame of the way");
+		world.advance(0.25);
+		assert_eq!(x(&world), 2.0);
+		world.advance(0.25);
+		world.advance(0.25);
+		assert_eq!(world.nodes[&node].transform, there);
+		assert_eq!(world.nodes[&node].world.w_axis.x, 4.0);
+		assert!(!world.needs_frame(), "and stops asking once there");
+
+		// Another ease starts from wherever the last one has got to.
+		world.apply([ease(Transform::IDENTITY, 1.0, Easing::Linear)]);
+		world.advance(0.25);
+		world.advance(0.25);
+		assert_eq!(x(&world), 2.0);
+		world.apply([ease(there, 1.0, Easing::Out)]);
+		world.advance(0.25);
+		world.advance(0.25);
+		// 1 − (1 − ½)³ = 7/8 of the way from 2 to 4.
+		assert_eq!(x(&world), 3.75);
+
+		// A transform set outright stops it where it is set.
+		world.apply([Op::SetTransform {
+			node,
+			transform: Transform::IDENTITY,
+		}]);
+		world.advance(0.25);
+		assert_eq!(x(&world), 0.0);
+		assert!(!world.needs_frame());
+
+		// No time puts it there at once.
+		world.apply([ease(there, 0.0, Easing::Smooth)]);
+		world.advance(0.0);
+		assert_eq!(world.nodes[&node].transform, there);
+		assert!(!world.needs_frame());
+	}
+
+	#[test]
+	fn nodes_ease_rotation_and_scale() {
+		let node = NodeId(1);
+		let target = Transform::IDENTITY
+			.with_yaw(std::f32::consts::FRAC_PI_2)
+			.with_scale(3.0);
+		let mut world = World::new();
+		world.apply([
+			Op::Spawn {
+				node,
+				asset: None,
+				parent: None,
+			},
+			Op::EaseTransform {
+				node,
+				transform: target,
+				seconds: 1.0,
+				easing: Easing::Linear,
+			},
+		]);
+		world.advance(0.25);
+		world.advance(0.25);
+		let mid = world.nodes[&node].transform;
+		let expected_rot = Quat::from_rotation_y(std::f32::consts::FRAC_PI_4);
+		let actual_rot = Quat::from_array(mid.rotation);
+		assert!(
+			actual_rot.dot(expected_rot).abs() > 0.9999,
+			"expected midpoint yaw 45 deg ({expected_rot:?}), got {actual_rot:?}"
+		);
+		for axis in 0..3 {
+			assert!(
+				(mid.scale[axis] - 2.0).abs() < 1.0e-5,
+				"expected midpoint scale 2.0, got {:?}",
+				mid.scale
+			);
+		}
+		world.advance(0.25);
+		world.advance(0.25);
+		let end = world.nodes[&node].transform;
+		assert!(
+			Quat::from_array(end.rotation)
+				.dot(Quat::from_array(target.rotation))
+				.abs()
+				> 0.99999,
+			"expected final rotation {:?}, got {:?}",
+			target.rotation,
+			end.rotation
+		);
+		assert_eq!(end.scale, target.scale);
+		assert!(!world.needs_frame());
 	}
 }

@@ -40,15 +40,16 @@
 Some apps show models that move: a character that walks and waves, a product turning on a stand, creatures standing in a room seen through the phone's camera. `leptoskit_3d` keeps such a scene on the host, animates it on the display's own clock, and draws it on the GPU, so the app's interface code only says what should happen.
 
 - **Models:** glTF 2.0 (`.glb`, or `.gltf` with its files), including `EXT_meshopt_compression`, `KHR_mesh_quantization` and `KHR_texture_transform` (as gltfpack writes them), decoded in pure Rust. Skins, morph targets by name, node names, and animation of transforms and weights (step, linear, cubic spline). Metallic-roughness, unlit, and emissive-strength materials with opaque, masked, and blended alpha. PNG and JPEG textures.
-- **Scenes:** instances and groups, named parts shown or hidden, clips played, crossfaded, and stopped, named parts moved by the app on top of their clips, morph weights, material overrides (tint, emissive, opacity, a Fresnel rim), additive blending for glows, nodes attached to named parts, a perspective camera or explicit matrices, one directional light, and raycasts that report the part, distance, point, and normal.
+- **Scenes:** instances and groups eased or set in place, named parts shown or hidden, clips played from any phase, crossfaded (linearly or eased), and stopped, named parts moved by the app on top of their clips, morph weights, material overrides (tint, emissive, opacity, a Fresnel rim), additive blending for glows, nodes attached to named parts, a perspective camera or explicit matrices, one directional light, and raycasts that report the part, distance, point, and normal.
 - **Drawing:** a forward renderer with 4× MSAA, HDR lighting tonemapped with Khronos PBR Neutral, a prefiltered environment baked once per device, a soft shadow under each model, GPU skinning and morphs, instancing, culling, and transparency sorted back to front.
+- **A hand-drawn style:** `Op::SetStyle` swaps physically based shading for toon shading in 2 to 4 antialiased bands with a coloured shade, a hard highlight and rim, and optional hatching fixed to the surface, and draws an ink line around every model: constant on screen in each view, heavier in shade if asked, wobbling like a pen and boiling in steps on the scene's own clock. `Op::SetInk` weighs or colours a part's line, and a model can weigh its own per vertex in `COLOR_1`'s red channel. Without a style, scenes draw exactly as before.
 - **Targets:** any wgpu texture, with one view or several (stereo by viewports or by layers), over a clear colour or a camera image (Y and CbCr planes or RGBA, with a display transform), with real-world depth to hide what is behind it.
 
 ## How it fits
 
 <!-- {=scene3dSummary} -->
 
-It draws 3D scenes the host owns: glTF models with skins, morph targets, and animation, lit and shaded on the GPU with wgpu, in a `Scene3d` view. A guest describes a scene with compact ops and hears back through events; the host animates and draws it on the display link, never in the guest's frame loop.
+It draws 3D scenes the host owns: glTF models with skins, morph targets, and animation, lit and shaded on the GPU with wgpu, physically based or in a hand-drawn style of banded light and ink lines, in a `Scene3d` view. A guest describes a scene with compact ops and hears back through events; the host animates and draws it on the display link, never in the guest's frame loop.
 
 <!-- {/scene3dSummary} -->
 

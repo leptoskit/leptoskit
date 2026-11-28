@@ -308,13 +308,19 @@ const AUTO_BACKENDS: wgpu::Backends = if cfg!(target_arch = "wasm32") {
 	wgpu::Backends::VULKAN
 };
 
-/// A render pipeline's variant: how the mesh is skinned and blended, and
-/// whether back faces are culled.
+/// A render pipeline's variant: how the mesh is skinned and blended,
+/// whether back faces are culled, and whether its transform mirrors
+/// triangle winding (negative determinant).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[allow(
+	clippy::struct_excessive_bools,
+	reason = "four orthogonal pipeline flags"
+)]
 pub(crate) struct Variant {
 	pub skinned: bool,
 	pub blend: bool,
 	pub double_sided: bool,
+	pub mirrored: bool,
 }
 
 impl Variant {
@@ -323,12 +329,15 @@ impl Variant {
 		let flags = [false, true];
 		flags.into_iter().flat_map(move |skinned| {
 			flags.into_iter().flat_map(move |blend| {
-				flags.map(move |double_sided| {
-					Self {
-						skinned,
-						blend,
-						double_sided,
-					}
+				flags.into_iter().flat_map(move |double_sided| {
+					flags.map(move |mirrored| {
+						Self {
+							skinned,
+							blend,
+							double_sided,
+							mirrored,
+						}
+					})
 				})
 			})
 		})
@@ -369,7 +378,59 @@ pub(crate) struct Pipelines {
 	pub meshes: HashMap<Variant, wgpu::RenderPipeline>,
 	pub shadow: wgpu::RenderPipeline,
 	pub background: wgpu::RenderPipeline,
+	format: wgpu::TextureFormat,
+	multisample: wgpu::MultisampleState,
+	/// The ink outline's pipelines (`[static, skinned]` for unmirrored then
+	/// mirrored transforms), compiled when a scene first draws a line, so
+	/// scenes without ink never build them.
+	outlines: OnceLock<[wgpu::RenderPipeline; 4]>,
 }
+
+/// The attributes of [`InstanceRecord`](crate::upload::InstanceRecord) that
+/// the outline reads: its matrix, its joints and morphs, and its ink.
+const OUTLINE_INSTANCE: [wgpu::VertexAttribute; 6] = [
+	wgpu::VertexAttribute {
+		format: wgpu::VertexFormat::Float32x4,
+		offset: 0,
+		shader_location: 4,
+	},
+	wgpu::VertexAttribute {
+		format: wgpu::VertexFormat::Float32x4,
+		offset: 16,
+		shader_location: 5,
+	},
+	wgpu::VertexAttribute {
+		format: wgpu::VertexFormat::Float32x4,
+		offset: 32,
+		shader_location: 6,
+	},
+	wgpu::VertexAttribute {
+		format: wgpu::VertexFormat::Float32x4,
+		offset: 48,
+		shader_location: 7,
+	},
+	wgpu::VertexAttribute {
+		format: wgpu::VertexFormat::Uint32x4,
+		offset: 112,
+		shader_location: 11,
+	},
+	wgpu::VertexAttribute {
+		format: wgpu::VertexFormat::Float32x4,
+		offset: 128,
+		shader_location: 14,
+	},
+];
+
+// The offsets above are the record's own.
+const _: () = {
+	use std::mem::offset_of;
+
+	use crate::upload::InstanceRecord;
+	assert!(offset_of!(InstanceRecord, model) == 0);
+	assert!(offset_of!(InstanceRecord, params) == 112);
+	assert!(offset_of!(InstanceRecord, ink) == 128);
+	assert!(size_of::<InstanceRecord>() == 144);
+};
 
 /// What a device's renderers share.
 pub(crate) struct Shared {
@@ -735,6 +796,9 @@ impl Shared {
 		};
 
 		Pipelines {
+			format,
+			multisample,
+			outlines: OnceLock::new(),
 			meshes: Variant::all()
 				.map(|variant| {
 					(
@@ -760,6 +824,7 @@ impl Shared {
 		let instance = wgpu::vertex_attr_array![
 			4 => Float32x4, 5 => Float32x4, 6 => Float32x4, 7 => Float32x4,
 			8 => Float32x4, 9 => Float32x4, 10 => Float32x4, 11 => Uint32x4,
+			14 => Float32x4,
 		];
 		let skin = wgpu::vertex_attr_array![12 => Uint16x4, 13 => Unorm16x4];
 		let mut buffers = vec![
@@ -798,7 +863,11 @@ impl Shared {
 			},
 			primitive: wgpu::PrimitiveState {
 				topology: wgpu::PrimitiveTopology::TriangleList,
-				front_face: wgpu::FrontFace::Ccw,
+				front_face: if variant.mirrored {
+					wgpu::FrontFace::Cw
+				} else {
+					wgpu::FrontFace::Ccw
+				},
 				cull_mode: (!variant.double_sided).then_some(wgpu::Face::Back),
 				..wgpu::PrimitiveState::default()
 			},
@@ -812,6 +881,113 @@ impl Shared {
 			fragment: Some(wgpu::FragmentState {
 				module: &self.mesh_shader,
 				entry_point: Some("fs_mesh"),
+				compilation_options: wgpu::PipelineCompilationOptions::default(),
+				targets: &targets,
+			}),
+			multiview_mask: None,
+			cache: None,
+		})
+	}
+
+	/// The outline pipelines for `pipelines`' format, indexed by
+	/// `usize::from(skinned) + usize::from(mirrored) * 2`, compiled on first
+	/// use.
+	pub fn outline_pipelines<'p>(
+		&self,
+		device: &wgpu::Device,
+		pipelines: &'p Pipelines,
+	) -> &'p [wgpu::RenderPipeline; 4] {
+		pipelines.outlines.get_or_init(|| {
+			[(false, false), (true, false), (false, true), (true, true)].map(
+				|(skinned, mirrored)| {
+					self.outline_pipeline(
+						device,
+						pipelines.format,
+						pipelines.multisample,
+						skinned,
+						mirrored,
+					)
+				},
+			)
+		})
+	}
+
+	/// The ink outline: the mesh's back faces, pushed out along the welded
+	/// outline normals, opaque and depth-tested like the meshes.
+	fn outline_pipeline(
+		&self,
+		device: &wgpu::Device,
+		format: wgpu::TextureFormat,
+		multisample: wgpu::MultisampleState,
+		skinned: bool,
+		mirrored: bool,
+	) -> wgpu::RenderPipeline {
+		let vertex = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3];
+		let ink = wgpu::vertex_attr_array![15 => Snorm8x4];
+		let skin = wgpu::vertex_attr_array![12 => Uint16x4, 13 => Unorm16x4];
+		let mut buffers = vec![
+			Some(buffer_layout::<crate::asset::Vertex>(
+				wgpu::VertexStepMode::Vertex,
+				&vertex,
+			)),
+			Some(buffer_layout::<crate::upload::InstanceRecord>(
+				wgpu::VertexStepMode::Instance,
+				&OUTLINE_INSTANCE,
+			)),
+			Some(buffer_layout::<crate::asset::InkVertex>(
+				wgpu::VertexStepMode::Vertex,
+				&ink,
+			)),
+		];
+
+		if skinned {
+			buffers.push(Some(buffer_layout::<crate::asset::SkinVertex>(
+				wgpu::VertexStepMode::Vertex,
+				&skin,
+			)));
+		}
+
+		let targets = color_target(format, false);
+
+		device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+			label: Some("leptoskit_3d outline"),
+			layout: Some(&self.mesh_layout),
+			vertex: wgpu::VertexState {
+				module: &self.mesh_shader,
+				entry_point: Some(if skinned {
+					"vs_outline_skinned"
+				} else {
+					"vs_outline_static"
+				}),
+				compilation_options: wgpu::PipelineCompilationOptions::default(),
+				buffers: &buffers,
+			},
+			primitive: wgpu::PrimitiveState {
+				topology: wgpu::PrimitiveTopology::TriangleList,
+				front_face: if mirrored {
+					wgpu::FrontFace::Cw
+				} else {
+					wgpu::FrontFace::Ccw
+				},
+				cull_mode: Some(wgpu::Face::Front),
+				..wgpu::PrimitiveState::default()
+			},
+			// Strict Less with a small positive depth bias guarantees zero-weight
+			// vertices (where pushed == world) never overwrite double-sided back
+			// faces already drawn by the mesh pass, and avoids z-fighting across
+			// differing vertex contraction on mobile GPUs.
+			depth_stencil: Some(wgpu::DepthStencilState {
+				bias: wgpu::DepthBiasState {
+					constant: 2,
+					slope_scale: 1.0,
+					clamp: 0.0,
+				},
+				..depth_state(true, wgpu::CompareFunction::Less)
+			}),
+			multisample,
+			fragment: Some(wgpu::FragmentState {
+				module: &self.mesh_shader,
+				entry_point: Some("fs_outline"),
 				compilation_options: wgpu::PipelineCompilationOptions::default(),
 				targets: &targets,
 			}),

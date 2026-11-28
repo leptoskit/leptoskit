@@ -27,6 +27,20 @@ pub(crate) struct SkinVertex {
 	pub weights: [u16; 4],
 }
 
+/// What the ink line needs of a vertex: 4 bytes, beside [`Vertex`] so the
+/// shaded pipelines never read it.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, bytemuck::Pod, bytemuck::Zeroable)]
+pub(crate) struct InkVertex {
+	/// The outline normal as signed normalized bytes: the normal of every
+	/// face that meets at the vertex's position, across the mesh's
+	/// primitives, so the outline stays closed at hard edges.
+	pub normal: [i8; 3],
+	/// The line weight minus one, as a signed normalized byte: -127 draws no
+	/// line, 0 the part's line, 127 one twice as heavy.
+	pub weight: i8,
+}
+
 /// An axis-aligned box.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Aabb {
@@ -255,9 +269,14 @@ pub struct Asset {
 	pub(crate) clips: Vec<Clip>,
 	pub(crate) vertices: Vec<Vertex>,
 	pub(crate) skin_vertices: Vec<SkinVertex>,
+	/// One per vertex, in [`Asset::vertices`]' order.
+	pub(crate) ink_vertices: Vec<InkVertex>,
 	pub(crate) indices: Vec<u32>,
 	pub(crate) morph_deltas: Vec<[f32; 4]>,
 	pub(crate) names: HashMap<String, usize>,
+	/// Per node, how long a unit of its mesh's space is in the rest pose, in
+	/// the model's metres.
+	pub(crate) units: Vec<f32>,
 }
 
 impl Asset {

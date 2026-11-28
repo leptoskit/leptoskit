@@ -7,7 +7,9 @@ use crate::asset::Asset;
 use crate::asset::Channel;
 use crate::asset::ChannelPath;
 use crate::asset::Interpolation;
+use crate::protocol::Easing;
 use crate::protocol::LoopMode;
+use crate::protocol::Play;
 
 /// Every asset node's local transform and morph weights.
 #[derive(Clone, Debug, PartialEq)]
@@ -62,10 +64,13 @@ struct Track {
 	time: f32,
 	speed: f32,
 	mode: LoopMode,
-	/// How much this track shows over the ones before it.
+	/// How far its fade in has come, from 0 to 1.
 	weight: f32,
 	/// Change in weight per second while fading in.
 	fade_rate: f32,
+	/// How the fade's progress becomes how much this track shows over the
+	/// ones before it.
+	fade_easing: Easing,
 	finished: bool,
 }
 
@@ -118,14 +123,23 @@ impl Animator {
 				.any(|track| track.fade_rate != 0.0 || (!track.finished && track.speed != 0.0))
 	}
 
-	/// Starts a clip. With a fade and something showing, the clip fades in
-	/// over what plays; otherwise it cuts. A clip played backwards once
-	/// starts from its end.
-	pub fn play(&mut self, clip: usize, speed: f32, mode: LoopMode, fade: f32, duration: f32) {
-		let start = if speed < 0.0 && mode == LoopMode::Once {
-			duration
-		} else {
-			0.0
+	/// Starts clip `clip`, `duration` seconds long, as `play` asks. With a
+	/// fade and something showing, the clip fades in over what plays;
+	/// otherwise it cuts. It starts at its phase, or without one at its
+	/// start, or its end for a clip played backwards once.
+	pub fn play(&mut self, clip: usize, play: &Play, duration: f32) {
+		let Play {
+			speed,
+			mode,
+			fade,
+			fade_easing,
+			phase,
+			..
+		} = *play;
+		let start = match phase {
+			Some(phase) => phase.clamp(0.0, 1.0) * duration,
+			None if speed < 0.0 && mode == LoopMode::Once => duration,
+			None => 0.0,
 		};
 
 		if fade <= 0.0 || self.tracks.is_empty() || self.master <= 0.0 {
@@ -145,6 +159,7 @@ impl Animator {
 			mode,
 			weight: if fading { 0.0 } else { 1.0 },
 			fade_rate: if fading { 1.0 / fade } else { 0.0 },
+			fade_easing,
 			finished: false,
 		});
 		// Bound the tracks a guest can stack by crossfading repeatedly.
@@ -221,7 +236,11 @@ impl Animator {
 		for (index, track) in self.tracks.iter().enumerate() {
 			let clip = &asset.clips[track.clip];
 			let time = local_time(track.time, clip.duration, track.mode);
-			let weight = if index == 0 { 1.0 } else { track.weight };
+			let weight = if index == 0 {
+				1.0
+			} else {
+				track.fade_easing.apply(track.weight)
+			};
 
 			for channel in &clip.channels {
 				apply_channel(channel, time, weight, pose);
@@ -390,6 +409,110 @@ impl QuatExt for Quat {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use crate::asset::AssetNode;
+	use crate::asset::Clip;
+
+	/// One node and two clips, each 2 seconds long: `rise` moves the node
+	/// from 0 to 2 along x, a metre a second, and `hold` keeps it at 10.
+	fn slider() -> Asset {
+		let clip = |name: &str, values: Vec<f32>| {
+			Clip {
+				name: name.into(),
+				duration: 2.0,
+				channels: vec![Channel {
+					node: 0,
+					path: ChannelPath::Translation,
+					interpolation: Interpolation::Linear,
+					times: vec![0.0, 2.0],
+					values,
+					width: 3,
+				}],
+			}
+		};
+
+		Asset {
+			nodes: vec![AssetNode {
+				name: "slider".into(),
+				parent: None,
+				children: Vec::new(),
+				translation: Vec3::ZERO,
+				rotation: Quat::IDENTITY,
+				scale: Vec3::ONE,
+				mesh: None,
+				skin: None,
+				weights: None,
+			}],
+			clips: vec![
+				clip("rise", vec![0.0, 0.0, 0.0, 2.0, 0.0, 0.0]),
+				clip("hold", vec![10.0, 0.0, 0.0, 10.0, 0.0, 0.0]),
+			],
+			..Asset::default()
+		}
+	}
+
+	/// Where the animator puts the slider along x.
+	fn slid(animator: &Animator, asset: &Asset) -> f32 {
+		let rest = Pose::rest(asset);
+		let mut pose = rest.clone();
+		animator.sample(asset, &rest, &mut pose, &mut Vec::new());
+		pose.translation[0].x
+	}
+
+	#[test]
+	fn clips_start_at_their_phase() {
+		let asset = slider();
+		let mut animator = Animator::default();
+		let mut started = |play: Play| {
+			animator.play(0, &play, 2.0);
+			slid(&animator, &asset)
+		};
+		// Without a phase, at the start, or at the end played backwards once.
+		assert_eq!(started(Play::new("rise")), 0.0);
+		assert_eq!(started(Play::new("rise").once().speed(-1.0)), 2.0);
+		// With one, that fraction of the clip in, whichever way it plays.
+		assert_eq!(started(Play::new("rise").phase(0.25)), 0.5);
+		assert_eq!(
+			started(Play::new("rise").once().speed(-1.0).phase(0.25)),
+			0.5
+		);
+		assert_eq!(started(Play::new("rise").once().phase(1.0)), 2.0);
+		// A loop's end is its start again.
+		assert_eq!(started(Play::new("rise").phase(1.0)), 0.0);
+
+		// And it plays on from there.
+		animator.play(0, &Play::new("rise").phase(0.25), 2.0);
+		animator.advance(&asset, 0.5);
+		assert_eq!(slid(&animator, &asset), 1.0);
+	}
+
+	#[test]
+	fn crossfades_ease_only_when_asked() {
+		let asset = slider();
+		// From `hold` at 10 to `rise` held at 0, a quarter of the way through
+		// a one-second fade.
+		let crossfade = |play: Play| {
+			let mut animator = Animator::default();
+			animator.play(1, &Play::new("hold"), 2.0);
+			animator.play(0, &play.speed(0.0).fade(1.0), 2.0);
+			animator.advance(&asset, 0.25);
+			let quarter = slid(&animator, &asset);
+			animator.advance(&asset, 0.75);
+			(quarter, slid(&animator, &asset))
+		};
+
+		// By default at a steady rate, as it always was.
+		assert_eq!(crossfade(Play::new("rise")), (7.5, 0.0));
+		assert_eq!(
+			crossfade(Play::new("rise").fade_easing(Easing::Linear)),
+			(7.5, 0.0)
+		);
+		// Smoothstep: 3t² − 2t³ of the way, 5/32 at a quarter, and all of it
+		// at the end.
+		assert_eq!(
+			crossfade(Play::new("rise").fade_easing(Easing::Smooth)),
+			(10.0 - 10.0 * 5.0 / 32.0, 0.0)
+		);
+	}
 
 	#[test]
 	fn loop_modes_map_time_into_the_clip() {
