@@ -1654,23 +1654,50 @@ async fn write_outcome(db: &Db, delivery: &PushDelivery, outcome: Outcome) -> rp
 	Ok(())
 }
 
-/// Writes `delivery`'s row in the acceptance ledger a metering host counts,
-/// in the write that accepts it, so an accepted delivery is never missing
-/// from it.
-async fn record_acceptance(
-	tx: &leptoskit_db::Tx,
-	delivery: &PushDelivery,
+/// Writes one accepted push's row in the acceptance ledger a metering host
+/// counts, naming the delivery it accepted. A test send has no delivery row
+/// of its own, so it records the id it made for it.
+pub(crate) async fn record_acceptance(
+	connection: &impl leptoskit_db::Connection,
+	delivery: Uuid,
+	platform: &str,
 	now: leptoskit_db::Timestamp,
 ) -> rpc::Result<()> {
 	crate::push::NewPushAcceptance {
 		id: Uuid::now_v7(),
-		delivery: delivery.id,
-		platform: delivery.platform.clone(),
+		delivery,
+		platform: platform.to_owned(),
 		accepted_at: now,
 	}
-	.insert(tx)
+	.insert(connection)
 	.await?;
 	Ok(())
+}
+
+/// The write [`send_test`](super::send_test) makes for one accepted push:
+/// its row in the acceptance ledger, as the caller, in a transaction of its
+/// own. It is not a route, so no caller can write an acceptance for a push
+/// no provider took.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub(crate) struct RecordAcceptance {
+	/// The test send's own delivery id: it has no delivery row, so this
+	/// only tells its ledger rows apart.
+	pub(crate) delivery: Uuid,
+	/// The platform the provider accepted it for.
+	pub(crate) platform: String,
+}
+
+impl rpc::Operation for RecordAcceptance {
+	type Context = rpc::MutationCx;
+	type Output = ();
+
+	const KIND: rpc::Kind = rpc::Kind::Mutation;
+	const NAME: &'static str = "record_push_acceptance";
+	const SERVICE: Option<&'static str> = Some(crate::SERVICE);
+
+	async fn run(self, cx: &rpc::MutationCx) -> rpc::Result<Self::Output> {
+		record_acceptance(cx.tx(), self.delivery, &self.platform, leptoskit_db::now()).await
+	}
 }
 
 /// Applies an outcome while the endpoint's exact credential revision is locked.
@@ -1714,7 +1741,7 @@ async fn apply_outcome(
 				.set(|row| row.next_attempt_at, None)
 				.run(tx)
 				.await?;
-			record_acceptance(tx, delivery, now).await?;
+			record_acceptance(tx, delivery.id, &delivery.platform, now).await?;
 		}
 		Outcome::Transient { after }
 		| Outcome::Stalled { after }

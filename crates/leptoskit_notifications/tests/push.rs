@@ -1738,6 +1738,58 @@ async fn a_paused_service_skips_its_pushes_and_keeps_its_inbox() {
 	assert_eq!(mock.requests_to(APNS_HOST).len(), 2);
 }
 
+/// A test send's accepted push is a push the app spent: it goes in the
+/// ledger a metering host counts, so a plan whose allowance counts pushes
+/// counts a test, and one the provider refused writes nothing. No delivery
+/// and no send bookkeeping come with it.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_accepted_test_push_is_in_the_ledger() {
+	let mock = Mock::new();
+	let mut service = service(&mock, &all_transports()).await;
+	let (status, body) = enroll(&service, ALICE, apns_credential(&device_token(1))).await;
+	assert_eq!(status, 200, "{body}");
+	service.resume();
+
+	let (status, body) = post(
+		&service,
+		"send_test",
+		json!({ "spec": spec(), "person": ALICE }),
+		Some(TOKEN),
+	)
+	.await;
+	assert_eq!(status, 200, "{body}");
+	let outcomes: Value = serde_json::from_str(&body).unwrap();
+	assert_eq!(outcomes[0]["state"], "accepted", "{outcomes}");
+
+	let ledger = rows(&service, "SELECT platform FROM push_acceptances").await;
+	assert_eq!(ledger.len(), 1, "the accepted test is one push");
+	assert_eq!(text(&ledger[0][0]), "apns");
+	let count = |table: &'static str| {
+		let service = &service;
+		async move { text(&rows(service, &format!("SELECT count(*) FROM {table}")).await[0][0]) }
+	};
+	assert_eq!(
+		count("push_deliveries").await,
+		"0",
+		"a test enqueues nothing"
+	);
+	assert_eq!(count("notifications").await, "0", "a test writes no send");
+
+	// A push the provider refuses is no push the app spent.
+	mock.scripted(|_, _| Scripted::Reply(410, Vec::new(), String::new()));
+	let (status, body) = post(
+		&service,
+		"send_test",
+		json!({ "spec": spec(), "person": ALICE }),
+		Some(TOKEN),
+	)
+	.await;
+	assert_eq!(status, 200, "{body}");
+	let outcomes: Value = serde_json::from_str(&body).unwrap();
+	assert_eq!(outcomes[0]["state"], "rejected", "{outcomes}");
+	assert_eq!(count("push_acceptances").await, "1", "the ledger stays");
+}
+
 /// Every accepted push is written to the acceptance ledger with its
 /// delivery: forgetting the person leaves it, so a host that meters pushes
 /// still counts it, and only its own age prunes it.
