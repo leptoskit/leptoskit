@@ -1,8 +1,8 @@
 //! The console's pages, served beside the control plane on a real port:
 //! each route answers with the right status, a signed-out visit is sent to
 //! sign in and back, sign-in offers only the methods the server set up,
-//! every page carries the hydration loader and no other script, and a
-//! terminal signs in by approving its code on `/device`.
+//! every page carries the hydration loader and no other script, no site can
+//! frame a page, and a terminal signs in by approving its code on `/device`.
 
 use std::net::SocketAddr;
 
@@ -45,10 +45,65 @@ struct Page {
 	location: Option<String>,
 	content_type: Option<String>,
 	cache_control: Option<String>,
+	content_security_policy: Option<String>,
+	x_content_type_options: Option<String>,
+	referrer_policy: Option<String>,
 	text: String,
 }
 
 impl Page {
+	/// Whether the answer is a page. A redirect has no body to frame.
+	fn is_html(&self) -> bool {
+		self.content_type
+			.as_deref()
+			.is_some_and(|content_type| content_type.starts_with("text/html"))
+	}
+
+	/// Fails unless no site can frame the answer, whichever layer of the
+	/// server produced it.
+	#[track_caller]
+	fn refuses_to_be_framed(&self, path: &str) -> &Self {
+		let refuses = self
+			.content_security_policy
+			.as_deref()
+			.is_some_and(|policy| {
+				policy
+					.split(';')
+					.any(|directive| directive.trim() == "frame-ancestors 'none'")
+			});
+		assert!(
+			refuses,
+			"{path} can be framed: {:?} ({} {})",
+			self.content_security_policy,
+			self.status,
+			self.content_type.as_deref().unwrap_or("no content type")
+		);
+		self
+	}
+
+	/// Fails unless the answer carries the headers every console page has:
+	/// no site may frame it, a browser reads it as HTML only, and it tells
+	/// no other site its address.
+	#[track_caller]
+	fn carries_the_page_headers(&self, path: &str) -> &Self {
+		assert_eq!(
+			self.content_security_policy.as_deref(),
+			Some("frame-ancestors 'none'"),
+			"{path}"
+		);
+		assert_eq!(
+			self.x_content_type_options.as_deref(),
+			Some("nosniff"),
+			"{path}"
+		);
+		assert_eq!(
+			self.referrer_policy.as_deref(),
+			Some("no-referrer"),
+			"{path}"
+		);
+		self
+	}
+
 	#[track_caller]
 	fn expect(&self, status: u16) -> &Self {
 		assert_eq!(self.status, status, "{}", self.text);
@@ -167,11 +222,17 @@ impl Console {
 		let location = header(reqwest::header::LOCATION);
 		let content_type = header(reqwest::header::CONTENT_TYPE);
 		let cache_control = header(reqwest::header::CACHE_CONTROL);
+		let content_security_policy = header(reqwest::header::CONTENT_SECURITY_POLICY);
+		let x_content_type_options = header(reqwest::header::X_CONTENT_TYPE_OPTIONS);
+		let referrer_policy = header(reqwest::header::REFERRER_POLICY);
 		Page {
 			status: response.status().as_u16(),
 			location,
 			content_type,
 			cache_control,
+			content_security_policy,
+			x_content_type_options,
+			referrer_policy,
 			text: response.text().await.expect("a body"),
 		}
 	}
@@ -254,6 +315,28 @@ impl Console {
 			.bearer_auth(bearer)
 			.json(&json!({}));
 		self.send(request).await
+	}
+
+	/// Starts a terminal's sign-in where the CLI does, and returns the
+	/// console address it shows: `/device`, with the code to approve.
+	async fn device_page(&self) -> String {
+		let discovery = self.get(DISCOVERY_PATH, None).await.expect(200).json();
+		let client_id = discovery["cli_client_id"].as_str().expect("a client");
+		let scope = discovery["scope"].as_str().expect("scopes");
+		let started = self
+			.post_form(
+				"/oauth/device_authorization",
+				&[("client_id", client_id), ("scope", scope)],
+			)
+			.await
+			.expect(200)
+			.json();
+		started["verification_uri_complete"]
+			.as_str()
+			.expect("a link with the code")
+			.strip_prefix(&self.origin)
+			.expect("a link to the console")
+			.to_owned()
 	}
 }
 
@@ -669,4 +752,105 @@ async fn a_terminal_signs_in_by_approving_its_code_on_the_device_page() {
 		.expect(200)
 		.shows("This code has expired or was already used.")
 		.hides("Approve this terminal");
+}
+
+#[tokio::test]
+async fn no_site_can_frame_a_console_page() {
+	let _one = one_server().await;
+	// A tenant's app is served on the console's own site, so a browser sends
+	// the session cookie to a console page the app frames. On these pages one
+	// click inside the frame changes something, so no site may frame them.
+	let app = Console::start(false).await;
+
+	for path in [
+		"/sign-in",
+		"/sign-in?next=%2Faccount",
+		"/sign-in/email?to=ana%40example.com",
+	] {
+		app.get(path, None)
+			.await
+			.expect(200)
+			.carries_the_page_headers(path);
+	}
+
+	let ana = app.sign_in("ana@example.com").await;
+	let cookie = Some(ana.as_str());
+	for path in ["/account", "/device", "/ana/settings/billing"] {
+		app.get(path, cookie)
+			.await
+			.expect(200)
+			.carries_the_page_headers(path);
+	}
+	let device = app.device_page().await;
+	app.get(&device, cookie)
+		.await
+		.expect(200)
+		.shows("Approve this terminal")
+		.carries_the_page_headers(&device);
+
+	// What isn't a page keeps its own headers.
+	let font = app.get("/_leptoskit/fonts/skribble-mono.woff2", None).await;
+	font.expect(200);
+	assert_eq!(
+		font.cache_control.as_deref(),
+		Some("public, max-age=31536000, immutable")
+	);
+	assert!(
+		font.content_security_policy.is_none(),
+		"{:?}",
+		font.content_security_policy
+	);
+}
+
+#[tokio::test]
+async fn no_page_the_console_answers_with_can_be_framed() {
+	let _one = one_server().await;
+	// The control plane's own pages never pass the console's layers, so the
+	// policy is checked on every answer, from whichever layer it comes.
+	let app = Console::start(false).await;
+	let ana = app.sign_in("ana@example.com").await;
+
+	for cookie in [None, Some(ana.as_str())] {
+		for path in [
+			"/",
+			"/welcome",
+			"/organizations",
+			"/account",
+			"/acme",
+			"/ana",
+			"/ana/settings/billing",
+			"/device?user_code=WDJB-MJHT",
+			"/someone-else",
+			"/sign-in",
+			"/sign-in?next=%2Faccount",
+			"/sign-in/email?to=ana%40example.com",
+		] {
+			let page = app.get(path, cookie).await;
+			if page.is_html() {
+				page.refuses_to_be_framed(path);
+			}
+		}
+	}
+
+	// The control plane's own pages: a sign-in link too broken to send back
+	// to an app, and the page that posts a provider's answer again.
+	app.get("/oauth/authorize?client_id=a&client_id=b", None)
+		.await
+		.expect(400)
+		.refuses_to_be_framed("/oauth/authorize");
+	let repost = app
+		.post_form("/auth/callback/github", &[("code", "a"), ("state", "b")])
+		.await;
+	repost
+		.expect(200)
+		.shows("Signing in")
+		.refuses_to_be_framed("/auth/callback/github");
+	// That page sets its own policy, which it keeps: the script that posts
+	// the answer again, and the referrer that post needs.
+	let policy = repost.content_security_policy.as_deref().unwrap_or("");
+	assert!(
+		policy.contains("script-src 'sha256-") && policy.contains("form-action 'self'"),
+		"{policy}"
+	);
+	assert_eq!(repost.referrer_policy.as_deref(), Some("same-origin"));
 }
